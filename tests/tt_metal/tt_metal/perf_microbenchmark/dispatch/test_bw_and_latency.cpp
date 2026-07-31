@@ -73,6 +73,8 @@ bool hammer_write_reg_g = false;
 bool hammer_pcie_g = false;
 bool hammer_pcie_type_g = false;
 bool test_write = false;
+bool test_rw_g = false;  // concurrent read+write to the SAME DRAM channel from the SAME cores
+bool safebuf_g = false;  // read/write ALLOCATED DRAM buffers (not raw offset 0). Required for DRAM writes.
 bool linked = false;
 bool read_profiler_results = false;
 uint32_t nop_count_g = 0;
@@ -109,6 +111,14 @@ void init(int argc, char** argv) {
         log_info(LogTest, "  -drx: when reading/writing dram, X of end core for worker range (default same as -rx)");
         log_info(LogTest, "  -dry: when reading/writing dram, Y of end core for worker range (default same as -ry)");
         log_info(LogTest, "  -wr: issue unicast write instead of read (default false)");
+        log_info(
+            LogTest,
+            "  -rw: concurrent read+write to the SAME DRAM channel from the SAME cores (reader on NOC0, writer "
+            "on NOC1); reports combined R+W bandwidth. DRAM only (-m 1). Isolates DRAM-endpoint read/write "
+            "contention from NoC-fabric contention. (default false)");
+        log_info(
+            LogTest,
+            "  -safebuf: read/write allocated DRAM buffers instead of raw offset 0 (auto-on for -rw and DRAM writes)");
         log_info(LogTest, "  -c: when reading/writing dram, DRAM channel (default 0)");
         log_info(LogTest, "  -f: time just the finish call (default disabled)");
         log_info(LogTest, "  -o: use read_one_packet API.  restricts page size to 8K max (default {})", 0);
@@ -155,6 +165,18 @@ void init(int argc, char** argv) {
     if (test_write && (source_mem_g != 1 && source_mem_g != 2 && source_mem_g != 6)) {
         log_info(LogTest, "Writing only tested w/ DRAM or L1 destination\n");
         exit(-1);
+    }
+
+    test_rw_g = test_args::has_command_option(input_args, "-rw");
+    if (test_rw_g && source_mem_g != 1) {
+        log_info(LogTest, "-rw (concurrent read+write) only supported with DRAM (-m 1)\n");
+        exit(-1);
+    }
+    // Writing to raw DRAM offset 0 clobbers reserved DRAM (kernel binaries / dispatch) and hangs the chip.
+    // Any DRAM write must target an allocated buffer; force safe buffers for -rw and DRAM writes.
+    safebuf_g = test_args::has_command_option(input_args, "-safebuf");
+    if (test_rw_g || (test_write && source_mem_g == 1)) {
+        safebuf_g = true;
     }
 
     linked = test_args::has_command_option(input_args, "-link");
@@ -235,6 +257,12 @@ int main(int argc, char** argv) {
         uint32_t num_mcast_dests = mcast_src_workers_g.size();
         uint32_t mcast_noc_addr_end_x = 0;
         uint32_t mcast_noc_addr_end_y = 0;
+        // Allocated DRAM buffers for the concurrent read+write test (-safebuf): interleaved across all banks
+        // so nothing reserved gets clobbered. The -rw kernels address one bank's slice via the bank->NoC
+        // addr-gen (get_dram_noc_addr), which resolves each kernel's per-NoC coord automatically. Kept in
+        // scope until after Finish so they stay allocated.
+        std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> in_buf, out_buf;
+        uint64_t read_base_addr = 0, write_base_addr = 0;
 
         ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
@@ -265,9 +293,33 @@ int main(int argc, char** argv) {
                     "DRAM channel {} not available, only {} channels found",
                     dram_channel_g,
                     dram_cores.size());
-                noc_addr_x = dram_cores[dram_channel_g].x;
+                noc_addr_x = dram_cores[dram_channel_g].x;  // single-dir path targets this DRAM NoC core
                 noc_addr_y = dram_cores[dram_channel_g].y;
                 write_dram = test_write;
+                if (safebuf_g) {
+                    // Interleaved DRAM buffers sized so every bank holds >= PAGE_COUNT pages. -rw addresses
+                    // one bank's slice (page_id = TARGET_BANK + j*NUM_DRAM_BANKS) through the bank->NoC
+                    // addr-gen, so the writer's NOC1 coord is resolved from the device table -- no manual
+                    // coords. For -rw, `-c` is a DRAM bank index (0..num_banks-1), not a NoC-core index.
+                    const uint32_t nbanks = mesh_device->allocator()->get_num_banks(BufferType::DRAM);
+                    const uint64_t per_bank = static_cast<uint64_t>(page_size_g) * page_count_g;
+                    tt::tt_metal::distributed::DeviceLocalBufferConfig lc{
+                        .page_size = page_size_g, .buffer_type = BufferType::DRAM};
+                    tt::tt_metal::distributed::ReplicatedBufferConfig bc{.size = per_bank * nbanks};
+                    in_buf = tt::tt_metal::distributed::MeshBuffer::create(bc, lc, mesh_device.get());
+                    out_buf = tt::tt_metal::distributed::MeshBuffer::create(bc, lc, mesh_device.get());
+                    read_base_addr = in_buf->address();
+                    write_base_addr = out_buf->address();
+                    noc_mem_addr = test_write ? write_base_addr : read_base_addr;  // single-dir NOC_XY path
+                    log_info(
+                        LogTest,
+                        "safebuf: in_buf@{} out_buf@{} ({} banks, {} B/bank); -rw targets bank {}",
+                        read_base_addr,
+                        write_base_addr,
+                        nbanks,
+                        per_bank,
+                        dram_channel_g);
+                }
             } break;
             case 2: {
                 src_mem = test_write ? "TO_L1" : "FROM_L1";
@@ -333,28 +385,79 @@ int main(int argc, char** argv) {
             defines.insert(std::pair<std::string, std::string>("PAGE_SIZE", std::to_string(page_size_g)));
         }
 
+        const std::string kKernel = "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/bw_and_latency.cpp";
+
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(page_size_g * page_count_g, {{0, tt::DataFormat::Float32}})
                 .set_page_size(0, page_size_g);
         tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
 
-        auto dm0 = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/bw_and_latency.cpp",
-            worker_g,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .defines = defines});
-        if (page_size_as_runtime_arg_g) {
-            tt_metal::SetRuntimeArgs(program, dm0, worker_g, {page_size_g});
+        if (test_rw_g) {
+            // Concurrent read+write to the same DRAM channel from the same cores: a reader on NOC0 and a
+            // writer on NOC1, co-resident on every worker core (mirrors the real reader/writer op split).
+            // Separate CBs so the two directions use independent L1 regions and neither back-pressures the
+            // other -- both blast the channel at max rate so combined BW exposes DRAM-endpoint R/W contention.
+            tt_metal::CircularBufferConfig cb_config1 =
+                tt_metal::CircularBufferConfig(page_size_g * page_count_g, {{1, tt::DataFormat::Float32}})
+                    .set_page_size(1, page_size_g);
+            tt_metal::CreateCircularBuffer(program, worker_g, cb_config1);
+
+            // Both kernels use the bank->NoC addr-gen pinned to bank `-c`; get_dram_noc_addr resolves the
+            // per-NoC coord (reader NOC0, writer NOC1) from the device table -- no manual coords needed.
+            const std::string bank = std::to_string(dram_channel_g);
+            auto rd_defines = defines;
+            rd_defines["WRITE"] = "0";
+            rd_defines["DRAM_BANKED"] = "1";
+            rd_defines["TARGET_BANK"] = bank;
+            rd_defines["BANK_BASE_ADDR"] = std::to_string(read_base_addr);  // reader <- allocated in_buf
+            rd_defines["CB_ID"] = "0";
+            auto wr_defines = defines;
+            wr_defines["WRITE"] = "1";
+            wr_defines["WRITE_DRAM"] = "1";
+            wr_defines["DRAM_BANKED"] = "1";
+            wr_defines["TARGET_BANK"] = bank;
+            wr_defines["BANK_BASE_ADDR"] = std::to_string(write_base_addr);  // writer -> allocated out_buf
+            wr_defines["CB_ID"] = "1";
+
+            auto dm_rd = tt_metal::CreateKernel(
+                program,
+                kKernel,
+                worker_g,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .defines = rd_defines});
+            auto dm_wr = tt_metal::CreateKernel(
+                program,
+                kKernel,
+                worker_g,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::NOC_1,
+                    .defines = wr_defines});
+            if (page_size_as_runtime_arg_g) {
+                tt_metal::SetRuntimeArgs(program, dm_rd, worker_g, {page_size_g});
+                tt_metal::SetRuntimeArgs(program, dm_wr, worker_g, {page_size_g});
+            }
+        } else {
+            auto dm0 = tt_metal::CreateKernel(
+                program,
+                kKernel,
+                worker_g,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .defines = defines});
+            if (page_size_as_runtime_arg_g) {
+                tt_metal::SetRuntimeArgs(program, dm0, worker_g, {page_size_g});
+            }
         }
         mesh_workload.add_program(
             tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
 
         CoreCoord w = mesh_device->worker_core_from_logical_core(worker_g.start_coord);
         log_info(LogTest, "Master core: {}", w.str());
-        std::string direction = test_write ? "Writing" : "Reading";
+        std::string direction = test_rw_g ? "Read+Write" : (test_write ? "Writing" : "Reading");
         if (source_mem_g == 3) {
             log_info(LogTest, "{}: {}", direction, src_mem);
         } else if (source_mem_g == 4) {
@@ -496,11 +599,14 @@ int main(int argc, char** argv) {
                 (float)std::chrono::duration_cast<std::chrono::microseconds>(elapsed_seconds).count() /
                     (page_count_g * iterations_g));
         } else {
-            float bw = (float)page_count_g * (float)page_size_g * (float)iterations_g * (float)worker_g.size() /
-                       (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
+            // In -rw mode each core moves a page IN (read) and a page OUT (write) per iteration, so the
+            // bytes crossing the DRAM channel are 2x. Reported BW is the COMBINED read+write throughput.
+            float directions = test_rw_g ? 2.0f : 1.0f;
+            float bw = directions * (float)page_count_g * (float)page_size_g * (float)iterations_g *
+                       (float)worker_g.size() / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
-            log_info(LogTest, "BW: {} GB/s", ss.str());
+            log_info(LogTest, "BW: {} GB/s{}", ss.str(), test_rw_g ? " (combined read+write)" : "");
         }
 
         if (read_profiler_results) {
