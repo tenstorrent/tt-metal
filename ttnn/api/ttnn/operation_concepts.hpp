@@ -305,7 +305,8 @@ consteval bool field_is_excluded() {
     }
 }
 
-// The legacy freeform hash: superseded by the declarations above, and forbidden on the spec path.
+// The freeform hash. Defining it wins outright: the framework hashes nothing for you and derives no exact
+// key, so hash collisions silently share a cache entry. Emergency exit only -- see #51765.
 template <typename device_operation_t>
 concept HasLegacyProgramHash = requires(
     const typename device_operation_t::operation_attributes_t& operation_attributes,

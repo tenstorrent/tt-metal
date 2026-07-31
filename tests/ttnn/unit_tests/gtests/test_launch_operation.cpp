@@ -272,8 +272,6 @@ static_assert(!device_operation::field_is_excluded<SeedDroppingAttributes, 0>())
 static_assert(!device_operation::HasTensorArgsRelaxations<SeedDroppingOp>);
 static_assert(!device_operation::HasLegacyProgramHash<SeedDroppingOp>);
 
-// The adapter static_asserts on "spec factory AND legacy hash"; pin that conjunction is detectable.
-// The adapter is deliberately not instantiated for the bad one.
 struct SpecFactoryOp {
     using operation_attributes_t = Attributes;
     using tensor_args_t = Inputs;
@@ -291,6 +289,32 @@ struct LegacyFactoryOpWithLegacyHash {
     using program_factory_t = std::variant<NewInfraProgramFactory>;
     static ttsl::hash::hash_t compute_program_hash(const Attributes&, const Inputs&) { return 0; }
 };
+
+// The emergency exit, declaring everything at once: a spec-path op with a custom hash, an exclusion and
+// a deliberately miscounted relaxation list. The custom hash must win and the rest must go unread --
+// were the framework to consult the relaxations, the count mismatch would TT_FATAL.
+struct EmergencyExitAttributes {
+    uint32_t knob = 0;
+    uint32_t seed = 0;
+
+    static constexpr auto attributes_excluded_from_key = std::forward_as_tuple("seed");
+};
+
+struct EmergencyExitOp {
+    using operation_attributes_t = EmergencyExitAttributes;
+    using tensor_args_t = Inputs;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<ProgramSpecFactory>;
+
+    static ttsl::SmallVector<TensorSpecRelaxations> tensor_args_relaxations(const Inputs&) { return {}; }
+    static ttsl::hash::hash_t compute_program_hash(const EmergencyExitAttributes& attrs, const Inputs&) {
+        return attrs.knob;
+    }
+};
+
+static_assert(device_operation::HasSpecProgramFactory<EmergencyExitOp>);
+static_assert(device_operation::HasLegacyProgramHash<EmergencyExitOp>);
 
 static_assert(device_operation::HasSpecProgramFactory<SpecFactoryOp>);
 static_assert(!device_operation::HasLegacyProgramHash<SpecFactoryOp>);
@@ -365,6 +389,33 @@ TEST(ProgramHashTest, RelaxationPreservesTensorArgsStructure) {
     EXPECT_NE(
         compute_op_hash<PaddedShapeOnlyOp>(attrs, Inputs{.input = tensor}),
         compute_op_hash<PaddedShapeOnlyOp>(attrs, in_first_slot));
+}
+
+TEST(ProgramHashTest, CustomHashWinsOutrightOnTheSpecPath) {
+    const Inputs tensor_args{.input = make_logical_30x32()};
+    EXPECT_EQ(compute_op_hash<EmergencyExitOp>(EmergencyExitAttributes{.knob = 7, .seed = 1}, tensor_args), 7u);
+
+    // Nothing the framework would normally key changes the result: not the excluded field, not the
+    // non-excluded one, not the tensors.
+    EXPECT_EQ(
+        compute_op_hash<EmergencyExitOp>(
+            EmergencyExitAttributes{.knob = 7, .seed = 2}, Inputs{.input = make_logical_32x32()}),
+        7u);
+    EXPECT_EQ(compute_op_hash<EmergencyExitOp>(EmergencyExitAttributes{.knob = 8}, tensor_args), 8u);
+}
+
+TEST(ProgramHashTest, CustomHashForfeitsTheExactKey) {
+    using Adapter = device_operation::MeshDeviceOperationAdapter<EmergencyExitOp>;
+    const Inputs tensor_args{.input = make_logical_30x32()};
+
+    // Prefix only, so two inputs the op hashes differently are indistinguishable once they collide:
+    // the exact key can no longer separate them and one cache entry serves both.
+    const auto key_one = Adapter::compute_mesh_workload_canonical_key(
+        nullptr, "emergency", EmergencyExitAttributes{.knob = 1}, tensor_args);
+    const auto key_two = Adapter::compute_mesh_workload_canonical_key(
+        nullptr, "emergency", EmergencyExitAttributes{.knob = 2}, tensor_args);
+    EXPECT_EQ(key_one, "emergency");
+    EXPECT_EQ(key_one, key_two);
 }
 
 TEST(ProgramHashTest, MiscountedRelaxationsAreRejected) {

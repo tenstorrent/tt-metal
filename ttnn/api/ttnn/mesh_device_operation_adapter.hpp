@@ -249,12 +249,6 @@ public:
     }
 
     static_assert(
-        !(HasSpecProgramFactory<DeviceOperation> && HasLegacyProgramHash<DeviceOperation>),
-        "A Metal 2.0 spec-path operation must not define compute_program_hash(attrs, tensor_args). Express the "
-        "cache key as tensor_args_relaxations() and attributes_excluded_from_key instead, or drop the custom "
-        "hash and let the framework reflect.");
-
-    static_assert(
         !HasSpecProgramFactory<DeviceOperation> ||
             !ttsl::reflection::detail::supports_to_hash_v<operation_attributes_t>,
         "operation_attributes_t::to_hash() silently replaces the whole attribute hash. A Metal 2.0 operation "
