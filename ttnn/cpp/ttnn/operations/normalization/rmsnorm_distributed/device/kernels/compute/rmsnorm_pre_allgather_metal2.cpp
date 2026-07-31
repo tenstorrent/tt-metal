@@ -1,10 +1,15 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 /*
  * This kernel computes rmsnorm statistics.
-For rmsnorm it computes E(x**2) and returns it as a one tile wide output
+ * For rmsnorm we compute E(x**2) and return it as a one tile wide output
+ * tensor containing E(x**2) in the left most column per tile.
+ *
+ * Metal 2.0 fork of rmsnorm_pre_allgather.cpp: same computation, with named kernel arguments and
+ * named dataflow-buffer bindings instead of positional compile-time args and CB indices. The legacy
+ * file beside this one still serves consumers that have not migrated.
  */
 
 #include <cstdint>
@@ -19,6 +24,15 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
+
 // The statistics pass reads either the raw input or the fused a + b result, depending on whether a
 // residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
 // at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
@@ -29,10 +43,9 @@ constexpr auto dfb_inp_id = dfb::in0;  // just a
 #endif
 
 void kernel_main() {
-    constexpr auto NCHt = get_arg(args::NCHt);
+    const auto NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto blk = get_arg(args::blk);
-    constexpr auto num_cores_y = get_arg(args::num_cores_y);
 
     constexpr uint32_t onetile = 1;
 
@@ -49,9 +62,6 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_res(dfb::res);  // residual b
 #endif
-#ifdef IS_MERGE_CORE
-    DataflowBuffer dfb_zero(dfb::zero);
-#endif
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
@@ -65,24 +75,15 @@ void kernel_main() {
         reconfig_data_format(dfb_inp_id, dfb_inp_id);
         pack_reconfig_data_format(dfb::x2);
         mul_tiles_init(dfb_inp_id, dfb_inp_id);
-
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_inp.wait_front(wt + blk);  // cumulative wait
-
-            tile_regs_acquire();
+            dfb_x2.reserve_back(blk);
+            ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
-            }
-            tile_regs_commit();
-
-            dfb_x2.reserve_back(blk);
-
-            tile_regs_wait();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 pack_tile(wtr, dfb::x2, wt + wtr);
             }
-            tile_regs_release();
-
+            REL();
             dfb_x2.push_back(blk);
         }
 
@@ -98,44 +99,6 @@ void kernel_main() {
             dfb::out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         dfb_inp.pop_front(Wt);
-        dfb_reduce.pop_front(1);
     }
-
-    // On a merge core, do a final sum over the column's partial statistics and write the result to
-    // the output buffer. Only the merge-core build binds that output buffer, so the whole block is
-    // gated at the preprocessor rather than on a runtime flag.
-#ifdef IS_MERGE_CORE
-    {
-        DataflowBuffer dfb_x2_merge(dfb::x2_merge);
-        DataflowBuffer dfb_out_final(dfb::out_final);
-        constexpr int dst0 = 0;
-
-        // Wait for all num_cores_y tiles
-        dfb_x2_merge.wait_front(num_cores_y);
-        dfb_zero.wait_front(1);
-
-        // Initialize accumulation
-        binary_op_init_common(dfb::x2_merge, dfb::zero, dfb::out_final);
-        reconfig_data_format(dfb::x2_merge, dfb::zero);
-        pack_reconfig_data_format(dfb::out_final);
-        add_tiles_init(dfb::x2_merge, dfb::zero, true);
-
-        tile_regs_acquire();
-        // Add all the column's partials together
-        for (uint32_t i = 0; i < num_cores_y; i++) {
-            add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
-        }
-        tile_regs_commit();
-
-        dfb_x2_merge.pop_front(num_cores_y);
-
-        dfb_out_final.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile(dst0, dfb::out_final);
-        tile_regs_release();
-
-        dfb_out_final.push_back(onetile);
-    }
-#endif
+    dfb_reduce.pop_front(1);
 }
