@@ -103,25 +103,19 @@ class ProfilerReadTimeout(RuntimeError):
 def _read_device_profiler_with_watchdog(ttnn_mod, device):
     """ttnn.ReadDeviceProfiler(device) with a wall-clock budget.
 
-    On a 32-chip Galaxy this call intermittently NEVER RETURNS. Reproduced on
-    wh-glx6u-02 with the CI flag set: 42 rounds of matmul+read completed at ~1.2s per read,
-    then round 43's read hung with no device exception -- the op itself had already finished
-    (matmul 0.00s, synchronize_device returned immediately). Two further 80-round arms then
-    ran clean, so the rate is roughly 1 in 200 reads. In CI that stall is what surfaces as
-    a 300s vector timeout -> FAIL_CRASH_HANG, and (when the read returns corrupt instead of
-    hanging) as "profiler.cpp:1830 Invalid packet type" or a near-zero PCC on the NEXT
-    vector, whose output never lands.
+    Defensive, not a known-defect workaround. A stalled C++ call is not an exception, so the
+    try/except around this call cannot see one; the watchdog converts a stall into a
+    recoverable "device-perf unavailable" instead of a 300s vector timeout plus reset+retry.
 
-    A hang is not an exception, so the try/except around this call cannot see it -- hence a
-    watchdog. On timeout we raise, which the caller converts into
-    DEVICE_PERF_READBACK_FAILED: a passing vector keeps its PASS with device-perf N/A, and a
-    failing one triggers the wedged-device abort. Profiling stays ENABLED throughout; this
-    only stops one stalled read from costing the vector (and, via the retry+reset path, the
-    whole suite).
+    CORRECTION to an earlier claim in this file's history: this was described as an
+    "intermittent 32-chip ReadDeviceProfiler stall". That was wrong. The stall was reproduced
+    only with an INCOMPLETE flag set (TT_METAL_DEVICE_PROFILER + CPP_POST_PROCESS, without
+    TT_METAL_PROFILER_MID_RUN_DUMP). Without MID_RUN_DUMP, getProgramsPerfDataMidRun() is false,
+    get_latest_programs_perf_data() returns nothing, and the profiler data is never consumed --
+    the probe logged "perf programs=0" for 42 rounds and then blocked on round 43. With the full
+    CI flag set (the set enable_profiler() applies) the same probe ran 80 rounds clean twice, on
+    a 32-chip Galaxy. Profiling works on 32 chips; do not use this watchdog as evidence otherwise.
 
-    Caveat: the stuck call is in C++ and cannot be cancelled, so the worker thread is leaked
-    (daemon, so it cannot block interpreter exit). That is why a stalled read is treated as
-    evidence the device is suspect rather than something to retry in-process.
     Budget: TTNN_SWEEP_PROFILER_READ_TIMEOUT_S (default 120s, ~100x the observed 1.2s).
     """
     import threading
