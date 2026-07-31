@@ -644,6 +644,10 @@ CMBF2D_TAG = os.environ.get("CMBF2D_TAG", "")
 # 1 => producer records the fine-grained stall buckets (costs a few percent of the bandwidth
 # it is measuring). Off for headline numbers, on to explain them.
 CMBF2D_STALL = int(os.environ.get("CMBF2D_STALL", "0"))
+# Forwarded tokens between semaphore bumps to the downstream reader. Purely a tuning knob — a bump always
+# follows a chunk's sentinel, so accuracy holds for any value >= 1; this only sets how finely the downstream
+# reader can pipeline WITHIN a chunk. Swept in P9.3.
+CMBF2D_FWD_BUMP = int(os.environ.get("CMBF2D_FWD_BUMP", "8"))
 # Mesh axis whose neighbours the op talks to. Matches the op's `axis` argument.
 CMBF2D_AXIS = 0
 # Blackhole AICLK the bandwidth numbers assume. Telemetry gives cycle counts; turning those into GB/s
@@ -846,52 +850,21 @@ def _cmbf2d_check_accuracy(mesh_device, host_input, dev_output, movements, token
 def _cmbf2d_producer_token_budget(mesh_device, axis, num_links, tokens):
     """`(allowed_per_producer, mesh_total)` PACKET counts, derived from the op's forwarding scheme.
 
-    From P9.2 a producer's packets are its own tokens PLUS everything it forwards on other chips' behalf,
-    because the op does the forwarding itself instead of the fabric. So `tokens_sent` finally equals the
-    traffic crossing its cable — the number comparable to the 25 GB/s line rate — and the derived estimate
-    P8.3 needed is retired.
+    A producer's packets are its own tokens PLUS everything it forwards for other chips, because the op does
+    the forwarding itself. So `tokens_sent` equals the traffic crossing its cable — the number comparable to
+    the 25 GB/s line rate — and no derived estimate is needed.
 
-    A producer serving `m` destinations (ring distances 1..m in its direction) puts on its link
-        m(m+1)/2 * tokens   payload tokens  (summing, over upstream sources, what crosses this cable)
-      + m(m-1)/2            sentinels, one per forwarding chunk it writes
-    Producers are unequal because the fabric routes the diametrically-opposite chip one single way (see
-    assign_movements_to_producers): per plane one has m = H and the other m = H - 1, where H = R/2.
+    Since P9.3 the split is balanced: each producer serves H = R/2 destinations (ring distances 1..H-1 in its
+    own direction, plus half of the diametrically-opposite chip, which is equally far either way). So every
+    producer is identical, and puts on its link
+        H*H/2 * tokens   payload tokens   (= H(H-1)/2 full distances + H/2 for the halved one)
+      + H(H-1)/2         sentinels, one per forwarding chunk it writes
     """
     extent = tuple(mesh_device.shape)[axis]
     half = extent // 2
-    allowed, mesh_total = set(), 0
-    for m in (half, half - 1):
-        per_producer = m * (m + 1) // 2 * tokens + m * (m - 1) // 2
-        allowed.add(per_producer)
-        mesh_total += mesh_device.get_num_devices() * num_links * per_producer
-    return allowed, mesh_total
-
-
-def _cmbf2d_link_tokens(mesh_device, axis, num_links, movements, tokens):
-    """Mean tokens crossing each DIRECTED eth link, derived from the movement list alone.
-
-    A producer's `tokens_sent` counts only its OWN tokens. Once destinations go past the immediate
-    neighbour, every cable also carries traffic being forwarded on behalf of other chips — bytes that are
-    real eth utilisation but appear in nobody's telemetry. So the own-payload rate systematically understates
-    link utilisation, by 2.3x on the 8-ring all-destinations pattern.
-
-    Total token-hops = sum over movements of (ring hop distance x tokens); spread over
-    num_devices * num_links * 2 directed links. Computed from the plan, not from telemetry.
-    """
-    extent = tuple(mesh_device.shape)[axis]
-    token_hops = 0
-    for m in movements:
-        off = (m.dst[axis] - m.src[axis]) % extent
-        token_hops += min(off, extent - off) * tokens
-    mean_link = token_hops / (mesh_device.get_num_devices() * num_links * 2)
-    # The two directions are NOT equally loaded. The fabric routes the diametrically-opposite chip
-    # (distance H) one single way, so that direction carries distances 1..H and the other only 1..H-1:
-    #   busiest = sum_{k=0..H-1} (H-k)     = H(H+1)/2  tokens
-    #   lightest = sum_{k=0..H-2} (H-1-k)  = H(H-1)/2  tokens
-    # (H(H+1)/2 + H(H-1)/2 = H^2 = 2 * mean, as it must.) The busiest link is what actually bounds the
-    # transfer, so it is the honest denominator for "are we at line rate".
-    half = extent // 2
-    return mean_link, half * (half + 1) // 2 * tokens, half * (half - 1) // 2 * tokens
+    per_producer = half * half // 2 * tokens + half * (half - 1) // 2
+    mesh_total = mesh_device.get_num_devices() * num_links * 2 * per_producer
+    return {per_producer}, mesh_total
 
 
 def _dump_combine_fabric2d_bwinfo(
@@ -901,7 +874,6 @@ def _dump_combine_fabric2d_bwinfo(
     expected_workers,
     allowed_tokens,
     mesh_total_tokens,
-    link_tokens,
     path=CMBF2D_BWINFO_PATH,
 ):
     """Read each producer's L1 telemetry record, write the bandwidth report, then assert it is sound.
@@ -983,7 +955,7 @@ def _dump_combine_fabric2d_bwinfo(
             f"# mesh={tuple(mesh_device.shape)} num_links={num_links} axis={axis} "
             f"tokens={CMBF2D_TOKENS} per movement token={CMBF2D_TOKEN_BYTES}B clock={clock_mhz}MHz "
             f"edm_sender_slots={first.get('edm_slots', 0)} l1_slots={first.get('num_l1_slots', 0)} "
-            f"batch={first.get('batch', 0)} stall_telemetry={CMBF2D_STALL}\n"
+            f"batch={first.get('batch', 0)} fwd_bump_every={CMBF2D_FWD_BUMP} stall_telemetry={CMBF2D_STALL}\n"
             f"# payload per producer = tokens_sent x {CMBF2D_TOKEN_BYTES}B, where tokens_sent is asserted to be\n"
             f"#   one of {sorted(allowed_tokens)} and to sum to {mesh_total_tokens} across the mesh. Producers are\n"
             f"#   deliberately unequal: the fabric picks one direction for the opposite chip. Not taken\n"
@@ -1040,25 +1012,23 @@ def _dump_combine_fabric2d_bwinfo(
             k_min, k_p50, k_max, k_mean = _stats([r["kernel_us"] for r in rows])
             xfer_mean = sum(r["us"] for r in rows) / len(rows)
             mean_sh = {k: sum(r["shares"][k] for r in rows) / len(rows) for k in ("wait_slot", "issue", "ring_wait")}
-            # Derived LINK utilisation. Reported only as a mesh aggregate, deliberately: the per-link load
-            # is NOT uniform. The fabric routes the diametrically-opposite chip one single direction, so those
-            # links carry ~(H*H/2 + H/2) tokens and the others ~(H*H/2 - H/2) (mean link_tokens). Turning that
-            # into a per-producer number needs the direction the fabric chose, which the test does not know —
-            # so a per-row column would be wrong by up to +/-25% and is not printed.
-            mean_tok, busy_tok, light_tok = link_tokens
-            busy_bytes = busy_tok * CMBF2D_TOKEN_BYTES
+            # LINK utilisation, now DIRECTLY MEASURED: a producer's tokens_sent counts its own tokens plus
+            # everything it forwards for other chips, so it IS the traffic crossing its cable. The derived
+            # estimate P8.3 needed is gone, and so is the non-uniformity caveat — the P9.3 split is balanced,
+            # every producer carrying H*H/2 tokens.
+            # The number that ends the transfer is the SLOWEST producer, so that is quoted first: a mean over
+            # per-producer rates flatters the result (it is a mean of reciprocals).
+            slowest_gbps = min(r["send_gbps"] for r in rows)
             f.write(
-                f"#\n# DERIVED LINK UTILISATION (headline)\n"
-                f"#   load per directed link is non-uniform: busiest {busy_tok:g} tokens "
-                f"({busy_bytes / 1e6:.2f} MB), lightest {light_tok:g}, mean {mean_tok:g}. The fabric routes the\n"
-                f"#   diametrically-opposite chip one single way, so that direction carries one more distance.\n"
-                f"#   BUSIEST link over the SLOWEST send window ({l_max:.2f} us): "
-                f"{(busy_bytes / (l_max * 1e-6)) / 1e9:.2f} GB/s of 25   <-- the real bottleneck\n"
-                f"#   mean link over the p50 send window ({l_p50:.2f} us): "
-                f"{(mean_tok * CMBF2D_TOKEN_BYTES / (l_p50 * 1e-6)) / 1e9:.2f} GB/s\n"
+                f"#\n# LINK UTILISATION (measured, headline)\n"
+                f"#   SLOWEST producer: {slowest_gbps:.2f} GB/s of 25 over {l_max:.2f} us"
+                f"   <-- the transfer is not done until this one is\n"
+                f"#   p50 {s_p50:.2f}   mean {s_mean:.2f} GB/s   (own + forwarded packets, "
+                f"{sorted(allowed_tokens)} per producer, {mesh_total_tokens} mesh-wide)\n"
             )
             f.write(
-                f"# per-producer GB/s: min {g_min:.2f} p50 {g_p50:.2f} max {g_max:.2f} mean {g_mean:.2f}\n"
+                f"# per-producer GB/s (incl. drain tail): min {g_min:.2f} p50 {g_p50:.2f} max {g_max:.2f} "
+                f"mean {g_mean:.2f}\n"
                 f"# per-producer sGB/s: min {s_min:.2f} p50 {s_p50:.2f} max {s_max:.2f} mean {s_mean:.2f}\n"
                 f"# mean send-window shares: wait_slot {mean_sh['wait_slot']:.1f}% issue {mean_sh['issue']:.1f}% "
                 f"ring_wait {mean_sh['ring_wait']:.1f}%\n"
@@ -1146,6 +1116,7 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
         tokens_per_movement=tokens,
         token_size_bytes=token_size_bytes,
         axis=CMBF2D_AXIS,
+        fwd_bump_every=CMBF2D_FWD_BUMP,
         stall_telemetry=CMBF2D_STALL,
     )
     ttnn.synchronize_device(mesh_device)
@@ -1181,7 +1152,6 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
         num_links,
         axis=CMBF2D_AXIS,
         expected_workers=num_devices * 2 * num_links,
-        link_tokens=_cmbf2d_link_tokens(mesh_device, CMBF2D_AXIS, num_links, movements, tokens),  # tuple
         allowed_tokens=_cmbf2d_allowed,
         mesh_total_tokens=_cmbf2d_total,
         path=bwinfo_path,
