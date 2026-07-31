@@ -173,6 +173,25 @@ Record the **layer share** of any kind you cannot capture. `sparse_matmul` and t
 are terminal in the tracer; if such a kind dominates, *"the advisor cannot reach N of M layers"* is the
 correct result and must be stated, not discovered later.
 
+### 2a. Consider capturing more than one consecutive layer
+
+**Switching between the python capture and the IR hardcodes every graph input and output to DRAM
+interleaved.** So with a one-layer capture the advisor is *forced* to place a conversion at both layer
+boundaries, whatever the shipped graph does — 12 to 16 reshards per corpus cell carry
+`producer: "input", from: "dram/interleaved/1x1"` for this reason. Those edges are artifacts of the capture,
+not recommendations, and `reconcile.py` leaves them `undetermined` rather than attributing them either way.
+
+Capturing **N consecutive layers** shrinks the damage to `1/N` of the layer boundaries and, more usefully,
+moves the `N-1` interior boundaries *inside* the advised graph — where the advisor can choose to keep them in
+L1. That is the one place it can see the inter-layer handoff at all. Declare it with
+`reconcile.py --layers-in-window N`, or the replay guard will correctly reject the repeating op sequence.
+
+The cost is L1 capacity: `spill.ran` is true in every corpus cell at **one** layer, with up to 4 spills, so
+2–3 layers will spill more and a spilled plan applies piecemeal less well. Start at N=2 on a kind that
+currently spills 0–1 times, and check the one question that settles it: does the advisor keep the interior
+layer boundary in L1? If it does, that is a directly attributable win worth `(N-1)/N` of the handoff cost
+(§`model_estimate.layer_handoff`), and it justifies a larger N.
+
 ### 3. Reconcile — `scripts/reconcile.py`, once per layer kind
 
 Always pass **`--incumbent incumbent.json`**. Its `repeats_ms` give the harness noise floor, and without that
@@ -280,9 +299,15 @@ to stay per-layer: an effect is compared against the per-layer noise floor. But 
 the full-model estimate**, which `reconcile.py` gives as `model_estimate.this_kind_us` per kind:
 
 ```
-full model  =  SUM over layer kinds of ( window_us x layers_of_kind )
+full model  =  SUM over layer kinds of ( per_layer_window_us x layers_of_kind )
 chain value =  advisor_removes_per_model_us  =  advisor_removes_us x layers_of_kind
+uncertainty =  noise_floor_us x layers_of_kind          <- scales with the estimate, quote it
 ```
+
+**Report the stage's result as a full-model estimate before and after, with that band.** Scaling a per-layer
+delta to the model scales its error by the same factor: on one corpus cell a 6.282 µs per-layer floor becomes
+a **± 201 µs** model-level band over 32 layers, so a claimed model saving smaller than that is inside its own
+error bar. A model number quoted without the band reads far more precise than the measurement supports.
 
 Per-layer ranking picks the wrong candidate across kinds. In one corpus model a sliding-attention chain worth
 1.629 µs/layer is **65.2 µs/model** over 40 layers, while a full-attention chain worth *more* per layer

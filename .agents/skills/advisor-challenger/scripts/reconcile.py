@@ -91,7 +91,7 @@ def device_class(op_code: str) -> str:
     return op_code.split()[0].replace("DeviceOperation", "")
 
 
-def parse_perf(path: Path, incumbent_ms: float | None = None):
+def parse_perf(path: Path, incumbent_ms: float | None = None, layers_in_window: int = 1):
     """Device ops in program order, plus the window total.
 
     Column names differ between producers and cases: tt-perf-report writes `OP Code` / `Device Time` (us),
@@ -151,10 +151,14 @@ def parse_perf(path: Path, incumbent_ms: float | None = None):
     for period in range(1, len(seq) // 2 + 1):
         if len(seq) % period == 0 and seq == seq[:period] * (len(seq) // period):
             reps = len(seq) // period
+            if reps == layers_in_window:
+                break          # a deliberate N-consecutive-layer capture, declared with --layers-in-window
             sys.exit(f"FATAL: {path}: the op sequence repeats {reps}x (period {period} of {len(seq)} "
-                     f"rows), so this report covers {reps} iterations rather than one. Re-run "
-                     f"tt-perf-report with --start-signpost/--end-signpost bounding a single replay; "
-                     f"every share computed here would be {reps}x too small.")
+                     f"rows), so this report covers {reps} iterations rather than "
+                     f"{layers_in_window}. Re-run tt-perf-report with --start-signpost/--end-signpost "
+                     f"bounding one replay, or pass --layers-in-window {reps} if the capture really does "
+                     f"cover {reps} consecutive layers; every share computed here would be "
+                     f"{reps // max(1, layers_in_window)}x too small.")
 
     # And a window far from the harness's own number means the CSV is not the decode window at all.
     if incumbent_ms is not None and incumbent_ms > 0:
@@ -351,6 +355,10 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--layer-kind", default="unknown")
     ap.add_argument("--layers-of-kind", type=int, default=1)
+    ap.add_argument("--layers-in-window", type=int, default=1,
+                    help="how many consecutive decoder layers the capture and the profile cover. >1 puts the "
+                         "interior layer boundaries INSIDE the advised graph, where the advisor can choose "
+                         "to keep them in L1 instead of having them hardcoded to DRAM")
     ap.add_argument("--total-layers", type=int, default=1)
     ap.add_argument("--incumbent-ms", type=float, default=None,
                     help="incumbent_ms from incumbent.json; enables a window sanity check")
@@ -375,7 +383,7 @@ def main() -> int:
     report = json.loads(a.report.read_text())
     advised = parse_advised(report)
     reshard_idx = parse_reshards(report)
-    device, window = parse_perf(a.perf, a.incumbent_ms)
+    device, window = parse_perf(a.perf, a.incumbent_ms, a.layers_in_window)
     handoff = layer_handoff(device, a.layers_of_kind)
     if window <= 0:
         sys.exit(f"FATAL: measured window is 0 us from {a.perf}")
@@ -628,6 +636,14 @@ def main() -> int:
         "op_counts": {"report_total_ops": report.get("total_ops"), "ops_listed": len(advised),
                       "final_choices": report.get("final_choices")},
         "dram_sharded_advised": report.get("dram_sharded_advised"),
+        "layers_in_window": a.layers_in_window,
+        "graph_input_reshards": sum(1 for x in (report.get("reshards") or [])
+                                    if x.get("producer") == "input"),
+        "graph_input_note": "reshards with producer=='input' come off a graph input the py-to-IR boundary "
+                            "hardcodes to DRAM interleaved. Some are genuine weight placement (DRAM is where "
+                            "weights live); the one feeding the first op is the layer's activation entry and "
+                            "is an artifact. Capturing N consecutive layers reduces the artifact to 1/N of "
+                            "the layer boundaries.",
     }
     if sp.get("total_spills"):
         capture_provenance["spill_caution"] = (
@@ -640,15 +656,23 @@ def main() -> int:
             "the SHIPPED policy rather than class defaults. Dtypes are checked by the gate; layouts and "
             "DRAM-sharding flags are not.")
 
+    per_layer_window = window / max(1, a.layers_in_window)
     model_estimate = {
-        "this_kind_us": round(window * a.layers_of_kind, 3),
+        "this_kind_us": round(per_layer_window * a.layers_of_kind, 3),
+        "per_layer_window_us": round(per_layer_window, 3), "layers_in_window": a.layers_in_window,
         "layers_of_kind": a.layers_of_kind, "total_layers": a.total_layers,
         "kind_share_of_layers": round(a.layers_of_kind / max(1, a.total_layers), 3),
-        "ceiling_per_model_us": round(ceiling_us * a.layers_of_kind, 3),
+        "ceiling_per_model_us": round(ceiling_us * a.layers_of_kind / max(1, a.layers_in_window), 3),
+        # the model number inherits the per-layer measurement error MULTIPLIED by the layer count, so it is
+        # far less precise than its digits suggest. Quote it with this band or not at all.
+        "uncertainty_per_model_us": (round(floor_us * a.layers_of_kind / max(1, a.layers_in_window), 3)
+                                     if floor_us else None),
         "layer_handoff": handoff,
         "note": "Sum this_kind_us over every layer kind for the full-model estimate, and choose between "
                 "candidates on THAT. Per-layer microseconds are for detection against the per-layer noise "
-                "floor; per-model microseconds are for deciding, because layer counts differ by kind.",
+                "floor; per-model microseconds are for deciding, because layer counts differ by kind. Report "
+                "the model estimate as before/after with the uncertainty band: a per-layer delta scaled by "
+                "the layer count carries the per-layer floor scaled by the same factor.",
     }
 
     out = {
