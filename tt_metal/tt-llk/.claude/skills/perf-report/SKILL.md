@@ -63,8 +63,9 @@ Rules:
   reduces `ZONE_SCOPED` to metadata only: the run emits no wall-clock
   `mean(<run type>)` columns, only `<RUN_TYPE>_..._pct` efficiency columns.
   It also writes to the same `<module>.csv` path, overwriting the timing
-  report. Copy the timing report aside first, run counters as a separate
-  sweep, and validate the result as a counter report. `--dump-csv-counters`
+  report. Move the timing report out of the way first (see Refresh and
+  compare), run counters as a separate sweep, and validate the result as a
+  counter report. `--dump-csv-counters`
   additionally writes raw counter values to `<module>.counters.csv`.
 - Perf counters are unavailable on Quasar. The build gate keeps the define off
   there and `counters.h` `#error`s if it ever slips through, so the flag
@@ -102,10 +103,15 @@ finish, or every selected test was skipped.
 1. **Schema.** A `PerfSchemaError` means one test emits different columns
    across its sweep — usually a parameter that is `None` for some values — or
    two ops share one module. Fix the test; do not work around it.
-2. **Row count.** Expect `variants × markers` rows: markers `INIT`, `KERNEL`,
-   and `TILE_LOOP` in a timing report, and only `INIT` and `TILE_LOOP` in a
-   counter report, which has no profiler-derived `KERNEL` row. A short file
-   means an aborted or partly skipped sweep.
+2. **Row count.** Reconcile rather than assert equality. Start from
+   `selected variants × markers`, then subtract skipped or deselected
+   variants and any rows merged by duplicate-key collapse. Markers are the
+   zones the kernel declares — `INIT` and `TILE_LOOP` in the perf sources,
+   plus the `KERNEL` zone that `trisc.cpp` wraps around every profiler build.
+   A counter report has no profiler-derived rows, so expect only the counter
+   zones `INIT` and `TILE_LOOP` there. An unexplained shortfall means an
+   aborted or partly skipped sweep; a shortfall you can attribute to skips or
+   collapse is fine.
 3. **Duplicate keys.** `combine_perf_reports()` warns when it collapses rows
    sharing a (sweep, marker) key. Differing metrics on a collapsed key are
    either run-to-run noise or a parameter that changes the kernel without
@@ -144,9 +150,15 @@ Report back, and keep alongside the CSV when it is archived:
 
 ## Refresh and compare
 
-- Copy an existing report elsewhere before rerunning; combined files are
-  overwritten in place. This applies with full force to a counter run, which
-  replaces the timing report for the same module.
+- Move the existing `perf_data/<module>/` aside before rerunning — copy it out
+  and delete the original, rather than just copying. `combine_perf_reports()`
+  returns early when no worker files were produced and writes each output only
+  when that class has inputs, so a rerun that skips everything or dies before
+  the consumer phase leaves the previous CSV sitting there looking like the new
+  result. Deleting first makes a no-op rerun visibly empty. Confirm the output
+  timestamps are from the run you just did.
+- A counter run replaces the timing report for the same module, so move the
+  timing report out of the way first for the same reason.
 - Compare like with like: same architecture, same speed-of-light setting, same
   `loop_factor` and marker, and the same report kind. Timing and counter
   reports measure different things and share no metric columns.
@@ -157,9 +169,11 @@ Report back, and keep alongside the CSV when it is archived:
 - [ ] Test, architecture, and intended scope confirmed.
 - [ ] Producer and consumer phases both completed without aborting.
 - [ ] Coverage off; speed-of-light setting deliberate and uniform.
+- [ ] Any previous `perf_data/<module>/` was moved aside and deleted before the
+      run, and the new files carry this run's timestamps.
 - [ ] `perf_data/<module>/` holds the raw and `.post.csv` files, plus counters
-      when requested, and no earlier report was overwritten unintentionally.
-- [ ] Single schema, expected row count, duplicate warnings reviewed.
+      when requested.
+- [ ] Single schema, row count reconciled, duplicate warnings reviewed.
 - [ ] Column expectations applied for the report kind actually produced.
 - [ ] `TILE_LOOP` metrics inspected for plausibility.
 - [ ] Columns match the current test sweep.
