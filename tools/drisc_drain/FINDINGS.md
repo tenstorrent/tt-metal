@@ -405,6 +405,50 @@ all serial on one core, which is 98% busy. Past that needs a second DRISC on ano
 Note the inversion against leg A: here `1 buf x 8` beats `2 buf x 4`, because the buffer is freed by a
 slow PCIe write rather than a 640 ns DMA, so the larger page outweighs the overlap.
 
+## Scaling the direct drainer: ingest fans out, egress does not
+
+N DRISCs, each on its own bank, each owning a slice of the grid and pushing to **its own D2H socket** --
+the same fan-out shape as the X280 reader pool, except every reader is also its own egress path, so
+there is no relay and no shared ring. The grid splits by whole 8-core pages (15 of them), as evenly as
+15/N allows. Host drains all sockets round-robin on one thread.
+
+| DRISCs | slice (pages) | device GB/s | host GB/s | worst reserve |
+|---|---|---|---|---|
+| 1 | 15 | 24.02 | 24.43 | 7.7% |
+| **2** | 8+7 | **25.00** | **25.01** | 46.7% |
+| 3 | 5+5+5 | 24.29 | 25.01 | 64.2% |
+| 4 | 4+4+4+3 | 24.11 | 24.13 | 70.3% |
+| 1, zero-copy consumer | 15 | 27.74 | 27.75 | 1.7% |
+
+**Flat at 24-25 GB/s from 1 to 4 DRISCs.** The reserve column is the whole story: 7.7% -> 46.7% ->
+64.2% -> 70.3%. Each added DRISC spends proportionally more of its life blocked waiting for FIFO space.
+The work redistributes; the total does not move.
+
+This is the opposite of ingest, which scaled 1.93x / 3.85x at 2 and 4 DRISCs, and the difference is
+structural: **ingest is N independent NoC paths, egress is one PCIe link and one host consumer.** The
+X280 reader fan-out helped because reads were the constraint; here the constraint is downstream of
+every reader, so nothing upstream can move it.
+
+Practical consequence: add DRISCs to poll the grid faster or cover more cores, never to get more data
+to the host. One drainer already holds essentially the entire egress budget.
+
+### Hazard: several senders with an unthrottled consumer wedge the card
+
+Sweeping the zero-copy consumer (`discard_pending_pages`) past one DRISC is **reproducibly fatal**.
+Two DRISCs pushing with nothing throttling them kills the machine at the same point every time:
+
+```
+MMIO per-op timeout: 4B load took 220218 us (budget=2 ms)
+```
+
+It survived hardening the poll loop, so it is not host polling pressure. The mechanism fits the
+numbers: one DRISC alone pushes 27.7 GB/s and the link ceiling is ~57.6 GB/s (~90% of PCIe Gen5 x16),
+so two unthrottled senders demand roughly the whole link, the host's small non-posted MMIO reads starve
+to 220 ms, and UMD's 2 ms budget trips. With the memcpy consumer the senders are throttled to ~47%
+reserve and the link never saturates.
+
+The zero-copy variant is therefore swept at N=1 only. Recovery is `tt-smi -r`.
+
 ## Verdict: the DRAM round-trip does not pay
 
 | approach | GB/s | DRISCs | DRAM traffic |
@@ -429,6 +473,7 @@ back-to-back on one lane:
 | ingest alone, whole-core sweep @ 18.29 us | 67.4 GB/s | **143 ns** |
 | leg A: ingest + DMA to GDDR, one DRISC | 43.18 GB/s | 222 ns |
 | **whole drainer: ingest -> host, one DRISC** | **24.51 GB/s** | **392 ns** |
+| whole drainer, 2-4 DRISCs each with its own socket | 24-25 GB/s | ~384 ns (flat) |
 | whole drainer, same but zero-copy host | 27.71 GB/s | 346 ns |
 | A -> DRAM -> B -> host, two DRISCs | 20.85 GB/s | 460 ns |
 | egress only, no ingest (reference) | 25.36 GB/s | 387 ns |
@@ -457,16 +502,18 @@ Until then egress binds by ~2.7x.
 6. **On egress, tune the host, not the device.** 80 KB pages and 8 pages per host read are worth +50%
    together. Host ack batching and device notify batching are both worth nothing. The device write
    path is already at ~90% of the PCIe link.
-7. **Do not route the trace through DRAM to get it to the host.** Measured 18% slower than pushing
+7. **Add DRISCs for ingest, never for egress.** Ingest scales 1.93x/3.85x at 2/4 cores; egress is flat
+   from 1 to 4 because one PCIe link and one host consumer sit downstream of every sender.
+8. **Do not route the trace through DRAM to get it to the host.** Measured 18% slower than pushing
    direct, using twice the cores. The host wall is downstream of the DRAM buffer, so the round-trip
    cannot raise throughput. Use DRAM only if you specifically need elasticity, and size it knowing the
    reserved region is 4.8 MB per bank.
-8. **Expect zero-copy to matter less in a combined kernel.** Worth 2.3x when the DRISC only pushes,
+9. **Expect zero-copy to matter less in a combined kernel.** Worth 2.3x when the DRISC only pushes,
    +13% once ingest shares the core, because the reads already absorb the host's stalls.
-9. **If the trace goes to DRAM, ping-pong two buffers.** One DRISC doing ingest + DMA runs at
+10. **If the trace goes to DRAM, ping-pong two buffers.** One DRISC doing ingest + DMA runs at
    43.18 GB/s, ~10% below reads alone, and the DMA hides completely behind the reads as long as a
    second batch buffer exists. A single deeper buffer trades that away and loses 23%.
-10. **Consume the FIFO in place.** The `memcpy` in `D2HSocket::read()` is the single largest remaining
+11. **Consume the FIFO in place**, but see 9 -- the payoff shrinks once ingest shares the core. The `memcpy` in `D2HSocket::read()` is the single largest remaining
    cost anywhere in the pipeline -- 2.3x -- and it penalises the producer as well as the consumer,
    because the host's PCIe reads contend with the device's PCIe writes.
 
@@ -491,6 +538,9 @@ Until then egress binds by ~2.7x.
   stream mode inbound traffic terminates at L1 and plain addresses are correct. Kernels that restore
   NOC2AXI on exit therefore need tagged readback; the egress test needs plain, because it leaves the
   NIU in stream mode. Same core, opposite convention.
+- **Never run multiple DRISC senders with a zero-cost host consumer.** Two unthrottled senders
+  saturate the PCIe link and starve host MMIO past UMD's 2 ms budget, reproducibly taking the card
+  down. A real (throttling) consumer is what keeps the link out of saturation.
 - **Do not pipe a long device test through `head`.** Closing the pipe early SIGPIPEs the test binary
   mid-run and can leave the card wedged (`Read 0xffffffff over PCIe ID 0`). Redirect to a file and
   grep the file. Recovery is `tt-smi -r`.
