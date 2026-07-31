@@ -318,7 +318,8 @@ void kernel_main() {
         // this program launches, so the credit has to live in memory the caller allocated up front.
         const uint32_t my_recv_sem_addr = get_arg_val<uint32_t>(fa++);
         const uint32_t my_dir = get_arg_val<uint32_t>(fa++);  // 0 = forward, 1 = backward
-        const uint32_t my_rounds = get_arg_val<uint32_t>(fa++);
+        const uint32_t my_send_rounds = get_arg_val<uint32_t>(fa++);
+        const uint32_t my_recv_rounds = get_arg_val<uint32_t>(fa++);
         const uint32_t m_groups = get_arg_val<uint32_t>(fa++);
         // On-chip barrier args (see the FusedGatherArg enum on the host).
         const uint32_t is_master0 = get_arg_val<uint32_t>(fa++);
@@ -413,9 +414,11 @@ void kernel_main() {
             }
 
             // ---- 2. bidirectional store-and-forward ring ----
-            // This core drives ONE direction (my_dir) for my_rounds rounds. fwd runs ceil((tp-1)/2) and
-            // bwd the remainder, so the two sum to exactly tp-1: at even tp the antipode rides the forward
-            // stream alone and is delivered exactly once, never twice and never dropped.
+            // This core drives ONE direction (my_dir). On a RING fwd runs tp/2 rounds and bwd the
+            // remainder, so the two sum to exactly tp-1 and at even tp the antipode rides the forward
+            // stream alone -- delivered exactly once, never twice and never dropped. On a LINE the counts
+            // are per-rank and send != recv (node d forwards the d+1 shards from 0..d but receives only
+            // d), which is why the two arrive as separate runtime args.
             //
             // Round r forwards the shard that ORIGINATED at rank -/+ (r-1) (forward/backward). It already
             // sits at the same staging offset here as on the neighbour, so source and destination offsets
@@ -434,7 +437,7 @@ void kernel_main() {
                 sender.open();
                 volatile tt_l1_ptr uint32_t* my_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_recv_sem_addr);
 
-                for (uint32_t r = 1; r <= my_rounds; ++r) {
+                for (uint32_t r = 1; r <= my_send_rounds; ++r) {
                     if (r >= 2) {
                         noc_semaphore_wait_min(my_recv, r - 1);  // previous hop has landed
                     }
@@ -503,13 +506,13 @@ void kernel_main() {
         // spec's progressive per-chunk consumption is the overlap step and comes next.
         if (is_fabric_client) {
             volatile tt_l1_ptr uint32_t* my_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_recv_sem_addr);
-            noc_semaphore_wait_min(my_recv, my_rounds);
+            noc_semaphore_wait_min(my_recv, my_recv_rounds);
             // Re-arm for the next invocation. A global semaphore is caller-owned memory and nothing else
             // zeroes it, so without this the next call that lands on this same ping-pong slot would see a
             // satisfied counter and read staging before any shard arrived.
             //
             // Safe to do here: only ONE neighbour ever increments this slot (store-and-forward, one
-            // direction per core), and it sends exactly my_rounds credits, so seeing the last one proves
+            // direction per core), and it sends exactly my_recv_rounds credits, so seeing the last one proves
             // that neighbour has finished with this slot for this invocation. It does NOT protect against
             // a neighbour running a whole ping-pong cycle ahead -- that is the caller's depth>=2 rotation.
             noc_semaphore_set(my_recv, 0);

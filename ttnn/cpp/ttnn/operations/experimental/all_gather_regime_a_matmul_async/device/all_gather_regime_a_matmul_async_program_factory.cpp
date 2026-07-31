@@ -359,21 +359,24 @@ enum FusedGatherArg : uint32_t {
     // Bidirectional schedule. One direction per core: masters 0..m_groups-1 drive forward, the rest
     // backward, and each direction's cores cover all of M between them. Only the mux for a core's own
     // direction is registered, so a core is never a client of a mux it does not drive.
-    kFgDir = 13,      // 0 = forward, 1 = backward
-    kFgRounds = 14,   // rounds this direction runs: ceil((tp-1)/2) fwd, floor((tp-1)/2) bwd
-    kFgMGroups = 15,  // M groups for the FABRIC split (= num_masters / 2); the local copy stays 8-way
+    kFgDir = 13,  // 0 = forward, 1 = backward
+    // Send and receive counts are SEPARATE because on a line they differ per rank: node d forwards the
+    // d+1 shards that originated at 0..d but only ever receives d of them. On a ring the two coincide.
+    kFgSendRounds = 14,
+    kFgRecvRounds = 15,
+    kFgMGroups = 16,  // M groups for the FABRIC split (= num_masters / 2); the local copy stays 8-way
     // On-chip gather barrier: every master reports to master 0, which multicasts one go-ahead to the grid.
-    kFgIsMaster0 = 16,
-    kFgGatherCountSem = 17,
-    kFgNumMasters = 18,
-    kFgMaster0X = 19,
-    kFgMaster0Y = 20,
-    kFgLocalDoneSem = 21,  // masters-finished-local-staging counter (one per master, not just master 0)
-    kFgNumReleaseRanges = 22,
+    kFgIsMaster0 = 17,
+    kFgGatherCountSem = 18,
+    kFgNumMasters = 19,
+    kFgMaster0X = 20,
+    kFgMaster0Y = 21,
+    kFgLocalDoneSem = 22,  // masters-finished-local-staging counter (one per master, not just master 0)
+    kFgNumReleaseRanges = 23,
     // Followed by kFgNumReleaseRanges 5-word records {start_x, start_y, end_x, end_y, num_dests} in VIRTUAL
     // coords: the multicast rectangles master 0 releases. Per-range rather than one bounding box because
     // the bank-adjacent placement is deliberately not a filled rectangle.
-    kFusedArgCount = 23,  // + 5*num_release_ranges + 2*num_masters words, then the mux client block
+    kFusedArgCount = 24,  // + 5*num_release_ranges + 2*num_masters words, then the mux client block
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -399,14 +402,6 @@ FusedGatherContext build_fused_gather_context(
     }
     ctx.enabled = true;
     ctx.tp = attrs.tp;
-
-    // Forward-only store-and-forward needs a CLOSED ring. On a line, rank 0 has no backward neighbour so
-    // its credit never arrives, and rank tp-1 can never pass shards onward. Refuse rather than hang.
-    TT_FATAL(
-        attrs.topology_is_ring,
-        "the fused gather is ring-only today: a forward-only store-and-forward gather deadlocks on a line "
-        "(rank 0 is never credited, and the last rank cannot forward). Use Topology::Ring, or the Phase-0 "
-        "composition for line topologies");
 
     const auto topology = attrs.topology_is_ring ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
     ctx.rank = ttnn::ccl::get_linearized_index_from_physical_coord(in0, mesh_coordinate, attrs.cluster_axis);
@@ -1258,11 +1253,28 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             // My direction's credit counter, and the round split. fwd = ceil((tp-1)/2), bwd = the rest, so
             // they sum to exactly tp-1: at even tp the antipode rides the forward stream only and is
             // therefore delivered exactly once.
-            const uint32_t fwd_rounds = (fused_gather.tp - 1u + 1u) / 2u;
-            const uint32_t bwd_rounds = (fused_gather.tp - 1u) - fwd_rounds;
+            // RING: the two directions split tp-1 evenly (tp is validated even, so fwd = tp/2), and each
+            // core sends exactly as many shards as it receives.
+            // LINE: counts are per-rank and send != recv. Node d passes forward the d+1 shards that
+            // originated at 0..d and receives the d shards 0..d-1; symmetrically backward. The two receive
+            // counts still sum to tp-1, so every rank still ends up with the whole activation. A rank at
+            // an end has no mux in that direction and sends nothing there, but it still RECEIVES the full
+            // tp-1 from the one direction it does have.
+            const uint32_t rk = fused_gather.rank;
+            uint32_t fwd_send, fwd_recv, bwd_send, bwd_recv;
+            if (operation_attributes.topology_is_ring) {
+                fwd_send = fwd_recv = fused_gather.tp / 2u;
+                bwd_send = bwd_recv = (fused_gather.tp - 1u) - fwd_send;
+            } else {
+                fwd_send = (fused_gather.mux_cfg_fwd != nullptr) ? (rk + 1u) : 0u;
+                fwd_recv = rk;
+                bwd_send = (fused_gather.mux_cfg_bwd != nullptr) ? (fused_gather.tp - rk) : 0u;
+                bwd_recv = fused_gather.tp - 1u - rk;
+            }
             wa.push_back(core_is_bwd ? fused_gather.bwd_recv_sem_addr : fused_gather.fwd_recv_sem_addr);
             wa.push_back(core_is_bwd ? 1u : 0u);
-            wa.push_back(core_is_bwd ? bwd_rounds : fwd_rounds);
+            wa.push_back(core_is_bwd ? bwd_send : fwd_send);
+            wa.push_back(core_is_bwd ? bwd_recv : fwd_recv);
             wa.push_back(m_groups_pf);
             wa.push_back((is_master_ring && (i == 0u)) ? 1u : 0u);
             wa.push_back(fused_gather.gather_count_sem_id);
