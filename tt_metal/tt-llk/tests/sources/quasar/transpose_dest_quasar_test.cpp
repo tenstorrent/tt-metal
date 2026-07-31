@@ -53,6 +53,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // types have no unpack-to-dest consumer pulse.
                 set_up_zero_dest_dvalid_handshake_for_unpack();
             }
+
+            const DataFormat unpack_src_format = static_cast<DataFormat>(formats.unpack_A_src);
+            if constexpr (is_fp32_dest_acc_en)
+            {
+                if (unpack_src_format == DataFormat::Float32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
+                }
+                else if (unpack_src_format == DataFormat::Int32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+                }
+                else
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+                }
+            }
+            else
+            {
+                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+            }
         }
         else
         {
@@ -217,12 +238,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && unpack_to_dest)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // L1_TO_L1 leaves FPU configured as the middle client in the
-            // UNPACK→FPU→PACK chain. Math isolate has no unpack destination
-            // pulse, so make FPU the producer and restore immediate ownership
-            // of the destination register.
+            // Math isolate has no destination producer before FPU, so make FPU
+            // the producer and restore immediate ownership of the destination.
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 

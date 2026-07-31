@@ -122,7 +122,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         # with a wide margin so the first run will pass and surface the measured number.
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer0 and gate_device and no_ref and isl_25k'",
-            25_862_584,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02 (with FABRIC_2D init flush=false change).
+            23_148_850,  # Recalibrated 2026-07-30 on bh-glx-110-c08u02 (with FABRIC_2D init flush=false change).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_fabric2d",
             1,

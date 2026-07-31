@@ -1119,21 +1119,34 @@ def test_timestamped_events():
         for E in BH_ERISC_COUNTS:
             BH_COMBO_COUNTS.append((T, E))
 
+    # Quasar's profiler is L1-only, the buffer fills and remaining markers are dropped, only the
+    # iterations that fit are captured. Each iteration writes 10 words (zone start + TS_DATA +
+    # TS_EVENT + zone end), so (PROFILER_L1_VECTOR_SIZE - CUSTOM_MARKERS) / 10 = 500 / 10 = 50
+    # iterations per risc, each contributing two event markers.
+    QUASAR_RISC_COUNT = 6 + 4 * 4  # DM2-7 + Neo0-3 * TRISC0-3
+    QUASAR_ITER_COUNT = 50
+    QUASAR_EVENTS_PER_ITER = 2  # DeviceTimestampedData + DeviceRecordEvent
+
     REF_COUNT_DICT = {
         "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
         "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
+        # Note: using emu-quasar-2x3_DISPATCH for both dispatch modes
+        "quasar": [2 * QUASAR_RISC_COUNT * QUASAR_ITER_COUNT * QUASAR_EVENTS_PER_ITER],
     }
     REF_ERISC_COUNT = {
         "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in WH_ERISC_COUNTS],
         "blackhole": [C * OP_COUNT * ZONE_COUNT for C in BH_ERISC_COUNTS],
     }
+    TEST_BIN_DICT = {
+        "wormhole_b0": "build/test/tt_metal/tools/profiler/test_timestamped_events",
+        "blackhole": "build/test/tt_metal/tools/profiler/test_timestamped_events",
+        "quasar": "build/programming_examples/profiler/test_timestamped_events",
+    }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(
-        testName="build/test/tt_metal/tools/profiler/test_timestamped_events", setupAutoExtract=True
-    )
+    devicesData = run_device_profiler_test(testName=TEST_BIN_DICT[ENV_VAR_ARCH_NAME], setupAutoExtract=True)
 
     if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
         eventCount = len(

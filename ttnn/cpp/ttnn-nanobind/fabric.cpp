@@ -67,6 +67,12 @@ void bind_fabric_api(nb::module_& mod) {
         .value(
             "CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
 
+    nb::enum_<tt::tt_fabric::FabricType>(mod, "FabricType", nb::is_arithmetic())
+        .value("MESH", tt::tt_fabric::FabricType::MESH)
+        .value("TORUS_X", tt::tt_fabric::FabricType::TORUS_X)
+        .value("TORUS_Y", tt::tt_fabric::FabricType::TORUS_Y)
+        .value("TORUS_XY", tt::tt_fabric::FabricType::TORUS_XY);
+
     // custom mapping here for interface stability
     nb::enum_<tt::tt_fabric::FabricReliabilityMode>(mod, "FabricReliabilityMode", R"(
         Specifies how the fabric initialization handles system health and configuration.
@@ -379,6 +385,15 @@ void bind_fabric_api(nb::module_& mod) {
 
             Unlike get_user_physical_mesh_ids (which is scoped to the local rank's meshes),
             this enumerates peer meshes as well, enabling multi-mesh topology discovery.
+        )");
+
+    mod.def(
+        "get_all_mgd_fabric_types",
+        &tt::tt_fabric::get_all_mgd_fabric_types,
+        R"(
+            Returns the FabricType each compute mesh's dim_types imply, one entry per mesh in
+            the active mesh graph descriptor. Callers can map these to a FabricConfig to match
+            the wired topology (RING/LINE) instead of inferring it from process count.
         )");
 }
 
