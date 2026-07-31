@@ -136,9 +136,9 @@ the two cannot be fully separated — but the measurements track **commands**, s
 Two reproduction notes for anyone repeating this:
 - This tt-npe build's JSON loader does an **unguarded** lookup of `golden_result` and aborts
   (`boost out_of_range`) if the key is absent; a dummy `{"golden_result": {"cycles": 0}}` is required
-  even when only the prediction is wanted. Its shipped `programmatic_workload_generation.py` is also
-  stale against the built pybind API (`Transfer`'s `dst` now wants an `NocDestination`), and
-  `tt_npe.py` references a `Stats.wallclock_runtime_us` that no longer exists on `Stats`.
+  even when only the prediction is wanted. Its shipped `programmatic_workload_generation.py` does not
+  match the built pybind API (`Transfer`'s `dst` expects an `NocDestination`, not a `Coord`), and
+  `tt_npe.py` reads a `Stats.wallclock_runtime_us` attribute that `Stats` does not expose.
 - `dram_bw_util` came back `inf` (a divide-by-zero artifact) and was not used.
 
 ---

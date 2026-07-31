@@ -121,9 +121,8 @@ LABEL = {
     "one_riscv_brisc": "DIAG: BRISC reads A+B, both on NoC1 (NCRISC idle)",
 }
 
-# The two factors, for the report: how many RISC-Vs issue reads, how many NoC ports carry them.
-# RISCs and NoCs move together (1:1 firmware binding), so these are always equal — both are reported
-# to keep the reader honest about the fact that the two factors are NOT independently varied.
+# Reported per variant: RISC-Vs issuing reads, and NoC ports carrying them. Always equal (one RISC is
+# one NoC); both are shown so the report never implies the two were varied independently.
 RISCS = {"one_riscv": 1, "two_riscv": 2, "two_riscv_sem": 2, "one_riscv_brisc": 1}
 NOCS = {"one_riscv": 1, "two_riscv": 2, "two_riscv_sem": 2, "one_riscv_brisc": 1}
 

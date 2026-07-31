@@ -34,7 +34,7 @@ sitting idle, and everything queues behind one of them.
 Taking that capacity is **not free**, and the cost is not obvious: one RISC is one NoC, so handing an
 operand to BRISC also moves it onto NoC 1, which is the *worse* route for DRAM reads. Whether the
 extra engine outweighs that is a measured question with a sign that changes —
-see [*Where this wins and where it does NOT*](#where-this-wins-and-where-it-does-not--core-count--transaction-size).
+see [*Where this wins and where it does NOT*](#where-this-wins-and-where-it-does-not--placement--transaction-size).
 
 ## What this isolates — and how
 
@@ -157,7 +157,7 @@ limit, and the port's injection path contributes a smaller share.**
 Practical consequence: the smaller your transactions, the more this trick is worth. With large
 contiguous reads you are closer to the byte side and should expect less.
 
-## Where this wins and where it does NOT — core count × transaction size
+## Where this wins and where it does NOT — placement × transaction size
 
 The single-core numbers above do **not** generalize. `two_riscv` vs baseline, payload-ablated,
 `block=8`, per-core work held constant (32 tiles/operand/core) — full tables in
@@ -196,8 +196,10 @@ single-RISC issue load but puts *all* reads on NoC 1:
 | 32 | 8×4 | 0.54× |
 | 64 | 8×8 | 0.62× |
 
-Consistent with `noc_placement`, and it explains the shape of the first table: the penalty is absent
-at one core, worst on a single row of cores, and eases as the grid fills out.
+**The penalty is governed by core PLACEMENT, not core count.** It is absent on one core (nothing to
+route around), worst on a single *row* of cores, and eases as the grid fills out — 0.34× at 8×1 vs
+0.62× at 8×8, despite 8× the cores. That is the same row-vs-filled-grid routing behaviour
+`noc_placement` measures, and it is what shapes the first table.
 
 **Why 64 cores recovers to ~1.1×:** DRAM saturates. Aggregate read bandwidth plateaus at **~340–410
 GB/s from 16 cores up** while per-core bandwidth collapses 37 → 5.6 GB/s. Once the read is DRAM-bound,
@@ -212,12 +214,10 @@ routing). By ~512 B the split is a win at every core count tested.
 - **Use it** when reads are command-limited — many small transactions. Block-float weight pages sit
   exactly there (a bfp4 tile page is 576 B, bfp8 1088 B), and at ~512 B the split wins at **every**
   core count tested: 1.34× at 8 cores, 1.46× at 64, 1.74× on one core.
-- **Don't** use it for large, tile-sized reads spread over a moderate core count — at bf16 2048 B on
-  8 cores it is a **0.68× regression**, because you pay the NoC-1 read-route penalty for nothing.
+- **Don't** use it for large, tile-sized reads on a spread placement — at bf16 2048 B on a single row
+  of 8 cores it is a **0.68× regression**: you pay the NoC-1 read-route penalty for nothing.
 - On a **single core** it always wins, and routing does not matter.
 - If you are already DRAM-bandwidth-bound, expect little either way.
-- The shape above is not specific to this grid width; it reproduced on both 8-wide and wider
-  rectangles, with the regression always landing on the single-row placement.
 
 ## Gist — how to apply it
 
@@ -283,9 +283,9 @@ scripts/run_safe_pytest.sh --run-all \
 - The output being L1-resident is what makes this a clean read-only measurement. A real op writes its
   result, and if the writer must do that *concurrently* with reading the second operand, this is no
   longer free. The trick is free precisely when the writer would otherwise be idle.
-- **Grids here are rectangular and anchored at (0,0)**, with work split row-major. Different
-  placements route differently (that is force 2 above), so re-measure rather than extrapolating to a
-  different core layout.
+- **Placement matters more than core count**, because it sets the NoC-1 penalty (force 2 above).
+  Grids here are rectangular, anchored at (0,0), work split row-major; a different layout routes
+  differently, so re-measure rather than extrapolating.
 - Only `bfloat16` operands are wired up; `txn_bytes` is what stands in for smaller pages. A real
   block-float tensor also changes the page size seen by the accessor, so treat the 512 B column as
   indicative of a bfp4-sized read, not identical to one.
