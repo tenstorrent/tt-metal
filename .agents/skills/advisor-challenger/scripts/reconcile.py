@@ -501,6 +501,14 @@ def main() -> int:
     # cell had a whole-stage ceiling of 0.65x its floor and still shipped a win, and another had a ceiling of
     # 4.31x its floor but no single chain above it, screened them one at a time, and reported no change.
     floor_us = round((max(repeats) - min(repeats)) * 1000, 3) if len(repeats) >= 2 else None
+    # IS THE FLOOR NOISE, OR AN UNFINISHED WARM-UP? A device that is still settling produces repeats that
+    # fall monotonically, and then the "floor" is a systematic ramp rather than run-to-run variance. That
+    # matters twice over: it inflates the floor, and it breaks the exchangeability the non-overlap rule
+    # assumes, because a candidate measured after the incumbent in the same process is simply warmer.
+    floor_exfirst_us = round((max(repeats[1:]) - min(repeats[1:])) * 1000, 3) if len(repeats) >= 3 else None
+    first_gap_share = (round(1 - floor_exfirst_us / floor_us, 3)
+                       if floor_us and floor_exfirst_us is not None else None)
+    monotone = len(repeats) >= 3 and all(repeats[i] >= repeats[i + 1] for i in range(len(repeats) - 1))
     ceiling_us = round(sum(
         r["us"] for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is False), 3)
     for c in chains:
@@ -522,6 +530,8 @@ def main() -> int:
     }
 
     feasibility = {"noise_floor_us": floor_us, "noise_floor_source": "max-min of incumbent repeats_ms",
+                   "noise_floor_excluding_first_us": floor_exfirst_us,
+                   "first_repeat_share_of_floor": first_gap_share, "repeats_monotone_decreasing": monotone,
                    "repeats": len(repeats), "ceiling_us": ceiling_us,
                    "ceiling_vs_floor": round(ceiling_us / floor_us, 2) if floor_us else None,
                    "chains_resolvable_alone": sum(1 for c in chains if c["resolvable_alone"])}
@@ -547,6 +557,23 @@ def main() -> int:
         feasibility["verdict"] = "measurable"
         feasibility["advice"] = (f"{feasibility['chains_resolvable_alone']} chain(s) exceed the {floor_us} us "
                                  f"floor; screen those individually and group the rest.")
+    if first_gap_share is not None and (first_gap_share > 0.5 or monotone):
+        would = ("measurable" if any(c["advisor_removes_us"] > floor_exfirst_us for c in chains)
+                 else "aggregate_only" if ceiling_us > floor_exfirst_us else "not_measurable")
+        feasibility["warmup_suspect"] = {
+            "first_repeat_share_of_floor": first_gap_share, "monotone": monotone,
+            "floor_without_first_repeat_us": floor_exfirst_us,
+            "verdict_if_warmed_properly": would,
+            "note": "The first timed repeat carries most of the spread, and/or the repeats fall "
+                    "monotonically, so this is a settling ramp rather than noise. Re-measure with at least "
+                    "10 untimed warm-up replays before accepting the verdict above -- and never measure a "
+                    "candidate after the incumbent in one process, since the later run is simply warmer.",
+        }
+    rec = incumbent.get("noise_floor_ms")
+    if rec is not None and floor_us is not None and abs(rec * 1000 - floor_us) > 0.002:
+        feasibility["recorded_noise_floor_disagrees"] = {
+            "recorded_ms": rec, "computed_us": floor_us,
+            "note": "incumbent.json records a noise floor that is not the spread of its own repeats_ms."}
     if repeats and incumbent.get("incumbent_ms") is not None:
         med = sorted(repeats)[len(repeats) // 2]
         if abs(incumbent["incumbent_ms"] - med) > 1e-9:
@@ -631,6 +658,12 @@ def main() -> int:
           f"ceiling {f['ceiling_us']} us ({f['ceiling_vs_floor']}x)")
     for line in textwrap.wrap(f["advice"], 108):
         print("      " + line)
+    if "warmup_suspect" in f:
+        w = f["warmup_suspect"]
+        print(f"   !! WARM-UP: the first repeat is {100 * (w['first_repeat_share_of_floor'] or 0):.0f} % of "
+              f"the floor" + (" and the repeats fall monotonically" if w["monotone"] else "") +
+              f". Without it the floor is {w['floor_without_first_repeat_us']} us and the verdict would be "
+              f"[{w['verdict_if_warmed_properly']}]. Add warm-up replays and re-measure.")
     if "incumbent_ms_is_not_median" in f:
         print(f"   !! incumbent_ms {f['incumbent_ms_is_not_median']['recorded']} is not the median "
               f"{f['incumbent_ms_is_not_median']['median']} -- fix before screening")

@@ -54,8 +54,28 @@ elif "constructor_default" in src:
                "arguments, not the run's effective config. Source it from what EXECUTED.")
 if not d.get("shipped_policy"):
     bad.append("shipped_policy missing")
+soft = []
+if not d.get("harness_scope"):
+    soft.append("harness_scope missing -- state what the harness times end to end. Unrecorded scope is why "
+                "one cell's incumbent_ms is a derived per-model composite and another's is one layer.")
+if not isinstance(d.get("iters_per_repeat"), int):
+    soft.append("iters_per_repeat missing. A timed block averaging N>=50 replays gives a floor ~sqrt(N) "
+                "tighter than single-shot timing; the corpus cell with the only material win is the one "
+                "that did this. Record N so floors are comparable across cells.")
+if isinstance(r, list) and len(r) >= 3:
+    full = max(r) - min(r)
+    exf = max(r[1:]) - min(r[1:])
+    mono = all(r[i] >= r[i + 1] for i in range(len(r) - 1))
+    if full > 0 and (mono or (1 - exf / full) > 0.5):
+        bad.append(f"the first timed repeat is {100 * (1 - exf / full):.0f}% of the whole spread"
+                   + (" and the repeats fall monotonically" if mono else "")
+                   + f", so {full * 1000:.3f}us is a settling ramp, not a noise floor (without it: "
+                     f"{exf * 1000:.3f}us). Add >=10 untimed warm-up replays and re-measure. A ramp also "
+                     "breaks non-overlap: a candidate timed after the incumbent in one process is warmer.")
 for b in bad: print(f"CRITICAL: incumbent.json: {b}", file=sys.stderr)
-sys.exit(1 if bad else 0)
+for b in soft: print(f"{'CRITICAL' if os.environ.get('CH_STRICT') == '1' else 'WARN'}: incumbent.json: {b}",
+                     file=sys.stderr)
+sys.exit(1 if bad or (soft and os.environ.get("CH_STRICT") == "1") else 0)
 PY
   [ "$fail" = 0 ] && ok "incumbent.json: n>=5, incumbent_ms = median, policy sourced from execution"
 fi

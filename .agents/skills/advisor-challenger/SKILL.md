@@ -125,18 +125,43 @@ The one combination worth enumerating is **across layer kinds** (step 6).
 
 ### 1. Freeze the incumbent, before running the advisor
 
-Its own perf harness at `DECODE_BATCH`. **10 untimed warm-up replays, then n = 5 timed** — or blocks of 100
-replays, which gave the tightest floor in this corpus (0.03 %). Record `repeats_ms` and take the
-**median**, not the min: min-of-n is biased low by an amount that grows with n, so cells with different n
-are not comparable.
+**The harness decides whether this stage can measure anything at all, so build it before you build anything
+else.** In the reference corpus the single cell with a tight harness is the single cell that found a material
+win, and two cells were unmeasurable before the advisor was even consulted.
 
-`incumbent.json`: `decode_batch`, `requested_decode_batch`, `measured_at`, `repeats_ms`, `incumbent_ms`
-(median), `harness`, `harness_scope` (what the harness measures end to end), `shipped_policy` and
+Protocol, in this order:
+
+1. Capture the trace once, then **≥10 untimed warm-up replays.** Not 1. A device still settling produces
+   repeats that fall monotonically, and in four of nine corpus cells the first timed repeat alone was
+   **45–73 % of the reported noise floor** — a ramp misread as variance. On one cell, discarding it takes the
+   floor from 6.282 µs to 1.693 µs, which flips the whole stage from unmeasurable to measurable.
+2. **n = 5 timed blocks, each block the mean of `ITERS ≥ 50` replays.** Averaging inside the block tightens
+   the floor by roughly √ITERS; the corpus cell that did this reached 0.03 % against 1.0–1.4 % for the cells
+   that timed one replay per repeat. Record `iters_per_repeat` — floors from different protocols are not
+   comparable numbers.
+3. `incumbent_ms` = **median** of the block means. Not the min: a harness that reports `best_ms = min(...)`
+   invites it, and all nine corpus cells recorded the min.
+4. Record `noise_floor_ms` = the spread of `repeats_ms`, and **use it** (step 3a). Every corpus cell already
+   recorded this number and none of them acted on it.
+5. **Never time a candidate after the incumbent in the same process.** With any residual ramp the later run
+   is simply warmer, which hands the candidate a free win under a non-overlap rule that assumes exchangeable
+   samples.
+
+`incumbent.json`: `decode_batch`, `requested_decode_batch`, `iters_per_repeat`, `measured_at`, `repeats_ms`,
+`incumbent_ms` (median), `noise_floor_ms`, `harness`, `harness_scope`, and `shipped_policy` /
 `shipped_weight_dtypes` sourced from what **executed** — the final `tt-perf-report` CSV or the selected
 candidate JSON, never `resolved_policy.constructor_defaults`.
 
-Save the op-level `tt-perf-report` CSV per layer kind. The window it reports must be within ~5× of
-`incumbent_ms`; a wider gap means the harness measures something other than the decode path.
+**State `harness_scope` explicitly, and say whether the metric is measured or derived.** It is unset in all
+nine corpus cells, and they do not measure the same thing: most time one decoder layer, while one reports a
+per-model composite computed as `Σ layer_count × per-layer median` — 937 ms of arithmetic, not a measurement.
+A derived metric's spread is the spread of medians and is far tighter than real run-to-run variance, so
+non-overlap against it will declare wins that a real measurement would not support. If the metric is derived,
+label it and do not compare its floor with any other cell's.
+
+Save the op-level `tt-perf-report` CSV per layer kind, bounded to **one** replay with
+`--start-signpost` / `--end-signpost`. The window it reports should be within a few percent of
+`incumbent_ms` when both cover one layer.
 
 ### 2. Capture once per layer kind, at the shipped precision
 
