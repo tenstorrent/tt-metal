@@ -77,6 +77,9 @@ def decode_forward(
         bias=weights.wqkv_bias,
         dtype=ttnn.bfloat16,
         memory_config=qkv_memory_config,
+        program_config=program_config.get_decode_qkv_config(
+            hidden_states.shape[-2], weights.wqkv.shape[-1], hidden_states.shape[-1]
+        ),
     )
 
     # Split into Q, K, V heads
