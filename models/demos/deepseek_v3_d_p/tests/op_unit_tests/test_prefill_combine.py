@@ -802,8 +802,6 @@ def _cmbf2d_check_accuracy(mesh_device, host_input, dev_output, movements, token
     # `host_out` are both the reassembled whole, so a device's block starts at coord * shard_extent.
     dev_rows, elems = tuple(dev_output.shape)
 
-    extent = rows
-    failures = []
     for m in movements:
         sr, sc = m.src
         dr, dc = m.dst
@@ -812,42 +810,9 @@ def _cmbf2d_check_accuracy(mesh_device, host_input, dev_output, movements, token
         src = host_input[src_row0 : src_row0 + tokens, sc * elems : (sc + 1) * elems]
         got = host_out[dst_row0 : dst_row0 + tokens, dc * elems : (dc + 1) * elems]
         if not torch.equal(src, got):
-            bad_rows = (src != got).any(dim=1)
-            failures.append(
-                {
-                    "offset": (dr - sr) % extent,
-                    "src": tuple(m.src),
-                    "dst": tuple(m.dst),
-                    "in_base": m.in_base_token,
-                    "bad_tokens": int(bad_rows.sum()),
-                    "first_bad": int(bad_rows.nonzero()[0][0]),
-                    "all_zero": bool((got[bad_rows] == 0).all()),
-                }
-            )
+            return False
 
-    if not failures:
-        return True
-
-    # Group by ring offset: the single most diagnostic cut, because it separates "routing is wrong" from
-    # "far destinations lose a race" from "one specific hop distance is broken".
-    by_offset = {}
-    for f in failures:
-        e = by_offset.setdefault(f["offset"], {"movements": 0, "bad_tokens": 0, "all_zero": 0})
-        e["movements"] += 1
-        e["bad_tokens"] += f["bad_tokens"]
-        e["all_zero"] += 1 if f["all_zero"] else 0
-    logger.error(f"accuracy FAILED: {len(failures)} of {len(movements)} movements wrong")
-    logger.error(f"{'ring offset':>12} {'bad movements':>14} {'bad tokens':>11} {'wholly unwritten':>17}")
-    for off in sorted(by_offset):
-        e = by_offset[off]
-        logger.error(f"{off:>12} {e['movements']:>14} {e['bad_tokens']:>11} {e['all_zero']:>17}")
-    for f in failures[:5]:
-        logger.error(
-            f"  e.g. off{f['offset']} src{f['src']} -> dst{f['dst']} in_base {f['in_base']}: "
-            f"{f['bad_tokens']}/{tokens} tokens wrong, first at {f['first_bad']}, "
-            f"{'all zero (never written)' if f['all_zero'] else 'wrong content'}"
-        )
-    return False
+    return True
 
 
 def _cmbf2d_producer_token_budget(mesh_device, axis, num_links, tokens):
