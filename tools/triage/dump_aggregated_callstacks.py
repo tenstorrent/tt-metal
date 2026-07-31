@@ -12,8 +12,8 @@ Options:
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
 
 Description:
-    Aggregates callstacks by (Kernel Id, normalized PC, RISC Name and Operation Id) and shows:
-      - Kernel Id / Kernel Name
+    Aggregates callstacks by (Kernel Path, ELF-relative PC, RISC Name and Operation Id) and shows:
+      - Kernel Name / # Kernel IDs (one group spans every kernel id that ran the same ELF)
       - Op Id (host_assigned_id, for correlation with dump_running_operations.py)
       - Callstack
       - # of Cores
@@ -50,6 +50,8 @@ from run_checks import run as get_run_checks, device_description_serializer
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
+from ttexalens.elf import ElfFile
+from ttexalens.memory_access import NO_MEMORY_ACCESS
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
@@ -59,6 +61,16 @@ script_config = ScriptConfig(
 
 BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 DEFAULT_MAX_LOCATIONS = 10
+
+
+def _normalize_pc(pc: int | None, kernel_elf: ElfFile | None, kernel_offset: int | None) -> tuple[bool, int | None]:
+    """Make a PC comparable across cores, returning (whether it is a kernel PC, the PC to key on)."""
+
+    if pc is None or kernel_elf is None or kernel_offset is None:
+        return False, pc
+    if kernel_elf.get_frame_description(pc, NO_MEMORY_ACCESS) is None:
+        return False, pc
+    return True, pc - kernel_offset
 
 
 def _render_device_for_bucket(
@@ -101,8 +113,8 @@ def _render_device_for_bucket(
 
 @dataclass
 class AggregatedCallstackRow:
-    kernel_id: int | None = triage_field("Kernel Id")
     kernel_name: str | None = triage_field("Kernel Name")
+    kernel_id_count: int = triage_field("# Kernel IDs")  # distinct watcher_kernel_ids folded into this group
     op_id: int | str | None = triage_field("Op Id")  # host_assigned_id from dispatcher, or "N/A (read error)"
     callstack: KernelCallstackWithMessage = triage_field("Kernel Callstack", format_callstack_with_message)
     core_count: int = triage_field("# of Cores")
@@ -116,7 +128,6 @@ class AggregationBucket:
 
     def __init__(self, first: CallstacksData, risc_name: str):
         d = first.dispatcher_core_data
-        self.kernel_id = d.watcher_kernel_id
         self.kernel_name = d.kernel_name
         self.op_id = d.host_assigned_id
         self.callstack = first.kernel_callstack_with_message
@@ -125,16 +136,18 @@ class AggregationBucket:
         # Existing aggregation for plain text mode
         self.core_locations: set[str] = set()
         self.device_labels: set[str] = set()
+        self.kernel_ids: set[int] = set()
 
         # Helper for device visualization mode
         self.per_core_hits: dict[int, set[tuple[int, int]]] = defaultdict(set)
 
-    def add_core(self, location: OnChipCoordinate, device_label: str):
+    def add_core(self, location: OnChipCoordinate, device_label: str, kernel_id: int):
         """Add a core to this aggregation bucket."""
 
         coord_str = location.to_user_str()
         self.core_locations.add(f"{device_label}:{coord_str}")
         self.device_labels.add(device_label)
+        self.kernel_ids.add(kernel_id)
 
         dev_id = location.device.id
         x, y = location._noc0_coord
@@ -164,8 +177,8 @@ class AggregationBucket:
         devices_str = ", ".join(sorted(self.device_labels)) if self.device_labels else ""
 
         return AggregatedCallstackRow(
-            kernel_id=self.kernel_id,
             kernel_name=self.kernel_name,
+            kernel_id_count=len(self.kernel_ids),
             op_id=self.op_id,
             callstack=self.callstack,
             core_count=len(self.core_locations),
@@ -183,7 +196,7 @@ def _collect_aggregated(
     verbose: bool,
     context: Context,
 ) -> list[AggregatedCallstackRow] | None:
-    """Collect callstacks and aggregate by (kernel_id, normalized_pc, op_id)."""
+    """Collect callstacks and aggregate by (kernel_path, ELF-relative pc, risc_name, op_id)."""
 
     def per_core(location: OnChipCoordinate, risc_name: str) -> CallstacksData | None:
         try:
@@ -213,8 +226,8 @@ def _collect_aggregated(
     if not results:
         return None
 
-    # Aggregate by (kernel_id, normalized_pc, risc_name, op_id)
-    buckets: dict[tuple[int | None, int | None, str, int | None], AggregationBucket] = {}
+    # Aggregate by (kernel_path, whether the PC is a kernel PC, normalized PC, risc_name, op_id)
+    buckets: dict[tuple[str | None, bool, int | None, str, int | None], AggregationBucket] = {}
 
     for check_result in results:
         if check_result.result is None:
@@ -224,10 +237,12 @@ def _collect_aggregated(
         d = cs_data.dispatcher_core_data
         pc = cs_data.pc
 
-        # Normalize PC into kernel space when kernel_offset is available
-        normalized_pc = pc - d.kernel_offset if d.kernel_offset is not None and pc is not None else pc
+        kernel_elf = None
+        if d.kernel_path is not None and d.kernel_offset is not None:
+            kernel_elf = callstack_provider.elfs_cache[d.kernel_path].with_load_address(d.kernel_offset)
+        in_kernel, normalized_pc = _normalize_pc(pc, kernel_elf, d.kernel_offset)
 
-        key = (d.watcher_kernel_id, normalized_pc, check_result.risc_name, d.host_assigned_id)
+        key = (d.kernel_path, in_kernel, normalized_pc, check_result.risc_name, d.host_assigned_id)
         bucket = buckets.get(key)
         if bucket is None:
             bucket = AggregationBucket(cs_data, check_result.risc_name)
@@ -238,6 +253,7 @@ def _collect_aggregated(
         bucket.add_core(
             location=check_result.location,
             device_label=device_label,
+            kernel_id=d.watcher_kernel_id,
         )
 
     # Sort ascending by op_id
