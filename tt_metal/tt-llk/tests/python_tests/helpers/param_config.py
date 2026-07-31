@@ -4,7 +4,7 @@
 import inspect
 import math
 from itertools import product
-from typing import Iterator, List, Tuple
+from typing import Callable, Iterator, List, Tuple, Union
 
 import pytest
 from helpers.tile_shape import construct_tile_shape
@@ -490,7 +490,7 @@ def is_invalid_quasar_sfpu_format_combination(
         not in_fmt.is_32_bit()
         and not out_fmt.is_32_bit()
         and dest_acc == DestAccumulation.Yes
-        and unpack_to_dest == True
+        and unpack_to_dest
     ):
         return True
 
@@ -508,8 +508,21 @@ def is_invalid_quasar_sfpu_format_combination(
     return False
 
 
+UnpackToDest = Union[bool, Callable[[FormatConfig, DestAccumulation], bool]]
+
+
+def resolve_unpack_to_dest(
+    unpack_to_dest: UnpackToDest, fmt: FormatConfig, dest_acc: DestAccumulation
+) -> bool:
+    """Evaluate an `UnpackToDest` spec for one (fmt, dest_acc) pair."""
+    if callable(unpack_to_dest):
+        return unpack_to_dest(fmt, dest_acc)
+    return unpack_to_dest
+
+
 def generate_sfpu_format_dest_acc_combinations(
     formats_list: List[FormatConfig],
+    unpack_to_dest: UnpackToDest = False,
 ) -> List[Tuple[FormatConfig, DestAccumulation]]:
     """
     Generate (format, dest_acc) pairs for Quasar SFPU tests.
@@ -520,7 +533,9 @@ def generate_sfpu_format_dest_acc_combinations(
     - Otherwise:     both No and Yes
 
     Invalid Quasar combinations (see `is_invalid_quasar_sfpu_format_combination`)
-    are filtered out.
+    are filtered out. `unpack_to_dest` must mirror what the caller passes to
+    `TestConfig` — either a constant or a `(fmt, dest_acc) -> bool` predicate —
+    since several of those guards only apply on one of the two datapaths.
     """
     combinations: List[Tuple[FormatConfig, DestAccumulation]] = []
 
@@ -535,7 +550,9 @@ def generate_sfpu_format_dest_acc_combinations(
             dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
 
         for dest_acc in dest_acc_modes:
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
+            if is_invalid_quasar_sfpu_format_combination(
+                fmt, dest_acc, resolve_unpack_to_dest(unpack_to_dest, fmt, dest_acc)
+            ):
                 continue
             combinations.append((fmt, dest_acc))
 

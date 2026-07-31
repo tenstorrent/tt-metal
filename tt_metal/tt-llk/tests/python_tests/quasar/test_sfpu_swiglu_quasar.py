@@ -247,6 +247,11 @@ def _prepare_swiglu_inputs(
     return gate.to(torch_dtype), up.to(torch_dtype)
 
 
+def _is_unpack_to_dest(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
+    """SFPU tests: unpack_to_dest only when format bit-width matches Dest mode."""
+    return fmt.input_format.is_32_bit() == (dest_acc == DestAccumulation.Yes)
+
+
 def _generate_sfpu_swiglu_combinations(formats_list: List[FormatConfig]):
     """
     Build the parametrize product for the swiglu test. Wraps the shared
@@ -255,7 +260,9 @@ def _generate_sfpu_swiglu_combinations(formats_list: List[FormatConfig]):
     """
     combinations = []
 
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
+    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(
+        formats_list, unpack_to_dest=_is_unpack_to_dest
+    ):
         for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
             # MX formats aren't part of this test but keep the pattern
             # consistent with other float SFPU tests.
@@ -325,10 +332,7 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
     # Golden is a single tile's worth of elements.
     golden_tensor = golden_tile.flatten().to(format_dict[formats.output_format])
 
-    # SFPU tests: unpack_to_dest only when format bit-width matches Dest mode.
-    unpack_to_dest = formats.input_format.is_32_bit() == (
-        dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
 
     configuration = TestConfig(
         "sources/quasar/sfpu_swiglu_quasar_test.cpp",
@@ -462,9 +466,7 @@ def test_sfpu_swiglu_nan_inf_quasar():
     golden_tile = _swiglu_golden(gate_f, up_f, formats.output_format)
     golden_tensor = golden_tile.flatten().to(format_dict[formats.output_format])
 
-    unpack_to_dest = formats.input_format.is_32_bit() == (
-        dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
 
     configuration = TestConfig(
         "sources/quasar/sfpu_swiglu_quasar_test.cpp",
