@@ -164,6 +164,7 @@ from ttnn._ttnn.global_circular_buffer import (
 
 from ttnn._ttnn.fabric import (
     FabricConfig,
+    FabricType,
     FabricReliabilityMode,
     FabricTensixConfig,
     FabricUDMMode,
@@ -176,6 +177,7 @@ from ttnn._ttnn.fabric import (
     get_physical_mesh_shapes,
     get_eth_forwarding_direction,
     get_all_fabric_mesh_ids,
+    get_all_mgd_fabric_types,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,

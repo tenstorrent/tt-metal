@@ -470,7 +470,6 @@ bool reader_datacopy_writer(
             .enable_32_bit_dest = fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
             .unpack_modes = unpack_modes,
-            .unpack_to_dest_en = fp32_dest_acc_en,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
