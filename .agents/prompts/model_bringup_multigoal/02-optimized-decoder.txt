@@ -6,7 +6,6 @@ This goal creates the optimized-decoder state for the repo-local TTNN autoport. 
 
 Goal completion requirements:
 - models/autoports/<model>/tt/optimized_decoder.py exists and its tests exercise the optimized path, not a functional fallback.
-- REQUIRED shard-advise step (HARD GATE): run $shard-advise this pass on the rewritten dense attention+MLP block, per $optimize OPT-015 and .agents/skills/shard-advise/SETUP.md Part B (set TTMLIR_ADVISOR_HOME, source scripts/bootstrap.sh in a separate shell, then `ttnn-advise capture`). Save its output to models/autoports/<model>/doc/optimized_decoder/shard_advise/report.json and .../final_ir.mlir, and record in the work_log which recommendations were applied vs rejected-with-evidence. Running and documenting the advisor is mandatory; keeping its config is NOT (DRAM-sharded per OPT-004 may legitimately win). The stage cannot complete without those two artifacts — a runner check verifies them.
 - Preserves the functional decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
 - Preserves the context contract; if optimization changes layout/sharding/KV dtype enough to change capacity, update doc/context_contract.json (never reduce advertised capability without a hard device limit + evidence).
 - Preserves valid non-aligned logical seq_len (internal padding/chunking fine; public seq_len%chunk==0 restrictions not).
