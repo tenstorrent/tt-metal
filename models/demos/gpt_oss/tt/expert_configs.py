@@ -36,8 +36,16 @@ class GPTOSSProgramConfig(ProgramConfig):
     # PR #51514 wide-subblock corruption conditions at once. This config cannot.
     # Tracy: 4.142 -> 3.295 ms/tok (-20%), 30 -> 45 cores. Matches the down
     # projection, which already ran 45 cores at higher efficiency (51.7% vs 43.0%).
+    # in0_block_w=3 (num_blocks_inner_dim = 90/3 = 30). Re-tuned IN-MODEL after the
+    # core count moved 30 -> 45: the old value of 15 came from a sweep at 30 cores,
+    # where each core held per_core_N=6 output tiles. At per_core_N=4 the per-core
+    # L1 budget differs and smaller K chunks win. Measured decode ms/tok:
+    #   ib=45 13.475 | 30 13.359 | 18 13.264 | 15 13.276 | 10 13.175
+    #   ib=9  13.168 | 6  13.127 | 5  13.078 | 3  13.000 | 2  14.082
+    # Monotonic down to 3, then a sharp regression at 2 (chunk too small to
+    # amortise the per-chunk loop overhead).
     decode_gate_up_cores: tuple[int, int] = (9, 5)
-    decode_gate_up_in0_block_w: int = 15
+    decode_gate_up_in0_block_w: int = 3
     decode_gate_up_subblock_w: int = 4
     decode_down_cores: tuple[int, int] = (9, 5)
     decode_down_in0_block_w: int = 30
