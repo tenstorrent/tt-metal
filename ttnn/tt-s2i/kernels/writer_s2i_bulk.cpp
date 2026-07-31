@@ -1,0 +1,1 @@
+/localdev/mmoscicki/tt-dm-codegen/ops/s2i/templates/writer_s2i_bulk.cpp
