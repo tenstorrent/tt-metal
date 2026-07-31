@@ -46,6 +46,14 @@ if not isinstance(m, (int, float)):
 elif isinstance(r, list) and len(r) >= 2 and abs(m - statistics.median(r)) > 1e-9:
     bad.append(f"incumbent_ms {m} must be median(repeats_ms) = {statistics.median(r)}. min-of-n is "
                "biased low by an amount growing with n, so cells with different n are not comparable.")
+lc = d.get("layer_counts")
+if not isinstance(lc, dict) or not lc:
+    bad.append("layer_counts missing: record {<layer_kind>: <count>} for every kind, read off the model's "
+               "own config (num_hidden_layers plus the kind pattern). The full-model estimate multiplies "
+               "per-layer microseconds by these, so an unrecorded count means an unchecked headline.")
+elif d.get("total_layers") is not None and sum(lc.values()) != d["total_layers"]:
+    bad.append(f"layer_counts sum to {sum(lc.values())} but total_layers is {d['total_layers']}; "
+               "every layer belongs to exactly one kind.")
 src = (d.get("shipped_policy_source") or "").lower()
 if not src:
     bad.append("shipped_policy_source missing -- it must name the artifact the policy came from")

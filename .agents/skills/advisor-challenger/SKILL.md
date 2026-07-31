@@ -123,6 +123,36 @@ The one combination worth enumerating is **across layer kinds** (step 6).
 
 ## Procedure
 
+### 0. Preflight, and the layer counts
+
+**The tool.** This stage drives `ttnn-advise` directly. The driver already exports `TTMLIR_ADVISOR_HOME` and
+sources tt-mlir's own bootstrap, so normally you only confirm it:
+
+```
+ls $TTMLIR_ADVISOR_HOME/build/bin/ttnn-advise
+git -C $TTMLIR_ADVISOR_HOME rev-parse --short HEAD      # expect the pin: 618cd4e75d
+```
+
+If it is missing, `$shard-advise` SETUP.md part A has the build. **Do not rebuild while a measured stage is
+running:** `tt-mlir/third_party/tt-metal/src/tt-metal` symlinks the live tt-metal checkout, and every
+`cmake --build` overwrites `$TT_METAL_HOME/ttnn/ttnn/_ttnn.so`, breaking `import ttnn` for anything running.
+
+**The layer counts, and they are load-bearing.** The full-model estimate multiplies per-layer microseconds by
+`layers_of_kind`, so a wrong count scales the headline directly. Derive them from the model's own config, not
+by assumption:
+
+- `total_layers` = `num_hidden_layers`.
+- The kinds come from the config's explicit `layer_types` list where one exists. Otherwise from the interval
+  field — gemma-3/4's `sliding_window_pattern = 6` over 48 layers means every 6th layer is full attention, so
+  **8 full + 40 sliding**; a qwen3-next with a full-attention interval of 4 over 64 layers is **16 full + 48
+  linear**. Confirm against the layer list the decoder actually builds; that code is the authority.
+- A MoE model's expert layers are a kind too, even though the tracer cannot reach them (see the last section).
+
+Record them in `incumbent.json` as `layer_counts: {<kind>: <count>}`. They **must sum to `num_hidden_layers`** —
+every layer belongs to exactly one kind. `reconcile.py` aborts if `--layers-of-kind` disagrees with this or if
+the counts do not sum to `--total-layers`, and the gate fails a cell that records no counts at all: an
+unrecorded count means an unchecked headline.
+
 ### 1. Freeze the incumbent, before running the advisor
 
 **The harness decides whether this stage can measure anything at all, so build it before you build anything
@@ -162,7 +192,8 @@ What the template enforces, and why:
    is simply warmer, which hands the candidate a free win under a non-overlap rule that assumes exchangeable
    samples.
 
-`incumbent.json` — all written for you by the template: `decode_batch`, `requested_decode_batch`,
+`incumbent.json` — the template writes all of these except `layer_counts` (step 0): `decode_batch`,
+`requested_decode_batch`,
 `warmup_replays`, `iters_per_repeat`, `measured_at`, `repeats_ms`, `median_ms`, `incumbent_ms` (median),
 `noise_floor_ms`, `harness`, `harness_scope`, `signposts`, and `shipped_policy` / `shipped_weight_dtypes`
 sourced from what **executed** — the final `tt-perf-report` CSV or the selected
@@ -315,7 +346,7 @@ to stay per-layer: an effect is compared against the per-layer noise floor. But 
 the full-model estimate**, which `reconcile.py` gives as `model_estimate.this_kind_us` per kind:
 
 ```
-full model  =  SUM over layer kinds of ( per_layer_window_us x layers_of_kind )
+full model  =  SUM over layer kinds of ( per_layer_window_us x layers_of_kind )     <- counts from step 0
 chain value =  advisor_removes_per_model_us  =  advisor_removes_us x layers_of_kind
 uncertainty =  noise_floor_us x layers_of_kind          <- scales with the estimate, quote it
 ```

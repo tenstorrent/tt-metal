@@ -48,7 +48,13 @@ source tools/ttnn-jit/integrations/agentic-research/shard-advise/scripts/bootstr
 python3 -c "import ttnn; print(ttnn.__file__)"  # must resolve, not error
 ```
 `bootstrap.sh` activates the env, sets `SYSTEM_DESC_PATH`, and runs `ttrt query --save-artifacts`
-once to make the system descriptor. If it reports `ttnn-advise` missing, A.1 wasn't done.
+once to make the system descriptor.
+
+If it reports `ttnn-advise` missing, **look for the binary before concluding anything**:
+`ls $TTMLIR_ADVISOR_HOME/build/bin/ttnn-advise`. That is where a completed A.1 puts it, and it is
+frequently present while absent from `PATH`. This inference has been made wrongly twice in this project,
+in both directions — once concluding the advisor was unbuilt, once concluding the binary did not exist
+anywhere — and both times from reasoning about the tool instead of listing the build tree.
 
 > **The path above is the tt-mlir one, and it matters.** Inside a **tt-metal** checkout this skill
 > lives at `.agents/skills/shard-advise/scripts/bootstrap.sh`, and earlier revisions of this file gave
@@ -80,10 +86,23 @@ paged cache + SDPA-decode). **Terminal (no TTIR op → skip these paths):** `ttn
 
 **B.0** Activate the advisor env (A.2) in the shell.
 
-**B.1 Point a capture target at the decoder.** Copy `scripts/advise_decoder.py` to
-`advise_<model>.py` and edit it to build one decode step of this model's `OptimizedDecoder`,
-reusing the model's own `tests/test_optimized_decoder` input builders (config, synthetic state
-dict, paged KV cache, rope, `current_pos`). Expose `make_inputs(device)` and `decode(hidden)`.
+**B.1 Point a capture target at the decoder.**
+
+> **For stage 02b (`$advisor-challenger`), copy that stage's
+> `.agents/skills/advisor-challenger/scripts/capture_template.py` instead of `advise_decoder.py`.**
+> `advise_decoder.py` is written for one model, and the reuse list below omits the **precision policy** —
+> three capture scripts written from it constructed the decoder with no dtype argument and therefore traced
+> the CLASS DEFAULTS rather than the precision the model ships. On one model that traced bf16 attention for
+> a cell shipping bfp8, excluding two matmuls from DRAM-sharding consideration for a dtype never used, and
+> the missing win was worth -10%. The template exists to close exactly this hole and records what it traced
+> so a gate can verify it.
+
+Copy `scripts/advise_decoder.py` to `advise_<model>.py` and edit it to build one decode step of this
+model's `OptimizedDecoder`, **constructed with the SHIPPED precision policy** — sourced from what executed,
+never `resolved_policy.constructor_defaults` — reusing the model's own `tests/test_optimized_decoder` input
+builders (config, synthetic state dict, paged KV cache, rope, `current_pos`). A synthetic state dict is
+fine: the advisor reasons about layout, not values. What must be real is the **dtype** and the **shapes**.
+Expose `make_inputs(device)` and `decode(hidden)`.
 **Append** the snapshot root + tt-metal to `sys.path` (never prepend — tt-metal's `ttnn/` dir
 shadows the real package). Pick a representative dense layer (attention + dense MLP); one target
 per distinct layer kind.
@@ -92,11 +111,25 @@ per distinct layer kind.
 ```
 export PYTHONPATH=<snapshot-root>:<tt-metal>:$PYTHONPATH
 cd "$TTMLIR_ADVISOR_HOME"
-ttnn-advise capture advise_<model>.py:decode --out /tmp/<model>-advice 2>/dev/null
+ttnn-advise capture advise_<model>.py:decode --out <out-dir> \
+  --pipeline-options allow-bf16-dram-sharded-matmul=true
 ```
-Read `/tmp/<model>-advice/final_ir.mlir` (**authoritative**). `report.json`/stdout are summaries;
-the per-op `program_config`, the required matmul **input layout**, and the advisor's reshards
-are only in `final_ir.mlir`. If capture blocks on an op, do A.3, re-sync, re-run.
+**Pass `allow-bf16-dram-sharded-matmul=true` whenever any traced weight is bf16.** Without it bf16 weights
+are declined *by policy*, not by capability — bf16 DS runs at PCC 1.0000 — and one cell got 0-of-5 DS
+matmuls advised for precisely this reason.
+
+**Write `--out` into the cell tree, not `/tmp`**, so the advice is an artifact of the run and not a
+scratch file: stage 02b requires `doc/advisor_challenger/shard_advise/<layer_kind>/`, which is where its
+gate looks. **Do not redirect stderr to `/dev/null`** — a capture that blocks on an unhandled op then looks
+like a success.
+
+What is where, corrected: `report.json` carries `ops[]` (index, op, layout including `cores=`, and the
+`program_config` **family name**) and the full `reshards[]` list with each edge's producer, consumer and
+from/to layouts — that is enough to reconcile advice against a profile, and 02b's `reconcile.py` reads
+only this file. `final_ir.mlir` is authoritative for what `report.json` does **not** carry: the matmul
+program-config **parameters** (grid, `in0_block_w`, `per_core_N`, `out_subblock_w`), the required matmul
+input layout, and any layout question the reconciliation flags as unresolved. If capture blocks on an op,
+do A.3, re-sync, re-run.
 
 **B.3 Apply as a candidate** into `optimized_decoder.py` (or a sibling variant for a clean A/B).
 For each `ttnn.linear`, take the `matmul_multi_core_reuse_multi_cast_1d` config from `final_ir`
@@ -111,7 +144,15 @@ required adaptations (learned; honor them or it won't run / regresses):
 - optionally apply the advised width-sharded `rms_norm` / residual-add / `concat_heads` layouts
   as one chain — measure it; it's often ~neutral.
 
-**B.4 Measure & decide.** PCC baseline vs advised (open with
+**B.4 Measure & decide.**
+
+> **Stage 02b overrides B.3 and B.4.** It is a contribution measurement against a *frozen* incumbent, so
+> its ship rule is non-overlap of n=5 timed repeats against a recorded noise floor, not "beats the best
+> measured candidate", and it derives its own geometry rather than copying advised configs. Follow
+> `advisor-challenger/SKILL.md` there. B.3's adaptations below remain accurate engineering constraints and
+> are worth reading either way.
+
+PCC baseline vs advised (open with
 `ttnn.open_mesh_device(MeshShape(1,1))` = full 8x8 grid the advisor assumes), then traced-decode
 `tt-perf-report` before/after. Keep the advised config only where it beats the DRAM-sharded /
 best measured candidate (OPT-004). Note: `tt-perf-report` splits `MatmulDeviceOperation` into

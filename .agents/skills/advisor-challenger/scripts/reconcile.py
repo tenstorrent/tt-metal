@@ -380,6 +380,22 @@ def main() -> int:
         if a.incumbent_ms is None:
             a.incumbent_ms = incumbent.get("incumbent_ms")
 
+    # LAYER COUNTS ARE LOAD-BEARING: the model estimate multiplies by layers_of_kind, so a wrong count
+    # scales the headline silently. Cross-check against the counts the incumbent recorded rather than
+    # trusting the flag.
+    counts = incumbent.get("layer_counts") or {}
+    if counts:
+        want = counts.get(a.layer_kind)
+        if want is None:
+            sys.exit(f"FATAL: incumbent.json records layer_counts {sorted(counts)} with no entry for "
+                     f"{a.layer_kind!r}. Name the kinds the same way in both places.")
+        if want != a.layers_of_kind:
+            sys.exit(f"FATAL: --layers-of-kind {a.layers_of_kind} but incumbent.json says {a.layer_kind} "
+                     f"has {want} layers. The model estimate scales by this number; fix whichever is wrong.")
+        if sum(counts.values()) != a.total_layers:
+            sys.exit(f"FATAL: layer_counts sum to {sum(counts.values())} but --total-layers is "
+                     f"{a.total_layers}. Every layer belongs to exactly one kind.")
+
     report = json.loads(a.report.read_text())
     advised = parse_advised(report)
     reshard_idx = parse_reshards(report)
@@ -684,6 +700,10 @@ def main() -> int:
         "per_layer_window_us": round(per_layer_window, 3), "layers_in_window": a.layers_in_window,
         "layers_of_kind": a.layers_of_kind, "total_layers": a.total_layers,
         "kind_share_of_layers": round(a.layers_of_kind / max(1, a.total_layers), 3),
+        "layer_counts": counts or None,
+        "layer_counts_source": ("incumbent.json layer_counts (cross-checked)" if counts else
+                                "UNVERIFIED -- incumbent.json records no layer_counts, so layers_of_kind is "
+                                "taken on trust and the model estimate is unchecked"),
         "ceiling_per_model_us": round(ceiling_us * a.layers_of_kind / max(1, a.layers_in_window), 3),
         # the model number inherits the per-layer measurement error MULTIPLIED by the layer count, so it is
         # far less precise than its digits suggest. Quote it with this band or not at all.
