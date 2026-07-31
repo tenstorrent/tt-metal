@@ -29,4 +29,10 @@ global_env:
   # Hold all stages until every one has compiled before creating sockets (asymmetric per-stage load races
   # the D2D socket setup).
   PREFILL_PP_FILE_BARRIER: "1"
+  # The D2D socket's L1 buffer is vestigial: the sender fabric-writes the activation shard straight
+  # DRAM->DRAM (persistent_d2d_receiver.cpp), so only ~12B of metadata transits it and its size has no
+  # effect on transfer speed -- only L1 footprint. The default 64KB, x2 on a middle stage's two sockets,
+  # overflows main L1 into the routed-expert MoE static CBs; 32KB (half the default) is the minimal
+  # reduction that clears the clash.
+  PREFILL_PP_D2D_FIFO_BYTES: "32768"
   LOGURU_LEVEL: "INFO"
