@@ -116,6 +116,7 @@ def parse_perf(path: Path, incumbent_ms: float | None = None):
     code_col = find("op code", "op type", "name")
     dur_col = find("device time", "device kernel duration [ns]", "device kernel duration")
     core_col = find("cores", "core count")
+    mem_col = find("input 0 memory", "input_0_memory")   # memory CLASS only: no grid, no output column
     if code_col is None or dur_col is None:
         sys.exit(f"FATAL: {path}: need an op-code and a duration column; saw {sorted(keys)}")
     ns = "ns" in dur_col.lower() or "cycle" in dur_col.lower()
@@ -139,6 +140,7 @@ def parse_perf(path: Path, incumbent_ms: float | None = None):
         dsc = find("dram sharded", exact=False)
         ops.append({"id": r.get(find("id") or "", None), "cls": device_class(code), "code": code,
                     "us": us, "cores": cores,
+                    "mem": ((r.get(mem_col) or "").strip() if mem_col else ""),
                     "dram_sharded": (r.get(dsc) or "").strip().lower() in ("true", "1", "yes")
                                     if dsc else False})
         total += us
@@ -255,6 +257,33 @@ def align(advised, device):
     return pairs
 
 
+def layer_handoff(device, layers_of_kind):
+    """Does this layer take its input from DRAM while leaving its output in L1?
+
+    Consecutive decoder layers can hand off in L1, and one corpus cell does exactly that -- its profile opens
+    and closes on L1_WIDTH_SHARDED. Two others open with an InterleavedToSharded off DRAM_INTERLEAVED and
+    close in L1, so every layer re-loads what its predecessor had already placed. That conversion is paid
+    layers_of_kind - 1 times more than it needs to be, and it belongs to whoever built the decoder, not to
+    this stage -- the advisor is never asked about a layer boundary. Report it so it is not lost.
+    """
+    if not device:
+        return None
+    first, last = device[0], device[-1]
+    entry_dram = movement_class(first["cls"]) == "dram_to_l1" or (first.get("mem") or "").find("DRAM") >= 0
+    exit_l1 = "L1" in (last.get("mem") or "")
+    if not (entry_dram and exit_l1):
+        return {"entry_from_dram": entry_dram, "exit_in_l1": exit_l1,
+                "note": "no layer-boundary DRAM round trip detected, or the profile does not show it"}
+    return {
+        "entry_from_dram": True, "exit_in_l1": True,
+        "entry_op": first["code"], "entry_us": round(first["us"], 3),
+        "redundant_per_model_us": round(first["us"] * max(0, layers_of_kind - 1), 3),
+        "note": "This layer loads its input from DRAM but leaves its output in L1, so consecutive layers do "
+                "not hand off in L1 and this conversion is paid once per layer. NOT this stage's to fix -- "
+                "the advisor is not asked about layer boundaries -- but report it upstream.",
+    }
+
+
 def parse_reshards(report):
     """Index the advice's own chain boundaries by the (producer, consumer) edge they sit on.
 
@@ -347,6 +376,7 @@ def main() -> int:
     advised = parse_advised(report)
     reshard_idx = parse_reshards(report)
     device, window = parse_perf(a.perf, a.incumbent_ms)
+    handoff = layer_handoff(device, a.layers_of_kind)
     if window <= 0:
         sys.exit(f"FATAL: measured window is 0 us from {a.perf}")
 
@@ -453,6 +483,8 @@ def main() -> int:
         c.setdefault("_unresolved_us", 0.0)
         c["op_share_pct"] = round(100 * c["us"] / window, 3)
         c["per_model_us"] = round((c["us"] + c["boundary_us"]) * a.layers_of_kind, 3)
+        # DECIDE ON THIS, not on the per-layer number: a 1 us win on 40 layers beats a 3 us win on 8.
+        c["advisor_removes_per_model_us"] = round(c["advisor_removes_us"] * a.layers_of_kind, 3)
     # advisor-attributable value first: a boundary the advice also wants is not this stage's candidate.
     # Losing chains are kept in the list, only ordered lower -- suppressing one understates the contribution.
     chains.sort(key=lambda c: (-c["advisor_removes_us"], -(c["conversion_value_us"] + c["us"])))
@@ -582,8 +614,19 @@ def main() -> int:
                 "note": "min-of-n is biased low and the bias grows with n; cells with different n are not "
                         "comparable. Fix the incumbent before screening."}
 
+    model_estimate = {
+        "this_kind_us": round(window * a.layers_of_kind, 3),
+        "layers_of_kind": a.layers_of_kind, "total_layers": a.total_layers,
+        "kind_share_of_layers": round(a.layers_of_kind / max(1, a.total_layers), 3),
+        "ceiling_per_model_us": round(ceiling_us * a.layers_of_kind, 3),
+        "layer_handoff": handoff,
+        "note": "Sum this_kind_us over every layer kind for the full-model estimate, and choose between "
+                "candidates on THAT. Per-layer microseconds are for detection against the per-layer noise "
+                "floor; per-model microseconds are for deciding, because layer counts differ by kind.",
+    }
+
     out = {
-        "feasibility": feasibility, "untraced_detail": untraced_detail,
+        "feasibility": feasibility, "model_estimate": model_estimate, "untraced_detail": untraced_detail,
         "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 5,
         "confidence": {
             "paired_by_name": len(byname), "paired_by_position": len(bypos),
@@ -680,8 +723,16 @@ def main() -> int:
     def show(c):
         print(f"      {c['chain']:20s} ops {c['us']:8.3f} + boundaries {c['boundary_us']:7.3f} us"
               f"  (attributable {c['advisor_removes_us']:6.3f} = {c['vs_noise_floor'] or 0:.2f}x floor,"
-              f" conf {c['confidence']})   {'/'.join(c['ops'])[:44]}")
+              f" conf {c['confidence']}, {c['advisor_removes_per_model_us']:7.1f} us/model)"
+              f"   {'/'.join(c['ops'])[:36]}")
 
+    me = out["model_estimate"]
+    print(f"   MODEL ESTIMATE this kind: {me['this_kind_us']:.1f} us "
+          f"({a.layers_of_kind}/{a.total_layers} layers); ceiling per model {me['ceiling_per_model_us']:.1f} us")
+    if handoff and handoff.get("redundant_per_model_us"):
+        print(f"   !! LAYER HANDOFF: input from DRAM, output left in L1 -- {handoff['entry_op'][:34]} costs "
+              f"{handoff['entry_us']} us/layer, {handoff['redundant_per_model_us']} us across the model. "
+              f"Upstream decoder issue, not this stage's.")
     print(f"   {len(attrib)} chain(s) with advisor-attributable value, ranked by it:")
     for c in attrib:
         show(c)

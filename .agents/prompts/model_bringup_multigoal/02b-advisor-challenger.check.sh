@@ -210,6 +210,28 @@ if f.get("changed") is None: crit.append("`changed` missing -- a no-change resul
 if not f.get("oracle"): crit.append("oracle missing -- name the correctness oracle the result passed")
 if f.get("oracle_passed") is not True:
     crit.append("oracle_passed is not true -- a faster decoder that fails its oracle is a regression")
+# an oracle is only a correctness gate if it compares against a reference the change cannot also move
+od = (str(f.get("oracle") or "") + " " + str(f.get("oracle_scope") or "")).lower()
+ow = str(f.get("oracle_weights") or "").lower()
+selfref = any(k in od for k in ("eager-vs-traced", "traced-vs-eager", "replay pcc", "preservation"))
+if ow not in ("real", "synthetic"):
+    (crit if f.get("changed") else warn).append(
+        "oracle_weights missing: state 'real' or 'synthetic'. A synthetic-weight PCC does NOT bound the "
+        "real-weight PCC when the shipped policy quantises to BFLOAT4_B/BFLOAT8_B -- quantisation error "
+        "depends on the weight distribution, and random weights have none of the outliers real ones do.")
+elif ow != "real" and f.get("changed"):
+    crit.append("a change shipped against a SYNTHETIC-weight oracle. Validate a shipped change on real "
+                "weights, or say explicitly that the correctness evidence is plumbing-only.")
+if selfref:
+    (crit if f.get("changed") else warn).append(
+        f"the oracle ({od[:60]}) compares the implementation against itself or against the frozen "
+        "incumbent, so it cannot fail for a placement change that keeps tracing working. That is a sanity "
+        "check, not a correctness oracle. One corpus cell reported PCC exactly 1.0 this way.")
+for k, v in f.items():
+    if k.endswith("_passed") and v is False:
+        crit.append(f"{k} is false: a correctness check failed and the cell shipped anyway. One corpus cell "
+                    "had absolute_pcc_current_environment_passed=False and shipped on a preservation "
+                    "argument, leaving it with no working absolute correctness check.")
 if isinstance(fm, (int, float)) and isinstance(im, (int, float)) and fm > im:
     crit.append(f"final_ms {fm} > incumbent_ms {im}: this stage may not ship a slower decoder")
 if f.get("changed"):
@@ -220,8 +242,8 @@ if f.get("changed"):
         for n, s in enumerate(sets):
             if not isinstance(s.get("measured_ms"), (int, float)):
                 crit.append(f"measured_sets[{n}]: no measured_ms -- best_set must be MEASURED")
-            if not s.get("chains"):
-                crit.append(f"measured_sets[{n}]: no `chains` -- the number is unattributable")
+            if not (s.get("chains") or s.get("set")):
+                crit.append(f"measured_sets[{n}]: neither `chains` nor `set` -- the number is unattributable")
             if not s.get("repeats_ms"):
                 warn.append(f"measured_sets[{n}]: no repeats_ms, so non-overlap cannot be checked")
         best = min((s["measured_ms"] for s in sets if isinstance(s.get("measured_ms"), (int, float))),

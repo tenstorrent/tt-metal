@@ -245,9 +245,23 @@ Each chain as one unit, one variable per measurement, against the frozen incumbe
 `repeats_ms` and a verdict, or `below_threshold` with its conversion value. Screen `dram_resident` rows
 too — *"leave this in DRAM"* is advice, and de-sharding an op has won here.
 
-Every kept candidate: its own op-level CSV as `perf_report`, and the incumbent's oracle at the incumbent's
-own PCC bar. Name the oracle and say if it is synthetic. **A faster decoder that fails its oracle is a
-regression with a good number.**
+Every kept candidate: its own op-level CSV as `perf_report`, and the incumbent's oracle at the incumbent's own
+PCC bar. **A faster decoder that fails its oracle is a regression with a good number.**
+
+Record **`oracle_weights`: `real` or `synthetic`**, and prefer real for anything you ship. Two traps the
+corpus fell into:
+
+- **A synthetic-weight PCC does not bound the real-weight PCC.** Random weights have none of the outliers real
+  ones do, and these policies quantise the MLP to `BFLOAT4_B` — so the oracle is weakest exactly where the
+  precision risk is highest. One cell ran on synthetic weights only because real ones were not cached on the
+  host and HF egress was disabled; that is a plumbing check, and should be labelled as one.
+- **An oracle that compares the implementation against itself cannot fail.** "eager vs traced replay" and
+  "preservation relative to the frozen incumbent" both pass automatically for any placement change that keeps
+  tracing working — one cell reported PCC exactly 1.0 this way, and another shipped with
+  `absolute_pcc_current_environment_passed: False`. Compare against a reference the change cannot move.
+
+In this corpus the oracle was exercised against an actual change in only three of nine cells; in the six
+no-change cells it was trivially satisfied. Treat it as unproven and be explicit about what yours covers.
 
 Screen DS-matmul advice **last**. It has not won a measurement in this corpus, and where it agrees with a
 shipped DS config there is nothing to screen.
@@ -259,12 +273,33 @@ This is only comparable across cells if n is fixed — the false-positive rate i
 n=3 against 0.40 % at n=5. **Confirm the winner in a fresh process** before shipping: cross-process
 variance is otherwise unmeasured, and per-process work happens once per process.
 
-### 6. Combine across layer kinds
+### 6. Combine across layer kinds — and decide on the full-model estimate
 
-Where the model has several layer kinds and the reported latency is a weighted composite, the candidate
-space is the **product** of per-kind winners, not the union of one-kind-varied sets. The composite is
-arithmetic over independently measured series, so these cost no extra device time. Record every measured
-set with its `chains`, `measured_ms`, `repeats_ms` and `oracle_passed`; ship the best measured set.
+Everything up to here is **per layer**, because that is what the profile and the harness cover. Detection has
+to stay per-layer: an effect is compared against the per-layer noise floor. But **choose between candidates on
+the full-model estimate**, which `reconcile.py` gives as `model_estimate.this_kind_us` per kind:
+
+```
+full model  =  SUM over layer kinds of ( window_us x layers_of_kind )
+chain value =  advisor_removes_per_model_us  =  advisor_removes_us x layers_of_kind
+```
+
+Per-layer ranking picks the wrong candidate across kinds. In one corpus model a sliding-attention chain worth
+1.629 µs/layer is **65.2 µs/model** over 40 layers, while a full-attention chain worth *more* per layer
+(2.146 µs) is only **17.2 µs/model** over 8. Rank within a kind by the per-layer number; rank *across* kinds,
+and pick the winner, by the per-model number.
+
+Where the reported latency is a weighted composite, the candidate space is the **product** of per-kind
+winners, not the union of one-kind-varied sets. The composite is arithmetic over independently measured
+series, so these cost no extra device time. Record every measured set with its `chains` (or `set`),
+`measured_ms`, `repeats_ms` and `oracle_passed`; ship the set that minimises the full-model estimate.
+
+**One thing the model estimate can expose that is not yours to fix.** `model_estimate.layer_handoff` reports
+whether the layer takes its input from DRAM while leaving its output in L1. If it does, consecutive layers do
+not hand off in L1 and that conversion is paid once per layer — 33.6 µs and 48.0 µs across the model in two
+corpus cells, while a third opens and closes on `L1_WIDTH_SHARDED` and pays nothing, so it is a decoder
+implementation choice rather than a framework limit. The advisor is never asked about a layer boundary, so
+this is out of scope here: **report it upstream, do not screen it, and never book it as advisor contribution.**
 
 ### 7. Ship
 
