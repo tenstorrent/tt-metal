@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/validation_helpers.hpp"
+#include "ttnn/operations/kernel_helper_functions/validation_helpers.hpp"
 
 // This reader shares one source across four modes, so its runtime-arg schema is the union of every
 // path's names (see the factory). Each path declares the arg names it does NOT own as
