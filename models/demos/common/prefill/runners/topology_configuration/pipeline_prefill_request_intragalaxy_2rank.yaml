@@ -1,0 +1,32 @@
+# REQUEST mode (unbounded, H2D-driven) 2-stage INTRA-galaxy pipeline prefill on ONE BH galaxy.
+#
+# One 8x4 galaxy carved into 2 Z-connected [4,4] sub-meshes (16 chips each); hidden state hops stage->stage
+# over the Z-link MeshSocket. Per-stage SP4 x TP4 x EP16. REQUEST mode (no PREFILL_STANDALONE): rank 0
+# builds the H2D service and waits for an external prefill_producer.
+#
+# TT_VISIBLE_DEVICES order is authoritative from the Generate2x4SliceToPCIeDeviceMapping discovery gtest
+# (slice_to_pcie_device_mapping.yaml): mesh0 = slices {0,1} (top), mesh1 = slices {2,3}
+# (bottom). Two 2x4 slices concatenate into a contiguous 4x4; the blitz/diagonal split fails topology_mapper.
+#
+# Launch (2 ranks on the single host), then run prefill_producer.py on this host:
+#   PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
+#     ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_intragalaxy_2rank.yaml \
+#     <galaxy-host>:2
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "28,29,24,25,0,4,5,1,31,26,27,30,6,7,2,3"}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "18,22,23,19,14,15,10,11,20,16,17,21,9,8,13,12"}}
+
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto
+
+global_env:
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_SP: "4"
+  PREFILL_TP: "4"
+  PREFILL_NUM_LAYERS: "60"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+  PREFILL_PP_FILE_BARRIER: "1"
+  LOGURU_LEVEL: "INFO"
