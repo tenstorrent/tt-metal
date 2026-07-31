@@ -43,19 +43,32 @@ def l1_accumulation_config(pack_l1_accumulation: L1Accumulation) -> str:
     return f"_llk_pack_reconfig_l1_acc_({l1_acc});\n"
 
 
-def pack_dest_init(dest_sync: str, dest_acc: str) -> str:
+def pack_dest_init(dest_sync: str, dest_acc: str, **kwargs) -> str:
     return f"_llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
 
 
-def packer_wait_for_math() -> str:
+def packer_wait_for_math(**kwargs) -> str:
     return "_llk_packer_wait_for_math_done_();\n"
 
 
-def packer_dest_section_done(dest_sync: str, dest_acc: str) -> str:
+def packer_dest_section_done(dest_sync: str, dest_acc: str, **kwargs) -> str:
     return f"_llk_pack_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
 
 
-def packer_sync_with_unpacker(stage_id: int, num_stages: int) -> str:
-    if stage_id < num_stages:
+def packer_sync_with_unpacker(has_pack_consumer: bool) -> str:
+    if has_pack_consumer:
         return "t6_semaphore_post<>(semaphore::PACK_DONE);\n\n"
     return ""
+
+
+def pack_reduce_mask_config(operation: "FusedOperation") -> str:
+    if operation.reduce_dim is None:
+        return ""
+    reduce_dim = operation.reduce_dim.cpp_enum_value
+    return f"_llk_pack_reduce_mask_config_<{reduce_dim}>();\n"
+
+
+def pack_reduce_mask_clear(operation) -> str:
+    if operation.reduce_dim is None:
+        return ""
+    return "_llk_pack_reduce_mask_clear_();\n"

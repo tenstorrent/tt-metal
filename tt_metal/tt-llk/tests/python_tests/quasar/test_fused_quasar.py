@@ -7,7 +7,8 @@ from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
 from fuser.fuser_config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
 
 yaml_files = sorted(FUSER_CONFIG_DIR.glob("*.yaml"))
-test_names = [f.stem for f in yaml_files]
+yaml_files += sorted((FUSER_CONFIG_DIR / "quasar").glob("*.yaml"))
+test_names = [str(f.relative_to(FUSER_CONFIG_DIR).with_suffix("")) for f in yaml_files]
 
 
 @skip_for_blackhole

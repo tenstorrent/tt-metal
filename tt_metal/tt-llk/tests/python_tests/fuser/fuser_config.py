@@ -31,6 +31,7 @@ class GlobalConfig:
     profiler_enabled: bool = False
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
+    quasar_use_dvalid: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
     @property
@@ -77,12 +78,6 @@ class FuserConfig(TestConfig):
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
-
-        num_stages = len(self.pipeline)
-
-        for i, operation in enumerate(self.pipeline, start=1):
-            operation.stage_id = i
-            operation.num_stages = num_stages
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
