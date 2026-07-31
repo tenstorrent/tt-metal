@@ -27,16 +27,15 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 #include "moe_fused_swiglu_common.hpp"  // the ONE definition of the mailbox word layout
 
 using namespace compute_kernel_lib;
 
-#ifdef MOE_SWIGLU_ZONES
-#define MOE_ZONE(n) DeviceZoneScopedN(n)
-#else
-#define MOE_ZONE(n) ((void)0)
-#endif
+// PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off. A compute TU does NOT
+// get the profiler through `dataflow_api.h` (it must not see the dataflow API at all), which is
+// exactly why `perf_instrumentation.hpp` exists. 6 records per M-block here.
 
 constexpr uint32_t M_BLOCK = get_compile_time_arg_val(0);
 constexpr uint32_t KR_PAD = get_compile_time_arg_val(1);
@@ -65,26 +64,54 @@ constexpr uint32_t REDUCE_SLOTS = get_compile_time_arg_val(11);
 // something to pipeline against. Layout-safe at OUT_SUBBLOCK_H_GU == 1 — SubblockMajor walks
 // in0_subblock outer / in1_subblock inner, so the tile order stays m*HN_PAD + n either way.
 constexpr uint32_t HN_BLOCK = get_compile_time_arg_val(12);
+// PERF 1 — eltwise DEST-window block size. Tiles per `tile_regs_acquire/commit/wait/release` cycle
+// in every eltwise pass below. See ELTWISE_BLK in the program descriptor for the mechanism and the
+// measurement; 1 reproduces the pre-Perf-1 per-tile shape byte-for-byte.
+constexpr uint32_t ELTWISE_BLK = get_compile_time_arg_val(13);
 
-constexpr uint32_t cb_x_in = get_compile_time_arg_val(13);
-constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(14);
-constexpr uint32_t cb_x_stage = get_compile_time_arg_val(15);
-constexpr uint32_t cb_w_gate = get_compile_time_arg_val(16);
-constexpr uint32_t cb_w_up = get_compile_time_arg_val(17);
-constexpr uint32_t cb_w_down = get_compile_time_arg_val(18);
-constexpr uint32_t cb_gate_acc = get_compile_time_arg_val(19);
-constexpr uint32_t cb_up_acc = get_compile_time_arg_val(20);
-constexpr uint32_t cb_gate_send = get_compile_time_arg_val(21);
-constexpr uint32_t cb_up_send = get_compile_time_arg_val(22);
-constexpr uint32_t cb_gate_silu = get_compile_time_arg_val(23);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(24);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(25);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(26);
-constexpr uint32_t cb_h = get_compile_time_arg_val(27);
-constexpr uint32_t cb_out_interm = get_compile_time_arg_val(28);
-constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(29);
+constexpr uint32_t cb_x_in = get_compile_time_arg_val(14);
+constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(15);
+constexpr uint32_t cb_x_stage = get_compile_time_arg_val(16);
+constexpr uint32_t cb_w_gate = get_compile_time_arg_val(17);
+constexpr uint32_t cb_w_up = get_compile_time_arg_val(18);
+constexpr uint32_t cb_w_down = get_compile_time_arg_val(19);
+constexpr uint32_t cb_gate_acc = get_compile_time_arg_val(20);
+constexpr uint32_t cb_up_acc = get_compile_time_arg_val(21);
+constexpr uint32_t cb_gate_send = get_compile_time_arg_val(22);
+constexpr uint32_t cb_up_send = get_compile_time_arg_val(23);
+constexpr uint32_t cb_gate_silu = get_compile_time_arg_val(24);
+constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(25);
+constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(26);
+constexpr uint32_t cb_h_local = get_compile_time_arg_val(27);
+constexpr uint32_t cb_h = get_compile_time_arg_val(28);
+constexpr uint32_t cb_out_interm = get_compile_time_arg_val(29);
+constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(30);
 
 constexpr uint32_t TILE_H = 32;
+
+// ---------------------------------------------------------------------------
+// PERF 1 — BLOCKED ELTWISE PASSES.
+//
+// `input(cb)` / `output(cb)` default to per-TILE wait/pop/reserve/push, and `eltwise_chain` only
+// honours a block size when every CB reader uses `Upfront` / `Cumulative` / `None+None` /
+// `PerChunk+PerChunk` (`eltwise_chain.inl:1511`); otherwise it SILENTLY clamps `block_size` to 1
+// (`eltwise_chain.inl:3054`). So the convenient spelling costs one full DEST sync round trip PER
+// TILE against a DEST budget of 8. These specs opt into the chunked lifecycle so the same math runs
+// in `ceil(n / ELTWISE_BLK)` DEST windows instead of `n`.
+//
+// The tail is safe by construction: numeric `EltwiseShape::tiles(n, blk)` uses
+// `BlockTailSync::ValidTiles`, so the last window synchronizes only its valid remainder and the
+// per-CB wait/pop/reserve/push TOTALS are unchanged — which is what the cross-core reduce requires,
+// since the child ships and the parent consumes whole `m_eff * HN_PAD` blocks (6/12/24/48 tiles).
+// ELTWISE_BLK == 1 collapses every one of these back to the pre-Perf-1 shape.
+// `OperandKind::Block` is REQUIRED, not decorative: `is_legal_input_policy_for_kind`
+// (`eltwise_chain.inl:152-172`) admits `PerChunk+PerChunk` only for `Block`. The default `Scalar`
+// kind pins the read to tile 0 and relies on the per-tile POP to advance the CB read pointer — which
+// is precisely the mechanism a chunked lifecycle removes, so the index has to advance with the walk
+// instead. Getting this wrong is a compile error, not a silent wrong answer.
+constexpr auto blk_in(uint32_t cb) { return input(cb, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block); }
+constexpr auto blk_out(uint32_t cb) { return output(cb, ReservePolicy::PerChunk, PushPolicy::PerChunk); }
+ALWI auto blk_shape(uint32_t n) { return EltwiseShape::tiles(n, ELTWISE_BLK); }
 
 // Per-K-block FMA step count for the gate/up matmul: the padded K slot is KR_PAD tiles wide but
 // only `kr` of them are real, so the loop bound shrinks and the pad tiles are never touched.
@@ -174,7 +201,7 @@ void kernel_main() {
 
         // ---- 1. fused tilize of the x tile-rows this core injects (bf16 ROW_MAJOR only) ----
         if constexpr (INPUT_FORMAT == 0) {
-            MOE_ZONE("C_TILIZE");
+            MaybeDeviceZoneScope("compute_tilize");
             const uint32_t n_inject = moe_fused_swiglu::inject_rows(m_eff, my_col, HGROUPS);
             for (uint32_t i = 0; i < n_inject; ++i) {
                 // Asymmetric page mode: TILE_H row-major stick slices in -> KR_PAD bfp8 tiles out.
@@ -184,7 +211,7 @@ void kernel_main() {
 
         // ---- 2. gate and up over the same resident x block ----
         {
-            MOE_ZONE("C_GATEUP");
+            MaybeDeviceZoneScope("compute_gateup");
             matmul_block<
                 /*transpose=*/false,
                 /*packer_l1_acc=*/false,
@@ -216,7 +243,7 @@ void kernel_main() {
 
         // ---- 3. cross-column reduce + SwiGLU ----
         {
-            MOE_ZONE("C_REDUCE");
+            MaybeDeviceZoneScope("compute_reduce");
             // Walk the reader's invite WAVES (Refinement 2 lever 1): the reader reserves and pushes the
             // WHOLE CB — REDUCE_SLOTS slots — per wave, so this side consumes exactly that much per
             // wave, adding the `wave` slots that carry a child and draining the rest.
@@ -252,14 +279,13 @@ void kernel_main() {
                         }
                         rg_buf.pop_front(REDUCE_SLOT_TILES);
                     } else {
-                        add<input(cb_gate_acc), input(cb_reduce_gate_in), output(cb_gate_acc)>(
-                            EltwiseShape::tiles(gu_block_tiles));
+                        add<blk_in(cb_gate_acc), blk_in(cb_reduce_gate_in), blk_out(cb_gate_acc)>(
+                            blk_shape(gu_block_tiles));
                         if (gu_block_tiles < REDUCE_SLOT_TILES) {
                             rg_buf.pop_front(REDUCE_SLOT_TILES - gu_block_tiles);
                         }
                     }
-                    add<input(cb_up_acc), input(cb_reduce_up_in), output(cb_up_acc)>(
-                        EltwiseShape::tiles(gu_block_tiles));
+                    add<blk_in(cb_up_acc), blk_in(cb_reduce_up_in), blk_out(cb_up_acc)>(blk_shape(gu_block_tiles));
                     if (gu_block_tiles < REDUCE_SLOT_TILES) {
                         ru_buf.pop_front(REDUCE_SLOT_TILES - gu_block_tiles);
                     }
@@ -275,21 +301,21 @@ void kernel_main() {
         }
 
         {
-            MOE_ZONE("C_SWIGLU");
+            MaybeDeviceZoneScope("compute_swiglu");
             if (is_root) {
                 // FPU multiply through L1 (deliberately not SFPU and not DEST-reuse — the L1
                 // round-trip measured faster for an FPU consumer, examples/compute_fusion).
-                mul<input(cb_gate_silu), input(cb_up_acc), output(cb_h_local)>(EltwiseShape::tiles(gu_block_tiles));
+                mul<blk_in(cb_gate_silu), blk_in(cb_up_acc), blk_out(cb_h_local)>(blk_shape(gu_block_tiles));
             } else {
-                copy<input(cb_gate_acc), output(cb_gate_send)>(EltwiseShape::tiles(gu_block_tiles));
-                copy<input(cb_up_acc), output(cb_up_send)>(EltwiseShape::tiles(gu_block_tiles));
+                copy<blk_in(cb_gate_acc), blk_out(cb_gate_send)>(blk_shape(gu_block_tiles));
+                copy<blk_in(cb_up_acc), blk_out(cb_up_send)>(blk_shape(gu_block_tiles));
             }
         }
 
         // ---- 4. down matmul: HGROUPS K-blocks, packer L1 accumulation into a caller-owned
         // interm region (so every K-block accumulates at the SAME L1 address) ----
         {
-            MOE_ZONE("C_DOWN");
+            MaybeDeviceZoneScope("compute_down");
             out_interm_buf.reserve_back(out_block_tiles);
             matmul_block<
                 /*transpose=*/false,
@@ -324,9 +350,12 @@ void kernel_main() {
             // packer_l1_acc=false matmul resets it. Without this the copy below — and the next
             // M-block's gate matmul — would ACCUMULATE onto stale L1 instead of overwriting.
             pack_reconfig_l1_acc(0);
+        }
 
+        {
             // The one genuine dtype boundary: bf16 accumulation -> bfp8 output tiles.
-            copy<input(cb_out_interm), output(cb_out_tiles)>(EltwiseShape::tiles(out_block_tiles));
+            MaybeDeviceZoneScope("compute_out_pack");
+            copy<blk_in(cb_out_interm), blk_out(cb_out_tiles)>(blk_shape(out_block_tiles));
         }
 
         // The resident x block was retained by both matmuls; release it now.

@@ -21,6 +21,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
 #include "moe_fused_swiglu_bank_runs.hpp"  // the ONE definition of the bank-run coalescing
 #include "moe_fused_swiglu_common.hpp"     // the ONE definition of the mailbox word layout
 
@@ -66,11 +68,8 @@ constexpr auto out_args = TensorAccessorArgs<wu_args.next_compile_time_args_offs
 // kernel's compile-time knobs — identical to the reader's binding, which is the point.
 using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
 
-#ifdef MOE_SWIGLU_ZONES
-#define MOE_ZONE(n) DeviceZoneScopedN(n)
-#else
-#define MOE_ZONE(n) ((void)0)
-#endif
+// PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off (see the reader's note
+// and the durability contract in `perf_instrumentation.hpp`). 5 records per M-block here.
 
 void kernel_main() {
     const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
@@ -134,6 +133,7 @@ void kernel_main() {
         // the multi-M-block critical path (count > 256). Draining it here instead lets it ride this
         // block's W_up read. DEPTH_OUT >= 2 is what makes the extra outstanding block legal.
         if (out_pending) {
+            MaybeDeviceZoneScope("writer_out_drain");
             noc_async_write_barrier();
             cb_pop_front(cb_out_tiles, out_pending);
             out_pending = 0;
@@ -142,7 +142,7 @@ void kernel_main() {
         // ---- W_up: NoC1 half of the gate/up weight stream, same bank-run coalescing ----
         cb_reserve_back(cb_w_up, WU_BLOCK_TILES);
         {
-            MOE_ZONE("W_WUP");
+            MaybeDeviceZoneScope("writer_wup");
             const uint32_t wp = get_write_ptr(cb_w_up);
 #ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
             // REFINEMENT 3: M-block 0 only when W_up is resident (the read carries no `b`).
@@ -167,7 +167,7 @@ void kernel_main() {
 
         // ---- reduce tree, CHILD side ----
         if (!is_root) {
-            MOE_ZONE("W_CHILD");
+            MaybeDeviceZoneScope("writer_reduce_child");
             cb_wait_front(cb_gate_send, gu_block_tiles);
             cb_wait_front(cb_up_send, gu_block_tiles);
 #ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the tree edge, keep the CB cycle
@@ -198,7 +198,7 @@ void kernel_main() {
         // EC_MAX is the L1 row stride of the block (uniform CB increment); `ec` is how many of
         // those columns this core actually owns.
         {
-            MOE_ZONE("W_OUT");
+            MaybeDeviceZoneScope("writer_out_issue");
             cb_wait_front(cb_out_tiles, out_block_tiles);
             {
                 const uint32_t rp = get_read_ptr(cb_out_tiles);

@@ -38,20 +38,22 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 #include "moe_fused_swiglu_bank_runs.hpp"  // the ONE definition of the bank-run coalescing
 #include "moe_fused_swiglu_common.hpp"     // the ONE definition of the mailbox word layout
 
 using namespace dataflow_kernel_lib;
 
-// `/perf-measure` phase zones (MOE_SWIGLU_ZONES=1). OFF by default and compiled out entirely, so
-// the shipped kernel is byte-identical. Each zone brackets ONE serial stage of the reader's
-// per-M-block chain, which is what the "serial composition" question needs measured.
-#ifdef MOE_SWIGLU_ZONES
-#define MOE_ZONE(n) DeviceZoneScopedN(n)
-#else
-#define MOE_ZONE(n) ((void)0)
-#endif
+// PER-STAGE ZONES — PERMANENT. Each `MaybeDeviceZoneScope` below brackets ONE serial stage of the
+// reader's per-M-block chain, which is what the "serial composition" question needs measured. They
+// are ALWAYS COMPILED (no opt-in define): with the profiler off the macro emits no instructions at
+// all, so the shipped kernel is byte-identical to one with no zones — see the durability contract in
+// `perf_instrumentation.hpp`. DO NOT DELETE THEM, and give any new fast path its own zone.
+//
+// ZONE BUDGET: 8 records per M-block on this kernel, against the profiler's 125-per-core cap. So a
+// profiled run resolves per-stage time for m_blocks <= 15 (i.e. count <= 3840 at M_BLOCK 8); above
+// that the tail is silently dropped and only the whole-kernel duration is meaningful.
 
 // ---------------------------------------------------------------------------
 // Compile-time block model. Every trip count and CB increment below is derived
@@ -262,7 +264,7 @@ void kernel_main() {
         // nothing else to cover — is real and is fixed below.
         cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
         {
-            MOE_ZONE("R_WG_ISSUE");
+            MaybeDeviceZoneScope("reader_wg_issue");
             const uint32_t wg_wp = get_write_ptr(cb_w_gate);
 #ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
             if (read_wg) {
@@ -306,7 +308,7 @@ void kernel_main() {
         // `noc_async_read_barrier()` IS a real arrival guarantee, so landing the data here removes
         // the loopback altogether, for the same NoC bytes (one fewer multicast destination).
         {
-            MOE_ZONE("R_XSTAGE");
+            MaybeDeviceZoneScope("reader_xstage");
             for (uint32_t t = my_col; t < m_eff; t += HGROUPS) {
                 const uint32_t dst = x_base + t * X_ROW_BYTES;
                 uint32_t row = b * M_BLOCK + t;
@@ -348,7 +350,7 @@ void kernel_main() {
         // requires of the landing address).
 #ifndef ABLATE_NO_X_XFER  // /perf-measure: drop the x transport, keep cb_x_tiles' reserve/push
         {
-            MOE_ZONE("R_XMCAST");
+            MaybeDeviceZoneScope("reader_xmcast");
             if constexpr (xmc.active) {
                 for (uint32_t t = 0; t < m_eff; ++t) {
                     const uint32_t round = t % HGROUPS;
@@ -368,7 +370,7 @@ void kernel_main() {
         // (W_up is the writer's twin on NoC1 — the dual-NoC split of op_design.md §1.5.)
         // -------------------------------------------------------------------
         {
-            MOE_ZONE("R_WG_WAIT");
+            MaybeDeviceZoneScope("reader_wg_wait");
             noc_async_read_barrier();
         }
         cb_push_back(cb_w_gate, WG_BLOCK_TILES);
@@ -384,6 +386,7 @@ void kernel_main() {
         constexpr uint32_t WD_BLOCK_TILES = HN_PAD * EC_MAX;
         cb_reserve_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
         {
+            MaybeDeviceZoneScope("reader_wd_issue");
             const uint32_t wp = get_write_ptr(cb_w_down);
             (void)wp;
             for (uint32_t r = 0; r < WD_AHEAD; ++r) {
@@ -431,7 +434,7 @@ void kernel_main() {
         // ships only the m_eff*HN_PAD tiles that carry live tokens (compute drops the tail).
         // -------------------------------------------------------------------
         {
-            MOE_ZONE("R_REDUCE");
+            MaybeDeviceZoneScope("reader_reduce");
             for (uint32_t c0 = 0; c0 < num_children; c0 += REDUCE_SLOTS) {
                 uint32_t wave = num_children - c0;
                 if (wave > REDUCE_SLOTS) {
@@ -470,10 +473,13 @@ void kernel_main() {
         // boundary; the last issue is at round HGROUPS-1-WD_AHEAD, so it is always published inside
         // the loop and nothing leaks out.
         // -------------------------------------------------------------------
-        noc_async_read_barrier();
+        {
+            MaybeDeviceZoneScope("reader_wd_wait");
+            noc_async_read_barrier();
+        }
         cb_push_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
         {
-            MOE_ZONE("R_PHASE2");
+            MaybeDeviceZoneScope("reader_phase2");
             bool wd_pending = false;
             for (uint32_t r = 0; r < HGROUPS; ++r) {
                 // This round's cb_h slot is reserved first so the round's sender can ISSUE its self-copy

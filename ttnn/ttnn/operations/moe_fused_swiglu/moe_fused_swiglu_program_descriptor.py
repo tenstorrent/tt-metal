@@ -50,6 +50,31 @@ M_BLOCK = 8
 #: assertion below reads it.
 DEST_AUTO_LIMIT_TILES = 8
 
+#: PERF 1 — eltwise DEST-WINDOW BLOCK SIZE. Tiles processed per `eltwise_chain` outer iteration
+#: (i.e. per `tile_regs_acquire/commit/wait/release` cycle) in every eltwise pass of the compute
+#: kernel: the cross-column reduce adds, the non-root partial copies, the SwiGLU multiply and the
+#: bf16->bfp8 output pack.
+#:
+#: WHY THIS IS A KNOB AND NOT A LITERAL 1. `eltwise_convenience`'s `input(cb)` defaults to
+#: `WaitPolicy::PerTile` / `PopPolicy::PerTile`, and `eltwise_chain`'s `input_supports_block()`
+#: (`eltwise_chain.inl:1511`) accepts a block only for `Upfront` / `Cumulative` / `None+None` /
+#: `PerChunk+PerChunk`. A per-tile policy therefore makes `chain_supports_block_v` false and the
+#: chain CLAMPS `block_size` to 1 at runtime (`eltwise_chain.inl:3054`) — silently, with no
+#: diagnostic. So every `add<>` / `mul<>` / `copy<>` written the convenient way runs ONE tile per
+#: DEST window against a DEST budget of 8, paying a full DEST sync round trip per tile.
+#:
+#: The fast path pairs `PerChunk` wait/pop/reserve/push with `EltwiseShape::tiles(n, blk)`. Numeric
+#: shapes use `BlockTailSync::ValidTiles`, so a ragged final window synchronizes only its valid
+#: remainder and the totals still match the producer's pushes exactly — which is what keeps the
+#: cross-core reduce's CB accounting intact at every `m_eff` (6/12/24/48 tiles at HN_PAD 6).
+#:
+#: MEASURED (isolated root-epilogue bake-off, `perf_experiments/root_epilogue_fusion/`): the
+#: baseline runs 104 DEST windows for the root's 144 tile-ops; blocking them collapses that to 16
+#: and measures **1.05x**, and hoisting the bias-add's per-row reconfig/init on top gives **1.07x**
+#: — uniform across tile counts 6/24/48 and HN_PAD 4/6, PCC bit-unchanged. Setting this to 1
+#: reproduces the pre-Perf-1 per-tile shape exactly, which is the A/B for a re-measurement.
+ELTWISE_BLK = int(os.environ.get("MOE_SWIGLU_ELTWISE_BLK", DEST_AUTO_LIMIT_TILES))
+
 #: Token tiles per gate/up output sub-block (the matmul's `out_subblock_h`). PINNED AT 1 and NOT a
 #: knob: the gate/up output must stay m-major with HN_PAD consecutive hidden tiles per token row,
 #: because that IS the `cb_h` in0 layout phase 2 reads. `OutputCBLayout::SubblockMajor` walks
@@ -168,10 +193,22 @@ WRUN = int(os.environ.get("MOE_SWIGLU_WRUN", 8))
 ABLATE = os.environ.get("MOE_SWIGLU_ABLATE", "")
 _DM_ABLATIONS = ("no_reduce_xfer", "no_h_xfer", "no_x_xfer", "no_w_xfer")
 
-#: `/perf-measure` phase zones (MOE_SWIGLU_ZONES=1): bracket each SERIAL STAGE of the per-M-block
-#: chain with a DeviceZoneScopedN so the profiler reports where the time actually goes. Compiled
-#: out entirely when unset, so the shipped kernels are byte-identical.
-ZONES = os.environ.get("MOE_SWIGLU_ZONES", "") not in ("", "0")
+#: PER-STAGE ZONES ARE PERMANENT AND UNCONDITIONAL — there is no knob here any more.
+#: Every serial stage of the per-M-block chain in all three kernels is bracketed by
+#: `MaybeDeviceZoneScope("<stage>")` (`ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`), which
+#: emits NO instructions when the device profiler is off, so the shipped kernels are byte-identical
+#: to unzoned ones and the observability can never be "optimised away". Enable the numbers with
+#: `scripts/run_safe_pytest.sh --profile` and read
+#: `generated/profiler/.logs/profile_log_device.csv`.
+#:
+#: The old `MOE_SWIGLU_ZONES=1` opt-in is GONE. It was measured (Refinement 2 note (c)) to produce an
+#: EMPTY device CSV, and the cause was structural: the compute TU used `DeviceZoneScopedN` without
+#: including the profiler header (a compute kernel does not get it through `dataflow_api.h`), so the
+#: hook could never have worked as written.
+#:
+#: ZONE BUDGET: 8 (reader) / 5 (writer) / 6 (compute) records per M-BLOCK against the profiler's
+#: 125-records-per-core cap, so per-stage numbers are resolvable up to m_blocks = 15 (count 3840 at
+#: M_BLOCK 8). Beyond that the tail is silently dropped and only the whole-kernel duration is valid.
 
 #: W_down prefetch depth, in phase-2 K-blocks kept in flight ahead of the round that consumes
 #: them. Clamped to [1, HGROUPS].
@@ -770,6 +807,7 @@ def create_program_descriptor(
         OUT_SUBBLOCK_H_DN,
         reduce_slots,
         hn_block,
+        ELTWISE_BLK,
         CB_X_IN,
         CB_X_TILES,
         CB_X_STAGE,
@@ -866,8 +904,6 @@ def create_program_descriptor(
     # `+`-separated so stages can be peeled off CUMULATIVELY (they overlap, so removing one alone
     # under-counts it — the documented ablation methodology).
     dm_defines = [("ABLATE_" + a.upper(), "1") for a in ABLATE.split("+") if a in _DM_ABLATIONS]
-    zone_defines = [("MOE_SWIGLU_ZONES", "1")] if ZONES else []
-    dm_defines = dm_defines + zone_defines
 
     kernels = [
         ttnn.KernelDescriptor(
@@ -892,7 +928,7 @@ def create_program_descriptor(
             compile_time_args=compute_ct,
             runtime_args=compute_rt,
             config=compute_kernel_config,
-            defines=([("SKIP_COMPUTE", "1")] if "skip_compute" in ABLATE.split("+") else []) + zone_defines,
+            defines=[("SKIP_COMPUTE", "1")] if "skip_compute" in ABLATE.split("+") else [],
         ),
     ]
 
