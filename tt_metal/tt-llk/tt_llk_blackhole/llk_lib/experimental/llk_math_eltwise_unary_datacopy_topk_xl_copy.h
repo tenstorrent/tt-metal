@@ -48,17 +48,7 @@ inline void _llk_math_topk_xl_copy_init_([[maybe_unused]] const std::uint32_t ds
 // Minimal slice of _llk_math_eltwise_unary_datacopy_: A2D, no SrcB broadcast, TopK-XL MOP already programmed in init.
 inline void _llk_math_topk_xl_copy_(const std::uint32_t dst_index, const std::uint32_t dst_format, const std::uint32_t elements_this_tile)
 {
-    if (elements_this_tile == 0)
-    {
-        // Return early, like UNPACK does for zero elements.
-        // Reachable whenever a K=2048 sequence has a tail of <= 1024 elements.
-        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-        ckernel_template::run();
-        math::clear_dst_reg_addr();
-        return;
-    }
-
-    if (is_32bit_input(dst_format, dst_format))
+    if (elements_this_tile != 0 && is_32bit_input(dst_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
         // clear to -inf first for padding
