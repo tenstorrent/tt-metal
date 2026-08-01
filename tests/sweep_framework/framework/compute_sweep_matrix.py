@@ -87,9 +87,11 @@ def _hw_label(hardware_group):
 def _log_module_groups(header, modules, groups):
     """Print a summary of module grouping to stderr."""
     total_base = len(set(strip_grouping_suffix(m) for m in modules))
+    # `groups` is one entry per routed group, each holding that group's module list -- so the
+    # group COUNT is the number of matrix entries. Summing the module lists (as this used to)
+    # reported "183 matrix entries" for a 16-entry run, which reads as a job count and is not one.
     print(
-        f"{header}: {len(modules)} vector files ({total_base} unique modules), "
-        f"{sum(1 for g in groups for _ in g[1])} matrix entries",
+        f"{header}: {len(modules)} vector files ({total_base} unique modules), " f"{len(groups)} matrix entries",
         file=sys.stderr,
     )
     for label, entries in groups:

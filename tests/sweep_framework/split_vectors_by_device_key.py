@@ -26,6 +26,9 @@ a row batch and save ~4 jobs, but that relies on the grid scanner being right, a
 known gap (linear's gather_in0 path keys off output/hop grids, not the nominal compute width).
 Paying 4 extra jobs to avoid a wrong-grid failure is the better trade.
 
+All modules sharing a device key share the job -- there are no per-module carve-outs. A batch
+is bounded by VECTOR COUNT, not module count, which is what actually caps a job's runtime.
+
 Writes one directory per batch plus a batch manifest for the CI matrix to consume.
 """
 
@@ -39,12 +42,6 @@ from split_vectors_by_axis import vector_dispatch_axis_hint
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "framework"))
 from constants import strip_grouping_suffix  # noqa: E402
-from matrix_runner_config import LEAD_MODELS_BATCH_POLICY  # noqa: E402
-
-# Modules that must not share a job with anything else, even inside their own device key.
-# Imported rather than restated so the CI matrix and this script cannot disagree about which
-# modules are solo -- they partition the same vectors and must produce identical batches.
-SOLO_MODULES = frozenset(LEAD_MODELS_BATCH_POLICY.get("solo_modules", ()))
 
 # Time model for splitting an oversized batch across jobs. Deliberately conservative: the
 # 3s/vector figure comes from slice (a light op) -- conv2d/matmul/CCL are slower, so a batch
@@ -121,6 +118,8 @@ def vector_device_key(vec):
 
 
 def batch_name(mesh, axis, fabric, part=None, total_parts=1, solo=None):
+    """Deterministic batch/directory name. ``solo`` is retained for callers that pin a single
+    module into its own batch; the default planner no longer does (see plan_batches)."""
     mesh_str = f"{mesh[0]}x{mesh[1]}" if mesh else "unknown"
     name = f"mesh{mesh_str}_{axis}_{fabric}"
     if solo:
@@ -133,11 +132,6 @@ def batch_name(mesh, axis, fabric, part=None, total_parts=1, solo=None):
 def _base_module(file_name):
     """'model_traced.conv2d_model_traced.mesh_4x8.json' -> 'model_traced.conv2d_model_traced'."""
     return strip_grouping_suffix(Path(file_name).stem)
-
-
-def _solo_token(file_name):
-    """Short, filename-safe tag for a solo module's batch ('...conv2d_model_traced' -> 'conv2d')."""
-    return _base_module(file_name).split(".")[-1].replace("_model_traced", "") or "solo"
 
 
 def source_manifest(src_dir: Path):
@@ -196,24 +190,12 @@ def plan_batches(grouped, dst_root: Path = _DST_ROOT):
         # than by module must not quietly undo that isolation: conv2d's heavy convs deadlock
         # the dispatch hang-detector once device state has accumulated from OTHER modules in
         # the same process, and run clean alone (see LEAD_MODELS_BATCH_POLICY.solo_modules).
-        # Group solo files by MODULE, not per file: one module can contribute several files
-        # to the same device key (the key comes from each vector's recorded shape, not the
-        # filename, so a .mesh_2x4 file can hold vectors traced at 1x8). One subset per file
-        # would mint two batches with the same name, and the second would overwrite the
-        # first's manifest on disk -- silently dropping its vectors.
-        solo_groups = {}
-        shared = {}
-        for name, suites in files.items():
-            if _is_solo(name):
-                solo_groups.setdefault(_solo_token(name), {})[name] = suites
-            else:
-                shared[name] = suites
-
-        subsets = sorted(solo_groups.items(), key=lambda kv: kv[0])
-        for solo, subset in subsets:
-            _plan_subset(batches, subset, mesh, axis, fabric, solo, cap, dst_root)
-        if shared:
-            _plan_subset(batches, shared, mesh, axis, fabric, None, cap, dst_root)
+        # Every module in a device key shares the job. No solo carve-outs: the reason ops like
+        # conv2d were isolated was cross-module device-state accumulation across a job that
+        # opened the device repeatedly, and a device-key job opens it exactly once, so the
+        # condition that motivated the split no longer holds. Batches are bounded by vector
+        # count instead (_plan_subset), which is what actually caps a job's runtime.
+        _plan_subset(batches, files, mesh, axis, fabric, None, cap, dst_root)
 
     duplicates = {b["name"] for b in batches if sum(1 for o in batches if o["name"] == b["name"]) > 1}
     if duplicates:
