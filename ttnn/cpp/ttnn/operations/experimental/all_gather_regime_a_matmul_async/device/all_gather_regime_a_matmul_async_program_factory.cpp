@@ -311,12 +311,16 @@ struct FusedGatherContext {
     uint32_t rank = 0;  // this device's index in the TP group
     uint32_t tp = 1;
     // A direction is absent at the ends of a LINE; on a ring both are always present.
-    std::optional<CoreCoord> mux_virtual_core_fwd;
-    std::optional<CoreCoord> mux_virtual_core_bwd;
-    std::unique_ptr<tt::tt_fabric::FabricMuxV2Config> mux_cfg_fwd;
-    std::unique_ptr<tt::tt_fabric::FabricMuxV2Config> mux_cfg_bwd;
-    uint8_t next_channel_fwd = 0;
-    uint8_t next_channel_bwd = 0;
+    // One mux per (direction, link). A direction is absent at a line end, in which case its vector is
+    // empty. Clients are dealt round-robin across a direction's links.
+    std::vector<CoreCoord> mux_virtual_cores_fwd;
+    std::vector<CoreCoord> mux_virtual_cores_bwd;
+    std::vector<std::unique_ptr<tt::tt_fabric::FabricMuxV2Config>> mux_cfgs_fwd;
+    std::vector<std::unique_ptr<tt::tt_fabric::FabricMuxV2Config>> mux_cfgs_bwd;
+    std::vector<uint8_t> next_channel_fwd;
+    std::vector<uint8_t> next_channel_bwd;
+    uint32_t num_links = 1;
+    uint32_t channels_per_mux = 0;
     // Readiness: one semaphore slot per (source rank, chunk). Receivers block on these; senders
     // atomic-inc AFTER the payload is flushed.
     uint32_t chunk_ready_sem_id = 0;   // VALID/INVALID go-ahead flag, on EVERY core
@@ -386,10 +390,10 @@ enum FusedGatherArg : uint32_t {
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
 // 4 KiB fabric packet, and one channel per direction is enough while a single ring does the forwarding.
-// One channel per client that will ACTUALLY register with this mux. Mux v2 self-terminates by counting
-// close() calls against its compile-time channel count, so an over-provisioned mux simply never exits:
-// with one direction per core only half the masters register with each mux, and leaving this at 8 hangs.
-constexpr uint8_t kMuxChannelsPerDirection = 4;
+// Channels are sized at run time to the number of clients that will ACTUALLY register with a given mux
+// (masters-per-direction / num_links). Mux v2 self-terminates by counting close() calls against its
+// compile-time channel count, so an over-provisioned mux simply never exits -- it does not error, it
+// hangs. Every change to the client split has to move this number with it.
 constexpr uint8_t kMuxBuffersPerChannel = 8;
 constexpr size_t kMuxChannelBufferBytes = 4096;  // 4 KiB packet
 
@@ -407,16 +411,6 @@ FusedGatherContext build_fused_gather_context(
     }
     ctx.enabled = true;
     ctx.tp = attrs.tp;
-
-    // num_links is part of the op's API but the fused path does not implement it: exactly one mux per
-    // direction is deployed, always on link 0. Accepting the parameter and quietly ignoring it would let a
-    // caller ask for 4 links, get 1, and read the resulting throughput as a property of the op. Refuse
-    // instead. (The Phase-0 composition does honour num_links, so that remains the option for multi-link.)
-    TT_FATAL(
-        attrs.num_links == 1,
-        "the fused gather implements a single fabric link per direction, but num_links={} was requested. "
-        "Use num_links=1, or the Phase-0 composition, which passes num_links through to all_gather_async",
-        attrs.num_links);
 
     const auto topology = attrs.topology_is_ring ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
     ctx.rank = ttnn::ccl::get_linearized_index_from_physical_coord(in0, mesh_coordinate, attrs.cluster_axis);
@@ -451,12 +445,17 @@ FusedGatherContext build_fused_gather_context(
     ctx.num_masters = static_cast<uint32_t>(master_ring_cores.size());
     // Hard-tie the mux sizing to the client split. Getting these out of step does not fail loudly: the
     // mux's forwarder RISC just spins waiting for close() calls that never come.
+    // Split each direction's masters across num_links muxes. Must divide evenly: an uneven split would
+    // leave one mux short of the close() count it waits for, i.e. a hang with no diagnostic.
+    ctx.num_links = attrs.num_links;
+    const uint32_t masters_per_direction = ctx.num_masters / 2u;
     TT_FATAL(
-        ctx.num_masters / 2u == kMuxChannelsPerDirection,
-        "each direction's mux is built with {} channels but {} masters will register with it; mux v2 "
-        "terminates on a close() count, so a mismatch hangs rather than erroring",
-        static_cast<uint32_t>(kMuxChannelsPerDirection),
-        ctx.num_masters / 2u);
+        ctx.num_links >= 1u && masters_per_direction % ctx.num_links == 0u,
+        "num_links={} must divide the {} masters that drive each direction; an uneven split leaves a mux "
+        "waiting on a close() count that never arrives",
+        ctx.num_links,
+        masters_per_direction);
+    ctx.channels_per_mux = masters_per_direction / ctx.num_links;
     TT_FATAL(
         !attrs.gather_semaphores.empty(),
         "the fused gather (tp={}) needs at least one caller-supplied global semaphore for the cross-chip "
@@ -479,32 +478,41 @@ FusedGatherContext build_fused_gather_context(
     auto mux_core_for = [&](uint32_t slot) { return CoreCoord{grid.x - 1u - slot, grid.y - 1u}; };
 
     auto deploy = [&](const std::optional<ttnn::MeshCoordinate>& dst_coord,
-                      uint32_t slot,
-                      std::unique_ptr<tt::tt_fabric::FabricMuxV2Config>& cfg_out,
-                      std::optional<CoreCoord>& vcore_out) {
+                      uint32_t slot_base,
+                      std::vector<std::unique_ptr<tt::tt_fabric::FabricMuxV2Config>>& cfgs_out,
+                      std::vector<CoreCoord>& vcores_out,
+                      std::vector<uint8_t>& next_channel_out) {
         if (!dst_coord.has_value()) {
             return;  // line end: this direction does not exist
         }
-        const CoreCoord mux_logical = mux_core_for(slot);
-        cfg_out = std::make_unique<tt::tt_fabric::FabricMuxV2Config>(
-            kMuxChannelsPerDirection, kMuxBuffersPerChannel, kMuxChannelBufferBytes, mux_base_l1);
-        tt::tt_fabric::add_fabric_mux_v2_to_program(
-            program,
-            *cfg_out,
-            mux_logical,
-            src_node,
-            mesh_device->get_fabric_node_id(*dst_coord),
-            /*link_idx=*/0,
-            tt::tt_metal::NOC::RISCV_0_default);
-        vcore_out = device->worker_core_from_logical_core(mux_logical);
+        for (uint32_t L = 0; L < ctx.num_links; ++L) {
+            const CoreCoord mux_logical = mux_core_for(slot_base + L);
+            cfgs_out.push_back(std::make_unique<tt::tt_fabric::FabricMuxV2Config>(
+                static_cast<uint8_t>(ctx.channels_per_mux),
+                kMuxBuffersPerChannel,
+                kMuxChannelBufferBytes,
+                mux_base_l1));
+            tt::tt_fabric::add_fabric_mux_v2_to_program(
+                program,
+                *cfgs_out.back(),
+                mux_logical,
+                src_node,
+                mesh_device->get_fabric_node_id(*dst_coord),
+                /*link_idx=*/L,
+                tt::tt_metal::NOC::RISCV_0_default);
+            vcores_out.push_back(device->worker_core_from_logical_core(mux_logical));
+            next_channel_out.push_back(0);
+        }
     };
 
-    deploy(fwd_coord, 0, ctx.mux_cfg_fwd, ctx.mux_virtual_core_fwd);
+    // Mux cores are taken from the top row: forward links occupy slots [0, num_links), backward the next
+    // num_links, so the two directions never share a core.
+    deploy(fwd_coord, 0, ctx.mux_cfgs_fwd, ctx.mux_virtual_cores_fwd, ctx.next_channel_fwd);
     // Both muxes are deployed now that the kernel drives both directions. Mux v2 self-terminates by
     // counting close() calls against its compile-time channel count and has no host-side termination
     // signal, so a mux must only ever be given clients that really do open/close it -- which is why each
     // master registers with the mux for its OWN direction only.
-    deploy(bwd_coord, 1, ctx.mux_cfg_bwd, ctx.mux_virtual_core_bwd);
+    deploy(bwd_coord, ctx.num_links, ctx.mux_cfgs_bwd, ctx.mux_virtual_cores_bwd, ctx.next_channel_bwd);
     return ctx;
 }
 
@@ -1308,8 +1316,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             const uint32_t m_groups_pf = fused_gather.num_masters / 2u;
             const uint32_t bank_pf = i / preaders_pf;
             const bool core_is_bwd = is_master_ring && (bank_pf >= m_groups_pf);
-            const bool has_fwd_client = is_master_ring && !core_is_bwd && fused_gather.mux_cfg_fwd != nullptr;
-            const bool has_bwd_client = is_master_ring && core_is_bwd && fused_gather.mux_cfg_bwd != nullptr;
+            const bool has_fwd_client = is_master_ring && !core_is_bwd && !fused_gather.mux_cfgs_fwd.empty();
+            const bool has_bwd_client = is_master_ring && core_is_bwd && !fused_gather.mux_cfgs_bwd.empty();
             wa.push_back(has_fwd_client ? 1u : 0u);
             wa.push_back(has_bwd_client ? 1u : 0u);
             wa.push_back(Mt_r);                          // global M tiles (staging row count)
@@ -1332,9 +1340,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
                 fwd_send = fwd_recv = fused_gather.tp / 2u;
                 bwd_send = bwd_recv = (fused_gather.tp - 1u) - fwd_send;
             } else {
-                fwd_send = (fused_gather.mux_cfg_fwd != nullptr) ? (rk + 1u) : 0u;
+                fwd_send = !fused_gather.mux_cfgs_fwd.empty() ? (rk + 1u) : 0u;
                 fwd_recv = rk;
-                bwd_send = (fused_gather.mux_cfg_bwd != nullptr) ? (fused_gather.tp - rk) : 0u;
+                bwd_send = !fused_gather.mux_cfgs_bwd.empty() ? (fused_gather.tp - rk) : 0u;
                 bwd_recv = fused_gather.tp - 1u - rk;
             }
             wa.push_back(core_is_bwd ? fused_gather.bwd_recv_sem_addr : fused_gather.fwd_recv_sem_addr);
@@ -1378,18 +1386,22 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
                 if (has_fwd_client) {
                     const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
                     const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
-                    fused_gather.mux_cfg_fwd->append_client_connection_rt_args(
-                        *fused_gather.mux_virtual_core_fwd,
-                        fused_gather.next_channel_fwd++,
+                    // Deal clients round-robin across this direction's links, so consecutive masters use
+                    // different links rather than piling onto one.
+                    const uint32_t Lf = bank_pf % fused_gather.num_links;
+                    fused_gather.mux_cfgs_fwd[Lf]->append_client_connection_rt_args(
+                        fused_gather.mux_virtual_cores_fwd[Lf],
+                        fused_gather.next_channel_fwd[Lf]++,
                         tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
                         wa);
                 }
                 if (has_bwd_client) {
                     const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
                     const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
-                    fused_gather.mux_cfg_bwd->append_client_connection_rt_args(
-                        *fused_gather.mux_virtual_core_bwd,
-                        fused_gather.next_channel_bwd++,
+                    const uint32_t Lb = (bank_pf - m_groups_pf) % fused_gather.num_links;
+                    fused_gather.mux_cfgs_bwd[Lb]->append_client_connection_rt_args(
+                        fused_gather.mux_virtual_cores_bwd[Lb],
+                        fused_gather.next_channel_bwd[Lb]++,
                         tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
                         wa);
                 }
