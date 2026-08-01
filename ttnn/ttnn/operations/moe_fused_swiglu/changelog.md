@@ -1858,3 +1858,66 @@ the shipped configuration is the best of them.**
 - **Perf achieved**: none. Default path measured unchanged (97 986 / 148 566 / 244 762).
 - **Tests**: golden 45/45. The knob is inert at its default and covered on both settings by the
   existing guard set.
+
+---
+
+## Perf 9 — `WD_LATE`: a NULL that resolves the open question. The op is RISC-ISSUE bound.
+
+- **Date**: 2026-08-01
+- **Scope**: perf. `MOE_SWIGLU_WD_LATE` ships defaulted to **0** (byte-identical). Golden 45/45.
+
+Perf 8 closed with one thing explicitly unexplained: a bandwidth-bound weight stream that runs
+concurrently with compute still recovers most of its DRAM occupancy as wall time when removed. This
+round answers it, by a null.
+
+**The hypothesis.** The NoC trace has the DRAM at ZERO for 45 us at count 256 (t = 59..104) while the
+grid runs the reduce, the scatter and the h publish. W_down is 8.26 MB (~16 us of DRAM) with no
+dependency on phase 1, and `WD_RESIDENT` reads it once for the whole op. `WD_AHEAD = 11` alone
+measured +15 % (Perf 6 §3), and the standing explanation was PLACEMENT — issued before the reduce, at
+t ~ 35-56, the batch lands inside the W_gate/W_up stream every core's matmul is blocked on. `WD_LATE`
+moves the issue past this core's reduce INVITE, a point it can only reach after its own matmul (hence
+its own weights) is done; cores reach it 50..87 us in, exactly spanning the hole.
+
+| variant | 128 | 256 | 512 |
+|---|---|---|---|
+| shipped (`WD_LATE=0`, `WD_AHEAD=1`) | **98 433** | **146 648** | **243 754** |
+| `WD_LATE=1`, `WD_AHEAD=4` | 101 250 | 153 305 | 253 767 |
+| `WD_LATE=1`, `WD_AHEAD=11` | 118 324 | 170 137 | 266 219 |
+
+**The placement hypothesis is REFUTED. The regression tracks `WD_AHEAD`, not where the batch is
+issued** — a bigger batch is worse wherever it goes. So the cost of a large W_down prefetch is not
+DRAM contention with the critical stream. It is the **per-transaction issue cost on the DM RISC-V**:
+`WD_AHEAD * HN_PAD` = 66 `BR::read` calls, each a NoC command, executed inline on NCRISC — which is
+also the reduce receiver and the h receiver, so loading it delays the collectives directly.
+
+### This is the unifying explanation, and it retires a whole family of ideas
+
+The op is **RISC-V issue bound**, not fabric bound. Every previously-puzzling result falls out of it:
+
+* NoC link utilisation **8 %**, congestion impact **0.08 %**, all 8 DRAM channels within 4 % (Perf 4)
+  — the fabric is empty because the bottleneck is upstream of it, in the instruction stream that
+  feeds it.
+* the trid ring is a null (Perf 8) — more requests in flight cannot help when issuing the requests
+  is the cost.
+* transaction WIDTH is a null in both directions (`GU_CHUNKS` 1/2/3/6, Perf 8 addendum) — wider runs
+  cut command count but cost pipelining; the interior optimum is where those balance.
+* the "sync floor" is 24 % of the op and scales as ~M^0.86 (Perf 7) — it is CB ops and NoC commands,
+  both counted per block.
+* DRAM sits idle 50 % of the time and moving work into the hole does not help — the hole is not
+  spare DRAM capacity, it is the RISC-Vs doing bookkeeping.
+
+Order of magnitude, per core per M-block: ~84 `BR::read` commands for W_gate, ~84 for W_up on the
+writer, ~66 for W_down, plus x staging, the scatter's `sl_w` writes and the h round loop — call it
+250-300 NoC commands at ~50-100 cycles of issue each = **13-22 us**, against a measured 34.8 us floor
+that also contains the CB reserve/wait/push/pop traffic. The budget closes.
+
+**What this means for the next attempt.** The lever is not placement, not depth, not width, not
+overlap, and not the fabric: it is **the NUMBER of NoC commands and CB operations executed per core**.
+Concretely that means a DRAM read shape that covers more tiles per command without giving up the
+chunk pipelining that `GU_CHUNKS = 3` buys — the two are in direct tension today because the chunk
+width IS the bank-run width. Decoupling them (read the full 6-wide row per command, publish in
+3 chunks) needs the gate/up weight CB to go back to row-major within the block, which Perf 3 made
+chunk-major precisely to make a chunk contiguous. That is the trade the next round has to price.
+
+- **Perf achieved**: none. Default measured unchanged (100 627 / 146 157 / 246 443).
+- **Tests**: golden 45/45; the knob is inert at its default.

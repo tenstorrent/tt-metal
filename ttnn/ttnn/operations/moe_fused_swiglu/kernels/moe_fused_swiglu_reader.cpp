@@ -573,9 +573,22 @@ void kernel_main() {
         // WD_AHEAD*HN_PAD transactions in flight and hides the latency behind the reduce-tree
         // handshakes below. WD_AHEAD is a knob: 1 restores the per-round read.
         // -------------------------------------------------------------------
+        // PERF 9 — WHEN this batch is issued (`WD_LATE`). The NoC trace (Perf 4) shows the DRAM at
+        // ZERO for 45 us at count 256 (t = 59..104), the window in which the grid runs the reduce,
+        // the scatter and the h publish. W_down is 8.26 MB = ~16 us of DRAM with NO dependency on
+        // phase 1, so it belongs in that window -- and `WD_RESIDENT` means it is read once for the
+        // whole op, so the move is paid once.
+        //
+        // `WD_AHEAD = 11` alone does NOT put it there and measured +15 % (Perf 6 §3): issued HERE,
+        // the batch lands at t ~ 35-56, i.e. squarely inside the W_gate/W_up stream that every
+        // core's matmul is blocked on, and 8.26 MB interleaved into a 16.5 MB critical stream slows
+        // the critical one. WD_LATE moves the issue past this core's reduce INVITE, which it can
+        // only reach after its own matmul (hence its own weights) is done. Cores reach that point
+        // 50..87 us in -- exactly spanning the idle window -- so the batch spreads across the hole
+        // instead of piling in front of the stream.
         constexpr uint32_t WD_BLOCK_TILES = HN_PAD * EC_MAX;
-        cb_reserve_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
-        {
+        auto issue_wd_batch = [&]() {
+            cb_reserve_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
             MaybeDeviceZoneScope("reader_wd_issue");
             const uint32_t wp = get_write_ptr(cb_w_down);
             (void)wp;
@@ -602,7 +615,10 @@ void kernel_main() {
                 }
 #endif
             }
-        }
+        };
+#if !WD_LATE
+        issue_wd_batch();
+#endif
 
         // -------------------------------------------------------------------
         // Phase 1c — the cross-column reduce's RECEIVER side. The invite (SEM_GO) is the flow control
@@ -656,6 +672,12 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(px, py, sem_go), 1);
             }
             noc_async_atomic_barrier();
+#endif
+#if WD_LATE
+            // PERF 9 — past the invite, so the column is already told and nothing downstream waits
+            // on this issue; the reads stream under the contributor wait below and land in the
+            // DRAM-idle window.
+            issue_wd_batch();
 #endif
             // The UP half of the gather, when MOE_SWIGLU_SCATTER_NOC=split puts it on NOC_0. The
             // GATE half stays on the writer's NOC_1; each RISC-V owns one accumulator CB outright.

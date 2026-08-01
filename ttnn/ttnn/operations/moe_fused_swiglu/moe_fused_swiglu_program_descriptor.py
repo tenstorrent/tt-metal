@@ -538,6 +538,11 @@ HACK_AHEAD = int(os.environ.get("MOE_SWIGLU_HACK_AHEAD", 2))
 #: mechanism. 0 = the pre-PERF-8 one-chunk-in-flight stream, byte for byte.
 WG_TRID = int(os.environ.get("MOE_SWIGLU_WG_TRID", 0))
 
+#: PERF 9 — issue the W_down batch AFTER the reduce invite instead of before the reduce, so it lands
+#: in the 45 us DRAM-idle window the NoC trace found instead of on top of the W_gate/W_up stream.
+#: Only meaningful with the scatter reduce (the tree path has no invite at the same point).
+WD_LATE = int(os.environ.get("MOE_SWIGLU_WD_LATE", 0))
+
 #: PERF 4 — one VALID cell per `cb_h` slot instead of one shared by every round. The other half of
 #: the round-cost lever, and the one that makes HACK_AHEAD legal on the FAST (reader-send) path.
 #:
@@ -1402,6 +1407,7 @@ def create_program_descriptor(
     hack_ahead = max(1, HACK_AHEAD) if (HSEND == "writer" or HSLOT) else 1
     dm_defines.append(("HSLOT", "1" if (HSLOT and HSEND != "writer") else "0"))
     dm_defines.append(("WG_TRID", str(int(WG_TRID))))
+    dm_defines.append(("WD_LATE", "1" if (WD_LATE and REDUCE == "scatter") else "0"))
     dm_defines.append(("HACK_AHEAD", str(hack_ahead)))
     dm_defines.append(("SEM_H_RDY_BASE", str(SEM_H_RDY_BASE)))
     dm_defines.append(("SEM_H_FREE", str(SEM_H_FREE)))
