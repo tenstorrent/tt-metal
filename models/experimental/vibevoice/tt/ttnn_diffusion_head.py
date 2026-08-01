@@ -22,7 +22,6 @@ import ttnn
 
 from models.experimental.vibevoice.common.weight_cache import WeightCache
 
-
 _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
@@ -301,13 +300,19 @@ class TTDiffusionHead:
             program_config=_DIFF_N4608_B2 if b2 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Place the SwiGLU product (down_proj's in0) in L1: down_proj is the slowest head matmul
         # (K=4608, 24 cores, ~37% DRAM BW) and reads in0 ~9 µs faster from L1 (79.4 -> 70.7 µs).
         # Placement changes where the tensor lives, not its bits, so this stays byte-identical
         # (maxabsdiff==0).  Only down_proj benefits — L1 in0 regresses final_adaLN (41 -> 108 µs),
         # which therefore stays in DRAM.
-        hidden = ttnn.mul(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
+        #
+        # silu folded into the product as an in0 activation, dropping the standalone unary op
+        # (40 calls/frame — 10 DPM steps x 4 head layers).  Measured maxabsdiff==0 vs
+        # `mul(silu(gate), up)`: the fused form still rounds the activation to the operand dtype
+        # before multiplying.  9.70 -> 7.99 us on the pair (1.21x).
+        hidden = ttnn.mul(
+            gate, up, memory_config=ttnn.L1_MEMORY_CONFIG, input_tensor_a_activations=[ttnn.UnaryOpType.SILU]
+        )
         out = ttnn.linear(
             hidden,
             w.layer_ffn_down_w[layer_idx],
