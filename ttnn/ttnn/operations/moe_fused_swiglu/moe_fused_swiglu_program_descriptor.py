@@ -528,7 +528,27 @@ HSEND = os.environ.get("MOE_SWIGLU_HSEND", "reader")
 #: re-serialise the reader against compute every round. 1 = the pre-PERF-4 path, byte for byte.
 #: Only meaningful with HSEND=writer (the per-slot monotone counters are what let senders finish
 #: out of order); at HSEND=reader the shared VALID flag re-imposes the chain and A is forced to 1.
-HACK_AHEAD = int(os.environ.get("MOE_SWIGLU_HACK_AHEAD", 1))
+HACK_AHEAD = int(os.environ.get("MOE_SWIGLU_HACK_AHEAD", 2))
+
+#: PERF 4 — one VALID cell per `cb_h` slot instead of one shared by every round. The other half of
+#: the round-cost lever, and the one that makes HACK_AHEAD legal on the FAST (reader-send) path.
+#:
+#: mcast_pipe offers exactly two data-ready signals and each gives up something this op needs:
+#:   Flag    — data and signal ride ONE NOC_CMD_VC_LINKED chain, so ordering is free (no acked
+#:             write barrier). But there is ONE cell, so round r+1's sender cannot set VALID until
+#:             every core has cleared round r's -- a per-round grid-wide serialisation, which is
+#:             mcast_pipe's own documented caveat.
+#:   Counter — monotone per-slot, so rounds can overlap. But the signal is an ATOMIC on a different
+#:             command buffer and therefore cannot terminate the link (the Perf-3 addendum-2 fix),
+#:             so the data must go UNLINKED and the sender pays an ACKED write barrier every round:
+#:             a second NUM_CORES-way incast, measured 11 % worse end to end.
+#: Per-SLOT FLAGS take the union: the link survives (no barrier) and rounds r and r+1 touch
+#: different cells (no reset chain). Rounds r and r+DEPTH_H share a cell and are ordered by the ack
+#: itself. Reuses the DEPTH_H `SEM_H_RDY_BASE` cells the Counter path already allocates, so it costs
+#: no semaphore and no L1. 0 = the pre-PERF-4 shared-flag pipe, byte for byte.
+#: SHIPPED ON (with HACK_AHEAD 2): 99 981 / 146 650 / 244 536 ns at 88 cores against the shared
+#: flag's 101 870 / 152 710 / 254 113 -- -1.9 % / -4.0 % / -3.8 %, no cell regressed.
+HSLOT = int(os.environ.get("MOE_SWIGLU_HSLOT", 1))
 
 #: Mailbox handshake word — the reader publishes {count, M_t, m_blocks} plus this flag.
 MAILBOX_MAGIC = 0xC0FFEE01
@@ -1368,7 +1388,11 @@ def create_program_descriptor(
     # and `m_eff` is a RUNTIME value, so the real clamp lives in the reader. All the host enforces is
     # the floor and the one thing it alone knows: the shared-VALID-flag `reader` send path cannot
     # tolerate out-of-order senders at all, so it is pinned to the byte-identical 1.
-    hack_ahead = max(1, HACK_AHEAD) if HSEND == "writer" else 1
+    # HSLOT gives the reader-send path per-slot VALID cells, which is exactly what the shared flag
+    # denied it, so ack-ahead becomes legal there too. Without either, the shared cell re-imposes
+    # the chain and A is pinned to the byte-identical 1.
+    hack_ahead = max(1, HACK_AHEAD) if (HSEND == "writer" or HSLOT) else 1
+    dm_defines.append(("HSLOT", "1" if (HSLOT and HSEND != "writer") else "0"))
     dm_defines.append(("HACK_AHEAD", str(hack_ahead)))
     dm_defines.append(("SEM_H_RDY_BASE", str(SEM_H_RDY_BASE)))
     dm_defines.append(("SEM_H_FREE", str(SEM_H_FREE)))

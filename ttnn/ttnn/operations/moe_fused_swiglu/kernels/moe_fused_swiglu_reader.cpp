@@ -156,6 +156,38 @@ constexpr auto xmc = McastArgs<CT_XMCAST, RT_XMCAST, HGROUPS>();
 // column r's reduce root. SPAN is the rect area (row-major sender list).
 constexpr auto hmc = McastArgs<CT_HMCAST, RT_HMCAST, HGROUPS * KGROUPS>();
 
+#if HSLOT
+// PERF 4 — one SenderPipe TYPE per cb_h slot, differing only in which VALID cell it broadcasts.
+//
+// The shared-flag h pipe serialises the rounds by construction: mcast_pipe's own comment says it —
+// "with Flag, the sender of round r+1 cannot proceed until every receiver has reset round r's flag,
+// and that reset chain is a per-round grid-wide serialisation". The Counter signal removes that
+// chain but pays an ACKED write barrier per round (it must issue its data UNLINKED, because an
+// atomic on a different command buffer cannot terminate a NOC_CMD_VC_LINKED chain), which measured
+// 11 % worse end to end. Per-SLOT flags get both: the link survives, so no acked barrier, and
+// rounds r and r+1 touch different cells, so they overlap. Rounds r and r+DEPTH_H share a cell and
+// are ordered by the ack itself — a core acks slot s only after `cb_reserve_back` proves it consumed
+// round r, which is strictly after it put that cell back to INVALID.
+//
+// PRE_HANDSHAKE = false: the ack wait is the caller's monotone counter (see the send site).
+template <uint32_t S>
+using HSlotSender = SenderPipe<noc_index, SEM_H_RDY_BASE + S, false, SEM_H_FREE, DataReadySignal::Flag, true>;
+
+// Runtime slot -> compile-time semaphore id. Recursive so it stays correct at any DEPTH_H; the
+// pipes are value types over the rect, and SenderPipe's ctor does NOT touch the flag cell, so
+// constructing one per send is free and cannot clobber an in-flight VALID.
+template <uint32_t S = 0>
+inline void h_slot_send(const Noc& noc, uint32_t slot, uint32_t l1, uint32_t size) {
+    if constexpr (S < DEPTH_H) {
+        if (slot == S) {
+            HSlotSender<S>(noc, hmc.template rect<noc_index>(), hmc.num_active).send(l1, l1, size);
+            return;
+        }
+        h_slot_send<S + 1>(noc, slot, l1, size);
+    }
+}
+#endif
+
 constexpr uint32_t TA_BASE = CT_HMCAST + 5;
 constexpr auto x_args = TensorAccessorArgs<TA_BASE>();
 constexpr auto wg_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
@@ -243,6 +275,12 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_h_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HSLICE)));
     uint32_t h_arrivals = 0;
+    // PERF 4 — monotone ack accounting for the per-slot-flag send (HSLOT). Each core acks each
+    // round's root exactly once per M-block, so a root's cell gains exactly NUM_CORES per M-block
+    // whatever order the acks arrive in. SEM_H_FREE is monotone ACROSS M-blocks, so this
+    // expectation must be too — declared here, outside the M-block loop, not reset per block.
+    uint32_t h_free_expected = 0;
+    (void)h_free_expected;
 #if HSEND_WRITER
     // PERF 3 — per-cb_h-slot arrival expectation, this core's own running total. See the wait site.
     uint32_t h_exp[DEPTH_H] = {0};
@@ -693,6 +731,14 @@ void kernel_main() {
             if (hack_ahead > blocks_cap - 1) {
                 hack_ahead = blocks_cap - 1;  // never reserve the WHOLE CB: that forces 0 in flight
             }
+            // ...and never ack more than DEPTH_H ahead, whatever the CB slack. There are only
+            // DEPTH_H flag cells, so sender g + A - 1 reuses the cell last written by global round
+            // g + A - 1 - DEPTH_H; only A <= DEPTH_H keeps that strictly in this core's PAST, i.e.
+            // already waited on and put back to INVALID. blocks_cap alone is NOT this bound (it is
+            // 6 at m_eff 4 and 24 at m_eff 1) and using it hangs.
+            if (hack_ahead > DEPTH_H) {
+                hack_ahead = DEPTH_H;
+            }
             if (hack_ahead < 1) {
                 hack_ahead = 1;
             }
@@ -712,7 +758,7 @@ void kernel_main() {
                     cb_reserve_back(cb_h, ahead * h_block_tiles);
                 }
                 const uint32_t hdst = get_write_ptr(cb_h);
-#if HSEND_WRITER
+#if HSEND_WRITER || HSLOT
                 // PERF 3 — DUAL-RISC SPLIT, receive side. The send lives on the writer now, so this
                 // loop only receives. Two steps, and the ORDER of them is the whole protocol:
                 //
@@ -778,9 +824,27 @@ void kernel_main() {
                     }
 #ifndef ABLATE_NO_H_XFER  // /perf-measure: drop the h transport, keep cb_h's reserve/push
 #if !HSEND_WRITER
+#if HSLOT
+                    // PERF 4 — PER-SLOT FLAGS. Same linked data+signal multicast as the shared-flag
+                    // path (so still NO acked write barrier -- see moe_fused_swiglu_common.hpp), but
+                    // the VALID cell is this SLOT's, so round r+1's sender is not held behind every
+                    // core clearing round r's. PRE_HANDSHAKE is deliberately OFF: mcast_pipe's
+                    // `wait(ack) ; set(0)` reset is only race-free while the rounds form a chain,
+                    // and HACK_AHEAD's whole purpose is to break that chain, so the ack accounting
+                    // is the MONOTONE `hfree_expected` counter below instead.
+                    if constexpr (hmc.active) {
+                        h_free_expected += NUM_CORES;
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                static_cast<uint32_t>(get_semaphore(SEM_H_FREE))),
+                            h_free_expected);
+                        h_slot_send(noc, (b * HGROUPS + r) % DEPTH_H, hdst, h_block_tiles * BFP8_TILE);
+                    }
+#else
                     if constexpr (hmc.active) {
                         h_send.send(hdst, hdst, h_block_tiles * BFP8_TILE);
                     }
+#endif
 #else
                     // PERF 3 — the broadcast to the other 109 cores is the WRITER's job now; this
                     // core only lands its own copy (the self-copy above). Nothing to do here.
@@ -792,11 +856,27 @@ void kernel_main() {
                     // had this whole round's grid-wide broadcast to land under — that is the deferral.
 #ifndef ABLATE_NO_H_XFER
 #if !HSEND_WRITER
+#if HSLOT
+                    // PERF 4 — the receive is the whole of `ReceiverPipe::receive` for a Flag signal
+                    // with PRE_HANDSHAKE off: wait for THIS slot's VALID, then put it back. Raw
+                    // rather than a per-slot ReceiverPipe because that class's ctor sets the cell
+                    // INVALID, and constructing one inside the loop would clobber a VALID a sender
+                    // running ahead had already broadcast. The cells need no init here at all: the
+                    // host allocates them at 0 == INVALID, every receive restores INVALID, and a
+                    // sender restores its own after its fence.
+                    if constexpr (hmc.active) {
+                        volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + ((b * HGROUPS + r) % DEPTH_H))));
+                        noc_semaphore_wait(hf, VALID);
+                        noc_semaphore_set(hf, INVALID);
+                    }
+#else
                     if constexpr (hmc.active) {
                         // Round r's sender is column r's root, core (r, r % KGROUPS); the rotating
                         // sender list is row-major over the rect.
                         h_recv.receive((r % KGROUPS) * HGROUPS + r);
                     }
+#endif
 #else
                     // PERF 3 — wait on THIS SLOT's own monotone arrival counter. `h_exp[]` is this
                     // core's private expectation: it is bumped only for rounds this core actually

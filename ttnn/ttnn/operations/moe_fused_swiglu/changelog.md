@@ -1464,7 +1464,80 @@ eats the one `HACK_AHEAD` removes.
 `MOE_SWIGLU_HACK_AHEAD` ships defaulted to 1 (byte-identical) with the table above, because the next
 build needs it.
 
-### 4. The named next build
+### 4. GRADUATED — per-slot FLAGS (`HSLOT`, default on) + `HACK_AHEAD = 2`
+
+Built after the null above, from its mechanism. `mcast_pipe` offers two data-ready signals and each
+gives up something this op needs: **Flag** rides one `NOC_CMD_VC_LINKED` chain with the data, so
+ordering is free — but there is ONE cell, so round r+1's sender cannot set VALID until every core has
+cleared round r's (mcast_pipe's own documented caveat). **Counter** is monotone per slot so rounds
+overlap — but the signal is an atomic on a different command buffer, cannot terminate the link, and
+therefore forces an ACKED write barrier every round: a second NUM_CORES-way incast.
+
+**Per-SLOT flags take the union**: the link survives (no barrier) and rounds r and r+1 touch different
+cells (no reset chain). Reuses the `DEPTH_H` `SEM_H_RDY_BASE` cells the Counter path already
+allocates, so it costs **no semaphore and no L1**. With the flag chain gone, `HACK_AHEAD` becomes
+legal on the fast path and the two ship together.
+
+**Every one of the 12 guard cells is faster; none regressed.** 88 cores:
+
+| cell | shared flag | **HSLOT + A2** | ratio |
+|---|---|---|---|
+| bf16_rm 128 | 99 601 | **98 433** | -1.2 % |
+| bf16_rm 256 | 152 521 | **146 648** | **-3.9 %** |
+| bf16_rm 512 | 254 279 | **243 754** | **-4.1 %** |
+| bf16_rm cap1024 256 | 151 556 | **145 350** | -4.1 % |
+| bf16_rm emb6144 256 | 132 361 | **130 086** | -1.7 % |
+| bf16_rm 5120 | 2 102 697 | **2 003 063** | **-4.7 %** |
+| bfp8 128 | 100 914 | **97 430** | -3.5 % |
+| bfp8 256 | 143 630 | **131 081** | **-8.7 %** |
+| bfp8 512 | 236 838 | **232 337** | -1.9 % |
+| bfp8 cap1024 256 | 144 493 | **138 610** | -4.1 % |
+| bfp8 emb6144 256 | 122 739 | **114 476** | **-6.7 %** |
+| bfp8 5120 | 1 973 664 | **1 869 101** | -5.3 % |
+
+**Two real bugs were found by the unit suite and are worth recording, because both are invisible to
+the 45-cell golden suite (which never runs a multi-M-block count):**
+
+1. **The flag index must be the GLOBAL round, not `r`.** `r % DEPTH_H` restarts every M-block, so at
+   `HGROUPS = 11 / DEPTH_H = 3` the flag used by block b's round 9 is reused by block b+1's round 0
+   only TWO global rounds later, while the ack only guarantees `DEPTH_H`. A sender then set VALID on
+   a cell a slower core had not yet cleared, that core cleared it, and the signal was lost —
+   **a hang at count 1024 (4 M-blocks)**. Fixed by indexing both sides with `(b * HGROUPS + r) %
+   DEPTH_H`; the Counter path is immune because monotone counters cannot lose an increment, which is
+   exactly why this only appeared on the Flag path.
+2. **The ack-ahead bound is `min(DEPTH_H, blocks_cap - 1)`, not `blocks_cap - 1`.** `blocks_cap =
+   DEPTH_H * M_BLOCK / m_eff` is 6 at m_eff 4 and 24 at m_eff 1, so the CB-slack bound alone lets a
+   core ack a sender that will reuse a FLAG the core has not cleared. Only `A <= DEPTH_H` keeps the
+   previous user of every cell strictly in this core's past. (This voids the earlier `A = max`
+   numbers, which ran unsafely.)
+3. `h_free_expected` must live OUTSIDE the M-block loop: `SEM_H_FREE` is monotone across blocks, so a
+   per-block expectation is satisfied instantly from block 1 on and the flow control silently dies.
+
+`A > 2` is unreachable at the graded shapes anyway: `m_eff = M_BLOCK` gives `blocks_cap = 3`, so
+`A = 2`. Going deeper needs `DEPTH_H >= 4`, i.e. +52 224 B against ~10 560 B free at 88 cores — the
+CB-aliasing enabler recorded in Perf 2 §5.4 (104 448 B) is the way in, and is now worth building.
+
+### 5. Still not enough — what is left
+
+88 cores, bf16_rm, against the targets:
+
+| count | session start | **now** | target | gap |
+|---|---|---|---|---|
+| 128 | 99 900 | **98 433** | 91 800 | 7.2 % |
+| 256 | 152 000 | **146 648** | 108 000 | 35.8 % |
+| 512 | 253 700 | **243 754** | 161 816 | 50.6 % |
+
+The rendezvous term is 34.3 us per M-block and this recovers roughly a sixth of it, because
+`DEPTH_H = 3` lets only three rounds overlap. Two levers remain, in order:
+
+**(a) `DEPTH_H >= 4` via the CB-aliasing enabler** — the same fix, deeper. Bounded by the remaining
+rendezvous, ~28 us/M-block.
+
+**(b) The 45 us DRAM-idle window** (§2b). Even a perfect rendezvous fix leaves count 256 at ~118 us
+and 512 at ~185 us, so 256/512 additionally require starting phase-2 rounds during phase 1 — legal,
+because round r needs only column r's h and the trace shows every root is ready ~44 us early.
+
+### 6. The original named next build (now done)
 
 **Per-slot FLAGS, not per-slot counters.** Keep the send on the reader and the linked
 data+signal multicast (so no acked barrier), but give each `cb_h` slot its own VALID/INVALID flag
