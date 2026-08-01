@@ -29,7 +29,6 @@ from models.common.tensor_utils import get_rot_transformation_mat
 from models.experimental.vibevoice.common.weight_cache import WeightCache
 from models.experimental.vibevoice.tt.vibevoice_config import DecoderConfig
 
-
 _HIFI4 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
@@ -511,6 +510,60 @@ def _apply_rope_ttnn(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return ttnn.typecast(rotated, ttnn.bfloat16)
+
+
+def _rope_neg_sin(sin: ttnn.Tensor) -> ttnn.Tensor:
+    """concat(-sin[:hd/2], sin[hd/2:]) — the sign of rotate_half folded into the sin row."""
+    hd = sin.shape[-1]
+    half = hd // 2
+    s1 = ttnn.slice(sin, [0, 0, 0, 0], [sin.shape[0], 1, 1, half], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    s2 = ttnn.slice(sin, [0, 0, 0, half], [sin.shape[0], 1, 1, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.concat(
+        [ttnn.neg(s1, memory_config=ttnn.DRAM_MEMORY_CONFIG), s2], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
+def _rope_b2_tables(rope_rows) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Stack both CFG rows' RoPE constants ONCE per frame: (cos [2,1,1,hd], nsin [2,1,1,hd]).
+
+    The rows are position-dependent but layer-independent, so all 28 layers share these.
+    ~10 ops per frame, against the ~870 ops/frame `_apply_rope_b2` removes.
+    """
+    cos2 = ttnn.concat([r[0] for r in rope_rows], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    nsin2 = ttnn.concat([_rope_neg_sin(r[1]) for r in rope_rows], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return cos2, nsin2
+
+
+def _apply_rope_b2(x: ttnn.Tensor, cos2: ttnn.Tensor, nsin2: ttnn.Tensor) -> ttnn.Tensor:
+    """RoPE on BOTH CFG rows at once: [2,n,1,hd] bf16 -> [2,n,1,hd] bf16, in 4 ops.
+
+    Byte-identical (measured maxabsdiff==0) to two per-row `_apply_rope_ttnn` calls, which
+    cost 9 ops each.  Three independent rewrites, each exact:
+
+    * `rotate_half(x)*sin == roll(x, hd/2, -1) * concat(-sin1, sin2)`.  Rolling right by hd/2
+      yields concat(x2, x1), and pairing it with the pre-negated sin gives concat(-x2*s1, x1*s2)
+      — the same products with the sign flipped on the operand instead of the result, which is
+      IEEE-exact.  Replaces slice/slice/neg/concat with one data-movement op.
+    * Batching the two CFG rows.  These are elementwise ops, so a row's result does not depend
+      on the other row; slicing after == slicing before.  Halves the number of calls.
+    * Dropping both typecasts.  `mul(bf16, fp32)->fp32` upcasts exactly (bf16->fp32 is lossless),
+      and asking the final `add` for bf16 packs with the same round-to-nearest-even the trailing
+      `typecast` applied.
+
+    Measured (isolated, one layer's worth): q 37.6 -> 14.5 us (2.60x), k 25.2 -> 8.8 us (2.88x),
+    both maxabsdiff==0.  Deployed frame 4235 -> 3489 ops and 38.89 -> 37.68 ms; end-to-end
+    2p_goat decode 22.89 -> 24.63 tok/s (+7.6%, 3 interleaved reps each, spread <=0.1).  The
+    600-token render is byte-identical (same sha256) to the pre-change one.
+    NOTE `ttnn.roll` is not a single kernel -- it expands to slice/slice/concat -- so the roll
+    rewrite pays only for the dropped `neg`; the batching and the typecast removal are the bulk.
+    """
+    half = x.shape[-1] // 2
+    return ttnn.add(
+        ttnn.mul(x, cos2, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32),
+        ttnn.mul(ttnn.roll(x, half, -1), nsin2, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
 
 
 def _apply_rope_interleaved_ttnn(
@@ -1424,7 +1477,8 @@ class TTVibeVoiceLM:
         self,
         x: ttnn.Tensor,  # [2,1,1,H]  row0=pos, row1=neg
         layer_w: LayerWeights,
-        rope_rows,  # [(cos0,sin0),(cos1,sin1)]  per-row [1,1,1,hd]
+        rope_rows,  # [(cos0,sin0),(cos1,sin1)]  per-row [1,1,1,hd] — fused-RoPE path only
+        rope_b2,  # (cos2, nsin2) [2,1,1,hd] stacked once per frame — fp32-RoPE path
         cur_positions,  # [cur_pos0, cur_pos1]  per-row [1] int32
         kv_caches,  # [kv0, kv1]  separate [1,..] caches
         layer_idx: int,
@@ -1462,24 +1516,38 @@ class TTVibeVoiceLM:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [2, n_heads/n_kv, 1, hd]
 
+        # RoPE + the q/k/v permute run BATCHED over both CFG rows, then the rows are split for the
+        # per-row KV caches.  Everything up to the split is elementwise or pure data movement, so
+        # slicing afterwards is byte-identical to the old slice-then-rope-then-permute order — but
+        # it halves the call count and drops RoPE from 9 ops to 4 (see _apply_rope_b2).
+        if not self._fused_rope:
+            qp = ttnn.permute(_apply_rope_b2(q, rope_b2[0], rope_b2[1]), (0, 2, 1, 3))  # [2,1,n_heads,hd]
+            kp = ttnn.permute(_apply_rope_b2(k, rope_b2[0], rope_b2[1]), (0, 2, 1, 3))
+        vp = ttnn.permute(v, (0, 2, 1, 3))  # [2,1,n_kv,hd]
+
         # Per-row attention on the two separate caches — identical ops to the B=1 path.
         attn_rows = []
         for b in range(2):
-            cos_row, sin_row = rope_rows[b]
             cur_pos = cur_positions[b]
             kv_cache = kv_caches[b]
-            qb = ttnn.slice(q, [b, 0, 0, 0], [b + 1, n_heads, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            kb = ttnn.slice(k, [b, 0, 0, 0], [b + 1, n_kv, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            vb = ttnn.slice(v, [b, 0, 0, 0], [b + 1, n_kv, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if self._fused_rope:
+                cos_row, sin_row = rope_rows[b]
+                qb = ttnn.slice(q, [b, 0, 0, 0], [b + 1, n_heads, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                kb = ttnn.slice(k, [b, 0, 0, 0], [b + 1, n_kv, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 q_dec = self._rope_decode_fused(qb, cos_row, sin_row)
                 k_1bkd = self._rope_decode_fused(kb, cos_row, sin_row)
             else:
-                qb = _apply_rope_ttnn(qb, cos_row, sin_row)
-                kb = _apply_rope_ttnn(kb, cos_row, sin_row)
-                q_dec = ttnn.permute(qb, (0, 2, 1, 3))  # [1, 1, n_heads, hd]
-                k_1bkd = ttnn.to_memory_config(ttnn.permute(kb, (0, 2, 1, 3)), self._kv_update_shard_mc)
-            v_1bkd = ttnn.to_memory_config(ttnn.permute(vb, (0, 2, 1, 3)), self._kv_update_shard_mc)
+                q_dec = ttnn.slice(
+                    qp, [b, 0, 0, 0], [b + 1, 1, n_heads, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )  # [1, 1, n_heads, hd]
+                k_1bkd = ttnn.to_memory_config(
+                    ttnn.slice(kp, [b, 0, 0, 0], [b + 1, 1, n_kv, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    self._kv_update_shard_mc,
+                )
+            v_1bkd = ttnn.to_memory_config(
+                ttnn.slice(vp, [b, 0, 0, 0], [b + 1, 1, n_kv, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                self._kv_update_shard_mc,
+            )
             ttnn.experimental.paged_update_cache(
                 kv_cache.keys[layer_idx], k_1bkd, update_idxs_tensor=cur_pos, page_table=None
             )
@@ -1508,7 +1576,7 @@ class TTVibeVoiceLM:
         )
         return out  # [2,1,1,H]
 
-    def _transformer_layer_traced_b2(self, x, layer_idx, rope_rows, cur_positions, kv_caches) -> ttnn.Tensor:
+    def _transformer_layer_traced_b2(self, x, layer_idx, rope_rows, rope_b2, cur_positions, kv_caches) -> ttnn.Tensor:
         lw = self.w.layers[layer_idx]
         x_norm = ttnn.rms_norm(
             x,
@@ -1517,7 +1585,7 @@ class TTVibeVoiceLM:
             compute_kernel_config=_HIFI4,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        attn_out = self._attention_decode_traced_b2(x_norm, lw, rope_rows, cur_positions, kv_caches, layer_idx)
+        attn_out = self._attention_decode_traced_b2(x_norm, lw, rope_rows, rope_b2, cur_positions, kv_caches, layer_idx)
         x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x_norm = ttnn.rms_norm(
             x,
@@ -1555,8 +1623,10 @@ class TTVibeVoiceLM:
             # PART 2 on device, once per step: both CFG rows' cos/sin gathered from their device
             # positions, so the caller's host-written rows are unused (and are not even built).
             rope_rows = [self._rope_rows_sharded(p) for p in cur_positions]
+        # Stack the two CFG rows' cos / sign-folded sin once — they are layer-invariant.
+        rope_b2 = None if self._fused_rope else _rope_b2_tables(rope_rows)
         for layer_idx in range(cfg.num_hidden_layers):
-            x = self._transformer_layer_traced_b2(x, layer_idx, rope_rows, cur_positions, kv_caches)
+            x = self._transformer_layer_traced_b2(x, layer_idx, rope_rows, rope_b2, cur_positions, kv_caches)
         x = ttnn.rms_norm(
             x,
             weight=self.w.norm_w,
