@@ -20,6 +20,8 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     TopKSortDirection,
+    TopKXLChunkBaseMode,
+    TopKXLIndexOp,
     format_dict,
 )
 from helpers.param_config import parametrize
@@ -36,8 +38,9 @@ FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt32)
 # wrong shift or mask width alters it.
 GROUP_ID = 0x2A9
 GROUP_SHIFT = 16
-# TOPK_XL_INDEX_OP codes in sources/topk_xl_test.cpp.
-INDEX_OP_CODE = {"separate": 1, "remove_msb": 2}
+# add_lsb_indices writes core_id into bits [15:11].
+CORE_ID_SHIFT = 11
+CORE_ID_MASK = 0x1F
 
 
 def _tiles_per_sequence(K: int) -> int:
@@ -122,7 +125,8 @@ def _build_input(K, num_chunks, tail_elements, num_rows, mode, as_float32=False)
 
     `as_float32` keeps the buffer in float32 for the 32-bit unpack_to_dest path.
     Every mode generates exactly-representable bf16 values, so the float32 and
-    bf16 buffers hold the same numbers and share one golden."""
+    bf16 buffers hold the same numbers and share one golden.
+    """
     tiles_per_seq = _tiles_per_sequence(K)
     search_len = (num_chunks - 1) * K + tail_elements
     total_input_tiles = num_rows * num_chunks * tiles_per_seq
@@ -148,23 +152,25 @@ def _config(
     tail_elements,
     num_rows,
     src_A,
-    index_op=0,
+    index_op=TopKXLIndexOp.RowMajor,
     group_id=0,
     group_shift=16,
     core_id=0,
     sort_direction=TopKSortDirection.Descending,
     fused_reduce=False,
-    chunk_base_mode=0,
+    chunk_base_mode=TopKXLChunkBaseMode.Static,
     chunk_base=0,
     dest_sync=DestSync.Full,
     formats=FORMATS,
 ):
-    """Build the TestConfig for one variant.
+    """
+    Build the TestConfig for one variant.
 
-    index_op: 0 row-major, 1 separate, 2 remove_msb (2 packs one region, else two).
-    The fused-reduce path splits indices at the end, so it packs two regions too."""
+    RemoveMsb packs one region in place, every other index op packs two.
+    The fused path splits indices at the end, so it packs two regions as well.
+    """
     tiles_per_seq = _tiles_per_sequence(K)
-    result_tiles = (1 if index_op == 2 else 2) * tiles_per_seq
+    result_tiles = (1 if index_op == TopKXLIndexOp.RemoveMsb else 2) * tiles_per_seq
     # 32-bit input does unpack_to_dest (is_32bit_input), while bf16 goes
     # through SrcA then the MATH A2D datacopy.
     is_32bit = formats.input_format in (DataFormat.Float32, DataFormat.Int32)
@@ -253,7 +259,8 @@ def _check(
     index_offset=0,
     value_format=FORMATS.input_format,
 ):
-    """Validate the packed result against the golden.
+    """
+    Validate the packed result against the golden.
 
     Always: exactly K finite lanes per row, K distinct indices, the top-K value
     multiset matches, and each returned index points at the value returned
@@ -262,7 +269,8 @@ def _check(
     indices ambiguous.
 
     `index_offset` is the starting chunk_base, which the LLK ORs into every
-    reported index, so the golden positions shift by it."""
+    reported index, so the golden positions shift by it.
+    """
     gold_values = rows.gather(1, gold_indices)  # [num_rows, K] top-K values per row
 
     for r, (hw_idx, hw_val) in enumerate(_extract_hw_topk(result, K, num_rows)):
@@ -366,8 +374,10 @@ def test_topk_xl_ties(K, num_chunks):
 @skip_for_wormhole
 @skip_for_quasar
 def test_topk_xl_all_equal(K):
-    """Every key is identical, so every compare-exchange in local_sort
-    and rebuild takes the tie branch and resolves on the index bits."""
+    """
+    Every key is identical, so every compare-exchange in local_sort
+    and rebuild takes the tie branch and resolves on the index bits.
+    """
     (K,) = K
 
     src_A, rows = _build_input(K, 1, K, 1, "all_equal")  # single chunk
@@ -412,8 +422,8 @@ def _check_separate(
 
         # core_id sits in bits [15:11]. A group_shift of 11 or less puts the group
         # id over that field, leaving no separable core bits to read back.
-        if group_shift > 11:
-            hw_core = (raw >> 11) & 0x1F
+        if group_shift > CORE_ID_SHIFT:
+            hw_core = (raw >> CORE_ID_SHIFT) & CORE_ID_MASK
             assert (hw_core == core_id).all(), (
                 f"row {r}: core_id bits [15:11] wrong; got "
                 f"{sorted(set(int(c) for c in hw_core.tolist()))[:4]}, want {core_id}"
@@ -465,7 +475,7 @@ def _check_remove_msb(result, K, num_rows):
 
 @parametrize(
     K=[512, 1024, 2048],
-    index_op=["separate", "remove_msb"],
+    index_op=[TopKXLIndexOp.Separate, TopKXLIndexOp.RemoveMsb],
 )
 @skip_for_wormhole
 @skip_for_quasar
@@ -479,13 +489,13 @@ def test_topk_xl_index_ops(K, index_op):
         K,
         num_rows,
         src_A,
-        index_op=INDEX_OP_CODE[index_op],
+        index_op=index_op,
         group_id=GROUP_ID,
         group_shift=GROUP_SHIFT,
     )
     result = configuration.run().result
 
-    if index_op == "separate":
+    if index_op == TopKXLIndexOp.Separate:
         _check_separate(result, K, num_rows, rows)
     else:
         _check_remove_msb(result, K, num_rows)
@@ -517,7 +527,7 @@ def test_topk_xl_core_id(K, core_id):
         K,
         num_rows,
         src_A,
-        index_op=INDEX_OP_CODE["separate"],
+        index_op=TopKXLIndexOp.Separate,
         group_id=GROUP_ID,
         group_shift=GROUP_SHIFT,
         core_id=core_id,
@@ -543,7 +553,7 @@ def test_topk_xl_group_shift(K, group_shift):
         K,
         num_rows,
         src_A,
-        index_op=INDEX_OP_CODE["separate"],
+        index_op=TopKXLIndexOp.Separate,
         group_id=GROUP_ID,
         group_shift=group_shift,
     )
@@ -557,7 +567,7 @@ def test_topk_xl_group_shift(K, group_shift):
 # - init(base) takes neither
 # All three send an (upper16, lower16) pair to _sfpu_load_config32_, but the split varies.
 # 0x1F800 is nonzero in both halves, and it's a multiple of every valid K.
-@parametrize(K=[512, 1024, 2048], chunk_base_mode=[0, 1, 2])
+@parametrize(K=[512, 1024, 2048], chunk_base_mode=list(TopKXLChunkBaseMode))
 @skip_for_wormhole
 @skip_for_quasar
 def test_topk_xl_chunk_base(K, chunk_base_mode):
@@ -599,7 +609,8 @@ def test_topk_xl_rebuild_ascending(K):
     and each lane must hold the same rank counted from the opposite end.
 
     The two directions are compared against each other rather than each checked
-    alone, because rebuild does not leave Dest sorted in lane order."""
+    alone, because rebuild does not leave Dest sorted in lane order.
+    """
     (K,) = K
     num_rows, num_chunks = 1, 2
 
@@ -685,10 +696,11 @@ def _check_fused_reduce(result, K, num_rows, num_chunks, rows):
 
 
 def _check_denormal_fused_word(result, K, rows):
-    """The +0 lanes must come back with their own coordinates intact.
-
+    """
+    The +0 lanes must come back with their own coordinates intact.
     A +0 value zeroes bits 30:23 of the fused word, so the 32-bit word is an fp32
-    denormal. An FP32-mode move would flush it and take the index with it."""
+    denormal. An FP32-mode move would flush it and take the index with it.
+    """
     res = _result_words(result)
     region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
     block = res[: 2 * region]
@@ -730,7 +742,8 @@ def test_topk_xl_denormal_fused_word(K):
 
     Runs fused, because that is where the value and the index share one word. On
     the unfused path they sit in separate regions, so a value word is plain
-    0x00000000 and flushing it is a no-op."""
+    0x00000000 and flushing it is a no-op.
+    """
     (K,) = K
     num_rows, num_chunks = 1, 2
 
