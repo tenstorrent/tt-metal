@@ -55,6 +55,7 @@ class Qwen3VlTextEncoder(Module):
         rms_norm_eps: float,
         rope_theta: float,
         mrope_section: Sequence[int],
+        head_dim: int | None = None,
         activation_layers: Sequence[int] | None = None,
         device: ttnn.MeshDevice,
         parallel_config: EncoderParallelConfig | None = None,
@@ -62,6 +63,20 @@ class Qwen3VlTextEncoder(Module):
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
+
+        # Qwen3-VL declares `head_dim` explicitly and it is NOT always `hidden_size // num_heads`:
+        # Qwen3-VL-8B happens to satisfy that (4096 // 32 == 128), but MiniMax-H3's conditioner does
+        # not (5120 // 64 == 80, while the checkpoint's head_dim is 128, giving an inner dimension of
+        # 8192 wider than the residual stream). Pass the config's value; the derivation is only a
+        # fallback for callers whose checkpoint omits it.
+        if head_dim is None:
+            if hidden_size % num_attention_heads != 0:
+                msg = (
+                    f"cannot derive head_dim: hidden_size {hidden_size} is not divisible by "
+                    f"num_attention_heads {num_attention_heads}. Pass `head_dim` explicitly."
+                )
+                raise ValueError(msg)
+            head_dim = hidden_size // num_attention_heads
 
         # FSDP: For encoders, we can only use FSDP if there's a separate axis from TP.
         # Since the encoder runs on a submesh (e.g., 1x4), we need to check if the other axis
@@ -98,6 +113,7 @@ class Qwen3VlTextEncoder(Module):
                 hidden_act=hidden_act,
                 num_attention_heads=num_attention_heads,
                 num_key_value_heads=num_key_value_heads,
+                head_dim=head_dim,
                 rms_norm_eps=rms_norm_eps,
                 ctx=ctx,
             )
@@ -109,7 +125,7 @@ class Qwen3VlTextEncoder(Module):
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
         self._mrope_section = mrope_section
-        self._head_dim = hidden_size // num_attention_heads
+        self._head_dim = head_dim
         self._rope_theta = rope_theta
         # When set, forward returns the raw hidden states after each of these decoder layers
         # (no final norm) — the Ideogram4 multi-layer feature tap. Otherwise returns the
@@ -199,6 +215,7 @@ class Qwen3VlDecoderLayer(Module):
         hidden_size: int,
         num_attention_heads: int,
         num_key_value_heads: int,
+        head_dim: int,
         intermediate_size: int,
         hidden_act: str,
         rms_norm_eps: float,
@@ -210,6 +227,7 @@ class Qwen3VlDecoderLayer(Module):
             hidden_size=hidden_size,
             num_heads=num_attention_heads,
             num_key_value_heads=num_key_value_heads,
+            head_dim=head_dim,
             rms_norm_eps=rms_norm_eps,
             ctx=ctx,
         )
@@ -245,6 +263,7 @@ class Qwen3VlAttention(Module):
         hidden_size: int,
         num_heads: int,
         num_key_value_heads: int,
+        head_dim: int,
         rms_norm_eps: float,
         ctx: Qwen3VlContext,
     ) -> None:
@@ -253,11 +272,9 @@ class Qwen3VlAttention(Module):
         if ctx.tp_axis is not None:
             assert ctx.ccl_manager is not None
 
-        if hidden_size % num_heads != 0:
-            msg = f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
-            raise ValueError(msg)
-
-        head_dim = hidden_size // num_heads
+        # `num_heads * head_dim` need not equal `hidden_size` — see the note in
+        # `Qwen3VlTextEncoder.__init__`. The projections below are sized from `head_dim` throughout,
+        # so a q/k/v inner dimension wider (or narrower) than the residual stream is supported.
 
         # Qwen3 (unlike Qwen2.5) applies per-head RMSNorm to q and k (over head_dim),
         # after the qkv projection / head split and before RoPE.
