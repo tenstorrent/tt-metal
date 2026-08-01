@@ -427,11 +427,182 @@ constexpr bool is_perf_actor_thread()
 #endif
 }
 
+// === Rendezvous implementation choice ===
+//   0 = L1 epoch/barrier words, with per-run-type poll backoff and a split arm/release actor
+//   1 = Tensix hardware semaphore (no L1 traffic at all, no release-detection latency)
+//
+// Mode 1 exists because every poll of the L1 protocol is a fence plus an uncached L1 load, so a
+// thread waiting at a zone's exit is a continuous L1 requester competing with the thread still being
+// measured. semaphore_read() instead reads pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] — the semaphore
+// register file, not L1 — so waiting costs the measured thread nothing and needs no backoff.
+// Both implementations are always compiled; the choice is made per run type below, because each run
+// type is built into its own ELFs and they want different things.
+
+// Blackhole has exactly 8 semaphores and none can be added: SEM_COUNT = 8 (tt_tensix.sv:3375) and
+// tt_sync_exu.sv:390 instantiates that many physical tt_semaphore_reg blocks. semaphore::PACK_DONE is
+// used because it is documented for precisely this purpose ("For recording perf events and inserting
+// delay", ckernel_structs.h:19) and nothing reachable from a perf kernel touches it — no *perf*.cpp
+// source uses it, and its only LLK users are the tilize_polluter_* tests, which never share a kernel
+// launch with these. (semaphore::UNPACK_MATH_DONE carries the same comment but is NOT safe: it is used
+// by llk_unpack_AB_reduce_custom_runtime.h, which perf_eltwise_bcast_col_custom reaches.)
+//
+// Firmware initialises this semaphore with max=1 (c_tensix_core.h:421), which does NOT matter here:
+// per tt_semaphore_reg.sv, SEMPOST increments up to 4'hf regardless of semaphore_max, and the max only
+// drives o_stall_cond for SEMWAIT — which this code never issues. So no SEMINIT is needed, which also
+// avoids having to order a backend instruction against RISC-side accesses.
+constexpr std::uint8_t PERF_RENDEZVOUS_SEM = ckernel::semaphore::PACK_DONE;
+
+// Cross-thread rendezvous on a hardware semaphore. Every thread announces by incrementing; the action
+// thread waits for all announcements, runs action(), then drains the count back to zero — and that
+// return to zero IS the release signal, so no separate release flag or actor is needed.
+//
+// Waiters watch for zero rather than for the full count, which removes the obvious race in a
+// count-to-N barrier (a thread that decremented first would otherwise stop its peers from ever
+// observing N). A waiter has already incremented before it starts polling, so the value is >= 1 on
+// entry and can only return to zero after the action thread has completed action() and drained.
+//
+// The drain loop is `while (read() != 0) get()` rather than a fixed N decrements so that the protocol
+// self-normalises: whatever value the semaphore happens to hold when the first zone starts, the first
+// rendezvous leaves it at zero and every later one begins from zero.
+template <std::uint32_t BACKOFF_NOPS_UNUSED = 0, typename Action>
+inline __attribute__((always_inline)) void sem_rendezvous(bool is_action_thread, Action action)
+{
+    ckernel::fence_compiler();
+
+    ckernel::semaphore_post(PERF_RENDEZVOUS_SEM);
+
+    if (is_action_thread)
+    {
+        while (ckernel::semaphore_read(PERF_RENDEZVOUS_SEM) < llk_profiler::NUM_CORES)
+        {
+        }
+        action();
+        while (ckernel::semaphore_read(PERF_RENDEZVOUS_SEM) != 0)
+        {
+            ckernel::semaphore_get(PERF_RENDEZVOUS_SEM);
+        }
+    }
+    else
+    {
+        while (ckernel::semaphore_read(PERF_RENDEZVOUS_SEM) != 0)
+        {
+        }
+    }
+
+    ckernel::fence_compiler();
+}
+
+// Which entry rendezvous a run type uses. Measured per run type, not chosen a priori: the two barriers
+// differ in medium — llk_profiler::sync_point polls an L1 barrier array and invalidates dcache, while
+// sem_rendezvous polls a hardware semaphore through pc_buf — so they release the threads with different
+// stagger, and the measured window inherits that phase. Over 3 tests / 580 variant-pairs, reproduced
+// twice cycle-for-cycle, variant-pairs breaching 1% per run type were:
+//   L1_CONGESTION 177 -> 78,  UNPACK_ISOLATE 100 -> 6,  MATH_ISOLATE 3 -> 0   (sync_point wins)
+//   PACK_ISOLATE   51 -> 89,  L1_TO_L1         0 -> 18                        (semaphore wins)
+// Choosing per run type is legitimate because PERF_RUN_TYPE is compile-time: each run type is its own
+// ELF, so this selects the measured-best barrier for each rather than trading one row against another.
+// sync_point is also what the no-counter build itself calls (counters.h NC stub), so where it is chosen
+// the two builds reach ZONE_START through the identical barrier.
+constexpr bool entry_via_sync_point(PerfRunType rt)
+{
+    return rt == PerfRunType::L1_CONGESTION || rt == PerfRunType::UNPACK_ISOLATE || rt == PerfRunType::MATH_ISOLATE;
+}
+
+// TRISC0 — the thread the no-counter path elects as its rendezvous actor (its MEASURE_PERF_COUNTERS
+// stub passes TRISC_ID == 0). Only used by the LLK_PERF_ARM_ON == 0 setting, which arms on the same
+// thread the no-counter build releases from. Measurement preferred arming on pack (ARM_ON 2): it
+// halves the L1_CONGESTION error and costs nothing elsewhere.
+constexpr bool is_perf_release_thread()
+{
+#if defined(LLK_TRISC_UNPACK)
+    return true;
+#else
+    return false;
+#endif
+}
+
 // RAII arm/freeze. Constructed first, destructed last relative to the profiler zone_scoped:
 // perf_ctor(arm) → zone_ctor(ZONE_START) → body → zone_dtor(ZONE_END) → perf_dtor(freeze).
 #ifndef _LLK_PERF_COUNTER_SCOPED_DEFINED_
 #define _LLK_PERF_COUNTER_SCOPED_DEFINED_
 
+// Run types whose reported metric is ONE thread's own ZONE_START..ZONE_END window. For these the
+// counters only need to be frozen at that thread's own zone end, so no cross-thread rendezvous is
+// required on exit at all.
+constexpr bool is_single_thread_runtype(PerfRunType run_type)
+{
+    return run_type == PerfRunType::UNPACK_ISOLATE || run_type == PerfRunType::MATH_ISOLATE || run_type == PerfRunType::PACK_ISOLATE;
+}
+
+// === Per-run-type rendezvous shape ===
+//
+// Every run type is built into its OWN set of ELFs (PERF_RUN_TYPE is a compile-time constant, so one
+// test variant produces 5 run types x 3 threads = 15 ELFs). Nothing about the shape is shared at run
+// time, so these choices are INDEPENDENT: tuning one run type cannot perturb another. That matters
+// because the residual WC-vs-NC difference is a thread-phase effect, and each run type has a different
+// thread doing the work, so each one wants a different phase.
+//
+// Measured on perf_eltwise_binary_fpu (Float16->Float16_b, LoFi, Elwadd, tile_cnt 16, dest_acc No),
+// sweeping exit-barrier x arming-thread. Delta vs the no-counter build, in cycles:
+//
+//   shape                 L1_TO_L1  UNPACK_ISO  MATH_ISO  PACK_ISO  CONG[UNP]  CONG[PACK]
+//   no barrier, TRISC0 arms     -6        -18        +2        +6       -12         +2
+//   no barrier, pack arms       -6        -13        +1         0        -6         +3
+//   barrier,    TRISC0 arms     -6        -13       +12        +5       -12         +2
+//   barrier,    pack arms       -6         -6       +12        +1        -6         +3
+//
+// (The L1_CONGESTION columns are against NC 691/471. An earlier revision of this table used 685/474,
+// which are WC numbers, and so wrongly reported these two as reaching exactly zero.)
+//
+// Two conclusions. Arming on the pack thread halves the total L1_CONGESTION error (|-6|+|+3| = 9 versus
+// |-12|+|+2| = 14 for TRISC0 arming), so it is still the better choice there. And the
+// exit barrier is wanted by UNPACK_ISOLATE (-6 with it, -13 without) but not by MATH/PACK_ISOLATE
+// (+12/+1 with it, +1/0 without) - so it has to be chosen per run type, which is safe because each run
+// type is built into its own ELFs and shares nothing at run time.
+//
+// Not a knob: arming on the *measured* thread deadlocks for the multi-thread run types, where no thread
+// is the measured one, so no thread becomes the actor and nobody releases the rendezvous.
+constexpr bool wants_exit_barrier(PerfRunType run_type)
+{
+    // Multi-thread metrics must keep it - their window spans more than one thread.
+    if (!is_single_thread_runtype(run_type))
+    {
+        return true;
+    }
+    // UNPACK_ISOLATE measures TRISC0, which is also first out of the entry rendezvous; keeping the exit
+    // barrier holds it closer to the no-counter build's phase.
+    return run_type == PerfRunType::UNPACK_ISOLATE;
+}
+
+// Override for experiments: -1 = per-run-type table above, 0/1 = force off/on for every run type.
+#ifndef LLK_PERF_EXIT_BARRIER
+#define LLK_PERF_EXIT_BARRIER (-1)
+#endif
+// 0 = TRISC0 arms, 2 = pack arms. (1 = measured thread: deadlocks, see above.)
+#ifndef LLK_PERF_ARM_ON
+#define LLK_PERF_ARM_ON 2
+#endif
+
+constexpr bool exit_barrier_for(PerfRunType run_type)
+{
+    return (LLK_PERF_EXIT_BARRIER < 0) ? wants_exit_barrier(run_type) : (LLK_PERF_EXIT_BARRIER != 0);
+}
+
+// Whether THIS thread is the one whose window a single-thread run type reports.
+constexpr bool is_measured_thread(PerfRunType run_type)
+{
+#if defined(LLK_TRISC_UNPACK)
+    return run_type == PerfRunType::UNPACK_ISOLATE;
+#elif defined(LLK_TRISC_MATH)
+    return run_type == PerfRunType::MATH_ISOLATE;
+#elif defined(LLK_TRISC_PACK)
+    return run_type == PerfRunType::PACK_ISOLATE;
+#else
+    return false;
+#endif
+}
+
+template <PerfRunType RUN_TYPE>
 struct perf_counter_scoped
 {
     std::uint32_t zone_id;
@@ -441,20 +612,65 @@ struct perf_counter_scoped
     perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
     perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
 
-    // Entry: actor thread waits for all, arms, releases (spin is before the arm, outside the window).
+    // Entry: arm once every thread has finished the previous zone, then release. The rendezvous is
+    // required here — without it the previous zone's trailing activity would be counted into this one.
+    //
+    // The arming thread is TRISC0 for every run type, which is exactly what the no-counter path elects
+    // (its MEASURE_PERF_COUNTERS stub passes TRISC_ID == 0). Matching it matters: whichever thread runs
+    // the action also walks on first, so electing a different one re-phases the threads relative to the
+    // no-counter build. Electing the measured thread instead was measured to swing UNPACK_ISOLATE from
+    // -6 to -18 cycles. Counters are global debug registers, so arming here and freezing on the
+    // measured thread (see the destructor) is fine.
     inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
     {
         ckernel::fence_compiler();
-        llk_profiler::sync_point(is_perf_actor_thread(), [] { arm_all_counters(); });
+#if LLK_PERF_ARM_ON == 1
+        // Total by construction: for a multi-thread run type no thread is the measured one, and electing
+        // nobody hangs the rendezvous (every thread SEMPOSTs then waits for a drain that never comes).
+        [[maybe_unused]] constexpr bool arms_here = is_single_thread_runtype(RUN_TYPE) ? is_measured_thread(RUN_TYPE) : is_perf_actor_thread();
+#elif LLK_PERF_ARM_ON == 2
+        [[maybe_unused]] constexpr bool arms_here = is_perf_actor_thread();
+#else
+        [[maybe_unused]] constexpr bool arms_here = is_perf_release_thread(); // TRISC0, as the no-counter path elects
+#endif
+        if constexpr (entry_via_sync_point(RUN_TYPE))
+        {
+            // Same call the no-counter build makes, with arming as its action.
+            llk_profiler::sync_point(llk_profiler::TRISC_ID == 0, [] { arm_all_counters(); });
+        }
+        else
+        {
+            sem_rendezvous(arms_here, [] { arm_all_counters(); });
+        }
         ckernel::fence_compiler();
     }
 
-    // Exit: actor thread waits for all to finish, then freezes+reads all counters and releases.
+    // Exit.
+    //
+    // For a single-thread run type there is NO rendezvous: the measured thread freezes and reads its
+    // own window at its own ZONE_END, and the other threads simply leave. Ablation showed the exit
+    // rendezvous — merely existing — was worth +11 of the +12 cycles that this build differed from the
+    // no-counter build on eltwise_binary_fpu/MATH_ISOLATE, while the arming writes cost 1 and the
+    // BRISC-side configuration cost 0. Ordering stays safe because the next zone's entry rendezvous
+    // still waits for every thread, and the measured thread only reaches it after freezing.
+    //
+    // L1_TO_L1 and L1_CONGESTION keep the barrier: their metrics span more than one thread, so the
+    // freeze genuinely has to wait for all of them.
     inline __attribute__((always_inline)) ~perf_counter_scoped()
     {
         ckernel::fence_compiler();
         const std::uint32_t zid = zone_id;
-        llk_profiler::sync_point(is_perf_actor_thread(), [zid] { freeze_and_read_all_counters(zid); });
+        if constexpr (!exit_barrier_for(RUN_TYPE))
+        {
+            if constexpr (is_measured_thread(RUN_TYPE))
+            {
+                freeze_and_read_all_counters(zid);
+            }
+        }
+        else
+        {
+            sem_rendezvous(is_perf_actor_thread(), [zid] { freeze_and_read_all_counters(zid); });
+        }
         ckernel::fence_compiler();
     }
 };
@@ -468,8 +684,10 @@ struct perf_counter_scoped
 // TRISC: instantiate a perf_counter_scoped keyed by the zone name.
 #define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
 #define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
+// PERF_RUN_TYPE is declared by the generated params.h, which lands after this header is parsed, so
+// the run type is read here at macro-expansion time (inside the kernel) rather than at header scope.
 #define MEASURE_PERF_COUNTERS(zone_name) \
-    const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
+    const llk_perf::perf_counter_scoped<PERF_RUN_TYPE> PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
 #else
 // BRISC (counters configured but no per-zone profiler rendezvous available): no-op.
 #define MEASURE_PERF_COUNTERS(zone_name)
