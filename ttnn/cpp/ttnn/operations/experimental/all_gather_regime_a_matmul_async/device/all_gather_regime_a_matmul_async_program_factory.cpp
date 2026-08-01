@@ -1374,7 +1374,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             .n_chunks = n_chunks,
             .fused_gather = fused_gather.enabled,
             .fused_rt_base = fused_rt_base,
-            .preaders = preaders_pf}};
+            .preaders = preaders_pf,
+            .fwd_master_count = fused_gather.enabled ? (fused_gather.num_masters / 2u) : 0u}};
 }
 
 AllGatherRegimeAMatmulAsyncProgramFactory::cached_mesh_workload_t
@@ -1462,10 +1463,13 @@ void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
                 const uint32_t g = sv.fused_rt_base;
                 wa[g + kFgStageAddr] = tensor_args.gather_staging_buffer->buffer()->address();
                 wa[g + kFgShardAddr] = tensor_args.input_tensor.buffer()->address();
-                // Per-direction credit: the first half of the 8 masters run forward, the rest backward.
-                // Must mirror the split in create_at exactly, or a replay hands a core the other
-                // direction's counter and it waits on credits that arrive somewhere else.
-                const bool is_bwd = ((i / sv.preaders) >= 4u);
+                // Per-direction credit. This MUST mirror create_at's split exactly: a replay that gets it
+                // wrong hands a core the other direction's counter, so it waits on credits that arrive
+                // somewhere else -- and only on a cached program, i.e. from the second invocation on.
+                // The threshold is carried in shared_variables rather than recomputed from a literal,
+                // because widening the fabric client set past 8 masters is the next planned change and a
+                // hardcoded 4 here would desync silently.
+                const bool is_bwd = ((i / sv.preaders) >= sv.fwd_master_count);
                 wa[g + kFgMyRecvSem] = operation_attributes.gather_semaphores[is_bwd ? 1u : 0u].address();
             }
         }

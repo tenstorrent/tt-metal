@@ -124,6 +124,14 @@ ttnn::Tensor all_gather_regime_a_matmul_async(
         TT_FATAL(
             persistent_output_buffer.has_value(),
             "the fused gather needs the caller's persistent [M, K] buffer to gather into");
+        // barrier_semaphore is an all_gather_async concept and the fused path has no equivalent hook, so
+        // it would be silently dropped. Accepting it and ignoring it would let a caller believe they had
+        // cross-invocation ordering they do not have; the fused path's own ordering comes from the
+        // caller ping-ponging the staging buffer and the gather semaphores.
+        TT_FATAL(
+            !barrier_semaphore.has_value(),
+            "the fused gather does not implement barrier_semaphore; pass std::nullopt, or use the Phase-0 "
+            "composition which forwards it to all_gather_async");
         auto fused_outs = ttnn::prim::all_gather_regime_a_matmul_async(
             input_tensor,
             weight_tensor,
@@ -197,6 +205,10 @@ std::vector<ttnn::Tensor> all_gather_regime_a_matmul_async_split(
         TT_FATAL(
             persistent_output_buffer.has_value(),
             "the fused gather needs the caller's persistent [M, K] buffer to gather into");
+        TT_FATAL(
+            !barrier_semaphore.has_value(),
+            "the fused gather does not implement barrier_semaphore; pass std::nullopt, or use the Phase-0 "
+            "composition which forwards it to all_gather_async");
         return ttnn::prim::all_gather_regime_a_matmul_async(
             input_tensor,
             weight_tensor,
