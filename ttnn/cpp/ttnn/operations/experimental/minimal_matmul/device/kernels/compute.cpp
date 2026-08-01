@@ -14,7 +14,6 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     CircularBuffer cb_out(out_cb);
@@ -472,11 +471,8 @@ void kernel_main() {
             // Accumulation buffer
             cb_intermediate.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                {
-                    DeviceZoneScopedN("WAIT-IN0");
-                    cb_in0.wait_front(in0_block_num_tiles);
-                }
-                cb_in1.wait_front(in1_block_num_tiles);  // in1 ruled out; un-zoned to save profiler budget
+                cb_in0.wait_front(in0_block_num_tiles);
+                cb_in1.wait_front(in1_block_num_tiles);
 
                 matmul_blocks(
                     in0_cb,
@@ -509,8 +505,7 @@ void kernel_main() {
                 }
             }
 
-            {  // EPILOGUE zone: intermediate->out copy (+bias/activation) and the out-CB write path
-                DeviceZoneScopedN("EPILOGUE");
+            {  // EPILOGUE: intermediate->out copy (+bias/activation) and the out-CB write path
                 cb_intermediate.push_back(out_block_num_tiles);
                 PACK((llk_pack_reconfig_l1_acc(0)));
 
