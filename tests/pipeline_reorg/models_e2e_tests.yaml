@@ -834,3 +834,52 @@
       tier: 3
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
+
+# ── WAN 2.2 (Black Hole quad galaxy, bh_sc4-mgd) ───────────────────
+- name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    TTRUN_DIR=/etc/ttop
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
+      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and t2v"
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
+      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+  model: wan-2.2-t2v
+  model_family: Wan
+  skus:
+    bh_sc4-mgd:
+      timeout: 40
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Wan2.2-I2V-A14B multihost quad e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    TTRUN_DIR=/etc/ttop
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
+      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and i2v"
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
+      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+  model: wan-2.2-i2v
+  model_family: Wan
+  skus:
+    bh_sc4-mgd:
+      timeout: 80
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
