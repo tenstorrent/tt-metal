@@ -200,7 +200,11 @@ WRUN = int(os.environ.get("MOE_SWIGLU_WRUN", 8))
 #:                    stage — the two together are the whole activation path.
 #: None is a correctness mode; each answers "how much of the 85% is THIS collective?".
 ABLATE = os.environ.get("MOE_SWIGLU_ABLATE", "")
-_DM_ABLATIONS = ("no_reduce_xfer", "no_h_xfer", "no_x_xfer", "no_w_xfer", "no_xstage_xfer")
+#: PERF 7 — `no_owrite` was the LAST hole in the peel. Without it the "all payloads stubbed" floor
+#: still carried the op's 1.95 MB output DRAM stream (count 256), which is exactly how the reference
+#: op's `down` peel bottomed out in a phantom 47 % floor. `writer_out_issue` measured 17.4 us inside
+#: what was being reported as pure synchronisation.
+_DM_ABLATIONS = ("no_reduce_xfer", "no_h_xfer", "no_x_xfer", "no_w_xfer", "no_xstage_xfer", "no_owrite")
 
 #: PER-STAGE ZONES ARE PERMANENT AND UNCONDITIONAL — there is no knob here any more.
 #: Every serial stage of the per-M-block chain in all three kernels is bracketed by

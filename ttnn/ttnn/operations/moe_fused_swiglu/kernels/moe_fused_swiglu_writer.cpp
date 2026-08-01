@@ -417,6 +417,7 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("writer_out_issue");
             cb_wait_front(cb_out_tiles, out_block_tiles);
+#ifndef ABLATE_NO_OWRITE  // /perf-measure: drop the output DRAM bytes, keep the CB cycle + barrier
             {
                 const uint32_t rp = get_read_ptr(cb_out_tiles);
                 for (uint32_t t = 0; t < m_eff; ++t) {
@@ -428,6 +429,7 @@ void kernel_main() {
                         out_acc, row * EMB_T, jstart, jstart + ec, SLOTS_E, rp + t * EC_MAX * BFP8_TILE, BFP8_TILE);
                 }
             }
+#endif
             // Issued only — the barrier and the pop happen at the top of the NEXT M-block (or in the
             // epilogue below for the last one).
             out_pending = out_block_tiles;

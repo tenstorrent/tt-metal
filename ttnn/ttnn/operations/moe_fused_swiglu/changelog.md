@@ -1731,7 +1731,45 @@ At **count 128 the bookkeeping alone (22 141 ns) is 1.75x the entire matmul roof
 before a single byte moves anywhere. That is the honest reason M=128's math utilisation is ~13 %
 shipped and only ~30 % with every transport stubbed.
 
-### 5. What this leaves
+### 5. `no_owrite` — the LAST hole, and the complete peel
+
+`writer_out_issue` measured **17.4 us** inside what §2 was calling a pure synchronisation floor,
+because there was no output-write ablation: the op's 1.95 MB output DRAM stream (count 256) was
+still running. This is the *identical* trap the reference op recorded ("without `owrite` the peel
+bottomed out in a 47 % floor that silently contained its 1.95 MB DRAM output stream") and it is the
+third instrumentation hole this round has closed. `no_owrite` now ships.
+
+**The complete peel, 88 cores:**
+
+| peel step | 128 | 256 | 512 |
+|---|---|---|---|
+| shipped | 98 433 | 146 648 | 243 754 |
+| - weight DRAM | 61 773 | 107 088 | 205 073 |
+| - x DRAM + staging | 52 327 | 90 806 | 171 761 |
+| - reduce transport | 44 255 | 83 981 | 157 679 |
+| - h transport | 42 379 | 78 976 | 150 123 |
+| - output write | 41 037 | 74 361 | 145 306 |
+| - matmul + eltwise = **TRUE FLOOR** | **20 401** | **34 774** | **65 754** |
+
+**Per-term, and it closes to the total:**
+
+| term | 128 | 256 | 512 | share @256 |
+|---|---|---|---|---|
+| weight DRAM | 36 660 | 39 560 | 38 681 | **27.0 %** |
+| matmul LLK | 20 636 | 39 587 | 79 552 | **27.0 %** |
+| sync floor (CB + semaphore) | 20 401 | 34 774 | 65 754 | **23.7 %** |
+| x DRAM + staging | 9 446 | 16 282 | 33 312 | 11.1 % |
+| reduce transport | 8 072 | 6 825 | 14 082 | 4.7 % |
+| h transport | 1 876 | 5 005 | 7 556 | 3.4 % |
+| output write | 1 342 | 4 615 | 4 817 | 3.1 % |
+| all eltwise | — | 712 | — | 0.5 % |
+
+**Three terms of 27 / 27 / 24 %, none of which overlaps any other.** That is the whole problem stated
+in one line. The matmul runs at 12.9 cycles/tile-MAC against a nominal 8 (2136 / 4272 / 8544
+tile-MACs per core = 12 658 / 25 316 / 50 631 ns) — but §3 measured that widening its DEST window 3x
+buys 1 %, so 12.9 is very likely the real bfp8 x bfp4 LoFi rate and not slack.
+
+### 6. What this leaves
 
 Only two terms are big enough to matter, and neither is a knob:
 
