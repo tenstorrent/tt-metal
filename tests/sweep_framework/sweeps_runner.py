@@ -757,6 +757,16 @@ _FABRIC_INFRA_SIGNATURES = (
     "mapping_result.success",
     "inter-mesh mapping failed",
     "intra-mesh mapping failed",
+    # The host came up with fewer chips than the traced topology needs, so mesh open fails
+    # before any kernel runs. Seen on main run 30681057227 job 91319472767 (runner g03glx03):
+    #   TT_FATAL @ tt_metal/distributed/system_mesh.cpp:159: requested_size <= system_size
+    #   Requested mesh shape MeshShape([1, 32]) requires 32 devices, but only 16 devices are
+    #   available in the system mesh MeshShape([4, 4]).
+    # Every Galaxy-traced vector asks for 32 devices, so a half-populated box failed all 65
+    # of them identically and they were booked as FAIL_ASSERT_EXCEPTION -- 65 phantom test
+    # failures for one broken runner. Nothing was tested, so this is NOT_RUN + abort.
+    "devices are available in the system mesh",
+    "system_mesh.cpp",
 )
 
 
