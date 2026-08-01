@@ -1780,3 +1780,57 @@ Only two terms are big enough to matter, and neither is a knob:
   reordering alone (Perf 6 §3).
 
 Everything else in the op is now measured to be at or near its floor.
+
+---
+
+## Perf 8 — the weight trid ring: built, and a NULL that says the stream is BANDWIDTH-bound
+
+- **Date**: 2026-08-01
+- **Scope**: perf. `MOE_SWIGLU_WG_TRID` ships defaulted to **0** (byte-identical). Golden 45/45.
+
+Perf 7 left the op as three co-equal, non-overlapping terms — weight DRAM 27 %, matmul 27 %, sync
+floor 24 %. The most obvious of those to attack is the weight/matmul pair, because they *ought* to
+overlap and demonstrably do not: removing the weight stream saves **100 %** of its 39 560 ns.
+
+**The suspected mechanism.** The N-chunked stream keeps only ONE chunk in DRAM at a time. The publish
+loop barriers on chunk c and only then issues c+1, because `noc_async_read_barrier()` is
+all-or-nothing and issuing c+1 first would make that barrier wait for it too. So chunk c+1's DRAM
+latency is paid *after* chunk c has already landed, GU_CHUNKS times per M-block. The reference op
+carries the fix as `WEIGHT_TRID_RING` (ring depth 4).
+
+**Built it**: tag chunk c with trid c+1, issue every chunk, drain per chunk with
+`noc_async_read_barrier_with_trid` so the others stay in flight. Trid 0 stays the untagged default
+and is restored after each issue, so x staging and W_down are unaffected. Issuing before any push
+rules out `get_write_ptr` (it advances only on `cb_push_back`), so the address is derived from the
+CB base — legal because cb_w_gate holds exactly GU_CHUNKS chunks and is pushed GU_CHUNKS times per
+M-block.
+
+| variant | 128 | 256 | 512 |
+|---|---|---|---|
+| shipped (`WG_TRID=0`) | **98 433** | **146 648** | **243 754** |
+| `WG_TRID=1`, all chunks issued early | 114 720 | 155 903 | 255 259 |
+| `WG_TRID=1`, tail issued after the x barrier | 100 757 | 148 039 | 249 739 |
+
+**Two findings, and the second is the one that matters.**
+
+1. **Placement is the whole result, and it reproduces a documented defect.** Issuing all chunks up
+   front is +17 %/+6 %/+5 % because the **x staging prologue carries its own blanket
+   `noc_async_read_barrier()`, which drains trid-tagged reads too** — so the whole weight block gets
+   paid for before a single stick is tilized. That is exactly the pathology the `XSTAGE_FIRST` knob
+   documents. Moving the tail issue past that barrier recovers most of it.
+2. **Even correctly placed it is a NULL (+0.9 to +2.5 %). The weight stream is BANDWIDTH-bound, not
+   latency-bound** — more requests in flight buys nothing, which agrees with Perf 4's NoC trace (8 %
+   link utilisation, 0.08 % congestion, all 8 DRAM channels balanced within 4 %: the channels are the
+   wall, not the request path). This also explains why the reference op's `WEIGHT_TRID_RING` has no
+   analogue win here: its stream was transaction-RATE bound at 576 B/txn, ours is 1 152-1 385 B/txn
+   on two RISC-Vs already.
+
+**So the weight/matmul non-overlap is NOT the reader's issue pattern.** The reads are already
+pipelined at chunk granularity and already saturate what the channels will give. What remains
+unexplained is why removing a bandwidth-bound stream that runs concurrently with compute recovers
+100 % of its wall time — the next round should answer that with a NoC trace of `no_w_xfer` against
+the baseline, not with another issue-side knob.
+
+- **Perf achieved**: none. Default path measured unchanged (97 986 / 148 566 / 244 762).
+- **Tests**: golden 45/45. The knob is inert at its default and covered on both settings by the
+  existing guard set.

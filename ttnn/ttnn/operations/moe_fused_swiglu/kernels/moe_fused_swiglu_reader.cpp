@@ -359,10 +359,37 @@ void kernel_main() {
         // extra L1-accumulating pack — which is exactly why K-chunking was rejected here (it would
         // cost `m_eff` extra accumulating packs per extra K-block, roughly what the overlap wins).
         // Each chunk is CONTIGUOUS in the CB (row stride GU_CHUNK_W, not HN_PAD).
+        // PERF 8 — TRANSACTION-ID RING on the weight stream (`WG_TRID`).
+        //
+        // The chunked stream keeps only ONE chunk in DRAM at a time: the publish loop barriers on
+        // chunk c and only THEN issues c+1, because `noc_async_read_barrier()` is all-or-nothing and
+        // issuing c+1 first would make that barrier wait for it too. So chunk c+1's full DRAM
+        // latency is paid AFTER chunk c has already landed, GU_CHUNKS times per M-block. The
+        // measured consequence (Perf 7 §5): removing the weight stream saves 100 % of its cost, i.e.
+        // it overlaps the matmul NOT AT ALL, while the matmul is a co-equal 27 % of the op.
+        //
+        // The fix is the reference op's `WEIGHT_TRID_RING`: tag chunk c with trid c+1, issue EVERY
+        // chunk up front, then drain per chunk with `noc_async_read_barrier_with_trid`, which waits
+        // for that chunk only and leaves the rest streaming. Trid 0 stays the untagged default and is
+        // restored after each issue, so x staging and W_down on this cmd buf are unaffected.
+        //
+        // Issuing every chunk before any push rules out `get_write_ptr` (it advances only on
+        // `cb_push_back`, so all chunks would land on top of each other). The address is derived:
+        // cb_w_gate holds exactly GU_CHUNKS chunks and is pushed GU_CHUNKS times per M-block, so its
+        // write pointer is the CB BASE at the top of every block and chunk c sits at
+        // `base + c * WG_CHUNK_TILES * BFP4_TILE`.
+#if WG_TRID
+        const uint32_t wg_base = get_write_ptr(cb_w_gate);
+#endif
         auto issue_wg_chunk = [&](uint32_t c) {
             cb_reserve_back(cb_w_gate, WG_CHUNK_TILES);
             MaybeDeviceZoneScope("reader_wg_issue");
+#if WG_TRID
+            const uint32_t wg_wp = wg_base + c * WG_CHUNK_TILES * BFP4_TILE;
+            noc_async_read_set_trid(c + 1);
+#else
             const uint32_t wg_wp = get_write_ptr(cb_w_gate);
+#endif
             const uint32_t h0 = c * GU_CHUNK_W;
             // The ragged last column (hn < HN_PAD) narrows the LAST chunk; the host guarantees every
             // chunk still holds at least one real column, so `w` is never 0.
@@ -386,9 +413,22 @@ void kernel_main() {
 #else
             (void)wg_wp;
 #endif
+#if WG_TRID
+            noc_async_read_set_trid(0);  // back to untagged for x staging / W_down on this cmd buf
+#endif
         };
+        // At WG_TRID the whole block goes to DRAM at once; otherwise only chunk 0, and the publish
+        // loop below issues c+1 after draining c (the pre-PERF-8 shape, byte for byte).
+// PERF 8 — WHERE the tail chunks are issued is the whole result. Issuing all GU_CHUNKS here was
+// measured +17 %/+6 %/+5 %, because the x STAGING PROLOGUE below carries its own blanket
+// `noc_async_read_barrier()`, which is all-or-nothing and drains trid-tagged reads too -- so the
+// whole weight block got paid for before a single stick was tilized. That is the identical defect
+// the XSTAGE_FIRST knob documents. Chunk 0 stays here (the x barrier drains one third of the block,
+// which is the pre-PERF-8 behaviour); chunks 1..N-1 are issued AFTER that barrier, so they stream
+// under the matmul on chunk 0 instead of in front of x.
+#define ISSUE_ALL_WG_CHUNKS() issue_wg_chunk(0)
 #if XSTAGE_FIRST == 0
-        issue_wg_chunk(0);
+        ISSUE_ALL_WG_CHUNKS();
 #endif
 
         cb_reserve_back(cb_x_tiles, x_slot_tiles);
@@ -466,7 +506,7 @@ void kernel_main() {
         // The staging prologue's barriers are behind us, so this prefetch now has the multicast chain
         // AND the whole gate matmul to land under, instead of standing in front of the stick reads.
 #if XSTAGE_FIRST
-        issue_wg_chunk(0);
+        ISSUE_ALL_WG_CHUNKS();
 #endif
 
         // ---- x multicast chain ----
@@ -501,6 +541,20 @@ void kernel_main() {
         // here rather than the over-wait it is everywhere else in this kernel.
         {
             MaybeDeviceZoneScope("reader_wg_wait");
+#if WG_TRID
+            // Past every blanket read barrier now: put chunks 1..N-1 in flight together, each on its
+            // own trid, so the drain below can release chunk 0 to compute while they are still in
+            // DRAM. This is the overlap the one-chunk-in-flight stream never had.
+            for (uint32_t c = 1; c < GU_CHUNKS; ++c) {
+                issue_wg_chunk(c);
+            }
+            // Every chunk is already in flight; drain them one at a time so compute starts on
+            // chunk 0 while chunks 1..N-1 are still streaming from DRAM.
+            for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                noc_async_read_barrier_with_trid(c + 1);
+                cb_push_back(cb_w_gate, WG_CHUNK_TILES);
+            }
+#else
             for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
                 noc_async_read_barrier();
                 cb_push_back(cb_w_gate, WG_CHUNK_TILES);
@@ -508,6 +562,7 @@ void kernel_main() {
                     issue_wg_chunk(c + 1);
                 }
             }
+#endif
         }
 
         // -------------------------------------------------------------------
