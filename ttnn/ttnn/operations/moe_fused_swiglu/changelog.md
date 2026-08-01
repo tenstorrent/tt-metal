@@ -2000,6 +2000,25 @@ the sweep was worth running even though the outcome looked certain.
 >
 > **Measure the thing that enforces the constraint, not a model of it.** Any L1 ledger built from the
 > descriptor sum is ~111 KB optimistic — which is exactly the size of the decisions it gets wrong.
+>
+> **AND THE FREE-SPACE FIGURE IS GRID-DEPENDENT — the `~121 KB free` comment was NOT stale.** Per-CB
+> sums measured both ways:
+>
+> | grid | KR_PAD | CB sum | allocator region_end | FREE |
+> |---|---|---|---|---|
+> | **11x10 (110c, the DEFAULT)** | 23 | 1 339 648 | 1 451 136 | **121 728** |
+> | **11x8 (88c, where the targets were measured)** | 28 | 1 450 816 | 1 562 304 | **10 560** |
+>
+> `KR_PAD` 23 -> 28 inflates `cb_x_tiles` by 87 040 B and the two weight CBs by 17 280 B each. So the
+> comment is right for the shipped default grid and my figure is right for the 88-core grid — the
+> earlier commit message calling it "10x wrong" is itself wrong and is corrected here. **Always state
+> the grid alongside an L1 figure for this op.**
+>
+> The 111 KB of L1 that 110 cores buys does NOT pay: measured 11x8 vs 11x10 with ND-sharded weights,
+> 2 samples, bf16_rm — **92 022 / 131 319 / 230 505 against 97 389 / 136 242 / 230 749**, i.e. 110
+> cores costs ~5 us at counts 128/256 for ~111 KB, and nothing buyable with 111 KB is worth 5 us
+> (`DEPTH_H=4` is a measured null; the bf16 accumulator still forces `gu_chunks = 1`, which is -6.8 %;
+> `M_BLOCK = 16` needs ~400 KB more at that grid).
 
 The shipped program allocates **1 562 304 B of the 1 572 864 B cap = 99.3 %**. The "~159 KB free" and
 "~121 KB free" figures in the `REDUCE_SLOTS_CAP` and `HSEND` comments are **STALE** — later
