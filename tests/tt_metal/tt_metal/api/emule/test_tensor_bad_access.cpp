@@ -30,7 +30,7 @@ namespace tt::tt_metal {
 TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto buffer = Buffer::create(this->devices_.at(0).get(), 1024, 1024, BufferType::L1);
+    auto buffer = Buffer::create(this->devices_[0].get(), 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
@@ -40,7 +40,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SanityCheck) {
 TEST_F(MeshDeviceFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto buffer = Buffer::create(this->devices_.at(0).get(), 1024, 1024, BufferType::L1);
+    auto buffer = Buffer::create(this->devices_[0].get(), 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint32_t> out;
@@ -50,7 +50,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
 TEST_F(MeshDeviceFixture, Host_UAF_ReadShard_SanityCheck) {
     // ReadShard's sanitizer check runs before its is_sharded() assertion, so a
     // plain interleaved buffer still drives the UAF path under test here.
-    auto buffer = Buffer::create(this->devices_.at(0).get(), 1024, 1024, BufferType::L1);
+    auto buffer = Buffer::create(this->devices_[0].get(), 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint8_t> out(1024);
@@ -60,7 +60,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadShard_SanityCheck) {
 TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto buffer = Buffer::create(this->devices_.at(0).get(), 1024, 1024, BufferType::L1);
+    auto buffer = Buffer::create(this->devices_[0].get(), 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
@@ -80,7 +80,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
 TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto buffer = Buffer::create(this->devices_.at(0).get(), 1024, 1024, BufferType::L1);
+    auto buffer = Buffer::create(this->devices_[0].get(), 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
@@ -93,7 +93,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) 
 TEST_F(MeshDeviceFixture, Host_UAF_Allocated_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto buffer = Buffer::create(this->devices_.at(0).get(), 1024, 1024, BufferType::L1);  // left allocated
+    auto buffer = Buffer::create(this->devices_[0].get(), 1024, 1024, BufferType::L1);  // left allocated
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     detail::WriteToBuffer(*buffer, data);  // must NOT abort

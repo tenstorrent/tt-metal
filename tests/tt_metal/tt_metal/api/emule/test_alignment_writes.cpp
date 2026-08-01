@@ -493,7 +493,7 @@ TEST_F(MeshDeviceFixture, NocRead_L1_Aligned_NoViolation) {
     // fire for the wrong reason. The allocator aligns buffer starts to >=16 B, so
     // base and base+16 are both 16-byte aligned.
     constexpr uint32_t buffer_size = 1024;
-    auto buf = Buffer::create(this->devices_.at(0).get(), buffer_size, buffer_size, BufferType::L1);
+    auto buf = Buffer::create(this->devices_[0].get(), buffer_size, buffer_size, BufferType::L1);
     uint32_t base = static_cast<uint32_t>(buf->address());
     ASSERT_EQ(base & 0xF, 0u);
 
