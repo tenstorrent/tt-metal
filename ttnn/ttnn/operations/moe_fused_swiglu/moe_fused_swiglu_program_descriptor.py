@@ -441,7 +441,7 @@ XSTAGE_FIRST = int(os.environ.get("MOE_SWIGLU_XSTAGE_FIRST", 0))
 #: CONSTRAINED, and the host clamps rather than trusts: must divide HN_PAD, must be a multiple of
 #: HN_BLOCK, and must leave the RAGGED column group (hn < HN_PAD) at least one real column in every
 #: chunk. At HID_T 64 / HGROUPS 11 that is HN_PAD 6, hn_min 4 -> 2 is the largest legal value.
-GU_CHUNKS = int(os.environ.get("MOE_SWIGLU_GU_CHUNKS", 2))
+GU_CHUNKS = int(os.environ.get("MOE_SWIGLU_GU_CHUNKS", 3))
 
 #: PERF 3 — ACTIVATION-FIRST DRAM PRIORITY. 1 = the writer holds its W_up stream until this core's
 #: reader has finished staging `x` (SEM_XSTAGED); 0 = both streams race from t=0 (Phase-0 behaviour).
@@ -790,8 +790,12 @@ def create_program_descriptor(
     # still hold a real column, because the helper can narrow an in1 sub-block's FMA width but a chunk
     # with no real column at all would have nothing to read. Any illegal request falls back to the
     # largest legal divisor (1 in the worst case = the Phase-0 whole-block stream).
+    # The ragged column may now have chunks with NO real column: the kernels skip that chunk's DRAM
+    # read and its matmul but still push the CB (so the residency wrap is unchanged), and the pad
+    # columns it leaves are the same pad columns `down` already never contracts over — `HnSteps`
+    # narrows the last K-block's FMA to `hn_last`. So the only remaining constraint is divisibility.
     gu_chunks = max(1, GU_CHUNKS)
-    while gu_chunks > 1 and (HN_PAD % gu_chunks != 0 or min(hn_sizes) <= (gu_chunks - 1) * (HN_PAD // gu_chunks)):
+    while gu_chunks > 1 and HN_PAD % gu_chunks != 0:
         gu_chunks -= 1
     if gu_chunks != GU_CHUNKS:
         print(
@@ -808,7 +812,10 @@ def create_program_descriptor(
     gu_in1_subblocks = gu_chunk_w // hn_block
     # The ragged column's real width must reach INTO the last sub-block OF ITS LAST CHUNK: the helper
     # can narrow the last in1 sub-block's FMA width (`last_in1_subblock_w_valid`) but cannot drop one.
-    if min(hn_sizes) - (gu_chunks - 1) * gu_chunk_w <= (gu_in1_subblocks - 1) * hn_block:
+    # Only chunks that HAVE a real column must reach into their last in1 sub-block; an empty chunk is
+    # skipped wholesale by the kernels, so it imposes nothing.
+    _ragged_last = min(hn_sizes) - ((min(hn_sizes) - 1) // gu_chunk_w) * gu_chunk_w
+    if _ragged_last <= (gu_in1_subblocks - 1) * hn_block:
         raise RuntimeError(
             f"moe_fused_swiglu: HN_BLOCK {hn_block} leaves the ragged column (hn={min(hn_sizes)}) "
             f"with an entirely empty last in1 sub-block; use a wider HN_BLOCK"

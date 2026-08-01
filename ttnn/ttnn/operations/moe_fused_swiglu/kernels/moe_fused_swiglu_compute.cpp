@@ -261,6 +261,18 @@ void kernel_main() {
                 // the host guarantees every chunk keeps at least one real column. 0 means "full".
                 const uint32_t h0 = c * GU_CHUNK_W;
                 const uint32_t valid = (hn > h0) ? (hn - h0) : 0;
+                if (valid == 0) {
+                    // This chunk is entirely PAD on the ragged column. The dataflow kernels still
+                    // push it (unread) so cb_w_gate/cb_w_up's residency wrap is core-independent, so
+                    // consume it here without a matmul. The output columns it leaves untouched are
+                    // pad, and `down`'s HnSteps narrows the last K-block past them.
+                    constexpr uint32_t CHUNK_W_TILES = KR_PAD * GU_CHUNK_W;
+                    wg_buf.wait_front(CHUNK_W_TILES);
+                    wg_buf.pop_front(CHUNK_W_TILES);
+                    wu_buf.wait_front(CHUNK_W_TILES);
+                    wu_buf.pop_front(CHUNK_W_TILES);
+                    continue;
+                }
                 MatmulBlockShape shape_c = MatmulBlockShape::of(
                     m_eff / OUT_SUBBLOCK_H_GU, GU_IN1_SUBBLOCKS, OUT_SUBBLOCK_H_GU, HN_BLOCK, KR_PAD, 1);
                 shape_c.last_in1_subblock_w_valid =
