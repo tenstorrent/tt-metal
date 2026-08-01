@@ -158,12 +158,6 @@ After entering the container:
    ls /dev/tenstorrent
    ```
 
-2. Run a basic TT-NN example:
-
-   ```sh
-   python3 -m ttnn.examples.usage.run_op_on_device
-   ```
-
 - You are all set to explore the packaged environment. Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
 
 If you plan to run models or edit code from a local source checkout instead of staying inside the packaged container environment, continue with the source-based environment setup for model-specific dependencies and environment variables.
