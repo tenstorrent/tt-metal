@@ -1324,6 +1324,30 @@ def _measure_cov(
     return last, missing, "measured-incomplete"
 
 
+def _cap_cov_depth(depth: int, model_id: str = "") -> int:
+    """The profiling window, bounded only by things that are real.
+
+    UNCAPPED BY DEFAULT. The old ceiling of 16 was the last rung of the 2/4/8/16 ladder this path
+    replaced; no code derives it from any profiler capacity, and marker overflow is already handled
+    elsewhere by drain_sizing (TT_PERF_FLUSH_EVERY). Capping below what the ops need does not make
+    the profile safe, it makes it BLIND -- gemma-3-12b-it was handed a 16-layer window with 54 op
+    types "present in full model, un-timed", any of which could hold the next bottleneck.
+
+    Two bounds remain, both meaningful:
+      * the model's DECLARED depth -- profiling deeper than the model is nonsense, not caution;
+      * PERF_MCP_COV_MAX_DEPTH -- an explicit opt-in ceiling for a box that really does overflow,
+        so the limit is a decision someone made rather than a constant nobody remembers choosing.
+    """
+    d = max(int(depth), 2)
+    full = _declared_depth(None, model_id) if model_id else None
+    if full:
+        d = min(d, int(full))
+    raw = (os.environ.get("PERF_MCP_COV_MAX_DEPTH") or "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        d = min(d, int(raw))
+    return d
+
+
 def _coverage_layers(
     repo_root: Path,
     mcp_env: dict,
@@ -1363,8 +1387,16 @@ def _coverage_layers(
         if _signposts_agree(seq):
             first_block, _ = _first_block_map(seq)
             deepest = max(first_block.values()) if first_block else 0
-            deep = sorted(op for op, b in first_block.items() if b >= 16)
-            _cov = min(max(deepest + 1, 2), 16)
+            # THE DEPTH THE OPS ACTUALLY REQUIRE, not a ceiling inherited from a deleted algorithm.
+            # This was `min(..., 16)`, and 16 was the last rung of the 2/4/8/16 ladder that a568d9dcba
+            # replaced with this signpost path; the docstring later called it "the marker limit"
+            # although nothing computes a marker capacity, and drain_sizing.py already prevents
+            # overflow by tuning TT_PERF_FLUSH_EVERY. The cost was silent: on gemma-3-12b-it the
+            # window was reported as 16 with "54 op-type(s) still absent at max depth", and the TRUE
+            # depth -- computed right here as deepest + 1 -- was thrown away before anyone could read
+            # it. A window that omits 54 op types cannot find a bottleneck living in one of them.
+            _cov = _cap_cov_depth(max(deepest + 1, 2), model_name or config_ref)
+            deep = sorted(op for op, b in first_block.items() if b >= _cov)
             blk_source = "signposts"
         else:
             measured = _measure_cov(
