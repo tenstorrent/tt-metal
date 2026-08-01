@@ -30,7 +30,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
-#include "tools/profiler/kernel_profiler.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -257,12 +256,8 @@ void kernel_main() {
                     // Wait for the neighboring device's writer to signal that it has finished
                     // writing this chunk's tiles into our intermediate buffer.
                     if (do_reduce) {
-                        {
-                            DeviceZoneScopedN("RS-RING-WAIT");  // stall on neighbor's partial = ring latency
-                            noc_semaphore_wait_min(
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem),
-                                out_ready_sem_target + 1);
-                        }
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), out_ready_sem_target + 1);
                         out_ready_sem_target++;
                     }
 
@@ -348,7 +343,6 @@ void kernel_main() {
                                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                                             mm_progress_counters + mm_core_id * sizeof(uint32_t));
                                     if (*mm_counter_ptr < mm_sem_target) {
-                                        DeviceZoneScopedN("RS-MM-WAIT");  // stall on MM output not-yet-ready
                                         noc_semaphore_wait_min(mm_counter_ptr, mm_sem_target);
                                     }
 #endif

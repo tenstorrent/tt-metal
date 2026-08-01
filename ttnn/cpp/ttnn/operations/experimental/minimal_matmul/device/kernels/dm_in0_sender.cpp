@@ -12,7 +12,6 @@
 #include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     Noc noc;
@@ -498,11 +497,8 @@ void kernel_main() {
                     // Signal this core's per-core progress counter right after its prompt block write, at
                     // compute-completion (every block, not just is_last_block). The reader waits per core, so
                     // no global "all cores done writing" barrier is needed.
-                    {
-                        DeviceZoneScopedN("MM-SIGNAL");  // when the output writer bumps this block's reader counter
-                        noc.async_write_barrier();
-                        srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
-                    }
+                    noc.async_write_barrier();
+                    srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
 #endif
                 }
             }
