@@ -767,6 +767,23 @@ _FABRIC_INFRA_SIGNATURES = (
     # failures for one broken runner. Nothing was tested, so this is NOT_RUN + abort.
     "devices are available in the system mesh",
     "system_mesh.cpp",
+    # The fabric routers never reached the synced state, so the control plane never came up and
+    # no kernel ran. Seen on lead-models run 30696173498 job mesh4x4_col_2d_conv2d (a HEALTHY
+    # 32-chip runner, topology OK):
+    #   TT_THROW @ tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271
+    #   Fabric Router Sync: Timeout after 10000 ms on Device 19: expected status 0xa2b2c2d2.
+    #   Master chan=4 got 0xa1b1c1d1
+    # followed by a cascade of "Read unexpected run_mailbox value from core 25-17" as the
+    # half-initialized device is reused. The run_mailbox wedge IS already a signature, but the
+    # exception that propagates to the sweep is this fabric-init throw, so 8 vectors were booked
+    # as FAIL_ASSERT_EXCEPTION. Nothing was tested -> NOT_RUN + abort.
+    #
+    # NOTE: unlike the half-populated-box signatures above, a router-sync timeout on a healthy
+    # box is a genuine fabric bring-up defect, not just a bad runner. Classifying it here stops
+    # the phantom test failures; it does NOT make the underlying timeout acceptable and it is
+    # being raised with the fabric owners separately.
+    "fabric_firmware_initializer.cpp",
+    "fabric router sync",
 )
 
 
