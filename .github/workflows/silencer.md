@@ -69,6 +69,9 @@ safe-outputs:
     # Draft: pr-gate.yaml does not run automatically on Silencer's PRs anyway (a
     # maintainer must approve the workflow run for bot-authored PRs), so ready-for-review
     # buys nothing here — draft signals accurately that CI has not validated this yet.
+    # The `dispatch-workflow` output below does start a run without that approval, but it
+    # is a separate `workflow_dispatch` run whose result lands after the agent turn ends,
+    # so at PR-creation time nothing is validated and draft is still the honest state.
     draft: true
     title-prefix: "[silencer] "
     labels: [automation, silencer]
@@ -79,6 +82,81 @@ safe-outputs:
   push-to-pull-request-branch:
     target: "*"
     required-title-prefix: "[silencer] "
+    max: 3
+  dispatch-workflow:
+    # Lets Silencer trigger a fresh `workflow_dispatch` run of the same tracked workflow
+    # it just fixed, aimed at its own PR branch (see *Validating changes via CI*).
+    # Requires gh-aw >= v0.84.2 — the per-call `ref` override landed in github/gh-aw#49408.
+    #
+    # Unlike the *runtime* scan-target list — which is deliberately read out of
+    # `aggregate-workflow-data.yaml` on every run so there is "no parallel list to drift"
+    # (see *Scan procedure* step 1) — this is a COMPILE-TIME allowlist and therefore
+    # cannot be derived dynamically. It MUST be kept in sync BY HAND with the
+    # `workflow_ids` array in `.github/workflows/aggregate-workflow-data.yaml`: when a
+    # workflow is added there, add it here too, or Silencer will be able to fix noise in
+    # it but not validate the fix. Entries are bare filename stems, no extension
+    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). Order below intentionally
+    # mirrors `workflow_ids` so the two lists can be diffed side by side. All 44 are
+    # confirmed to declare a `workflow_dispatch` trigger, which this safe-output requires.
+    workflows:
+      - sanity-tests
+      - blackhole-sanity-tests
+      - blackhole-e2e-tests
+      - blackhole-demo-tests
+      - galaxy-profiler-tests
+      - galaxy-multi-user-isolation-tests
+      - galaxy-deepseek-tests
+      - galaxy-perf-tests
+      - galaxy-demo-tests
+      - galaxy-unit-tests
+      - galaxy-integration-tests
+      - galaxy-stress-tests
+      - galaxy-e2e-tests
+      - galaxy-sanity
+      - galaxy-health
+      - t3000-perf-tests
+      - t3000-e2e-tests
+      - t3000-integration-tests
+      - t3000-profiler-tests
+      - single-card-profiler-tests
+      - pipeline-select-profiler
+      - t3000-demo-tests
+      - t3000-unit-tests
+
+      - models-t1-e2e-tests
+      - models-t1-unit-tests
+      - models-t2-e2e-tests
+      - models-t2-unit-tests
+      - models-t3-e2e-tests
+      - models-t3-unit-tests
+
+      - perf-device-models
+      - perf-models
+      - single-card-ttnn-models-frequent-tests
+      - single-card-demo-tests
+      - tt-metal-l2-nightly
+      - ttnn-run-sweeps
+      - vllm-nightly-tests
+      - metal-run-microbenchmarks
+      - sanity-tests-debug
+      - merge-gate
+      - pr-gate
+      - runtime-sanity-tests
+      - runtime-unit-tests
+      - runtime-integration-tests
+      - runtime-perf-tests
+    # THE SAFETY BOUNDARY for the per-call `ref`. Patterns are normalized to
+    # `refs/heads/...` before matching, so `silencer/*` becomes `refs/heads/silencer/*`
+    # and matches exactly the branches Silencer names itself (*Pull request
+    # conventions*) — it can dispatch CI onto branches it created and nothing else:
+    # not `main`, not a release branch, not a maintainer's branch. Without this field
+    # any per-call `ref` is refused outright ("message.ref is not allowed unless
+    # 'allowed-refs' is configured"), so it is also what makes the feature usable.
+    # `target-ref` is deliberately NOT set: it is a single static string, and
+    # Silencer's branch differs every run.
+    allowed-refs: ["silencer/*"]
+    # One dispatch per PR touched in a turn, matching the `max: 3` on
+    # `create-pull-request` / `push-to-pull-request-branch` above (default is 1).
     max: 3
   create-issue:
     # Used when a noise source cannot be safely auto-fixed (e.g. it lives in a
@@ -97,14 +175,20 @@ safe-outputs:
 source: githubnext/agentics/workflows/ci-doctor.md@497230d3867fe453aae74b15d06178d45a39fcce
 engine: copilot
 
-# Required by `private-to-public-flows: allow`, which strict mode rejects. Scoped
-# to this workflow only (`strict` defaults to true; the other agentic workflows
-# are unaffected). This drops compile-time enforcement, not the properties
-# themselves — Silencer still satisfies all five strict constraints in fact:
-# writes only via safe-outputs (no contents/issues/pull-requests write), an
-# explicit `network` allowlist with no bare `*`, all actions pinned to SHAs, no
-# custom container MCP servers, and no deprecated fields. Re-enable if that
-# stops being true.
+# Required by `private-to-public-flows: allow`, which strict mode rejects — and as of
+# v0.84.2 that is still the *only* reason: test-compiling this file with `strict: true`
+# reports `tools.github.private-to-public-flows` as the single violation, so adding
+# `dispatch-workflow` below cost no additional strict property. Scoped to this workflow
+# only (`strict` defaults to true; the other agentic workflows are unaffected). This
+# drops compile-time enforcement, not the properties themselves — Silencer still
+# satisfies all five strict constraints in fact: writes only via safe-outputs, an
+# explicit `network` allowlist with no bare `*`, all actions pinned to SHAs, no custom
+# container MCP servers, and no deprecated fields. The first of those still holds now
+# that Silencer can dispatch CI: the agent job keeps `actions: read` and remains
+# read-only — the compiler hard-rejects any write scope on it ("all writes must go
+# through safe-outputs") — and the `actions: write` a `workflow_dispatch` needs is
+# auto-granted by the compiler to the generated `safe_outputs` job instead, gated there
+# by the `workflows` + `allowed-refs` allowlists. Re-enable if that stops being true.
 strict: false
 ---
 
@@ -600,18 +684,68 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
    `push-to-pull-request-branch`, `git fetch origin <branch>` and check it out first so
    your patch applies to the branch's current content, not to stale `main`. For a **new**
    PR, branch from current `origin/main`.
-7. **Open the PR** (see below). gh-aw creates it in the `safe_outputs` job **after** your
+7. **Open the PR** (see below), **then dispatch CI on its branch in the same turn** (see
+   *Validating changes via CI*). gh-aw performs both in the `safe_outputs` job **after** your
    agent turn ends — so you do **not** know the new PR number or its CI run ID yet. Record
-   in memory only what you have now: the pattern you targeted, the branch name, and the
-   run/job IDs whose logs you actually read. The **next** run resolves the PR number and build
-   outcome with the `github` MCP tool — `search_pull_requests` (`query: "repo:${{ github.repository }} is:pr is:open [silencer]"`)
+   in memory only what you have now: the pattern you targeted, the branch name, the tracked
+   workflow you dispatched, and the run/job IDs whose logs you actually read. The **next** run
+   resolves the PR number and build outcome with the `github` MCP tool — `search_pull_requests` (`query: "repo:${{ github.repository }} is:pr is:open [silencer]"`)
    then `pull_request_read` with `method: "get_check_runs"` — **not** `gh pr list` / `gh pr checks`,
    which have no credentials here. Then **stop** — one quiet step at a time.
 
 ## Validating changes via CI
 
-We should attempt a fresh run of the targeted workflow with our PR branch. However, that is not working yet.
-Thus, nothing to do at the moment.
+You **can** now start a CI run against your own PR branch, and you **must** — it is the only
+evidence any of your fixes compile. Use the `dispatch-workflow` safe-output (`dispatch_workflow`
+tool).
+
+**In the same turn** that you emit a `create-pull-request` or `push-to-pull-request-branch`
+output, dispatch the **same tracked workflow whose logs you just used to make the fix**, with
+`ref` set to **that PR's own branch** — the identical branch string you used in that output,
+not a rewritten or guessed variant:
+
+```json
+{ "type": "dispatch_workflow", "workflow_name": "pr-gate", "ref": "silencer/unused-var-layernorm", "inputs": {} }
+```
+
+- `workflow_name` is the bare filename stem (`pr-gate`, not `pr-gate.yaml`), and it must be one
+  of the entries in this workflow's `safe-outputs.dispatch-workflow.workflows` allowlist. That
+  allowlist is compile-time and hand-maintained; if the workflow you scanned is **not** in it,
+  the dispatch will fail — do not substitute a different workflow to make the call succeed. Say
+  in the PR body that validation could not be dispatched and that the allowlist needs the entry
+  added.
+- `ref` works **only because** the branch matches the `silencer/*` pattern in `allowed-refs`,
+  which is normalized to `refs/heads/silencer/*` before matching. This is deliberate scoping,
+  not a formality: a ref outside that pattern is **rejected at runtime** and the dispatch fails
+  with an error — it does **not** silently fall back to dispatching against `main`. So keep
+  following the `silencer/<category>-<short-desc>` convention in *Pull request conventions*; a
+  branch named anything else cannot be validated.
+- Dispatch **once per PR** you touched this turn (up to the configured `max: 3`), each with its
+  own branch. Never dispatch a workflow you did not scan, and never dispatch against a branch
+  you did not create this turn.
+
+**What this proves, and what it does not.** The dispatched run confirms **compilation/build
+success** for gate-type workflows (`pr-gate`, `merge-gate`, and anything else pulling in
+`build-artifact.yaml`) — which is exactly the evidence categories 1–2 and 4 (host compile, JIT /
+device-kernel, `-Wdeprecated-declarations`) need. It does **not** confirm that a runtime warning
+or log-spam pattern (categories 3/5/6) is actually gone: that requires reading the dispatched
+run's own logs for the pattern's absence, and **you cannot do that in this turn.** Exactly as
+with the PR itself — gh-aw performs the dispatch in the `safe_outputs` job *after* your agent
+turn ends — the run does not exist yet, so you have **no run ID, no outcome, and no logs** to
+cite. Do not claim or imply a fix is verified.
+
+Therefore:
+
+- Record in memory what you know now: the branch name, the `workflow_name` you dispatched, and
+  the run/job IDs whose logs motivated the fix. The **next** scheduled run resolves the outcome
+  (`search_pull_requests`, then `pull_request_read` with `method: "get_check_runs"` — see *Scan
+  procedure* step 7) and can then re-grep the dispatched run's logs to confirm a category 3/5/6
+  pattern is genuinely absent.
+- In the PR's **Test Status** section, state plainly that a run was dispatched onto this branch,
+  that no result is available yet, and that a maintainer should check that run's outcome —
+  keeping the compile-vs-runtime distinction explicit.
+- A dispatched run is **not** a substitute for maintainer review, and it does not make the PR
+  ready for review. It stays a draft.
 
 ## Pull request conventions
 
@@ -628,13 +762,17 @@ Thus, nothing to do at the moment.
   - **Root cause** — *why* the noise was emitted, and why this fix removes it at the source.
   - **Why this is not suppression** — one sentence confirming you fixed the emitter (or, for
     the rare justified suppression, why the source is unreachable and the scope is minimal).
-  - **Test Status** — on PR creation, state plainly that CI has not run: `pr-gate.yaml`
-    needs a maintainer's approval before it starts, and even once green it only confirms
-    compilation, not that the runtime pattern (categories 3/5/6) is gone — that needs a
-    maintainer to re-run the source tracked workflow on this branch. The PR and any build
-    do not exist until gh-aw's `safe_outputs` job runs after your agent turn, so no run ID
-    is available yet. On later runs, update with whatever build link/state exists, keeping
-    that same distinction explicit.
+  - **Test Status** — on PR creation, name the tracked workflow you dispatched onto this
+    branch (see *Validating changes via CI*) and state plainly that its result is not in
+    yet: the PR and the dispatched run do not exist until gh-aw's `safe_outputs` job runs
+    after your agent turn, so no run ID or outcome is available to cite. Keep the
+    compile-vs-runtime distinction explicit — a green run confirms **compilation** only,
+    not that a runtime/log-spam pattern (categories 3/5/6) is gone, which needs that
+    run's own logs re-grepped for the pattern's absence. Ask the maintainer to check the
+    dispatched run's outcome. If the workflow was **not** in the `dispatch-workflow`
+    allowlist and could not be dispatched, say so here instead and note that the
+    allowlist needs the entry. On later runs, update with whatever run link/state exists,
+    keeping that same distinction explicit.
 - Match tt-metal's existing C++/Python style. **No new
   dependencies, no broad refactors, no behavior changes** — noise removal must be
   behavior-preserving (a demoted log still logs at lower severity; a removed unused variable
@@ -706,10 +844,11 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
   `search_pull_requests` / `pull_request_read` are the real tool names — do not invent methods.
 - **No logs retrieved means no scan.** Report `missing-tool` / `missing-data`, write nothing to
   repo memory, and stop. Never back-fill a "fix" from old issues or a source grep instead.
-- **Validate via CI, never locally.** Never claim a fix is verified without a build run, and
-  never claim a runtime/log-spam pattern (categories 3/5/6) is confirmed gone from a compile-
-  only build run — the proof is its absence from a fresh run of the *source tracked workflow*,
-  which currently needs a maintainer to trigger (see *Validating changes via CI*).
+- **Validate via CI, never locally.** Always dispatch the source tracked workflow onto your PR
+  branch in the same turn you open/amend it (see *Validating changes via CI*). Never claim a fix
+  is verified without a build run, and never claim a runtime/log-spam pattern (categories 3/5/6)
+  is confirmed gone from a compile-only build run — the proof is its absence from the dispatched
+  run's own logs, which you cannot read until a later run.
 - **Coordinate with `deprecations.json` / `deprecation-reaper.yml`** for deprecated-API work;
   migrate call sites, leave shim deletion to the reaper's schedule.
 - **When in doubt, do nothing / open an issue.** A wrong or noisy PR wastes maintainer
