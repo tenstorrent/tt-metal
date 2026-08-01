@@ -20,6 +20,7 @@
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -64,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // L1_TO_L1 may leave UNP_DEST waiting for inactive SFPU/PACK clients.
             // Isolated/congested UNP_DEST execution must not inherit that chain.
-            _perf_clear_dest_dvalid_wait_mask(UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32);
+            set_up_zero_dest_dvalid_handshake_for_unpack();
         }
 
         if constexpr (unpack_to_dest)
@@ -183,8 +184,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // FPU datacopy (when present) and SFPU execute sequentially on this
             // thread. Keep them on one Dest bank instead of creating a dvalid
             // chain whose producer would also wait for inactive UNPACK/PACK.
-            _perf_clear_dest_dvalid_wait_mask(MATH_DEST_DVALID_CTRL_wait_mask_ADDR32);
-            _perf_clear_dest_dvalid_wait_mask(SFPU_DEST_DVALID_CTRL_wait_mask_ADDR32);
+            set_up_zero_dest_dvalid_handshake_for_math();
+            set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
         // Max/min selects the Dest mode (fp32 / int32 / neither) from pack_src
         // so integer ordering is preserved. Other ops use the inferred mode.
@@ -291,7 +292,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // PACK runs without the L1_TO_L1 producer chain in isolated modes.
-            _perf_clear_dest_dvalid_wait_mask(PACK_DEST_DVALID_CTRL_wait_mask_ADDR32);
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
