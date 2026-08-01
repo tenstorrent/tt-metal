@@ -94,6 +94,9 @@ constexpr auto out_args = TensorAccessorArgs<wu_args.next_compile_time_args_offs
 // Bank-run coalescing (see moe_fused_swiglu_bank_runs.hpp): ONE definition, bound here to this
 // kernel's compile-time knobs — identical to the reader's binding, which is the point.
 using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
+// The W_up stream takes its tensor's DRAM ND shard width (0 = interleaved, byte-identical to the
+// pre-WSHARD path). The OUTPUT write-back keeps `BR`: the output is always DRAM interleaved.
+using BRG = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WG_SHARD_W>;
 
 // PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off (see the reader's note
 // and the durability contract in `perf_instrumentation.hpp`). 5 records per M-block on either path:
@@ -217,7 +220,7 @@ void kernel_main() {
                 // REFINEMENT 3: M-block 0 only when W_up is resident (the read carries no `b`).
                 if (((b == 0) || (W_RESIDENT == 0)) && w) {
                     for (uint32_t k = 0; k < kr; ++k) {
-                        BR::read(
+                        BRG::read(
                             wu_acc,
                             (kstart + k) * HID_T,
                             hstart + h0,

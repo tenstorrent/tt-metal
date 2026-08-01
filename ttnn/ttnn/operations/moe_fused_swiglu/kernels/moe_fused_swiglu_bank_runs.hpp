@@ -16,6 +16,20 @@
 //
 // REMAP == 0 (device with an unexpected bank count / alignment, or the WRUN=1 ablation) degrades to
 // the naive one-transaction-per-page read, which is always correct.
+//
+// SHARD_W > 0 — THE DRAM-ND-SHARDED WEIGHT STREAM (MOE_SWIGLU_WSHARD). When the weight tensor is
+// DRAM ND-sharded with an N extent of SHARD_W pages per shard, `TensorAccessor` places page (k, n)
+// at `bank_page_offset = shard_in_bank * shard_volume + (n % SHARD_W) * 1` (tensor_accessor.h
+// `get_bank_and_offset`), i.e. the pages of one shard row are PHYSICALLY CONTIGUOUS in one bank at
+// `aligned_page_size` stride. So a run may extend to the next SHARD_W boundary with NO remap and no
+// bank arithmetic — which is why this mode is orthogonal to REMAP and needs neither `slots` nor a
+// power-of-two bank count. Interleaved placement cannot express this: there consecutive `n` land in
+// DIFFERENT banks by construction.
+//
+// The shard HEIGHT does not enter: `page_offset_within_shard` is
+// `(k % SH) * shard_strides[0] + (n % SHARD_W)` and `shard_strides[0] == SHARD_W`, so for a FIXED k
+// consecutive n stay contiguous whatever SH is. Only the N extent matters, and it is the one number
+// this template takes.
 
 #pragma once
 
@@ -27,12 +41,13 @@
 
 namespace moe_fused_swiglu {
 
-template <bool REMAP, uint32_t NUM_BANKS, uint32_t WRUN>
+template <bool REMAP, uint32_t NUM_BANKS, uint32_t WRUN, uint32_t SHARD_W = 0>
 struct BankRuns {
     // Logical N index -> physical page column, such that j, j+1, ... land in one bank's
     // consecutive slots. `slots` is the per-bank slot count of that axis (extent / NUM_BANKS).
+    // The ND-sharded stream is already contiguous in its own N order, so it never remaps.
     static FORCE_INLINE uint32_t remap(uint32_t j, uint32_t slots) {
-        if constexpr (REMAP) {
+        if constexpr (REMAP && SHARD_W == 0) {
             return (j / slots) + NUM_BANKS * (j % slots);
         } else {
             return j;
@@ -42,7 +57,15 @@ struct BankRuns {
     // Length of the maximal bank-contiguous run starting at linear index j inside [j, end),
     // capped by the WRUN knob.
     static FORCE_INLINE uint32_t run(uint32_t j, uint32_t end, uint32_t slots) {
-        if constexpr (REMAP) {
+        if constexpr (SHARD_W > 0) {
+            // ND-sharded: the run extends to this shard's N boundary. NOT capped by WRUN — that knob
+            // caps the INTERLEAVED remap's transaction size (where a long run costs NoC command count
+            // for DRAM-side locality, measured a net negative at PERF 10). Here the whole slice is one
+            // request with no remap and no extra commands, so there is nothing to trade off.
+            const uint32_t to_shard_edge = SHARD_W - (j % SHARD_W);
+            const uint32_t r = end - j;
+            return (to_shard_edge < r) ? to_shard_edge : r;
+        } else if constexpr (REMAP) {
             uint32_t r = end - j;
             const uint32_t to_bank_edge = slots - (j % slots);
             if (to_bank_edge < r) {

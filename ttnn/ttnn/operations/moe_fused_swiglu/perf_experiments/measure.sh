@@ -26,7 +26,18 @@ MOE_R2_CASES="$CASES" timeout 1200 scripts/run_safe_pytest.sh --profile \
     tests/ttnn/unit_tests/operations/moe_fused_swiglu/test_moe_fused_swiglu_r2_perf.py \
     >"/tmp/moe_measure_$$.log" 2>&1
 RC=$?
-AFTER=$(newest_report)
+# Prefer the path run_safe_pytest.sh reports for THIS run. Picking "newest report dir" by mtime is
+# wrong whenever anything else is using the device concurrently (e.g. a perf subagent), and it fails
+# silently: you get a valid CSV belonging to someone else's cases and zero matching rows.
+# tracy prints the authoritative path; run_safe_pytest's own PROFILER CSV line looks in the clone
+# while tracy writes under TT_METAL_HOME, so it is often absent. Take the last one in case of retries.
+CSV=$(grep "OPs csv generated at:" "/tmp/moe_measure_$$.log" 2>/dev/null | tail -1 | sed "s/.*generated at: //")
+[ -f "$CSV" ] || CSV=$(grep -m1 "SAFE_PYTEST: PROFILER CSV:" "/tmp/moe_measure_$$.log" 2>/dev/null | sed "s/.*PROFILER CSV: //")
+if [ -n "$CSV" ] && [ -f "$CSV" ]; then
+    AFTER="$(dirname "$CSV")/"
+else
+    AFTER=$(newest_report)
+fi
 if [ "$RC" != "0" ] || [ "$AFTER" = "$BEFORE" ]; then
     echo "$LABEL: FAILED (rc=$RC) — see /tmp/moe_measure_$$.log"
     tail -25 "/tmp/moe_measure_$$.log"

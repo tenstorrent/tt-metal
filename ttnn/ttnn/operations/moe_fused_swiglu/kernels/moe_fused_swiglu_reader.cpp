@@ -197,7 +197,15 @@ constexpr auto idx_args = TensorAccessorArgs<cnt_args.next_compile_time_args_off
 
 // Bank-run coalescing (see moe_fused_swiglu_bank_runs.hpp): ONE definition, bound here to this
 // kernel's compile-time knobs.
+//
+// THREE bindings, because the three tensors this kernel touches can have DIFFERENT placements. The
+// weight streams take their tensor's DRAM ND shard width (0 = interleaved, i.e. byte-identical to
+// the pre-WSHARD path); everything else stays on the interleaved binding. The widths arrive as
+// DEFINES rather than compile-time args so the CT_XMCAST / TA_BASE offset arithmetic above is
+// untouched.
 using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
+using BRG = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WG_SHARD_W>;  // W_gate
+using BRD = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WD_SHARD_W>;  // W_down
 
 void kernel_main() {
     const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
@@ -400,7 +408,7 @@ void kernel_main() {
 #ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
             if (read_wg && w) {
                 for (uint32_t k = 0; k < kr; ++k) {
-                    BR::read(
+                    BRG::read(
                         wg_acc,
                         (kstart + k) * HID_T,
                         hstart + h0,
@@ -456,7 +464,41 @@ void kernel_main() {
         // the loopback altogether, for the same NoC bytes (one fewer multicast destination).
         {
             MaybeDeviceZoneScope("reader_xstage");
-            for (uint32_t t = my_col; t < m_eff; t += HGROUPS) {
+            // PERF 11 — WHICH tile-row this column stages, and in WHAT ORDER its sticks are read.
+            //
+            // Baseline: column c stages tile-row c, in every grid row. x is bf16 ROW_MAJOR so one
+            // page is one `emb` stick and the page index is `tile_row*32 + s`; with 8 interleaved
+            // banks the bank is `(tile_row*32 + s) % 8` == `s % 8`, because 32 % 8 == 0. So the bank
+            // depends ONLY on the stick counter and EVERY staging core walks the banks in the same
+            // order. Measured in the NoC trace as a clean staircase in the first bucket
+            // (ch0..ch7 = 32/22/21/16/12/9/6/2, max/mean 2.1x) that decays to 1.0x by ~2 us as the
+            // cores drift apart -- a head transient, not a sustained imbalance.
+            //
+            // XSTAGE_DIAG: grid row y stages tile-row `(c + y) % m_eff` instead of `c`, so the 8
+            // rows of a column touch 8 DIFFERENT pages instead of all hammering the same one. Does
+            // NOT change the bank (that is `s % 8` whatever the tile-row) -- it removes same-page
+            // incast and diversifies NoC paths.
+            // XSTAGE_STAGGER: start the stick walk at `(my_col + my_row) % TILE_H` and wrap, which
+            // is the only one of the two that moves the BANK a core is on at a given instant.
+            // PERF 13 — LANE SKEW (the CORRECT diagonal; PERF 11's was the wrong one).
+            //
+            // Baseline injector for tile-row t is column `t % HGROUPS` in EVERY grid row, so the
+            // cores issuing x DRAM reads for a given round form a VERTICAL LINE. The reference op
+            // measured that exact shape as the worst case for NOC0 reads —
+            // `examples/noc_placement`: 789k ns column vs 202k row / 204k diagonal, 3.9x — because
+            // NOC0 routes east->south, so a read response turns south in the READER's own column
+            // and same-column readers contend on those vertical links.
+            //
+            // PERF 11 rotated WHICH TILE-ROW a column stages, which leaves the active column SET
+            // unchanged and is therefore still a vertical line: measured a null (-1.3 %, in band).
+            // The fix is to rotate WHICH COLUMN is the injector, per row: lane = (t + y) % HGROUPS,
+            // giving core ((t + y) % HGROUPS, y) — one injector per row, still exactly one round
+            // each, but on a diagonal so no two injectors of a round share a column.
+            //
+            // The multicast wire is untouched: the lane VALUE is the sender's column, so the
+            // receiver's `receive(lane)` resolves against the existing host-built coord table.
+            const uint32_t t_first = moe_fused_swiglu::inject_first(my_col, my_row, HGROUPS, XSTAGE_DIAG);
+            for (uint32_t t = t_first; t < m_eff; t += HGROUPS) {
                 const uint32_t dst = x_base + t * X_ROW_BYTES;
                 uint32_t row = b * M_BLOCK + t;
                 if (row >= M_T_MAX) {
@@ -468,7 +510,12 @@ void kernel_main() {
                     cb_reserve_back(cb_x_in, TILE_H);
                     const uint32_t wp = get_write_ptr(cb_x_in);
 #ifndef ABLATE_NO_XSTAGE_XFER  // /perf-measure: drop the ACTIVATION DRAM stream, keep the tilize
-                    for (uint32_t s = 0; s < TILE_H; ++s) {
+                    for (uint32_t i = 0; i < TILE_H; ++i) {
+#if XSTAGE_STAGGER
+                        const uint32_t s = (i + my_col + my_row) % TILE_H;
+#else
+                        const uint32_t s = i;
+#endif
                         noc_async_read(
                             x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
                             wp + s * X_SLICE,
@@ -519,7 +566,16 @@ void kernel_main() {
             MaybeDeviceZoneScope("reader_xmcast");
             if constexpr (xmc.active) {
                 for (uint32_t t = 0; t < m_eff; ++t) {
+                    // PERF 13 — round `t` carries tile-row `t` (unchanged); only the LANE that
+                    // sends it is skewed by the grid row, which is what turns a round's injector set
+                    // from a column into a diagonal. Every core in the row derives the same lane
+                    // from the same `my_row`, so sender and receivers agree by construction, and the
+                    // lane value IS the sender's column so the coord table needs no change.
+#if XSTAGE_DIAG
+                    const uint32_t round = (t + my_row) % HGROUPS;
+#else
                     const uint32_t round = t % HGROUPS;
+#endif
                     if (round == my_col) {
                         x_send.send(x_base + t * X_ROW_BYTES, x_base + t * X_ROW_BYTES, X_ROW_BYTES);
                     } else {
@@ -603,9 +659,9 @@ void kernel_main() {
                     for (uint32_t k = 0; k < hn_r; ++k) {
                         // W_down's K axis is `h`'s hidden axis, which the Hn split remapped too, so
                         // the row index goes through the same remap as the N axis.
-                        BR::read(
+                        BRD::read(
                             wd_acc,
-                            BR::remap(hbase + k, SLOTS_H) * EMB_T,
+                            BRG::remap(hbase + k, SLOTS_H) * EMB_T,
                             jstart,
                             jstart + ec,
                             SLOTS_E,
@@ -992,9 +1048,9 @@ void kernel_main() {
 #ifndef ABLATE_NO_W_XFER
                     if (read_wd) {
                         for (uint32_t k = 0; k < hn_r; ++k) {
-                            BR::read(
+                            BRD::read(
                                 wd_acc,
-                                BR::remap(hbase + k, SLOTS_H) * EMB_T,
+                                BRG::remap(hbase + k, SLOTS_H) * EMB_T,
                                 jstart,
                                 jstart + ec,
                                 SLOTS_E,

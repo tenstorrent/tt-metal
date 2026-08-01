@@ -16,6 +16,8 @@ eval/golden_tests/moe_fused_swiglu/feature_spec.py.
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
@@ -39,7 +41,9 @@ def default_compute_kernel_config() -> ttnn.ComputeConfigDescriptor:
     `dst_full_sync_en=False` is load-bearing: the Blackhole fast tilize path requires half sync.
     """
     cfg = ttnn.ComputeConfigDescriptor()
-    cfg.math_fidelity = ttnn.MathFidelity.LoFi
+    # MEASUREMENT OVERRIDE ONLY. The shipped value is LoFi and `PROPERTIES` declares it; this env
+    # knob exists so a fidelity A/B does not need a source edit. It is not a supported input.
+    cfg.math_fidelity = getattr(ttnn.MathFidelity, os.environ.get("MOE_SWIGLU_FIDELITY", "LoFi"))
     cfg.math_approx_mode = True
     cfg.fp32_dest_acc_en = False
     cfg.dst_full_sync_en = False

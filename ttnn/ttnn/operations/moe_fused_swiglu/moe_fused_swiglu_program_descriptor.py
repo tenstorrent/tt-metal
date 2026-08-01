@@ -552,6 +552,34 @@ WG_TRID = int(os.environ.get("MOE_SWIGLU_WG_TRID", 0))
 #: Only meaningful with the scatter reduce (the tree path has no invite at the same point).
 WD_LATE = int(os.environ.get("MOE_SWIGLU_WD_LATE", 0))
 
+#: PERF 12 — DRAM ND-SHARDED WEIGHTS. Not a knob but a DETECTION: the shard width is read off the
+#: weight tensors the CALLER handed in, so an interleaved weight produces the byte-identical
+#: pre-PERF-12 stream and a sharded one produces the coalesced stream. `MOE_SWIGLU_WSHARD=0` forces
+#: the interleaved read path even on a sharded tensor, which is the A/B for a re-measurement (the
+#: accessor still addresses the shard correctly — only the RUN LENGTH changes).
+#:
+#: WHY SHARDING IS THE ONLY WAY TO GET A BIG WEIGHT TRANSACTION. Interleaved page -> bank is
+#: `page_id % num_banks`, so for `W_gate [emb, hidden]` the tile `(k, n)` at page `k*HID_T + n` puts
+#: CONSECUTIVE n in DIFFERENT banks — one NoC request per tile, structurally. PERF 10 already
+#: measured the only interleaved escape (remap the N axis so a bank's slots are consecutive, then
+#: coalesce) as a NET NEGATIVE: it buys DRAM-side locality and pays in NoC command count. A DRAM ND
+#: shard of `[TILE, W*TILE]` instead makes a shard's W tiles physically contiguous in ONE bank, so
+#: the same coalescing costs no remap and no extra commands.
+#:
+#: THE SHARD MUST BE ONE TILE-ROW TALL, and that is a MEASURED constraint, not a formality: a core
+#: pinned to a single DRAM bank saturates near 30 GB/s no matter how big the request, while the same
+#: bytes with the bank rotating reach ~370 GB/s. A one-tile-row shard is distributed ROUND_ROBIN_1D
+#: as `shard_id = k * shards_per_row + gx`, so consecutive K-rows land in DIFFERENT banks; a TALLER
+#: shard would make a core's whole K-run one request but would pin it to one bank.
+WSHARD = int(os.environ.get("MOE_SWIGLU_WSHARD", 1))
+
+#: PERF 11 — x-staging placement. DIAG rotates which tile-row a column stages by grid row (so the 8
+#: rows of a column read 8 different DRAM pages instead of the same one); STAGGER rotates the stick
+#: walk start (the only one that changes which BANK a core is on at a given instant, since the bank
+#: is `s % 8` whatever the tile-row). Both 0 = the pre-PERF-11 lockstep column shape.
+XSTAGE_DIAG = int(os.environ.get("MOE_SWIGLU_XSTAGE_DIAG", 0))
+XSTAGE_STAGGER = int(os.environ.get("MOE_SWIGLU_XSTAGE_STAGGER", 0))
+
 #: PERF 4 — one VALID cell per `cb_h` slot instead of one shared by every round. The other half of
 #: the round-cost lever, and the one that makes HACK_AHEAD legal on the FAST (reader-send) path.
 #:
@@ -692,6 +720,34 @@ def _gcd(a, b):
     return a
 
 
+def nd_shard_n_tiles(t):
+    """N-axis TILES per DRAM ND shard of `t`, or 0 if `t` is not usable for the coalesced read.
+
+    This is the ONE place the op learns a weight's placement; everything downstream is a run length.
+    Returns 0 (the interleaved stream, byte-identical to pre-PERF-12) unless ALL of:
+      * DRAM ND-sharded (`created_with_nd_shard_spec`), so `TensorAccessor` lays a shard's pages out
+        contiguously in one bank at `aligned_page_size` stride;
+      * rank-2 shard whose N extent is a whole number of tiles.
+    The shard HEIGHT is deliberately NOT constrained — `page_offset_within_shard` is
+    `(k % SH) * SHARD_W + (n % SHARD_W)`, so for a fixed K-row consecutive n are contiguous at any
+    height. Height is a BANDWIDTH choice (one tile-row rotates banks across K, see the WSHARD knob),
+    and the caller owns it.
+    """
+    if not WSHARD:
+        return 0
+    try:
+        mc = t.memory_config()
+        spec = mc.nd_shard_spec
+        if spec is None or mc.buffer_type != ttnn.BufferType.DRAM:
+            return 0
+        shape = list(spec.shard_shape)
+    except Exception:  # pragma: no cover - defensive: an older tensor type without the attribute
+        return 0
+    if len(shape) != 2 or int(shape[-1]) % TILE != 0:
+        return 0
+    return int(shape[-1]) // TILE
+
+
 def _split(total, groups):
     """`base + (i < rem)` split — alignment-aware, no floor on a tile count."""
     base, rem = total // groups, total % groups
@@ -759,6 +815,52 @@ def make_mailbox(device, num_cores):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+
+
+def worker_grid(device):
+    """The (HGROUPS, KGROUPS) this op will actually use on `device` — the ONE definition, shared by
+    `create_program_descriptor` and by `weight_memory_configs` below so a caller's shard width cannot
+    drift from the op's own N split."""
+    grid = device.compute_with_storage_grid_size()
+    hgroups, kgroups = int(grid.x), int(grid.y)
+    if GRID:
+        gx, gy = (int(v) for v in GRID.lower().split("x"))
+        hgroups, kgroups = min(gx, hgroups), min(gy, kgroups)
+    return hgroups, kgroups
+
+
+def weight_memory_configs(device, emb, hidden):
+    """PERF 12 — the DRAM ND shard the coalesced weight stream wants, as `(gate_up, down)` memory
+    configs. PUBLIC because the placement is the CALLER's to choose: the op reads whatever width it
+    is handed (`nd_shard_n_tiles`) and an interleaved weight is still correct, just uncoalesced.
+
+    Each shard is exactly the N slice ONE core consumes for ONE K-row:
+      * gate/up — `HN_PAD = ceil(HID_T / HGROUPS)` tiles, the hidden split across grid COLUMNS, so
+        column x's `[hstart, hstart + hn)` IS shard x and its whole K-row read is one request.
+      * down    — `EC_MAX = max(ec)` tiles, the emb-output split across ALL cores. `_split` packs the
+        wider groups first, so a narrow core's `[jstart, jstart + ec)` can straddle one boundary and
+        cost two requests instead of one; `run()` splits it correctly either way.
+    Height is ONE TILE-ROW so shards rotate DRAM banks across K — see the WSHARD knob for the
+    measurement that makes that the load-bearing part.
+    """
+    hgroups, kgroups = worker_grid(device)
+    hid_t, emb_t = hidden // TILE, emb // TILE
+    hn_pad = (hid_t + hgroups - 1) // hgroups
+    ec_max = max(_split(emb_t, hgroups * kgroups)[0])
+    dram = device.dram_grid_size()
+    banks = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram.x - 1, dram.y - 1))])
+
+    def mc(n_tiles):
+        return ttnn.MemoryConfig(
+            ttnn.BufferType.DRAM,
+            ttnn.NdShardSpec(
+                shard_shape=ttnn.Shape([TILE, n_tiles * TILE]),
+                grid=banks,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    return mc(hn_pad), mc(ec_max)
 
 
 def create_program_descriptor(
@@ -955,6 +1057,21 @@ def create_program_descriptor(
         and bfp8_tile % dram_align == 0
     )
     if not remap:
+        num_banks = max(num_banks, 1)
+
+    # ---- PERF 12: the DRAM ND-sharded weight stream ----
+    # W_gate and W_up share one width because the reader and the writer read the SAME [k, n] slice of
+    # two identically-shaped tensors; a disagreement would silently give the up matmul a different
+    # coalescing than the gate's, so it is resolved here to the common value (0 = interleaved) rather
+    # than per-tensor.
+    wg_shard_w = min(nd_shard_n_tiles(w_gate), nd_shard_n_tiles(w_up))
+    wd_shard_w = nd_shard_n_tiles(w_down)
+    # The N-axis REMAP and the shard are two different answers to the same question and cannot both be
+    # live: remap re-indexes N for the interleaved bank layout, which would scatter the shard's own
+    # contiguous run. The shard wins (it is the measured one) and the remap is dropped grid-wide --
+    # including the W_down ROW index, which pairs with the gate/up N axis.
+    if wg_shard_w or wd_shard_w:
+        remap = 0
         num_banks = max(num_banks, 1)
 
     # ---- reduce tree ----
@@ -1417,12 +1534,20 @@ def create_program_descriptor(
     dm_defines.append(("HSLOT", "1" if (HSLOT and HSEND != "writer") else "0"))
     dm_defines.append(("WG_TRID", str(int(WG_TRID))))
     dm_defines.append(("WD_LATE", "1" if (WD_LATE and REDUCE == "scatter") else "0"))
+    # PERF 12 — the two weight streams' DRAM ND shard widths, in N-axis TILES. 0 == interleaved, which
+    # makes `BankRuns::run` return 1 exactly as before, so an interleaved caller gets the byte-identical
+    # pre-PERF-12 kernel. Passed as DEFINES, not compile-time args, so the reader's CT_XMCAST /
+    # CT_HMCAST / TA_BASE offset arithmetic is untouched.
+    dm_defines.append(("WG_SHARD_W", str(wg_shard_w)))
+    dm_defines.append(("WD_SHARD_W", str(wd_shard_w)))
+    dm_defines.append(("XSTAGE_DIAG", str(int(XSTAGE_DIAG))))
+    dm_defines.append(("XSTAGE_STAGGER", str(int(XSTAGE_STAGGER))))
     dm_defines.append(("HACK_AHEAD", str(hack_ahead)))
     dm_defines.append(("SEM_H_RDY_BASE", str(SEM_H_RDY_BASE)))
     dm_defines.append(("SEM_H_FREE", str(SEM_H_FREE)))
     dm_defines.append(("DEPTH_H", str(DEPTH_H)))
     dm_defines.append(("NUM_CORES", str(num_cores)))
-    compute_defines = [("GU_CHUNKS", str(gu_chunks))]
+    compute_defines = [("GU_CHUNKS", str(gu_chunks)), ("XSTAGE_DIAG", str(int(XSTAGE_DIAG)))]
     if "skip_compute" in ABLATE.split("+"):
         compute_defines.append(("SKIP_COMPUTE", "1"))
     # PERF 7 — the peel had a HOLE. `SKIP_COMPUTE` is a matmul_block_helpers define and elides ONLY

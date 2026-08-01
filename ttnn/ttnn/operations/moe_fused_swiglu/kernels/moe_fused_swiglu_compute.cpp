@@ -229,7 +229,8 @@ void kernel_main() {
         // ---- 1. fused tilize of the x tile-rows this core injects (bf16 ROW_MAJOR only) ----
         if constexpr (INPUT_FORMAT == 0) {
             MaybeDeviceZoneScope("compute_tilize");
-            const uint32_t n_inject = moe_fused_swiglu::inject_rows(m_eff, my_col, HGROUPS);
+            const uint32_t n_inject = moe_fused_swiglu::inject_rows(
+                m_eff, moe_fused_swiglu::inject_first(my_col, my_row, HGROUPS, XSTAGE_DIAG), HGROUPS);
             for (uint32_t i = 0; i < n_inject; ++i) {
                 // Asymmetric page mode: TILE_H row-major stick slices in -> KR_PAD bfp8 tiles out.
                 tilize<KR_PAD, cb_x_in, cb_x_stage>(1, TILE_H);

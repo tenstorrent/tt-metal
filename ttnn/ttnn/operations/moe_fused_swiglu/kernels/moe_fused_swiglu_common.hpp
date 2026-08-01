@@ -95,8 +95,23 @@ inline uint32_t slice_assigned(uint32_t t, uint32_t cap, uint32_t row) {
 // Round `t`'s rotating injector is column `t % hgroups`, so this counts t in [0, m_eff) with
 // `t % hgroups == my_col`. Shared so the reader's staging loop and compute's fused-tilize count
 // cannot disagree (it used to be a host-computed runtime arg fixed at M_BLOCK).
-inline uint32_t inject_rows(uint32_t m_eff, uint32_t my_col, uint32_t hgroups) {
-    return (my_col < m_eff) ? ((m_eff - my_col + hgroups - 1) / hgroups) : 0;
+inline uint32_t inject_rows(uint32_t m_eff, uint32_t first, uint32_t hgroups) {
+    return (first < m_eff) ? ((m_eff - first + hgroups - 1) / hgroups) : 0;
+}
+
+// PERF 13 — the ONE definition of a core's FIRST x-injection tile-row, shared by the reader's
+// staging loop, the reader's multicast lane test and compute's fused-tilize count. Three sites
+// derive the injector map; the reference op records the failure mode when they disagree ("skew must
+// be 0 wherever a SECOND kernel independently recomputes this map and is not handed the same
+// skew"), so the skew lives here and nowhere else.
+//
+// diag == 0: injector for tile-row t is column `t % hgroups` in EVERY row -> a VERTICAL LINE of
+//            readers, measured upstream as the worst NOC0 read shape (789k vs 204k diagonal, 3.9x;
+//            NOC0 routes east->south so a response turns south in the reader's own column).
+// diag == 1: lane = (t + y) % hgroups -> core ((t + y) % hgroups, y), one injector per row on a
+//            DIAGONAL. Equivalently this core's rows start at (my_col - y) mod hgroups.
+inline uint32_t inject_first(uint32_t my_col, uint32_t my_row, uint32_t hgroups, uint32_t diag) {
+    return diag ? ((my_col + hgroups - (my_row % hgroups)) % hgroups) : my_col;
 }
 
 }  // namespace moe_fused_swiglu

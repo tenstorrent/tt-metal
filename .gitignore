@@ -176,3 +176,6 @@ bringup/artifacts
 model_tracer/traced_operations
 
 CLAUDE.md
+
+# Agent perf-experiment profiler artifacts (multi-MB tracy captures, never committed)
+ttnn/ttnn/operations/moe_fused_swiglu/perf_experiments/**/profiler*/
