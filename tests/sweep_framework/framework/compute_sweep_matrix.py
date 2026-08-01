@@ -35,6 +35,8 @@ from constants import get_mesh_shape_string, parse_hardware_suffix, strip_groupi
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from split_vectors_by_device_key import (  # noqa: E402
+    DEVICE_OPEN_MINUTES,
+    SECONDS_PER_VECTOR,
     VECTORS_BATCH_ROOT,
     group_vectors,
     plan_batches,
@@ -61,6 +63,11 @@ from matrix_runner_config import (
 )
 
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
+
+# Safety factor on the per-vector time term when deriving a batch timeout. See where
+# _sizing_minutes is set: the splitter's SECONDS_PER_VECTOR is measured on a light op, so the
+# un-margined estimate lands exactly on the observed need for a heavy batch.
+_VECTOR_TIME_MARGIN = 1.5
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -470,6 +477,18 @@ def compute_device_key_matrix(vectors_path, run_type, suite_name, grouping_mode,
                     "fabric": batch["fabric"],
                     "vectors_dir": f"{VECTORS_BATCH_ROOT}/{batch['name']}",
                     "_op_shares": dict(shares),
+                    # What the splitter's time model says this lane's slice of the batch costs.
+                    # Timing it by op-shares alone under-budgets big batches (see
+                    # get_weighted_batch_timeout); the batch was SIZED by this model.
+                    #
+                    # The per-vector term carries a margin because SECONDS_PER_VECTOR is the
+                    # splitter's own admittedly-optimistic figure ("comes from slice, a light
+                    # op"). Un-margined it lands exactly on the observed need -- model_traced
+                    # run 30702189957 mesh1x2_row_1d passed 432 of 562 vectors in 29.2 min,
+                    # extrapolating to ~38 min against a computed 38. A timeout is a ceiling,
+                    # not a target: a job that finishes early releases its runner, while one
+                    # killed at the wall throws away everything it had done.
+                    "_sizing_minutes": DEVICE_OPEN_MINUTES + _VECTOR_TIME_MARGIN * vectors * SECONDS_PER_VECTOR / 60.0,
                 }
             )
             log_groups.append((f"{batch['name']} -> {lane} ({vectors} vectors)", mods))
@@ -567,9 +586,12 @@ def main():
     for entry in include_entries:
         op_shares = entry.pop("_op_shares", None)
         if op_shares is None:
+            entry.pop("_sizing_minutes", None)
             entry["timeout"] = get_batch_timeout(run_type, entry.get("sku"), entry.get("module_selector", ""))
         else:
-            entry["timeout"] = get_weighted_batch_timeout(run_type, entry.get("sku"), op_shares)
+            entry["timeout"] = get_weighted_batch_timeout(
+                run_type, entry.get("sku"), op_shares, sizing_minutes=entry.pop("_sizing_minutes", 0)
+            )
 
     # Budget enforcement: the sum of a SKU's per-batch timeouts is that SKU's total
     # time for this run. Check it against the per-run budget declared for the
