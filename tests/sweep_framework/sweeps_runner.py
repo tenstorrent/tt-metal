@@ -1566,17 +1566,13 @@ def run_sweeps(
     job_child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     job_worker = None
     if job_child_mode and _is_galaxy_job():
-        # Prime the device-count cache in THIS (main) process before the worker
-        # opens the job device — result export's card-type fallback queries the
-        # count (constructs a cluster), which would collide with the worker's held
-        # device (CHIP_IN_USE) if queried live. No-op when RUNNER_LABEL is set (CI).
-        if not os.environ.get("RUNNER_LABEL"):
-            try:
-                from framework.result_destination import prime_device_count
-
-                prime_device_count()
-            except Exception:
-                pass
+        # NOTE: the main process deliberately does NOT touch the device here. A
+        # prime_device_count() call used to sit at this point to warm a device-count cache for
+        # a cosmetic results label; on Galaxy it constructed a MetalContext in the PARENT, and
+        # the child's subsequent mesh open then forced a MetalContext teardown + dispatch
+        # relaunch, hanging the first vector until the 300s timeout. See the removal note in
+        # result_destination.get_card_type(). Keep this path device-free: the whole
+        # one-device-per-job design rests on exactly one MetalContext existing per job.
         # Enable job-level device reuse in create_mesh_device (inherited by the
         # forked worker). Only vectors sharing a device config reach a given
         # process (two-pass splits by dispatch axis), so the cached device is
