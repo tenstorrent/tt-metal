@@ -203,24 +203,24 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="ltx_ff2_4864_4096_4096_x12_y8_b888",
         ),
-        # LTX ff2, tuned: the block sweep (run_ff2_block_sweep.py) on the (12,8) grid (rows 8-9 reserved
-        # for RS workers) found M/K/N block = 7/5/6 tiles (subblock 1x3) fastest.
+        # LTX ff2, tuned: on the (12,8) grid (rows 8-9 reserved for RS workers), the default block is
+        # M/K/N = 4/5/7 tiles (subblock 4x1); run_ff2_block_sweep.py sweeps shapes to revisit.
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
                 M=4864,
                 K=4096,
                 N=4096,
                 dim=3,
-                mm_block_m=224,  # 7 tiles
+                mm_block_m=128,  # 4 tiles
                 mm_block_k=160,  # 5 tiles
-                mm_block_n=192,  # 6 tiles
+                mm_block_n=224,  # 7 tiles
                 mm_core_grid=ttnn.CoreCoord(12, 8),
                 chunk_width_in_mm_blocks=1,
-                subblock_h=1,
-                subblock_w=3,
+                subblock_h=4,
+                subblock_w=1,
                 num_workers_per_link=3,
             ),
-            id="ltx_ff2_4864_4096_4096_x12_y8_b756",
+            id="ltx_ff2_4864_4096_4096_x12_y8_b457",
         ),
     ],
 )
