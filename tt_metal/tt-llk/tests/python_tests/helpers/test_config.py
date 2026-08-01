@@ -458,22 +458,30 @@ class TestConfig:
         StimuliConfig.WITH_COVERAGE = with_coverage
         TestConfig.SPEED_OF_LIGHT = speed_of_light
 
+        # llk_api/llk_sfpu is on the path because some LLK lib headers include an SFPU kernel by bare
+        # name (ckernel_sfpu_generalized_moe_gate_topk_single_face.h -> ckernel_sfpu_exp.h), which
+        # only resolves from that directory. Match Hal tensix includes (wh_hal.cpp / bh_hal.cpp /
+        # qa_hal.cpp), which list both. It goes last: llk_sfpu shares twelve basenames with
+        # tt_llk_<arch>/common/inc/sfpu, and those must keep winning.
         hw_specific_includes = []
         if TestConfig.ARCH == ChipArchitecture.WORMHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/wormhole",
                 "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
                 "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/blackhole",
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
+                "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-2xx/quasar",
                 "-I../../hw/ckernels/quasar/metal/llk_api",
+                "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
 
         if detailed_artefacts:

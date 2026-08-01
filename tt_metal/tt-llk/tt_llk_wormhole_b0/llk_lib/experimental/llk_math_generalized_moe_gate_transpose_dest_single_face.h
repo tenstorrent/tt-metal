@@ -184,7 +184,6 @@ template <bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_()
 {
     generalized_moe_gate_transpose_dest_single_face_step0_configure_mop<4, is_32bit>();
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
 }
 
 // Initialize for single face transpose
@@ -216,6 +215,7 @@ inline void _llk_math_generalized_moe_gate_copy4rows_()
 {
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit / fp32 dest accum not supported");
     math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_mov_ops_zero_flag_state_(); // MOVB2D must not flush datums with a zero low byte
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
     ckernel_template::run();
 }
@@ -232,6 +232,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_(
 {
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
     math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_mov_ops_zero_flag_state_(); // MOVB2D must not flush datums with a zero low byte
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
     ckernel_template::run();
 }
@@ -241,6 +242,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_()
 {
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
     math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_mov_ops_zero_flag_state_(); // MOVB2D must not flush datums with a zero low byte
 
     // Wait for SFPU and SrcB to be available
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
@@ -258,6 +260,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_()
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_mov_ops_zero_flag_state_(); // MOVB2D must not flush datums with a zero low byte
 
     // Wait for SFPU and SrcB to be available
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
@@ -275,6 +278,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_()
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_mov_ops_zero_flag_state_(); // MOVB2D must not flush datums with a zero low byte
 
     // Wait for SFPU and SrcB to be available
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
