@@ -254,6 +254,10 @@ void kernel_main() {
     constexpr uint32_t SLOTS_E = REMAP ? (EMB_T / NUM_BANKS) : EMB_T;
 
     constexpr uint32_t WG_BLOCK_TILES = KR_PAD * HN_PAD;      // one gate weight K-block (num_k_blocks == 1)
+    // PERF 3 — the N-chunk the weight stream is published in. GU_CHUNKS == 1 restores the whole-block
+    // push byte for byte (the chunk IS the block, and its row stride is HN_PAD again).
+    constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
+    constexpr uint32_t WG_CHUNK_TILES = KR_PAD * GU_CHUNK_W;
     constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;  // one child's landing slot
     constexpr uint32_t REDUCE_CB_TILES = REDUCE_SLOTS * REDUCE_SLOT_TILES;  // the whole CB — see 1c
     constexpr uint32_t X_ROW_BYTES = KR_PAD * BFP8_TILE;
@@ -296,27 +300,54 @@ void kernel_main() {
         // longer overlaps the prologue's OWN stick reads, and that overlap is worth more than the
         // handshake chain's. Kept here. The same defect class in phase 2 — where the barrier had
         // nothing else to cover — is real and is fixed below.
-        cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
-        {
+        //
+        // PERF 3 — WHERE this issue sits is a KNOB (`XSTAGE_FIRST`), because the barrier below is
+        // all-or-nothing and therefore decides which stream the OTHER one waits for. Measured on the
+        // focus cell (emb 7168, count 256): with W_gate issued FIRST, `reader_xmcast` finishes at
+        // 24.7 us on grid row 11 and 57.7 us on row 2 — a 33 us spread that `compute_gateup` inherits
+        // exactly (ends 43 us vs 86 us) — because the staging prologue's `noc_async_read_barrier()`
+        // drains this 8.7 MB grid-wide prefetch before a single stick is tilized. x is 3.67 MB and
+        // the whole grid needs it before ANY matmul starts; the weights are 16.5 MB and are needed
+        // per-column. Issuing the small, universally-blocking stream first is the correct order.
+        //
+        // PERF 3 — N-CHUNKED WEIGHT STREAM. The block is issued and published in `GU_CHUNKS` slices
+        // of the HIDDEN (N) axis, each a full-K [KR_PAD x GU_CHUNK_W] matmul input in its own right,
+        // so compute starts on chunk 0 while chunk 1 is still in DRAM. N is the axis that admits this
+        // for free: chunks are INDEPENDENT matmuls, so there is no cross-chunk accumulation and no
+        // extra L1-accumulating pack — which is exactly why K-chunking was rejected here (it would
+        // cost `m_eff` extra accumulating packs per extra K-block, roughly what the overlap wins).
+        // Each chunk is CONTIGUOUS in the CB (row stride GU_CHUNK_W, not HN_PAD).
+        auto issue_wg_chunk = [&](uint32_t c) {
+            cb_reserve_back(cb_w_gate, WG_CHUNK_TILES);
             MaybeDeviceZoneScope("reader_wg_issue");
             const uint32_t wg_wp = get_write_ptr(cb_w_gate);
+            const uint32_t h0 = c * GU_CHUNK_W;
+            // The ragged last column (hn < HN_PAD) narrows the LAST chunk; the host guarantees every
+            // chunk still holds at least one real column, so `w` is never 0.
+            uint32_t w = (h0 < hn) ? (hn - h0) : 0;
+            if (w > GU_CHUNK_W) {
+                w = GU_CHUNK_W;
+            }
 #ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
-            if (read_wg) {
+            if (read_wg && w) {
                 for (uint32_t k = 0; k < kr; ++k) {
                     BR::read(
                         wg_acc,
                         (kstart + k) * HID_T,
-                        hstart,
-                        hstart + hn,
+                        hstart + h0,
+                        hstart + h0 + w,
                         SLOTS_H,
-                        wg_wp + k * HN_PAD * BFP4_TILE,
+                        wg_wp + k * GU_CHUNK_W * BFP4_TILE,
                         BFP4_TILE);
                 }
             }
 #else
             (void)wg_wp;
 #endif
-        }
+        };
+#if XSTAGE_FIRST == 0
+        issue_wg_chunk(0);
+#endif
 
         cb_reserve_back(cb_x_tiles, x_slot_tiles);
         const uint32_t x_base = get_write_ptr(cb_x_tiles);
@@ -383,6 +414,19 @@ void kernel_main() {
             }
         }
 
+        // PERF 3 — this core's `x` is off DRAM. Release the writer's W_up stream (XPRIO). A plain
+        // volatile store, not a NoC semaphore op: producer and consumer are two RISC-Vs on the SAME
+        // core sharing one L1, and this word has exactly one writer. Monotone, so no reset.
+#if XPRIO
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)) = b + 1;
+#endif
+
+        // The staging prologue's barriers are behind us, so this prefetch now has the multicast chain
+        // AND the whole gate matmul to land under, instead of standing in front of the stick reads.
+#if XSTAGE_FIRST
+        issue_wg_chunk(0);
+#endif
+
         // ---- x multicast chain ----
         // m_eff rounds, not M_BLOCK: at count 128 (M_t 4) this is HALF the handshake chain and half
         // the staged bytes, and at count 32 an eighth. m_eff divides M_BLOCK, so cb_x_tiles' write
@@ -409,11 +453,20 @@ void kernel_main() {
         // Phase 1b — W_gate landed under the x rounds; publish it.
         // (W_up is the writer's twin on NoC1 — the dual-NoC split of op_design.md §1.5.)
         // -------------------------------------------------------------------
+        // Publish chunk c, then ISSUE chunk c+1 and immediately block on it: the reader sits in DRAM
+        // while compute chews chunk c, which is the whole point of the split. Only chunk c is ever
+        // outstanding at a barrier, so `noc_async_read_barrier()`'s all-or-nothing drain is exact
+        // here rather than the over-wait it is everywhere else in this kernel.
         {
             MaybeDeviceZoneScope("reader_wg_wait");
-            noc_async_read_barrier();
+            for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                noc_async_read_barrier();
+                cb_push_back(cb_w_gate, WG_CHUNK_TILES);
+                if (c + 1 < GU_CHUNKS) {
+                    issue_wg_chunk(c + 1);
+                }
+            }
         }
-        cb_push_back(cb_w_gate, WG_BLOCK_TILES);
 
         // -------------------------------------------------------------------
         // Phase 1b' — W_down for ALL WD_AHEAD phase-2 K-blocks, ISSUED as one batch.

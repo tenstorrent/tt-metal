@@ -70,6 +70,10 @@ constexpr uint32_t REDUCE_SLOTS = get_compile_time_arg_val(11);
 // something to pipeline against. Layout-safe at OUT_SUBBLOCK_H_GU == 1 — SubblockMajor walks
 // in0_subblock outer / in1_subblock inner, so the tile order stays m*HN_PAD + n either way.
 constexpr uint32_t HN_BLOCK = get_compile_time_arg_val(12);
+// PERF 3 — the hidden-axis chunk the gate/up weight stream is published and consumed in. 1 restores
+// the single whole-block matmul per matrix. Host-guaranteed to divide HN_PAD, to be a multiple of
+// HN_BLOCK, and to leave every column group at least one real column per chunk.
+constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
 // PERF 1 — eltwise DEST-window block size. Tiles per `tile_regs_acquire/commit/wait/release` cycle
 // in every eltwise pass below. See ELTWISE_BLK in the program descriptor for the mechanism and the
 // measurement; 1 reproduces the pre-Perf-1 per-tile shape byte-for-byte.
@@ -210,12 +214,9 @@ void kernel_main() {
 
         // gate/up: [m_eff, HN_PAD] = x[m_eff, kr] @ W[kr, HN_PAD]. ONE K-block whose width is the
         // whole per-row K extent, which is what lets both matmuls read the same resident in0.
-        constexpr uint32_t GU_IN1_SUBBLOCKS = HN_PAD / HN_BLOCK;
-        MatmulBlockShape shape_gu =
-            MatmulBlockShape::of(m_eff / OUT_SUBBLOCK_H_GU, GU_IN1_SUBBLOCKS, OUT_SUBBLOCK_H_GU, HN_BLOCK, KR_PAD, 1);
-        // The ragged column (hn < HN_PAD) narrows the FMA width of the LAST in1 sub-block only; the
-        // host guarantees that sub-block still holds at least one real column. 0 means "full".
-        shape_gu.last_in1_subblock_w_valid = (hn < HN_PAD) ? (hn - (GU_IN1_SUBBLOCKS - 1) * HN_BLOCK) : 0;
+        // PERF 3 — the in1 sub-blocking is now WITHIN one N-chunk; the host keeps HN_BLOCK a divisor
+        // of GU_CHUNK_W, so at GU_CHUNKS == 1 (GU_CHUNK_W == HN_PAD) this is the Phase-0 shape.
+        constexpr uint32_t GU_IN1_SUBBLOCKS = GU_CHUNK_W / HN_BLOCK;
 
         // down: [m_eff, ec] = h[m_eff, HGROUPS*HN_PAD] @ W_down[.., ec], HGROUPS K-blocks.
         // The FMA width is the real `ec`, but the in1 read stride and the output row stride are the
@@ -236,35 +237,100 @@ void kernel_main() {
         }
 
         // ---- 2. gate and up over the same resident x block ----
+        //
+        // PERF 3 — the two matmuls walk the HIDDEN axis in `GU_CHUNKS` chunks, INTERLEAVED
+        // (gate c, up c, gate c+1, ...), so each chunk's matmul runs while the NEXT chunk's bfp4
+        // block is still in DRAM. Chunks are independent full-K matmuls, so there is no
+        // cross-chunk accumulation to pay for; the only thing the split needs is that each chunk
+        // pack into ITS OWN columns of one shared m-major block rather than producing a
+        // chunk-major one, which is what `out_col_offset` + `caller_owns_pack_target` buy. The
+        // block the reduce and the scatter see is byte-identical to the single-call layout.
+        //
+        // INTERLEAVED, not gate-then-up: with gate first, `up`'s whole stream lands during gate's
+        // matmul and only gate's own chunking overlaps anything. Alternating spends both NoCs'
+        // streams under both matmuls.
         {
             MaybeDeviceZoneScope("compute_gateup");
-            matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/false,
-                LastBlockTarget::Out,
-                OutputCBLayout::SubblockMajor,
-                matmul_config::InitMode::Short,
-                InputPolicy::WaitAndRetainOnLastBlock,
-                InputPolicy::WaitAndPopPerKBlock,
-                NoPostCompute,
-                NoPreKBlock,
-                NoPostKBlock,
-                /*untilize_block_ct_dim=*/0,
-                KrSteps>(x_buf, wg_buf, gate_buf, gate_buf, shape_gu, {}, {}, 0, 0, {}, KrSteps{kr});
+            gate_buf.reserve_back(gu_block_tiles);
+            up_buf.reserve_back(gu_block_tiles);
+            for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                // The ragged column (hn < HN_PAD) narrows the FMA width of the chunk it falls in;
+                // the host guarantees every chunk keeps at least one real column. 0 means "full".
+                const uint32_t h0 = c * GU_CHUNK_W;
+                const uint32_t valid = (hn > h0) ? (hn - h0) : 0;
+                MatmulBlockShape shape_c = MatmulBlockShape::of(
+                    m_eff / OUT_SUBBLOCK_H_GU, GU_IN1_SUBBLOCKS, OUT_SUBBLOCK_H_GU, HN_BLOCK, KR_PAD, 1);
+                shape_c.last_in1_subblock_w_valid =
+                    (valid < GU_CHUNK_W) ? (valid - (GU_IN1_SUBBLOCKS - 1) * HN_BLOCK) : 0;
 
-            matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/false,
-                LastBlockTarget::Out,
-                OutputCBLayout::SubblockMajor,
-                matmul_config::InitMode::Short,
-                InputPolicy::WaitAndRetainOnLastBlock,
-                InputPolicy::WaitAndPopPerKBlock,
-                NoPostCompute,
-                NoPreKBlock,
-                NoPostKBlock,
-                /*untilize_block_ct_dim=*/0,
-                KrSteps>(x_buf, wu_buf, up_buf, up_buf, shape_gu, {}, {}, 0, 0, {}, KrSteps{kr});
+                matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    LastBlockTarget::Interm,
+                    OutputCBLayout::TileRowMajor,
+                    matmul_config::InitMode::Short,
+                    InputPolicy::WaitAndRetainOnLastBlock,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    NoPostCompute,
+                    NoPreKBlock,
+                    NoPostKBlock,
+                    /*untilize_block_ct_dim=*/0,
+                    KrSteps,
+                    NoIn0Source,
+                    NoIn1BaseOffset,
+                    /*caller_owns_pack_target=*/true>(
+                    x_buf,
+                    wg_buf,
+                    gate_buf,
+                    gate_buf,
+                    shape_c,
+                    {},
+                    {},
+                    /*in1_per_core_w=*/GU_CHUNK_W,
+                    /*out_row_width=*/HN_PAD,
+                    {},
+                    KrSteps{kr},
+                    {},
+                    {},
+                    /*out_col_offset=*/h0);
+
+                matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    LastBlockTarget::Interm,
+                    OutputCBLayout::TileRowMajor,
+                    matmul_config::InitMode::Short,
+                    InputPolicy::WaitAndRetainOnLastBlock,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    NoPostCompute,
+                    NoPreKBlock,
+                    NoPostKBlock,
+                    /*untilize_block_ct_dim=*/0,
+                    KrSteps,
+                    NoIn0Source,
+                    NoIn1BaseOffset,
+                    /*caller_owns_pack_target=*/true>(
+                    x_buf,
+                    wu_buf,
+                    up_buf,
+                    up_buf,
+                    shape_c,
+                    {},
+                    {},
+                    /*in1_per_core_w=*/GU_CHUNK_W,
+                    /*out_row_width=*/HN_PAD,
+                    {},
+                    KrSteps{kr},
+                    {},
+                    {},
+                    /*out_col_offset=*/h0);
+            }
+            gate_buf.push_back(gu_block_tiles);
+            up_buf.push_back(gu_block_tiles);
+            // packer_l1_acc leaves L1 accumulation ENABLED after the last chunk (the `down` matmul
+            // below carries the same note). The reduce chain that follows would otherwise ACCUMULATE
+            // onto stale L1 instead of overwriting.
+            pack_reconfig_l1_acc(0);
         }
 
         // PERF 2 — MY SLICE of this block's T = m_eff*HN_PAD tile block, from the ONE shared plan in

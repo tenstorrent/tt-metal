@@ -100,7 +100,8 @@ ALWI void matmul_block(
     PostKBlockFn post_k_block,
     KBlockInnerDimFn k_block_inner_dim,
     In0SourceFn in0_source_fn,
-    In1BaseOffsetFn in1_base_offset_fn) {
+    In1BaseOffsetFn in1_base_offset_fn,
+    uint32_t out_col_offset) {
 
     // OutWithUntilize needs SubblockMajor: pack_untilize_dest packs from DST offset 0 for a
     // fixed block_ct_dim and can't compose with the per-tile absolute-offset row-major pack.
@@ -418,7 +419,13 @@ ALWI void matmul_block(
                             // row 0 (latent when in0_num_subblocks == 1, garbles when > 1).
                             const uint32_t row_base =
                                 caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
-                            const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
+                            // out_col_offset shifts this call's columns inside the row-major block,
+                            // so a caller streaming the in1 width in chunks packs chunk c at its own
+                            // columns rather than producing a chunk-major block. Applied to the
+                            // spill and the last-block pack alike: a K-block partial must land at
+                            // the same absolute address the reload will read it from. 0 by default.
+                            const uint32_t col_base =
+                                row_base + in1_subblock * shape.out_subblock_w + out_col_offset;
                             pack_subblock_row_strided(
                                 0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
                         } else if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
@@ -459,7 +466,13 @@ ALWI void matmul_block(
                             // same as the last-block pack above.
                             const uint32_t row_base =
                                 caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
-                            const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
+                            // out_col_offset shifts this call's columns inside the row-major block,
+                            // so a caller streaming the in1 width in chunks packs chunk c at its own
+                            // columns rather than producing a chunk-major block. Applied to the
+                            // spill and the last-block pack alike: a K-block partial must land at
+                            // the same absolute address the reload will read it from. 0 by default.
+                            const uint32_t col_base =
+                                row_base + in1_subblock * shape.out_subblock_w + out_col_offset;
                             pack_subblock_row_strided(
                                 0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
                         } else {

@@ -147,6 +147,9 @@ void kernel_main() {
     constexpr uint32_t SLOTS_H = REMAP ? (HID_T / NUM_BANKS) : HID_T;
     constexpr uint32_t SLOTS_E = REMAP ? (EMB_T / NUM_BANKS) : EMB_T;
     constexpr uint32_t WU_BLOCK_TILES = KR_PAD * HN_PAD;
+    // PERF 3 — the N-chunk the weight stream is published in (reader's twin). 1 == the whole block.
+    constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
+    constexpr uint32_t WU_CHUNK_TILES = KR_PAD * GU_CHUNK_W;
     constexpr uint32_t SLOT_TILES = M_BLOCK * HN_PAD;  // one child's landing slot in the parent
 
     // The output block written but not yet barriered/popped — see the DEFERRED WRITE BARRIER below.
@@ -174,30 +177,49 @@ void kernel_main() {
         }
 
         // ---- W_up: NoC1 half of the gate/up weight stream, same bank-run coalescing ----
-        cb_reserve_back(cb_w_up, WU_BLOCK_TILES);
+        //
+        // PERF 3 — published in the same `GU_CHUNKS` N-chunks as the reader's W_gate twin, for the
+        // same reason: the up matmul starts on chunk 0 while chunk 1 is still in DRAM. See the
+        // reader's comment for why N (independent chunks, no extra accumulating pack) and not K.
         {
             MaybeDeviceZoneScope("writer_wup");
-            const uint32_t wp = get_write_ptr(cb_w_up);
-#ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
-            // REFINEMENT 3: M-block 0 only when W_up is resident (the read carries no `b`).
-            if ((b == 0) || (W_RESIDENT == 0)) {
-                for (uint32_t k = 0; k < kr; ++k) {
-                    BR::read(
-                        wu_acc,
-                        (kstart + k) * HID_T,
-                        hstart,
-                        hstart + hn,
-                        SLOTS_H,
-                        wp + k * HN_PAD * BFP4_TILE,
-                        BFP4_TILE);
-                }
-            }
-#else
-            (void)wp;
+            // PERF 3 — ACTIVATION-FIRST. Hold this NoC1 weight stream until this core's reader has
+            // pulled its `x` tile-rows off DRAM. Every core does it, so the whole grid's 16.5 MB of
+            // gate/up weights stays behind the 3.67 MB of activation that EVERY core's matmul is
+            // blocked on. Intra-core: an L1 poll, no NoC traffic. Never entered when m_blocks == 0,
+            // so the zero-count dispatch still cannot hang.
+#if XPRIO
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)), b + 1);
 #endif
-            noc_async_read_barrier();
+            for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                cb_reserve_back(cb_w_up, WU_CHUNK_TILES);
+                const uint32_t wp = get_write_ptr(cb_w_up);
+                const uint32_t h0 = c * GU_CHUNK_W;
+                uint32_t w = (h0 < hn) ? (hn - h0) : 0;
+                if (w > GU_CHUNK_W) {
+                    w = GU_CHUNK_W;
+                }
+#ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
+                // REFINEMENT 3: M-block 0 only when W_up is resident (the read carries no `b`).
+                if (((b == 0) || (W_RESIDENT == 0)) && w) {
+                    for (uint32_t k = 0; k < kr; ++k) {
+                        BR::read(
+                            wu_acc,
+                            (kstart + k) * HID_T,
+                            hstart + h0,
+                            hstart + h0 + w,
+                            SLOTS_H,
+                            wp + k * GU_CHUNK_W * BFP4_TILE,
+                            BFP4_TILE);
+                    }
+                }
+#else
+                (void)wp;
+#endif
+                noc_async_read_barrier();
+                cb_push_back(cb_w_up, WU_CHUNK_TILES);
+            }
         }
-        cb_push_back(cb_w_up, WU_BLOCK_TILES);
 
         // ---- PERF 2: REDUCE-SCATTER, contributor side + the finished-slice scatter ----
         if constexpr (SCATTER) {

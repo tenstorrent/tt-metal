@@ -285,6 +285,14 @@ struct NoIn1BaseOffset {
  *   KBlockInnerDimFn   per-K-block FMA step count (for unpadded/partial K-blocks).
  *   In0SourceFn        per-K-block in0 CB selector (alternates must share in0's dataformat).
  *   In1BaseOffsetFn    per-K-block in1 base-offset shift within the fronted region.
+ *   out_col_offset     (TileRowMajor only) N-tile column at which this call's output starts
+ *                      inside the row-major output block. Lets a caller that STREAMS the in1
+ *                      width in chunks — issuing one matmul_block per chunk so the matmul can
+ *                      start before the whole weight block has landed — pack each chunk into its
+ *                      own columns of one shared block, instead of getting a chunk-major block.
+ *                      Pairs with caller_owns_pack_target (one reserve/push around the chunk
+ *                      loop) and out_row_width = the FULL block width. 0 = the classic single-call
+ *                      layout, byte-identical.
  *   caller_owns_pack_target  caller does one reserve before + one push after; the helper
  *                            skips its own reserve/push/drain. Pairs with TileRowMajor +
  *                            packer_l1_acc + Interm.
@@ -363,7 +371,8 @@ ALWI void matmul_block(
     PostKBlockFn post_k_block = {},
     KBlockInnerDimFn k_block_inner_dim = {},
     In0SourceFn in0_source_fn = {},
-    In1BaseOffsetFn in1_base_offset_fn = {});
+    In1BaseOffsetFn in1_base_offset_fn = {},
+    uint32_t out_col_offset = 0);
 
 }  // namespace compute_kernel_lib
 

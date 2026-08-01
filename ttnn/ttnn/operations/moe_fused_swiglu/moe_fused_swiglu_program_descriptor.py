@@ -404,6 +404,55 @@ REDUCE = os.environ.get("MOE_SWIGLU_REDUCE", "scatter")
 #: payload split captures the bandwidth half of the idea and none of the hop-count half.
 SCATTER_NOC = os.environ.get("MOE_SWIGLU_SCATTER_NOC", "split")
 
+#: Worker-grid override, "<HGROUPS>x<KGROUPS>", e.g. "11x8" (88 cores) or "11x9" (99). Empty = the
+#: device's full `compute_with_storage_grid_size()`. The graded PERF_MEASURED_NS baselines this op is
+#: stretched against were taken on 88/99-core grids, so the op has to be tuned and reported at those
+#: core counts too, not only at this box's 110. Clamped to the device grid host-side.
+GRID = os.environ.get("MOE_SWIGLU_GRID", "")
+
+#: PERF 3 — READ ORDER inside an M-block: 1 = stage `x` BEFORE issuing the W_gate prefetch, 0 = the
+#: Phase-0 order (W_gate first). `noc_async_read_barrier()` is all-or-nothing, so whichever stream is
+#: issued first is the one the other's barrier waits for. See the reader's comment for the measured
+#: 33 us row spread this decides.
+#:
+#: MEASURED NULL, kept as the A/B that PROVED the diagnosis rather than as a win. Alone it is -0.2 to
+#: +2.8 % (150 260 vs 151 233 ns at count 256), and it is WORSE in every combination with XPRIO
+#: (152 791 vs 146 945). That is the same lesson XPRIO encodes: re-ordering ONE core's own two issue
+#: streams cannot move x forward when the queue x is stuck behind belongs to the other 109 cores and
+#: to the writer's NoC1 twin. 0 (the Phase-0 order) is the default.
+XSTAGE_FIRST = int(os.environ.get("MOE_SWIGLU_XSTAGE_FIRST", 0))
+
+#: PERF 3 — N-CHUNKED GATE/UP WEIGHT STREAM. The bfp4 gate/up block is issued, published and
+#: consumed in this many HIDDEN-axis chunks instead of one, so the matmul runs on chunk c while
+#: chunk c+1 is still in DRAM. 1 == the Phase-0 whole-block shape, byte-identical.
+#:
+#: WHY N AND NOT K. Measured on the focus cell, the weight DRAM stream (38 163 ns exposed) and the
+#: matmul math (22 801 ns) are STRICTLY ADDITIVE — ablating both together lands at 85 266 ns against
+#: a 148 742 ns baseline, i.e. 85 266 + 38 163 + 22 801 = 146 230, so nothing overlaps. K-chunking
+#: would overlap them too, but a K-chunk is a partial sum: it costs `m_eff` extra L1-ACCUMULATING
+#: packs per extra K-block per matrix, and at this shape that is roughly the whole overlap it buys.
+#: N-chunks are INDEPENDENT matmuls — no partial sums, no extra packs — and the block is K-major in
+#: the CB, so an N-chunk is contiguous on both the DRAM read side and the matmul in1 side.
+#:
+#: CONSTRAINED, and the host clamps rather than trusts: must divide HN_PAD, must be a multiple of
+#: HN_BLOCK, and must leave the RAGGED column group (hn < HN_PAD) at least one real column in every
+#: chunk. At HID_T 64 / HGROUPS 11 that is HN_PAD 6, hn_min 4 -> 2 is the largest legal value.
+GU_CHUNKS = int(os.environ.get("MOE_SWIGLU_GU_CHUNKS", 2))
+
+#: PERF 3 — ACTIVATION-FIRST DRAM PRIORITY. 1 = the writer holds its W_up stream until this core's
+#: reader has finished staging `x` (SEM_XSTAGED); 0 = both streams race from t=0 (Phase-0 behaviour).
+#:
+#: WHY IT IS A GRID-WIDE ORDERING PROBLEM, not a local one. Profiled at GU_CHUNKS=2: the gate/up
+#: matmul does not wait for weights at all — `reader_wg_wait` returns in ~4 us — it waits for
+#: `cb_x_tiles`, which the x row-multicast publishes at 56 us. x is only 3.67 MB of phase 1's
+#: 20.2 MB, but every core's matmul needs ALL of its row's x before it can start, whereas the
+#: weights are consumed per column. With both streams issued at t=0 on 110 cores, DRAM is saturated
+#: and x's last byte simply arrives at the END of the mixed stream. Re-ordering the READER's own
+#: issues (XSTAGE_FIRST) cannot fix that — the competition is the other 109 cores and the writer's
+#: 8.7 MB W_up twin. Holding every core's W_up until its x is read is what actually moves x to the
+#: front of the grid-wide queue; the weight stream then runs UNDER the matmul instead of before it.
+XPRIO = int(os.environ.get("MOE_SWIGLU_XPRIO", 1))
+
 #: Mailbox handshake word — the reader publishes {count, M_t, m_blocks} plus this flag.
 MAILBOX_MAGIC = 0xC0FFEE01
 MAILBOX_WORDS = 16
@@ -450,6 +499,10 @@ SEM_H_BASE = 2  # h all-gather   (data_ready, consumer_ready)
 SEM_GO = 4
 SEM_DATA = 5  # `tree`: child -> parent "partials landed". `scatter`: contributor -> worker, same.
 SEM_HSLICE = 6  # `scatter`: worker -> column root "my finished h slice landed in your cb_h_local"
+# PERF 3 — reader -> writer, SAME CORE: "this core's `x` tile-rows are read and staged". The only
+# intra-core semaphore in the op: no NoC traffic, just an L1 word the reader stores and the writer
+# polls. It exists to ORDER THE TWO DRAM STREAMS against each other — see XPRIO.
+SEM_XSTAGED = 7
 
 
 def _pow2_ceil(v):
@@ -602,6 +655,9 @@ def create_program_descriptor(
     # ---- grid / core assignment (every core count derives from the device grid) ----
     HGROUPS = int(grid.x)  # hidden groups == grid columns
     KGROUPS = int(grid.y)  # emb-contraction groups == grid rows
+    if GRID:
+        gx, gy = (int(v) for v in GRID.lower().split("x"))
+        HGROUPS, KGROUPS = min(gx, HGROUPS), min(gy, KGROUPS)
     num_cores = HGROUPS * KGROUPS
     all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(HGROUPS - 1, KGROUPS - 1))])
     if KGROUPS < 2:
@@ -680,13 +736,30 @@ def create_program_descriptor(
     #   gate/up  out_subblock_w = HN_PAD, height pinned at OUT_SUBBLOCK_H_GU (see the knob).
     #   down     out_subblock_w = ec (<= EC_MAX), height DERIVED here — Refinement 2 lever 3.
     # gate/up in1 sub-block width — Refinement 2 lever 2. 0 (default) = the whole HN_PAD.
-    hn_block = HN_PAD if HN_BLOCK <= 0 or HN_BLOCK >= HN_PAD else HN_BLOCK
-    if HN_PAD % hn_block != 0:
-        raise RuntimeError(f"moe_fused_swiglu: HN_BLOCK {hn_block} must divide HN_PAD {HN_PAD}")
-    gu_in1_subblocks = HN_PAD // hn_block
-    # The ragged column's real width must reach INTO the last sub-block: the helper can narrow the
-    # last in1 sub-block's FMA width (`last_in1_subblock_w_valid`) but cannot drop one entirely.
-    if min(hn_sizes) <= (gu_in1_subblocks - 1) * hn_block:
+    # PERF 3 — the N-chunk the weight stream is published in. CLAMPED, not trusted: it must divide
+    # HN_PAD, and — the constraint that actually binds — every chunk of the RAGGED column group must
+    # still hold a real column, because the helper can narrow an in1 sub-block's FMA width but a chunk
+    # with no real column at all would have nothing to read. Any illegal request falls back to the
+    # largest legal divisor (1 in the worst case = the Phase-0 whole-block stream).
+    gu_chunks = max(1, GU_CHUNKS)
+    while gu_chunks > 1 and (HN_PAD % gu_chunks != 0 or min(hn_sizes) <= (gu_chunks - 1) * (HN_PAD // gu_chunks)):
+        gu_chunks -= 1
+    if gu_chunks != GU_CHUNKS:
+        print(
+            f"moe_fused_swiglu: GU_CHUNKS {GU_CHUNKS} illegal at HN_PAD {HN_PAD} / ragged hn "
+            f"{min(hn_sizes)}; using {gu_chunks}"
+        )
+    gu_chunk_w = HN_PAD // gu_chunks
+
+    # gate/up in1 sub-block width — Refinement 2 lever 2. Now a sub-division of ONE chunk, so it is
+    # additionally clamped to gu_chunk_w; at gu_chunks == 1 this is the Phase-0 expression unchanged.
+    hn_block = gu_chunk_w if HN_BLOCK <= 0 or HN_BLOCK >= gu_chunk_w else HN_BLOCK
+    if gu_chunk_w % hn_block != 0:
+        raise RuntimeError(f"moe_fused_swiglu: HN_BLOCK {hn_block} must divide the chunk width {gu_chunk_w}")
+    gu_in1_subblocks = gu_chunk_w // hn_block
+    # The ragged column's real width must reach INTO the last sub-block OF ITS LAST CHUNK: the helper
+    # can narrow the last in1 sub-block's FMA width (`last_in1_subblock_w_valid`) but cannot drop one.
+    if min(hn_sizes) - (gu_chunks - 1) * gu_chunk_w <= (gu_in1_subblocks - 1) * hn_block:
         raise RuntimeError(
             f"moe_fused_swiglu: HN_BLOCK {hn_block} leaves the ragged column (hn={min(hn_sizes)}) "
             f"with an entirely empty last in1 sub-block; use a wider HN_BLOCK"
@@ -1175,6 +1248,13 @@ def create_program_descriptor(
     # `+`-separated so stages can be peeled off CUMULATIVELY (they overlap, so removing one alone
     # under-counts it — the documented ablation methodology).
     dm_defines = [("ABLATE_" + a.upper(), "1") for a in ABLATE.split("+") if a in _DM_ABLATIONS]
+    dm_defines.append(("XSTAGE_FIRST", str(XSTAGE_FIRST)))
+    dm_defines.append(("GU_CHUNKS", str(gu_chunks)))
+    dm_defines.append(("XPRIO", str(XPRIO)))
+    dm_defines.append(("SEM_XSTAGED", str(SEM_XSTAGED)))
+    compute_defines = [("GU_CHUNKS", str(gu_chunks))]
+    if "skip_compute" in ABLATE.split("+"):
+        compute_defines.append(("SKIP_COMPUTE", "1"))
 
     kernels = [
         ttnn.KernelDescriptor(
@@ -1199,7 +1279,7 @@ def create_program_descriptor(
             compile_time_args=compute_ct,
             runtime_args=compute_rt,
             config=compute_kernel_config,
-            defines=[("SKIP_COMPUTE", "1")] if "skip_compute" in ABLATE.split("+") else [],
+            defines=compute_defines,
         ),
     ]
 
@@ -1210,5 +1290,10 @@ def create_program_descriptor(
     # (never reset, always compared with `wait_min` against a running total), which is what keeps it
     # race-free across M-blocks. Allocated on both paths so the two programs differ only in kernels.
     semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_HSLICE, core_ranges=all_cores, initial_value=0))
+    # PERF 3 — reader -> writer on the SAME core. Monotone like the rest (incremented once per
+    # M-block, always compared with wait_min against a running total), so it needs no reset and
+    # cannot race across M-blocks. Allocated unconditionally so both XPRIO settings share a program
+    # shape; at XPRIO=0 nothing reads it.
+    semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_XSTAGED, core_ranges=all_cores, initial_value=0))
 
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
