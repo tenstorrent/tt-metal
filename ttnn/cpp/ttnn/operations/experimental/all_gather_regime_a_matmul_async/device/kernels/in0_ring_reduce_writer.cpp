@@ -77,6 +77,10 @@ void kernel_main() {
     const uint32_t valid_m = get_arg_val<uint32_t>(15);  // valid M tiles (rest zero / not written)
     const uint32_t valid_n = get_arg_val<uint32_t>(16);  // valid N tiles (rest zero / not written)
 
+    // Blocked-cyclic global-K mapping, filled in by the fused prologue below (0 => contiguous, the
+    // single-chip layout). Declared out here because the in0 ring load further down needs them.
+    uint32_t k_run_len = 0u, k_stripe_base = 0u, k_shard_stride = 0u;
+
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_bytes);
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
     constexpr uint32_t in0_cb = 0, out_cb = 2, cb_reduce = 7;
@@ -328,6 +332,9 @@ void kernel_main() {
         const uint32_t master0_x = get_arg_val<uint32_t>(fa++);
         const uint32_t master0_y = get_arg_val<uint32_t>(fa++);
         const uint32_t local_done_sem_id = get_arg_val<uint32_t>(fa++);
+        k_run_len = get_arg_val<uint32_t>(fa++);
+        k_stripe_base = get_arg_val<uint32_t>(fa++);
+        k_shard_stride = get_arg_val<uint32_t>(fa++);
         const uint32_t num_release_ranges = get_arg_val<uint32_t>(fa++);
         const std::size_t release_base = fa;  // 5 words per range: sx, sy, ex, ey, num_dests
         fa += 5u * num_release_ranges;
@@ -568,7 +575,15 @@ void kernel_main() {
                     for (uint32_t k = 0; k < K_block; ++k) {
                         const uint32_t l = sb * K_block + k;  // capacity-local K index within the slice
                         if (m < valid_m && l < valid_k) {
-                            noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
+                            // Capacity-local K index -> global staging column. On the fused path every
+                            // Pk group owns a stripe of EVERY source rank's shard, so consecutive l walk
+                            // one stripe and then jump a whole shard; k_run_len == 0 is the single-chip
+                            // contiguous case.
+                            const uint32_t gk =
+                                (k_run_len == 0u)
+                                    ? (k_start + l)
+                                    : ((l / k_run_len) * k_shard_stride + k_stripe_base + (l % k_run_len));
+                            noc_async_read_page((m_start + m) * Kt + gk, in0, p);
                         } else {
                             zero_tile(p);  // pad M row or K tail -> local zero (no DRAM read)
                         }

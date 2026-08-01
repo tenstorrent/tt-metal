@@ -372,11 +372,16 @@ enum FusedGatherArg : uint32_t {
     kFgMaster0X = 20,
     kFgMaster0Y = 21,
     kFgLocalDoneSem = 22,  // masters-finished-local-staging counter (one per master, not just master 0)
-    kFgNumReleaseRanges = 23,
+    // Blocked-cyclic K assignment (see the k-stripe comment at the runtime-arg push site). The writer needs
+    // these to map its capacity-local K index onto a global staging column.
+    kFgKRunLen = 23,
+    kFgKStripeBase = 24,
+    kFgKShardStride = 25,
+    kFgNumReleaseRanges = 26,
     // Followed by kFgNumReleaseRanges 5-word records {start_x, start_y, end_x, end_y, num_dests} in VIRTUAL
     // coords: the multicast rectangles master 0 releases. Per-range rather than one bounding box because
     // the bank-adjacent placement is deliberately not a filled rectangle.
-    kFusedArgCount = 24,  // + 5*num_release_ranges + 2*num_masters words, then the mux client block
+    kFusedArgCount = 27,  // + 5*num_release_ranges + 2*num_masters words, then the mux client block
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -1042,7 +1047,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     //   g0 (noc==0): reader RISCV_0/NOC0, writer RISCV_1/NOC1
     //   g1 (noc==1): reader RISCV_1/NOC1, writer RISCV_0/NOC0
     // in1 reader takes no compile defines.
-    const std::map<std::string, std::string> rdefs;
+    std::map<std::string, std::string> rdefs;
+    if (fused_gather.enabled) {
+        // The in1 reader has to walk the SAME global-K order as the in0 side; the spec is explicit about
+        // that. Give it the define so it parses the K-stripe args below.
+        rdefs["FUSED_GATHER"] = "1";
+    }
     KernelHandle readerA = mk(kIn1ReaderKernel, g0, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, rct, rdefs);
     KernelHandle readerB = mk(kIn1ReaderKernel, g1, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, rct, rdefs);
     KernelHandle writerA = mk(kWriterKernel, g0, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, wct, wdefs);
@@ -1121,6 +1131,45 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         const KernelHandle rh = cp.noc ? readerB : readerA;
         const KernelHandle wh = cp.noc ? writerB : writerA;
 
+        // ---- BLOCKED-CYCLIC global-K assignment for the fused path ----
+        // The planner gives each Pk group a CONTIGUOUS K range. On the fused path that is the failure mode
+        // the design spec calls out by name: gathered K is laid out contiguously by source rank, so with
+        // Pk == tp, group kk maps one-to-one onto shard kk and exactly ONE group can make progress per
+        // arrival wave -- every other group sits idle through fabric startup.
+        //
+        // Instead give every group a stripe of EVERY shard. Wave 0 (the local shard) then hands all Pk
+        // groups work immediately, and each subsequent wave (two shards, one per direction) does the same.
+        // The group's capacity-local index l maps to a global K tile as
+        //     gk(l) = (l / run_len) * shard_stride + stripe_base + (l % run_len)
+        // which both the in0 side and the in1 reader evaluate identically -- the spec requires the in1
+        // reader to walk the same global-K order, and this is that order.
+        //
+        // The per-shard split is balanced, not exact-divide, so a shard tile count that does not divide by
+        // Pk still distributes rather than being refused; run_len is then constant per group across shards
+        // (every shard has the same tile count), which keeps the closed form above valid.
+        uint32_t k_run_len = 0u, k_stripe_base = 0u, k_shard_stride = 0u, k_valid = cp.valid_k;
+        if (fused_gather.enabled) {
+            k_shard_stride = geo.Kt / fused_gather.tp;  // tiles per source rank (Kt % tp == 0 asserted below)
+            const plan::BalRange rs = plan::rap_balanced(cp.kk, k_shard_stride, Pk);
+            k_run_len = rs.extent;
+            k_stripe_base = rs.start;
+            k_valid = k_run_len * fused_gather.tp;
+            TT_FATAL(
+                k_run_len > 0u,
+                "the blocked-cyclic K assignment gives Pk group {} no tiles: Pk={} exceeds the {} tiles per "
+                "source rank. Reduce Pk or increase K",
+                cp.kk,
+                Pk,
+                k_shard_stride);
+            TT_FATAL(
+                k_valid <= geo.K_slice_capacity,
+                "blocked-cyclic K needs {} tiles for Pk group {} but the planner sized the slice capacity at "
+                "{}; the per-shard rounding has outgrown the contiguous estimate",
+                k_valid,
+                cp.kk,
+                geo.K_slice_capacity);
+        }
+
         // in1 reader runtime args.
         std::vector<uint32_t> ra = {
             in1_addr,     // 0
@@ -1128,7 +1177,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             cp.ring_pos,  // 2
             cp.k_start,   // 3 first logical K tile (balanced)
             cp.n_local,   // 4 within-bank column offset
-            cp.valid_k,   // 5 valid K tiles (rest of capacity zero-filled)
+            k_valid,      // 5 valid K tiles (rest of capacity zero-filled)
             cp.valid_n};  // 6 valid N tiles this core owns
         if (Sm == 1u) {
             ra.push_back(2u);  // 5 mrole = solo
@@ -1149,6 +1198,13 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             auto p = phys(i - cp.mm);
             ra.push_back(p.x);
             ra.push_back(p.y);
+        }
+        if (fused_gather.enabled) {
+            // Appended last, after the variable-length M-split peer coords; the kernel locates them at
+            // 9 + 2*mpeers. Only present when FUSED_GATHER is defined for the reader.
+            ra.push_back(k_run_len);
+            ra.push_back(k_stripe_base);
+            ra.push_back(k_shard_stride);
         }
         SetRuntimeArgs(program, rh, cores[i], ra);
 
@@ -1171,7 +1227,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             cp.is_top ? 1u : 0u,     // 11
             red_prev.x,              // 12
             red_prev.y,              // 13
-            cp.valid_k,              // 14 valid K tiles (rest of capacity zero)
+            k_valid,                 // 14 valid K tiles (rest of capacity zero)
             cp.valid_m,              // 15 valid M tiles (rest zero / not written)
             cp.valid_n};             // 16 valid N tiles (rest zero / not written)
         // Fused-epilogue / output-split writer args (index 17+). Order MUST match the writer kernel's fidx
@@ -1292,6 +1348,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.x));
             wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.y));
             wa.push_back(fused_gather.local_done_sem_id);
+            wa.push_back(k_run_len);
+            wa.push_back(k_stripe_base);
+            wa.push_back(k_shard_stride);
             wa.push_back(static_cast<uint32_t>(fused_gather.release_ranges.size()));
             for (const auto& rr : fused_gather.release_ranges) {
                 wa.push_back(rr.sx);

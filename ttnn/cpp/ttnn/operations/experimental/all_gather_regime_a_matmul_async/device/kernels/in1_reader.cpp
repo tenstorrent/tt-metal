@@ -42,6 +42,19 @@ void kernel_main() {
     const uint32_t mpeers = get_arg_val<uint32_t>(8);   // forward peer count
     // M-split peer coords (only present when Sm > 1) start at arg 9.
 
+    // Blocked-cyclic global-K mapping, appended after the peer coords on the fused path. The in1 reader
+    // MUST walk the identical global-K order as the in0 side, so this mirrors the writer exactly.
+#if defined(FUSED_GATHER)
+    const uint32_t k_run_len = get_arg_val<uint32_t>(9 + 2 * mpeers);
+    const uint32_t k_stripe_base = get_arg_val<uint32_t>(10 + 2 * mpeers);
+    const uint32_t k_shard_stride = get_arg_val<uint32_t>(11 + 2 * mpeers);
+#else
+    constexpr uint32_t k_run_len = 0u, k_stripe_base = 0u, k_shard_stride = 0u;
+#endif
+    auto global_k = [&](uint32_t l) {
+        return (k_run_len == 0u) ? (k_start + l) : ((l / k_run_len) * k_shard_stride + k_stripe_base + (l % k_run_len));
+    };
+
     constexpr uint32_t in1_cb = 1;
     constexpr uint32_t in1_blk = K_block * N_block;
     constexpr uint32_t in1_blk_bytes = in1_blk * tile_bytes;
@@ -122,16 +135,20 @@ void kernel_main() {
         // bank shard: full owned width (vcols==N_block==shard stride), zero column offset, and NO K-tail in
         // this block. Consecutive K rows are then adjacent (gk*stride) with a contiguous L1 destination, so
         // one read replaces K_block per-row reads (-0.5..-3.1%, PCC-exact). Falls back to per-row otherwise.
+        // The coalesced read assumes consecutive K rows are adjacent in the bank shard. Under the
+        // blocked-cyclic mapping that only holds while the block stays inside a single stripe -- crossing
+        // a stripe boundary jumps a whole shard, so fall back to per-row there.
+        const bool stripe_ok = (k_run_len == 0u) || (((kblk * K_block) % k_run_len) + K_block <= k_run_len);
         const bool contig = (vcols == N_block) && (N_block == in1_shard_stride_n) && ((n_local + ncol_base) == 0u) &&
-                            ((kblk * K_block + K_block) <= valid_k);
+                            ((kblk * K_block + K_block) <= valid_k) && stripe_ok;
         if (contig) {
-            const uint32_t off = (k_start + kblk * K_block) * in1_shard_stride_n * tile_bytes;
+            const uint32_t off = global_k(kblk * K_block) * in1_shard_stride_n * tile_bytes;
             noc_async_read(get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, K_block * vcols * tile_bytes);
         } else {
             for (uint32_t kr = 0; kr < K_block; ++kr) {
                 const uint32_t l = kblk * K_block + kr;  // capacity-local K index within the slice
                 if (l < valid_k) {
-                    const uint32_t gk = k_start + l;  // global logical K tile
+                    const uint32_t gk = global_k(l);  // global logical K tile
                     const uint32_t off = (gk * in1_shard_stride_n + n_local + ncol_base) * tile_bytes;
                     noc_async_read(get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, vcols * tile_bytes);
                     // cols [vcols, N_block) are pad-N (garbage): safe, those output cols aren't written.
