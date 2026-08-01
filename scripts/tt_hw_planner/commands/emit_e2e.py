@@ -1441,12 +1441,14 @@ def _emit_e2e_phase_a(args) -> int:
         if (os.environ.get("E2E_REQUIRE_TRACE", "1") != "0" or os.environ.get("E2E_REQUIRE_ON_DEVICE", "1") != "0")
         else ""
     )
+    _batch_note = _batch_prompt_block(int(getattr(args, "batch", 1) or 1))
     build_prompt = _build_agent_prompt(
         model_id=model_id,
         demo_dir=demo_dir,
         pcc=pcc,
         parallel_note=_parallel_note,
         trace_note=_trace_note,
+        batch_note=_batch_note,
         all_tasks=bool(getattr(args, "all_tasks", False)),
     )
     rc_build, build_final = _run_agent(
@@ -1793,8 +1795,41 @@ def _required_heads_block(model_id: str, all_tasks: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _batch_prompt_block(batch: int) -> str:
+    """Builder instruction for a DECODE BATCH of B>1 independent streams. Empty for B<=1 (default,
+    unchanged single-stream behaviour). Batching fills the matmul tile rows -> aggregate throughput, not
+    per-token latency; the model must be an autoregressive decode that can carry a batch axis."""
+    if not batch or batch <= 1:
+        return ""
+    return f"""
+DECODE BATCH = {batch}. Emit the pipeline to run {batch} INDEPENDENT streams (utterances/prompts) at
+once, not one. A single stream wastes 31/32 of a 32-row matmul tile, so filling it with {batch} real
+streams raises AGGREGATE throughput ~{batch}x; per-stream latency is unchanged. Thread a leading batch
+dimension B={batch} through the WHOLE decode path and verify it end to end:
+  - decode step + every projection: activations are [B, ...] (M = B rows); ONE program feeds all B
+    streams -- do NOT python-loop over streams.
+  - KV-cache holds B independent sequences ([B, heads, C, head_dim]); PagedUpdateCache / decode-SDPA
+    index per-stream, one cache slot per batch row.
+  - collectives (all_gather / reduce_scatter) carry the batch dimension; batch is a SEPARATE axis from
+    the TP-sharded weight axis -- do NOT shard on batch, and do NOT change the existing TP/mesh split.
+  - vocoder runs over B (pad per-stream conv lengths to a common length, or run per-stream) -- correct,
+    not just shaped.
+The PCC gate must pass for ALL {batch} streams: feed {batch} DISTINCT reference inputs and compare each
+stream to its OWN model.generate() golden. A pipeline that shape-supports B but emits {batch} identical
+outputs is WRONG. If the model is not an autoregressive decode that can batch, STOP and report it as a
+hole -- do NOT fake a batch axis.
+"""
+
+
 def _build_agent_prompt(
-    *, model_id: str, demo_dir: Path, pcc: float, parallel_note: str = "", trace_note: str = "", all_tasks: bool = False
+    *,
+    model_id: str,
+    demo_dir: Path,
+    pcc: float,
+    parallel_note: str = "",
+    trace_note: str = "",
+    batch_note: str = "",
+    all_tasks: bool = False,
 ) -> str:
     heads_note = _required_heads_block(model_id, all_tasks)
     return f"""You are bringing up a REAL end-to-end TTNN pipeline for the model
@@ -1898,7 +1933,7 @@ inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT de
 gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
-{parallel_note}{trace_note}
+{parallel_note}{trace_note}{batch_note}
 {_TT_ONLY_CONTRACT}
 """
 
