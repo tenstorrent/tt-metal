@@ -2085,3 +2085,71 @@ worth that at 99.3 % occupancy.
 
 - **Perf achieved**: none. Default path re-measured after the revert: 90 576 / 130 780 ns
   (counts 128/256), unchanged.
+
+---
+
+## Perf 15 — phase 2 is 83 % ONE `noc_semaphore_wait`, and it is waiting on phase 1, not on protocol
+
+- **Date**: 2026-08-01
+- **Scope**: instrumentation (3 permanent per-round zones) + the finding. No perf change.
+
+Every statement this changelog has made about the phase-2 round cost came from a FIT — the
+`3.12 us FIXED + 0.147 us/m-tile` model derived from two `m_eff` points. Three zones inside the round
+loop now measure its parts directly. Count 256, bf16_rm, 88 cores, ND-sharded weights:
+
+| zone | entries | us/core | ns/entry | share |
+|---|---|---|---|---|
+| `reader_phase2` | 88 | 46.21 | — | 100 % |
+| **`p2_hwait`** (the h arrival flag) | 957 | **38.51** | **3 541** | **83 %** |
+| `p2_wdbar` (per-round W_down barrier) | 870 | 0.43 | 44 | 1 % |
+| `p2_reserve` (per-round `cb_h` reserve) | 968 | 0.45 | 41 | 1 % |
+
+**83 % of phase 2 is one line: `noc_semaphore_wait` on the round's arrival flag.** The CB reserve is
+41 ns and the W_down barrier 44 ns — both free.
+
+### What this overturns
+
+1. **There was never ~3 us of handshake to remove.** 3 541 ns of pure flag wait against ~1.2 us of
+   transport (52 KB at ~43 GB/s) means the receiver is waiting for the **SENDER TO ARRIVE**, not for
+   the protocol. The sender is ~2.3 us late, and what it is doing is finishing its column's
+   reduce-scatter and SwiGLU. **Phase 2 is waiting on phase 1's tail.** That retro-explains the whole
+   rendezvous programme: per-slot flags + ack-ahead bought 4 %, `DEPTH_H` 4/6 bought 0, `HSEND=writer`
+   lost — all of them attacked a term that is mostly not there.
+2. **It reconciles the per-M-block discrepancy.** Measured 13-20 us/block (by shrinking `M_BLOCK`)
+   against the fit's ~34 us. The fit charged the entire round period to fixed overhead when most of
+   it is a real dependency on upstream work.
+3. **The W_down question is settled, and the ORIGINAL claim was right.** `reader_wd_wait` covers only
+   the `WD_AHEAD = 1` prologue block (1 of 11) and I first read it as "down never waits for its
+   weights", then retracted that as unsupported. The real in-loop barrier is **44 ns/round**: the
+   one-block prefetch is sufficient. Right claim, wrong evidence, now measured.
+
+### Two instrumentation traps hit while placing these zones — both worth remembering
+
+* The first `p2_hwait` went into the shared-flag `#else` branch, which is DEAD CODE at the shipped
+  `HSLOT = 1`. Zero entries, silently.
+* The first `p2_wdbar` matched the POST-LOOP safety drain (whose own comment says "nothing is ever
+  left pending here"), not the in-loop barrier. Zero entries, silently.
+  **A zone with no entries looks identical to a zone measuring zero.** Always check the entry count
+  first: 957 and 870 are ~11 x 88 and ~10 x 88, which is what says the zones are on the live path.
+
+### Where the remaining gap actually is
+
+Phase 2 cannot be shortened by touching the broadcast. It can only be shortened by making each
+column's reduce + SwiGLU finish EARLIER, which is a phase-1 question. Combined with Perf 14's
+10 560 B of free L1 — now attributed exactly (`cb_region_end` is an ADDRESS, so the allocator's throw
+is `L1_UNRESERVED_BASE(111 488) + sum(CB sizes)`; and note
+`get_max_worker_l1_unreserved_size()` reports a DIFFERENT offset, 40 832, because it is the buffer
+allocator's region) — the board is:
+
+* everything that SPENDS L1 is dead (verified three ways),
+* the rendezvous is not the cost (this round),
+* so the only live direction is the phase-1 tail: the column reduce-scatter and its epilogue.
+
+`CB_GATHER_GATE` + `CB_GATHER_UP` (104 448 B at M_BLOCK 8) is the largest single block in the CB
+budget after `cb_x_tiles`, and it is the reduce's landing buffer — so narrowing it is the one place
+where the L1 question and the phase-1-tail question meet.
+
+- **Perf achieved**: none this round. Zones are permanent and free with the profiler off.
+- **Zone budget**: 3 records/round = 33/M-block on top of the reader's 8, against the 125-per-core
+  cap. Per-stage numbers are valid for ONE M-block (count <= 256); above that only the whole-kernel
+  duration is meaningful.

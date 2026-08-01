@@ -884,6 +884,13 @@ void kernel_main() {
                 // The tail clamp (`HGROUPS - r`) matters: near the end there are fewer rounds left
                 // than A, and reserving blocks nobody will ever push into would hang here.
                 {
+                    // PERF 15 — per-round zones. The 3.12 us/round FIXED term has only ever been
+                    // FITTED (from two m_eff points); these three zones measure its parts directly,
+                    // which is the difference between knowing the round is expensive and knowing
+                    // WHICH part is. Cost: 3 records/round = 33/M-block on top of the reader's 8,
+                    // against the profiler's 125-per-core cap — so per-stage numbers are valid for
+                    // ONE M-block (count <= 256) and only the whole-kernel duration above that.
+                    MaybeDeviceZoneScope("p2_reserve");
                     uint32_t ahead = hack_ahead;
                     if (ahead > HGROUPS - r) {
                         ahead = HGROUPS - r;
@@ -1000,6 +1007,8 @@ void kernel_main() {
                     if constexpr (hmc.active) {
                         volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                             static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + ((b * HGROUPS + r) % DEPTH_H))));
+                        // PERF 15 — the round's h arrival wait, on the SHIPPED (HSLOT) path.
+                        MaybeDeviceZoneScope("p2_hwait");
                         noc_semaphore_wait(hf, VALID);
                         noc_semaphore_set(hf, INVALID);
                     }
@@ -1026,6 +1035,10 @@ void kernel_main() {
 #endif
 #endif
                     if (wd_pending) {
+                        // PERF 15 — the REAL per-round W_down wait. `reader_wd_wait` covers only the
+                        // WD_AHEAD=1 prologue block (1 of 11) and I misread it as "down never waits
+                        // for its weights"; this is the other 10, on the 87 non-sending cores.
+                        MaybeDeviceZoneScope("p2_wdbar");
                         noc_async_read_barrier();
                         cb_push_back(cb_w_down, WD_BLOCK_TILES);
                         wd_pending = false;
