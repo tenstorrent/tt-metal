@@ -2575,21 +2575,15 @@ TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
 // SECTION 9: GetDataflowBufferFootprints
 // ============================================================================
 //
-// The footprint view feeds L1 accounting for consumers that never touch a DataflowBufferImpl
-// (TTNN graph capture, memory estimation — see #51674). Both of its mappings exist purely to
-// stop that accounting from over-reporting, so each needs a test that fails if the mapping is
-// dropped: aliased DFBs must collapse to one region, and a borrowed DFB must be flagged so its
-// tensor-owned L1 isn't counted a second time.
+// Both mappings exist to stop L1 over-reporting in graph capture (#51674), so each needs a test
+// that fails if it is dropped.
 
-// Aliased DFBs share one L1 region. Reporting both would double-count a single allocation.
 TEST_F(ProgramRunArgsTestQuasar, GetDataflowBufferFootprintsCollapsesAliasGroup) {
-    // Equal totals (512*8 == 1024*4 == 4096) so the assertion holds whichever member the
-    // aliasing logic picks as primary.
+    // Equal totals (512*8 == 1024*4) so the assertion holds whichever member becomes primary.
     ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    // Precondition: the two DFBs really are aliased, so this test can't pass vacuously on a
-    // spec where aliasing silently failed to apply.
+    // Guards against passing vacuously if aliasing silently failed to apply.
     auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
     ASSERT_TRUE(a->alias_primary_id.has_value() || !a->alias_secondary_ids.empty()) << "dfb_a not aliased";
 
@@ -2600,8 +2594,6 @@ TEST_F(ProgramRunArgsTestQuasar, GetDataflowBufferFootprintsCollapsesAliasGroup)
     EXPECT_FALSE(footprints[0].borrows_memory);
 }
 
-// A borrowed DFB is a view onto a tensor's buffer. That L1 is already accounted for by the
-// tensor, so the flag has to survive into the footprint.
 TEST_F(ProgramRunArgsTestQuasar, GetDataflowBufferFootprintsFlagsBorrowedMemory) {
     // entry_size 16 * num_entries 2 = 32 bytes.
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
