@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
 #include "llk_param_structs.h"
@@ -10,40 +11,6 @@
 /*************************************************************************
  * LLK PACK UNTILIZE
  *************************************************************************/
-
-/**
- * Configure the packer hardware for an untilize output operand.
- *
- * Face geometry (face_r_dim, num_faces), partial-face flag, narrow-tile flag and tile
- * size are all derived from the output CB metadata associated with the operand id.
- * Callers no longer thread face geometry through the API, since per-CB face geometry
- * is recorded in the CB descriptor at program creation time. The relu configuration is
- * taken from the supplied pack params.
- *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @tparam pack_mode           Packer program mode (e.g. Default, Untilize).
- * @param  pack_params         Pack parameters carrying the output operand and relu config.
- */
-template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params) {
-    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
-
-    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
-
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        tile_size,
-        face_r_dim,
-        num_faces,
-        partial_face,
-        narrow_tile,
-        pack_params->relu_config.val);
-}
 
 /**
  * Initialize the packer for an untilize operation on the given output operand.
@@ -104,7 +71,7 @@ template <
     bool diagonal = false,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    uint32_t tile_dst_ct_offset = 0,
+    std::uint32_t tile_dst_ct_offset = 0,
     bool dense = false>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
