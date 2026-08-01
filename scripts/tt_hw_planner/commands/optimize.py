@@ -641,7 +641,14 @@ def cmd_optimize(args) -> int:
         if result is None:
             print("  [optimize/cc] run failed (see messages above)")
             return 1
-        for r in result.get("results", []):
+        for _i, r in enumerate(result.get("results", [])):
+            # A pipeline that raised is appended as None (its cause was already printed by
+            # _print_optimize_stop). Indexing it here raised TypeError and took down the whole
+            # orchestrator AFTER the real diagnosis had been printed -- so the supervisor burned all 3
+            # restarts showing a stack trace instead of the actual cause.
+            if r is None:
+                print(f"      pipeline #{_i}: FAILED (cause printed above)")
+                continue
             print(f"      pipeline {r['task']}: {r['rounds']} round(s), can_stop={r['can_stop']}")
         if iso is None:
             _write_optimize_fallback(
