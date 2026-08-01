@@ -58,7 +58,7 @@ tools:
     lockdown: false
     min-integrity: none # This workflow is allowed to examine and comment on any issues or PRs
   repo-memory: true # Persistent cross-run memory for cursor, deduplication, and CI run tracking
-  bash: true # Required for running gh CLI commands (e.g. polling checks)
+  bash: true # Local filesystem work (clone/grep/read). The agent sandbox has no gh/git GitHub credentials — GitHub reads go through the `github` MCP tool, writes go through safe-outputs.
 
 mcp-servers:
   # DeepWiki is Cognition Labs' public, unauthenticated, read-only remote MCP
@@ -163,7 +163,7 @@ You have a read-only **DeepWiki** MCP tool (`read_wiki_structure`, `read_wiki_co
 
 Good uses: *"how does tt-umd expose interrupts?"*, *"what does the ISA doc say about a given register?"*, *"which tt-umd layer does tt-metal call for device init?"* — the kind of question where local grep and `bash` are not enough because the answer lives in a separate repo or in hardware docs.
 
-**DeepWiki is for orientation, not ground truth.** Its content is generated from repositories and can lag their actual state, so treat every DeepWiki answer as a lead to confirm, never as a citable fact on its own. **Verify before you assert**: anything that goes into a PR diff, a bug root-cause, or a definitive-sounding comment must be checked against the *current* code via `bash`/`gh` (clone or fetch the relevant file, grep it, read it) — not asserted from DeepWiki alone. If you genuinely cannot verify a DeepWiki-sourced claim against real code, phrase it tentatively ("per DeepWiki, which may be out of date …") and say what would confirm it, rather than stating it as established.
+**DeepWiki is for orientation, not ground truth.** Its content is generated from repositories and can lag their actual state, so treat every DeepWiki answer as a lead to confirm, never as a citable fact on its own. **Verify before you assert**: anything that goes into a PR diff, a bug root-cause, or a definitive-sounding comment must be checked against the *current* code via `bash` (clone the repo, grep it, read it) or the `github` MCP tool (fetch the relevant file) — not asserted from DeepWiki alone. If you genuinely cannot verify a DeepWiki-sourced claim against real code, phrase it tentatively ("per DeepWiki, which may be out of date …") and say what would confirm it, rather than stating it as established.
 
 This does not change your permissions: DeepWiki is an additional read-only external tool. Your write surface is unchanged (read-only job plus the scoped safe-outputs above).
 
