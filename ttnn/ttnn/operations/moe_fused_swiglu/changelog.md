@@ -1921,3 +1921,60 @@ chunk-major precisely to make a chunk contiguous. That is the trade the next rou
 
 - **Perf achieved**: none. Default measured unchanged (100 627 / 146 157 / 246 443).
 - **Tests**: golden 45/45; the knob is inert at its default.
+
+---
+
+## Perf 10 — the bank-run coalescing + remap is a NET NEGATIVE. `WRUN` ships at 1.
+
+- **Date**: 2026-08-01
+- **Scope**: perf. `MOE_SWIGLU_WRUN` default **8 -> 1**. Golden 45/45, unit 109/110 (the one failure,
+  `test_perfexp_reader_head_scheduling`, reproduces on the stashed tree).
+
+Perf 9 concluded the op is RISC-issue bound and predicted the lever was FEWER NoC commands. The
+obvious way to price a command is to add commands without changing bytes: sweep `WRUN`, the
+bank-contiguous run length. The prediction was that `WRUN=1` (one transaction per tile, ~2x the
+commands) would be much slower.
+
+**It is FASTER.** bf16_rm count 256: `WRUN` 1 / 2 / 4 / 8 = **133 036** / 153 388 / 147 637 / ~146 400.
+
+`remap` is gated on `WRUN > 1`, so `WRUN=1` switches off the N-axis bank remap as well as the
+coalescing — and the pair together is a net negative. Two full guard-set samples, means:
+
+| cell | `WRUN=8` | `WRUN=1` | delta |
+|---|---|---|---|
+| bf16_rm 128 | 98 433 | 101 913 | **+3.5 %** |
+| **bf16_rm 256** | 146 648 | **136 143** | **-7.2 %** |
+| **bf16_rm 512** | 243 754 | **234 790** | **-3.7 %** |
+| bf16_rm cap1024 256 | 145 350 | 135 014 | **-7.1 %** |
+| bf16_rm emb6144 256 | 130 086 | 121 828 | **-6.3 %** |
+| bf16_rm 5120 | 2 003 063 | 1 996 432 | -0.3 % |
+| bfp8 128 | 97 430 | 97 561 | +0.1 % |
+| bfp8 256 | 131 081 | 131 755 | +0.5 % |
+| **bfp8 512** | 232 337 | **222 990** | **-4.0 %** |
+| bfp8 cap1024 256 | 138 610 | 128 924 | **-7.0 %** |
+| bfp8 emb6144 256 | 114 476 | 115 536 | +0.9 % |
+| bfp8 5120 | 1 869 101 | 1 882 628 | +0.7 % |
+
+**Six cells 3.7-7.2 % faster including BOTH worst-gap cells, four flat, one real loss** — bf16_rm
+count 128 at +3.5 %, which is about the size of that cell's own run-to-run band (97 986..100 627
+measured on the shipped binary across three runs). Shipped on the aggregate.
+
+**Why, and why Perf 9's prediction inverted.** The remap buys DRAM-side locality (bank-contiguous
+runs, 2-tile transactions) and pays for it in NoC command count and in *which* core hits *which* bank
+*when*. Perf 4's trace showed per-channel bytes balanced within 4 % **over the whole op** — that says
+nothing about temporal balance, and the remap deliberately concentrates a core's reads on one bank at
+a time. Removing it trades aggregate locality for temporal spread, and at these shapes the spread
+wins. The RISC-issue reading is not refuted (it explains the `WD_AHEAD`, trid and `GU_CHUNKS`
+results) but it is **not the only term**, and Perf 9 over-generalised from it: command count and
+bank-hit pattern move in opposite directions here, and the second is larger.
+
+**A methodology note worth as much as the win.** This measurement was run to CONFIRM a theory and it
+refuted it. The theory had already been used, in the same round, to explain five prior results. Every
+one of those explanations survives, but the prediction it made about `WRUN` was wrong — which is why
+the sweep was worth running even though the outcome looked certain.
+
+- **Perf achieved**: bf16_rm **101 913 / 136 143 / 234 790** at 88 cores (targets 91 800 / 108 000 /
+  161 816; gaps 11.0 % / 26.1 % / 45.1 %). Against the session's starting point of
+  111 536 / 153 761 / 254 542 that is **-8.6 % / -11.5 % / -7.8 %**. Targets still not met.
+- **Accuracy**: unchanged. The remap moves which address a core reads, not what is computed; golden
+  PCC gate passes on all 45 cells and the three structural debug tests are the sharp check.

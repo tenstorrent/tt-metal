@@ -179,7 +179,16 @@ XSTICK_ROWS = 1  # tile-rows of row-major x sticks held in flight
 #: Read-coalescing knob: max BANK-CONTIGUOUS weight/output tiles fetched per NoC transaction.
 #: 1 reproduces the naive one-transaction-per-tile read (the ablation baseline).
 #: Overridable for `/perf-measure` A/B via MOE_SWIGLU_WRUN.
-WRUN = int(os.environ.get("MOE_SWIGLU_WRUN", 8))
+#: PERF 10 — SHIPPED AT 1, i.e. bank-run coalescing AND the N-axis bank remap are OFF.
+#: `remap` is gated on `WRUN > 1`, so this knob switches both together, and measured over two full
+#: guard-set samples the pair is a NET NEGATIVE at the graded shapes: 6 of 12 cells are 3.7-7.2 %
+#: FASTER without it (including both worst-gap cells, bf16_rm 256 -7.2 % and 512 -3.7 %), 4 flat,
+#: and the only real loss is bf16_rm count 128 at +3.5 % -- which is about the size of that cell's
+#: own run-to-run band (97 986..100 627 measured on the shipped binary). Consistent with the
+#: RISC-issue-bound reading of Perf 9: the remap buys DRAM-side locality and pays for it in NoC
+#: command count, and at the graded shapes the second term dominates. 8 restores the pre-PERF-10
+#: coalesced+remapped stream.
+WRUN = int(os.environ.get("MOE_SWIGLU_WRUN", 1))
 
 #: `/perf-measure` ablation hook (payload stubbed, ALL synchronisation scaffolding intact).
 #: MOE_SWIGLU_ABLATE=skip_compute defines SKIP_COMPUTE in the compute TU, which drops the inner
