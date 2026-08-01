@@ -11,15 +11,14 @@ namespace ttnn::operations::experimental::deepseek::hyperconnection {
 
 namespace {
 
-void validate_tensors(const FusedPrePostInputs& tensor_args) {
-    const auto& pre_w = tensor_args.pre_w;
-    const auto& post_w = tensor_args.post_w;
+void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostInputs& tensor_args) {
+    const auto& fused_w = tensor_args.fused_w;
     const auto& pre_bias = tensor_args.pre_bias;
     const auto& post_bias = tensor_args.post_bias;
     const auto& hidden_streams = tensor_args.hidden_streams;
 
-    TT_FATAL(pre_w.storage_type() == StorageType::DEVICE, "fused_hyperconnection_pre_post: pre_w must be on device");
-    TT_FATAL(post_w.storage_type() == StorageType::DEVICE, "fused_hyperconnection_pre_post: post_w must be on device");
+    TT_FATAL(
+        fused_w.storage_type() == StorageType::DEVICE, "fused_hyperconnection_pre_post: fused_w must be on device");
     TT_FATAL(
         pre_bias.storage_type() == StorageType::DEVICE, "fused_hyperconnection_pre_post: pre_bias must be on device");
     TT_FATAL(
@@ -28,15 +27,13 @@ void validate_tensors(const FusedPrePostInputs& tensor_args) {
         hidden_streams.storage_type() == StorageType::DEVICE,
         "fused_hyperconnection_pre_post: hidden_streams must be on device");
 
-    TT_FATAL(pre_w.layout() == Layout::TILE, "fused_hyperconnection_pre_post: pre_w must be TILE layout");
-    TT_FATAL(post_w.layout() == Layout::TILE, "fused_hyperconnection_pre_post: post_w must be TILE layout");
+    TT_FATAL(fused_w.layout() == Layout::TILE, "fused_hyperconnection_pre_post: fused_w must be TILE layout");
     TT_FATAL(pre_bias.layout() == Layout::TILE, "fused_hyperconnection_pre_post: pre_bias must be TILE layout");
     TT_FATAL(post_bias.layout() == Layout::TILE, "fused_hyperconnection_pre_post: post_bias must be TILE layout");
     TT_FATAL(
         hidden_streams.layout() == Layout::TILE, "fused_hyperconnection_pre_post: hidden_streams must be TILE layout");
 
-    TT_FATAL(pre_w.dtype() == DataType::BFLOAT16, "fused_hyperconnection_pre_post: pre_w must be BFLOAT16");
-    TT_FATAL(post_w.dtype() == DataType::BFLOAT16, "fused_hyperconnection_pre_post: post_w must be BFLOAT16");
+    TT_FATAL(fused_w.dtype() == DataType::BFLOAT16, "fused_hyperconnection_pre_post: fused_w must be BFLOAT16");
     TT_FATAL(pre_bias.dtype() == DataType::BFLOAT16, "fused_hyperconnection_pre_post: pre_bias must be BFLOAT16");
     TT_FATAL(post_bias.dtype() == DataType::BFLOAT16, "fused_hyperconnection_pre_post: post_bias must be BFLOAT16");
     TT_FATAL(
@@ -44,112 +41,127 @@ void validate_tensors(const FusedPrePostInputs& tensor_args) {
         "fused_hyperconnection_pre_post: hidden_streams must be BFLOAT16");
 
     TT_FATAL(
-        pre_w.logical_shape() == post_w.logical_shape(),
-        "fused_hyperconnection_pre_post: pre_w and post_w must have the same shape");
-    TT_FATAL(
         pre_bias.logical_shape() == post_bias.logical_shape(),
         "fused_hyperconnection_pre_post: pre_bias and post_bias must have the same shape");
 
-    const auto& pre_shape = pre_w.logical_shape();
+    const uint32_t hc = attributes.num_streams;
+    const auto& fused_shape = fused_w.logical_shape();
     const auto& bias_shape = pre_bias.logical_shape();
     const auto& hidden_shape = hidden_streams.logical_shape();
+
     TT_FATAL(
-        pre_shape.rank() == 4,
-        "fused_hyperconnection_pre_post: pre_w must be rank-4 [1,1,T,H], got rank {}",
-        pre_shape.rank());
+        fused_shape.rank() == 4,
+        "fused_hyperconnection_pre_post: fused_w must be rank-4 [1,1,T,(2+H)*H], got rank {}",
+        fused_shape.rank());
+    TT_FATAL(
+        fused_shape[0] == 1 && fused_shape[1] == 1, "fused_hyperconnection_pre_post: fused_w must be [1,1,T,(2+H)*H]");
+    // Decode-only fused op: a single token (T == 1).
+    TT_FATAL(
+        fused_shape[2] == 1,
+        "fused_hyperconnection_pre_post: only T==1 (decode) is supported, got T={}",
+        fused_shape[2]);
+    TT_FATAL(
+        fused_shape[-1] == (2 + hc) * hc,
+        "fused_hyperconnection_pre_post: fused_w last dim must be (2+H)*H = {}, got {}",
+        (2 + hc) * hc,
+        fused_shape[-1]);
+
     TT_FATAL(
         bias_shape.rank() == 4,
         "fused_hyperconnection_pre_post: pre_bias must be rank-4 [1,1,1,H], got rank {}",
         bias_shape.rank());
     TT_FATAL(
-        hidden_shape.rank() == 4,
-        "fused_hyperconnection_pre_post: hidden_streams must be rank-4 [1,1,H,D], got rank {}",
-        hidden_shape.rank());
-    TT_FATAL(pre_shape[0] == 1 && pre_shape[1] == 1, "fused_hyperconnection_pre_post: pre_w must be [1,1,T,H]");
-    // Decode-only fused op: a single token (T == 1) so the stream collapse is a [1,H] x [H,D] matmul.
-    TT_FATAL(
-        pre_shape[2] == 1, "fused_hyperconnection_pre_post: only T==1 (decode) is supported, got T={}", pre_shape[2]);
-    TT_FATAL(
         bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1,
         "fused_hyperconnection_pre_post: pre_bias must be [1,1,1,H]");
     TT_FATAL(
-        pre_shape[-1] == bias_shape[-1],
-        "fused_hyperconnection_pre_post: pre_w and pre_bias last dim must match ({} vs {})",
-        pre_shape[-1],
+        bias_shape[-1] == hc,
+        "fused_hyperconnection_pre_post: pre_bias last dim must be H={}, got {}",
+        hc,
         bias_shape[-1]);
+
+    TT_FATAL(
+        hidden_shape.rank() == 4,
+        "fused_hyperconnection_pre_post: hidden_streams must be rank-4 [1,1,H,D], got rank {}",
+        hidden_shape.rank());
     TT_FATAL(
         hidden_shape[0] == 1 && hidden_shape[1] == 1,
         "fused_hyperconnection_pre_post: hidden_streams must be [1,1,H,D] (decode, T==1)");
     TT_FATAL(
-        hidden_shape[2] == pre_shape[-1],
+        hidden_shape[2] == hc,
         "fused_hyperconnection_pre_post: hidden_streams stream dim ({}) must match H ({})",
         hidden_shape[2],
-        pre_shape[-1]);
+        hc);
+    TT_FATAL(hc <= 32, "fused_hyperconnection_pre_post: only H<=32 (single comb tile) is supported, got H={}", hc);
 }
 
 }  // namespace
 
 void FusedPrePostDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(tensor_args);
-    (void)attributes;
+    validate_tensors(attributes, tensor_args);
 }
 
 void FusedPrePostDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(tensor_args);
-    (void)attributes;
+    validate_tensors(attributes, tensor_args);
 }
 
 FusedPrePostDeviceOperation::spec_return_value_t FusedPrePostDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& post_w = tensor_args.post_w;
+    const auto& fused_w = tensor_args.fused_w;
     const auto& hidden_streams = tensor_args.hidden_streams;
+    const uint32_t hc = operation_attributes.num_streams;
     const auto output_layout = tt::tt_metal::TensorLayout(
-        post_w.dtype(), tt::tt_metal::PageConfig(post_w.layout()), operation_attributes.output_mem_config);
+        fused_w.dtype(), tt::tt_metal::PageConfig(fused_w.layout()), operation_attributes.output_mem_config);
 
-    // post = 2 * sigmoid(post_w * post_scale + post_bias), shape [1,1,1,H] (same as post_w).
+    // post = 2 * sigmoid(post_w * post_scale + post_bias), shape [1,1,1,H] (same as pre/post bias H).
     // collapsed = pre[1,H] @ hidden[H,D] -> [1,1,1,D].
+    // comb_w_mat = comb_w slice of fused_w, laid out as [1,1,H,H] (single tile).
     const auto& hidden_shape = hidden_streams.logical_shape();
+    const ttnn::Shape post_shape({1, 1, 1, hc});
     const ttnn::Shape collapsed_shape({1, 1, 1, hidden_shape[-1]});
+    const ttnn::Shape comb_shape({1, 1, hc, hc});
     return {
-        tt::tt_metal::TensorSpec(post_w.logical_shape(), output_layout),
-        tt::tt_metal::TensorSpec(collapsed_shape, output_layout)};
+        tt::tt_metal::TensorSpec(post_shape, output_layout),
+        tt::tt_metal::TensorSpec(collapsed_shape, output_layout),
+        tt::tt_metal::TensorSpec(comb_shape, output_layout)};
 }
 
 FusedPrePostDeviceOperation::tensor_return_value_t FusedPrePostDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto specs = compute_output_specs(operation_attributes, tensor_args);
+    auto* device = tensor_args.fused_w.device();
     return {
-        create_device_tensor(specs[0], tensor_args.post_w.device()),
-        create_device_tensor(specs[1], tensor_args.hidden_streams.device())};
+        create_device_tensor(specs[0], device),
+        create_device_tensor(specs[1], device),
+        create_device_tensor(specs[2], device)};
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::hyperconnection
 
 namespace ttnn::prim {
 
-std::array<Tensor, 2> fused_hyperconnection_pre_post(
-    const Tensor& pre_w,
-    const Tensor& post_w,
+std::array<Tensor, 3> fused_hyperconnection_pre_post(
+    const Tensor& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
     const Tensor& hidden_streams,
+    uint32_t num_streams,
     float pre_scale,
     float post_scale,
     float eps,
     const std::optional<MemoryConfig>& memory_config) {
     using OperationType = ttnn::operations::experimental::deepseek::hyperconnection::FusedPrePostDeviceOperation;
-    const MemoryConfig output_mem_config = memory_config.value_or(pre_w.memory_config());
+    const MemoryConfig output_mem_config = memory_config.value_or(fused_w.memory_config());
     auto operation_attributes = OperationType::operation_attributes_t{
+        .num_streams = num_streams,
         .pre_scale = pre_scale,
         .post_scale = post_scale,
         .eps = eps,
         .output_mem_config = output_mem_config,
     };
     auto tensor_args = OperationType::tensor_args_t{
-        .pre_w = pre_w,
-        .post_w = post_w,
+        .fused_w = fused_w,
         .pre_bias = pre_bias,
         .post_bias = post_bias,
         .hidden_streams = hidden_streams,
