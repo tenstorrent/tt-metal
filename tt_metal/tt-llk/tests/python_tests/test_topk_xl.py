@@ -336,14 +336,12 @@ def test_topk_xl(K, num_chunks, partial_tail):
 # Distinct values spanning negatives and positives: the top-K are the largest
 # (positive) values, so negatives must sort below them. Exercises bf16 sign
 # handling under the INT32 SFPSWAP compare.
-@parametrize(
-    K=[512, 1024, 2048],
-    num_chunks=[2],
-)
+@parametrize(K=[512, 1024, 2048])
 @skip_for_wormhole
 @skip_for_quasar
-def test_topk_xl_signed(K, num_chunks):
-    num_rows = 1
+def test_topk_xl_signed(K):
+    (K,) = K
+    num_rows, num_chunks = 1, 2
     tail_elements = K  # full chunks, no padding
 
     src_A, rows = _build_input(K, num_chunks, tail_elements, num_rows, "signed")
@@ -354,14 +352,12 @@ def test_topk_xl_signed(K, num_chunks):
 
 # Random bf16, so ties are likely. The tie-break makes the chosen indices
 # ambiguous, so validate K distinct indices + the top-K value multiset only.
-@parametrize(
-    K=[512, 1024, 2048],
-    num_chunks=[2],
-)
+@parametrize(K=[512, 1024, 2048])
 @skip_for_wormhole
 @skip_for_quasar
-def test_topk_xl_ties(K, num_chunks):
-    num_rows = 1
+def test_topk_xl_ties(K):
+    (K,) = K
+    num_rows, num_chunks = 1, 2
     tail_elements = K  # full chunks, no padding: all lanes finite
 
     src_A, rows = _build_input(K, num_chunks, tail_elements, num_rows, "random")

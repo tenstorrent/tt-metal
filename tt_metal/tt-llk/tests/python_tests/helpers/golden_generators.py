@@ -4567,21 +4567,14 @@ class TopKXLGolden:
     Args:
         rows: float tensor [num_rows, search_len] of the per-row values.
         K: number of top elements per row.
-        sort_direction: Descending -> largest first (the direction the op uses).
     Returns:
         indices: sorted int64 tensor [num_rows, K] of the top-K row-major positions.
     """
 
-    def __call__(
-        self,
-        rows,
-        K,
-        sort_direction: TopKSortDirection = TopKSortDirection.Descending,
-    ):
+    def __call__(self, rows, K):
         if not isinstance(rows, torch.Tensor):
             rows = torch.tensor(rows)
-        largest = sort_direction == TopKSortDirection.Descending
-        _, indices = torch.topk(rows.float(), K, dim=-1, largest=largest, sorted=True)
+        _, indices = torch.topk(rows.float(), K, dim=-1, largest=True, sorted=True)
         return indices
 
 
