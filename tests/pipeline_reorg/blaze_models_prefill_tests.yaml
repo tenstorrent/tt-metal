@@ -350,6 +350,25 @@
   team: models
   sp_config: sc1
 
+- name: "Blaze - high_bw_all_gather CCL perf and accuracy"
+  # A focused 8x1 Blackhole-Galaxy Fabric2D torus gate. The test measures
+  # 55K and 512K global-row targets, then validates gathered output exactly.
+  cmd: |
+    export MESH_DEVICE=TG
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q
+    '
+  test_type: high_bw_all_gather_perf
+  test_group: sdpa_perf
+  skus:
+    bh_sc1:
+      timeout: 10
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  sp_config: sc1
+
 - name: "Blaze - Chunked Kimi (code_debug 55k)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to

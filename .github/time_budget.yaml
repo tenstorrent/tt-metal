@@ -121,6 +121,8 @@ ttnn:
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+  demo:
+    bh_sc1: 10
   # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
   # workflows.
   sweep:
