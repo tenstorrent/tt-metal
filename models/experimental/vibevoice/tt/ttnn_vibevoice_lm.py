@@ -1119,13 +1119,17 @@ class TTVibeVoiceLM:
         gateup_mc = ttnn.L1_MEMORY_CONFIG if ((S == 1 and B == 2) or S > 1) else ttnn.DRAM_MEMORY_CONFIG
         gate = ttnn.linear(x, layer_w.w1, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
         up = ttnn.linear(x, layer_w.w3, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
-        gate = ttnn.silu(gate, memory_config=gateup_mc)
         # Place the SwiGLU product (down_proj's in0) in L1 for decode: down_proj is the biggest LM
         # matmul (K=8960, 24 cores, ~45% DRAM BW) and reads in0 faster from L1 (151 -> 134 µs at
         # B=2, 1.13x).  Placement only — same in0_block_w K-reduction, so byte-identical
         # (maxabsdiff==0).  Prefill (S>1) keeps DRAM.
         hidden_mc = ttnn.L1_MEMORY_CONFIG if S == 1 else ttnn.DRAM_MEMORY_CONFIG
-        hidden = ttnn.mul(gate, up, memory_config=hidden_mc)
+        # silu folded into the product as an in0 activation, dropping the standalone unary op
+        # (28 calls/frame).  Measured maxabsdiff==0 vs `mul(silu(gate), up)` — the fused form
+        # still rounds the activation to the operand dtype before the multiply.  Only worth
+        # ~0.01 ms/frame here (the SFPU work moves rather than disappears); the diffusion-head
+        # sibling in ttnn_diffusion_head.py is the one that actually pays.
+        hidden = ttnn.mul(gate, up, memory_config=hidden_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         out = ttnn.linear(
             hidden,
             layer_w.w2,
