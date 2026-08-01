@@ -2285,21 +2285,28 @@ extern "C" void __emule_fabric_set_route_dir(
 // Carry a stamped route from a source header address to a destination when the header bytes are copied
 // (a worker staging a packet header into a forwarder relay slot). On silicon the routing fields ride inside
 // the header, so a byte copy carries them for free; emule keeps them in the address-keyed side-table, so the
-// copy must replicate the entry. No-op when src carries no route. src_key/dst_key are 0-based L1 offsets
-// (the fabric shim passes bridge_l1-relative offsets); widen through emule_route_key to match the set/read
-// sides. See tt-emule docs/fabric-ccl-emulation.md.
-extern "C" void __emule_fabric_route_follow(uint32_t src_key, uint32_t dst_key) {
-    emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
+// copy must replicate the entry. No-op when src carries no route. src_key/dst_key are FULL host-pointer
+// values (bridge_l1 + offset) in the same key space as the set/read sides — NOT bridge_l1-relative uint32
+// offsets (see the ABI note in the body for why the widening was removed). See tt-emule
+// docs/fabric-ccl-emulation.md.
+extern "C" void __emule_fabric_route_follow(uint64_t src_key, uint64_t dst_key) {
+    // src_key/dst_key are FULL host-pointer values (bridge_l1 + offset) — the same key space as
+    // emule_route_key and the set + teleport-read sides. They MUST be full 64-bit pointers, not
+    // bridge_l1-relative uint32 offsets: a forwarder's relay slot lives on a DIFFERENT core whose L1
+    // mmap can be >4 GB from the writer's bridge_l1, so (dst - writer_bridge_l1) overflows uint32 and
+    // mis-keys the copy → the forwarder's teleport lookup misses → kind UNSET → wrong-neighbor route
+    // → many-to-one converge deadlock (reduce_to_one column dimension). See tt-emule
+    // docs/fabric-ccl-emulation.md.
     if (src_key == dst_key) {
         return;
     }
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
-    auto it = g_route_meta.find(emule_route_key(src_key));
+    auto it = g_route_meta.find(src_key);
     if (it == g_route_meta.end()) {
         return;  // src carries no route — not a packet-header copy; nothing to follow.
     }
     const EmuleRoute r = it->second;  // copy before the insert below can rehash/invalidate `it`.
-    g_route_meta[emule_route_key(dst_key)] = r;
+    g_route_meta[dst_key] = r;
 }
 
 // Fabric connection routes recorded host-side by append_fabric_connection_rt_args: for 1D the dst chip is
