@@ -316,16 +316,16 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
 }  // end namespace local_test_functions
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileBankedL1ReaderOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, false));
+        EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, false));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        auto num_banks = device->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_banks % 2 == 0, "Number of banks ({}) must be even for this test", num_banks);
         size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
@@ -333,7 +333,7 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderOnly) {
         uint32_t index = 0;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, false));
+            EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, false));
             num_tiles += tile_increment;
             index++;
         }
@@ -341,18 +341,18 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderOnly) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileBankedDramReaderOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
         test_config.output_buffer_type = BufferType::DRAM;
-        EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, false));
+        EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, false));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
+        auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
         size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 6;
@@ -361,7 +361,7 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderOnly) {
         test_config.output_buffer_type = BufferType::DRAM;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, false));
+            EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, false));
             num_tiles += tile_increment;
             index++;
         }
@@ -369,16 +369,16 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderOnly) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileBankedL1WriterOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, false, true));
+        EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, false, true));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1WriterOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        auto num_banks = device->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_banks % 2 == 0, "Number of banks ({}) must be even for this test", num_banks);
         size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
@@ -386,7 +386,7 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1WriterOnly) {
         uint32_t index = 0;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, false, true));
+            EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, false, true));
             num_tiles += tile_increment;
             index++;
         }
@@ -394,18 +394,18 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1WriterOnly) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileBankedDramWriterOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
         test_config.output_buffer_type = BufferType::DRAM;
-        EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, false, true));
+        EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, false, true));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramWriterOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
+        auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
         size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 6;
@@ -414,7 +414,7 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramWriterOnly) {
         test_config.output_buffer_type = BufferType::DRAM;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, false, true));
+            EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, false, true));
             num_tiles += tile_increment;
             index++;
         }
@@ -422,22 +422,22 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramWriterOnly) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileBankedL1ReaderAndWriter) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true));
+        EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, true));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndWriter) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        size_t num_tiles = device->allocator()->get_num_banks(BufferType::L1);
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true));
+            EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, true));
             num_tiles += tile_increment;
             index++;
         }
@@ -445,18 +445,18 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndWriter) 
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileBankedDramReaderAndWriter) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
         test_config.output_buffer_type = BufferType::DRAM;
-        EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true));
+        EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, true));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderAndWriter) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        size_t num_tiles = device->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Number of tiles ({}) must be even for this test", num_tiles);
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
@@ -465,7 +465,7 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderAndWriter
         test_config.output_buffer_type = BufferType::DRAM;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true));
+            EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, true));
             num_tiles += tile_increment;
             index++;
         }
@@ -473,26 +473,26 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderAndWriter
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileBankedDramReaderAndL1Writer) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
-        EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true));
+        EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, true));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderAndL1Writer) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
 
-        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        size_t num_tiles = device->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Number of tiles ({}) must be even for this test", num_tiles);
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true));
+            EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, true));
             num_tiles += tile_increment;
             index++;
         }
@@ -500,26 +500,26 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderAndL1Writ
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileBankedL1ReaderAndDramWriter) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
         test_config.output_buffer_type = BufferType::DRAM;
-        EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true));
+        EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, true));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndDramWriter) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
         test_config.output_buffer_type = BufferType::DRAM;
 
-        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        size_t num_tiles = device->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Number of tiles ({}) must be even for this test", num_tiles);
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true));
+            EXPECT_TRUE(local_test_functions::reader_cb_writer(device, test_config, true, true));
             num_tiles += tile_increment;
             index++;
         }
@@ -527,17 +527,17 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndDramWrit
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        size_t num_tiles = device->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Number of tiles ({}) must be even for this test", num_tiles);
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
-        test_config.logical_core = this->devices_.at(id)->allocator()->get_logical_core_from_bank_id(0);
+        test_config.logical_core = device->allocator()->get_logical_core_from_bank_id(0);
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config));
+            EXPECT_TRUE(local_test_functions::reader_datacopy_writer(device, test_config));
             num_tiles += tile_increment;
             index++;
         }
@@ -545,9 +545,9 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyL1W
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyDramWriter) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
+        size_t num_tiles = device->allocator()->get_num_banks(BufferType::DRAM);
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
@@ -555,7 +555,7 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyD
         test_config.output_buffer_type = BufferType::DRAM;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config));
+            EXPECT_TRUE(local_test_functions::reader_datacopy_writer(device, test_config));
             num_tiles += tile_increment;
             index++;
         }
@@ -563,19 +563,19 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyD
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyDramWriter) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        size_t num_tiles = device->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Number of tiles ({}) must be even for this test", num_tiles);
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
-        test_config.logical_core = this->devices_.at(id)->allocator()->get_logical_core_from_bank_id(0);
+        test_config.logical_core = device->allocator()->get_logical_core_from_bank_id(0);
         test_config.input_buffer_type = BufferType::L1;
         test_config.output_buffer_type = BufferType::DRAM;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config));
+            EXPECT_TRUE(local_test_functions::reader_datacopy_writer(device, test_config));
             num_tiles += tile_increment;
             index++;
         }
@@ -583,9 +583,9 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyDra
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyL1Writer) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         BankedConfig test_config;
-        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        size_t num_tiles = device->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Number of tiles ({}) must be even for this test", num_tiles);
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
@@ -594,7 +594,7 @@ TEST_F(MeshDeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyL
         test_config.output_buffer_type = BufferType::L1;
         while (index < num_iterations) {
             test_config.update_num_tiles(num_tiles);
-            EXPECT_TRUE(local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config));
+            EXPECT_TRUE(local_test_functions::reader_datacopy_writer(device, test_config));
             num_tiles += tile_increment;
             index++;
         }

@@ -1,26 +1,39 @@
 # Quasar emulator regression tests
 #
 # Structure:
-#   <group>:            Binary name under build/test/tt_metal/
-#     - filter: <glob>  GTest filter pattern
-#       config: <config>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3 and 2x3_DISPATCH
-#       env:            (optional) Extra environment variables as key: value pairs
-#       gtest_repeat:   (optional) Run each matched test N times (--gtest_repeat=N)
-#       back2back:      (optional) When true, run this entry in the same gtest process as
-#                       other consecutive back2back entries that share the same group,
-#                       config, env, and gtest_repeat. Used by run_quasar_regression.sh.
-#                       Defaults to false (each entry runs in its own process).
+#   <group>:              gtest binary under build/test/tt_metal/, or pytest file path
+#                         relative to TT_METAL_HOME
+#     - filter: <pattern> gtest filter glob, or pytest node id after :: (e.g. test_foo)
+#       config: <config>  Simulator grid (emu-quasar-<config>): 1x3, 2x3, 2x3_DISPATCH
+#       runner: <type>    (optional) gtest (default) or pytest
+#       env:              (optional) Extra environment variables as key: value pairs
+#       gtest_repeat:     (optional, gtest only) --gtest_repeat=N
+#       back2back:        (optional, gtest only) When true, run this entry in the same
+#                         process as other consecutive back2back entries that share the
+#                         same group, config, env, and gtest_repeat. Used by
+#                         run_quasar_regression.sh. Defaults to false.
+#                         Illegal for runner: pytest.
 #
-# Example test entry
+# Example gtest entry
 #
 # unit_tests_legacy:
 #   - filter: "*SingleDmL1Write*"
 #     config: 1x3
 #     env:
 #       TT_METAL_SOMETHING: 1
+#
+# Example pytest entry
+#
+# tests/tt_metal/tools/profiler/test_device_profiler.py:
+#   - filter: test_custom_cycle_count
+#     runner: pytest
+#     config: 2x3_DISPATCH
+#     env:
+#       TT_METAL_DEVICE_PROFILER: 1
+
 
 unit_tests_legacy:
-# 1x3 tests run back-to-back
+# 1x3 tests
   - filter: "*SingleDmL1Write*"
     config: 1x3
     back2back: true
@@ -33,80 +46,82 @@ unit_tests_legacy:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*QuasarComputeKernelSingleThread*"
+  - filter: "*MeshDeviceSingleCardFixture.Bmm"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# 2x3 tests
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# Fast dispatch on worker cores - target device with not dispatch engine
+  - filter: "*SingleDmL1Write*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_TENSIX_DISPATCH_CORES: 1
+
+  - filter: "*QuasarMultiCQMeshDeviceSingleCardFixture*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_TENSIX_DISPATCH_CORES: 1
+
+# Fast Dispatch (Dispatch Engine) tests
+  - filter: "*SingleDmL1Write*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*DmLoopback*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarComputeKernelSingleThread*"
+    config: 2x3_DISPATCH
+    back2back: true
 
   - filter: "*QuasarComputeKernelMultipleThread*"
-    config: 1x3
+    config: 2x3_DISPATCH
     back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
-    config: 1x3
+    config: 2x3_DISPATCH
     back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarMeshDeviceSingleCardFixture*GlobalsAndTLS"
-    config: 1x3
+    config: 2x3_DISPATCH
     back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS*"
-    config: 1x3
+    config: 2x3_DISPATCH
     back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
+    # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
   #   config: 1x3
   #   back2back: true
   #   env:
-  #     TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*Bmm"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-# 2x3 tests run back-to-back
-  - filter: "*SingleDmL1Write*"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*MultiDmAddTwoInts*"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-# 2x3_DISPATCH tests run back-to-back
-  - filter: "*SingleDmL1Write*"
-    config: 2x3_DISPATCH
-    back2back: true
 
   - filter: "*MultiDmAddTwoInts*"
     config: 2x3_DISPATCH
     back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*MeshDeviceSingleCardFixture.Bmm"
+    config: 2x3_DISPATCH
+    back2back: true
 
 unit_tests_debug_tools:
-  - filter: "*WatcherAssertTests*DM2"
+  - filter: "*WatcherAssertTests*/DM2"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*WatcherAssertTests*DM7"
+  - filter: "*WatcherAssertTests*/DM7"
     config: 1x3
     back2back: true
     env:
@@ -184,25 +199,14 @@ unit_tests_debug_tools:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
+# Dispatch Engine tests
+  - filter: "*WatcherAssertTests*/DispatchDM2"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
 unit_tests_api:
-  - filter: "*QuasarCRTASharedL1Address*"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*QuasarCRTAUniqueL1Addresses*"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
   - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S_2_0/ImplicitSyncTrue"
     config: 1x3
     back2back: true
@@ -336,9 +340,35 @@ unit_tests_api:
   #   env:
   #     TT_METAL_SLOW_DISPATCH_MODE: 1
 
+# Fast Dispatch (Dispatch Engine) tests
+  - filter: "*QuasarCRTASharedL1Address*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarCRTAUniqueL1Addresses*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
+    config: 2x3_DISPATCH
+    back2back: true
+
 unit_tests_device:
   - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
+
+unit_tests_dispatch:
+# Verify dispatch_s is running when running fast dispatch on worker cores
+  - filter: '*QuasarDispatchSInstantiatedAndRunning*'
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_TENSIX_DISPATCH_CORES: 1
+
+# Verify dispatch_s is running when running fast dispatch on dispatch engines
+  - filter: "*QuasarDispatchSInstantiatedAndRunning*"
+    config: 2x3_DISPATCH
+    back2back: true

@@ -239,7 +239,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, APPROX_MODE>(DST_INDEX + i, sfpu_format);
+                    test_utils::call_unary_sfpu_operation_quasar<
+                        SFPU_UNARY_OPERATION,
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        APPROX_MODE,
+                        SFPU_ITERATIONS,
+                        TYPECAST_IN_FORMAT,
+                        TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_format);
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
