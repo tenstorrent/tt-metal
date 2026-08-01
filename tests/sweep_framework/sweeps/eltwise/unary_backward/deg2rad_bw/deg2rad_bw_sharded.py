@@ -100,7 +100,7 @@ def run(
     )(input_shape)
 
     torch_input_tensor.requires_grad = True
-    golden_function = ttnn.get_golden_function(ttnn.rad2deg_bw)
+    golden_function = ttnn.get_golden_function(ttnn.deg2rad_bw)
     torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor)[0]
 
     grad_tensor = ttnn.from_torch(
@@ -120,7 +120,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.rad2deg_bw(grad_tensor, input_tensor, memory_config=sharded_config)[0]
+    output_tensor = ttnn.deg2rad_bw(grad_tensor, input_tensor, memory_config=sharded_config)[0]
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
