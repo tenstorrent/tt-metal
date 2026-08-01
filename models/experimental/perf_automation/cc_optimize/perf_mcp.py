@@ -2616,21 +2616,22 @@ def _signpost_blocks(seq: list) -> int:
     return m + 1
 
 
-def _signposts_agree(seq: list) -> bool:
-    sp = _signpost_blocks(seq)
-    op = _infer_block_count(
-        _C_counts([s for s in seq or [] if not (isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX))])
-    )
-    if sp <= 1 or op <= 1:
+def _signposts_usable(seq: list) -> bool:
+    """Are there signposts to read? See cc_optimize.run._signposts_usable -- a histogram of op
+    repetition counts EXECUTIONS and cannot audit a stack tagged by identity."""
+    idx = [i for i, t in enumerate(seq or []) if isinstance(t, str) and t.startswith(_SIGNPOST_PREFIX)]
+    if len({seq[i] for i in idx}) <= 1:
         return False
-    lo, hi = sorted((sp, op))
-    return lo / hi >= float(os.environ.get("PERF_MCP_SIGNPOST_AGREE_RATIO", "0.8"))
+    # DECOUPLED SIGNPOSTS ARE NOT SIGNPOSTS. A stack whose markers all land in a clump -- typically
+    # trailing the ops entirely -- delimits nothing: every op would attribute to block 0. Presence is
+    # necessary, interleaving is what makes them usable.
+    return any(isinstance(t, str) and not t.startswith(_SIGNPOST_PREFIX) for t in (seq or [])[idx[0] :])
 
 
 def _block_starts(sequence: list, n_blocks: int | None = None) -> tuple:
     seq = sequence or []
     sp = [i for i, s in enumerate(seq) if isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX)]
-    if sp and _signposts_agree(seq):
+    if sp and _signposts_usable(seq):
         return sp, "signposts"
     if n_blocks is None:
         n_blocks = _infer_block_count(_C_counts(seq))

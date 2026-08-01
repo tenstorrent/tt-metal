@@ -88,7 +88,9 @@ def test_o1_the_old_order_would_have_called_it(monkeypatch):
     the ladder unreachable. Under the OLD order this input returned the ladder's 4, not signposts."""
     m = _run()
     seq = _seq(6)
-    assert m._signposts_agree(seq), "fixture must have usable signposts"
+    # renamed from _signposts_agree: the gate no longer cross-checks a histogram, it asks whether
+    # usable signposts exist at all. See test_signposts_are_not_audited_by_a_histogram.py.
+    assert m._signposts_usable(seq), "fixture must have usable signposts"
     ladder_only = m._measure_cov  # untouched reference; the real function still exists
     assert callable(ladder_only)
 

@@ -1011,29 +1011,33 @@ def _signpost_entries(seq) -> int:
     return sum(1 for t in seq or [] if isinstance(t, str) and t.startswith(_SIGNPOST_TOKEN))
 
 
-def _signposts_agree(seq) -> bool:
-    """Do the signposts and the op-repetition estimator describe the same execution?
+def _signposts_usable(seq) -> bool:
+    """Are there signposts to read? That is the ONLY question worth asking here.
 
-    COMPARE LIKE WITH LIKE: _op_block_count infers block count from how many times an op repeats, so
-    it counts EXECUTIONS. Comparing it against _blocks_ran, which counts DISTINCT blocks, treats a
-    model that runs twice as a model whose signposts are broken -- gemma-3-12b-it prefills and then
-    decodes over 48 layers, giving 48 distinct signposts against 96 repetitions, a ratio of 0.5, and
-    the signposts were thrown away as untrustworthy. The fallback then inferred blocks by counting op
-    repetitions, produced 96 ordinals for a 48-layer model, and that 96 became TT_PERF_LAYERS.
+    This used to cross-check them against _op_block_count -- "the most common repeat count among the
+    ops" -- and discard them when the two differed by more than 20%. Backwards twice:
 
-    Entries against repetitions is the honest comparison; the per-block INDEX is still what
-    _first_block_map reads, so multiple passes collapse onto the layers they actually ran.
+      * _op_block_count counts op EXECUTIONS, so it reports layers x passes. A perf test that
+        prefills and then decodes over 48 layers reports 96 against 48 distinct blocks, a ratio of
+        0.5, and the signposts were thrown out on every two-pass model.
+      * it is a histogram auditing a direct measurement. _tag_stack attaches an index to each block
+        by identity; the histogram infers structure from symbol frequency. The weaker estimate does
+        not get to overrule the stronger one.
+
+    _op_block_count remains what runs when there are no signposts -- a fallback, never an auditor.
+    Two distinct blocks is the floor: one tagged block has no second boundary to delimit anything.
     """
-    sp = _signpost_entries(seq)
-    op = _op_block_count(seq)
-    if sp <= 1 or op <= 1:
+    idx = [i for i, t in enumerate(seq or []) if isinstance(t, str) and t.startswith(_SIGNPOST_TOKEN)]
+    if len({seq[i] for i in idx}) <= 1:
         return False
-    lo, hi = sorted((sp, op))
-    return lo / hi >= float(os.environ.get("PERF_MCP_SIGNPOST_AGREE_RATIO", "0.8"))
+    # DECOUPLED SIGNPOSTS ARE NOT SIGNPOSTS. A stack whose markers all land in a clump -- typically
+    # trailing the ops entirely -- delimits nothing: every op would attribute to block 0. Presence is
+    # necessary, interleaving is what makes them usable.
+    return any(isinstance(t, str) and not t.startswith(_SIGNPOST_TOKEN) for t in (seq or [])[idx[0] :])
 
 
 def _block_start_positions(seq):
-    if _signposts_agree(seq):
+    if _signposts_usable(seq):
         pos = [i for i, t in enumerate(seq or []) if isinstance(t, str) and t.startswith(_SIGNPOST_TOKEN)]
         return pos, "signposts"
     n = _op_block_count(seq)
@@ -1440,7 +1444,7 @@ def _coverage_layers(
         # probe above emitted them, so reading them costs nothing. The ladder REBUILDS the model at
         # 2, 4, 8 and 16, up to four extra device probes, each reloading the weights. Running the
         # expensive one first and the free one only as its fallback was backwards.
-        if _signposts_agree(seq):
+        if _signposts_usable(seq):
             first_block, _ = _first_block_map(seq)
             deepest = max(first_block.values()) if first_block else 0
             # THE DEPTH THE OPS ACTUALLY REQUIRE, not a ceiling inherited from a deleted algorithm.
