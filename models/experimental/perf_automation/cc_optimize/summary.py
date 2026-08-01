@@ -400,17 +400,16 @@ def _ledger_line(kind: str, title: str, model: str = "", task: str = ""):
         av, bv = a.get("value_ms"), b.get("value_ms")
         depth = a.get("depth") or "unknown"
         dl = "all layers" if str(depth) == "all" else "%s layers" % depth
-        ok, why = led.comparable(a, b)
+        ok, _why = led.comparable(a, b)
         if not ok:
-            return "%s (%s):  before %.2f ms [%s]  ->  after %.2f ms [%s]   — NOT COMPARABLE: %s" % (
-                title,
-                dl,
-                av,
-                a.get("mode") or "unknown mode",
-                bv,
-                b.get("mode") or "unknown mode",
-                why,
-            )
+            # OMIT, do not disclaim. Two reports shipped a line whose numbers described different
+            # work -- "before 547.90 -> after 547.80 (all vs 96)", the same unoptimized build profiled
+            # twice, and "before 296.70 -> after 117.40 (2 vs all)", a 60% "win" that is purely the
+            # depth stamp. The disclaimer was printed and the numbers were read anyway. A pair that
+            # cannot be subtracted has strictly less to say than a missing anchor, which this same
+            # function already drops on the grounds that the live value appears in the roofline
+            # block where it means something. The rows stay in the ledger; only the subtraction goes.
+            return None
         pct = led.delta_pct(a, b)
         spd = (av / bv) if bv else 1.0
         _der = " ".join(t for t, r in (("before", a), ("after", b)) if isinstance(r, dict) and r.get("derived"))
@@ -837,7 +836,12 @@ def render_summary(
         )
     else:
         _eager = _ledger_line(_ledger().KIND_EAGER, "eager per-op device time", model, task)
-        lines.append(_eager or "eager per-op device time: not measured (no ledger reading for this run)")
+        if _eager:
+            lines.append(_eager)
+        elif not _ledger().rows(_ledger().KIND_EAGER, model=model, task=task):
+            # Only claim "not measured" when the ledger really holds nothing. When it holds a pair the
+            # renderer declined to subtract, this sentence is false.
+            lines.append("eager per-op device time: not measured (no ledger reading for this run)")
     _tp = _ledger_line(_ledger().KIND_TRACE_PASS, "tracy trace pass", model, task)
     if _tp:
         lines.append(_tp)

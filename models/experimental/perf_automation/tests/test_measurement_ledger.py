@@ -152,14 +152,16 @@ def test_report_uses_the_ledger_and_ignores_the_foreign_anchor(tmp_path, monkeyp
     assert "16 layers" in line and "+73.7%" in line, line
 
 
-def test_report_refuses_a_mismatched_ledger_pair(tmp_path, monkeypatch):
+def test_report_omits_a_mismatched_ledger_pair(tmp_path, monkeypatch):
     m = _mod()
     line = _render_with_ledger(
         tmp_path,
         monkeypatch,
         [(m.KIND_EAGER, m.PHASE_BEFORE, 832.93, "2", "eager"), (m.KIND_EAGER, m.PHASE_AFTER, 1088.15, "16", "eager")],
     )
-    assert "NOT COMPARABLE" in line and "depth differs" in line, line
+    # OMITTED, not disclaimed. The disclaimer shipped in two real reports and was read past -- see
+    # test_report_omits_uncomparable_pairs.py. A pair that cannot be subtracted renders as nothing.
+    assert not line, line
 
 
 def test_a_garbage_profile_is_never_recorded_as_the_original(tmp_path, monkeypatch):
