@@ -88,6 +88,14 @@ void kernel_main() {
     constexpr uint32_t in0_blk_bytes = in0_blk * tile_bytes;
     constexpr uint32_t shard_bytes = W * in0_blk_bytes;
     constexpr uint32_t out_blk = M_block * N_block;
+
+    // Fused-gather transfer batch: how many tiles are kept in flight between synchronization points.
+    // Bounded by the per-RISC packet-header pool (12 on Blackhole; we need batch + 1 for the credit) and
+    // by cb0's capacity, whose first tiles double as the scratch ring during the prologue.
+    constexpr uint32_t kGatherBatchMax = 8;
+    constexpr uint32_t kCb0Tiles = K_num_blocks * in0_blk;
+    constexpr uint32_t kGatherBatch = (kCb0Tiles < kGatherBatchMax) ? kCb0Tiles : kGatherBatchMax;
+
     const uint32_t fwd_addr = get_semaphore(fwd_sem_id);
     volatile tt_l1_ptr uint32_t* fwd_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_addr);
     constexpr uint32_t words_per_tile = tile_bytes / 4u;
@@ -372,26 +380,47 @@ void kernel_main() {
         // naturally empty for those cores, so they open, send zero payload, still credit, and close.
         if (is_fabric_client) {
             // ---- 1. stage OUR OWN shard: in0[m, k] -> staging[m, rank*k_shard_tiles + k] ----
-            // Local DRAM->DRAM, no fabric. Read into the scratch L1 slot then write back out.
-            const uint32_t scratch = get_write_ptr(in0_cb);  // cb0 is not yet in use at this point
-            // Packet headers come from the per-RISC PacketHeaderPool, allocated ONCE outside the loops.
-            // Two of them: to_noc_unicast_write and to_noc_unicast_atomic_inc overwrite the same
-            // command_fields union, so sharing one header between the payload and the credit would
-            // corrupt whichever was still in flight.
-            auto* pkt_hdr_write = PacketHeaderPool::allocate_header();
+            // Local DRAM->DRAM through an L1 scratch RING. cb0 is not yet in use, so its first
+            // kGatherBatch tiles are free staging slots.
+            //
+            // BATCHED, not per-tile. A read-barrier plus a writes-flush around every single 2 KiB tile
+            // makes this a strict serial chain of DRAM-read latency + write latency, with no DMA
+            // concurrency at all -- measured as the fused gather gaining NOTHING from a second fabric
+            // link, which is what a latency-bound (rather than bandwidth-bound) loop looks like.
+            // Issuing kGatherBatch reads, then one barrier, then kGatherBatch writes, then one flush
+            // keeps that many transfers in flight and cuts the serialization points by the batch factor.
+            const uint32_t scratch = get_write_ptr(in0_cb);
+            // Packet headers come from the per-RISC PacketHeaderPool (12 per RISC on Blackhole),
+            // allocated ONCE outside the loops. One per in-flight payload, because the header stays live
+            // until the send drains; plus a separate one for the credit, since to_noc_unicast_write and
+            // to_noc_unicast_atomic_inc overwrite the same command_fields union.
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_write[kGatherBatch];
+            for (uint32_t j = 0; j < kGatherBatch; ++j) {
+                pkt_hdr_write[j] = PacketHeaderPool::allocate_header();
+            }
             auto* pkt_hdr_seminc = PacketHeaderPool::allocate_header();
             const uint32_t own_k0 = rank * k_shard_tiles;
-            for (uint32_t m = m_lo; m < m_hi; ++m) {
-                for (uint32_t k = 0; k < k_shard_tiles; ++k) {
-                    noc_async_read_page(m * k_shard_tiles + k, shard_acc, scratch);
-                    noc_async_read_barrier();
-                    noc_async_write_page(m * Kt_global + own_k0 + k, stage_acc, scratch);
-                    // The write still SOURCES from scratch, and the next iteration's read overwrites it.
-                    // noc_async_read_barrier() orders reads only, so without this flush the write can
-                    // pick up the following tile's data -- silent corruption of our own shard, which the
-                    // ring then propagates to every other rank.
-                    noc_async_writes_flushed();
+            const uint32_t local_total = (m_hi > m_lo) ? (m_hi - m_lo) * k_shard_tiles : 0u;
+            for (uint32_t t0 = 0; t0 < local_total; t0 += kGatherBatch) {
+                const uint32_t nb = ((local_total - t0) < kGatherBatch) ? (local_total - t0) : kGatherBatch;
+                for (uint32_t j = 0; j < nb; ++j) {
+                    const uint32_t t = t0 + j;
+                    noc_async_read_page(
+                        (m_lo + t / k_shard_tiles) * k_shard_tiles + (t % k_shard_tiles),
+                        shard_acc,
+                        scratch + j * tile_bytes);
                 }
+                noc_async_read_barrier();
+                for (uint32_t j = 0; j < nb; ++j) {
+                    const uint32_t t = t0 + j;
+                    noc_async_write_page(
+                        (m_lo + t / k_shard_tiles) * Kt_global + own_k0 + (t % k_shard_tiles),
+                        stage_acc,
+                        scratch + j * tile_bytes);
+                }
+                // The writes SOURCE from the scratch slots, which the next batch's reads overwrite.
+                // read_barrier orders reads only, so this flush is what makes slot reuse safe.
+                noc_async_writes_flushed();
             }
             noc_async_write_barrier();
 
@@ -451,34 +480,41 @@ void kernel_main() {
                     // Forward carries ranks rank-1, rank-2, ...; backward carries rank+1, rank+2, ...
                     const uint32_t src_rank = (my_dir == 0u) ? ((rank + tp - (r - 1)) % tp) : ((rank + (r - 1)) % tp);
                     const uint32_t k0 = src_rank * k_shard_tiles;
-                    for (uint32_t m = fab_lo; m < fab_hi; ++m) {
-                        for (uint32_t k = 0; k < k_shard_tiles; ++k) {
-                            const uint32_t page = m * Kt_global + k0 + k;
-                            noc_async_read_page(page, stage_acc, scratch);
-                            noc_async_read_barrier();
-                            // Destination is the SAME page of the SAME staging buffer on the neighbour.
-                            // Mesh tensors are allocated at a common address across the mesh, so the local
-                            // NoC address of this page is also its address on the peer chip -- the fabric
-                            // supplies the chip hop, the NoC address supplies the rest.
-                            // Fabric expects noc0 coords and DRAM has no virtual coords on some archs, so
-                            // build the destination through the fabric addrgen helper rather than a bare
-                            // get_noc_addr(). The peer's staging buffer sits at the same address as ours
-                            // (mesh tensors share an address across the mesh), so the same page id resolves
-                            // correctly there -- fabric supplies the chip hop.
-                            // Signature is (accessor, page_id, offset) -- NOT (page_id, accessor).
+                    // Batched egress: kGatherBatch tiles are read, then injected, then flushed ONCE.
+                    // Per-tile barriers made this a serial chain -- see the batching note on the local
+                    // staging loop above. Each in-flight tile needs its own packet header and its own
+                    // scratch slot, since both stay live until the send drains.
+                    //
+                    // Destination is the SAME page of the SAME staging buffer on the neighbour. Mesh
+                    // tensors share an address across the mesh, so the local address of a page is also
+                    // its address on the peer -- the fabric supplies only the chip hop. Built through the
+                    // fabric addrgen helper because it emits noc0 coords and DRAM has no virtual coords on
+                    // some archs; signature is (accessor, page_id, offset), NOT (page_id, accessor).
+                    const uint32_t fab_total = (fab_hi > fab_lo) ? (fab_hi - fab_lo) * k_shard_tiles : 0u;
+                    for (uint32_t t0 = 0; t0 < fab_total; t0 += kGatherBatch) {
+                        const uint32_t nb = ((fab_total - t0) < kGatherBatch) ? (fab_total - t0) : kGatherBatch;
+                        for (uint32_t j = 0; j < nb; ++j) {
+                            const uint32_t t = t0 + j;
+                            const uint32_t page = (fab_lo + t / k_shard_tiles) * Kt_global + k0 + (t % k_shard_tiles);
+                            noc_async_read_page(page, stage_acc, scratch + j * tile_bytes);
+                        }
+                        noc_async_read_barrier();
+                        for (uint32_t j = 0; j < nb; ++j) {
+                            const uint32_t t = t0 + j;
+                            const uint32_t page = (fab_lo + t / k_shard_tiles) * Kt_global + k0 + (t % k_shard_tiles);
                             const uint64_t dst_noc =
                                 tt::tt_fabric::linear::addrgen_detail::get_noc_address(stage_acc, page, 0);
                             tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
                                 &sender,
-                                pkt_hdr_write,
-                                scratch,
+                                pkt_hdr_write[j],
+                                scratch + j * tile_bytes,
                                 tile_bytes,
                                 tt::tt_fabric::NocUnicastCommandHeader{dst_noc},
                                 /*num_hops=*/1);
-                            // The send is NON-blocking and the header + payload source stay live until
-                            // drained, so flush before the next iteration mutates either.
-                            noc_async_writes_flushed();
                         }
+                        // One flush per batch: headers and scratch slots are reusable once the sends have
+                        // been injected.
+                        noc_async_writes_flushed();
                     }
                     // Credit AFTER the payload. Ordering is enforced on the RECEIVING chip: flush=true makes
                     // the peer drain every prior write on this channel before applying the increment.
