@@ -1988,6 +1988,19 @@ the sweep was worth running even though the outcome looked certain.
 
 ### 1. The correction that matters most: the op has 10 560 B of L1 free, not ~121 KB
 
+> **Verified three ways after a challenge.** The descriptor's per-CB sum is 1 450 816 B, which would
+> imply 122 048 B free — and that sum is what the `~121 KB free` comments were built from. It is
+> WRONG as a budget: the allocator charges a constant **+111 488 B** over a naive
+> `pages * page_size` sum (alignment/page rounding and whatever else it reserves). Three independent
+> UNPROFILED allocator observations pin the real total at 1 562 304 B:
+>
+>     DEPTH_H=4 -> "grow to 1 614 528"  = 1 562 304 + 1x52 224
+>     DEPTH_H=5 -> "grow to 1 666 752"  = 1 562 304 + 2x52 224
+>     GRID=8x10 -> "grow to 1 663 104"
+>
+> **Measure the thing that enforces the constraint, not a model of it.** Any L1 ledger built from the
+> descriptor sum is ~111 KB optimistic — which is exactly the size of the decisions it gets wrong.
+
 The shipped program allocates **1 562 304 B of the 1 572 864 B cap = 99.3 %**. The "~159 KB free" and
 "~121 KB free" figures in the `REDUCE_SLOTS_CAP` and `HSEND` comments are **STALE** — later
 refinements ate them, and this changelog has been quoting them as current all round. Corroborated
@@ -2003,6 +2016,12 @@ independently: forcing `DEPTH_H = 5` reports "grow to 1 666 752 B", and DEPTH_H 
 | `DEPTH_H = 4` | +52 KB | dead |
 | `pack_l1_pair` bf16 accumulator | +102 KB | dead |
 | K-chunking's bf16 accumulation region | +98 KB | dead |
+
+`M_BLOCK = 16` was re-priced properly and is worse than the ~415 KB above: it costs **806 272 B**,
+because `CB_GATHER_GATE`/`_UP` (+104 448), `CB_SLICE_GATE`/`_UP`/`CB_GATE_SILU` (+36 864) and
+`CB_H_SLICE` also scale with M_BLOCK. Even with x K-chunked to 4 K-tiles, `CB_X_IN`/`CB_X_STAGE`
+shrunk, `DEPTH_OUT` 2->1 and `DEPTH_H` 3->2 it lands ~99 KB over — and the last two concessions give
+back the Perf 4 and Perf 2 wins. **Not reachable**, not merely a wash.
 
 ### 2. K-chunking: the `raise` blamed the wrong thing
 
