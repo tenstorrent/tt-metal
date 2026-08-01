@@ -266,6 +266,7 @@ def run_combine(
             fwd_bump_every=CMBF2D_FWD_BUMP,
             assignment_order=CMBF2D_ORDER,
             stall_telemetry=CMBF2D_STALL,
+            **({"num_l1_slots": CMBF2D_L1_SLOTS} if CMBF2D_L1_SLOTS else {}),
         )
     else:
         tt_combine = TtCombineModule(
@@ -719,6 +720,9 @@ CMBF2D_FWD_BUMP = int(os.environ.get("CMBF2D_FWD_BUMP", "32"))
 # 0 = nearest destination first then all forwarding; 1 = furthest first with forwarding interleaved, so
 # downstream cores are handed work earlier. Scheduling only — accuracy is identical either way.
 CMBF2D_ORDER = int(os.environ.get("CMBF2D_ORDER", "1"))
+# Depth of the reader->producer L1 ring, in tokens. Also sets the read batch (half the ring), i.e. how many
+# 14 kB DRAM reads the reader keeps in flight. 0 leaves the op's own default.
+CMBF2D_L1_SLOTS = int(os.environ.get("CMBF2D_L1_SLOTS", "0"))
 # Mesh axis whose neighbours the op talks to. Matches the op's `axis` argument.
 CMBF2D_AXIS = 0
 # Blackhole AICLK the bandwidth numbers assume. Telemetry gives cycle counts; turning those into GB/s

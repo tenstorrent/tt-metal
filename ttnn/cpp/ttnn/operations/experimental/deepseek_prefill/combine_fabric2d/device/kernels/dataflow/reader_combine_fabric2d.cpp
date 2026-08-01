@@ -115,7 +115,7 @@ void kernel_main() {
     // Work schedule: one entry per unit of work, high bit set = "relay forwarding chunk k", clear = "own
     // assignment k". Which order to do them in is the factory's call (assignment_order); this kernel just
     // walks the list. Interleaving own work with relaying is what keeps downstream cores fed.
-    constexpr uint32_t SCHED_BASE = 34;
+    constexpr uint32_t SCHED_BASE = 35;
     constexpr uint32_t SCHED_FWD = 0x80000000u;
     // Per-assignment table: [dst_chip_id, dst_row, split_idx, split_count]. Read through
     // kernel_compile_time_args (a constexpr std::array) because get_compile_time_arg_val needs a literal
@@ -134,14 +134,24 @@ void kernel_main() {
     // Re-forwarding reads the token AND the two metadata words that follow it in the page.
     constexpr uint32_t FWD_EXTRA_BYTES = 16;
     constexpr uint32_t fwd_read_bytes = token_size_bytes + FWD_EXTRA_BYTES;
-    // A token's routing metadata lands in a single 64-byte pad at the front of the control region, NOT in
-    // the ring slot: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole
-    // (LOG_BASE_2_OF_DRAM_ALIGNMENT = 6) and no offset inside a slot's tail is 64-byte aligned. One pad
-    // suffices because the record is consumed immediately after the barrier, before the slot is published,
-    // so only ever one is in flight.
-    constexpr uint32_t meta_scratch_addr = control_addr;
+    // Routing metadata is PREFETCHED a batch at a time into pads at the front of the control region. Pads,
+    // not one buffer, because a DRAM read needs a 64-byte-aligned L1 destination on Blackhole
+    // (LOG_BASE_2_OF_DRAM_ALIGNMENT = 6), and a 12-byte record per token would not keep that.
+    //
+    // Batching is what makes the per-token loop cheap. A token's destination page comes from its metadata,
+    // and turning that page into an address costs an interleaved-bank division — so if the metadata arrived
+    // per token, that arithmetic would sit AFTER the read barrier, serialised between tokens. With the batch
+    // already in L1 the loop goes back to phase 9's shape: compute the tail, issue the token read, barrier.
+    // The arithmetic overlaps the 14 kB read instead of following it.
+    //
+    // The batch is capped rather than sized to the run: run lengths are data-dependent and a whole expert
+    // region could be tens of thousands of tokens, so a cap bounds L1 with no correctness risk. Reads are
+    // issued back to back and awaited once, so one batch costs one DRAM latency, not `cap` of them.
+    constexpr uint32_t meta_pads_addr = control_addr;
+    constexpr uint32_t META_PAD_STRIDE = 64;
     constexpr uint32_t META_READ_BYTES = 64;
-    constexpr uint32_t control_tables_addr = control_addr + 64;
+    constexpr uint32_t META_PREFETCH_CAP = get_compile_time_arg_val(34);
+    constexpr uint32_t control_tables_addr = control_addr + META_PREFETCH_CAP * META_PAD_STRIDE;
 
     // Written only by the producer; we just read it.
     volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_addr);
@@ -200,9 +210,16 @@ void kernel_main() {
         return my_quarter * fwd_chunks_per_quarter * fwd_pages_per_chunk + chunk * fwd_pages_per_chunk + token;
     };
 
-    // `published` counts slots handed to the producer across BOTH phases; the ring and both counters are
-    // continuous, so a phase or chunk boundary is invisible to the flow control.
+    // `published` counts slots ANNOUNCED to the producer; `claimed` counts slots we have taken. They differ
+    // because reads are issued in batches: a batch's slots are all claimed and their reads all issued before
+    // any of them is announced, which is what puts several 14 kB DRAM reads in flight at once instead of
+    // exposing one read's latency per token. The ring and both counters are continuous, so a phase or chunk
+    // boundary is invisible to the flow control.
+    //
+    // Deadlock is ruled out by batch <= num_l1_slots/2: at most `batch` slots are ever unannounced, so the
+    // producer always has at least as many announced ones to drain, and `freed` keeps advancing.
     uint32_t published = 0;
+    uint32_t claimed = 0;
     // Which chunk of the neighbour's quarter the next forwarding batch goes into. Our own forwarding
     // assignments take 0.., then our re-forwards continue from there — and the downstream reader walks its
     // chunks in exactly that order, which is what makes the two agree with no negotiation.
@@ -221,35 +238,54 @@ void kernel_main() {
     // make the producer wait on slots we are holding back, which would deadlock us against each other.
     auto claim_slot = [&]() -> uint32_t {
         invalidate_l1_cache();
-        if (published - *freed >= num_l1_slots) {
+        if (claimed - *freed >= num_l1_slots) {
             flush_publish();
             while (true) {
                 invalidate_l1_cache();
-                if (published - *freed < num_l1_slots) {
+                if (claimed - *freed < num_l1_slots) {
                     break;
                 }
             }
         }
-        return published % num_l1_slots;
+        return claimed++ % num_l1_slots;
+    };
+
+    // Announce `n` slots whose data is known to be in L1.
+    auto publish_n = [&](uint32_t n) {
+        published += n;
+        pending_publish += n;
+        if (pending_publish >= batch) {
+            flush_publish();
+        }
     };
 
     // ---- Stream one token: read it and its routing metadata, work out where it must end up, hand the slot
     // to the producer. `chunk_page` is where it goes in the downstream forwarding chunk when this is not the
     // last hop; it is ignored for a direct write.
-    auto stream_token = [&](uint32_t in_page, bool direct, uint32_t dst_chip_id, uint32_t chunk_page) {
+    // Read the metadata for pages [lo, hi) into the pads, one page read each, awaited together. Returns
+    // nothing: pad k then holds page lo + k's record.
+    auto prefetch_metadata = [&](uint32_t lo, uint32_t hi) {
+        for (uint32_t p = lo; p < hi; p++) {
+            noc_async_read(dram_meta.get_noc_addr(p), meta_pads_addr + (p - lo) * META_PAD_STRIDE, META_READ_BYTES);
+        }
+        noc_async_read_barrier();
+    };
+
+    // Issues one token's read and fills its tail, but does NOT barrier or announce it — the caller does both
+    // once per batch, so several reads are in flight together.
+    auto issue_token = [&](uint32_t in_page, uint32_t pad, bool direct, uint32_t dst_chip_id, uint32_t chunk_page) {
         const uint32_t slot = claim_slot();
         const uint32_t slot_addr = ring_addr + slot * slot_stride;
         volatile tt_l1_ptr uint64_t* tail =
             reinterpret_cast<volatile tt_l1_ptr uint64_t*>(slot_addr + token_size_bytes);
-        volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_scratch_addr);
-        // Both reads issued before the single barrier, so the small metadata read rides along with the
-        // 14 kB token read instead of serialising behind it.
-        noc_async_read(dram_in.get_noc_addr(in_page), slot_addr, token_size_bytes);
-        noc_async_read(dram_meta.get_noc_addr(in_page), meta_scratch_addr, META_READ_BYTES);
-        noc_async_read_barrier();  // the token AND its metadata are in L1 before we say the slot is ready
+        volatile tt_l1_ptr uint32_t* meta =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * META_PAD_STRIDE);
 
-        // Metadata: [0] linearized_coord, [1] token_idx, [2] topk_idx. The destination chip is already known
-        // from the run this token came out of, so only the slot within that chip's output is read here.
+        noc_async_read(dram_in.get_noc_addr(in_page), slot_addr, token_size_bytes);
+        // Everything below is done while that read is in flight — which is the point of prefetching the
+        // metadata. Record layout: [0] linearized_coord, [1] token_idx, [2] topk_idx. The destination chip is
+        // already known from the run this token came out of, so only its slot within that chip's output is
+        // taken from here.
         const uint32_t out_page = meta[1] * num_experts_per_tok + meta[2];
         // The FINAL destination address is computed here, once, and then travels with the token for however
         // many hops it takes. Valid on any chip because the output buffer's base address and interleaved bank
@@ -263,10 +299,6 @@ void kernel_main() {
             tail[TAIL_DST_CHIP] = (uint64_t)dst_chip_id;
             tail[TAIL_CMD] = CMD_FORWARD;
             tail[TAIL_THIS_ADDR] = dram_fwd.get_noc_addr(fwd_page(out_chunk, chunk_page));
-        }
-        published++;
-        if (++pending_publish >= batch) {
-            flush_publish();
         }
     };
 
@@ -294,10 +326,21 @@ void kernel_main() {
             const uint32_t n = run_end(dst_row, e) - begin;
             const uint32_t lo = slice_begin(begin, n, split_idx, split_count);
             const uint32_t hi = slice_begin(begin, n, split_idx + 1, split_count);
-            for (uint32_t p = lo; p < hi; p++) {
-                stream_token(p, direct, dst_chip_id, chunk_page);
-                if (!direct) {
-                    chunk_page++;
+            for (uint32_t base = lo; base < hi; base += META_PREFETCH_CAP) {
+                const uint32_t end = (hi - base) > META_PREFETCH_CAP ? base + META_PREFETCH_CAP : hi;
+                prefetch_metadata(base, end);
+                // `batch` tokens' reads in flight at a time, then one barrier and one announcement.
+                for (uint32_t q = base; q < end;) {
+                    const uint32_t k = (end - q) > batch ? batch : (end - q);
+                    for (uint32_t j = 0; j < k; j++) {
+                        issue_token(q + j, q + j - base, direct, dst_chip_id, chunk_page);
+                        if (!direct) {
+                            chunk_page++;
+                        }
+                    }
+                    noc_async_read_barrier();  // every token of the batch is in L1 before any is announced
+                    publish_n(k);
+                    q += k;
                 }
             }
         }
@@ -327,14 +370,31 @@ void kernel_main() {
     };
 
     // ---- One arrived chunk, pushed exactly one more hop.
-    uint32_t consumed = 0;  // forwarded tokens (sentinels included) taken out of our quarter
+    //
+    // This is where most of a producer's traffic comes from, not its own assignments: on an 8-ring each
+    // producer puts H*H/2 = 8 tok packets on its cable but only ~1.75 tok of those are its own, so ~78% is
+    // relayed. Batching the reads here is therefore what the reader's throughput actually turns on.
+    //
+    // Batching has to be SPECULATIVE, because a chunk's length is only discovered by reading its sentinel.
+    // Two facts bound the speculation:
+    //   * having read a non-sentinel page, the next page of this chunk certainly exists;
+    //   * the upstream watermark says how many pages upstream has written, though not how they divide
+    //     between this chunk and later ones.
+    // So we read up to `batch` pages at once and stop at the sentinel. Pages read past a sentinel are
+    // garbage upstream never wrote — harmless, since they are discarded and their slots handed straight back
+    // (nothing was announced for them, so the producer never saw them). The waste is at most batch-1 reads
+    // per chunk against a mean chunk of tok pages, and it buys `batch` reads in flight.
+    uint32_t consumed = 0;  // forwarded pages (sentinels included) taken out of our quarter
     auto do_forward_chunk = [&](uint32_t chunk) {
-        // Every token of a chunk shares one final destination (a chunk IS one movement's tokens), so the
-        // first token decides for the whole chunk whether this hop is the last one.
+        // Every token of a chunk shares one final destination (a chunk IS one (chip -> chip) term), so the
+        // first page decides for the whole chunk whether this hop is the last one.
         bool reforward = false;
         bool decided = false;
-        for (uint32_t i = 0;; i++) {
-            // Do not outpace the upstream producer. It bumps this counter every fwd_bump_every tokens and
+        uint32_t i = 0;  // page index within the chunk
+        bool at_end = false;
+
+        while (!at_end) {
+            // Do not outpace the upstream producer. It bumps this counter every fwd_bump_every pages and
             // ALWAYS right after a sentinel, so a chunk boundary is never left unreachable.
             invalidate_l1_cache();
             if (*fwd_arrived <= consumed) {
@@ -346,53 +406,78 @@ void kernel_main() {
                     }
                 }
             }
-            const uint32_t slot = claim_slot();
-            const uint32_t slot_addr = ring_addr + slot * slot_stride;
-            // ONE read brings the token AND the [final_addr][dst_chip] pair straight into the slot's tail,
-            // because the page layout was chosen to match the slot layout exactly.
-            noc_async_read(dram_fwd.get_noc_addr(fwd_page(chunk, i)), slot_addr, fwd_read_bytes);
+            uint32_t k = *fwd_arrived - consumed;
+            if (k > batch) {
+                k = batch;
+            }
+            if (k > fwd_pages_per_chunk - i) {
+                k = fwd_pages_per_chunk - i;  // never read outside this chunk's own page range
+            }
+
+            const uint32_t first_slot = claimed;  // slots come out consecutively, so the base is enough
+            for (uint32_t j = 0; j < k; j++) {
+                const uint32_t slot = claim_slot();
+                // ONE read brings the token AND the [final_addr][dst_chip] pair straight into the slot's
+                // tail, because the page layout was chosen to match the slot layout exactly.
+                noc_async_read(
+                    dram_fwd.get_noc_addr(fwd_page(chunk, i + j)), ring_addr + slot * slot_stride, fwd_read_bytes);
+            }
             noc_async_read_barrier();
-            consumed++;
 
-            volatile tt_l1_ptr uint64_t* tail =
-                reinterpret_cast<volatile tt_l1_ptr uint64_t*>(slot_addr + token_size_bytes);
-            const uint64_t dst_chip = tail[TAIL_DST_CHIP];
+            uint32_t used = 0;  // pages of this batch that really belong to the chunk
+            uint32_t pub = 0;   // of those, the ones we hand to the producer
+            for (uint32_t j = 0; j < k; j++) {
+                const uint32_t slot_addr = ring_addr + ((first_slot + j) % num_l1_slots) * slot_stride;
+                volatile tt_l1_ptr uint64_t* tail =
+                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(slot_addr + token_size_bytes);
+                const uint64_t dst_chip = tail[TAIL_DST_CHIP];
+                used++;
 
-            if (dst_chip == SENTINEL_DST_CHIP) {
-                // An EMPTY chunk reaches its sentinel with nothing having decided for it, so the sentinel's
-                // own destination word decides. The chunk still has to be passed on when it is not for our
-                // neighbour: the downstream reader counts chunks positionally, so silently dropping one would
-                // shift every chunk after it.
+                if (dst_chip == SENTINEL_DST_CHIP) {
+                    // An EMPTY chunk reaches its sentinel with nothing having decided for it, so the
+                    // sentinel's own destination word decides. The chunk still has to be passed on when it is
+                    // not for our neighbour: the downstream reader counts chunks positionally, so silently
+                    // dropping one would shift every chunk after it.
+                    if (!decided) {
+                        reforward = (tail[TAIL_FINAL_ADDR] != (uint64_t)nbr_chip_id);
+                        decided = true;
+                    }
+                    if (reforward) {
+                        // Pass the terminator on, at the end of the chunk we have been writing downstream.
+                        // Its destination word is already in place — it came in with the sentinel.
+                        tail[TAIL_CMD] = CMD_FORWARD;
+                        tail[TAIL_THIS_ADDR] = dram_fwd.get_noc_addr(fwd_page(out_chunk, i + j));
+                        pub++;
+                    }
+                    at_end = true;
+                    break;
+                }
+
                 if (!decided) {
-                    reforward = (tail[TAIL_FINAL_ADDR] != (uint64_t)nbr_chip_id);
+                    reforward = (dst_chip != (uint64_t)nbr_chip_id);
                     decided = true;
                 }
                 if (reforward) {
-                    // Pass the terminator on, at the end of the chunk we have been writing downstream. Its
-                    // destination word is already in place — it came in with the sentinel.
                     tail[TAIL_CMD] = CMD_FORWARD;
-                    tail[TAIL_THIS_ADDR] = dram_fwd.get_noc_addr(fwd_page(out_chunk, i));
-                    published++;
-                    pending_publish++;
+                    tail[TAIL_THIS_ADDR] = dram_fwd.get_noc_addr(fwd_page(out_chunk, i + j));
+                } else {
+                    tail[TAIL_CMD] = CMD_FINAL_WRITE;
+                    tail[TAIL_THIS_ADDR] = tail[TAIL_FINAL_ADDR];
                 }
-                flush_publish();
-                break;
+                pub++;
             }
 
-            if (!decided) {
-                reforward = (dst_chip != (uint64_t)nbr_chip_id);
-                decided = true;
+            // Announce only the pages we are passing on, in claim order. A sentinel we swallow (last hop) and
+            // any speculative reads past it are not announced, so their slots go back by rewinding `claimed`
+            // — legitimate precisely because the producer was never told about them.
+            if (pub > 0) {
+                publish_n(pub);
             }
-            if (reforward) {
-                tail[TAIL_CMD] = CMD_FORWARD;
-                tail[TAIL_THIS_ADDR] = dram_fwd.get_noc_addr(fwd_page(out_chunk, i));
-            } else {
-                tail[TAIL_CMD] = CMD_FINAL_WRITE;
-                tail[TAIL_THIS_ADDR] = tail[TAIL_FINAL_ADDR];
-            }
-            published++;
-            if (++pending_publish >= batch) {
-                flush_publish();
+            claimed -= (k - pub);
+            consumed += used;
+            i += used;
+            if (at_end) {
+                flush_publish();  // a chunk boundary: do not let it sit unannounced
             }
         }
         if (reforward) {
@@ -428,25 +513,31 @@ void kernel_main() {
         // `published` does not move during this phase so it stays free. The CMD_END slot below reclaims it.
         const uint32_t slot = claim_slot();
         const uint32_t slot_addr = ring_addr + slot * slot_stride;
-        volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_scratch_addr);
         for (uint32_t le = 0; le < experts_per_chip; le++) {
             const uint32_t e = my_expert_base + le;
             const uint32_t begin = run_begin(my_row, e);
             const uint32_t n = run_end(my_row, e) - begin;
             const uint32_t lo = slice_begin(begin, n, local_split_idx, local_split_count);
             const uint32_t hi = slice_begin(begin, n, local_split_idx + 1, local_split_count);
-            for (uint32_t p = lo; p < hi; p++) {
-                noc_async_read(dram_in.get_noc_addr(p), slot_addr, token_size_bytes);
-                noc_async_read(dram_meta.get_noc_addr(p), meta_scratch_addr, META_READ_BYTES);
-                noc_async_read_barrier();
-                const uint32_t out_page = meta[1] * num_experts_per_tok + meta[2];
-                noc_async_write(slot_addr, dram_out.get_noc_addr(out_page), token_size_bytes);
-                // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write has
-                // read it out. Overlapping these needs several buffers in flight, tracked separately from the
-                // producer's ring accounting — a stage-3 optimisation.
-                noc_async_write_barrier();
+            for (uint32_t base = lo; base < hi; base += META_PREFETCH_CAP) {
+                const uint32_t end = (hi - base) > META_PREFETCH_CAP ? base + META_PREFETCH_CAP : hi;
+                prefetch_metadata(base, end);
+                for (uint32_t p = base; p < end; p++) {
+                    volatile tt_l1_ptr uint32_t* meta =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + (p - base) * META_PAD_STRIDE);
+                    const uint32_t out_page = meta[1] * num_experts_per_tok + meta[2];
+                    const uint64_t out_addr = dram_out.get_noc_addr(out_page);
+                    noc_async_read(dram_in.get_noc_addr(p), slot_addr, token_size_bytes);
+                    noc_async_read_barrier();
+                    noc_async_write(slot_addr, out_addr, token_size_bytes);
+                    // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write
+                    // has read it out. Overlapping these needs several buffers in flight, tracked separately
+                    // from the producer's ring accounting.
+                    noc_async_write_barrier();
+                }
             }
         }
+        claimed--;  // hand the staging slot back; nothing was ever announced for it
     }
 
     // ---- End of stream. The producer cannot know the length up front, so it stops on this.

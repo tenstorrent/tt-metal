@@ -99,6 +99,13 @@ uint32_t fwd_total_chunks(uint32_t extent, uint32_t num_links) {
     return fwd_chunks_per_quarter(extent) * num_links * 2;
 }
 
+// Tokens whose routing metadata the reader prefetches in one batch. Each pad is 64 B (a DRAM read needs a
+// 64-byte-aligned L1 destination on Blackhole), so this costs CMBF2D_META_PREFETCH * 64 B of L1. Big enough
+// that one DRAM latency is amortised over many tokens, small enough to bound L1 regardless of how long a
+// data-dependent run turns out to be.
+constexpr uint32_t CMBF2D_META_PREFETCH = 64;
+constexpr uint32_t CMBF2D_META_PAD_STRIDE = 64;
+
 // Pages a chunk can hold. Phase 10 makes chunk lengths DATA-DEPENDENT: a chunk is one producer's share of
 // one (origin chip -> this chip) run merged over the experts it serves, and how many tokens that is depends
 // on where the router happened to send things. Only the expectation is known here:
@@ -887,6 +894,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             args.num_links * 2,
             static_cast<uint32_t>(my_row),
             l1.control,
+            CMBF2D_META_PREFETCH,
         };
         // Schedule block, then the per-assignment block. The schedule says WHEN each own assignment and each
         // relayed forwarding chunk is worked on; the assignment block says WHICH destination each own
@@ -1117,13 +1125,14 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     const uint32_t fwd_arrived_addr = static_cast<uint32_t>(fwd_arrived_sem.address());
     // The reader's L1 copy of the control tensors: the expert_offsets slice (one row per origin chip) plus
     // the counts and region offsets. A few kB, read once at startup and indexed from L1 thereafter.
-    // Plus one 64-byte-aligned landing pad at the front for the per-token metadata record: a DRAM read
-    // needs a 64-byte-aligned L1 destination on Blackhole, which no offset inside a ring slot's tail can
-    // give (the tail starts at token_size, and its free half is only 32-byte aligned).
+    // Plus the metadata prefetch pads at the front, 64-byte aligned each: a DRAM read needs a 64-byte-aligned
+    // L1 destination on Blackhole, which no offset inside a ring slot's tail can give (the tail starts at
+    // token_size, and its free half is only 32-byte aligned).
     const uint32_t control_num_routed_experts =
         static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
-    const uint32_t control_bytes = 64 + static_cast<uint32_t>(sizeof(uint32_t)) * control_num_routed_experts *
-                                            (operation_attributes.dispatch_group_size + 2);
+    const uint32_t control_bytes = CMBF2D_META_PREFETCH * CMBF2D_META_PAD_STRIDE +
+                                   static_cast<uint32_t>(sizeof(uint32_t)) * control_num_routed_experts *
+                                       (operation_attributes.dispatch_group_size + 2);
     const auto l1 = compute_l1_layout(
         mesh_device,
         operation_attributes.num_l1_slots,
