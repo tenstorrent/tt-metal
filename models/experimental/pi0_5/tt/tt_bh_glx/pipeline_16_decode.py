@@ -43,6 +43,11 @@ _NUM_PATCHES = 256
 _DENOISE_SPLITS_8 = (2, 2, 2, 3, 3, 2, 2, 2)
 
 
+def _mesh_pipeline_enabled() -> bool:
+    """Overlap the prefill mesh (row 0) and denoise mesh (row 1) across consecutive chunks."""
+    return os.environ.get("PI05_16_MESH_PIPELINE", "1").lower() in ("1", "true", "yes", "on")
+
+
 def _prefix_compaction_plan(img_masks, lang_masks, enabled):
     """Return camera indices and the exact pad mask used by the prefill sequence."""
     img_present = tuple(bool(m.item()) if m.numel() == 1 else bool(m[0].item()) for m in img_masks)
@@ -1100,13 +1105,52 @@ class Pi0_5GLX16DecodePipeline:
 
         times_ms: List[float] = []
         last_actions = None
-        for i in range(iters):
-            t0 = _time.perf_counter()
-            hi_pix, hi_lang = host_chunks[i]
+        if _mesh_pipeline_enabled():
+            # STRUCTURAL: software-pipeline the two meshes across chunks.
+            #
+            # Prefill (row 0, 8 chips) and denoise (row 1, 8 chips) are DISJOINT hardware, but a
+            # chunk runs them strictly in sequence: the denoise trace opens with a socket recv that
+            # blocks until the prefill trace's send tail lands, so each mesh idles while the other
+            # works. That stall is the single largest residual in the roofline profile
+            # (RecvDirectAsync, 209.8 ms of pure wait against a 0.039 ms ideal) and no per-op knob
+            # can touch it -- grid, L1 placement and wire dtype were each measured flat, because the
+            # cost is WHEN the data arrives, not how it moves.
+            #
+            # So dispatch chunk i+1's prefill BEFORE blocking on chunk i's denoise. The prefill mesh
+            # then computes the next chunk underneath the current chunk's denoise, and steady-state
+            # per-chunk wall becomes max(prefill, denoise) instead of prefill + denoise.
+            #
+            # Safety: the KV landing pad `rv` is single-buffered per chip, so chunk i+1's send must
+            # not overtake chunk i's recv. It cannot. send_direct_async's sender kernel
+            # (sender_direct_writer.cpp, STEP 2) spins on `while (*valid_ptr == 0)` waiting for the
+            # RECEIVER to write back its destination-tensor info, and the receiver only advertises
+            # that when its own recv_direct_async runs -- so the sender cannot write a single payload
+            # byte before the matching recv has posted. Chunk i+1's send therefore parks at the
+            # handshake until denoise(i+1) posts its recv, which is after denoise(i) has copied rv
+            # into _prefix_kv. What we overlap is the prefill COMPUTE (vision + prefix + 18-layer
+            # TP=8 prefill); only the short send tail stays serialized.
+            # Set PI05_16_MESH_PIPELINE=0 to A/B back to the serial loop.
+            hi_pix, hi_lang = host_chunks[0]
             ttnn.copy_host_to_device_tensor(hi_pix, self.pixel_values_buf)
             ttnn.copy_host_to_device_tensor(hi_lang, self.lang_tokens_buf)
-            last_actions = self._run_socket_chunk()
-            times_ms.append((_time.perf_counter() - t0) * 1000.0)
+            self._socket_chunk_prefill()
+            for i in range(iters):
+                t0 = _time.perf_counter()
+                if i + 1 < iters:
+                    hn_pix, hn_lang = host_chunks[i + 1]
+                    ttnn.copy_host_to_device_tensor(hn_pix, self.pixel_values_buf)
+                    ttnn.copy_host_to_device_tensor(hn_lang, self.lang_tokens_buf)
+                    self._socket_chunk_prefill()
+                last_actions = self._socket_chunk_denoise()
+                times_ms.append((_time.perf_counter() - t0) * 1000.0)
+        else:
+            for i in range(iters):
+                t0 = _time.perf_counter()
+                hi_pix, hi_lang = host_chunks[i]
+                ttnn.copy_host_to_device_tensor(hi_pix, self.pixel_values_buf)
+                ttnn.copy_host_to_device_tensor(hi_lang, self.lang_tokens_buf)
+                last_actions = self._run_socket_chunk()
+                times_ms.append((_time.perf_counter() - t0) * 1000.0)
 
         if last_actions is None:
             raise RuntimeError("iters must be >= 1")
