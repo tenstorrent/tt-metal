@@ -625,9 +625,41 @@ __attribute__((noinline)) void process_write_paged() {
     // DPRINT("process_write_paged - pages: {} page_size: {} dispatch_cb_page_size: {}\n", pages, page_size,
     // dispatch_cb_page_size);
 
+    // A page that fits in one packet and starts on a page boundary is written whole, and every such page in a row of
+    // available data is the same length. Count them up front and write the run with the transfer length programmed
+    // once, which also drops the availability check, both clamps and the partial-page branch from the inner loop.
+    // Anything else -- a page larger than a packet, or a page split across the command buffer's data -- falls through
+    // to the general path below.
+    const bool single_packet_pages = page_size <= NOC_MAX_BURST_SIZE;
+    cq_noc_async_write_init_state<CQ_NOC_sndl>(0, 0, 0);
+
     while (write_length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
+
+        if (single_packet_pages && dst_addr_offset == 0 && available_data >= page_size) {
+            uint32_t run = available_data < write_length ? available_data : write_length;
+            noc_write_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT, false>(
+                noc_index, 0, 0, page_size);
+            do {
+                uint64_t dst = get_noc_addr_helper(
+                    interleaved_addr_gen::get_noc_xy<is_dram>(walk_bank, noc_index),
+                    walk_row_addr + interleaved_addr_gen::get_bank_offset<is_dram>(walk_bank));
+                ASSERT(dst == addr_gen.get_noc_addr(page_id, 0));
+                cq_noc_async_write_with_state<CQ_NOC_SNDl, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_CMD_BUF, true>(
+                    static_cast<uint32_t>(data_ptr), dst, page_size);
+                page_id++;
+                if (++walk_bank == num_banks) {
+                    walk_bank = 0;
+                    walk_row_addr += page_size;
+                }
+                data_ptr += page_size;
+                write_length -= page_size;
+                run -= page_size;
+            } while (run >= page_size);
+            continue;
+        }
+
         uint32_t remaining_page_size = page_size - dst_addr_offset;
         uint32_t xfer_size = remaining_page_size > available_data ? available_data : remaining_page_size;
         // Cap the transfer size to the NOC packet size - use of One Packet NOC API (better performance
@@ -638,7 +670,8 @@ __attribute__((noinline)) void process_write_paged() {
             walk_row_addr + interleaved_addr_gen::get_bank_offset<is_dram>(walk_bank) + dst_addr_offset);
         ASSERT(dst == addr_gen.get_noc_addr(page_id, dst_addr_offset));
 
-        noc_async_write<NOC_MAX_BURST_SIZE>(static_cast<uint32_t>(data_ptr), dst, xfer_size);
+        cq_noc_async_write_with_state<CQ_NOC_SNDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_CMD_BUF, true>(
+            static_cast<uint32_t>(data_ptr), dst, xfer_size);
         // If paged write is not completed for a page (dispatch_cb_page_size < page_size) then add offset, otherwise
         // incr page_id.
         if (xfer_size < remaining_page_size) {
