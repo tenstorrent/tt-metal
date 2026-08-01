@@ -1831,6 +1831,30 @@ unexplained is why removing a bandwidth-bound stream that runs concurrently with
 100 % of its wall time — the next round should answer that with a NoC trace of `no_w_xfer` against
 the baseline, not with another issue-side knob.
 
+### Addendum — the weight stream is at its practical limit, on every axis
+
+A correction to this round's own §2: the stream is NOT 100 % exposed. 24.77 MB at the phase-1
+sustained rate the NoC trace measured (~345 GB/s) is **71.8 us of DRAM occupancy** against **39.6 us
+of wall cost**, i.e. **~45 % of it is already hidden** under compute and the collectives. What is
+actually short is the RATE — 345 GB/s against the ~460 GB/s the reference op measured as the wall
+with two request paths — and the suspected cause was `GU_CHUNKS = 3` capping every bank run at the
+chunk width (2 tiles = 1 152 B, exactly what the trace shows).
+
+Measured, live (not stubbed), on the current tree:
+
+| `GU_CHUNKS` | bank run | 128 | 256 | 512 |
+|---|---|---|---|---|
+| 1 | 6 tiles / 3 456 B | 109 469 | 151 133 | 249 165 |
+| 2 | 3 tiles / 1 728 B | 103 686 | 148 050 | 248 414 |
+| **3 (shipped)** | **2 tiles / 1 152 B** | **98 433** | **146 648** | **243 754** |
+| 6 | 1 tile / 576 B | 110 044 | 155 911 | 285 336 |
+
+**Monotone in favour of the shipped value on both sides.** Wider transactions do not pay and neither
+do finer ones; the chunk PIPELINING is worth more than the bank-run width, and 3 is the interior
+optimum. Together with the trid null above, the `WD_AHEAD` 1/4/11 sweep (Perf 6 §3), the `WRUN` null
+and the two-RISC split phase 1 already carries, **every axis of the weight stream is now measured and
+the shipped configuration is the best of them.**
+
 - **Perf achieved**: none. Default path measured unchanged (97 986 / 148 566 / 244 762).
 - **Tests**: golden 45/45. The knob is inert at its default and covered on both settings by the
   existing guard set.
