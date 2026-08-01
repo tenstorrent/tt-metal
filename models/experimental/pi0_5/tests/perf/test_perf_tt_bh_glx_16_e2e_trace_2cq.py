@@ -87,6 +87,15 @@ SEED = 42
 N_CAMS = int(os.environ["PI0_NUM_CAMERAS"])
 LANG_LEN = 256
 PERF_ITERS = int(os.environ.get("PERF_ITERS", "20"))
+# CAP THE PROFILED WINDOW. 20 iters x (1CQ + 2CQ) = 40 full 16-chip chunks; under tracy that is a
+# ~150M-zone / 1.4GB capture that overflows the device profiler's DRAM marker buffers ("markers were
+# dropped", bufferEndIndex = 96000) and dies before flushing cpp_device_perf_report.csv, so the whole
+# profile comes back empty. TT_PERF_LAYERS is the harness's window cap but this pipeline has no layer
+# knob to cap, so cap the ITERATION count instead — the per-op device_ms steering signal needs one
+# representative chunk, not forty. TT_METAL_DEVICE_PROFILER=1 is set ONLY by the tracy run, so the
+# untraced full-pipeline latency gate keeps all 20 iters for its robust median.
+if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+    PERF_ITERS = int(os.environ.get("PERF_PROFILED_ITERS", "1"))
 # One warm-up replay by default (not timed) — the pipeline's own socket build +
 # warm chunk happens inside the loop call, but a WARMUP_ITERS knob is kept for
 # symmetry with the 1×8 test / to absorb any first-call jitter.
@@ -247,3 +256,7 @@ def test_perf_16_socket_traced_2cq():
         )
         print(f"  2CQ samples             : {[round(x, 3) for x in times]}")
         print("=" * 72)
+
+        # Harness-readable headline: the 1CQ median IS the trace+1cq per-chunk wall.
+        print("TRACE_REPLAY_PATH=trace+1cq")
+        print("TRACE_PER_TOKEN_MS=%.4f" % stats_1cq["median"])
