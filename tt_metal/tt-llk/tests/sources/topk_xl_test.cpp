@@ -51,8 +51,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 //                   chunk.
 //   TOPK_XL_GROUP_ID / TOPK_XL_GROUP_SHIFT : generic separate_indices params
 //   TOPK_XL_CORE_ID:         add_lsb_indices core_id, index bits [15:11] (0 .. 31)
-//   TOPK_XL_ASCENDING:       rebuild direction (0 descending, 1 ascending)
-//   TOPK_XL_FUSED_REDUCE:    0 unfused merge/rebuild (op path) | 1 fused
+//   TOPK_XL_ASCENDING:       rebuild direction (false descending, true ascending)
+//   TOPK_XL_FUSED_REDUCE:    false unfused merge/rebuild (op path), true fused
 //   TOPK_XL_CHUNK_BASE_MODE: three ways to init chunk_base:
 //                            0 init_static<hi,lo> | 1 init_upper<hi>(lo) | 2 init(runtime)
 //   TOPK_XL_CHUNK_BASE:      starting chunk_base (must be a multiple of K)
@@ -66,7 +66,7 @@ constexpr bool INDEX_OP_ROW_MAJOR  = (TOPK_XL_INDEX_OP == 0);
 constexpr bool INDEX_OP_SEPARATE   = (TOPK_XL_INDEX_OP == 1);
 constexpr bool INDEX_OP_REMOVE_MSB = (TOPK_XL_INDEX_OP == 2);
 
-constexpr bool FUSED_REDUCE = (TOPK_XL_FUSED_REDUCE != 0);
+constexpr bool FUSED_REDUCE = TOPK_XL_FUSED_REDUCE;
 
 // Second merge operand. `_topk_xl_merge_` reads it at a fixed distance from the
 // first: 64 dest units (one tile) per sequence-tile when fused, 128 (value +
@@ -313,7 +313,7 @@ __attribute__((noinline)) void merge_and_rebuild(bool do_merge)
     {
         topk_xl_merge<K, fused>(SLOT0);
     }
-    topk_xl_rebuild<K, fused>(SLOT0, TOPK_XL_ASCENDING != 0);
+    topk_xl_rebuild<K, fused>(SLOT0, TOPK_XL_ASCENDING);
 }
 
 // Save the starting chunk_base through the requested init flavor.

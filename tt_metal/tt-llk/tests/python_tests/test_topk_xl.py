@@ -16,7 +16,12 @@ import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TopKXLGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    TopKSortDirection,
+    format_dict,
+)
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -147,7 +152,7 @@ def _config(
     group_id=0,
     group_shift=16,
     core_id=0,
-    ascending=False,
+    sort_direction=TopKSortDirection.Descending,
     fused_reduce=False,
     chunk_base_mode=0,
     chunk_base=0,
@@ -181,7 +186,7 @@ def _config(
                 group_id=group_id,
                 group_shift=group_shift,
                 core_id=core_id,
-                ascending=ascending,
+                sort_direction=sort_direction,
                 fused_reduce=fused_reduce,
                 chunk_base_mode=chunk_base_mode,
                 chunk_base=chunk_base,
@@ -601,8 +606,12 @@ def test_topk_xl_rebuild_ascending(K):
     src_A, rows = _build_input(K, num_chunks, K, num_rows, "positive")
     gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
 
-    desc_cfg = _config(K, num_chunks, K, num_rows, src_A, ascending=False)
-    asc_cfg = _config(K, num_chunks, K, num_rows, src_A, ascending=True)
+    desc_cfg = _config(
+        K, num_chunks, K, num_rows, src_A, sort_direction=TopKSortDirection.Descending
+    )
+    asc_cfg = _config(
+        K, num_chunks, K, num_rows, src_A, sort_direction=TopKSortDirection.Ascending
+    )
     # Build both before running either: `prepare()` is the build half of `run()`,
     # and under --compile-producer `run()` skips as soon as the first variant is
     # built, so the second would otherwise never emit its ELF.

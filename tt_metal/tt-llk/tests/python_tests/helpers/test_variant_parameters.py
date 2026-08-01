@@ -539,7 +539,7 @@ class TOPK_XL(TemplateParameter):
     group_id: int = 0
     group_shift: int = 16
     core_id: int = 0
-    ascending: bool = False
+    sort_direction: TopKSortDirection = TopKSortDirection.Descending
     fused_reduce: bool = False
     chunk_base_mode: int = 0
     chunk_base: int = 0
@@ -554,8 +554,8 @@ class TOPK_XL(TemplateParameter):
             f"constexpr std::uint32_t TOPK_XL_GROUP_ID = {self.group_id};",
             f"constexpr std::uint32_t TOPK_XL_GROUP_SHIFT = {self.group_shift};",
             f"constexpr std::uint32_t TOPK_XL_CORE_ID = {self.core_id};",
-            f"constexpr std::uint32_t TOPK_XL_ASCENDING = {int(self.ascending)};",
-            f"constexpr std::uint32_t TOPK_XL_FUSED_REDUCE = {int(self.fused_reduce)};",
+            f"constexpr bool TOPK_XL_ASCENDING = {str(self.sort_direction == TopKSortDirection.Ascending).lower()};",
+            f"constexpr bool TOPK_XL_FUSED_REDUCE = {str(self.fused_reduce).lower()};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE_MODE = {self.chunk_base_mode};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
         ]
