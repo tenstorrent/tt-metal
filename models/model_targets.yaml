@@ -1194,6 +1194,31 @@ targets:
               top5: 97
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
+      # Blackhole Galaxy runs the same Qwen3-32B model on the no-prefetcher path.
+      # Perf seeded from measured batch-32 (seq_len=507) e2e demo runs on BH Galaxy
+      # (TTFT ~1226 ms, ~33.9 tok/s/user); accuracy floor mirrors the WH Galaxy entry
+      # (measured token accuracy 95.6% top-1 / 99.8% top-5 clears it with margin).
+      bh_galaxy_perf:
+        entries:
+          - batch_size: 32
+            seq_len: 507
+            status: active
+            perf:
+              prefill_time_to_first_token: 1225.0
+              decode_t/s/u: 34.0
+              decode_t/s: 1088.0
+            accuracy: {}
+            owner_id: U053W15B6JF # Djordje Ivanovic
+            team: models
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89
+              top5: 97
+            owner_id: U053W15B6JF # Djordje Ivanovic
+            team: models
   qwen3.6-27b:
     aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
     skus:

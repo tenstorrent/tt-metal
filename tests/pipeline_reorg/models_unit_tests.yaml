@@ -479,7 +479,7 @@
       timeout: 10
       tier: 1
     bh_galaxy:
-      timeout: 45
+      timeout: 15
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
