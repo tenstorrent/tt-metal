@@ -703,7 +703,11 @@ def before_loop(
         print(f"      depth-bridge skipped: {str(_bl_e)[:160]}", file=sys.stderr, flush=True)
         print(_tb.format_exc()[-600:], file=sys.stderr, flush=True)
 
-    stages.start("tracy_baseline", "Measuring the baseline latency (trace+1CQ)")
+    # Label the ACTUAL queue count. The measurement runs the resolved perf test, which may be an
+    # operator-supplied harness that opens its own device (pi0.5's is trace+2CQ), so a hardcoded
+    # "1CQ" here is misleading in the run report.
+    _cq_label = os.environ.get("TT_PERF_NUM_CQ", "1")
+    stages.start("tracy_baseline", f"Measuring the baseline latency (trace+{_cq_label}CQ)")
 
     def _run_baseline():
         return profile_model(

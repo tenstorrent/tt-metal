@@ -9,8 +9,15 @@ tests/perf/test_perf_tt_bh_glx_16_e2e_trace_2cq.py profiles. The only 16-chip co
 single-layer unit checks, and a single-layer gate cannot see SigLIP, prefill, the device-to-device KV
 sockets, or the multi-step denoise loop. That gap is not hypothetical for this model: the 16-chip perf
 gate feeds every camera present, so it stayed green straight through a total loss of kv_sdpa mask
-support, and test_l1_single_layer_pcc read 0.999894 both before and after a fix that moved attention
-from PCC 0.389 to 0.9996. A whole-pipeline artifact needs a whole-pipeline gate.
+support, and the single-layer gate read an unchanged value either side of a fix that moved attention
+correlation from roughly four-tenths to essentially one. A whole-pipeline artifact needs a
+whole-pipeline gate.
+
+NOTE FOR TOOLING: tt_hw_planner lifts a gate's threshold by regex -- the FIRST
+(pcc|comp_pcc|assert_with_pcc|allclose)[^0-9]{0,48}(0.9xx) match in this file wins. Keep the
+declaration below the first such occurrence and do not write PCC figures in prose above it, or the
+prose becomes the bar (a docstring number was picked up as 0.999894 once, which fails every
+candidate including the baseline).
 
 Mirrors test_pcc_tt_bh_glx_e2e.py's structure (same torch reference, same seeding discipline) but
 builds the 16-chip pipeline exactly as the perf test does, so the correctness gate and the perf
@@ -72,6 +79,7 @@ LANG_LEN = 256
 # 0.95 matches the other full-model gates (test_pcc_tt_bh_glx_e2e, test_pcc_1x8_vs_torch). The bar is
 # looser than a per-layer 0.99 on purpose: this composes SigLIP + prefill + sockets + a multi-step
 # flow-matching denoise loop, so bf8/bf4 error accumulates across the whole chain.
+# pcc threshold 0.95  <- machine-readable declaration for tt_hw_planner's regex; keep it first.
 PCC_MIN = float(os.environ.get("PI05_E2E_PCC_MIN", "0.95"))
 
 
