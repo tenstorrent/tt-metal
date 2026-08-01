@@ -53,7 +53,7 @@ def main():
 
     CHECKPOINT = os.environ.get(
         "PI05_CHECKPOINT_DIR",
-        "/storage/sdawle/pi05_weights/pi05_libero_finetuned",
+        "/home/tt-admin/pi05_cache/pi05_libero_finetuned",
     )
 
     print("[setup] opening device...")

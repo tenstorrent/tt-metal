@@ -5,7 +5,7 @@
 Architectural diff: our `Pi0_5Model` (pytorch reference) vs openpi's `PI0Pytorch`.
 
 Both models are loaded with the SAME upstream openpi pi05_libero weights
-(converted to PyTorch safetensors at /storage/sdawle/pi05_weights/pi05_libero_upstream).
+(converted to PyTorch safetensors at /home/tt-admin/pi05_cache/pi05_libero_upstream).
 We feed both the same canned observation + same noise + same timestep schedule
 and diff:
   - the final action chunk
@@ -22,7 +22,7 @@ This is the *unambiguous* test that resolves the "is our Pi0_5Model =
 openpi PI0Pytorch?" question, completing the Phase 3 investigation.
 
 Usage:
-    PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/storage/sdawle/openpi/src \\
+    PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/home/tt-admin/pi05_cache/openpi/src \\
         python_env/bin/python models/experimental/pi0_5/tests/pcc/test_pi05_upstream_vs_ours_activation_diff.py
 """
 
@@ -39,12 +39,12 @@ _fake.check_whether_transformers_replace_is_installed_correctly = lambda: True
 sys.modules["transformers.models.siglip.check"] = _fake
 
 REPO_ROOT = "/home/tt-admin/sdawle/pi0/tt-metal"
-OPENPI_SRC = "/storage/sdawle/openpi/src"
+OPENPI_SRC = "/home/tt-admin/pi05_cache/openpi/src"
 for p in (REPO_ROOT, OPENPI_SRC):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-UPSTREAM_CKPT = Path("/storage/sdawle/pi05_weights/pi05_libero_upstream")
+UPSTREAM_CKPT = Path("/home/tt-admin/pi05_cache/pi05_libero_upstream")
 
 
 def make_canned_observation(device: str = "cpu"):
@@ -57,7 +57,7 @@ def make_canned_observation(device: str = "cpu"):
     import sentencepiece
 
     sp = sentencepiece.SentencePieceProcessor()
-    sp.load("/storage/sdawle/pi05_weights/paligemma_tokenizer.model")
+    sp.load("/home/tt-admin/pi05_cache/tokenizer/paligemma_tokenizer.model")
     # Match openpi's tokenizer.py:33 — `bos + <desc> + "\n"`, no Task/Action scaffold.
     text = "pick up the bowl"
     tokens = sp.encode(text, add_bos=True) + sp.encode("\n")

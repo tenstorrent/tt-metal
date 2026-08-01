@@ -18,7 +18,7 @@ Pipeline:
     → env.step each of the 50 actions
 
 Run:
-  PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/storage/sdawle/libero_repo \\
+  PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/home/tt-admin/pi05_cache/libero_repo \\
   MUJOCO_GL=osmesa python_env/bin/python \\
   models/experimental/pi0_5/eval/libero_rollout.py --num-episodes 5 --max-steps 200
 """
@@ -44,7 +44,7 @@ sys.modules["transformers.models.siglip.check"] = _fake
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
-LIBERO_REPO = os.environ.get("LIBERO_REPO_PATH", "/storage/sdawle/libero_repo")
+LIBERO_REPO = os.environ.get("LIBERO_REPO_PATH", "/home/tt-admin/pi05_cache/libero_repo")
 if LIBERO_REPO not in sys.path:
     sys.path.insert(0, LIBERO_REPO)
 os.environ.setdefault("MUJOCO_GL", "osmesa")
@@ -114,7 +114,7 @@ class Pi0_5LiberoAdapter:
         self,
         checkpoint_dir: str,
         tokenizer_path: str = os.environ.get(
-            "PI0_TOKENIZER_PATH", "/storage/sdawle/pi05_weights/paligemma_tokenizer.model"
+            "PI0_TOKENIZER_PATH", "/home/tt-admin/pi05_cache/tokenizer/paligemma_tokenizer.model"
         ),
         backend: str = "pytorch",
         ttnn_device=None,
@@ -1004,7 +1004,7 @@ SUITE_MAX_STEPS = {
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint", default="/storage/sdawle/pi05_weights/pi05_libero_upstream")
+    ap.add_argument("--checkpoint", default="/home/tt-admin/pi05_cache/pi05_libero_upstream")
     ap.add_argument("--suite", default="libero_spatial", help="Single suite (legacy; overridden by --suites).")
     ap.add_argument(
         "--suites",

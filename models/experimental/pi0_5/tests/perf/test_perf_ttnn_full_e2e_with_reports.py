@@ -31,7 +31,7 @@ How to run:
     TT_VISIBLE_DEVICES=0 \
     PI0_UPSTREAM_MASKS=1 \
     QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1 \
-    PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/storage/sdawle/openpi/src \
+    PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/home/tt-admin/pi05_cache/openpi/src \
     /home/tt-admin/sdawle/pi0/tt-metal/python_env/bin/python -m pytest \
       models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_with_reports.py \
       -x -s --no-header

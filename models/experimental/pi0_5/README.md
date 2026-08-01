@@ -803,7 +803,7 @@ CLI flag notes:
 
 | flag | default | meaning |
 |---|---|---|
-| `--checkpoint` | `/storage/sdawle/pi05_weights/pi05_libero_upstream` | path to model.safetensors + config + assets/. Stale default — pass yours. |
+| `--checkpoint` | `/home/tt-admin/pi05_cache/pi05_libero_upstream` | path to model.safetensors + config + assets/. Stale default — pass yours. |
 | `--suite` / `--suites` | `libero_spatial` | one (`--suite`) or many (`--suites` nargs+) LIBERO suites |
 | `--task-idx` / `--task-range` | `0` | single task or inclusive `(start, end)` range |
 | `--num-episodes` | `3` | initial states per task (max 50; LIBERO ships 50 canonical inits per task) |

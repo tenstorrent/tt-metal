@@ -107,7 +107,7 @@ def _call_sample_actions(model, images_ttnn, img_masks_ttnn, lang_tokens_ttnn, l
 
 NUM_IMAGE_VIEWS = 3  # pi0.5 LIBERO: agentview + wrist + empty (-1 fill)
 IMG_SIZE = 224
-TOKENIZER_PATH = "/storage/sdawle/pi05_weights/paligemma_tokenizer.model"
+TOKENIZER_PATH = "/home/tt-admin/pi05_cache/tokenizer/paligemma_tokenizer.model"
 
 
 def _resize_with_pad_centered(img_hwc_uint8: np.ndarray, size: int = IMG_SIZE) -> np.ndarray:

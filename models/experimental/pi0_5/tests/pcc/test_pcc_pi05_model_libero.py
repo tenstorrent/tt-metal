@@ -41,7 +41,7 @@ from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", "/home/ttuser/experiments/pi0_5/tt-metal")
 CHECKPOINT_PATH = os.environ.get(
     "PI05_CHECKPOINT_DIR",
-    "/storage/sdawle/pi05_weights/pi05_libero_finetuned",
+    "/home/tt-admin/pi05_cache/pi05_libero_finetuned",
 )
 BATCH_SIZE = 1
 SEED = 42

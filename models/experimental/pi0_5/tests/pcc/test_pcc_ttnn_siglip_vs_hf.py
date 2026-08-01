@@ -11,7 +11,7 @@ Blackhole (without the `PI0_SIGLIP_HF=1` host bridge).
 
 Usage:
     TT_METAL_HOME=/home/tt-admin/sdawle/pi0/tt-metal TT_VISIBLE_DEVICES=0 \
-      PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/storage/sdawle/openpi/src \
+      PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/home/tt-admin/pi05_cache/openpi/src \
       python_env/bin/python -m pytest \
       models/experimental/pi0_5/tests/pcc/test_pcc_ttnn_siglip_vs_hf.py \
       -x -s --no-header
@@ -31,7 +31,7 @@ _fake = _types.ModuleType("transformers.models.siglip.check")
 _fake.check_whether_transformers_replace_is_installed_correctly = lambda: True
 sys.modules["transformers.models.siglip.check"] = _fake
 
-UPSTREAM_CKPT = Path("/storage/sdawle/pi05_weights/pi05_libero_upstream")
+UPSTREAM_CKPT = Path("/home/tt-admin/pi05_cache/pi05_libero_upstream")
 
 
 def _hf_siglip_full_output(weights_vis: dict, pixel_values: torch.Tensor):
