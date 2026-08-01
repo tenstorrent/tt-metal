@@ -35,7 +35,7 @@ void MoeRoutingRemapDeviceOperation::validate_on_program_cache_miss(
 
     const auto mesh_view = input_routing_weights.device()->get_view();
     TT_FATAL(
-        expert_parallel_size == (cluster_axis == 0) ? mesh_view.num_cols() : mesh_view.num_rows(),
+        expert_parallel_size == ((cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols()),
         "expert parallel size should be the same as size of cluster axis");
 
     const auto& optional_output_routing_weights = tensor_args.optional_output_routing_weights;
