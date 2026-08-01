@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import torch
 
 from models.common.sampling.generator import SamplingGenerator, SeedManager
+from models.tt_transformers.tt.common import Mode
 
 
 def _fake_sampling_generator():
@@ -74,6 +75,93 @@ def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
         generator_cls.remap_rope_deltas(generator, [3, 1, 2, 3])
 
         assert generator.model.rope_setup.rope_deltas.tolist() == [40, 20, 30, 40]
+
+
+def test_shared_generator_routes_slot_remap_to_exactly_one_sampling_owner():
+    from models.tt_transformers.tt.generator import Generator
+
+    def run(*, sampling_params=None, defer_device_sampling=False, fail_readback=False):
+        events = []
+        fake = SimpleNamespace(
+            mode=Mode.DECODE,
+            model=[SimpleNamespace(switch_mode=lambda mode: None)],
+            data_parallel=1,
+            _decode_forward_trace_text=lambda **kwargs: events.append("decode") or "logits",
+            sample_decode_on_device=lambda output, **kwargs: events.append(("sample", kwargs["slot_remap"]))
+            or "tokens",
+            read_decode_output=lambda output: events.append("read") or output,
+            process_decode_output_host=lambda output, **kwargs: (_ for _ in ()).throw(RuntimeError("readback"))
+            if fail_readback
+            else events.append("process")
+            or output,
+            _apply_sampling_slot_remap=lambda remap: events.append(("host-remap", remap)),
+        )
+
+        try:
+            result = Generator.decode_forward(
+                fake,
+                torch.zeros((1, 1), dtype=torch.int64),
+                torch.zeros((1,), dtype=torch.int64),
+                sampling_params=sampling_params,
+                slot_remap=[0],
+                defer_device_sampling=defer_device_sampling,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
+            )
+        except RuntimeError:
+            result = None
+        return events, result
+
+    host_events, _ = run()
+    device_events, _ = run(sampling_params=object())
+    deferred_events, _ = run(defer_device_sampling=True)
+    failed_host_events, _ = run(fail_readback=True)
+
+    assert host_events == ["decode", "read", "process", ("host-remap", [0])]
+    assert device_events == ["decode", ("sample", [0]), "read", "process"]
+    assert deferred_events == ["decode"]
+    assert failed_host_events == ["decode", "read"]
+
+
+def test_galaxy_generator_routes_slot_remap_to_exactly_one_sampling_owner():
+    from models.demos.llama3_70b_galaxy.tt.generator import Generator
+
+    def run(*, sampling_params=None, defer_device_sampling=False):
+        events = []
+        fake = SimpleNamespace(
+            model=SimpleNamespace(is_decode_setup=True),
+            _decode_easy_trace_text=lambda **kwargs: events.append("decode") or ("logits", None),
+            sample_decode_on_device=lambda output, **kwargs: events.append(("sample", kwargs["slot_remap"]))
+            or ("tokens", "logprobs"),
+            read_decode_output=lambda output, **kwargs: events.append("read") or output,
+            process_decode_output_host=lambda output, **kwargs: events.append("process") or output,
+            _apply_sampling_slot_remap=lambda remap: events.append(("host-remap", remap)),
+        )
+
+        result = Generator.decode_forward(
+            fake,
+            torch.zeros((1, 1), dtype=torch.int64),
+            torch.zeros((1,), dtype=torch.int64),
+            kv_cache=[object()],
+            sampling_params=sampling_params,
+            slot_remap=[0],
+            defer_device_sampling=defer_device_sampling,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+        return events, result
+
+    host_events, _ = run()
+    device_events, _ = run(sampling_params=object())
+    deferred_events, _ = run(defer_device_sampling=True)
+
+    assert host_events == ["decode", "read", "process", ("host-remap", [0])]
+    assert device_events == ["decode", ("sample", [0]), "read", "process"]
+    assert deferred_events == ["decode"]
 
 
 def test_unseeded_decode_reset_loads_fresh_device_seed(monkeypatch):
