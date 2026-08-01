@@ -6,6 +6,7 @@
 
 #include "api/compute/tilize.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
@@ -73,6 +74,11 @@ inline void mul_and_accumulate_block(
             // Restore srcA to in0's format for the next iteration's mul unpack.
             reconfig_data_format_srca(in0_cb_id);
         }
+#ifdef SFPU_OP_INIT_ACTIVATION
+        if (is_last_tap) {
+            SFPU_OP_FUNC_ACTIVATION
+        }
+#endif
         tile_regs_commit();
 
         // scratch_dfb and out_dfb share the output data format, so packing to either target needs no
@@ -117,6 +123,9 @@ inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowB
                 mul_tiles_init(in0_cb_id, in1_cb_id, tap != 0 ? 1U : 0U, __builtin_LINE());
                 mul_tiles(in0_cb_id, in1_cb_id, act_tile_idx, weight_tile_idx, 0);
             }
+#ifdef SFPU_OP_INIT_ACTIVATION
+            SFPU_OP_FUNC_ACTIVATION
+#endif
             tile_regs_commit();
 
             out_dfb.reserve_back(1);
@@ -133,19 +142,18 @@ inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowB
 
 void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_num_blocks_h = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_num_blocks_w = get_compile_time_arg_val(4);
-    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(8);
-    constexpr uint32_t kernel_width = get_compile_time_arg_val(9);
-    constexpr bool coalesce_kw_reads = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_num_blocks_h = get_compile_time_arg_val(2);
+    constexpr uint32_t in0_num_blocks_w = get_compile_time_arg_val(3);
+    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(7);
+    constexpr uint32_t kernel_width = get_compile_time_arg_val(8);
+    constexpr bool coalesce_kw_reads = get_compile_time_arg_val(9) == 1;
     // Read-back scratch for the dest-reuse accumulation. The host points this at out_dfb for a single
     // height block (in-place) or at a dedicated scratch CB for multiple blocks.
-    constexpr uint32_t partials_cb_id = get_compile_time_arg_val(11);
+    constexpr uint32_t partials_cb_id = get_compile_time_arg_val(10);
 
     DataflowBuffer dfb_tilized_in0(tilized_in0_cb_id);
     DataflowBuffer dfb_in1(in1_cb_id);
@@ -156,6 +164,9 @@ void kernel_main() {
     // The pack target never changes (we only ever pack to out_dfb), so no further pack reconfig is
     // needed for the lifetime of the kernel.
     binary_op_init_common(in0_cb_id, in1_cb_id, out_cb_id);
+#ifdef SFPU_OP_INIT_ACTIVATION
+    SFPU_OP_INIT_ACTIVATION
+#endif
 
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
         for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
