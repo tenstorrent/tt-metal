@@ -80,10 +80,15 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
         reload_page_table: bool,
         reload_sampling_params: bool,
         reset_sampling_state: bool,
+        slot_remap=None,
         **kwargs,
     ):
         if not reload_inputs or reload_page_table or reload_sampling_params or reset_sampling_state:
             raise ValueError("T3000 Llama requires a full host-input reload and has no " "device sampling state")
+        # This host-only adapter has no persistent model state keyed by vLLM's
+        # condensed batch slots. Contract v1 still delivers the layout remap on
+        # every decode so stateful adapters can consume it; accepting and
+        # ignoring it here is therefore intentional.
         return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):

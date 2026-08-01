@@ -121,6 +121,13 @@ four boolean commands on every decode:
 - `reload_sampling_params`: upload sampling configuration.
 - `reset_sampling_state`: rebuild mutable penalty/RNG state for the layout.
 
+The plugin also sends `slot_remap` as layout data on every version-1 decode,
+including host-sampling steps. `slot_remap[i] = j` means every persistent state
+owned by new slot `i` must take the continuing request state from old slot `j`
+before the forward reads it. This is broader than sampler state: recurrent or
+convolution state indexed by decode slot must be remapped too. Stateless
+adapters accept and may ignore the value.
+
 Generators execute these commands without adding page-table comparisons,
 sampling-mode checks, or model-specific forced reloads. The corresponding
 vLLM plugin falls back to the legacy `reset_batch` interface for adapters that
@@ -152,8 +159,10 @@ A model wrapper may opt in only if all of the following hold:
   RoPE trace inputs.
 - All four reload commands are honored independently, without model-local
   heuristics escalating page-table-only refresh into a full reload.
-- Slot remap, sampling-parameter upload, penalty/RNG reset, and seed advancement
-  occur in that order, with one seed advance per sampled token.
+- Slot remap applies before the forward to every persistent slot-indexed model
+  state in both sampling modes. For device sampling, parameter upload,
+  penalty/RNG reset, and seed advancement follow in that order, with one seed
+  advance per sampled token.
 - Persistent buffers remain valid through deferred readback and until an
   explicit reload replaces them.
 

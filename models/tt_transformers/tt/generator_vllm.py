@@ -627,6 +627,10 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         reload_page_table = kwargs.pop("reload_page_table")
         reload_sampling_params = kwargs.pop("reload_sampling_params")
         reset_sampling_state = kwargs.pop("reset_sampling_state")
+        # Mllama has no persistent model state keyed by vLLM's condensed
+        # decode slots. Contract v1 nevertheless supplies slot_remap for every
+        # decode so adapters with recurrent state can consume it.
+        kwargs.pop("slot_remap", None)
         if not reload_inputs or reload_page_table or reload_sampling_params or reset_sampling_state:
             raise ValueError("Mllama requires a full host-input reload and has no " "device sampling state")
         logits = super().decode_forward_llama_vision(*args, **kwargs)
