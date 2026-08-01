@@ -24,6 +24,7 @@ from ttexalens.tt_exalens_lib import (
     parse_elf,
     read_from_device,
     read_word_from_device,
+    read_words_from_device,
     write_to_device,
     write_words_to_device,
 )
@@ -194,6 +195,10 @@ class TestConfig:
     INFRA_TESTING: ClassVar[bool] = False
 
     # CLI perf counter flags
+    # Poll backoff for wait_for_tensix_operations_finished. The host poll is unthrottled upstream and
+    # overlaps the whole kernel, injecting L1 traffic into the core under measurement; 200 us is longer
+    # than the short perf kernels, so they complete before the first poll (tt-metal#51592, H2).
+    MAILBOX_POLL_THROTTLE_S: ClassVar[float] = 200e-6
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
     DUMP_RAW_COUNTERS: ClassVar[bool] = False
     DUMP_RAW_METRICS: ClassVar[bool] = False
@@ -1535,14 +1540,42 @@ class TestConfig:
         )
 
         completed = set()
+
+        # This loop runs concurrently with the kernel, and every read is a non-posted PCIe read of an
+        # L1 word issued into the core being measured (tt-metal#51592, H2). Two mitigations:
+        #
+        # 1. Coalesce. The polled mailboxes are contiguous — Unpacker at base+0, Math +4, Packer +8,
+        #    and Sfpu +12 on Quasar (llk_params.py Mailboxes*) — so one read_words_from_device replaces
+        #    three or four separate reads. The base is taken from the enum, never hardcoded, because
+        #    coverage builds relocate the block (MailboxesCoverage at 0x6DFB8).
+        # 2. Throttle. Nothing here needs sub-microsecond completion detection: the counter and
+        #    profiler readout both happen strictly after this returns. A short sleep lets short kernels
+        #    finish before the first poll, removing essentially all in-window host traffic. It is
+        #    skipped when a poll_callback is installed, since device-print drain wants responsiveness.
+        polled = sorted(mailboxes, key=lambda m: m.value)
+        base = polled[0].value
+        contiguous = all(m.value == base + 4 * i for i, m in enumerate(polled))
+        throttle = TestConfig.MAILBOX_POLL_THROTTLE_S if poll_callback is None else 0.0
+
         end_time = time.time() + timeout
         while time.time() < end_time:
-            for mailbox in mailboxes - completed:
-                if (
-                    read_word_from_device(TestConfig.TENSIX_LOCATION, mailbox.value)
-                    == KERNEL_COMPLETE
-                ):
-                    completed.add(mailbox)
+            if throttle:
+                time.sleep(throttle)
+
+            if contiguous:
+                words = read_words_from_device(
+                    TestConfig.TENSIX_LOCATION, base, word_count=len(polled)
+                )
+                completed.update(
+                    m for m, w in zip(polled, words) if w == KERNEL_COMPLETE
+                )
+            else:
+                for mailbox in mailboxes - completed:
+                    if (
+                        read_word_from_device(TestConfig.TENSIX_LOCATION, mailbox.value)
+                        == KERNEL_COMPLETE
+                    ):
+                        completed.add(mailbox)
 
             if poll_callback is not None:
                 poll_callback()
