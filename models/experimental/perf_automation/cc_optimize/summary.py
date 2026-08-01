@@ -374,42 +374,54 @@ def _ledger_pair(kind: str, model: str = "", task: str = ""):
         return None, None
 
 
+def _single_reading(title: str, row) -> str | None:
+    """One measurement, stated plainly, with no delta implied.
+
+    The depth travels WITH the number because that is the axis that made the pair incomparable in the
+    first place: "547.80 ms (96 layers)" cannot be silently re-read as a full-model result the way a
+    bare 547.80 can.
+    """
+    if not isinstance(row, dict):
+        return None
+    v = row.get("value_ms")
+    if not isinstance(v, (int, float)) or v <= 0:
+        return None
+    d = str(row.get("depth") or "unknown")
+    return "%s (%s):  %.2f ms   (single reading — no comparable before/after pair)" % (
+        title,
+        "all layers" if d == "all" else "%s layers" % d,
+        v,
+    )
+
+
 def _ledger_line(kind: str, title: str, model: str = "", task: str = ""):
-    """Render one before/after line from the ledger, or None when it has nothing to say."""
+    """Render one before/after line from the ledger.
+
+    A DELTA needs two readings of the same work. Without that pair there is still a measurement worth
+    showing, so the line degrades to the single latest reading rather than to a subtraction nobody can
+    trust -- see _single_reading for why the arrow is dropped instead of the whole line.
+    """
     try:
         led = _ledger()
         a, b = _ledger_pair(kind, model, task)
         if not a and not b:
             return None
-        if a and not b:
-            # A before with no after yet is the normal state for most of a run. Returning None here
-            # printed "not measured" over a reading the ledger actually held, hiding the anchor until
-            # the first after landed.
-            _d = str(a.get("depth") or "unknown")
-            return "%s (%s):  %.2f ms  ->  (after not measured yet)" % (
-                title,
-                "all layers" if _d == "all" else "%s layers" % _d,
-                a.get("value_ms"),
-            )
-        if b and not a:
-            # This line's whole content is before -> after. With no baseline there is no comparison to
-            # make, and printing the current value alone on a delta line is noise in a report that
-            # goes out for confirmation -- the value already appears where it means something (the
-            # roofline "measured"). Omit the line entirely rather than announce a missing anchor.
-            return None
+        if not a or not b:
+            # One reading only: the normal state for most of a run (before, no after yet), or an after
+            # with no anchor. Show the number, not a half-drawn arrow.
+            return _single_reading(title, b or a)
         av, bv = a.get("value_ms"), b.get("value_ms")
         depth = a.get("depth") or "unknown"
         dl = "all layers" if str(depth) == "all" else "%s layers" % depth
         ok, _why = led.comparable(a, b)
         if not ok:
-            # OMIT, do not disclaim. Two reports shipped a line whose numbers described different
-            # work -- "before 547.90 -> after 547.80 (all vs 96)", the same unoptimized build profiled
-            # twice, and "before 296.70 -> after 117.40 (2 vs all)", a 60% "win" that is purely the
-            # depth stamp. The disclaimer was printed and the numbers were read anyway. A pair that
-            # cannot be subtracted has strictly less to say than a missing anchor, which this same
-            # function already drops on the grounds that the live value appears in the roofline
-            # block where it means something. The rows stay in the ledger; only the subtraction goes.
-            return None
+            # DO NOT SUBTRACT, and do not disclaim either. Two reports shipped a headline whose numbers
+            # described different work -- "before 547.90 -> after 547.80 (all vs 96)", the same
+            # unoptimized build profiled twice, and "before 296.70 -> after 117.40 (2 vs all)", a 60%
+            # "win" that is purely the depth stamp. The disclaimer was printed after the numbers and
+            # the numbers are what got read. The latest reading is still a real measurement of a real
+            # build, so it survives; only the arrow between two incommensurable ones goes.
+            return _single_reading(title, b)
         pct = led.delta_pct(a, b)
         spd = (av / bv) if bv else 1.0
         _der = " ".join(t for t, r in (("before", a), ("after", b)) if isinstance(r, dict) and r.get("derived"))

@@ -214,17 +214,20 @@ def test_measured_rows_carry_no_marker(tmp_path, monkeypatch):
     assert "DERIVED" not in sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "", "")
 
 
-def test_a_line_with_no_baseline_is_omitted_entirely(tmp_path, monkeypatch):
-    """A before -> after line has nothing to say with only an after, and "(before not measured)" is
-    noise in a confirmation report -- the current value already appears in the roofline. Omit it."""
+def test_a_line_with_no_baseline_shows_the_reading_without_an_arrow(tmp_path, monkeypatch):
+    """An after with no anchor cannot be a before -> after line, but it IS a measurement. It used to
+    be dropped on the grounds that the roofline carries the live value; that reasoning held only while
+    the alternative was a misleading arrow. A bare number is neither."""
     sm, led = _sm_and_led()
     monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
     led.record(led.KIND_TRACE_PASS, led.PHASE_AFTER, 9.34, depth="16", mode="tracy-trace")
-    assert sm._ledger_line(led.KIND_TRACE_PASS, "tracy trace pass", "", "") is None
+    solo = sm._ledger_line(led.KIND_TRACE_PASS, "tracy trace pass", "", "")
+    assert solo and "9.34" in solo and "->" not in solo, solo
 
     led.record(led.KIND_TRACE_PASS, led.PHASE_BEFORE, 43.0, depth="16", mode="tracy-trace")
-    # once a real baseline exists the line returns
-    assert "43.00 ms" in (sm._ledger_line(led.KIND_TRACE_PASS, "tracy trace pass", "", "") or "")
+    # once a real baseline exists the ARROW returns, and with it the delta
+    paired = sm._ledger_line(led.KIND_TRACE_PASS, "tracy trace pass", "", "")
+    assert "43.00 ms" in (paired or "") and "->" in (paired or ""), paired
 
 
 def test_a_baseline_with_no_after_yet_still_shows(tmp_path, monkeypatch):

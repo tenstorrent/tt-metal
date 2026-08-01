@@ -152,16 +152,17 @@ def test_report_uses_the_ledger_and_ignores_the_foreign_anchor(tmp_path, monkeyp
     assert "16 layers" in line and "+73.7%" in line, line
 
 
-def test_report_omits_a_mismatched_ledger_pair(tmp_path, monkeypatch):
+def test_report_drops_the_arrow_on_a_mismatched_ledger_pair(tmp_path, monkeypatch):
     m = _mod()
     line = _render_with_ledger(
         tmp_path,
         monkeypatch,
         [(m.KIND_EAGER, m.PHASE_BEFORE, 832.93, "2", "eager"), (m.KIND_EAGER, m.PHASE_AFTER, 1088.15, "16", "eager")],
     )
-    # OMITTED, not disclaimed. The disclaimer shipped in two real reports and was read past -- see
-    # test_report_omits_uncomparable_pairs.py. A pair that cannot be subtracted renders as nothing.
-    assert not line, line
+    # NO ARROW, no disclaimer. The disclaimer shipped in two real reports and was read past -- see
+    # test_report_omits_uncomparable_pairs.py. What survives is the latest reading as a bare number.
+    assert "1088.15" in line and "16 layers" in line, line
+    assert "832.93" not in line and "->" not in line, line
 
 
 def test_a_garbage_profile_is_never_recorded_as_the_original(tmp_path, monkeypatch):
@@ -280,5 +281,8 @@ def test_a_before_with_no_after_yet_is_still_reported(tmp_path, monkeypatch):
     )
     line = next(l for l in sm.render_summary(kl, model="mdl", task="main").splitlines() if "eager per-op" in l)
     assert "2464.18" in line, line
-    assert "not measured yet" in line, line
+    # A half-drawn arrow into "(after not measured yet)" became a bare number: the anchor is still
+    # shown, which is the point this test defends, without implying a comparison that has no second
+    # term. See test_report_omits_uncomparable_pairs.py.
+    assert "->" not in line, line
     assert line.strip() != "eager per-op device time: not measured (no ledger reading for this run)"

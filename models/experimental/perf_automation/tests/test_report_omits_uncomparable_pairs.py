@@ -11,9 +11,9 @@ The first is the same unoptimized build measured twice (the 'after' is the disco
 before a single win landed) -- 0.02% apart, a delta of nothing dressed as a result. The second is
 worse: a 2-layer baseline against an all-layer 'after', which reads as a 60% win and is an artifact
 of the depth stamp. Printing the disclaimer was not enough; a reader takes the two numbers and
-ignores the tail. summary.py already argues this case for a missing anchor -- "the value already
-appears where it means something (the roofline 'measured'). Omit the line entirely" -- and an
-incomparable pair has strictly less to say than a missing one.
+ignores the tail. So the ARROW goes, not the line: what survives is the single latest reading with
+its depth attached ("547.80 ms (96 layers)"), which is a real measurement of a real build and cannot
+be silently re-read as a delta.
 
 The risk this file guards in the other direction: over-deleting. A COMPARABLE pair must still render
 with its delta, or the fix silently blinds the headline the whole report exists to carry.
@@ -59,32 +59,39 @@ def _write(led, model, task, kind, phase, ms, depth, mode="eager", source="test"
 # ---------------------------------------------------------------- the two real reports
 
 
-def test_the_gemma3_pair_of_identical_baselines_renders_nothing(led_sm):
-    """all vs 96: the same build profiled twice, 0.09 ms apart. There is no result here."""
+def test_the_gemma3_pair_degrades_to_the_latest_reading(led_sm):
+    """all vs 96: the same build profiled twice, 0.09 ms apart. No delta -- but 547.80 is a real
+    number and the report should say so, with its depth, and without an arrow."""
     led, sm = led_sm
     _write(led, "gemma3", "main", led.KIND_EAGER, led.PHASE_BEFORE, 547.8951, "all")
     _write(led, "gemma3", "main", led.KIND_EAGER, led.PHASE_AFTER, 547.8010, "96")
     line = sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "gemma3", "main")
-    assert line is None, line
+    assert line and "547.80" in line and "96 layers" in line, line
+    assert "->" not in line and "547.89" not in line, line
+    assert "%" not in line and "x)" not in line, line
 
 
-def test_the_two_layer_against_all_layer_pair_renders_nothing(led_sm):
-    """2 vs all: reads as a 60% win, is a depth artifact. The dangerous one."""
+def test_the_two_layer_against_all_layer_pair_shows_no_win(led_sm):
+    """2 vs all: reads as a 60% win, is a depth artifact. The dangerous one -- the 296.70 must not
+    appear at all, or a reader reconstructs the fake delta themselves."""
     led, sm = led_sm
     _write(led, "m2", "main", led.KIND_EAGER, led.PHASE_BEFORE, 296.70, "2")
     _write(led, "m2", "main", led.KIND_EAGER, led.PHASE_AFTER, 117.40, "all")
     line = sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "m2", "main")
-    assert line is None, line
+    assert line and "117.40" in line and "all layers" in line, line
+    assert "296.70" not in line and "->" not in line, line
 
 
-def test_no_rendered_line_anywhere_still_carries_the_disclaimer(led_sm):
-    """The disclaimer existed because the line was printed. No line, no disclaimer -- and no path
-    may reintroduce it by rendering the text and hoping the reader reaches the tail."""
+def test_no_rendered_line_anywhere_carries_a_disclaimer_or_a_delta(led_sm):
+    """The disclaimer existed to excuse a subtraction. With no subtraction there is nothing to
+    excuse, and no kind may reintroduce either."""
     led, sm = led_sm
     for kind in (led.KIND_EAGER, led.KIND_TRACE_PASS, led.KIND_FULLPIPE):
         _write(led, "m3", "main", kind, led.PHASE_BEFORE, 100.0, "2")
         _write(led, "m3", "main", kind, led.PHASE_AFTER, 50.0, "all")
-        assert sm._ledger_line(kind, kind, "m3", "main") is None, kind
+        line = sm._ledger_line(kind, kind, "m3", "main")
+        assert line and "50.00" in line, (kind, line)
+        assert "NOT COMPARABLE" not in line and "->" not in line, (kind, line)
 
 
 # ---------------------------------------------------------------- the other direction
@@ -112,21 +119,38 @@ def test_a_comparable_pair_that_got_slower_still_renders(led_sm):
     assert line is not None and "140.00" in line, line
 
 
-def test_before_with_no_after_still_says_so(led_sm):
-    """The normal state for most of a run, and a DIFFERENT case: one credible reading exists and the
-    report should show it. Only the uncomparable PAIR disappears."""
+def test_before_with_no_after_prints_the_number(led_sm):
+    """The normal state for most of a run: one credible reading, shown as a number rather than as a
+    half-drawn arrow into nothing."""
     led, sm = led_sm
     _write(led, "ok3", "main", led.KIND_EAGER, led.PHASE_BEFORE, 300.0, "all")
     line = sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "ok3", "main")
-    assert line is not None and "after not measured yet" in line, line
+    assert line and "300.00" in line and "->" not in line, line
 
 
-def test_mode_and_stage_mismatches_are_omitted_too(led_sm):
+def test_after_with_no_before_prints_the_number_too(led_sm):
+    """Previously omitted entirely. A reading with no anchor is still a reading."""
+    led, sm = led_sm
+    _write(led, "ok4", "main", led.KIND_EAGER, led.PHASE_AFTER, 88.0, "16")
+    line = sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "ok4", "main")
+    assert line and "88.00" in line and "16 layers" in line, line
+
+
+def test_a_junk_reading_prints_nothing(led_sm):
+    """Degrading to a single number must not degrade to a single ZERO -- a 0.0 ms 'measurement' is a
+    failed capture, and printing it as the current state is worse than printing nothing."""
+    led, sm = led_sm
+    _write(led, "ok5", "main", led.KIND_EAGER, led.PHASE_AFTER, 0.0, "16")
+    assert sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "ok5", "main") is None
+
+
+def test_mode_and_stage_mismatches_lose_the_arrow_too(led_sm):
     """comparable() guards three axes. Depth is the one that bit us; the fix must not be depth-only."""
     led, sm = led_sm
     _write(led, "m4", "main", led.KIND_EAGER, led.PHASE_BEFORE, 100.0, "16", mode="eager")
     _write(led, "m4", "main", led.KIND_EAGER, led.PHASE_AFTER, 50.0, "16", mode="tracy-trace")
-    assert sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "m4", "main") is None
+    line = sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "m4", "main")
+    assert line and "->" not in line, line
 
 
 # ---------------------------------------------------------------- the whole report
@@ -152,9 +176,10 @@ def test_the_rendered_report_has_no_eager_line_and_no_placeholder(led_sm, tmp_pa
     _write(led, "gemma3", "main", led.KIND_FULLPIPE, led.PHASE_AFTER, 34.82, "all", mode="trace")
     text = _render(sm, "gemma3", "main", tmp_path)
     assert "NOT COMPARABLE" not in text
-    assert "eager per-op device time" not in text, text
     assert "no ledger reading for this run" not in text, text
-    # the real result must survive untouched
+    # the eager line survives as ONE number; the fake pairing does not
+    assert "547.80" in text and "547.89" not in text, text
+    # the real result must survive untouched, arrow and all
     assert "84.05" in text and "34.82" in text, text
 
 
@@ -170,13 +195,13 @@ def test_an_all_uncomparable_report_still_renders(led_sm, tmp_path):
     assert "NOT COMPARABLE" not in text
 
 
-def test_omission_is_not_a_silent_data_loss(led_sm):
+def test_dropping_the_arrow_is_not_a_silent_data_loss(led_sm):
     """The rows stay in the ledger. The report declines to SUBTRACT them; it does not delete them,
     so the pairing is still diagnosable after the fact."""
     led, sm = led_sm
     _write(led, "m6", "main", led.KIND_EAGER, led.PHASE_BEFORE, 547.8951, "all")
     _write(led, "m6", "main", led.KIND_EAGER, led.PHASE_AFTER, 547.8010, "96")
-    assert sm._ledger_line(led.KIND_EAGER, "e", "m6", "main") is None
+    assert "->" not in (sm._ledger_line(led.KIND_EAGER, "e", "m6", "main") or "")
     rs = led.rows(led.KIND_EAGER, model="m6", task="main")
     assert len(rs) == 2 and {r["phase"] for r in rs} == {"before", "after"}
 
