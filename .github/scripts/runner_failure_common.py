@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-08-01-v3"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-08-01-v4"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -145,6 +145,12 @@ ERROR_SIGNATURES = (
         key="PHYSICAL_DISCOVERY_FAILURE_FOUND",
         label="Physical discovery failure",
         pattern=r"Physical\s+Discovery\s+found\s+\d+\s+missing\s+channel\s+connections?",
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="PHYSICAL_CHIP_NOT_FOUND",
+        label="Physical chip not found",
+        pattern=r"Physical\s+chip\s+id\s+\d+\s+(?:is\s+)?not\s+found\s+in\s+(?:the\s+)?control\s+plane\s+chip\s+mapping",
         case_sensitive=False,
     ),
 )
