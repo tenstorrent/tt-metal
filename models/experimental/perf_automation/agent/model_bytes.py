@@ -141,6 +141,24 @@ _UNIT_LABEL = {"token": "tok/s/u", "step": "steps/s", "inference": "inferences/s
 # not the table. The output projection is read in full and is deliberately absent from this list.
 _LOOKUP_ONLY = re.compile(r"(^|\.)(embed_tokens|wte|word_embeddings|token_embedding|embeddings?\.weight$)", re.I)
 
+# The output projection, under every name checkpoints give it. Its PRESENCE is what makes the input
+# embedding lookup-only: with a separate head, a token reads one row of the table and streams the head
+# in full. TIED checkpoints ship no head at all -- the table IS the projection -- so skipping it there
+# deletes a tensor the step really does stream (1.007 B params on gemma-3-12b-it, which is why its read
+# set came out 11.18 B instead of 11.77 B). Tying is the norm in Gemma, Qwen, Phi and the small Llamas,
+# so this is not one model's quirk.
+_OUTPUT_PROJ = re.compile(r"(^|\.)(lm_head|output|embed_out|score|proj_out)\.weight$", re.I)
+
+# Encoders that run once per image or audio clip, never per generated token. gemma-3-12b-it carries 437
+# such tensors, 0.411 B params, and every one of them was charged to every token. Anchored to a NAME
+# COMPONENT (start of string or after a dot, then a dot) so a decoder weight can never be dropped for
+# containing one of these words by accident -- losing a real streamed tensor is the worse failure.
+_TOWER_ONLY = re.compile(
+    r"(^|\.)(vision_tower|vision_model|vision_encoder|visual|image_encoder|image_tower"
+    r"|audio_tower|audio_encoder|speech_encoder|multi_modal_projector|mm_projector)\.",
+    re.I,
+)
+
 
 # HF class-name suffixes -> unit. config.json carries `architectures` for every model but usually NOT
 # a pipeline_tag (that lives on the model card), so keying only on the tag meant the analytic path
@@ -251,17 +269,24 @@ def weight_bytes(
     compiled = [(re.compile(pat), dt) for pat, dt in (overrides or ())]
     dflt = device_width(default_device_dtype)
 
+    # ONE PASS FIRST, to learn whether a separate output projection exists. That fact decides whether
+    # the embedding table is lookup-only or is itself the projection, and it cannot be known from the
+    # embedding tensor alone.
+    shards = []
+    for f in files:
+        try:
+            shards.append(_headers(f))
+        except Exception:  # noqa: BLE001
+            continue
+    tied = not any(_OUTPUT_PROJ.search(n) for hdr in shards for n in hdr)
+
     total, skipped, count = 0.0, 0.0, 0
     # Params on the SAME read set as `total` (lookup-only tensors excluded when unit=token). The
     # params-based ceiling needs this, and unlike bytes a param count does not depend on the width
     # the device serves -- so it costs no per-model investigation.
     params = 0
     by_pattern: dict = {}
-    for f in files:
-        try:
-            hdr = _headers(f)
-        except Exception:  # noqa: BLE001
-            continue
+    for hdr in shards:
         for name, meta in hdr.items():
             n = _numel(meta.get("shape"))
             if n <= 0:
@@ -278,7 +303,11 @@ def weight_bytes(
                 width = dflt if dflt is not None else _STORED_WIDTHS.get(str(meta.get("dtype")), 2.0)
             b = n * width
             count += 1
-            if unit == "token" and _LOOKUP_ONLY.search(name):
+            if unit == "token" and _TOWER_ONLY.search(name):
+                # Not streamed per token at all: an encoder pass is per image/clip. Not "skipped
+                # lookup" either -- that counter means "read one row of", which this is not.
+                continue
+            if unit == "token" and not tied and _LOOKUP_ONLY.search(name):
                 skipped += b
                 continue
             total += b
