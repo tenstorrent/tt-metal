@@ -517,15 +517,12 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
 // ============================================================================
 // Metal 2.0 dataflow buffers in the estimation-path capture (#51674)
 //
-// A Metal 2.0 program allocates its per-core L1 scratch as dataflow buffers rather than
-// circular buffers, so `Program::circular_buffers()` is empty for a ported op and the CB
-// side of the resource usage summed to zero. `repeat` is ported (#51068), and row-major
-// input keeps it on the DFB-bearing factory rather than routing through a tilize first.
+// A ported op allocates L1 scratch as dataflow buffers, so circular_buffers() is empty and the
+// CB side of the resource usage summed to zero. `repeat` is the first such op (#51068).
 // ============================================================================
 
 namespace {
-// Row major so `repeat` stays on the path that builds DataflowBufferSpecs directly,
-// instead of converting layout first and reporting some other op's buffers.
+// Row major keeps `repeat` on the DFB-bearing factory instead of tilizing first.
 tt::tt_metal::TensorSpec metal2_repeat_input_spec() {
     return tt::tt_metal::TensorSpec(
         ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
@@ -542,13 +539,12 @@ ttnn::graph::ConstraintQueryResponse query_repeat(tt::tt_metal::distributed::Mes
         input_spec.tensor_layout().get_memory_config());
 }
 
-// Two repeats inside ONE queried callable, i.e. two programs in a single capture. Params are
-// taken by const& rather than forwarded, since forwarding the same pack twice is unsound.
+// Two repeats in one capture. Params are by const& because forwarding the same pack twice is
+// unsound; `first` is held to end of scope so both programs' buffers coexist.
 ttnn::graph::ConstraintQueryResponse query_two_repeats(tt::tt_metal::distributed::MeshDevice* device) {
     const auto input_spec = metal2_repeat_input_spec();
     return ttnn::graph::query_op_constraints(
         [](const auto& input, const auto& repetition_vector, const auto& memory_config) {
-            // Held to end of scope so the two programs' buffers coexist in the capture.
             [[maybe_unused]] const auto first = ttnn::repeat(input, repetition_vector, memory_config);
             return ttnn::repeat(input, repetition_vector, memory_config);
         },
@@ -559,8 +555,7 @@ ttnn::graph::ConstraintQueryResponse query_two_repeats(tt::tt_metal::distributed
 }
 }  // namespace
 
-// The regression itself: before dataflow buffers were recorded this reported exactly 0,
-// which is what blocked the tt-mlir uplift.
+// The regression itself: this reported exactly 0 before DFBs were recorded.
 TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatReportsNonZeroCbPeak) {
     auto query = query_repeat(mock_device_.get());
 
@@ -568,8 +563,7 @@ TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatReportsNonZeroCbPeak) {
     EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0u);
 }
 
-// Recording the buffers is only half the fix — they also have to reach the running total,
-// which is a separate accumulator in extract_resource_usage_per_core.
+// Recording the buffers is only half the fix; the running total is a separate accumulator.
 TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakContributesToPeakMemory) {
     auto query = query_repeat(mock_device_.get());
 
@@ -577,14 +571,8 @@ TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakContributesToPeakMemory)
     EXPECT_GE(query.resource_usage.peak_memory_usage_per_core, query.resource_usage.cb_peak_size_per_core);
 }
 
-// Each program's CB state is released before the next program in the same capture, so the
-// reported figure is a peak rather than a running sum. If dataflow buffers are recorded but
-// not covered by that per-program reset, two repeats in one capture report roughly double a
-// single repeat.
-//
-// This has to be two programs inside ONE capture: two separate query_op_constraints calls
-// would each begin_capture() and re-zero the counters, so their equality holds whether or not
-// the reset covers DFB nodes.
+// Must be two programs in ONE capture: separate queries each re-zero the counters, so their
+// equality would hold whether or not the per-program reset covers DFB nodes.
 TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakDoesNotAccumulateWithinOneCapture) {
     auto single = query_repeat(mock_device_.get());
     auto doubled = query_two_repeats(mock_device_.get());
