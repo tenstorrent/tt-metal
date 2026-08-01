@@ -36,6 +36,11 @@ fi
 python3 - "$AFTER" "$LABEL" "$CASES" <<'PYEOF'
 import csv, glob, sys
 report, label, cases = sys.argv[1], sys.argv[2], sys.argv[3]
+if cases == "guard":  # the harness's own alias; mirror it so the labels line up
+    sys.path.insert(0, "tests/ttnn/unit_tests/operations/moe_fused_swiglu")
+    from test_moe_fused_swiglu_r2_perf import GUARD_SET
+
+    cases = GUARD_SET
 names = [c.strip() for c in cases.split(";") if c.strip()]
 ns = []
 for p in glob.glob(f"{report}/ops_perf_results*.csv"):

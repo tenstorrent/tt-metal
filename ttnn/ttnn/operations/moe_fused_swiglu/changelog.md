@@ -1075,3 +1075,147 @@ Measured-and-ready, deliberately **not** graduated, each with its gate:
   and the per-core TRISC work decomposition that located the hot roots in the first place. Five
   subagent experiment dirs are committed under `perf_experiments/` as durable artifacts, each with its
   own runnable bake-off.
+
+---
+
+## Perf 3 — the op is STRICTLY ADDITIVE: a measured decomposition, two graduated levers, and where the wall is
+
+### 1. The measurement that reframes everything
+
+Every ablation stubs ONE payload and keeps every CB reserve/push/pop, every barrier and every loop
+trip count, so each diff is that term's EXPOSED cost. Focus cell, emb 7168 / cap 5120 / count 256 /
+bf16_rm, fresh kernel cache per arm:
+
+| arm | ns | exposed term |
+|---|---|---|
+| baseline | 148 742 | — |
+| `no_w_xfer` | 110 579 | **weight DRAM 38 163** |
+| `skip_compute` | 125 941 | **matmul math 22 801** |
+| `no_h_xfer` | 128 513 | **h all-gather 20 229** |
+| `no_reduce_xfer` | 138 313 | reduce transport 10 429 |
+| `no_x_xfer` / `no_xstage_xfer` | 143 233 / 143 886 | x mcast 5 509 / x DRAM 4 856 |
+| all five transports | 71 072 | (transports together 77 670) |
+| all five + `skip_compute` | **42 764** | **the pure synchronisation floor** |
+| `no_w_xfer` + `skip_compute` | 85 266 | — |
+
+`42 764 + 38 163 + 22 801 + 20 229 + 10 429 + 10 365 = 144 751` against a 148 742 baseline, i.e.
+**within 2.7 % of the sum. NOTHING IN THIS OP OVERLAPS ANYTHING ELSE.** That single fact reprices the
+whole board, because every individual stage is already at a wall:
+
+- **weight DRAM is at roofline**: 24.772 MB / 50.6 µs = 490 GB/s of a 512 GB/s peak.
+- **the matmul is at the FPU roofline** (2208 tile-MACs LoFi, ~16 cycles/tile-MAC).
+- **phase 2 is at its ingest roofline**: 512 bfp8 tiles of `h` per core = 557 KB at ~27 GB/s
+  achieved against a ~43 GB/s NoC-to-L1 limit, plus a `down` matmul at its own FPU roofline.
+- so the entire question is **overlap**, not bytes, not FLOPs, not transactions.
+
+`no_w_xfer + skip_compute` = 85 266 pins the ceiling for overlapping those two terms at **126 µs**,
+and `no_w_xfer` = 110 579 pins the ceiling for hiding the ENTIRE weight stream at **111 µs** — which
+is still above the 108 000 target. **Reaching the target needs the weight stream hidden AND the
+42.8 µs floor cut; no single lever gets there.**
+
+### 2. What graduated
+
+**XPRIO (default 1) — activation-first DRAM priority.** The profile killed the obvious story: the
+gate/up matmul does not wait for weights at all (`reader_wg_wait` returns in ~4 µs). It waits for
+`cb_x_tiles`, which the x row-multicast publishes at **56 µs**. x is 3.67 MB of phase 1's 20.2 MB,
+but EVERY core's matmul needs all of its row's x before it can start, while the weights are consumed
+per column — so the small stream is the universally-blocking one and it was arriving last. Each
+core's writer now holds its 8.7 MB W_up stream on `SEM_XSTAGED` until that core's reader has staged
+x. Intra-core: a plain volatile L1 store the writer polls, no NoC traffic, monotone so no reset, and
+never entered at `m_blocks == 0` so the zero-count dispatch still cannot hang.
+
+**GU_CHUNKS (default 2) — N-chunked gate/up weight stream.** The bfp4 block is issued, published and
+consumed in 2 chunks of the HIDDEN axis, so the matmul runs on chunk 0 while chunk 1 is in DRAM.
+
+> **Why N and not K, measured rather than argued.** A K-chunk is a PARTIAL SUM: `m_eff * HN_PAD`
+> tiles exceed DEST, so each extra K-block costs `m_eff` extra L1-ACCUMULATING packs per matrix, and
+> at ~2.2 unpacks per accumulating pack (Perf 2 idea #2's engine model) that is about the whole
+> overlap it buys. This is why `op_design.md` forbade `num_k_blocks > 1`, and the reason is now
+> written down. An N-chunk is an INDEPENDENT full-K matmul — no partial sums, no extra packs — and
+> the block is K-major in the CB, so an N-chunk is contiguous on the DRAM-read side AND the matmul
+> in1 side. `matmul_block` gained `out_col_offset` (new, default 0, byte-identical when unused) so
+> each chunk packs into its own columns of one shared m-major block instead of producing a
+> chunk-major one; it pairs with `caller_owns_pack_target` + `TileRowMajor` + `out_row_width = HN_PAD`.
+
+**THE TWO LEVERS ONLY WORK TOGETHER, and that is the round's most transferable result.** Each is a
+null or a regression alone:
+
+| | GU_CHUNKS 1 | GU_CHUNKS 2 |
+|---|---|---|
+| XPRIO 0 | 149 459 (baseline) | 149 316 (**null**) |
+| XPRIO 1 | **154 219 (worse)** | **146 483 (win)** |
+
+Holding W_up back only pays if the matmul can start on a chunk; chunking only pays if x is not the
+thing being waited for. Either alone measures nothing, which is exactly the shape that makes a lever
+look dead in a one-at-a-time sweep.
+
+### 3. Nulls, with their causes
+
+- **`XSTAGE_FIRST` (issue x before W_gate on the reader) is a NULL** — 150 260 / 151 233 alone, and
+  *worse* with XPRIO (152 791 vs 146 945). Profiled cause: re-ordering ONE core's own two issue
+  streams cannot move x forward when the queue x is stuck behind belongs to the other 109 cores and
+  to the writer's NoC1 twin. Kept as a knob because it is the A/B that proved the diagnosis; default
+  0. This also independently reproduces Perf 2 idea #5's finding that phase 1's 20.2 MB head is at
+  **1.016× its byte roofline**, so head-of-line re-scheduling has a ~0.3 % ceiling.
+- **`WD_AHEAD` deeper is monotonically WORSE**: 1 → 146 945, 2 → 151 390, 4 → 164 193, 11 → 190 720.
+  Cause found: the knob pushes all `WD_AHEAD` blocks in ONE `cb_push_back` before the round loop, so
+  a deeper prefetch does not pipeline — it makes phase 2 wait for the whole 8.5 MB before its first
+  round. `noc_async_read_barrier()` being all-or-nothing is what forces that shape; a per-block
+  transaction-ID barrier is the only way to issue early AND publish incrementally.
+- **The 2D `down` (contract only over the core's own hidden group, reduce the output along the grid
+  row) was priced on paper and REJECTED before implementation.** It replaces 557 KB/core of `h`
+  ingest with a row reduce-scatter of a `m_eff x EMB_T/KGROUPS` = 184-tile partial per core — 182 KB
+  each way in bfp8, ~2× that in the bf16 the phase-1 scatter's precision lesson demands — plus ~170
+  tile-adds. Net ≈ −6 µs before the precision risk, against a restructure of the op's most
+  hang-prone path. `h` is 512 tiles and the output is 1792; broadcasting the SMALLER one and keeping
+  `down`'s contraction whole is the right way round, and that is now on the record.
+- **`MOE_SWIGLU_ABLATE=no_handshake` DEADLOCKS** (26 BRISCs halted, device reset by the harness). It
+  is documented as measurement-only, but it does not currently produce a number — so the floor's
+  handshake component is still unpriced. Fixing that hook is the cheapest next diagnostic in the op.
+
+### 4. Results — graded cells, and at the core counts the targets were measured on
+
+`MOE_SWIGLU_GRID` is new: the graded `PERF_MEASURED_NS` baselines were taken on **88/99-core** grids,
+so the op is now measurable at 11x8 / 11x9 instead of only at this box's 110.
+
+| count | @110 before | **@110 after** | **@99** | **@88** | target | best measured |
+|---|---|---|---|---|---|---|
+| 128 | 110 654 | **103 498** (−6.5 %) | 104 599 | 106 419 | 91 800 | 102 000 |
+| 256 | 148 742 | **145 879** (−1.9 %) | 147 798 | 153 953 | 108 000 | 120 000 |
+| 512 | 251 082 | **247 472** (−1.4 %) | 248 363 | 252 448 | 161 816 | 179 795 |
+
+**The op is nearly core-count-insensitive** (99 ≈ 110, 88 only +3–5 %), which is itself a finding: it
+confirms from the outside what the ablations say from the inside — this op is bound by serialisation,
+not by compute throughput, so adding 25 % more cores buys ~1 %.
+
+Guard set, 12/12 cells, against the Perf-2 shipped tree: bf16_rm
+**103 498 / 145 879 / 247 472 / 147 018 / 136 399 / 2 049 576** and bfp8_tile
+**101 606 / 142 873 / 235 192 / 141 647 / 130 300 / 1 921 787**. Ten cells faster, two (emb 6144
+bf16_rm +0.7 %, count=capacity +0.4 %) inside the op's documented ~1 % run-to-run band. Sum 5 503 247
+vs 5 526 702.
+
+- **Accuracy**: golden **45/45**; all 66 tests in the op's six test files pass; 0 hangs. XPRIO moves
+  no bytes (a pure ordering constraint) and GU_CHUNKS is the same LLK at the same precision on the
+  same formats — no precision knob was touched, and `MOE_SWIGLU_REDUCE=tree` still measures
+  200 513 ns, confirming the scatter default and that both paths still build.
+
+### 5. Where the wall is, with numbers
+
+Ranked by measured headroom, for whoever picks this up:
+
+1. **The 42 764 ns zero-payload synchronisation floor — 29 % of the op, and the largest unexplained
+   term.** With no payload and no math it is `compute_reduce` ~11 µs, `compute_down` ~13 µs,
+   `compute_out_pack` ~14 µs, `writer_out_issue` ~18 µs, `writer_hslice` ~15 µs — i.e. phase 2's
+   **11 SERIAL rotating-sender rounds** and the column scatter's invites. The 11 h-broadcast rounds
+   are ordered and each is gated on a DIFFERENT column root, so a late root blocks every later round
+   (`compute_reduce` spans 43→100 µs while its own math is ~2 µs). Making all 11 roots multicast
+   CONCURRENTLY into their own disjoint `cb_h` slot with a per-slot arrival counter is the same
+   mechanism that won 3.08× in Perf 2, applied one layer up. Not attempted here: `mcast_pipe`'s
+   `DataReadySignal::Counter` is a documented hang and the fallback would have been a revert.
+2. **Genuine chunk-through pipelining of the hidden axis** — carry GU_CHUNKS through the reduce,
+   SwiGLU and h-broadcast, not just the matmul, so chunk c's collectives run under chunk c+1's weight
+   stream. This is the only structure that can put the weight stream under the 57 µs window where
+   DRAM currently idles (after the matmul, only W_down's 17 µs is left). Ceiling ≈ 111 µs from
+   `no_w_xfer`. Cost: 2× the collective handshakes against a floor that is already 29 % of the op —
+   which is why item 1 should land first.
+3. **Per-block transaction-ID barriers for W_down**, which is what `WD_AHEAD` actually needed.
