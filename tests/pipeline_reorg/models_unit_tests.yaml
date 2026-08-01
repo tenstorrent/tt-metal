@@ -1119,7 +1119,7 @@
     # Pro T2V = one-stage full-guidance on the 22B dev checkpoint (checkpoints + Gemma resolve from
     # the HF hub cache set above; see models/tt_dit/models/LTX2.md).
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      bash -lc 'G=/mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized; V=/mnt/models/vbench/models--google--gemma-3-12b-it-qat-q4_0-unquantized; echo "syncing Gemma vbench->hub as $(id -un)"; rsync -a "$V"/ "$G"/; chmod -R go+rX "$G" 2>/dev/null || true; export GEMMA_PATH="$(ls -d "$G"/snapshots/*/ 2>/dev/null | head -1)"; echo "GEMMA_PATH=$GEMMA_PATH"; python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_one_stage.py::test_pipeline_one_stage -k "4x8sp1tp0nl2_ring_is_fsdp0"'
+      bash -lc 'G=/mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized; V=/mnt/models/vbench/models--google--gemma-3-12b-it-qat-q4_0-unquantized; echo "copying Gemma vbench->hub as $(id -un)"; mkdir -p "$G"; cp -auf "$V"/. "$G"/ 2>/dev/null; chmod -R go+rX "$G" 2>/dev/null || true; export GEMMA_PATH="$(ls -d "$G"/snapshots/*/ 2>/dev/null | head -1)"; echo "GEMMA_PATH=$GEMMA_PATH"; python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_one_stage.py::test_pipeline_one_stage -k "4x8sp1tp0nl2_ring_is_fsdp0"'
   model: ltx-2.3-pro-t2v
   model_family: LTX
   skus:
@@ -1157,7 +1157,7 @@
     # MGD and all allocated devices (TT_VISIBLE_DEVICES left unset -> use the whole galaxy).
     # Fast T2V = distilled 2-stage (half-res -> upsample -> full-res) on the distilled-1.1 checkpoint.
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      bash -lc 'G=/mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized; V=/mnt/models/vbench/models--google--gemma-3-12b-it-qat-q4_0-unquantized; echo "syncing Gemma vbench->hub as $(id -un)"; rsync -a "$V"/ "$G"/; chmod -R go+rX "$G" 2>/dev/null || true; export GEMMA_PATH="$(ls -d "$G"/snapshots/*/ 2>/dev/null | head -1)"; echo "GEMMA_PATH=$GEMMA_PATH"; python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"'
+      bash -lc 'G=/mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized; V=/mnt/models/vbench/models--google--gemma-3-12b-it-qat-q4_0-unquantized; echo "copying Gemma vbench->hub as $(id -un)"; mkdir -p "$G"; cp -auf "$V"/. "$G"/ 2>/dev/null; chmod -R go+rX "$G" 2>/dev/null || true; export GEMMA_PATH="$(ls -d "$G"/snapshots/*/ 2>/dev/null | head -1)"; echo "GEMMA_PATH=$GEMMA_PATH"; python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"'
   model: ltx-2.3-fast-t2v
   model_family: LTX
   skus:
@@ -1197,7 +1197,7 @@
     # exported before mpirun so PRTE forwards it to the rank. Skips if the image/checkpoints are absent.
     export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      bash -lc 'G=/mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized; V=/mnt/models/vbench/models--google--gemma-3-12b-it-qat-q4_0-unquantized; echo "syncing Gemma vbench->hub as $(id -un)"; rsync -a "$V"/ "$G"/; chmod -R go+rX "$G" 2>/dev/null || true; export GEMMA_PATH="$(ls -d "$G"/snapshots/*/ 2>/dev/null | head -1)"; echo "GEMMA_PATH=$GEMMA_PATH"; python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"'
+      bash -lc 'G=/mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized; V=/mnt/models/vbench/models--google--gemma-3-12b-it-qat-q4_0-unquantized; echo "copying Gemma vbench->hub as $(id -un)"; mkdir -p "$G"; cp -auf "$V"/. "$G"/ 2>/dev/null; chmod -R go+rX "$G" 2>/dev/null || true; export GEMMA_PATH="$(ls -d "$G"/snapshots/*/ 2>/dev/null | head -1)"; echo "GEMMA_PATH=$GEMMA_PATH"; python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"'
   model: ltx-2.3-pro-i2v
   model_family: LTX
   skus:
@@ -1236,7 +1236,7 @@
     # Fast I2V = distilled chained t2v->i2v (self-contained: conditions on its own generated frame,
     # no external image needed).
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      bash -lc 'G=/mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized; V=/mnt/models/vbench/models--google--gemma-3-12b-it-qat-q4_0-unquantized; echo "syncing Gemma vbench->hub as $(id -un)"; rsync -a "$V"/ "$G"/; chmod -R go+rX "$G" 2>/dev/null || true; export GEMMA_PATH="$(ls -d "$G"/snapshots/*/ 2>/dev/null | head -1)"; echo "GEMMA_PATH=$GEMMA_PATH"; python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"'
+      bash -lc 'G=/mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized; V=/mnt/models/vbench/models--google--gemma-3-12b-it-qat-q4_0-unquantized; echo "copying Gemma vbench->hub as $(id -un)"; mkdir -p "$G"; cp -auf "$V"/. "$G"/ 2>/dev/null; chmod -R go+rX "$G" 2>/dev/null || true; export GEMMA_PATH="$(ls -d "$G"/snapshots/*/ 2>/dev/null | head -1)"; echo "GEMMA_PATH=$GEMMA_PATH"; python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"'
   model: ltx-2.3-fast-i2v
   model_family: LTX
   skus:
