@@ -54,6 +54,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
         static_assert(
             !(EN_32BIT_DEST && !unpack_to_dest),
             "32BIT_DEST is not supported for broadcast when unpack_to_dest is false");
+        static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
 
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
         LLK_ASSERT(
