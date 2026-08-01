@@ -1764,13 +1764,21 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
             }
         }
         if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
+            std::string kernel_names;
+            for (size_t ki = 0; ki < this->num_kernels(); ki++) {
+                auto k = this->get_kernel(ki);
+                if (k) {
+                    kernel_names += (kernel_names.empty() ? "" : ", ") + k->name();
+                }
+            }
             TT_THROW(
                 "Statically allocated circular buffers in program {} clash with L1 buffers on core range {}. L1 buffer "
-                "allocated at {} and static circular buffer region ends at {}",
+                "allocated at {} and static circular buffer region ends at {}. Kernels: [{}]",
                 this->id,
                 cb_allocator.core_range.str(),
                 lowest_address.value(),
-                cb_region_end);
+                cb_region_end,
+                kernel_names);
         }
     }
 }

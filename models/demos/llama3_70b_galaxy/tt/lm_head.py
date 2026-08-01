@@ -203,15 +203,29 @@ class LMHead(LightweightModule):
                 x.deallocate(True)
                 outputs.append(output)
 
+        # Blackhole galaxy has only 2 fabric links (vs Wormhole's 4), which roughly doubles the
+        # all_reduce_async reduction scratch CB. For the wide lm_head logits that CB no longer fits
+        # beside the full-worker-grid resident decode buffers on any worker column, so the async
+        # all-reduce fails to allocate. Route Blackhole through the stable all_gather + local reduce
+        # (the same pattern prefill uses): it avoids the oversized reduction CB entirely.
+        lm_head_bh_gather_reduce = mode == "decode" and getattr(self.args, "is_blackhole", False)
         outputs_reduced = []
         for output in outputs:
-            output_reduced = self.tt_ccl.line_all_reduce(
-                output,
-                cluster_axis=1,
-                num_links=num_links,
-                memory_config=output.memory_config(),
-                lm_head=True,
-                buffer_key="LM_HEAD",
-            )  # self.output_memory_config
+            if lm_head_bh_gather_reduce:
+                output_reduced = self.tt_ccl.line_all_reduce_gather_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=output.memory_config(),
+                )
+            else:
+                output_reduced = self.tt_ccl.line_all_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=output.memory_config(),
+                    lm_head=True,
+                    buffer_key="LM_HEAD",
+                )  # self.output_memory_config
             outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return outputs_reduced

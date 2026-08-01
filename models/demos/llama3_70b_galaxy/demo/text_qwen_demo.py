@@ -941,7 +941,10 @@ def test_qwen_demo_text(
                 if apc_test and iteration == 0:
                     tt_out_logits_saved_iter_0 = tt_out_logits_saved
             except Exception as e:
+                import traceback
+
                 logger.error(f"Error during decoding: {str(e)}")
+                logger.error("QWEN_BH_DECODE_TRACEBACK:\n" + traceback.format_exc())
                 break
 
             if iteration == 0:  # First iteration will account the compile time
