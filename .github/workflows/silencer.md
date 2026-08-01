@@ -78,11 +78,17 @@ safe-outputs:
     # Scope patches to source-like files only: a mistaken or manipulated agent response
     # cannot touch unrelated files outside Silencer's noise-fix scope.
     allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
-    max: 3
+    # One target per run (see *Scan procedure* step 4): Silencer fixes a single noise
+    # source per turn, so it opens at most one PR. Also gh-aw's default, but stated
+    # explicitly here because it is a deliberate scope decision, not an accident.
+    max: 1
   push-to-pull-request-branch:
     target: "*"
     required-title-prefix: "[silencer] "
-    max: 3
+    # One target per run, as above. Explicit because — unlike `create-pull-request`,
+    # `create-issue`, and `dispatch-workflow` — this safe-output emits *no* `max` at all
+    # when the field is omitted, so omitting it here would not be equivalent to `1`.
+    max: 1
   dispatch-workflow:
     # Lets Silencer trigger a fresh `workflow_dispatch` run of the same tracked workflow
     # it just fixed, aimed at its own PR branch (see *Validating changes via CI*).
@@ -155,15 +161,16 @@ safe-outputs:
     # `target-ref` is deliberately NOT set: it is a single static string, and
     # Silencer's branch differs every run.
     allowed-refs: ["silencer/*"]
-    # One dispatch per PR touched in a turn, matching the `max: 3` on
-    # `create-pull-request` / `push-to-pull-request-branch` above (default is 1).
-    max: 3
+    # One dispatch for the single PR touched in a turn, matching the `max: 1` on
+    # `create-pull-request` / `push-to-pull-request-branch` above (also the default).
+    max: 1
   create-issue:
     # Used when a noise source cannot be safely auto-fixed (e.g. it lives in a
     # sibling repo, or the root cause is ambiguous and needs a human decision).
     title-prefix: "[silencer] "
     labels: [automation]
-    max: 3
+    # One target per run, as above.
+    max: 1
   update-issue:
     target: "*"
     required-title-prefix: "[silencer] "
@@ -671,9 +678,10 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
    Scan `residue_top.txt` for a shape none of the three parsers recognized; if a recurring
    unrecognized shape turns out to be real emitted noise, say so in your PR/issue so a fourth
    parser can be added rather than leaving it in residue forever.
-4. **Select ONE high-value target** for this run (occasionally two if trivially related) —
-   the highest-frequency pattern that you can fix cleanly and validate. Small, focused PRs
-   review faster and are safer than a sweeping one.
+4. **Select ONE high-value target** for this run — the highest-frequency pattern that you can
+   fix cleanly and validate. Exactly one per run: a single focused PR reviews faster and is
+   safer than a sweeping one, and anything else you spotted keeps for the next run (that is
+   what the backlog cursor in memory is for).
 5. **Root-cause it.** From the grep hit, open the *specific source file(s)* (not the log),
    understand why the noise is emitted, and design the minimal correct fix per its category
    above. Use DeepWiki-style reasoning only for orientation on sibling repos; verify against
@@ -696,7 +704,7 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
 ## Validating changes via CI
 
 You **can** now start a CI run against your own PR branch, and you **must** — it is the only
-evidence any of your fixes compile. Use the `dispatch-workflow` safe-output (`dispatch_workflow`
+evidence that your fix compiles. Use the `dispatch-workflow` safe-output (`dispatch_workflow`
 tool).
 
 **In the same turn** that you emit a `create-pull-request` or `push-to-pull-request-branch`
@@ -720,9 +728,9 @@ not a rewritten or guessed variant:
   with an error — it does **not** silently fall back to dispatching against `main`. So keep
   following the `silencer/<category>-<short-desc>` convention in *Pull request conventions*; a
   branch named anything else cannot be validated.
-- Dispatch **once per PR** you touched this turn (up to the configured `max: 3`), each with its
-  own branch. Never dispatch a workflow you did not scan, and never dispatch against a branch
-  you did not create this turn.
+- Dispatch **exactly once** per turn, for the single PR you touched, against that PR's own
+  branch (the configured `max: 1`). Never dispatch a workflow you did not scan, and never
+  dispatch against a branch you did not create this turn.
 
 **What this proves, and what it does not.** The dispatched run confirms **compilation/build
 success** for gate-type workflows (`pr-gate`, `merge-gate`, and anything else pulling in
