@@ -2153,3 +2153,38 @@ where the L1 question and the phase-1-tail question meet.
 - **Zone budget**: 3 records/round = 33/M-block on top of the reader's 8, against the 125-per-core
   cap. Per-stage numbers are valid for ONE M-block (count <= 256); above that only the whole-kernel
   duration is meaningful.
+
+### Perf 15 addendum — the off-loop sender on a linked flag HANGS, exactly as the reference predicted
+
+Perf 15 showed `p2_hwait` waits 3 541 ns/round for the sender to SEND, and round r's sender is inside
+the same receive loop — it must first receive rounds 0..r-1. That is the loop-order chain this
+changelog has called THE KEYSTONE. `HSEND=writer` was built to break it and measured a loss, but for
+a separable reason: the host FORCED `HSLOT` off whenever `HSEND=writer`
+
+    dm_defines.append(("HSLOT", "1" if (HSLOT and HSEND != "writer") else "0"))
+
+so the writer path only ever ran the COUNTER signal, which cannot terminate a `NOC_CMD_VC_LINKED`
+chain (an atomic sits on a different command buffer) and therefore pays an ACKED write barrier every
+round. **Off-loop sender PLUS linked flag was unreachable and had never been measured.**
+
+Built it: writer asserts VALID on its own cell, multicasts the data LINKED, terminates with
+`noc_semaphore_set_multicast`, no barrier. **Result: HANG** (dispatch timeout, device auto-reset).
+
+**Cause, and it was written down in advance.** The reference op's P7 records it: *"`ROTATING_SENDER`'s
+reset writes the SHARED data-ready cell, which is race-free only while send and receive run on the
+same RISC. Split across two, a receiver's `set(INVALID)` for round r-1 can land between the sender's
+`set(VALID)` and its flag multicast for round r, broadcasting INVALID and hanging the grid."*
+
+That is exactly this shape: the send is on BRISC, the receive on NCRISC, and both touch the same flag
+cell. **Per-slot flags do NOT immunise it** — I asserted earlier that they might, and that was wrong.
+Cell `s` is still shared by rounds `s`, `s+DEPTH_H`, ..., so with the send on a second RISC the reset
+still races the broadcast. The two recorded mitigations (relay a private always-VALID cell, or order
+the two RISC-Vs with the reader's slot-ready gate) are what a retry needs; neither is free —
+a private relay cell per slot is more semaphores, and the ordering gate re-introduces the coupling
+the off-loop send exists to remove.
+
+**Reverted.** Default path re-measured after the revert: 91 619 / 130 947 ns (counts 128/256).
+
+**The standing conclusion is unchanged and now better supported**: phase 2's cost is the loop-order
+chain plus phase 1's completion spread, and the one shape that would break the chain hangs on a
+documented cross-RISC race. Attacking it needs the mitigation built first, not the send moved.
