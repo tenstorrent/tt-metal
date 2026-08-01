@@ -142,49 +142,49 @@ jobs:
           PYEOF
 
       - name: Test S3 write+readback
-        # Explicitly verify that S3 *writes* work — not just reads.
-        # The list_objects_v2 probe above only confirms read access; writes can silently fail
-        # (wrong IAM policy, bucket ACL, proxy stripping PUT, etc.) with no error surfaced during
-        # analysis. This step writes a sentinel object, reads it back to confirm integrity, then
-        # deletes it. Hard-fails so write breakage is caught immediately, not discovered days later.
+        # The probe above only confirms S3 *reads* work; writes can fail silently
+        # (IAM policy, ACL, proxy stripping PUT) with nothing to catch it. Writes,
+        # reads back, and deletes a per-invocation sentinel object; hard-fails on error.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           python3 - << 'PYEOF'
-          import boto3, botocore, os, sys
+          import os, sys, uuid
+          import boto3
+          from botocore.config import Config
 
           if os.environ.get("CTCACHE_S3_OK") != "1":
               print("Skipping write test — S3 not configured or probe failed")
               sys.exit(0)
 
-          s3 = boto3.client("s3",
-              endpoint_url=os.environ["AWS_ENDPOINT_URL"],
-              aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-              aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-              region_name=os.environ["AWS_DEFAULT_REGION"],
-              config=botocore.config.Config(s3={"addressing_style": "path"}),
-          )
-
+          bucket = os.environ.get("CTCACHE_S3_BUCKET", "ctcache")
           folder = os.environ.get("CTCACHE_S3_FOLDER", "ct20")
           run_id = os.environ.get("GITHUB_RUN_ID", "local")
           attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
-          key = f"{folder}/.write-test/{run_id}-{attempt}"
+          # uuid suffix: parallel clang-tidy-reusable legs (full/tt_metal/ttnn/tt-train/catchall)
+          # share the same run_id+attempt, so a plain run_id key collides across them.
+          key = f"{folder}/.write-test/{run_id}-{attempt}-{uuid.uuid4().hex[:12]}"
           payload = b"ctcache-write-test-ok"
 
           try:
-              s3.put_object(Bucket="ctcache", Key=key, Body=payload)
-              print(f"Wrote sentinel: s3://ctcache/{key}")
+              s3 = boto3.client("s3", config=Config(s3={"addressing_style": "path"}))
+              s3.put_object(Bucket=bucket, Key=key, Body=payload)
+              print(f"Wrote sentinel: s3://{bucket}/{key}")
 
-              response = s3.get_object(Bucket="ctcache", Key=key)
-              body = response["Body"].read()
-              if body != payload:
-                  print(f"::error::S3 readback MISMATCH: expected {payload!r}, got {body!r}")
-                  sys.exit(1)
-              print("Readback: content matches ✓")
-
-              s3.delete_object(Bucket="ctcache", Key=key)
-              print("Sentinel deleted (cleanup)")
+              try:
+                  response = s3.get_object(Bucket=bucket, Key=key)
+                  body = response["Body"].read()
+                  if body != payload:
+                      print(f"::error::S3 readback MISMATCH: expected {payload!r}, got {body!r}")
+                      sys.exit(1)
+                  print("Readback: content matches ✓")
+              finally:
+                  try:
+                      s3.delete_object(Bucket=bucket, Key=key)
+                      print("Sentinel deleted (cleanup)")
+                  except Exception:
+                      print(f"::warning::Failed to delete write-test sentinel {key} — manual cleanup may be needed")
           except Exception as e:
-              print(f"::error::ctcache S3 write+readback FAILED: {e}")
+              print(f"::error::ctcache S3 write+readback FAILED: {type(e).__name__}")
               print("::error::Writes to Garage S3 are broken — ctcache will run but results will NOT be persisted")
               sys.exit(1)
           PYEOF
