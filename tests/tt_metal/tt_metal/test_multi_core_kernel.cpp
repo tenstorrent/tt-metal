@@ -84,7 +84,8 @@ void set_rt_args(
 }  // namespace
 
 TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelSameRuntimeArgs) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* dev = mesh_device.get_devices()[0];
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {2, 2};
@@ -94,7 +95,7 @@ TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelSameRuntimeArgs) {
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
     InterleavedBufferConfig dram_config{
-        .device = devices_[0].get(),
+        .device = &mesh_device,
         .size = dram_buffer_size,
         .page_size = dram_buffer_size,
         .buffer_type = BufferType::DRAM};
@@ -127,7 +128,8 @@ TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelSameRuntimeArgs) {
 }
 
 TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelUniqueRuntimeArgs) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* dev = mesh_device.get_devices()[0];
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {1, 1};
@@ -142,7 +144,7 @@ TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelUniqueRuntimeArgs) {
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig dram_config{
-        .device = devices_[0].get(),
+        .device = &mesh_device,
         .size = dram_buffer_size,
         .page_size = dram_buffer_size,
         .buffer_type = BufferType::DRAM};

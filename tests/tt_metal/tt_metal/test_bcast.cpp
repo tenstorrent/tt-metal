@@ -65,7 +65,7 @@ const char* op_id_to_llkop_define[] = {
 const char* bdim_to_llkdim_define[] = {"", "BroadcastType::ROW", "BroadcastType::COL", "", "BroadcastType::SCALAR"};
 const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
 
-void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_op) {
+void run_bcast_test(distributed::MeshDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_op) {
     bool multibank = true;
 
     log_info(LogTest, "=============================================================");
