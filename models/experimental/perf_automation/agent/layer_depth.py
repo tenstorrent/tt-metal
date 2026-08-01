@@ -53,25 +53,69 @@ _DEPTH_KEYS = (
 _FOREIGN_DIRS = ("model_params", "reference_outputs", "sweeps", "model_cache", "tests")
 
 
-def _depth_from_mapping(obj) -> int | None:
-    """The first recognised depth key with a positive int value, or None."""
+def _walk_depths(obj, _seen=None, _out=None) -> list:
+    """EVERY declared depth anywhere in a config, whatever shape it is nested in.
+
+    Three containers, one rule, because configs mix all of them:
+
+        dict     -> its values          plain JSON
+        object   -> its __dict__        transformers PretrainedConfig
+        list     -> its items           sub_configs = [text_cfg, vision_cfg]
+
+    A single named walk over ("text_config", "decoder", ...) could not see any of this. It stopped at
+    Gemma3Config.text_config -- an OBJECT, not a dict -- so gemma-3-12b-it declared no depth at all,
+    nothing clamped the coverage window, and a 48-layer model was profiled and reported as 96.
+
+    Returns every candidate rather than the first, because the first is a coin flip: gemma3 offers
+    text_config=48 and vision_config=27 and the walk order decides which one you get. The caller
+    takes the MAX, which is the safe direction for a value used only as a ceiling -- too high just
+    weakens the clamp, too low silently hides layers.
+
+    _seen is termination, not a depth limit: configs hold back-references and the walk is otherwise
+    unbounded by design.
+    """
+    _seen = set() if _seen is None else _seen
+    _out = [] if _out is None else _out
+    if id(obj) in _seen:
+        return _out
+    if isinstance(obj, (str, bytes, int, float, bool)) or obj is None:
+        return _out
+    _seen.add(id(obj))
+
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            _walk_depths(item, _seen, _out)
+        return _out
+
     if not isinstance(obj, dict):
-        return None
+        d = getattr(obj, "__dict__", None)
+        if not isinstance(d, dict):
+            return _out
+        obj = d
+        if id(obj) in _seen:
+            return _out
+        _seen.add(id(obj))
+
     for key in _DEPTH_KEYS:
         v = obj.get(key)
         if isinstance(v, bool):
+            # True is an int in Python; num_hidden_layers=True must not become a 1-layer window.
             continue
         try:
             n = int(v)
         except (TypeError, ValueError):
             continue
         if n > 0:
-            return n
-    for nested in ("text_config", "decoder", "model", "gpt", "llm_config"):
-        n = _depth_from_mapping(obj.get(nested))
-        if n is not None:
-            return n
-    return None
+            _out.append(n)
+    for v in obj.values():
+        _walk_depths(v, _seen, _out)
+    return _out
+
+
+def _depth_from_mapping(obj) -> int | None:
+    """The DEEPEST declared depth anywhere in `obj`, or None when nothing declares one."""
+    found = _walk_depths(obj)
+    return max(found) if found else None
 
 
 def full_depth_from_config(model_id: str = "", model_dir=None) -> int | None:
@@ -98,6 +142,10 @@ def full_depth_from_config(model_id: str = "", model_dir=None) -> int | None:
             pass
     if model_dir:
         root = Path(model_dir)
+        # EVERY config at the root, not the first that parses. A model that ships both a params.json
+        # and a config.json declares the same thing twice and the shallower file must not win by
+        # filename order -- same max rule as within one file.
+        seen = []
         for name in ("config.json", "params.json", "model_config.json"):
             p = root / name
             if not p.is_file():
@@ -107,7 +155,9 @@ def full_depth_from_config(model_id: str = "", model_dir=None) -> int | None:
             except Exception:  # noqa: BLE001
                 continue
             if n is not None:
-                return n
+                seen.append(n)
+        if seen:
+            return max(seen)
     return None
 
 

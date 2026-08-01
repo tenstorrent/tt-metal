@@ -705,7 +705,12 @@ def _config_layer_kinds(model_name: str):
     first: dict = {}
     for i, sym in enumerate(seq):
         first.setdefault(sym, i)
-    n_layers = int(getattr(cfg, "num_hidden_layers", 0) or len(seq)) or len(seq)
+    # ONE reader for "how deep is this model". A flat getattr returns 0 for every multimodal config
+    # (gemma3 declares it under text_config, an object), so this silently fell through to len(seq) --
+    # the sequence length, which is not a layer count.
+    from agent.layer_depth import _depth_from_mapping as _dfm
+
+    n_layers = int(_dfm(cfg) or len(seq)) or len(seq)
     return min(max(first.values()) + 1, n_layers), len(first)
 
 
@@ -985,21 +990,41 @@ def _llm_depth_env(model_root: Path, cov: int) -> dict:
 
 
 def _work_signal(seq) -> int:
-    return sum(1 for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:"))
+    return sum(1 for t in seq or [] if isinstance(t, str) and not t.startswith(_SIGNPOST_TOKEN))
 
 
 def _op_block_count(seq) -> int:
     from collections import Counter
 
-    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:")]
+    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith(_SIGNPOST_TOKEN)]
     vals = [c for c in Counter(ops).values() if c > 1]
     if not vals:
         return 0
     return Counter(vals).most_common(1)[0][0]
 
 
+_SIGNPOST_TOKEN = "PERF_BLOCK_SIGNPOST:"
+
+
+def _signpost_entries(seq) -> int:
+    """How many times a tagged block was ENTERED -- not how many distinct blocks exist."""
+    return sum(1 for t in seq or [] if isinstance(t, str) and t.startswith(_SIGNPOST_TOKEN))
+
+
 def _signposts_agree(seq) -> bool:
-    sp = _blocks_ran(seq)
+    """Do the signposts and the op-repetition estimator describe the same execution?
+
+    COMPARE LIKE WITH LIKE: _op_block_count infers block count from how many times an op repeats, so
+    it counts EXECUTIONS. Comparing it against _blocks_ran, which counts DISTINCT blocks, treats a
+    model that runs twice as a model whose signposts are broken -- gemma-3-12b-it prefills and then
+    decodes over 48 layers, giving 48 distinct signposts against 96 repetitions, a ratio of 0.5, and
+    the signposts were thrown away as untrustworthy. The fallback then inferred blocks by counting op
+    repetitions, produced 96 ordinals for a 48-layer model, and that 96 became TT_PERF_LAYERS.
+
+    Entries against repetitions is the honest comparison; the per-block INDEX is still what
+    _first_block_map reads, so multiple passes collapse onto the layers they actually ran.
+    """
+    sp = _signpost_entries(seq)
     op = _op_block_count(seq)
     if sp <= 1 or op <= 1:
         return False
@@ -1009,14 +1034,14 @@ def _signposts_agree(seq) -> bool:
 
 def _block_start_positions(seq):
     if _signposts_agree(seq):
-        pos = [i for i, t in enumerate(seq or []) if isinstance(t, str) and t.startswith("PERF_BLOCK_SIGNPOST:")]
+        pos = [i for i, t in enumerate(seq or []) if isinstance(t, str) and t.startswith(_SIGNPOST_TOKEN)]
         return pos, "signposts"
     n = _op_block_count(seq)
     if n <= 1:
         return [], "none"
     from collections import Counter
 
-    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:")]
+    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith(_SIGNPOST_TOKEN)]
     counts = Counter(ops)
     anchor = next((t for t in ops if counts.get(t) == n), None)
     if anchor is None:
@@ -1025,12 +1050,43 @@ def _block_start_positions(seq):
 
 
 def _first_block_map(seq):
+    """{op: the block it FIRST appears in}, plus how the blocks were located.
+
+    READ THE SIGNPOST'S OWN INDEX. _tag_stack stamps each block with its position in the stack and
+    the probe emits it as "PERF_BLOCK_SIGNPOST:<i>", which is a layer index -- the same unit as
+    TT_PERF_LAYERS, the knob this feeds. Counting signposts instead gives an ORDINAL, and the two
+    agree only when the model is entered exactly once: a perf test that prefills and then decodes
+    enters all 48 layers twice, so the ordinal runs 0..95 and decode's layer 0 reads as block 48. On
+    gemma-3-12b-it that produced a coverage window of 96 for a 48-layer model, which was handed to
+    the layer knob, stamped into the ledger, and printed as "96 layers".
+
+    Ordering is not assumed either: a model may enter a shared block early, so the index is
+    authoritative and the position in the sequence is not.
+
+    The ordinal path stays for sequences with no signposts (source "inferred"), where counting block
+    starts is the only information there is.
+    """
     starts, source = _block_start_positions(seq)
+    fb: dict = {}
+    if source == "signposts":
+        cur = 0
+        for tok in seq or []:
+            if not isinstance(tok, str):
+                continue
+            if tok.startswith(_SIGNPOST_TOKEN):
+                raw = tok[len(_SIGNPOST_TOKEN) :].strip()
+                # A malformed payload must not reset the walk to block 0 -- that would attribute the
+                # whole rest of the stack to the shallowest window and shrink coverage to nothing.
+                if raw.isdigit():
+                    cur = int(raw)
+                continue
+            fb.setdefault(tok, cur)
+        return fb, source
+
     import bisect
 
-    fb: dict = {}
     for i, tok in enumerate(seq or []):
-        if not isinstance(tok, str) or tok.startswith("PERF_BLOCK_SIGNPOST:"):
+        if not isinstance(tok, str) or tok.startswith(_SIGNPOST_TOKEN):
             continue
         b = bisect.bisect_right(starts, i) - 1 if starts else 0
         fb.setdefault(tok, max(b, 0))
@@ -3457,7 +3513,14 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     # already coerces exactly this (per-layer top_k), so reuse it instead of a second rule here.
     from agent.perf_target import _scalar as _sc
 
-    layers = _sc(cfg.get("num_hidden_layers") or cfg.get("n_layer") or cfg.get("num_layers"), 0)
+    # FLAT FIRST, then the nested walk. _scalar coerces a per-layer LIST into a scalar, which the
+    # walk deliberately will not (int(list) is not a depth), so routing the flat keys through the walk
+    # dropped a list-valued num_hidden_layers on the floor. The walk is the fallback that catches the
+    # nested case -- gemma3 declares it under text_config and a flat .get() reads 0 for every
+    # multimodal config, and 0 layers feeds the roofline facts.
+    from agent.layer_depth import _depth_from_mapping as _dfm
+
+    layers = _sc(cfg.get("num_hidden_layers") or cfg.get("n_layer") or cfg.get("num_layers"), 0) or _sc(_dfm(cfg), 0)
     kv_heads = _sc(cfg.get("num_key_value_heads") or cfg.get("num_attention_heads") or cfg.get("num_heads"), 0)
     hidden = _sc(cfg.get("hidden_size") or cfg.get("d_model"), 0)
     heads = _sc(cfg.get("num_attention_heads") or cfg.get("num_heads"), 0)
