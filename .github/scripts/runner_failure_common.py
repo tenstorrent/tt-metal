@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-08-01-v4"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-08-01-v5"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -488,24 +488,16 @@ def out_of_disk_signature_found(log_text: str) -> bool:
     if OUT_OF_DISK_HARD_RE.search(plain_log_text):
         return True
 
-    high_positions: list[int] = []
-    usage_reports: list[tuple[int, int]] = []
+    disk_pressure_signals: list[tuple[int, bool]] = []
     for match in DISK_USAGE_RE.finditer(plain_log_text):
         percent = int(match.group("percent"))
-        usage_reports.append((match.start(), percent))
-        if percent >= 90:
-            high_positions.append(match.start())
+        disk_pressure_signals.append((match.start(), percent >= 90))
 
-    high_positions.extend(match.start() for match in DISK_USAGE_HIGH_RE.finditer(plain_log_text))
-    if not high_positions:
+    disk_pressure_signals.extend((match.start(), True) for match in DISK_USAGE_HIGH_RE.finditer(plain_log_text))
+    if not disk_pressure_signals:
         return False
 
-    first_high_position = min(high_positions)
-    later_usage_reports = [(position, percent) for position, percent in usage_reports if position > first_high_position]
-    if later_usage_reports and later_usage_reports[-1][1] < 90:
-        return False
-
-    return True
+    return max(disk_pressure_signals, key=lambda signal: signal[0])[1]
 
 
 def format_fabric_node(mesh: str, device: str) -> str:

@@ -23,6 +23,7 @@ from runner_failure_common import (
     format_signature_summary,
     format_utc,
     gh_api_json,
+    job_from_dict,
     job_state_key,
     job_to_dict,
     load_triggering_failures_json,
@@ -52,6 +53,7 @@ GITHUB_JOB_LINK_RE = re.compile(
 class LiveGithubPopulationMetrics:
     statuses: tuple[str, ...]
     run_list_api_calls: int = 0
+    run_list_api_failures: int = 0
     job_list_api_calls: int = 0
     job_list_api_failures: int = 0
     workflow_runs_seen: int = 0
@@ -102,6 +104,22 @@ def parse_args() -> argparse.Namespace:
         "--triggering-failures-json",
         type=Path,
         help="Optional JSON array of triggering failures from the scan workflow.",
+    )
+    parser.add_argument(
+        "--live-jobs-json",
+        type=Path,
+        help="Optional JSON cache of live GitHub jobs from the scan workflow.",
+    )
+    parser.add_argument(
+        "--export-live-jobs-json",
+        type=Path,
+        help="Fetch active GitHub jobs once, write the cache JSON, and exit.",
+    )
+    parser.add_argument(
+        "--run-enrichment",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fetch live GitHub active-run enrichment when no --live-jobs-json is supplied (default: true).",
     )
     parser.add_argument(
         "--api-base-url",
@@ -158,14 +176,20 @@ def parse_args() -> argparse.Namespace:
 def validate_args(args: argparse.Namespace) -> None:
     if args.hours <= 0:
         raise ValueError("--hours must be greater than zero.")
-    if args.api_timeout <= 0:
-        raise ValueError("--api-timeout must be greater than zero.")
     if args.gh_timeout <= 0:
         raise ValueError("--gh-timeout must be greater than zero.")
-    if args.log_workers <= 0:
-        raise ValueError("--log-workers must be greater than zero.")
     if args.live_run_workers <= 0:
         raise ValueError("--live-run-workers must be greater than zero.")
+    if not args.owner_repo or not args.owner_repo.strip():
+        raise ValueError("--owner-repo is required.")
+
+    if args.export_live_jobs_json:
+        return
+
+    if args.api_timeout <= 0:
+        raise ValueError("--api-timeout must be greater than zero.")
+    if args.log_workers <= 0:
+        raise ValueError("--log-workers must be greater than zero.")
     if not args.runner_name or not args.runner_name.strip():
         raise ValueError("--runner-name is required.")
     if not args.api_base_url or not args.api_base_url.strip():
@@ -210,6 +234,7 @@ def build_runner_markdown_report(
             f"`{live_github_metrics.api_calls}` API call(s) "
             f"({live_github_metrics.run_list_api_calls} run-list + "
             f"{live_github_metrics.job_list_api_calls} job-list, "
+            f"{live_github_metrics.run_list_api_failures} run-list failure(s), "
             f"{live_github_metrics.job_list_api_failures} job-list failure(s))."
         ),
         "",
@@ -305,6 +330,38 @@ def response_api_call_count(response: Any) -> int:
     if isinstance(response, list):
         return max(1, len(response))
     return 1
+
+
+def live_github_metrics_from_dict(value: Any) -> LiveGithubPopulationMetrics:
+    if not isinstance(value, dict):
+        return LiveGithubPopulationMetrics(statuses=ACTIVE_RUN_STATUSES)
+
+    raw_statuses = value.get("statuses")
+    statuses = (
+        tuple(str(status) for status in raw_statuses if status)
+        if isinstance(raw_statuses, list)
+        else ACTIVE_RUN_STATUSES
+    )
+    metrics = LiveGithubPopulationMetrics(statuses=statuses)
+    for field_name in (
+        "run_list_api_calls",
+        "run_list_api_failures",
+        "job_list_api_calls",
+        "job_list_api_failures",
+        "workflow_runs_seen",
+        "workflow_runs_inspected",
+        "workflows_inspected",
+        "workflow_runs_skipped_stale",
+        "jobs_seen",
+        "jobs_for_runner",
+        "jobs_in_window",
+        "jobs_added_to_report",
+    ):
+        try:
+            setattr(metrics, field_name, int(value.get(field_name) or 0))
+        except (TypeError, ValueError):
+            setattr(metrics, field_name, 0)
+    return metrics
 
 
 def api_get_json(
@@ -556,6 +613,17 @@ def active_workflow_runs_endpoint(owner_repo: str, status: str) -> str:
     return f"repos/{owner_repo}/actions/runs?{query}"
 
 
+def live_workflow_identity(run: dict[str, Any]) -> str:
+    return str(
+        run.get("workflow_id")
+        or run.get("path")
+        or run.get("workflow_url")
+        or run.get("name")
+        or run.get("display_title")
+        or ""
+    )
+
+
 def job_touched_window(job: RecentJob, *, since: datetime, until: datetime) -> bool:
     started_at = parse_github_time(job.started_at)
     completed_at = parse_github_time(job.completed_at)
@@ -600,14 +668,13 @@ def fetch_live_run_jobs(
     *,
     owner_repo: str,
     run: dict[str, Any],
-    runner_name: str,
     since: datetime,
     until: datetime,
     gh_timeout: int,
-) -> tuple[list[RecentJob], int, int, int]:
+) -> tuple[list[RecentJob], int, int]:
     run_id = str(run.get("id") or "")
     if not run_id:
-        return [], 0, 0, 0
+        return [], 0, 0
 
     response = gh_api_json(
         f"repos/{owner_repo}/actions/runs/{run_id}/jobs?{urlencode({'filter': 'latest', 'per_page': '100'})}",
@@ -617,23 +684,18 @@ def fetch_live_run_jobs(
     api_calls = response_api_call_count(response)
     jobs = paginated_items(response, "jobs")
 
-    expected_runner = runner_name.casefold()
-    runner_jobs: list[RecentJob] = []
-    jobs_for_runner = 0
+    live_jobs: list[RecentJob] = []
     for job in jobs:
         live_job = recent_job_from_live_github_api(owner_repo=owner_repo, run=run, job=job)
-        if live_job.runner_name.casefold() != expected_runner:
+        if not live_job.runner_name or not job_touched_window(live_job, since=since, until=until):
             continue
-        jobs_for_runner += 1
-        if job_touched_window(live_job, since=since, until=until):
-            runner_jobs.append(live_job)
+        live_jobs.append(live_job)
 
-    return runner_jobs, api_calls, len(jobs), jobs_for_runner
+    return live_jobs, api_calls, len(jobs)
 
 
-def list_live_runner_jobs_from_github(
+def list_live_jobs_from_github(
     *,
-    runner_name: str,
     since: datetime,
     until: datetime,
     owner_repo: str,
@@ -645,11 +707,17 @@ def list_live_runner_jobs_from_github(
     seen_run_ids: set[str] = set()
 
     for status in ACTIVE_RUN_STATUSES:
-        response = gh_api_json(
-            active_workflow_runs_endpoint(owner_repo, status),
-            paginate=True,
-            timeout=gh_timeout,
-        )
+        try:
+            response = gh_api_json(
+                active_workflow_runs_endpoint(owner_repo, status),
+                paginate=True,
+                timeout=gh_timeout,
+            )
+        except Exception as exc:
+            metrics.run_list_api_calls += 1
+            metrics.run_list_api_failures += 1
+            print(f"warning: live GitHub run-list lookup failed for status {status!r}: {exc}", file=sys.stderr)
+            continue
         metrics.run_list_api_calls += response_api_call_count(response)
         runs = paginated_items(response, "workflow_runs")
         metrics.workflow_runs_seen += len(runs)
@@ -661,17 +729,15 @@ def list_live_runner_jobs_from_github(
             candidate_runs.append(run)
 
     metrics.workflow_runs_inspected = len(candidate_runs)
-    metrics.workflows_inspected = len(
-        {str(run.get("name") or run.get("display_title") or run.get("path") or "") for run in candidate_runs}
-    )
+    metrics.workflows_inspected = len({identity for run in candidate_runs if (identity := live_workflow_identity(run))})
     if not candidate_runs:
-        print("Live GitHub enrichment: no active workflow run(s) found " "to inspect for runner jobs.")
+        print("Live GitHub enrichment: no active workflow run(s) found to inspect for runner jobs.")
         return [], metrics
 
     print(
         "Live GitHub enrichment: "
-        f"inspecting {len(candidate_runs)} active workflow run(s) for runner "
-        f"{runner_name!r} with {min(live_run_workers, len(candidate_runs))} worker(s)."
+        f"inspecting {len(candidate_runs)} active workflow run(s) with "
+        f"{min(live_run_workers, len(candidate_runs))} worker(s)."
     )
 
     live_jobs: list[RecentJob] = []
@@ -681,7 +747,6 @@ def list_live_runner_jobs_from_github(
                 fetch_live_run_jobs,
                 owner_repo=owner_repo,
                 run=run,
-                runner_name=runner_name,
                 since=since,
                 until=until,
                 gh_timeout=gh_timeout,
@@ -690,7 +755,7 @@ def list_live_runner_jobs_from_github(
         ]
         for future in as_completed(futures):
             try:
-                runner_jobs, api_calls, jobs_seen, jobs_for_runner = future.result()
+                run_jobs, api_calls, jobs_seen = future.result()
             except Exception as exc:
                 metrics.job_list_api_calls += 1
                 metrics.job_list_api_failures += 1
@@ -698,18 +763,110 @@ def list_live_runner_jobs_from_github(
                 continue
             metrics.job_list_api_calls += api_calls
             metrics.jobs_seen += jobs_seen
-            metrics.jobs_for_runner += jobs_for_runner
-            metrics.jobs_in_window += len(runner_jobs)
-            live_jobs.extend(runner_jobs)
+            metrics.jobs_in_window += len(run_jobs)
+            live_jobs.extend(run_jobs)
 
     print(
         "Live GitHub enrichment: "
-        f"{metrics.jobs_in_window} runner job(s) in window from "
+        f"{metrics.jobs_in_window} runner-assigned job(s) in window from "
         f"{metrics.jobs_seen} inspected job(s); "
         f"{metrics.api_calls} API call(s), "
+        f"{metrics.run_list_api_failures} run-list failure(s), "
         f"{metrics.job_list_api_failures} job-list failure(s)."
     )
     return sorted(live_jobs, key=lambda job: parse_github_time(job.started_at), reverse=True), metrics
+
+
+def filter_live_jobs_for_runner(
+    live_jobs: list[RecentJob], *, runner_name: str, since: datetime, until: datetime
+) -> list[RecentJob]:
+    expected_runner = runner_name.casefold()
+    return [
+        job
+        for job in live_jobs
+        if job.runner_name.casefold() == expected_runner and job_touched_window(job, since=since, until=until)
+    ]
+
+
+def load_live_jobs_json(path: Path) -> tuple[list[RecentJob], LiveGithubPopulationMetrics]:
+    try:
+        raw_value = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(f"Unable to read live jobs JSON {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Unable to parse live jobs JSON {path}: {exc}") from exc
+
+    metrics = LiveGithubPopulationMetrics(statuses=ACTIVE_RUN_STATUSES)
+    raw_jobs: Any
+    if isinstance(raw_value, list):
+        raw_jobs = raw_value
+    elif isinstance(raw_value, dict):
+        metrics = live_github_metrics_from_dict(raw_value.get("metrics"))
+        raw_jobs = raw_value.get("jobs")
+    else:
+        raise RuntimeError(f"Live jobs JSON {path} must contain a list or object.")
+
+    if not isinstance(raw_jobs, list):
+        raise RuntimeError(f"Live jobs JSON {path} must contain jobs list.")
+
+    jobs = [job_from_dict(value) for value in raw_jobs if isinstance(value, dict)]
+    if not metrics.jobs_seen:
+        metrics.jobs_seen = len(jobs)
+    print(f"Loaded {len(jobs)} precomputed live GitHub job(s) from {path}.")
+    return jobs, metrics
+
+
+def write_live_jobs_json(
+    *,
+    path: Path,
+    generated_at: datetime,
+    since: datetime,
+    until: datetime,
+    owner_repo: str,
+    live_jobs: list[RecentJob],
+    metrics: LiveGithubPopulationMetrics,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "generated_at": format_utc(generated_at),
+                "since": format_utc(since),
+                "until": format_utc(until),
+                "owner_repo": owner_repo,
+                "metrics": metrics.to_dict(),
+                "jobs": [job_to_dict(job) for job in live_jobs],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def export_live_github_jobs(args: argparse.Namespace) -> int:
+    ensure_gh_available()
+    generated_at = datetime.now(timezone.utc)
+    since = generated_at - timedelta(hours=args.hours)
+    live_jobs, metrics = list_live_jobs_from_github(
+        since=since,
+        until=generated_at,
+        owner_repo=args.owner_repo,
+        gh_timeout=args.gh_timeout,
+        live_run_workers=args.live_run_workers,
+    )
+    write_live_jobs_json(
+        path=args.export_live_jobs_json,
+        generated_at=generated_at,
+        since=since,
+        until=generated_at,
+        owner_repo=args.owner_repo,
+        live_jobs=live_jobs,
+        metrics=metrics,
+    )
+    print(f"Wrote {len(live_jobs)} live GitHub job(s) to {args.export_live_jobs_json}.")
+    return 0
 
 
 def triggering_results_for_runner(results: list[JobScanResult], runner_name: str) -> list[JobScanResult]:
@@ -864,14 +1021,36 @@ def build_runner_report(args: argparse.Namespace) -> int:
         timeout=args.api_timeout,
         owner_repo=args.owner_repo,
     )
-    live_runner_jobs, live_github_metrics = list_live_runner_jobs_from_github(
-        runner_name=runner_name,
-        since=since,
-        until=generated_at,
-        owner_repo=args.owner_repo,
-        gh_timeout=args.gh_timeout,
-        live_run_workers=args.live_run_workers,
-    )
+    live_github_metrics = LiveGithubPopulationMetrics(statuses=ACTIVE_RUN_STATUSES)
+    if args.live_jobs_json:
+        live_jobs, live_github_metrics = load_live_jobs_json(args.live_jobs_json)
+        live_runner_jobs = filter_live_jobs_for_runner(
+            live_jobs,
+            runner_name=runner_name,
+            since=since,
+            until=generated_at,
+        )
+        live_github_metrics.jobs_for_runner = len(live_runner_jobs)
+        live_github_metrics.jobs_in_window = len(live_runner_jobs)
+    elif args.run_enrichment:
+        live_jobs, live_github_metrics = list_live_jobs_from_github(
+            since=since,
+            until=generated_at,
+            owner_repo=args.owner_repo,
+            gh_timeout=args.gh_timeout,
+            live_run_workers=args.live_run_workers,
+        )
+        live_runner_jobs = filter_live_jobs_for_runner(
+            live_jobs,
+            runner_name=runner_name,
+            since=since,
+            until=generated_at,
+        )
+        live_github_metrics.jobs_for_runner = len(live_runner_jobs)
+        live_github_metrics.jobs_in_window = len(live_runner_jobs)
+    else:
+        live_runner_jobs = []
+        print("Live GitHub enrichment disabled for this runner report.")
     runner_jobs, live_jobs_added = merge_missing_runner_jobs(runner_jobs, live_runner_jobs)
     live_github_metrics.jobs_added_to_report = live_jobs_added
     if live_runner_jobs:
@@ -939,6 +1118,8 @@ def main() -> int:
     args = parse_args()
     try:
         validate_args(args)
+        if args.export_live_jobs_json:
+            return export_live_github_jobs(args)
         return build_runner_report(args)
     except (RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
