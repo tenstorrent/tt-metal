@@ -1276,3 +1276,39 @@ it dangerous:
   captured before the first push plus its own `(b * HGROUPS + r) mod (capacity / block)` counter.
 - `consumer_ready` stays as it is: after consuming round r the receiver acks the sender of round
   `r + DEPTH_H`, whose coordinates are static. That cost is already paid today.
+
+### 7. Perf 3 addendum 2 — the `mcast_pipe` Counter path is FIXED, and it disproves the flag-reset hypothesis
+
+§6 named the h rendezvous the keystone. The descriptor's own comment offered a specific culprit inside
+it: `DataReadySignal::Flag` is RESET by every receiver, so "the sender of round r+1 [waits] for every
+receiver to reset round r's flag, which is part of the measured collective serialisation." The
+monotone `Counter` signal removes that reset entirely — and had been **unusable since Phase 0**, filed
+as an open helper bug. It is now fixed, and the answer is a clean NULL with a mechanism.
+
+**The bug, fixed in `mcast_pipe.inl`.** `send_data_` issued the data multicast with
+`NOC_CMD_VC_LINKED` unconditionally, relying on the following signal to terminate the chain. Only
+`Flag` can: it is a multicast WRITE on the SAME command buffer, while `Counter` is a multicast ATOMIC
+on `write_at_cmd_buf` — a DIFFERENT one. So a linked data write behind a Counter signal left
+`NCRISC_WR_CMD_BUF` linked forever and the next write on it blocked in `noc_cmd_buf_ready`: a
+guaranteed hang for every Counter user, previously observed as round-0's h sender stuck in
+`noc_async_write_multicast_loopback_src` while all 110 readers sat in their `wait_min`. The fix is the
+one the descriptor predicted: **link only for `Flag`**, and order the Counter path's data ahead of its
+signal with an **ACKED `async_write_barrier()`** (`async_writes_flushed()` means SENT, not LANDED — a
+receiver could see the counter and read a half-written block).
+
+**It works and it is correct**: the Counter path now runs to completion and passes **golden 45/45**,
+where it previously hung. That is a real repair to a shared helper, useful to any op that wants a
+monotone multicast signal, and it is independent of whether this op ships it.
+
+**And it is SLOWER here — measured, not argued:** `counter` 112 087 / 159 968 / 278 493 ns against
+`flag` 105 076 / 145 625 / 247 181 (**+7 to +13 %**). The reason is the interesting part: **the link
+that Flag terminates for free is what was ordering data-before-signal.** Unlinked, Counter must buy
+that ordering with an acked write barrier plus a non-posted atomic barrier, and that pair costs more
+than the flag-reset round trip it deletes. `MOE_SWIGLU_HSIG` keeps both live; `flag` is the default.
+
+**This DISPROVES the flag-reset hypothesis and sharpens §6.** The per-round reset is not what
+serialises phase 2. What does is the **LOOP ORDER**: a core sends its own column at iteration
+`r == my_col` of the same loop in which it receives every other column, so the sender of round r+1
+must first RECEIVE rounds 0..r. No signal change can touch that — only moving the send off the
+receiving RISC can, which is §6's dual-RISC split. One fewer candidate, and the remaining one is now
+the only one.

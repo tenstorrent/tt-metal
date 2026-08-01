@@ -457,6 +457,21 @@ GU_CHUNKS = int(os.environ.get("MOE_SWIGLU_GU_CHUNKS", 2))
 #: front of the grid-wide queue; the weight stream then runs UNDER the matmul instead of before it.
 XPRIO = int(os.environ.get("MOE_SWIGLU_XPRIO", 1))
 
+#: PERF 3 — the h all-gather's data-ready signal: "counter" (monotone, never reset) or "flag" (the
+#: reset-per-round signal). Counter was UNUSABLE (a guaranteed sender hang) until the
+#: `NOC_CMD_VC_LINKED` bug in `mcast_pipe.inl::send_data_` was fixed this round; it is now correct
+#: (golden 45/45 on it) and MEASURED SLOWER: 112 087 / 159 968 / 278 493 ns against Flag's
+#: 105 076 / 145 625 / 247 181 (+7 to +13 %).
+#:
+#: WHY, and it is the useful part: the link that Flag terminates for free is what ordered
+#: data-before-signal. Unlinked, the Counter path has to buy that ordering with an ACKED
+#: `async_write_barrier()` (SENT is not enough — a receiver could see the counter and read a
+#: half-written block) plus a non-posted atomic barrier, and that pair costs MORE than the flag-reset
+#: round trip it removes. So the flag reset was never the keystone: what actually serialises phase 2
+#: is the LOOP ORDER — the sender of round r+1 must first RECEIVE rounds 0..r — and no signal change
+#: touches that. `flag` is the default.
+HSIG = os.environ.get("MOE_SWIGLU_HSIG", "flag")
+
 #: Mailbox handshake word — the reader publishes {count, M_t, m_blocks} plus this flag.
 MAILBOX_MAGIC = 0xC0FFEE01
 MAILBOX_WORDS = 16
@@ -892,6 +907,16 @@ def create_program_descriptor(
     # stays on (MOE_SWIGLU_ABLATE=no_handshake drops it for MEASUREMENT only — not correct).
     handshake = ABLATE != "no_handshake"
     data_ready_signal = ttnn._ttnn.mcast_host.McastDataReady.Flag
+    # PERF 3 — the h all-gather's data-ready signal. Flag is RESET by each receiver, so the sender of
+    # round r+1 cannot proceed until every receiver has cleared round r's flag: a per-round grid-wide
+    # serialisation, and measurably the op's keystone (phase 2 = 43 us with every payload ablated
+    # ~= 11 rounds x ~3.9 us). Counter is MONOTONE — nothing is ever reset — which removes that chain.
+    # It was unusable until the `NOC_CMD_VC_LINKED` bug in `mcast_pipe.inl::send_data_` was fixed
+    # (the Counter signal is an atomic on a different command buffer and so could never terminate the
+    # link, hanging the sender); see the comments there.
+    h_data_ready_signal = (
+        ttnn._ttnn.mcast_host.McastDataReady.Counter if HSIG == "counter" else ttnn._ttnn.mcast_host.McastDataReady.Flag
+    )
     x_mcast = ttnn.Mcast1D(
         device,
         all_cores,
@@ -912,7 +937,7 @@ def create_program_descriptor(
         ttnn.McastConfig(
             noc=ttnn.NOC.NOC_0,
             handshake=handshake,
-            data_ready=data_ready_signal,
+            data_ready=h_data_ready_signal,
             rotating_sender=True,
             base_sem_id=SEM_H_BASE,
         ),

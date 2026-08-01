@@ -127,15 +127,22 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     MulticastEndpoint dst_ep;
     const typename noc_traits_t<UnicastEndpoint>::src_args_type src_args{.addr = src_l1};
     const typename noc_traits_t<MulticastEndpoint>::dst_args_mcast_type dst_args{r.sx, r.sy, r.ex, r.ey, dst_l1};
-    // Data is always linked to the following signal mcast (signal_ready_ issues the signal with
-    // linked=false to terminate the chain). The linked pair enforces data-before-signal without a
-    // barrier.
+    // LINKED ONLY FOR THE Flag SIGNAL. The link is terminated by the following signal mcast, and
+    // only the Flag signal can terminate it: Flag is a multicast WRITE issued on the SAME command
+    // buffer, while Counter is a multicast ATOMIC issued on `write_at_cmd_buf` — a DIFFERENT command
+    // buffer. Linking the data behind a Counter signal therefore leaves NCRISC_WR_CMD_BUF linked
+    // forever and the next write on it blocks in `noc_cmd_buf_ready`. That was a guaranteed hang for
+    // every Counter user (observed as round-0's sender stuck in
+    // `noc_async_write_multicast_loopback_src` while every receiver sat in its `wait_min`), and it is
+    // why the Counter path was unusable. The Counter path instead orders data-before-signal with an
+    // ACKED write barrier in signal_ready_ — see there for why `async_writes_flushed` is not enough.
+    constexpr bool link_to_signal = (DATA_READY_SIGNAL == DataReadySignal::Flag);
     if (loopback) {
         noc_.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-            src_ep, dst_ep, size, mcast_dests, src_args, dst_args, /*linked=*/true);
+            src_ep, dst_ep, size, mcast_dests, src_args, dst_args, link_to_signal);
     } else {
         noc_.async_write_multicast<NocOptions::DEFAULT>(
-            src_ep, dst_ep, size, mcast_dests, src_args, dst_args, /*linked=*/true);
+            src_ep, dst_ep, size, mcast_dests, src_args, dst_args, link_to_signal);
     }
 }
 
@@ -158,6 +165,15 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
         // num_dests_incl_`) made the NON-POSTED atomic below wait in fence_()'s
         // async_atomic_barrier() for one ack from a destination that was never addressed — a
         // guaranteed hang for every Counter user whose src cb != dst cb.
+        // DATA BEFORE SIGNAL, and it must be an ACKED barrier. send_data_ issues the Counter path's
+        // data UNLINKED (see there), so nothing else orders the payload ahead of this increment.
+        // `async_writes_flushed()` is NOT enough: it means SENT, not LANDED, so a receiver could see
+        // the counter and read a half-written block. `async_write_barrier()` waits for the write
+        // acks, which is the real arrival guarantee. Costs the sender one barrier per round and buys
+        // a MONOTONE signal that is never reset — which is the whole point of the Counter path: with
+        // Flag, the sender of round r+1 cannot proceed until every receiver has reset round r's
+        // flag, and that reset chain is a per-round grid-wide serialisation.
+        noc_.async_write_barrier();
         data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, num_dests_excl_);  // monotone +1
     } else {
         // set_multicast broadcasts this core's own cell as the source, so re-assert VALID first: a
