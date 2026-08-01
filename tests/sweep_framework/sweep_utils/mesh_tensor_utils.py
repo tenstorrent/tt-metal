@@ -460,11 +460,24 @@ def _close_mesh_and_parent(device, *args, **kwargs):
     """Close `device`, or its parent when `device` is a carved submesh.
 
     Closing a submesh does not release the parent's devices, so the parent must be closed or
-    the next open runs a second live mesh (which corrupts context state on Galaxy)."""
+    the next open runs a second live mesh (which corrupts context state on Galaxy).
+
+    The carved submesh shares the PARENT's command queues, so the parent is quiesced first to
+    drain them -- otherwise closing it with submesh work still in flight throws, which makes
+    close_job_device() report failure and the fabric-reconfig / reopen guards then refuse
+    ("refusing to reconfigure fabric because the cached job device could not be closed").
+    That cost 30 vectors in lead-models run 30706921019 (24 conv2d + 6 group_norm), all of
+    them fabric-reconfiguring modules. Mirrors ccl_common._teardown_cached_device, which has
+    always quiesced before closing a carved parent."""
     entry = _SUBMESH_PARENTS.pop(id(device), None)
-    if entry is not None:
-        return _orig_close_mesh_device(entry[1], *args, **kwargs)
-    return _orig_close_mesh_device(device, *args, **kwargs)
+    if entry is None:
+        return _orig_close_mesh_device(device, *args, **kwargs)
+    parent = entry[1]
+    try:
+        parent.quiesce_devices()
+    except Exception:
+        logger.exception("SWEEPS: quiesce_devices before closing the carved parent mesh failed")
+    return _orig_close_mesh_device(parent, *args, **kwargs)
 
 
 def _guarded_open_mesh_device(*args, **kwargs):
