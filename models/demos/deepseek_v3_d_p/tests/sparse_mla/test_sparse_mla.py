@@ -8,8 +8,6 @@ path separate while reusing the same TT execution helper and the production mesh
 / fabric axes from the dense MLA tests.
 """
 
-import os
-
 import pytest
 import torch
 from loguru import logger
@@ -133,50 +131,25 @@ def _sparse_accuracy_cases():
 SPARSE_ACCURACY_CASES = _sparse_accuracy_cases()
 SPARSE_ANCHOR_CASES = _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=True)
 
-# All three fabric transports, keyed by name. Fabric is NOT swept: correctness is ~invariant to the
-# transport, so the suite pins one fabric (PREFERRED below) and lets a dedicated fabric test cover
-# multi-transport bring-up. The ids/dicts are kept so DS_SPARSE_FABRIC can select any of them.
-_SPARSE_FABRICS = {
-    "line": {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-    },
-    "ring": {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-    },
-    "fabric2d": {
-        "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+# Generic Sparse MLA correctness retains the established 2D fabric and linear
+# schedule. The dedicated CCL suite covers the production torus/ring schedule
+# and selects high_bw_all_gather.
+SPARSE_FABRIC = ttnn.FabricConfig.FABRIC_2D
+SPARSE_TOPOLOGY = ttnn.Topology.Linear
+SPARSE_DEVICE_PARAMS = [
+    {
+        "fabric_config": SPARSE_FABRIC,
         "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-    },
-}
-# Auto-pin the fabric: priority fabric2d > ring > line (fabric2d is the Galaxy/production bring-up).
-# Override with DS_SPARSE_FABRIC=line|ring|fabric2d. TODO: replace the priority default with a real
-# per-box capability probe; for now it defaults to the top-priority (production) transport.
-_SPARSE_FABRIC_PRIORITY = ["fabric2d", "ring", "line"]
-
-
-def _preferred_fabric_name() -> str:
-    env = os.environ.get("DS_SPARSE_FABRIC")
-    if env:
-        assert env in _SPARSE_FABRICS, f"DS_SPARSE_FABRIC={env!r} must be one of {sorted(_SPARSE_FABRICS)}"
-        return env
-    return _SPARSE_FABRIC_PRIORITY[0]
-
-
-PREFERRED_FABRIC = _preferred_fabric_name()
-SPARSE_DEVICE_PARAMS = [_SPARSE_FABRICS[PREFERRED_FABRIC]]
-SPARSE_DEVICE_IDS = [PREFERRED_FABRIC]
+    }
+]
+SPARSE_DEVICE_IDS = ["fabric2d"]
 
 
 def _topology_from_device_params(device_params):
-    return (
-        ttnn.Topology.Ring
-        if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
-        else ttnn.Topology.Linear
-    )
+    assert device_params.get("fabric_config") == SPARSE_FABRIC
+    return SPARSE_TOPOLOGY
 
 
 def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=1):
@@ -365,7 +338,17 @@ def run_sparse_mla_determinism_case(
 
 
 def run_sparse_mla_chunked_case(
-    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+    variant,
+    config,
+    mesh_device,
+    seq_len,
+    chunk,
+    cache_format,
+    topology,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
 ):
     """Sparse chunked prefill: compare chunked ttMLA against MLACPU sparse chunked truth."""
     # Anchor mesh (TP>=2) and seq/SP validity are guaranteed by _sparse_cases (no runtime skips).
@@ -409,6 +392,7 @@ def run_sparse_mla_chunked_case(
         seq_len=seq_len,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        topology=topology,
         is_chunked=True,
         layer_num=1,
         sparse_kv_cache_format=cache_format,
@@ -472,7 +456,9 @@ def run_sparse_mla_chunked_case(
     logger.info(f"[{variant.name}] sparse MLA chunked complete")
 
 
-def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo):
+def run_sparse_mla_kv_only_case(
+    variant, config, mesh_device, seq_len, chunk, topology, ds_layer, ds_checkpoint, ds_repo
+):
     """Last-layer chunked fast path must populate packed KVPE and tiled index caches without an output."""
     seed = 42
     weights, src_tag = build_weights(
@@ -500,6 +486,7 @@ def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds
         seq_len=seq_len,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        topology=topology,
         is_chunked=True,
         layer_num=1,
         sparse_kv_cache_format=cache_format,
@@ -550,7 +537,7 @@ def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds
 
 
 def run_sparse_mla_rotated_case(
-    variant, config, mesh_device, iters_isl, chunk_size_global, ds_layer, ds_checkpoint, ds_repo
+    variant, config, mesh_device, iters_isl, chunk_size_global, topology, ds_layer, ds_checkpoint, ds_repo
 ):
     """Rotation/padding scenario (sparse analogue of test_mla._run_chunked_prefill): one DENSE sequence
     chunked VARIABLY by iters_isl (per-iter valid token counts). Each iter's real tokens are rotated to
@@ -598,6 +585,7 @@ def run_sparse_mla_rotated_case(
         seq_len=seq_len_cache,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        topology=topology,
         is_chunked=True,
         slot_num=1,
         layer_num=1,
@@ -690,7 +678,10 @@ def run_sparse_mla_rotated_case(
 def test_sparse_mla_rotated(
     mesh_device, seq_len, iters_isl, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
-    run_sparse_mla_rotated_case(variant, config_only, mesh_device, iters_isl, seq_len, ds_layer, ds_checkpoint, ds_repo)
+    topology = _topology_from_device_params(device_params)
+    run_sparse_mla_rotated_case(
+        variant, config_only, mesh_device, iters_isl, seq_len, topology, ds_layer, ds_checkpoint, ds_repo
+    )
 
 
 # One combined parametrization instead of independent variant/mesh/sequence/format axes. BF16 retains
@@ -833,8 +824,19 @@ def test_sparse_mla_chunked(
     ds_repo,
     ds_input,
 ):
+    topology = _topology_from_device_params(device_params)
     run_sparse_mla_chunked_case(
-        variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+        variant,
+        config_only,
+        mesh_device,
+        seq_len,
+        chunk,
+        cache_format,
+        topology,
+        ds_layer,
+        ds_checkpoint,
+        ds_repo,
+        ds_input,
     )
 
 
@@ -849,4 +851,7 @@ SPARSE_KV_ONLY_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_1" in c.id]
 def test_sparse_mla_kv_only(
     mesh_device, seq_len, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
-    run_sparse_mla_kv_only_case(variant, config_only, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo)
+    topology = _topology_from_device_params(device_params)
+    run_sparse_mla_kv_only_case(
+        variant, config_only, mesh_device, seq_len, chunk, topology, ds_layer, ds_checkpoint, ds_repo
+    )

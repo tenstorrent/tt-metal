@@ -153,11 +153,10 @@ VARIANTS = ("deepseek_v32", "glm_5_1")
 VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
 _CONFIG_BUILDERS = {"deepseek_v32": deepseek_v32_hf_config, "glm_5_1": glm_hf_config}
 
-# Fabric transport being profiled — single source for BOTH the device_params and the run manifest, so the
-# recorded provenance can never drift from what actually ran (FABRIC_2D is the production transport;
-# FABRIC_1D exhibited the multi-hop line-broadcast hang). FABRIC_2D + fabric_router_config leaves the
-# fabric-tensix datamover off, so the realtime profiler stays eligible (see PR #49840 CCL benchmarks).
+# Generic MLA performance retains the established 2D/linear schedule. The
+# sparse-MLA CCL suite separately measures high_bw_all_gather on torus/ring.
 PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
+PERF_TOPOLOGY = ttnn.Topology.Linear
 
 # Realtime-profiler record drain ceiling. The receiver thread delivers records asynchronously; the
 # wrapper stops once no new record has landed for its settle window, bounded by this ceiling. A generous
@@ -328,6 +327,7 @@ def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, cache_forma
                 "mesh_sp": workload.sp,
                 "mesh_tp": workload.tp,
                 "fabric": getattr(PERF_FABRIC, "name", str(PERF_FABRIC)),
+                "topology": getattr(PERF_TOPOLOGY, "name", str(PERF_TOPOLOGY)),
             },
             "build": {"so_mtime": so_mtime},
             "command": reproducer,
@@ -664,6 +664,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         seq_len=total,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        topology=PERF_TOPOLOGY,
         is_chunked=True,
         layer_num=1,
         has_indexer=has_indexer,  # sparse: DSA indexer + sparse_sdpa; dense: NullIndexer + ring MLA

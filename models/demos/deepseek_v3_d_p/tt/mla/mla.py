@@ -453,6 +453,8 @@ class ttMLA:
         # the attention dense (has_indexer=False). Dense-path tuning gates that must tell V3.1 from a
         # dense-run V3.2 key on this, not _has_indexer (see _get_sdpa_program_config).
         self._is_dsa_family = TtIndexer.matches_config(config)
+        self._high_bw_all_gather_outputs = {}
+        self._high_bw_all_gather_buffer_addresses = set()
         # GLM-5.2 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2 / GLM-5.1) every layer is
@@ -820,15 +822,12 @@ class ttMLA:
                 topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
-            qr = ttnn.experimental.all_gather_async(
+            qr = ttnn.experimental.high_bw_all_gather(
                 qr,
                 dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.tp_ccl_topology,
+                output_tensor=self._get_high_bw_all_gather_output("q_a_latent", qr, dim=3, cluster_axis=self.tp_axis),
                 cluster_axis=self.tp_axis,
+                num_links=self.ccl_num_links,
             )
 
         return ttnn.rms_norm(
@@ -855,7 +854,7 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
-        ttnn.deallocate(qr)
+        self._deallocate_if_transient(qr)
 
         # convert to
         # [batch (1), num_heads_local, seq_len_local, qk_head_dim]
@@ -913,15 +912,12 @@ class ttMLA:
 
         # All reduce (skip for single-device TP)
         if self.tp_factor > 1:
-            tt_kv = ttnn.experimental.all_gather_async(
+            tt_kv = ttnn.experimental.high_bw_all_gather(
                 tt_kv,
                 dim=1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.tp_ccl_topology,
+                output_tensor=self._get_high_bw_all_gather_output("kv_stem", tt_kv, dim=1, cluster_axis=self.tp_axis),
                 cluster_axis=self.tp_axis,
+                num_links=self.ccl_num_links,
             )
             tt_kv = ttnn.experimental.fast_reduce_nc(
                 tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
@@ -935,7 +931,7 @@ class ttMLA:
         tt_kv_rope = ttnn.slice(
             tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
         )
-        ttnn.deallocate(tt_kv)
+        self._deallocate_if_transient(tt_kv)
 
         tt_kv_nope = ttnn.rms_norm(
             tt_kv_nope,
@@ -1249,7 +1245,7 @@ class ttMLA:
         attn_out = self._sparse_mla(
             tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=None
         )
-        ttnn.deallocate(kvpe_dev.storage)
+        self._deallocate_if_transient(kvpe_dev.storage)
         ttnn.deallocate(tt_q)
         return self._apply_wkv_b2(attn_out, seq_len_local)
 
@@ -1320,22 +1316,45 @@ class ttMLA:
     # only sparse-specific gather/attention helpers live below.
     # ----------------------------------------------------------------------------------------
 
+    def _get_high_bw_all_gather_output(self, name, tensor, *, dim, cluster_axis):
+        """Return the model-owned persistent buffer for one high-bandwidth all-gather."""
+        local_shape = list(ttnn.get_device_tensors(tensor)[0].padded_shape)
+        output_shape = local_shape.copy()
+        output_shape[dim] *= self.mesh_device.shape[cluster_axis]
+        key = (name, dim, cluster_axis, tuple(output_shape), tensor.dtype, tensor.layout)
+        output = self._high_bw_all_gather_outputs.get(key)
+        if output is None:
+            output = ttnn.empty(
+                output_shape,
+                dtype=tensor.dtype,
+                layout=tensor.layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._high_bw_all_gather_outputs[key] = output
+            self._high_bw_all_gather_buffer_addresses.update(
+                shard.buffer_address() for shard in ttnn.get_device_tensors(output)
+            )
+        return output
+
+    def _deallocate_if_transient(self, tensor):
+        if not any(
+            shard.buffer_address() in self._high_bw_all_gather_buffer_addresses
+            for shard in ttnn.get_device_tensors(tensor)
+        ):
+            ttnn.deallocate(tensor)
+
     def _all_gather(self, t, dim, cluster_axis):
         """All-gather across a mesh cluster axis → replicated on that axis. factor==1: no-op.
         cluster_axis picks SP (sequence) or TP; the guard reads the matching mesh factor."""
         factor = self.sp_factor if cluster_axis == self.sp_axis else self.tp_factor
         if factor == 1:
             return t
-        # Per-axis topology: match the ring/line topology to the axis this gather rides.
-        topology = self.sp_ccl_topology if cluster_axis == self.sp_axis else self.tp_ccl_topology
-        return ttnn.experimental.all_gather_async(
+        return ttnn.experimental.high_bw_all_gather(
             t,
             dim=dim,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=cluster_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=cluster_axis),
+            output_tensor=self._get_high_bw_all_gather_output("sparse", t, dim=dim, cluster_axis=cluster_axis),
             num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=topology,
             cluster_axis=cluster_axis,
         )
 

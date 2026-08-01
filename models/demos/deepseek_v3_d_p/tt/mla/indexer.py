@@ -265,6 +265,8 @@ class TtIndexer:
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl
         self.ccl_num_links = ccl_num_links
+        self._high_bw_all_gather_outputs = {}
+        self._high_bw_all_gather_buffer_addresses = set()
         # Per-axis topology: the TP collectives (_tp_rs_ag) use tp_ccl_topology, the SP-axis
         # all-gather (_sp_all_gather) uses sp_ccl_topology. Conflating them would deadlock the
         # SP-axis gather under an X-only torus (TP Ring, SP has no physical wrap) — mirrors ttMLA.
@@ -323,6 +325,34 @@ class TtIndexer:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
+    def _get_high_bw_all_gather_output(self, name, tensor, *, dim, cluster_axis):
+        """Return the indexer-owned persistent buffer for one high-bandwidth all-gather."""
+        local_shape = list(ttnn.get_device_tensors(tensor)[0].padded_shape)
+        output_shape = local_shape.copy()
+        output_shape[dim] *= self.mesh_device.shape[cluster_axis]
+        key = (name, dim, cluster_axis, tuple(output_shape), tensor.dtype, tensor.layout)
+        output = self._high_bw_all_gather_outputs.get(key)
+        if output is None:
+            output = ttnn.empty(
+                output_shape,
+                dtype=tensor.dtype,
+                layout=tensor.layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._high_bw_all_gather_outputs[key] = output
+            self._high_bw_all_gather_buffer_addresses.update(
+                shard.buffer_address() for shard in ttnn.get_device_tensors(output)
+            )
+        return output
+
+    def _deallocate_if_transient(self, tensor):
+        if not any(
+            shard.buffer_address() in self._high_bw_all_gather_buffer_addresses
+            for shard in ttnn.get_device_tensors(tensor)
+        ):
+            ttnn.deallocate(tensor)
+
     # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
     # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
     def _tp_rs_ag(self, t, rs_only=False):
@@ -342,15 +372,12 @@ class TtIndexer:
         )
         if rs_only:
             return t
-        return ttnn.experimental.all_gather_async(
+        return ttnn.experimental.high_bw_all_gather(
             t,
             dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
+            output_tensor=self._get_high_bw_all_gather_output("tp_rs_ag", t, dim=3, cluster_axis=self.tp_axis),
             cluster_axis=self.tp_axis,
+            num_links=self.ccl_num_links,
         )
 
     def _tp_all_reduce_via_gather(self, t):
@@ -364,15 +391,12 @@ class TtIndexer:
         917-929), measured cheaper even on an 18x-wider tensor than wts."""
         if self.tp_factor == 1:
             return t
-        t = ttnn.experimental.all_gather_async(
+        t = ttnn.experimental.high_bw_all_gather(
             t,
             dim=1,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
+            output_tensor=self._get_high_bw_all_gather_output("tp_all_reduce", t, dim=1, cluster_axis=self.tp_axis),
             cluster_axis=self.tp_axis,
+            num_links=self.ccl_num_links,
         )
         return ttnn.experimental.fast_reduce_nc(
             t, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
@@ -382,15 +406,12 @@ class TtIndexer:
         """All-gather across the SP axis (sequence) → full-S replicated on SP. sp=1: no-op."""
         if self.sp_factor == 1:
             return t
-        return ttnn.experimental.all_gather_async(
+        return ttnn.experimental.high_bw_all_gather(
             t,
             dim=dim,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.sp_ccl_topology,
+            output_tensor=self._get_high_bw_all_gather_output("sp_all_gather", t, dim=dim, cluster_axis=self.sp_axis),
             cluster_axis=self.sp_axis,
+            num_links=self.ccl_num_links,
         )
 
     def _tp_all_gather(self, t, dim):
@@ -399,15 +420,12 @@ class TtIndexer:
         indices that were computed on TP-seq-sharded query rows back to the [1,1,S/sp,k] contract.)"""
         if self.tp_factor == 1:
             return t
-        return ttnn.experimental.all_gather_async(
+        return ttnn.experimental.high_bw_all_gather(
             t,
             dim=dim,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
+            output_tensor=self._get_high_bw_all_gather_output("tp_all_gather", t, dim=dim, cluster_axis=self.tp_axis),
             cluster_axis=self.tp_axis,
+            num_links=self.ccl_num_links,
         )
 
     def _upload_weights(self, idx_host):
@@ -686,7 +704,7 @@ class TtIndexer:
             block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
             kv_len=end_pos,
         )
-        ttnn.deallocate(k_full)
+        self._deallocate_if_transient(k_full)
         # wq_b replicated -> each chip already holds the COMPLETE head-summed logit, so there is NO
         # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
         # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.
@@ -719,7 +737,7 @@ class TtIndexer:
             idx = ttnn.to_layout(idx_gathered, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(idx_local)
             ttnn.deallocate(idx_tiled)
-            ttnn.deallocate(idx_gathered)
+            self._deallocate_if_transient(idx_gathered)
         return idx
 
 

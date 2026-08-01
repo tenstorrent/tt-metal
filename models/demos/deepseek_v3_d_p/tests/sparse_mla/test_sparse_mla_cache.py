@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
@@ -42,6 +43,16 @@ from tests.ttnn.utils_for_testing import comp_pcc
 CACHE_DIR = Path("/tmp/DS_PREFILL_sparse_mla")
 SEQ_LEN = 256
 SP_AXIS, TP_AXIS = 0, 1
+SPARSE_TOPOLOGY = ttnn.Topology.Ring
+
+
+def _torus_xy_device_params():
+    return {
+        "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+        "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+    }
 
 
 # --------------------------------------------------------------------------------------------------
@@ -209,6 +220,7 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
         seq_len=SEQ_LEN,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
+        topology=SPARSE_TOPOLOGY,
         weight_cache_path=weight_cache_path,
         # Single-shot folds onto block-cyclic: the sparse indexer/KVPE write goes through
         # update_padded_kv_cache (num_slots = cache_batch / layer_num). The test caches are 1 layer / 1 user,
@@ -222,12 +234,9 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
     [
         pytest.param(
             (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="linear"),
-            id="linear-4x2",
+            _torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="torus-xy-ring-4x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -303,12 +312,9 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
+            _torus_xy_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-ring-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -344,6 +350,7 @@ def test_glm52_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
         seq_len=SEQ_LEN,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
+        topology=SPARSE_TOPOLOGY,
         weight_cache_path=CACHE_DIR,
     )
     assert mla_c._has_indexer and mla_c._indexer_reuse, f"{variant.name}: shared layer must be sparse + reuse"
@@ -357,12 +364,9 @@ def test_glm52_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
     [
         pytest.param(
             (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="linear"),
-            id="linear-4x2",
+            _torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="torus-xy-ring-4x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],

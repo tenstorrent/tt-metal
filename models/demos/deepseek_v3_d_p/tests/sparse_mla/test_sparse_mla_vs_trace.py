@@ -37,7 +37,7 @@ the layout DOES matter: pass --ds-kpe-layout vllm to reindex our k_pe to vLLM's
 half-split layout (interleaved_to_halfsplit_perm in tt/mla/rope.py) and assert a hard
 element-wise k_pe PCC (~0.99997) instead of the frame-invariant L2.
 
-Runtime (Blackhole 1x4, layer shard already downloaded — measured layer 0):
+Runtime (Blackhole, layer shard already downloaded — measured layer 0):
   host_*  (CPU only)            ~25 s for all 3 (shared module fixture: weight load +
                                 one 5120 forward; the 3 asserts are ~0 s each)
   device indexer                ~45 s  (10 s mesh setup + 30 s device stems/score/topk)
@@ -84,6 +84,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import (
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 
@@ -273,14 +274,17 @@ def _assert_kv(ref_kv: torch.Tensor, kvpe: torch.Tensor, tag: str, kpe_layout: s
 
 
 # ----------------------------------------------------------------------------
-# Device: the TT implementation vs the official reference (Blackhole 1x4).
+# Device: the TT implementation vs the official reference on the box-adaptive SP×TP mesh.
 # ----------------------------------------------------------------------------
 _DEVICE_PARAMS = [
     {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+        "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
     }
 ]
+_TOPOLOGY = ttnn.Topology.Ring
 
 
 def _config_for(model: str):
@@ -314,6 +318,7 @@ def _make_mla(model, config, layer, mesh_device, is_chunked=False):
         seq_len=SEQ_LEN,
         sp_axis=0,
         tp_axis=1,
+        topology=_TOPOLOGY,
         is_chunked=is_chunked,
         layer_num=1,
     )
@@ -333,7 +338,7 @@ def _shard_idx_input(t, mesh_device):
 
 
 @parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["torus_xy_ring"], indirect=True)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, monkeypatch):
@@ -455,7 +460,7 @@ def _run_device_forward(model, config, layer, mesh_device):
 
 
 @parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["torus_xy_ring"], indirect=True)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_kv_cache_device_vs_reference(mesh_device, model, layer, device_params, ds_kpe_layout):
@@ -467,7 +472,7 @@ def test_kv_cache_device_vs_reference(mesh_device, model, layer, device_params, 
 
 
 @parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["torus_xy_ring"], indirect=True)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_mla_output_device_vs_reference(mesh_device, model, layer, device_params):
