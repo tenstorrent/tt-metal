@@ -41,7 +41,7 @@ inline constexpr uint32_t kWriterVGroupStrideArg = 8;
 struct SparseSDPAMsaOperation {
     using operation_attributes_t = SparseSDPAMsaParams;
     using tensor_args_t = SparseSDPAMsaInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct SparseSDPAMsaProgramFactory {
@@ -90,6 +90,7 @@ Tensor sparse_sdpa_msa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt);
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt);
 
 }  // namespace ttnn::prim

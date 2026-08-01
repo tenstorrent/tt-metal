@@ -283,8 +283,10 @@ inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
-           local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_offset;
+    {
+        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.wr_entry_idx);
+    }
 #elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr;
 #else
@@ -298,8 +300,10 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
-    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
-           local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_offset;
+    {
+        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+    }
 #elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr;
 #else
@@ -427,7 +431,9 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
         return;
     } else {
         for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
-            noc.async_write_barrier<NocOptions::TXN_ID>({.trid = local_dfb_interface_.txn_ids[i]});
+            // Uses internal API rather than user facing noc.async_write_barrier() since it ASSERTs that the txn_id comes
+            // from the user tnx ID pool and the DFB txn ids are internal only.
+            noc_async_write_barrier_with_trid(local_dfb_interface_.txn_ids[i], noc.get_noc_id());
         }
     }
 }

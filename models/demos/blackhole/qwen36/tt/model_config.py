@@ -35,6 +35,8 @@ class Qwen36ModelArgs(ModelArgs):
             offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
             os.environ["HF_MODEL"] = snapshot_download(hf_model, local_files_only=offline)
         super().__init__(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, **kwargs)
+        if mesh_device is not None:
+            self.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"] = True
 
         # Mirror CKPT_DIR -> checkpoint_dir for weight_cache_path / load_state_dict.
         self.checkpoint_dir = self.CKPT_DIR
@@ -126,7 +128,9 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
-        # Fused qkvz+ab in-projection (gdn/tp.py fuses when qkvz weight is DRAM-sharded).
+        # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
+        # projection into qkvz removes a whole decode matmul while keeping the (good) K=dim. Default
+        # (was QWEN36_GDN_FUSE_AB); gdn/tp.py fuses whenever the qkvz weight is DRAM-sharded.
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp
         self.gdn_value_dim_tp = self.gdn_value_dim // tp
         self.gdn_key_dim_tp = self.gdn_key_dim // tp
@@ -141,7 +145,7 @@ class Qwen36ModelArgs(ModelArgs):
         )
         self.attn_k_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, kv_dim_per_device)
         self.attn_v_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, kv_dim_per_device)
-        # Fused [q+gate | k | v] in-projection (QWEN36_FUSED_QKV).
+        # Fused [q+gate | k | v] in-projection (P4: QWEN36_FUSED_QKV) — one column-parallel matmul.
         self.attn_qkv_fused_dim_tp = self.n_local_heads * self.head_dim * 2 + 2 * kv_dim_per_device
         self.attn_qkv_fused_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.attn_qkv_fused_dim_tp)
         self.mlp_w1_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)
@@ -275,7 +279,7 @@ class Qwen36ModelArgs(ModelArgs):
         return Path(root) / suffix
 
     def load_state_dict(self):
-        """Load + remap weights via AutoModelForCausalLM (text-only Qwen3_5ForCausalLM).
+        """Load + remap weights via the text-only HF Qwen3_5ForCausalLM.
         Overrides base meta-key loader."""
         from models.demos.blackhole.qwen36.tt.weight_mapping import (
             is_fp8_checkpoint,
@@ -283,13 +287,32 @@ class Qwen36ModelArgs(ModelArgs):
             remap_qwen36_state_dict,
         )
 
-        # Block FP8 checkpoints: dequant + remap for TP loaders (skip AutoModelForCausalLM).
+        # Block FP8 checkpoints: dequant + remap for TP loaders (skip the HF model).
         if is_fp8_checkpoint(self.CKPT_DIR):
             return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 
-        from transformers import AutoModelForCausalLM
+        # Import the HF classes directly rather than going through AutoModelForCausalLM.
+        # Serving out-of-tree, vllm.transformers_utils.config registers vLLM's OWN
+        # Qwen3_5Config for model_type "qwen3_5" into transformers' AutoConfig
+        # (AutoConfig.register(..., exist_ok=True)), so AutoConfig hands back vLLM's class.
+        # transformers only unwraps a composite config to its text sub-config when
+        # `model_class.config_class == config.sub_configs["text_config"]` — an identity
+        # check that cannot hold across libraries — so the composite config would reach
+        # Qwen3_5ForCausalLM and fail on `config.vocab_size` (which lives one level down,
+        # in text_config). Naming the classes here keeps config and model from the same
+        # library, matching vision/vision_model_config.py::reference_vision_model.
+        #
+        # Qwen3_5TextConfig.from_pretrained picks the `text_config` sub-dict on composite
+        # (3.6 VLM) checkpoints via base_config_key, and reads a text-only (3.5) config.json
+        # as-is, so both checkpoint layouts land on the config Qwen3_5ForCausalLM expects.
+        from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
-        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, dtype="auto", trust_remote_code=True)
+        text_config = Qwen3_5TextConfig.from_pretrained(self.CKPT_DIR)
+        assert text_config.vocab_size == self.vocab_size and text_config.hidden_size == self.dim, (
+            f"HF text config disagrees with model args: vocab_size {text_config.vocab_size} vs "
+            f"{self.vocab_size}, hidden_size {text_config.hidden_size} vs {self.dim}"
+        )
+        model = Qwen3_5ForCausalLM.from_pretrained(self.CKPT_DIR, config=text_config, dtype="auto")
         state_dict = remap_qwen36_state_dict(model.state_dict())
         del model
         return state_dict

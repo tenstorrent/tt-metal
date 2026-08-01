@@ -25,16 +25,14 @@
 #include <sys/wait.h>   // waitpid (reap the gcore child)
 #endif
 
-// Identity thread-locals read by the trace; defined in emulated_program_runner.cpp.
+// Physical-coord identity read by the trace. my_x/my_y stay worker-thread-locals
+// (the fiber scheduler restores them per-fiber on swap); the kernel name, logical
+// coords, processor/neo/trisc ids are read from the per-fiber context
+// (__emule_self->san / __emule_self) so they aren't clobbered by a co-scheduled
+// fiber across a yield — nullptr/absent when no kernel fiber is on the stack.
 extern thread_local uint8_t my_x[2];
 extern thread_local uint8_t my_y[2];
-extern thread_local uint32_t __emule_logical_x;
-extern thread_local uint32_t __emule_logical_y;
-extern thread_local uint8_t __processor_id;
-extern thread_local uint8_t __emule_neo_id;
-extern thread_local uint8_t __emule_trisc_id;
-// Source path of the kernel currently on this thread, or nullptr for host-API checks.
-extern thread_local const char* __emule_kernel_name;
+#include "jit_hw/internal/emule_thread_ctx.h"  // __emule_self / EmuleSanitizerState
 
 namespace {
 
@@ -148,21 +146,22 @@ void emule_asan_collapse_angles(char* s) {
 void emule_asan_print_trace() {
     std::fflush(stdout);
     fprintf(stderr, "  --- emule ASAN context ---\n");
-    if (__emule_kernel_name != nullptr && __emule_kernel_name[0] != '\0') {
-        fprintf(stderr, "  kernel:    %s\n", __emule_kernel_name);
+    const char* kn = (__emule_self != nullptr) ? __emule_self->san.kernel_name : nullptr;
+    if (kn != nullptr && kn[0] != '\0') {
+        fprintf(stderr, "  kernel:    %s\n", kn);
         fprintf(
             stderr,
             "  core:      logical (%u, %u)  physical (%u, %u)\n",
-            __emule_logical_x,
-            __emule_logical_y,
+            __emule_self->san.logical_x,
+            __emule_self->san.logical_y,
             static_cast<unsigned>(my_x[0]),
             static_cast<unsigned>(my_y[0]));
         fprintf(
             stderr,
             "  processor: %u  (neo %u, trisc %u)\n",
-            static_cast<unsigned>(__processor_id),
-            static_cast<unsigned>(__emule_neo_id),
-            static_cast<unsigned>(__emule_trisc_id));
+            static_cast<unsigned>(__emule_self->san.processor_id),
+            static_cast<unsigned>(__emule_self->neo_id),
+            static_cast<unsigned>(__emule_self->trisc_id));
     }
 
     void* frames[128];

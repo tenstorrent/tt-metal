@@ -85,6 +85,7 @@ enum class EnvVarID {
     TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
+    TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
     TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
     TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
@@ -116,6 +117,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,   // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -188,6 +190,7 @@ enum class EnvVarID {
     TT_METAL_DPRINT_CORES,                          // Worker cores for debug printing
     TT_METAL_DPRINT_ETH_CORES,                      // Ethernet cores for debug printing
     TT_METAL_DPRINT_DRAM_CORES,                     // DRAM cores for debug printing
+    TT_METAL_DPRINT_DISPATCH_CORES,                 // Quasar dispatch-engine cores for debug printing
     TT_METAL_DPRINT_CHIPS,                          // Chip IDs for debug printing
     TT_METAL_DPRINT_NODES,                          // Fabric node IDs for debug printing
     TT_METAL_DPRINT_MESH_COORDS,                    // Global system mesh (row,col) coordinates for debug printing
@@ -606,6 +609,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_GTEST_ETH_DISPATCH=1
         case EnvVarID::TT_METAL_GTEST_ETH_DISPATCH: this->dispatch_core_type = tt_metal::DispatchCoreType::ETH; break;
 
+        // TT_METAL_TENSIX_DISPATCH_CORES
+        // Quasar: use interim Tensix dispatch cores from core descriptor YAML instead of soc dispatch-engine cores.
+        // Default: false (use soc dispatch-engine cores when present)
+        // Usage: export TT_METAL_TENSIX_DISPATCH_CORES=1
+        case EnvVarID::TT_METAL_TENSIX_DISPATCH_CORES:
+            this->use_quasar_tensix_dispatch_cores = is_env_enabled(value);
+            log_info(
+                tt::LogDevice,
+                "TT_METAL_TENSIX_DISPATCH_CORES=1: using interim Tensix dispatch cores from core descriptor YAML");
+            break;
+
         // TT_METAL_SKIP_LOADING_FW
         // Skip loading firmware during device initialization.
         // Default: false (load firmware)
@@ -799,7 +813,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Store command queues in device DRAM.
         // Default: false (use hugepages)
         // Usage: export TT_METAL_DRAM_BACKED_CQ=1
-        case EnvVarID::TT_METAL_DRAM_BACKED_CQ: this->dram_backed_cq = is_env_enabled(value); break;
+        case EnvVarID::TT_METAL_DRAM_BACKED_CQ:
+            this->dram_backed_cq_env_var_set = true;
+            this->dram_backed_cq = is_env_enabled(value);
+            break;
 
         // TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES
         // Use synchronous direct buffer writes for simulator tensor preloads instead of FD CQ copies.
@@ -807,6 +824,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1
         case EnvVarID::TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES:
             this->simulator_direct_tensor_writes = is_env_enabled(value);
+            break;
+
+        // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
+        // Controls Blackhole DRAM programmable cores in the HAL:
+        //   =1 → force enable, =0 → force disable, unset → auto-detect (firmware + topology)
+        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0
+        case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
+            this->blackhole_dram_programmable_cores_override = is_env_enabled(value);
             break;
 
         // ========================================
@@ -1398,6 +1423,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
+        // TT_METAL_DPRINT_DISPATCH_CORES
+        // Specifies Quasar dispatch-engine cores (CoreType::DISPATCH, synthetic logical coords (index,0)) for
+        // debug printing. Same syntax as DPRINT_CORES (e.g. 'all', 'dispatch', '(0,0)').
+        // Default: disabled (no debug printing on dispatch-engine cores)
+        // Usage: export TT_METAL_DPRINT_DISPATCH_CORES=all
+        case EnvVarID::TT_METAL_DPRINT_DISPATCH_CORES:
+            // Handled by ParseFeatureEnv() - this is for documentation
+            break;
+
         // TT_METAL_DPRINT_CHIPS
         // Specifies chip IDs for debug printing. Supports 'all' or comma-separated list of chip IDs.
         // Mutually exclusive with TT_METAL_DPRINT_NODES and TT_METAL_DPRINT_MESH_COORDS.
@@ -1844,6 +1878,9 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
     ParseFeatureCoreRange(feature, feature_env_prefix + "_CORES", CoreType::WORKER);
     ParseFeatureCoreRange(feature, feature_env_prefix + "_ETH_CORES", CoreType::ETH);
     ParseFeatureCoreRange(feature, feature_env_prefix + "_DRAM_CORES", CoreType::DRAM);
+    // Quasar dispatch-engine cores (CoreType::DISPATCH) use synthetic logical coords (index, 0). Same
+    // syntax as the worker/eth/dram core lists (e.g. "all", "dispatch", "(0,0)").
+    ParseFeatureCoreRange(feature, feature_env_prefix + "_DISPATCH_CORES", CoreType::DISPATCH);
     bool chips_specified = ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
     bool nodes_specified = ParseFeatureNodeIds(feature, feature_env_prefix + "_NODES");
     bool mesh_coords_specified = ParseFeatureMeshCoords(feature, feature_env_prefix + "_MESH_COORDS");
@@ -1885,7 +1922,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
 void RunTimeOptions::ParseFeatureCoreRange(
     RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type) {
     char* str = std::getenv(env_var.c_str());
-    std::vector<CoreCoord> cores;
+    std::vector<tt::tt_metal::CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
     feature_targets[feature].all_cores[core_type] = RunTimeDebugClassNoneSpecified;
@@ -1908,7 +1945,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
         } else if (str[0] == '(') {
             if (strchr(str, '-')) {
                 // Assume this is a range
-                CoreCoord start, end;
+                tt::tt_metal::CoreCoord start, end;
                 if (sscanf(str, "(%zu,%zu)", &start.x, &start.y) != 2) {
                     TT_THROW("Invalid {}", env_var);
                 }

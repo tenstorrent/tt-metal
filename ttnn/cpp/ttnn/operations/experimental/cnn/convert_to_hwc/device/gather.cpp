@@ -21,8 +21,8 @@ inline void append_or_extend_transfer(
     std::vector<GatherTransfer>& transfers,
     uint32_t input_core_idx,
     uint32_t output_core_idx,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& output_cores,
     uint32_t input_offset_within_shard,
     uint32_t output_offset_within_shard,
     uint32_t channel,
@@ -57,8 +57,8 @@ std::vector<GatherTransfer> generate_gather_transfers(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& output_cores,
     std::optional<uint32_t> output_shard_width_override) {
     std::vector<GatherTransfer> transfers;
     const uint32_t num_input_cores = input_cores.size();
@@ -132,8 +132,8 @@ std::vector<GatherTransfer> precompute_gather_transfers(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores) {
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& output_cores) {
     return generate_gather_transfers(B, C, HW, input_cores, output_cores, std::nullopt);
 }
 
@@ -142,8 +142,8 @@ std::vector<GatherTransfer> precompute_gather_transfers(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& output_cores,
     uint32_t output_shard_width_override) {
     return generate_gather_transfers(
         B, C, HW, input_cores, output_cores, std::optional<uint32_t>(output_shard_width_override));
@@ -154,7 +154,7 @@ std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     uint32_t /*B*/,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
     uint32_t /*num_output_cores*/,
     uint32_t element_size_bytes,
     uint32_t output_shard_width) {
@@ -208,7 +208,7 @@ BlockedTransfersWithCount group_transfers_by_output_column_blocks(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
     uint32_t num_output_cores,
     uint32_t element_size_bytes,
     uint32_t block_size,
@@ -407,7 +407,7 @@ std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(
 }
 
 std::vector<GatherTransfer> precompute_gather_transfers(
-    const Tensor& input, const std::vector<CoreCoord>& output_cores) {
+    const Tensor& input, const std::vector<tt::tt_metal::CoreCoord>& output_cores) {
     // Extract tensor properties
     const auto& input_shape = input.logical_shape();
     uint32_t B = input_shape[1];   // Batch size
@@ -419,7 +419,7 @@ std::vector<GatherTransfer> precompute_gather_transfers(
 
     const auto& shard_spec = input.shard_spec().value();
     const auto& core_grid = shard_spec.grid;
-    std::vector<CoreCoord> input_cores = corerange_to_cores(
+    std::vector<tt::tt_metal::CoreCoord> input_cores = corerange_to_cores(
         core_grid, std::nullopt, shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     // Call the original implementation

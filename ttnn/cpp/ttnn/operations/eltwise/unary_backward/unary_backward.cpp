@@ -1755,7 +1755,7 @@ std::vector<Tensor> prod_bw(
                 tensor_2 = ttnn::pad(
                     tensor_2,
                     padded_shape.to_array_4D(),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
+                    ttnn::Array4D({0, 0, 0, 0}),
                     0.0f,
                     false,
                     tensor_1.memory_config());
@@ -1805,7 +1805,7 @@ std::vector<Tensor> prod_bw(
             tensor_2 = ttnn::pad(
                 tensor_2,
                 padded_shape.to_array_4D(),
-                tt::tt_metal::Array4D({0, 0, 0, 0}),
+                ttnn::Array4D({0, 0, 0, 0}),
                 0.0f,
                 false,
                 tensor_1.memory_config());

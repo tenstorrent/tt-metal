@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pandas as pd
 from loguru import logger
-from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .device_io import read_words_from_device
 from .test_config import TestConfig
 
 # Length of the shared config array (matches counters.h COUNTER_SLOT_COUNT).

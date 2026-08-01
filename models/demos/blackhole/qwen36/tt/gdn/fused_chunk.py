@@ -144,10 +144,17 @@ def chunk_gated_delta_rule_fused_adapter(
             k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
 
     # valid_len: zero beta/g past pad so state updates are identity; final_state = state at valid_len.
-    if valid_len is not None and valid_len < T:
+    # Scalar (one length for all rows) or a per-row list/tuple of B lengths (grouped batched prefill:
+    # each user its own real length within the shared bucket).
+    _is_per_row = isinstance(valid_len, (list, tuple))
+    if _is_per_row or (valid_len is not None and valid_len < T):
         _dram = ttnn.DRAM_MEMORY_CONFIG  # op CBs clash with L1 inputs at small buckets
         _mt = torch.zeros(B, T, 1, dtype=torch.float32)
-        _mt[:, :valid_len, :] = 1.0
+        if _is_per_row:
+            for _b in range(B):
+                _mt[_b, : int(valid_len[_b]), :] = 1.0
+        else:
+            _mt[:, :valid_len, :] = 1.0
         _m = ttnn.from_torch(_mt, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         beta = ttnn.multiply(beta, _m, memory_config=_dram)  # beta/g fp32 (op contract) — load-bearing
         g = ttnn.multiply(g, _m, memory_config=_dram)

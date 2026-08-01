@@ -27,6 +27,7 @@ def test_ci_dispatch(hf_model_name, is_ci_env, model_location_generator):
 
     tests = [
         "models/experimental/janus_pro/tests/test_patch_embedding.py",
+        "models/experimental/janus_pro/tests/test_vision_embedding.py",
     ]
 
     # Pass the exit code of pytest to proper keep track of failures during runtime

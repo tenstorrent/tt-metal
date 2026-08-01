@@ -179,10 +179,23 @@ def _causal_conv1d_fir(
         new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
         new_state = ttnn.to_memory_config(new_state, ttnn.DRAM_MEMORY_CONFIG)
     else:
-        # Fixed bucket: select real tail via one-hot matmul (program shape-fixed, values vary by valid_len)
+        # Fixed-bucket masking: x is right-padded to a bucket length T but only the first
+        # valid_len positions are real; the decode conv window must come from the real tail
+        # x[valid_len-(K-1):valid_len], i.e. x_padded[:, valid_len : valid_len+(K-1)] (x[i]
+        # is at x_padded index (K-1)+i). A static slice there would compile a new program per
+        # valid_len value — defeating the bounded-program goal — so select those rows with a
+        # one-hot matmul instead: the program depends only on shapes (fixed per bucket), and
+        # only the one-hot VALUES depend on valid_len.
+        # valid_len may be a scalar (one length for all B rows) or a per-row list/tuple of length
+        # B (batched prefill: each user's own real length picks that user's decode conv window).
         sel = torch.zeros(B, kernel_size - 1, total_len, dtype=torch.float32)
-        for j in range(kernel_size - 1):
-            sel[:, j, valid_len + j] = 1.0
+        if isinstance(valid_len, (list, tuple)):
+            for bi in range(B):
+                for j in range(kernel_size - 1):
+                    sel[bi, j, int(valid_len[bi]) + j] = 1.0
+        else:
+            for j in range(kernel_size - 1):
+                sel[:, j, valid_len + j] = 1.0
         sel_tt = ttnn.from_torch(sel, dtype=x_padded.dtype, layout=ttnn.TILE_LAYOUT, device=device)
         xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
         # cross-chunk carry -> DRAM

@@ -96,15 +96,15 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
         tt::tt_metal::MemoryConfig(qkv_memory_config.memory_layout(), qkv_memory_config.buffer_type(), v_shard_spec);
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};

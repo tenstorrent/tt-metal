@@ -105,7 +105,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -128,7 +129,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        std::nullopt,  // cu_window_seqlens
+        paged_cache_geometry);
 }
 
 // Flexible: chunk_start_idx in device tensor [1]; read at runtime (for tracing).
@@ -141,7 +144,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -164,7 +168,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        std::nullopt,  // cu_window_seqlens
+        paged_cache_geometry);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
@@ -280,7 +286,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    std::optional<uint32_t> kv_cache_num_layers,
+    std::optional<uint32_t> kv_cache_layer_idx) {
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_kv,
@@ -309,7 +319,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         core_allocation_strategy,
         kv_cache_batch_idx,
         kv_actual_isl,
-        head_dim_v);
+        head_dim_v,
+        slot_id,
+        kv_actual_isl_tensor,
+        kv_cache_num_layers.value_or(1),
+        kv_cache_layer_idx.value_or(0));
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 

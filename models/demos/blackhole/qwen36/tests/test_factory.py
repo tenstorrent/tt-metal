@@ -197,6 +197,17 @@ def parametrize_mesh_tp(max_tp=4):
     return decorator
 
 
+def parametrize_batch(batches=(1, 8, 32)):
+    """Parametrize a decode test over batch sizes (the ``B`` fixture argument).
+
+    B must be a power of two <= 32 so the ``kv_update_shard_cfg`` core grid in
+    ``Qwen35ModelArgs._init_tp_config`` factors cleanly (one user per core, grid
+    sized to ``max_batch_size``). Ids are ``B1``/``B8``/``B32`` so node names and
+    ``pcc_thresholds.json`` stay readable.
+    """
+    return pytest.mark.parametrize("B", [pytest.param(b, id=f"B{b}") for b in batches])
+
+
 def parametrize_mesh_only(max_tp=4):
     """Parametrize over just the env-selected mesh shape (no device_params / fabric).
 

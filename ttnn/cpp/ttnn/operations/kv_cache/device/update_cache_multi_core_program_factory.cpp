@@ -54,6 +54,7 @@ UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
     UpdateCacheDynamicArgs result;
     result.tile_update_offset = update_idx % tt::constants::TILE_HEIGHT * Wbytes;
     result.batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
+    result.Wbytes = Wbytes;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -366,14 +367,13 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     // Per-core runtime args. src/dst base addresses are declared as Buffer* bindings so the
-    // framework patches the (possibly reallocated) addresses directly on cache hits (fast path).
-    // cache_start_id, tile_update_offset and batch_read_offset depend on operation_attributes
-    // (update_idx, batch_offset) which UpdateKVCacheOperation::compute_program_hash deliberately
-    // excludes from the program-cache key, so they are NOT stable across cache hits: they are
-    // re-patched every dispatch by UpdateKVCacheOperation::get_dynamic_runtime_args.
-    // compute_update_cache_dynamic_args is the shared single source of truth for the work-split and
-    // formulas so the two paths agree. input_start_id and batch_start_id are shape-only (in the
-    // hash), so they stay computed inline here.
+    // descriptor carries the buffer identity; on a cache hit override_runtime_arguments below
+    // re-applies the (possibly reallocated) addresses. cache_start_id, tile_update_offset and
+    // batch_read_offset depend on operation_attributes (update_idx, batch_offset) which
+    // UpdateKVCacheOperation::compute_program_hash deliberately excludes from the program-cache key,
+    // so they are NOT stable across cache hits either. compute_update_cache_dynamic_args is the
+    // single source of truth for the work-split and those formulas, shared with the override.
+    // input_start_id and batch_start_id are shape-only (in the hash), so they stay computed inline here.
     const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
     uint32_t input_start_id = 0;
     uint32_t batch_start_id = 0;
@@ -415,7 +415,7 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
              cache_head_num_tiles,
              cache_start_id,
              batch_start_id,
-             Wbytes,
+             dyn.Wbytes,
              dyn.tile_update_offset,
              dyn.batch_read_offset});
         total_batched_heads += num_batched_heads_per_core;
@@ -431,6 +431,65 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
     }
 
     return desc;
+}
+
+void UpdateCacheMultiCoreProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const KvCacheParams& operation_attributes,
+    const KvCacheInputs& tensor_args,
+    Tensor& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Runs on EVERY program-cache hit, so it patches the cached program in place and never calls
+    // create_descriptor(): that would pay the cache-miss host cost (work-split, CoreRangeSet,
+    // get_compute_kernel_config_args, TensorAccessorArgs, kernel-source strings, a fresh per-core arg
+    // vector) on a hit.
+    // Kernel push order in create_descriptor: reader(0), writer(1), compute group_1(2),
+    // [compute group_2(3)]. The compute kernels take no runtime args.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kReaderDstAddrArgIdx = 0;
+    constexpr uint32_t kReaderSrcAddrArgIdx = 1;
+    constexpr uint32_t kReaderCacheStartIdArgIdx = 8;
+    constexpr uint32_t kWriterDstAddrArgIdx = 0;
+    constexpr uint32_t kWriterCacheStartIdArgIdx = 7;
+    constexpr uint32_t kWriterWbytesArgIdx = 9;
+    constexpr uint32_t kWriterTileUpdateOffsetArgIdx = 10;
+    constexpr uint32_t kWriterBatchReadOffsetArgIdx = 11;
+
+    // Buffer-address slots: create_descriptor emplaces these as Buffer*, and this hook supersedes
+    // resolve_bindings, so re-applying them is ours. The reader reads BOTH tensors (cache first, then
+    // input); the writer only writes the cache, which is also the output (in-place).
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = tensor_args.cache.buffer();
+    const uint32_t src_addr = src_buffer->address();
+    const uint32_t dst_addr = dst_buffer->address();
+
+    // Same helper create_descriptor uses: identical core set, order and formulas. Everything else
+    // (Wt, Bcache, num_batched_heads_per_core, cache_*_num_tiles, input_start_id, batch_start_id) is
+    // derived from the tensor specs and the shape-driven work split, which the hash covers.
+    const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
+    for (const auto& [core, cache_start_id] : dyn.cache_start_ids) {
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
+        reader_args[kReaderDstAddrArgIdx] = dst_addr;
+        reader_args[kReaderSrcAddrArgIdx] = src_addr;
+        reader_args[kReaderCacheStartIdArgIdx] = cache_start_id;
+
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
+        writer_args[kWriterDstAddrArgIdx] = dst_addr;
+        writer_args[kWriterCacheStartIdArgIdx] = cache_start_id;
+        writer_args[kWriterWbytesArgIdx] = dyn.Wbytes;
+        writer_args[kWriterTileUpdateOffsetArgIdx] = dyn.tile_update_offset;
+        writer_args[kWriterBatchReadOffsetArgIdx] = dyn.batch_read_offset;
+    }
+
+    // desc.cbs[1] (the input CB) is globally allocated on the input buffer for sharded inputs (whether
+    // the input is sharded is hashed, so the cached program has the dynamic CB iff we take this
+    // branch); cbs[0]/[2]/[3]/[4] are plain L1 scratch. CB positions in program.circular_buffers()
+    // match desc.cbs, as in apply_descriptor_runtime_args.
+    if (tensor_args.input.shard_spec().has_value()) {
+        constexpr uint32_t kSrc1CbPos = 1;
+        UpdateDynamicCircularBufferAddress(program, program.circular_buffers()[kSrc1CbPos]->id(), *src_buffer);
+    }
 }
 
 }  // namespace ttnn::prim

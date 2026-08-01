@@ -18,12 +18,17 @@ compute_program_hash() hashes:
 Where args = entire UnaryParams (op_chain, output_dtype, output_memory_config,
 fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise, sub_core_grids).
 
-override_runtime_arguments() only updates buffer addresses — shape/work
-distribution changes require separate cache entries.
+On a program-cache HIT the descriptor is NOT rebuilt; override_runtime_arguments()
+re-derives ALL per-dispatch state for the current tensors from the same shared
+per-core builder create_descriptor() uses — every per-core work-split arg (tile
+counts, start ids), packed scalars, buffer-address rt-arg slots, AND every
+tensor-backed circular-buffer base address (by CBIndex: c_0=input, c_2=output).
 
-For TILE layout, only volume is hashed. Same volume = same num_pages = same
-work distribution, so different shapes with same volume correctly share a
-cache entry.
+For TILE layout, volume is NOT hashed, so differently-shaped calls share one
+cache entry and override_runtime_arguments re-applies the new shape's work split
+on the hit. Because addresses are re-derived from the actual current tensors
+(never inferred from Buffer* identity), in-place (out=x) and mixed in-place/
+out-of-place reuse of one cache entry stay correct by construction.
 """
 
 import pytest
@@ -337,4 +342,101 @@ def test_unary_sharded_mixed_inplace_outofplace(device, first_inplace):
 
     for i, inplace in enumerate([first_inplace, not first_inplace, first_inplace, not first_inplace]):
         do(i, inplace)
+    assert device.cache_entries_counter.total == 1
+
+
+# =============================================================================
+# override_runtime_arguments migration guards (interleaved) — the get_dynamic ->
+# override_runtime_arguments port. Every per-dispatch value the custom hash
+# EXCLUDES (work split via volume, buffer addresses) must be re-applied on hit.
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "shape_first, shape_second",
+    [
+        ([1, 1, 32, 64], [1, 1, 128, 256]),  # grow volume
+        ([1, 1, 128, 256], [1, 1, 32, 64]),  # shrink volume
+    ],
+)
+def test_unary_inplace_cache_reuse_different_shapes(device, shape_first, shape_second):
+    """MIGRATION GUARD (override_runtime_arguments): interleaved TILE in-place relu (output_tensor
+    aliases the input) reused across DIFFERENT logical shapes sharing ONE cache entry (TILE layout
+    excludes volume from compute_program_hash). The second call is a cache HIT that reuses the first
+    program WITHOUT rebuild; override_runtime_arguments must re-derive every per-core work-split arg
+    (per-core tile counts, start_tile_id, and the work-core set itself) for the new shape, or the
+    reused program corrupts the result. Interleaved analog of the SDXL in-place silu class of bug."""
+    device.cache_entries_counter.reset()
+
+    def inplace_relu(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.relu(tt_a, output_tensor=tt_a)  # in-place
+        # Prove the op is ACTUALLY in-place: a fresh-output regression would still pass PCC +
+        # single-entry while no longer exercising the alias.
+        assert tt_c.buffer_address() == tt_a.buffer_address()
+        return torch.relu(a), ttnn.to_torch(tt_c)
+
+    ref1, out1 = inplace_relu(shape_first, 0)
+    assert_equal(ref1, out1)
+
+    ref2, out2 = inplace_relu(shape_second, 1)  # cache HIT on the differently-shaped program
+    assert_equal(ref2, out2)
+
+    assert device.cache_entries_counter.total == 1  # proves it was a hit, not a rebuild masking the bug
+
+
+@pytest.mark.parametrize("first_inplace", [True, False], ids=["inplace_first", "outofplace_first"])
+def test_unary_cache_mixed_inplace_outofplace_interleaved(device, first_inplace):
+    """MIGRATION GUARD (aliased address re-derivation, interleaved): one cached INTERLEAVED program
+    reused across a MIX of in-place (output_tensor aliases the input) and out-of-place calls sharing a
+    single cache entry (TILE volume excluded from the hash). The legacy resolve_bindings maps an
+    aliased buffer to its FIRST occurrence, so a program built under one aliasing pattern and reused
+    under another would patch the writer's output address from the wrong tensor slot.
+    override_runtime_arguments re-derives every rt-arg address (reader[0]=input, writer[0]=output) for
+    the actual current tensors, so it MUST survive both orders — proving the rt-arg axis is re-applied,
+    not just that a cache hit occurred."""
+    device.cache_entries_counter.reset()
+    shape = [1, 1, 32, 64]
+    keep_alive = []  # hold refs so successive calls see fresh (different) buffer addresses
+
+    def do(seed, inplace):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = tt_a if inplace else None
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.relu(tt_a, output_tensor=out)
+        if inplace:
+            assert tt_c.buffer_address() == tt_a.buffer_address()
+        keep_alive.extend([tt_a, tt_c])
+        assert_equal(torch.relu(a), ttnn.to_torch(tt_c))
+
+    # Alternate aliasing across the SAME cache entry, in both orders.
+    for i, inplace in enumerate([first_inplace, not first_inplace, first_inplace, not first_inplace]):
+        do(i, inplace)
+    assert device.cache_entries_counter.total == 1
+
+
+def test_unary_inplace_cache_hit_interleaved_readdresses(device):
+    """MIGRATION GUARD (stale buffer address on hit, interleaved): repeated in-place relu at the SAME
+    shape/config but with freshly-allocated operands kept alive, so each cache HIT sees a DIFFERENT
+    buffer address. override_runtime_arguments must re-apply the reader/writer buffer-address rt-arg
+    slots on every hit (no rebuild) or the result reads/writes a stale address."""
+    device.cache_entries_counter.reset()
+    shape = [1, 1, 64, 64]
+    keep_alive = []  # hold refs so each iteration's tensors get fresh (different) addresses
+    for i in range(4):
+        torch.manual_seed(i)
+        a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.relu(tt_a, output_tensor=tt_a)  # in-place
+        assert tt_c.buffer_address() == tt_a.buffer_address()
+        keep_alive += [tt_a, tt_c]
+        assert_equal(torch.relu(a), ttnn.to_torch(tt_c))
+
+    # One shared program reused across all four differently-addressed in-place hits.
     assert device.cache_entries_counter.total == 1

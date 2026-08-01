@@ -163,6 +163,7 @@ class Qwen36DecoderLayer:
         chunk_start_idx=None,
         chunk_start_idx_tensor=None,
         valid_len=None,
+        gdn_collect=False,
     ):
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
         if self.num_devices > 1:
@@ -213,9 +214,16 @@ class Qwen36DecoderLayer:
                 # GDN carries its recurrent/conv state internally (capture_state on
                 # prefill, read on decode); it has no paged KV, so page_table is N/A.
                 if mode == "prefill":
-                    attn_output = self.attention.forward_prefill(
-                        attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
-                    )
+                    if gdn_collect:
+                        # Batched per-user prefill: stash this user's from-scratch state for
+                        # assembly into row u of the batched buffers (finalize_pending later).
+                        attn_output = self.attention.forward_prefill_collect(
+                            attn_input, chunk_size=chunk_size, valid_len=valid_len
+                        )
+                    else:
+                        attn_output = self.attention.forward_prefill(
+                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
+                        )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)
         elif self.is_full_attention:
