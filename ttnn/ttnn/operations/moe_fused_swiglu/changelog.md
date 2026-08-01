@@ -1354,3 +1354,134 @@ defect at all — it is that the ELEVEN COLUMN ROOTS FINISH PHASE 1 ~56 us APART
 the weight stream's, which is already at its 490 GB/s roofline. Closing it means changing the
 blocking model so a column's reduce does not wait on the slowest core in its column — a
 planner-level scheme change, not a kernel one.
+
+---
+
+## Perf 4 — the NoC trace: nothing is contended, and the rounds are not data-gated
+
+- **Date**: 2026-08-01
+- **Scope**: perf only. `SUPPORTED` byte-identical, golden **45/45**, default path byte-identical
+  (`MOE_SWIGLU_HACK_AHEAD` defaults to 1 and is additionally pinned to 1 on the shipped
+  `HSEND=reader` path). Measured at **88 cores**, the grid the targets were taken on.
+
+### 1. Instrumentation: tt-npe NoC event traces
+
+Built tt-npe and captured device NoC event traces. No repo change was needed —
+`TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1` + `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000` in front
+of `run_safe_pytest.sh --profile` is all `tools/tracy --collect-noc-traces` does. Capture recipe,
+the two saturation/overflow traps, and the analysis scripts are durable under
+`perf_experiments/noc_trace/`.
+
+### 2. What it overturns
+
+**(a) There is no congestion and no bank imbalance.** tt-npe on the count-256 trace: NoC link util
+**7.96 %**, multicast-write util 0.19 %, **congestion impact 0.08 %**. Per-DRAM-channel bytes are
+3.24-3.37 MB across all 8 channels; the 16 endpoints are 2 subchannels x 8 channels
+(`blackhole_140_arch.yaml` lists 3 NoC endpoints per channel) and the 2:1 endpoint split is only
+NCRISC -> subchannel A / BRISC -> subchannel B. This retires the entire coalescing / bank-striding /
+routing family for this op and retro-explains the `WRUN` and dual-NoC nulls — the same reason the
+reference op's P1' died once it had two request paths.
+
+**(b) The gap is DRAM-idle time, and it is what scales with M.**
+
+| | count 128 | count 256 |
+|---|---|---|
+| DRAM bytes | 26.50 MB | 28.04 MB (+5.7 %) |
+| traced wall | 112.6 us | 159.0 us (+41 %) |
+| **us with DRAM < 10 GB/s** | **37 (33 %)** | **80 (50 %)** |
+| longest contiguous idle window | 14 us | **45 us** |
+
+Doubling M costs 46 us of wall and **43 us of it is time the DRAM system does nothing**. That is the
+whole M-scaling gap against the unfused reference, which keeps its M-independent weight stream
+running and hides the M-dependent work under it (`MCAST_FAMILIES=2` + `INJECT_LOOKAHEAD` on the
+activation, Refinement 4's pipelined combine).
+
+**(c) Phase 2 is not DRAM-bound.** Its stream is a square wave — ~1.5 us at 700-900 GB/s then ~3 us
+of silence, x11, a 25 % duty cycle on a single RISC. So the reference's `BRISC_WEIGHT_K` split
+(1.60x there) is worth nothing here, and neither is deeper `WD_AHEAD` prefetch.
+
+**(d) The phase-2 rounds are NOT gated by root readiness.** Perf 3 concluded they were, from a
+110-core zone span. Correlating each root's `compute_reduce` end against its own h multicast:
+
+| round | root | reduce end | h mcast | idle |
+|---|---|---|---|---|
+| 0 | (1,2) | 101.2 | 102.9 | 1.7 us |
+| 5 | (6,7) | 100.5 | 124.6 | 24.0 us |
+| 10 | (15,4) | 88.7 | 145.9 | **57.2 us** |
+
+Every root is finished by t = 101.2 us; the last round does not fire until t = 145.9 us on a rigid
+4.3 us cadence. The rounds wait for **each other**, not for data.
+
+**(e) The round cost, fitted across both traces** (m_eff 4 -> 3.66 us, m_eff 8 -> 4.30 us):
+
+```
+round period = 3.12 us FIXED + 0.147 us per m-tile
+```
+
+against ~2.06 us of real work at m_eff 8. **34.3 us per M-block of pure rendezvous, independent of
+M** — 68.6 us at count 512 (two M-blocks), which is 27 % of that cell and exactly why 512 is the
+worst cell. Same term as the 42.8 us all-payloads-stubbed floor.
+
+**(f) The matmul is at roofline and the fused gate+up block is retired.** Per-call shapes at 88
+cores: gate/up `M=m_eff, K=28, N=2` (6 calls/M-block, 1x2 of 8 DEST); `down` `M=m_eff, K=6, N=3`
+(11 calls, 1x3 of 8 DEST). Small N and a quarter of DEST — and still **8.1 cycles/tile-MAC against an
+8 cycles/tile-MAC LoFi roofline**. Nothing to win there.
+
+**Floors**: count 256 / 88 cores, DRAM 28.0 MB at the 460 GB/s wall = **61 us**, compute
+4272 tile-MACs = **25.3 us**, `max(...) = 61 us` against a 108 us target and 152 us measured. The
+targets are ~1.8x INSIDE the DRAM floor. The whole remaining gap is serialisation.
+
+### 3. `HACK_AHEAD` — built, measured, a NULL, with the mechanism named
+
+The rendezvous chain is: round r's sender waits for one ack from each of NUM_CORES receivers, and a
+receiver only acks after `cb_reserve_back` for round r proves its slot free. `HACK_AHEAD = A`
+reserves A blocks at once, so a core acks senders r..r+A-1 together and every ack lands A-1 rounds
+early. Clamp is a RUNTIME value (`blocks_cap = DEPTH_H * M_BLOCK / m_eff`, minus one so the reader
+is never forced to zero blocks in flight), which is why the clamp lives in the reader.
+
+88 cores, `HSEND=writer` (the per-slot-counter path the lever needs):
+
+| A | count 128 | count 256 | count 512 |
+|---|---|---|---|
+| 1 (control) | 112 741 | 164 520 | 275 337 |
+| **2** | **97 570 / 101 267** | **154 469** | 278 262 |
+| max (5 / 2 / 2) | 113 443 | 160 685 | 278 756 |
+| shipped (`HSEND=reader`, A=1) | 101 870 | 152 710 | 254 113 |
+
+**The lever works on its own baseline** (-13.5 % / -6.1 % at A=2) **and still loses to the shipped
+path**, because `HSEND=writer` starts 11 % behind and A=2 only recovers it. The count-128 "win"
+(97 570) did **not** reproduce (101 267 on the same binary) — a 3.6 % spread, so it was noise.
+`A > 2` is worse: reserving more blocks throttles the reader harder than the early acks help.
+
+**Why the counter path starts behind, which is the finding worth keeping**: `DataReadySignal::Counter`
+pays an **ACKED write barrier every round** — the sender must wait for all 87 destinations to
+acknowledge the data multicast before it may bump the counter — where the `Flag` path terminates a
+`NOC_CMD_VC_LINKED` chain on the same command buffer and skips it entirely. (That is the constraint
+the Perf-3 addendum-2 `mcast_pipe` fix established: an atomic on a different command buffer cannot
+terminate the link.) So the Counter path carries a **second** NUM_CORES-way incast per round, and it
+eats the one `HACK_AHEAD` removes.
+
+`MOE_SWIGLU_HACK_AHEAD` ships defaulted to 1 (byte-identical) with the table above, because the next
+build needs it.
+
+### 4. The named next build
+
+**Per-slot FLAGS, not per-slot counters.** Keep the send on the reader and the linked
+data+signal multicast (so no acked barrier), but give each `cb_h` slot its own VALID/INVALID flag
+instead of the one shared cell. That removes the shared-flag barrier — the only thing forcing
+`HACK_AHEAD = 1` on the fast path — while keeping the link that makes the Flag path fast. Round r and
+r+DEPTH_H share a flag and the ordering is already safe (a core acks slot s only after clearing it).
+This is a `mcast_pipe` change (`SenderPipe`/`ReceiverPipe` take one `DATA_READY_SEM_ID`), and it
+must carry the reference op's P7 `ROTATING_SENDER` reset-race mitigation.
+
+Ceiling, stated honestly: 34.3 us/M-block. Even a **perfect** rendezvous fix leaves count 256 at
+~118 us (target 108) and count 512 at ~185 us (target 162). **Reaching 256/512 additionally requires
+closing the 45 us DRAM-idle window** — i.e. starting phase-2 rounds during phase 1, which is legal
+because round r only needs column r's h and every root is ready 44 us early.
+
+- **Accuracy**: unchanged. `HACK_AHEAD` moves the timing of a semaphore increment; the arithmetic is
+  bit-identical. Golden 45/45, no precision knob touched.
+- **Perf achieved**: **none.** Every measured variant is a null or a regression against the shipped
+  path; the deliverable of this round is the measurement, not a number.
+- **Tests added**: none — the 45-cell golden suite and the 12-cell guard set already cover both
+  settings of the new knob. Durable artifacts under `perf_experiments/noc_trace/`.

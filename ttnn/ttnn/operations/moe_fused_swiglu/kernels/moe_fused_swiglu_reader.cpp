@@ -660,11 +660,57 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("reader_phase2");
             bool wd_pending = false;
+            // PERF 4 — HACK_AHEAD: how many rounds' senders this core acks in one go.
+            //
+            // The h all-gather's measured cost is 3.12 us of FIXED per-round rendezvous against
+            // 2.06 us of actual work (52 KB of ingest + a 144 tile-MAC matmul at m_eff 8), and the
+            // NoC trace says why: round r's sender waits for ONE ack from each of the NUM_CORES
+            // receivers, and a receiver only acks after `cb_reserve_back` for round r proves its
+            // slot free. That makes every round a full grid traversal that cannot start until the
+            // previous one finished on the SLOWEST core -- an 88-way incast on the critical path,
+            // eleven times per M-block. (Measured independently: every column root has its h ready
+            // by t=101 us at count 256, and the last round does not broadcast until t=146 us. The
+            // rounds are not waiting for data; they are waiting for each other.)
+            //
+            // Reserving A blocks instead of 1 proves A slots free at once, so this core can ack
+            // senders r .. r+A-1 together and every ack lands A-1 rounds before it is needed. The
+            // senders then overlap up to the CB depth instead of running in a strict chain.
+            //
+            // A <= DEPTH_H - 1 is the safety bound and the host clamps to it: reserving the WHOLE
+            // CB would require zero blocks in flight, i.e. it would re-serialise the reader against
+            // compute every round -- the opposite of the point. A == 1 is the pre-PERF-4 path, one
+            // reserve and one ack per round, byte for byte.
+            //
+            // The bound is a RUNTIME quantity, not DEPTH_H: cb_h is sized DEPTH_H * M_BLOCK * HN_PAD
+            // tiles but a round only occupies m_eff * HN_PAD, so it holds
+            // `blocks_cap = DEPTH_H * M_BLOCK / m_eff` whole rounds — the same expression the writer
+            // derives its landing slot from. At m_eff == M_BLOCK that is DEPTH_H (3, so A <= 2), but
+            // at m_eff 4 it is 6 and at m_eff 1 it is 24. Clamping here rather than on the host is
+            // what lets the small-m_eff cells — which is where the fixed 3.12 us/round is the
+            // largest FRACTION of the round — use the whole window.
+            const uint32_t blocks_cap = (DEPTH_H * M_BLOCK) / m_eff;
+            uint32_t hack_ahead = HACK_AHEAD;
+            if (hack_ahead > blocks_cap - 1) {
+                hack_ahead = blocks_cap - 1;  // never reserve the WHOLE CB: that forces 0 in flight
+            }
+            if (hack_ahead < 1) {
+                hack_ahead = 1;
+            }
+            uint32_t next_ack = 0;
             for (uint32_t r = 0; r < HGROUPS; ++r) {
                 // This round's cb_h slot is reserved first so the round's sender can ISSUE its self-copy
                 // before the barrier below, which then covers the self-copy AND the previous round's
                 // W_down block in one drain.
-                cb_reserve_back(cb_h, h_block_tiles);
+                //
+                // The tail clamp (`HGROUPS - r`) matters: near the end there are fewer rounds left
+                // than A, and reserving blocks nobody will ever push into would hang here.
+                {
+                    uint32_t ahead = hack_ahead;
+                    if (ahead > HGROUPS - r) {
+                        ahead = HGROUPS - r;
+                    }
+                    cb_reserve_back(cb_h, ahead * h_block_tiles);
+                }
                 const uint32_t hdst = get_write_ptr(cb_h);
 #if HSEND_WRITER
                 // PERF 3 — DUAL-RISC SPLIT, receive side. The send lives on the writer now, so this
@@ -679,11 +725,17 @@ void kernel_main() {
                 //
                 // Round r's sender is column r's reduce root, core (r, r % KGROUPS); the h mcast's
                 // rotating-sender coord table is row-major over the grid and already in RT.
-                {
-                    const uint32_t sidx = (r % KGROUPS) * HGROUPS + r;
+                //
+                // PERF 4 — ack every sender the reserve above has proved a slot for, not just this
+                // round's. `next_ack` makes each sender acked EXACTLY once no matter how the clamp
+                // moves, which is what keeps the sender's `hfree_expected += NUM_CORES` per-round
+                // accounting exact.
+                while (next_ack < r + hack_ahead && next_ack < HGROUPS) {
+                    const uint32_t sidx = (next_ack % KGROUPS) * HGROUPS + next_ack;
                     const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
                     const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
                     noc_semaphore_inc(get_noc_addr(svx, svy, static_cast<uint32_t>(get_semaphore(SEM_H_FREE))), 1);
+                    ++next_ack;
                 }
 #endif
                 const bool i_send = (is_root && r == my_col);

@@ -493,7 +493,42 @@ HSIG = os.environ.get("MOE_SWIGLU_HSIG", "flag")
 #: vs 2->85) but compute_down stretched to 144, because the rounds were never waiting on the loop
 #: order: they wait on ROOT READINESS (compute_reduce spans 40->96 us, so the eleven roots finish
 #: ~56 us apart), and that spread is the weight stream's. `reader` is the default.
+#:
+#: PERF 4 CORRECTION, from the tt-npe NoC trace (88 cores, count 256): the "root readiness" reading
+#: above is WRONG, and it was wrong because it was inferred from a 110-core zone span instead of
+#: measured. Correlating each root's `compute_reduce` END against the timestamp of its own h
+#: multicast: every one of the 11 roots is finished by t = 101.2 us, and the multicasts go out at
+#: 102.9, 107.2, ... 145.9 us on a rigid 4.3 us cadence. Round 10's root sits on ready data for
+#: 57.2 us. The rounds are NOT data-gated. See HACK_AHEAD below for what actually gates them.
 HSEND = os.environ.get("MOE_SWIGLU_HSEND", "reader")
+
+#: PERF 4 — how many rounds' senders a receiver acks in one `cb_reserve_back`. THE round-cost lever.
+#:
+#: Fitting the measured h-multicast cadence across two NoC traces (m_eff 4 -> 3.66 us/round,
+#: m_eff 8 -> 4.30 us/round) gives
+#:
+#:      round period = 3.12 us FIXED + 0.147 us per m-tile
+#:
+#: against ~2.06 us of real work at m_eff 8 (52 224 B of h ingest at ~43 GB/s = 1.21 us, plus a
+#: 144 tile-MAC `down` block at the 8 cycles/tile-MAC LoFi roofline = 0.85 us). So 3.12 us x 11
+#: rounds = 34.3 us per M-BLOCK of pure rendezvous, INDEPENDENT of M — and count 512 runs two
+#: M-blocks, i.e. 68.6 us, which is 27 % of that cell's wall clock and exactly why 512 is the worst
+#: cell. The op's own ablation floor (42.8 us with every payload stubbed) is the same term.
+#:
+#: The mechanism, from the trace: round r's sender waits for ONE ack from each of NUM_CORES
+#: receivers, and a receiver only acks after `cb_reserve_back` for round r proves its slot free.
+#: So each round is [NUM_CORES-way ack incast] -> [52 KB multicast] -> [ready signal] -> [every
+#: core wakes], four grid traversals that cannot start until the previous round finished on the
+#: SLOWEST core. HSEND=writer removed the shared-flag half of that chain and measured null because
+#: the ack half — the expensive half — was left just-in-time.
+#:
+#: A > 1 reserves A blocks at once, which proves A slots free, so a core acks senders r..r+A-1
+#: together and every ack lands A-1 rounds early. The 11 senders then overlap up to the CB depth.
+#: Clamped to DEPTH_H - 1: reserving the whole CB would demand zero blocks in flight and
+#: re-serialise the reader against compute every round. 1 = the pre-PERF-4 path, byte for byte.
+#: Only meaningful with HSEND=writer (the per-slot monotone counters are what let senders finish
+#: out of order); at HSEND=reader the shared VALID flag re-imposes the chain and A is forced to 1.
+HACK_AHEAD = int(os.environ.get("MOE_SWIGLU_HACK_AHEAD", 1))
 
 #: Mailbox handshake word — the reader publishes {count, M_t, m_blocks} plus this flag.
 MAILBOX_MAGIC = 0xC0FFEE01
@@ -1329,6 +1364,12 @@ def create_program_descriptor(
     dm_defines.append(("XPRIO", str(XPRIO)))
     dm_defines.append(("SEM_XSTAGED", str(SEM_XSTAGED)))
     dm_defines.append(("HSEND_WRITER", "1" if HSEND == "writer" else "0"))
+    # PERF 4 — the deadlock bound is `blocks_cap - 1` where `blocks_cap = DEPTH_H * M_BLOCK / m_eff`,
+    # and `m_eff` is a RUNTIME value, so the real clamp lives in the reader. All the host enforces is
+    # the floor and the one thing it alone knows: the shared-VALID-flag `reader` send path cannot
+    # tolerate out-of-order senders at all, so it is pinned to the byte-identical 1.
+    hack_ahead = max(1, HACK_AHEAD) if HSEND == "writer" else 1
+    dm_defines.append(("HACK_AHEAD", str(hack_ahead)))
     dm_defines.append(("SEM_H_RDY_BASE", str(SEM_H_RDY_BASE)))
     dm_defines.append(("SEM_H_FREE", str(SEM_H_FREE)))
     dm_defines.append(("DEPTH_H", str(DEPTH_H)))
