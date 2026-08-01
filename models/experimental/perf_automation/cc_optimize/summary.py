@@ -387,11 +387,10 @@ def _single_reading(title: str, row) -> str | None:
     if not isinstance(v, (int, float)) or v <= 0:
         return None
     d = str(row.get("depth") or "unknown")
-    return "%s (%s):  %.2f ms   (single reading — no comparable before/after pair)" % (
-        title,
-        "all layers" if d == "all" else "%s layers" % d,
-        v,
-    )
+    # JUST THE NUMBER. The depth in the header already says what was measured; a trailing explanation
+    # of what the line is NOT is noise in a report that goes out for confirmation, and the em dash it
+    # carried mojibaked in the reader's terminal. No arrow means no delta -- that is the whole signal.
+    return "%s (%s):  %.2f ms" % (title, "all layers" if d == "all" else "%s layers" % d, v)
 
 
 def _ledger_line(kind: str, title: str, model: str = "", task: str = ""):
