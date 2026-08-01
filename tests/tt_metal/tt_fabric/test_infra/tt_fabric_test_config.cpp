@@ -2260,8 +2260,9 @@ void TestConfigBuilder::expand_full_or_half_ring_unicast_or_multicast(
             }
         } else {
             for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
-                // Skip dimensions with only one device
-                if (this->route_manager_.get_mesh_shape()[dim] < 2) {
+                // A collapsed torus axis has no distinct wrap peer, so it cannot carry a ring multicast.
+                if (this->route_manager_.get_mesh_shape()[dim] < 2 ||
+                    this->route_manager_.is_degenerate_torus_axis(dim)) {
                     continue;
                 }
 
