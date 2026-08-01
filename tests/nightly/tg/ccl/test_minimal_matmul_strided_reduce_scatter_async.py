@@ -243,7 +243,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
         pytest.param(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": _make_fabric_router_config(4096),
+                "fabric_router_config": _make_fabric_router_config(8192),
                 "trace_region_size": 1531456,
             },
             ttnn.Topology.Ring,
