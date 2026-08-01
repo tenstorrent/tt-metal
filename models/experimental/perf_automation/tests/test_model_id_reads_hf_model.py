@@ -14,7 +14,7 @@ the 4b and the 27b. It returned the 4b.
 Nothing was mismeasured -- the model resolves its own identity from HF_MODEL and the 12B ran
 throughout -- but every roofline figure divided by 4 GB instead of 12:
 
-    ceiling      102.4 tok/s/u   should be 34.1
+    ceiling      128.0 tok/s/u   should be 42.7   (spec 512/GB; band top 25.6-34.1)
     band         61.4-81.9       should be 20.5-27.3
     "measured" BW  115 GB/s      should be 345
     utilisation  28%             actually 84%, ABOVE the band
@@ -91,11 +91,11 @@ def test_h2_the_gemma3_run(tree, monkeypatch):
 
 
 def test_h2_the_bytes_that_follow_from_it(monkeypatch):
-    """12B -> 12 GB -> ceiling 34.1, not 102.4. The whole point of getting the id right."""
+    """12B -> 12 GB -> ceiling 42.7, not 128.0. The whole point of getting the id right."""
     sys.path.insert(0, str(_PA))
     from agent import perf_target as pt
 
-    for params, want_bytes, want_ceiling in ((12e9, 12e9, 34.1), (4e9, 4e9, 102.4)):
+    for params, want_bytes, want_ceiling in ((12e9, 12e9, 42.7), (4e9, 4e9, 128.0)):
         facts = {"total_params": params}
         b = pt.simple_active_bytes(facts)
         c, _band = pt.rate_and_band(b, 512e9, frac=pt.bw_fraction(facts))

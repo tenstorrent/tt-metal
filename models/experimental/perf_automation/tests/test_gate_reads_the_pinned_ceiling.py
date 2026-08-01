@@ -59,7 +59,7 @@ def test_the_gate_divides_by_the_anchor_not_the_reverted_facts(tmp_path, monkeyp
 
     assert (scope, has_ceiling) == ("model", True)
     assert target.active_bytes == int(8 * _GB), "gate followed the facts instead of the anchor"
-    assert round(target.theoretical_rate, 1) == 51.2  # (512*0.8)/8, NOT 102.4 from 4 GB
+    assert round(target.theoretical_rate, 1) == 64.0  # spec 512/8, NOT 128.0 from 4 GB
     assert target.bytes_source == "anchored baseline bytes"
 
 
@@ -72,7 +72,7 @@ def test_with_nothing_pinned_the_gate_still_computes_from_the_facts(tmp_path, mo
     monkeypatch.setattr(perf_mcp, "_load_perf_target_inputs", lambda: _facts(8e9))
 
     target, _scope, _has = perf_mcp._select_perf_target({"modeled_floor_ms": 15.6})
-    assert round(target.theoretical_rate, 1) == 51.2
+    assert round(target.theoretical_rate, 1) == 64.0
     assert "params rule" in target.bytes_source
 
 
@@ -108,7 +108,7 @@ def test_the_gate_and_the_report_agree_on_one_run(tmp_path, monkeypatch):
     txt = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 17.0}, "m", "main"))
 
     # 7.505 GB anchored -> (512*0.8)/7.505 = 54.6, in BOTH places, and never the 4 GB facts' 102.4.
-    assert round(gate.theoretical_rate, 1) == 54.6
+    assert round(gate.theoretical_rate, 1) == 68.2
     assert "54.6 tok/s/u" in txt, txt
     assert "102.4" not in txt, txt
 
@@ -143,7 +143,7 @@ def test_losing_the_facts_file_does_not_downgrade_the_gate_to_the_floor(tmp_path
 
     target, scope, has_ceiling = perf_mcp._select_perf_target({"modeled_floor_ms": 15.6})
     assert (scope, has_ceiling) == ("model", True), "downgraded to the floor form"
-    assert round(target.theoretical_rate, 1) == 51.2  # not 1000/15.6 = 64.1
+    assert round(target.theoretical_rate, 1) == 64.0  # spec 512/8; not 1000/15.6 = 64.1 from the floor
     assert target.band[0] > 0, "a floor target carries no band, so the band stop could never fire"
     assert target.unit == "token", "the unit must travel with the pinned bytes"
 
@@ -161,4 +161,4 @@ def test_a_step_unit_anchor_rebuilds_as_steps_not_tokens(tmp_path, monkeypatch):
 
     target, _s, _h = perf_mcp._select_perf_target({"modeled_floor_ms": 15.6})
     assert target.unit == "step"
-    assert round(target.theoretical_rate, 1) == 204.8  # (512*0.8)/2
+    assert round(target.theoretical_rate, 1) == 256.0  # (512*0.8)/2

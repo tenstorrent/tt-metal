@@ -252,10 +252,10 @@ def test_s5_does_not_write_to_the_model_tree(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "model_id,params_b,ceiling",
     [
-        ("google/gemma-3-12b-it", 12, 34.1),
-        ("google/gemma-3-4b-it", 4, 102.4),
-        ("google/gemma-3-27b-it", 27, 15.2),
-        ("meta-llama/Llama-3.1-8B-Instruct", 8, 51.2),
+        ("google/gemma-3-12b-it", 12, 42.7),
+        ("google/gemma-3-4b-it", 4, 128.0),
+        ("google/gemma-3-27b-it", 27, 19.0),
+        ("meta-llama/Llama-3.1-8B-Instruct", 8, 64.0),
     ],
 )
 def test_s6_the_id_determines_the_ceiling(model_id, params_b, ceiling):
@@ -267,11 +267,11 @@ def test_s6_the_id_determines_the_ceiling(model_id, params_b, ceiling):
     facts = {"total_params": total}
     c, band = pt.rate_and_band(pt.simple_active_bytes(facts), 512e9, frac=pt.bw_fraction(facts))
     assert c == pytest.approx(ceiling, abs=0.15)
-    assert band[0] == pytest.approx(c * 0.6, abs=0.05) and band[1] == pytest.approx(c * 0.8, abs=0.05)
+    assert band[0] == pytest.approx(c * 0.60, abs=0.05) and band[1] == pytest.approx(c * 0.80, abs=0.05)
 
 
 def test_s6_the_gemma3_error_quantified():
-    """The exact damage: 4B instead of 12B turned 84% utilisation into 28%."""
+    """The exact damage: 4B instead of 12B turned 67% utilisation into 22%."""
     from agent import perf_target as pt
 
     measured = 1000 / 34.82
@@ -279,4 +279,4 @@ def test_s6_the_gemma3_error_quantified():
     for label, p in (("wrong_4b", 4e9), ("right_12b", 12e9)):
         c, _ = pt.rate_and_band(pt.simple_active_bytes({"total_params": p}), 512e9, frac=0.80)
         out[label] = round(measured / c * 100)
-    assert out["wrong_4b"] == 28 and out["right_12b"] == 84, out
+    assert out["wrong_4b"] == 22 and out["right_12b"] == 67, out

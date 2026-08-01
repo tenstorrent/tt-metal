@@ -5,8 +5,8 @@
 The standard bound for LLM decode is:
 
     ceiling    = (peak_BW_per_chip * fraction * TP) / params_GB
-                 dense (512*0.8)/8 = 51.2 tok/s/u ;  MoE (512*0.5)/3 = 85.3 tok/s/u
-    achievable = 60-80% OF THAT CEILING            51.2 -> 30.7 - 41.0 tok/s/u
+                 dense (512*0.8)/8 = 64.0 tok/s/u ;  MoE (512*0.5)/3 = 170.7 tok/s/u
+    achievable = 60-80% OF THAT CEILING            64.0 -> 38.4 - 51.2 tok/s/u
     compute    = (peak_FLOPs * 0.8 * TP) / (2 * params * tokens_per_unit) -- binds prefill, not decode
     TP scales the ceiling; DP and PP scale only aggregate_rate
     measured   = bytes / forward_time                8 GB / 19.4 ms = 412 GB/s -> 51.5 tok/s/u
@@ -47,21 +47,22 @@ def _pt():
 
 
 def test_the_ceiling_is_sustained_bandwidth_over_params_gb():
-    """8B params on a 512 GB/s part -> (512*0.8)/8 = 51.2 tok/s/u. The sustained fraction is INSIDE the
+    """8B params on a 512 GB/s part -> (512*0.8)/8 = 64.0 tok/s/u. The sustained fraction is INSIDE the
     ceiling: 512 GB/s is a spec figure no workload attains, and a target nobody can reach is not one."""
     pt = _pt()
     tgt = pt.compute_target({"total_params": int(8e9)}, {"dram_bw_gbps": _BH_DRAM_GBPS})
     assert tgt.active_bytes == int(8 * _GB)  # xB -> xGB
     assert tgt.bw_fraction == 0.80
-    assert round(tgt.theoretical_rate, 1) == 51.2
-    assert [round(b, 1) for b in tgt.band] == [30.7, 41.0]  # 60-80% OF the ceiling
+    assert round(tgt.theoretical_rate, 1) == 64.0
+    assert [round(b, 1) for b in tgt.band] == [38.4, 51.2]  # 60-80% OF the ceiling
     assert tgt.bound_by == "memory"
     assert "params rule" in tgt.bytes_source
 
 
 def test_a_moe_ceiling_uses_active_params_and_half_of_peak():
     """A 30B-A3B MoE streams only its ACTIVE params, and its scattered expert reads sustain ~50% of
-    peak: (512*0.5)/3 = 85.3 tok/s/u -- not 512/30, which would bound nothing it can reach."""
+    peak: 512/3 = 170.7 tok/s/u spec -- not 512/30, which would bound nothing it can reach. The
+    0.50 MoE fraction sets the band top (85.3), which is what the ceiling used to report."""
     pt = _pt()
     tgt = pt.compute_target(
         {"is_moe": True, "active_params": int(3e9), "total_params": int(30e9)},
@@ -69,8 +70,8 @@ def test_a_moe_ceiling_uses_active_params_and_half_of_peak():
     )
     assert tgt.active_bytes == int(3 * _GB)
     assert tgt.bw_fraction == 0.50
-    assert round(tgt.theoretical_rate, 1) == 85.3  # (512*0.5)/3
-    assert [round(b, 1) for b in tgt.band] == [51.2, 68.3]
+    assert round(tgt.theoretical_rate, 1) == 170.7  # (512*0.5)/3
+    assert [round(b, 1) for b in tgt.band] == [64.0, 85.3]  # 0.375-0.50 of the 170.7 spec ceiling
 
 
 def test_the_exact_byte_count_is_the_fallback_when_no_param_count_exists():
@@ -78,20 +79,23 @@ def test_the_exact_byte_count_is_the_fallback_when_no_param_count_exists():
     pt = _pt()
     tgt = pt.compute_target({"weight_bytes": int(8 * _GB)}, {"dram_bw_gbps": _BH_DRAM_GBPS})
     assert tgt.active_bytes == int(8 * _GB)
-    assert round(tgt.theoretical_rate, 1) == 51.2
+    assert round(tgt.theoretical_rate, 1) == 64.0
     assert "per-tensor exact bytes" in tgt.bytes_source
 
 
 def test_the_achievable_band_is_60_to_80_percent_of_peak():
-    """30.7-41.0 tok/s/u -- 60-80% of the 51.2 ceiling, which is the label the report prints."""
+    """38.4-51.2 tok/s/u -- 60-80% of the 64.0 ceiling, which is the label the report prints."""
     pt = _pt()
     tgt = pt.compute_target({"weight_bytes": int(8 * _GB)}, {"dram_bw_gbps": _BH_DRAM_GBPS})
     lo, hi = tgt.band
-    assert round(lo, 1) == 30.7 and round(hi, 1) == 41.0, (lo, hi)
+    assert round(lo, 1) == 38.4 and round(hi, 1) == 51.2, (lo, hi)
 
 
 def test_a_measured_forward_pass_scores_as_published():
-    """19.4 ms/token on 8 GB = 412 GB/s = 80% utilisation = 51.5 tok/s/u, at the top of the band."""
+    """19.4 ms/token on 8 GB = 412 GB/s = 51.5 tok/s/u, at the TOP of the 38.4-51.2 band.
+
+    bw_util is now a fraction of SPEC (512 GB/s), so this reads 80% of spec -- the same physical fact
+    the old 100%-of-a-sustained-ceiling reading described, stated against the wall instead."""
     pt = _pt()
     tgt = pt.compute_target({"weight_bytes": int(8 * _GB)}, {"dram_bw_gbps": _BH_DRAM_GBPS})
     s = pt.score(tgt, 19.4)
@@ -99,12 +103,11 @@ def test_a_measured_forward_pass_scores_as_published():
     assert round(s["effective_bw_bytes_s"] / 1e9) == 412
     # 8 GB / 19.4 ms = 412.4 GB/s, and 412.4/512 = 80.5%. The published "80%" rounds 412 first;
     # both agree to the nearest point, so pin the band rather than a single rounding convention.
-    # 8 GB / 19.4 ms = 412 GB/s of the 512 spec peak = 80.5%, reported as bw_util_of_peak now that
-    # the 0.80 lives inside the ceiling.
     assert 80.0 <= s["bw_util_of_peak"] * 100 <= 80.6
-    # 51.5 measured against a 51.2 ceiling: the params rule assumes 8 GB where the device streams
-    # 6.095, so a well-optimized bf4/bf8 build legitimately reads just past it.
-    assert s["status"] == "ABOVE_BAND"
+    # 51.5 against a 64.0 SPEC ceiling with a 38.4-51.2 band: this is the top of what the hardware
+    # sustains, so it reads IN_BAND. ABOVE_BAND is now reserved for beating spec, which flags the
+    # bytes as wrong rather than the build as fast.
+    assert s["status"] == "IN_BAND"
 
 
 def test_a_slower_pass_reads_below_band_and_a_faster_one_above_the_ceiling():
@@ -214,7 +217,7 @@ def test_only_a_missing_divisor_withholds_the_ceiling(tmp_path, monkeypatch):
     facts = run._perf_target_inputs(tmp_path, None, {})
     assert facts and facts["weight_bytes"] == int(8 * _GB), "bytes alone are a usable divisor"
     tgt = _pt().compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS})
-    assert round(tgt.theoretical_rate, 1) == 51.2 and tgt.band[0] > 0
+    assert round(tgt.theoretical_rate, 1) == 64.0 and tgt.band[0] > 0
 
 
 def test_the_manifest_config_overrides_the_hf_cache(tmp_path, monkeypatch):
@@ -251,7 +254,7 @@ def test_emit_never_raises_on_a_broken_model_root(tmp_path, monkeypatch):
 
 
 def test_end_to_end_the_produced_facts_give_the_published_ceiling(tmp_path, monkeypatch):
-    """Producer -> perf_target: the file this writes must yield the 51.2 ceiling and 30.7-41.0 band."""
+    """Producer -> perf_target: the file this writes must yield the 64.0 ceiling and 38.4-51.2 band."""
     run = _run_mod()
     monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
     monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
@@ -264,8 +267,8 @@ def test_end_to_end_the_produced_facts_give_the_published_ceiling(tmp_path, monk
     pt = _pt()
     tgt = pt.compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS})
     assert facts["total_params"] == int(8e9)  # from the model id "Llama-3.1-8B"
-    assert round(tgt.theoretical_rate, 1) == 51.2
-    assert [round(b, 1) for b in tgt.band] == [30.7, 41.0]
+    assert round(tgt.theoretical_rate, 1) == 64.0
+    assert [round(b, 1) for b in tgt.band] == [38.4, 51.2]
     assert round(pt.score(tgt, 19.4)["measured_tok_s"], 1) == 51.5
 
 
@@ -276,7 +279,7 @@ def test_on_device_weight_bytes_can_be_stated_when_they_differ_from_the_checkpoi
     band sits BELOW the untouched 20.7 baseline, so the run would stop before optimizing anything.
 
     Under the params rule that trap is structural rather than a setting to remember: 8B params -> 8 GB
-    whatever the checkpoint stores, so both paths give 51.2 and the override cannot be forgotten."""
+    whatever the checkpoint stores, so both paths give 64.0 and the override cannot be forgotten."""
     run = _run_mod()
     monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 16_060_556_376)
     monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
@@ -288,7 +291,7 @@ def test_on_device_weight_bytes_can_be_stated_when_they_differ_from_the_checkpoi
     from_disk = run._perf_target_inputs(tmp_path, None, {})
     pt = _pt()
     # 16.06 GB on disk, but the divisor is 8B params -> 8 GB, so NOT the old 31.9.
-    assert round(pt.compute_target(from_disk, {"dram_bw_gbps": _BH_DRAM_GBPS}).theoretical_rate, 1) == 51.2
+    assert round(pt.compute_target(from_disk, {"dram_bw_gbps": _BH_DRAM_GBPS}).theoretical_rate, 1) == 64.0
     assert from_disk["total_params"] == int(8e9)
 
     monkeypatch.setenv("TT_PERF_WEIGHT_BYTES", str(int(8 * _GB)))
@@ -296,8 +299,8 @@ def test_on_device_weight_bytes_can_be_stated_when_they_differ_from_the_checkpoi
     assert on_device["weight_bytes"] == int(8 * _GB)
     assert "on-device" in on_device["source"]
     tgt = pt.compute_target(on_device, {"dram_bw_gbps": _BH_DRAM_GBPS})
-    assert round(tgt.theoretical_rate, 1) == 51.2  # identical either way now
-    assert [round(b, 1) for b in tgt.band] == [30.7, 41.0]
+    assert round(tgt.theoretical_rate, 1) == 64.0  # identical either way now
+    assert [round(b, 1) for b in tgt.band] == [38.4, 51.2]
 
 
 def test_a_junk_override_is_ignored_rather_than_trusted(tmp_path, monkeypatch):
@@ -366,8 +369,8 @@ def test_published_figures_render_exactly(tmp_path, monkeypatch):
     sm = _sm()
     out = "\n".join(sm._roofline_lines(_snap(), 534.44, {"per_token_ms": 19.4}, "m", "main"))
     # Labels say SUSTAINED, and both are derived from the numbers rather than hardcoded strings.
-    assert "theoretical ceiling : 51.2 tok/s/u" in out, out
-    assert "achievable (60-80%) : 30.7 - 41.0 tok/s/u" in out, out
+    assert "theoretical ceiling : 64.0 tok/s/u" in out, out
+    assert "achievable (60-80%) : 38.4 - 51.2 tok/s/u" in out, out
     assert "51.5 tok/s/u" in out and "412 GB/s" in out
 
 
@@ -507,7 +510,7 @@ def test_the_anchored_ceiling_uses_the_sustained_fraction_not_a_second_copy_of_t
     # (512*0.8) / 6.0947 GB = 67.2 tok/s/u from the ANCHOR.
     assert "67.2 tok/s/u" in txt, txt
     assert "153.8" not in txt, txt  # the stale snapshot value
-    assert "40.3 - 53.8 tok/s/u" in txt, txt
+    assert "50.4 - 67.2 tok/s/u" in txt, txt
 
 
 def test_an_anchored_snapshot_without_the_fraction_keeps_its_old_reading(tmp_path, monkeypatch):
@@ -571,7 +574,7 @@ def test_a_list_valued_config_field_does_not_cost_the_whole_ceiling(tmp_path, mo
     facts = run._perf_target_inputs(tmp_path, None, {})
     assert facts, "a list-valued field must not withhold the whole ceiling"
     assert facts["kv_heads"] == 8 and facts["layers"] == 32 and facts["head_dim"] == 128
-    assert round(_pt().compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS}).theoretical_rate, 1) == 51.2
+    assert round(_pt().compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS}).theoretical_rate, 1) == 64.0
 
 
 def test_params_are_read_even_when_the_unit_cannot_be_determined(tmp_path, monkeypatch):
@@ -621,7 +624,7 @@ def test_decode_is_memory_bound_and_prefill_is_compute_bound():
     pt = _pt()
     dec = pt.compute_target({"total_params": int(8e9), "unit": "token"}, _BH_HW, tokens_per_unit=1)
     assert dec.bound_by == "memory"
-    assert round(dec.theoretical_rate, 1) == 51.2  # unchanged by adding the compute term
+    assert round(dec.theoretical_rate, 1) == 64.0  # unchanged by adding the compute term
 
     pre = pt.compute_target({"total_params": int(8e9), "unit": "token"}, _BH_HW, tokens_per_unit=2048)
     assert pre.bound_by == "compute"
@@ -646,14 +649,14 @@ def test_tp_scales_the_ceiling_and_dp_only_scales_aggregate():
     pt = _pt()
     mf = {"total_params": int(8e9), "unit": "token"}
     seen_aggregate = set()
-    for tp, dp, want_per_user in ((8, 1, 409.6), (4, 2, 204.8), (2, 4, 102.4), (1, 8, 51.2)):
+    for tp, dp, want_per_user in ((8, 1, 512.0), (4, 2, 256.0), (2, 4, 128.0), (1, 8, 64.0)):
         t = pt.compute_target(mf, _BH_HW, tp_degree=tp, dp_degree=dp)
         assert round(t.theoretical_rate, 1) == want_per_user, (tp, dp, t.theoretical_rate)
         assert t.dp_degree == dp and t.tp_degree == tp
         seen_aggregate.add(round(t.aggregate_rate, 1))
         # the BAND scores the per-unit rate, never the aggregate
         assert t.band[1] <= t.theoretical_rate + 1e-9
-    assert seen_aggregate == {409.6}, seen_aggregate
+    assert seen_aggregate == {512.0}, seen_aggregate
 
 
 def test_dp_never_leaks_into_the_scored_rate():
@@ -664,5 +667,5 @@ def test_dp_never_leaks_into_the_scored_rate():
     replicated = pt.compute_target(mf, _BH_HW, tp_degree=1, dp_degree=32)
     assert solo.theoretical_rate == replicated.theoretical_rate
     assert solo.band == replicated.band
-    ms = 1000.0 / 35.0  # 35 tok/s: in band for the real ceiling
+    ms = 1000.0 / 45.0  # 45 tok/s: inside the 38.4-51.2 band for the real ceiling
     assert pt.score(solo, ms)["status"] == pt.score(replicated, ms)["status"] == "IN_BAND"

@@ -76,20 +76,22 @@ def test_tp_divides_per_device_bytes():
 
 def test_compute_target_ceiling_and_band():
     # 1B params -> 1 GB under xB -> xGB (NOT 2 GB from params x bf16: the stored dtype is not the
-    # divisor any more), and the 0.80 sustained fraction is inside the ceiling: (512*0.8)/1 = 409.6.
+    # divisor any more). The ceiling is SPEC -- 512/1 = 512.0 -- and the 0.80 sustained fraction sets
+    # the band's top instead of being folded in, so the band is 307.2 - 409.6 and its top is the
+    # number the ceiling used to report.
     mf = {"total_params": 1_000_000_000, "dominant_dtype": "bfloat16"}
     t = pt.compute_target(mf, _BH)
     assert t.active_bytes == 1_000_000_000
-    assert abs(t.theoretical_rate - 409.6) < 1e-3
-    assert abs(t.band[0] - 0.60 * 409.6) < 1e-3 and abs(t.band[1] - 0.80 * 409.6) < 1e-3
+    assert abs(t.theoretical_rate - 512.0) < 1e-3
+    assert abs(t.band[0] - 0.60 * 512.0) < 1e-3 and abs(t.band[1] - 0.80 * 512.0) < 1e-3
 
 
 def test_status_below_in_above():
     mf = {"total_params": 1_000_000_000, "dominant_dtype": "bfloat16"}
-    t = pt.compute_target(mf, _BH)  # theo 409.6 tok/s ; band 245.8 - 327.7
-    below = pt.score(t, forward_ms=1000.0 / 100.0)  # 100 tok/s < 245.8
-    inb = pt.score(t, forward_ms=1000.0 / 300.0)  # 300 tok/s, >=245.8, <=409.6
-    above = pt.score(t, forward_ms=1000.0 / 600.0)  # 600 tok/s > 409.6 ceiling
+    t = pt.compute_target(mf, _BH)  # theo 512.0 tok/s (spec) ; band 307.2 - 409.6
+    below = pt.score(t, forward_ms=1000.0 / 100.0)  # 100 tok/s < 307.2
+    inb = pt.score(t, forward_ms=1000.0 / 350.0)  # 350 tok/s, >=307.2, <=409.6
+    above = pt.score(t, forward_ms=1000.0 / 600.0)  # 600 tok/s > the 512.0 spec ceiling
     assert below["status"] == "BELOW_BAND"
     assert inb["status"] == "IN_BAND"
     assert above["status"] == "ABOVE_BAND"
@@ -121,12 +123,13 @@ def test_a_floor_target_carries_no_band():
 
 def test_only_a_bandwidth_ceiling_produces_a_band():
     """The band must come from bandwidth-over-bytes, never from the ms floor: 8 GB on 512 GB/s -> a
-    (512*0.8)/8 = 51.2 ceiling with the 30.7-41.0 achievable band."""
+    SPEC ceiling of 512/8 = 64.0 with a 38.4-51.2 achievable band (0.60-0.80 of it)."""
     t = pt.compute_target({"weight_bytes": int(8e9)}, {"dram_bw_gbps": 512.0})
-    assert [round(b, 1) for b in t.band] == [30.7, 41.0]
-    assert pt.score(t, 30.0)["status"] == "IN_BAND"  # 33.3 tok/s, inside 30.7-41.0
+    assert round(t.theoretical_rate, 1) == 64.0
+    assert [round(b, 1) for b in t.band] == [38.4, 51.2]
+    assert pt.score(t, 25.0)["status"] == "IN_BAND"  # 40 tok/s, inside 38.4-51.2
     assert pt.score(t, 50.0)["status"] == "BELOW_BAND"  # 20 tok/s
-    assert pt.score(t, 10.0)["status"] == "ABOVE_BAND"  # 100 tok/s, past the 51.2 ceiling
+    assert pt.score(t, 10.0)["status"] == "ABOVE_BAND"  # 100 tok/s, past the 64.0 spec ceiling
 
 
 def test_list_topk_degrades_not_crashes():

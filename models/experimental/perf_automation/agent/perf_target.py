@@ -31,37 +31,41 @@ BYTES_PER_ELEM = {
     "fp32": 4.0,
 }
 _DEFAULT_BYTES_PER_ELEM = 2.0
-_BAND_LO_FRAC = 0.60
-_BAND_HI_FRAC = 0.80
 
 # ---------------------------------------------------------------------------
 # THE CEILING IS PARAMS-BASED (team decision, 2026-07-29).
 #
-#   theoretical ceiling = (peak_BW * sustained_fraction * TP) / params_GB
-#       dense: (512 * 0.80) / 8 GB = 51.2 tok/s/u     sustained fraction 0.80
-#       MoE:   (512 * 0.50) / 3 GB = 85.3 tok/s/u     0.50, over ACTIVE params
+#   theoretical ceiling = (peak_BW * TP) / params_GB          <- SPEC, nothing folded in
+#   achievable band     = (0.75 * f) * ceiling .. f * ceiling
+#       dense: 512 / 8 GB = 64.0 tok/s/u   band 38.4 - 51.2   f = 0.80
+#       MoE:   512 / 3 GB = 170.7          band 64.0 - 85.3   f = 0.50, over ACTIVE params
+#   The band's TOP is what the ceiling used to report, so targets are unchanged.
 #
-# The fraction is INSIDE the ceiling: the reported number is the one a run can actually reach, because
-# 512 GB/s is a spec figure no workload attains and a target nobody can hit is not a target.
+# THE CEILING IS SPEC, NOT A TARGET. peak_bw / bytes_per_token, nothing folded in. To emit one token
+# the chip must read every weight from DRAM and cannot use a weight it has not fetched, so no software
+# can beat bytes/bandwidth. A ceiling that has already been discounted is not a ceiling -- a good run
+# passes it, and then it says nothing. gemma3 showed exactly that: 28.7 tok/s/u reported as 84% of a
+# "ceiling" of 34.1, i.e. ABOVE the achievable band, when the real wall is 512/12 = 42.7.
+#
+# The sustained fraction has not gone away, it has moved to the BAND, where it belongs as a statement
+# about what a run can reach rather than about what the hardware permits.
 #
 # 1 B params -> 1 GB streamed. Deliberately an approximation: the exact on-device byte count (6.095 GB
-# for Llama-3.1-8B served as bf4/bf8) is more accurate, but establishing it costs a per-model
-# investigation of what width each tensor group is actually served at. A param count is
-# dtype-independent, so it needs no such work, and xB -> xGB lands close enough to steer optimization.
-#
-# The DRAM efficiency the part sustains (~80% of spec on dense streams; ~50% on MoE, whose per-token
-# expert reads are scattered) is folded INTO the ceiling, so theoretical_rate is ACHIEVABLE rather than
-# spec. MoE cards publish the active-parameter count ("30B-A3B" -> 3B active), which is this input.
+# for Llama-3.1-8B served as bf4/bf8, 8.79 GB for gemma3-12b) is more accurate, but establishing it
+# costs a per-model investigation of what width each tensor group is served at. A param count is
+# dtype-independent, so it needs no such work, and xB -> xGB lands close enough to steer optimization
+# -- conservatively, since a bf4-heavy model streams less than 1 B/param and so has a HIGHER real
+# ceiling than this reports.
 _BYTES_PER_PARAM = 1.0
-# The fraction of spec DRAM bandwidth each read pattern sustains, folded INTO the ceiling.
-_DENSE_BW_FRACTION = 0.80
-_MOE_BW_FRACTION = 0.50
-# The achievable band, as a fraction of the ceiling: the report reads "achievable (60-80%)" and these
-# are the numbers behind that label. NOTE the stop threshold this implies -- IN_BAND fires at
-# 0.60 * ceiling, i.e. 30.7 tok/s/u for an 8B model, rather than the 38.4 it was when the 0.80 sat in
-# the band instead of the ceiling.
-_BAND_LO_FRAC_OF_CEILING = 0.60
-_BAND_HI_FRAC_OF_CEILING = 0.80
+
+# The DRAM efficiency each read pattern sustains: ~80% of spec on a dense stream, ~50% on MoE, whose
+# per-token expert reads are scattered. This is the TOP of the achievable band.
+_DENSE_BAND_HI = 0.80
+_MOE_BAND_HI = 0.50
+# The bottom of the band, as a fraction of its top. One ratio for both patterns rather than a fourth
+# hand-picked constant: dense keeps its familiar 0.60-0.80 (0.60 = 0.75 x 0.80), and MoE follows the
+# same shape at 0.375-0.50.
+_BAND_LO_OF_HI = 0.75
 
 # --- COMPUTE term -----------------------------------------------------------------------------------
 # A weight is used in one multiply-accumulate per token, and a MAC is 2 FLOPs, so the work ONE unit of
@@ -270,13 +274,17 @@ def simple_active_bytes(model_facts: dict) -> int:
 
 
 def bw_fraction(model_facts: dict) -> float:
-    """Fraction of peak DRAM bandwidth this model's read pattern actually sustains."""
-    return _MOE_BW_FRACTION if (model_facts or {}).get("is_moe") else _DENSE_BW_FRACTION
+    """Fraction of peak DRAM bandwidth this model's read pattern sustains -- the BAND's top.
+
+    Kept under its old name because callers persist it as `bw_fraction` in the throughput snapshot
+    and the report reads it back. What changed is where it applies: it used to be multiplied into the
+    ceiling, so `theoretical_rate` was already a sustained figure; now the ceiling is spec and this
+    sets the top of the achievable band.
+    """
+    return _MOE_BAND_HI if (model_facts or {}).get("is_moe") else _DENSE_BAND_HI
 
 
-def rate_and_band(
-    bytes_per_unit: float, peak_bw_bytes_s: float, *, frac: float = _DENSE_BW_FRACTION, tp_degree: int = 1
-):
+def rate_and_band(bytes_per_unit: float, peak_bw_bytes_s: float, *, frac: float = _DENSE_BAND_HI, tp_degree: int = 1):
     """(ceiling, (band_lo, band_hi)) from an ALREADY-KNOWN byte count.
 
     The one place the ceiling arithmetic lives. Exists because a second caller (the report renderer,
@@ -284,6 +292,12 @@ def rate_and_band(
     (0.60, 0.80) band. That copy silently kept the pre-sustained-fraction physics, so an anchored run
     printed a 84.0 ceiling while the stop gate it shares was judging against 51.2 -- the report and the
     gate disagreeing about the same run. Callers pass bytes; nobody else multiplies.
+
+    THE CEILING IS SPEC: peak / bytes, with `frac` no longer multiplied into it. The fraction now sets
+    the band's TOP, so the band spans frac*0.75 .. frac of the ceiling -- 0.60-0.80 dense, exactly the
+    range the report has always printed, and 0.375-0.50 for MoE. Folding it into the ceiling made a
+    "ceiling" a run could pass: gemma3 read 84% of 34.1 and sat ABOVE its own achievable band, when
+    the wall is 512/12 = 42.7 and 28.7 is 67% of it -- inside the band, with headroom left to chase.
     """
     tp = max(1, int(tp_degree or 1))
     per_dev = (float(bytes_per_unit) / tp) if bytes_per_unit else 0.0
@@ -293,10 +307,11 @@ def rate_and_band(
     pk, fr = max(0.0, float(peak_bw_bytes_s or 0.0)), max(0.0, float(frac or 0.0))
     if per_dev <= 0:
         return 0.0, (0.0, 0.0)
-    # THE FRACTION IS IN THE CEILING: (peak * 0.80) / params_GB for dense, (peak * 0.50) / active_GB
-    # for MoE -- 51.2 tok/s/u for an 8B model on a 512 GB/s part, which is the figure the team quotes.
-    theo = (pk * fr) / per_dev
-    return theo, (_BAND_LO_FRAC_OF_CEILING * theo, _BAND_HI_FRAC_OF_CEILING * theo)
+    # SPEC CEILING, then the band. peak / bytes is the wall; `fr` is what the read pattern sustains
+    # and so sets the band's top, with the bottom a fixed ratio below it.
+    theo = pk / per_dev
+    hi = fr * theo
+    return theo, (_BAND_LO_OF_HI * hi, hi)
 
 
 def chip_peak_flops(hw_facts: dict, fidelity: str = "") -> float:
@@ -473,7 +488,8 @@ def compute_target(
     theo_c = compute_ceiling(mf, hw, tp_degree=tp, tokens_per_unit=_toks)
     if theo_c > 0 and (theo <= 0 or theo_c < theo):
         theo, bound = theo_c, "compute"
-        band = (_BAND_LO_FRAC_OF_CEILING * theo, _BAND_HI_FRAC_OF_CEILING * theo)
+        _hi = frac * theo
+        band = (_BAND_LO_OF_HI * _hi, _hi)
     # DP AND PP ARE NOT IN THE CEILING. Replicas and pipeline stages do not reduce what ONE unit of work
     # reads or computes, so they cannot make one token faster -- they multiply how many run at once.
     # Folding them in is what inflated every mesh run by its chip count. Carried separately so a report
@@ -517,10 +533,10 @@ def target_from_floor_ms(modeled_floor_ms: float) -> PerfTarget:
 def score(target: PerfTarget, forward_ms: float) -> dict:
     """Compare a measured decode-step / invocation time against the target.
 
-    bw_util = measured / theoretical_rate, the fraction of the SUSTAINED ceiling reached (the
-    efficiency factor lives inside theoretical_rate now, so this is no longer a fraction of spec
-    peak -- `bw_util_of_peak` is, and the two differ by exactly target.bw_fraction). Formerly: the fraction of
-    the achievable ceiling reached. status: BELOW_BAND (keep optimizing) | IN_BAND (>= 60% of
+    bw_util = measured / theoretical_rate, the fraction of the SPEC ceiling reached. The sustained
+    fraction sets the band's top rather than being folded into the ceiling, so this IS already a
+    fraction of spec bandwidth and cannot exceed 1.0 for a real measurement; `bw_util_of_peak` is
+    kept as an alias of it for readers that ask for the peak-relative number by name. status: BELOW_BAND (keep optimizing) | IN_BAND (>= 60% of
     ceiling, done) | ABOVE_BAND (beat the ceiling -> active_bytes/floor suspect, assert never win)
     | UNKNOWN (no valid target or measurement)."""
     theo = target.theoretical_rate if target else 0.0
@@ -554,9 +570,8 @@ def score(target: PerfTarget, forward_ms: float) -> dict:
         "measured_tok_s": round(measured, 3),
         "theoretical_rate": round(theo, 3),
         "bw_util": round(bw_util, 4),
-        # bw_util is now the fraction of the SUSTAINED ceiling reached; this is the fraction of SPEC
-        # peak, which is what a bandwidth number in a report should be comparable to.
-        "bw_util_of_peak": round(bw_util * target.bw_fraction, 4) if target.bw_fraction else None,
+        # the ceiling IS spec, so bw_util is already peak-relative; the alias stays for callers.
+        "bw_util_of_peak": round(bw_util, 4),
         "bw_fraction": target.bw_fraction,
         "bytes_source": target.bytes_source or None,
         "band": (round(target.band[0], 3), round(target.band[1], 3)),
