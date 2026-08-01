@@ -94,8 +94,12 @@ PERF_ITERS = int(os.environ.get("PERF_ITERS", "20"))
 # knob to cap, so cap the ITERATION count instead — the per-op device_ms steering signal needs one
 # representative chunk, not forty. TT_METAL_DEVICE_PROFILER=1 is set ONLY by the tracy run, so the
 # untraced full-pipeline latency gate keeps all 20 iters for its robust median.
+# 3, not 1: the chunk loop software-pipelines the prefill and denoise meshes across
+# CONSECUTIVE chunks, so a single-chunk window cannot contain the overlap at all and would
+# profile the serial behaviour that production no longer has. 3 iters x (1CQ + 2CQ) = 6 chunks
+# still leaves ~7x headroom against the 40-chunk capture that overflowed the marker buffers.
 if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
-    PERF_ITERS = int(os.environ.get("PERF_PROFILED_ITERS", "1"))
+    PERF_ITERS = int(os.environ.get("PERF_PROFILED_ITERS", "3"))
 # One warm-up replay by default (not timed) — the pipeline's own socket build +
 # warm chunk happens inside the loop call, but a WARMUP_ITERS knob is kept for
 # symmetry with the 1×8 test / to absorb any first-call jitter.
