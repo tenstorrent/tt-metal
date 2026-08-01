@@ -119,7 +119,7 @@ def test_d5_absent_ops_are_measured_against_the_real_window():
     src = (_PA / "cc_optimize" / "run.py").read_text()
     # anchor on the COVERAGE branch: _signposts_agree also appears in _block_start_positions
     i = src.index("first_block, _ = _first_block_map(seq)")
-    body = src[i : i + 1600]
+    body = src[i : i + 3200]
     assert "b >= _cov" in body, "`deep` still compares against a hardcoded depth"
     assert "b >= 16" not in body, "a stale 16 remains in the absent-ops filter"
 
@@ -127,6 +127,6 @@ def test_d5_absent_ops_are_measured_against_the_real_window():
 def test_d5_no_hardcoded_sixteen_left_in_the_signpost_branch():
     src = (_PA / "cc_optimize" / "run.py").read_text()
     i = src.index("first_block, _ = _first_block_map(seq)")
-    body = src[i : i + 1600]
+    body = src[i : i + 3200]
     code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
     assert ", 16)" not in code, "the min(..., 16) clamp is back"

@@ -1297,6 +1297,81 @@ def _cov_ladder(model_root, model_id: str = "") -> list:
     return out
 
 
+def _signpost_cap_is_inert(repo_root, mcp_env, devices, node, case, cov: int, full_signal) -> bool:
+    """One probe at the chosen window: did capping there change the work at all?
+
+    The ladder gets this observation for free -- it RUNS the model at every rung. The signpost path
+    derives its number from a single full-depth probe and never runs capped, so without this it
+    exports a window it has never seen take effect. That is how gemma-3-12b-it, whose build_pipeline
+    has no depth parameter and whose perf test parses TT_PERF_LAYERS and drops it, was profiled at
+    full depth and reported as a capped run.
+
+    One probe, not the ladder's four, and it fails OPEN: an unreadable signal returns False (assume
+    the cap worked) rather than discarding a window the model may well be honouring. The cost of a
+    false negative is a mislabelled depth; the cost of a false positive is throwing away the whole
+    coverage window and profiling everything.
+    """
+    if os.environ.get("PERF_MCP_VERIFY_SIGNPOST_CAP", "1") != "1":
+        return False
+    try:
+        _sigs, _raw, seq_at = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
+    except Exception:  # noqa: BLE001
+        return False
+    return _cap_took_effect(_work_signal(seq_at), full_signal) is False
+
+
+def _validate_signpost_window(window: int, stack_len: int, declared) -> tuple:
+    """(ok, why) for a window the signpost path derived, cross-checked against the model's config.
+
+    Two free checks, and neither may raise -- they run inside a live optimize where a wrong window is
+    recoverable by falling back and a crash is not.
+
+      window <= declared        A window deeper than the model is a UNIT bug: something counted
+                                blocks, or executions, and handed the result to a layer knob.
+                                gemma-3-12b-it produced 96 for 48 layers and nothing noticed.
+      stack_len == declared     Confirms the walker tagged the DECODER stack. It picks the largest
+                                list of same-typed repeated objects, which can just as easily be the
+                                vision tower (27) or a sub-block list inside one layer (9) -- the
+                                9-element case really happened, and only a live run caught it. The
+                                indices look perfectly reasonable; they are about the wrong stack.
+
+    No declared depth is MISSING INFORMATION, not a failure: a model that ships no config cannot be
+    cross-checked, and the window still stands on the signposts alone.
+    """
+    try:
+        d = int(declared or 0)
+    except (TypeError, ValueError):
+        d = 0
+    if d <= 0:
+        return True, "no declared depth to check against"
+    try:
+        w, s = int(window), int(stack_len)
+    except (TypeError, ValueError):
+        return True, "window or stack length not numeric"
+    if w > d:
+        return False, "window %d exceeds the declared depth %d -- the index is not in layer units" % (w, d)
+    if s and s != d:
+        return False, "tagged stack has %d blocks but the model declares %d -- wrong stack tagged" % (s, d)
+    return True, "window %d within declared depth %d" % (w, d)
+
+
+def _cap_took_effect(capped_signal, full_signal):
+    """Did capping to the window actually make the model smaller? True / False / None for unknown.
+
+    The signal is the work the probe observed. Identical work at 2 layers and at full depth means the
+    cap never reached the builder -- a knob is a NAME the tool exports, and whether anything acts on
+    it is a property of the model. gemma3 reads TT_PERF_LAYERS in its perf test and never forwards it
+    to build_pipeline, which has no depth parameter, so every rung profiles the same 48 layers.
+
+    NONE IS NOT TRUE. A missing measurement must not read as "the cap worked" -- claiming a window
+    that was never verified is the failure this exists to stop, and it is how a full-model profile
+    ends up labelled as an N-layer one.
+    """
+    if not capped_signal or not full_signal:
+        return None
+    return capped_signal != full_signal
+
+
 def _knob_is_inert(seq_at_depth, full_signal, depth, model_root) -> bool:
     """Did capping to `depth` actually make the model smaller?
 
@@ -1444,6 +1519,7 @@ def _coverage_layers(
         # probe above emitted them, so reading them costs nothing. The ladder REBUILDS the model at
         # 2, 4, 8 and 16, up to four extra device probes, each reloading the weights. Running the
         # expensive one first and the free one only as its fallback was backwards.
+        _signpost = None
         if _signposts_usable(seq):
             first_block, _ = _first_block_map(seq)
             deepest = max(first_block.values()) if first_block else 0
@@ -1456,7 +1532,29 @@ def _coverage_layers(
             # depth -- computed right here as deepest + 1 -- was thrown away before anyone could read
             # it. A window that omits 54 op types cannot find a bottleneck living in one of them.
             _cov = _cap_cov_depth(max(deepest + 1, 2), model_name or config_ref)
-            deep = sorted(op for op, b in first_block.items() if b >= _cov)
+            # VERIFY BEFORE BELIEVING. The ladder earns its number by running the model at each rung;
+            # this path derives one from a single probe, so the two free cross-checks against the
+            # model's own declared depth are all that stand between a wrong window and a run labelled
+            # with it. Falling back to the ladder is the recovery, never an exception.
+            _declared = _declared_depth(_model_root_from_node(repo_root, node), model_name or config_ref)
+            _ok, _why = _validate_signpost_window(_cov, facts.get("full_blocks") or 0, _declared)
+            if not _ok:
+                print(f"  [optimize/cc] signpost window REJECTED: {_why}; falling back to the ladder")
+            elif _signpost_cap_is_inert(repo_root, mcp_env, devices, node, case, _cov, facts["full_signal"]):
+                # The cap reached nothing. Reporting a window here would label a FULL-MODEL profile as
+                # an N-layer one, which is what put "96 layers" on a 48-layer gemma3 run and left its
+                # before/after eager readings incomparable. The ladder path has refused this since it
+                # was written; the path almost every model takes did not.
+                print(
+                    f"  [optimize/cc] depth knob is INERT on the signpost path: capping to {_cov} left the "
+                    f"work signal unchanged, so the cap never reached the builder. Profiling FULL depth."
+                )
+                _coverage_cache_put(repo_root, node, case, 0)
+                return None, facts
+            else:
+                _signpost = (_cov, sorted(op for op, b in first_block.items() if b >= _cov))
+        if _signpost is not None:
+            _cov, deep = _signpost
             blk_source = "signposts"
         else:
             measured = _measure_cov(

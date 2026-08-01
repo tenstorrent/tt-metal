@@ -53,7 +53,13 @@ def _patch(m, monkeypatch, *, sigs, seq, ladder_result=(4, [], "measured")):
         calls["ladder"] += 1
         return ladder_result
 
-    monkeypatch.setattr(m, "_run_op_sigs", lambda *a, **k: (set(sigs), "", seq))
+    def _fake_sigs(_repo, _env, _dev, _node, _case, k, *a, **kw):
+        # A HONOURED depth knob: the k=0 probe sees the whole sequence, a capped probe sees less.
+        # Returning the identical sequence at every depth models a model that IGNORES the cap, which
+        # the signpost path now detects and refuses -- see test_signpost_path_validates_its_window.py.
+        return (set(sigs), "", seq if not k else seq[: max(2, len(seq) // 2)])
+
+    monkeypatch.setattr(m, "_run_op_sigs", _fake_sigs)
     monkeypatch.setattr(m, "_measure_cov", _fake_measure)
     monkeypatch.setattr(m, "_parse_facts", lambda raw, s: {})
     monkeypatch.setattr(m, "_coverage_cache_get", lambda *a, **k: None)
