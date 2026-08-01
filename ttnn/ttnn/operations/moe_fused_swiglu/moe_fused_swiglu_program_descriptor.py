@@ -167,7 +167,11 @@ DEPTH_X = int(os.environ.get("MOE_SWIGLU_DEPTH_X", 2))
 #: Overridable for `/perf-measure` A/B via MOE_SWIGLU_DEPTH_WD; HGROUPS reproduces the
 #: whole-hidden-extent sizing this CB used to have.
 DEPTH_WD = int(os.environ.get("MOE_SWIGLU_DEPTH_WD", 5))
-DEPTH_H = 3  # h all-gather: 3 so a late round's producer is not flow-controlled by itself
+#: h all-gather slots. 3 = "a late round's producer is not flow-controlled by itself". Now a knob,
+#: because phase 2 measures as EXACTLY 11 serialised rendezvous (43 us with every payload removed
+#: ~= 11 x (1.2 us mcast + 1.7 us `down` K-block)) and the CB depth is the first thing that could be
+#: forcing that lockstep. One extra slot costs M_BLOCK * HN_PAD bfp8 tiles = 52 224 B/core.
+DEPTH_H = int(os.environ.get("MOE_SWIGLU_DEPTH_H", 3))
 DEPTH_OUT = 2
 DEPTH_XSTAGE = 1  # tilized x staging slots (a core injects <= ceil(M_BLOCK/HGROUPS) rows/block)
 XSTICK_ROWS = 1  # tile-rows of row-major x sticks held in flight

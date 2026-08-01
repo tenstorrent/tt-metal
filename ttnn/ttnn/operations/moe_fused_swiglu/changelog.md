@@ -1219,3 +1219,60 @@ Ranked by measured headroom, for whoever picks this up:
    `no_w_xfer`. Cost: 2× the collective handshakes against a floor that is already 29 % of the op —
    which is why item 1 should land first.
 3. **Per-block transaction-ID barriers for W_down**, which is what `WD_AHEAD` actually needed.
+
+### 6. Perf 3 addendum — the h rendezvous is the KEYSTONE, and it is L1-locked
+
+Three further measurements change the priority order in §5, so they are recorded before anything is
+built on the old ranking.
+
+**(a) Phase 2 is exactly 11 SERIALISED RENDEZVOUS, and `cb_h`'s depth is not why.** With every payload
+ablated phase 2 is 43 µs ≈ 11 × (1.2 µs mcast + 1.7 µs `down` K-block + ~1.5 µs handshake). Sweeping
+the new `MOE_SWIGLU_DEPTH_H` knob: 2 → 149 918, **3 → 145 879 (default, best)**, 4 → 147 354,
+5 → 147 550 ns. Deeper is not better, so the CB is not the flow-control limit.
+
+The lockstep is STRUCTURAL, in the loop shape rather than in `mcast_pipe`: a core sends its own
+column's h at iteration `r == my_col` of the SAME loop in which it receives every other column, so
+**the root of column c cannot send until it has received rounds 0..c-1.** Round 10's sender waits on
+ten prior receives. That is an 11-long serial chain no CB depth can shorten.
+
+**(b) The obvious fix — absolute per-slot addressing so all 11 roots send concurrently — is
+L1-INFEASIBLE, by a measured margin.** It requires `cb_h` to hold all HGROUPS slots at once (the
+landing address must not depend on the receiver's progress). Each slot is `M_BLOCK * HN_PAD` bfp8
+tiles = **52 224 B**, and the allocator prices the ladder exactly: `DEPTH_H` 7 → 1 660 032 B,
+9 → 1 764 480 B, 11 → **1 868 928 B** against a **1 572 864 B** cap. Working back, the op sits at
+**1 451 136 B with 121 728 B free** at the default depth, and 11 slots need **+417 792 B** — over by
+**296 064 B even after** the 104 448 B CB-aliasing enabler designed in Perf 2. Not close, not a
+tuning question.
+
+**(c) Therefore the rendezvous BLOCKS the weight-stream fix, which reverses §5's ranking.** §5 put
+chunk-through pipelining of the hidden axis second, on the grounds that it could hide the 38 163 ns
+weight stream. Priced against (a) it does not pay: carrying GU_CHUNKS through the reduce and the h
+gather **doubles the round count to 22**, and at ~2.95 µs per half-width round that is 65 µs of phase
+2 against today's 43 — **+22 µs** versus a weight-overlap gain of at most 34 µs. The same arithmetic
+kills any finer chunking. **The per-round rendezvous is the keystone: until it is gone, every scheme
+that buys overlap by adding pipeline stages pays for it at the rendezvous and nets out flat.**
+
+Two adjacent knobs were also priced and are dead ends: `HGROUPS` 10 gives `HN_PAD` 7 with a ragged
+`hn` of **1**, which clamps GU_CHUNKS to 1, makes the scatter slice plan inexpressible (falls back to
+the tree) and overflows L1 at 1 670 464 B; `HGROUPS` 8 gives a perfectly uniform `HN_PAD` 8 and only 8
+rounds but overflows at 1 663 104 B and adds 33 % per-core matmul. HGROUPS 11 is a local optimum.
+
+**So the one remaining route is the dual-RISC split** — h SEND on the writer/NoC1, RECEIVE on the
+reader/NoC0 — which keeps the 3-slot rolling window (no new L1) and decouples a root's send from its
+own receive progress. It is moe_matmul's P7, measured there at 1.13–1.17× on the analogous stage and
+deliberately not attempted there either. The design, including the mitigation for the race that makes
+it dangerous:
+
+- `mcast_pipe`'s `DataReadySignal` is a VALID/INVALID cell that the receiver RESETS. Split across two
+  RISC-Vs, a receiver's `set(INVALID)` for round r-1 can land between the sender's `set(VALID)` and
+  its flag multicast for round r, broadcasting INVALID and hanging the grid (moe_matmul P7 found this
+  by construction, not by luck).
+- **Mitigation: replace the flag with a MONOTONE counting semaphore** — the sender multicasts an
+  increment, the receiver `wait_min`s on `b * HGROUPS + r + 1` and never resets anything. One writer
+  per round, no reset, race-free by construction, and the same discipline every other semaphore in
+  this op already follows.
+- The writer cannot call `get_write_ptr(cb_h)` for the landing address (`cb_interface` is per-RISC-V
+  local state and the writer is not the pusher); it must derive it arithmetically from the CB base
+  captured before the first push plus its own `(b * HGROUPS + r) mod (capacity / block)` counter.
+- `consumer_ready` stays as it is: after consuming round r the receiver acks the sender of round
+  `r + DEPTH_H`, whose coordinates are static. That cost is already paid today.
