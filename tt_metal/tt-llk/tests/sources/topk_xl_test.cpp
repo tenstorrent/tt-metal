@@ -137,12 +137,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t src_format = formats.unpack_A_src;
     const std::uint32_t dst_format = formats.unpack_A_dst;
 
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+        src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES /* unpA_num_faces */, TILE_NUM_FACES /* unpB_num_faces */);
+    ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
         for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
         {
-            _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, 4, 4);
-            ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
             unpack_copy_tile(params, r, c, src_format, dst_format); // chunk 0 -> slot0, the rest -> slot1
             _llk_unpack_set_srcb_dummy_valid_();                    // local_sort
             if (c > 0)
@@ -351,12 +352,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Fused reduction: chunks stay in the fused [value|index] form all the
             // way through merge/rebuild, and the index split happens once at the end.
-            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false, math_format);
+            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
 
             for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
             {
-                copy_sort<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true, math_format);
-                merge_and_rebuild<TOPK_XL_K, true>(true);
+                copy_sort<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
+                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */);
             }
 
             topk_xl_separate_indices_init(TOPK_XL_GROUP_SHIFT);
@@ -367,17 +368,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             topk_xl_chunk_base_init();
 
             // chunk 0 -> slot0, local-sort descending.
-            process_chunk_math<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false, math_format);
+            process_chunk_math<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
 
             for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
             {
                 // chunk c -> slot1, local-sort ascending, then merge into slot0.
-                process_chunk_math<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true, math_format);
-                merge_and_rebuild<TOPK_XL_K, false>(true);
+                process_chunk_math<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
+                merge_and_rebuild<TOPK_XL_K, false /* fused */>(true /* do_merge */);
             }
             if constexpr (REBUILD_LONE_CHUNK)
             {
-                merge_and_rebuild<TOPK_XL_K, false>(false);
+                merge_and_rebuild<TOPK_XL_K, false /* fused */>(false /* do_merge */);
             }
         }
         else
@@ -386,7 +387,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // the split is here (MATH). For remove_msb the value-half zero runs on
             // PACK (as the op does), so MATH just leaves the fused [value|index] in slot0.
             static_assert(INDEX_OP_ROW_MAJOR || TOPK_XL_NUM_CHUNKS == 1, "terminal index ops (INDEX_OP 1/2) are single-chunk only");
-            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false, math_format);
+            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* fused */, math_format);
 
             if constexpr (INDEX_OP_SEPARATE)
             {
