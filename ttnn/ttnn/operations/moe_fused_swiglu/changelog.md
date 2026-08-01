@@ -1571,3 +1571,90 @@ because round r only needs column r's h and every root is ready 44 us early.
   path; the deliverable of this round is the measurement, not a number.
 - **Tests added**: none — the 45-cell golden suite and the 12-cell guard set already cover both
   settings of the new knob. Durable artifacts under `perf_experiments/noc_trace/`.
+
+---
+
+## Perf 6 — "all weights already in L1": the measurement that reprioritises everything
+
+- **Date**: 2026-08-01
+- **Scope**: measurement only, no code change. 88 cores, emb 7168, bf16_rm.
+
+### 1. Two independent ways to get it, and they agree to 0.05 %
+
+**(a) The ablation.** `MOE_SWIGLU_ABLATE=no_w_xfer` stubs every weight DRAM read and keeps every CB
+reserve/push/pop, barrier and loop trip count — i.e. exactly "the weights were already sitting in
+their CBs".
+
+**(b) The op already does it for real, 19 times.** `W_RESIDENT`/`WD_RESIDENT` mean M-block 0 reads
+the weights and blocks 1..19 re-use the same CB slots with no DRAM at all. So at `count = 5120`
+(20 M-blocks) the MARGINAL M-block IS the weights-in-L1 case, with no ablation anywhere:
+
+| | with weight DRAM | weights stubbed |
+|---|---|---|
+| count 5120 | 2 003 063 | 1 964 424 |
+| count 256 | 146 648 | 107 088 |
+| **marginal M-block** `(5120 - 256)/19` | **97 706 ns** | **97 754 ns** |
+
+**Identical to 0.05 %.** The ablation and the real resident path measure the same thing, which
+validates (a) and independently proves the residency actually works.
+
+### 2. The numbers
+
+| count | shipped | **all weights in L1** | target | verdict |
+|---|---|---|---|---|
+| 128 | 98 433 | **61 773** | 91 800 | **33 % UNDER** |
+| 256 | 146 648 | **107 088** | 108 000 | **AT target** |
+| 512 | 243 754 | **205 073** | 161 816 | **27 % OVER** |
+| 5120 | 2 003 063 | 1 964 424 | — | — |
+
+**The exposed weight-DRAM cost is FLAT: 36 660 / 39 560 / 38 681 / 38 639 ns.** M-independent, as
+the blocking model says it must be (24.77 MB of weights, read once, `W_RESIDENT`).
+
+### 3. What it reprioritises
+
+1. **count 128's entire gap IS the weight stream.** Free the weights and it is 61 773 against a
+   91 800 target — a third under. Nothing else about that cell is wrong.
+2. **count 256's gap is the weight stream almost exactly.** 107 088 vs a 108 000 target.
+3. **count 512 is NOT a weight problem.** Even with every weight free it is 205 073 against 161 816.
+   Its problem is the MARGINAL M-BLOCK: 97.7 us with all weights resident, against ~40 us of real
+   work (16 us gate/up matmul + 12 us `down` + 8 us x DRAM + 4 us output write). A 2.4x
+   serialisation tax with nothing to do with weights.
+
+**And the weight stream cannot be hidden by reordering alone.** `WD_AHEAD=11` — prefetch the whole
+8.26 MB W_down stream into the phase-1 DRAM-idle window, which Perf 4's trace showed is 45 us of
+dead DRAM — re-measured on the current tree: **115 630 / 169 013 / 265 704, a +15 % REGRESSION**
+(and it reproduces the pre-Perf-3 result at a completely different baseline). The prefetch competes
+with the grid's in-flight W_gate/W_up, and the gate/up matmul is gated on those, and everything
+follows the matmul. The idle window is real but it is downstream of the dependency that creates it.
+
+### 4. Peeling the weights-free op further
+
+| arm | 128 | 256 | 512 |
+|---|---|---|---|
+| weights in L1 | 61 773 | 107 088 | 205 073 |
+| + no compute | 44 262 | 72 767 | 136 954 |
+| + no h transport | 54 530 | 99 853 | 181 004 |
+
+* **compute exposed** 17 511 / 34 321 / 68 119 — clean 2x per M doubling.
+* **h transport exposed** 7 243 / 7 235 / 24 069 — flat 128->256, then 3.3x at 512 (two M-blocks).
+* **floor with neither** 44 262 / 72 767 / 136 954 — x + reduce + output + the sync skeleton, and
+  still 68 % of the weights-free op at count 256.
+
+**A correction to Perf 4 §2f.** "The matmul is at roofline (8.1 cycles/tile-MAC)" was derived from a
+110-core ablation. At **88 cores it is 10.8** — 34 321 ns for 4272 tile-MACs/core — against the same
+8 cycles/tile-MAC LoFi roofline, i.e. **~26 % headroom, worth ~9 us at count 256 and ~18 us at 512**.
+Per-core work only rises 1.13x from 110 to 88 cores while exposed compute rises 1.51x, so the extra
+is not FPU work; the small-N `matmul_block` shape (N=2 gate/up, N=3 `down`, 2-3 of 8 DEST tiles) is
+the obvious suspect and is now worth a bench rather than being retired.
+
+### 5. Ranked, with what each is worth
+
+| # | lever | worth | applies to |
+|---|---|---|---|
+| 1 | hide the 38.6 us weight stream | **-38.6 us, M-independent** | takes 128 and 256 to target |
+| 2 | cut the marginal M-block's 58 us serialisation tax | -58 us per block | the only way to 512 / 5120 |
+| 3 | the small-N matmul shape (10.8 -> 8 cycles/tile-MAC) | ~9 us @256, ~18 us @512 | all cells |
+
+Lever 1 is NOT a prefetch reorder (measured above). It needs the gate/up matmul to stop being a
+barrier — i.e. consume W_gate/W_up chunk-by-chunk as they land, which `GU_CHUNKS` already does for
+the READ but not for the round-trip through reduce -> h -> down.
