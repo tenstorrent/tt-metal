@@ -319,6 +319,11 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                     f"Unexpected decode logits rank for host sampling: {tuple(decode_step_output.shape)}"
                 )
             decode_output = decode_step_output.unsqueeze(1)
+            # Host sampling bypasses the device sampler, but its dormant
+            # per-slot state must still follow the layout. Apply after the
+            # decode/output path succeeds so retries cannot consume the same
+            # non-idempotent remap twice.
+            self._apply_sampling_slot_remap(slot_remap)
 
         # decode_output semantics:
         # - sample_on_device=True  -> sampled token ids

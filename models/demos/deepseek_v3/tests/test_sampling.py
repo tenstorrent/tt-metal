@@ -12,6 +12,7 @@ import torch
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, SeedManager, format_sampling_params
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
+from models.demos.deepseek_v3.tt.generator_vllm import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, make_deepseek_sampling_args
 
 
@@ -469,6 +470,58 @@ def test_deepseek_sampling_applies_remap_before_update_and_advance():
 
     assert result == "tokens"
     assert [event[0] for event in events] == ["remap", "update", "advance"]
+
+
+def test_deepseek_host_sampling_applies_dormant_remap_after_success(monkeypatch):
+    events = []
+    generator = DeepseekV3ForCausalLM.__new__(DeepseekV3ForCausalLM)
+    generator.model_run_config_decode = object()
+    generator._apply_sampling_slot_remap = lambda remap: events.append(("remap", remap))
+    monkeypatch.setattr(
+        DeepseekGenerator,
+        "decode_forward",
+        lambda *args, **kwargs: events.append("decode") or torch.zeros((1, 1, 1, 8)),
+    )
+
+    output = generator.decode_forward(
+        tokens=torch.zeros((1, 1), dtype=torch.int64),
+        start_pos=torch.zeros((1,), dtype=torch.int64),
+        read_from_device=False,
+        slot_remap=[0],
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+
+    assert output.shape == (1, 1, 8)
+    assert events == ["decode", ("remap", [0])]
+
+
+def test_deepseek_host_sampling_does_not_consume_remap_on_failure(monkeypatch):
+    events = []
+    generator = DeepseekV3ForCausalLM.__new__(DeepseekV3ForCausalLM)
+    generator.model_run_config_decode = object()
+    generator._apply_sampling_slot_remap = lambda remap: events.append(("remap", remap))
+    monkeypatch.setattr(
+        DeepseekGenerator,
+        "decode_forward",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("decode")),
+    )
+
+    with pytest.raises(RuntimeError, match="decode"):
+        generator.decode_forward(
+            tokens=torch.zeros((1, 1), dtype=torch.int64),
+            start_pos=torch.zeros((1,), dtype=torch.int64),
+            read_from_device=False,
+            slot_remap=[0],
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+
+    assert events == []
 
 
 @torch.no_grad()

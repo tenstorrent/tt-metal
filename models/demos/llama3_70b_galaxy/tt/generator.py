@@ -1394,10 +1394,19 @@ class Generator(WarmupForwardMixin):
             tt_out_for_read = (tt_tok, tt_log_probs) if tt_log_probs is not None else tt_tok
             tt_out = self.read_decode_output(tt_out_for_read, async_read=async_read)
             if async_read:
+                if sampling_params is None:
+                    self._apply_sampling_slot_remap(slot_remap)
                 return tt_out
             else:
-                return self.process_decode_output_host(tt_out, is_tokens=on_device_logits)
+                output = self.process_decode_output_host(tt_out, is_tokens=on_device_logits)
+                if sampling_params is None:
+                    # Consume the dormant sampler remap only after decode and
+                    # readback succeed, preserving retry semantics.
+                    self._apply_sampling_slot_remap(slot_remap)
+                return output
 
+        if sampling_params is None:
+            self._apply_sampling_slot_remap(slot_remap)
         return tt_tok, tt_log_probs
 
     def _decode_forward_no_trace_text(
@@ -1599,6 +1608,16 @@ class Generator(WarmupForwardMixin):
             if isinstance(value, list) and len(value) == self.model_args.max_batch_size:
                 self._slot_sampling_params[f.name] = list(value)
 
+    def _apply_sampling_slot_remap(self, slot_remap) -> None:
+        if slot_remap is None:
+            return
+        sampling_module = getattr(self.model, "sampling", None)
+        if sampling_module is None:
+            return
+        seed_manager = sampling_module.seed_manager
+        sm_bs = seed_manager.max_batch_size
+        seed_manager.apply_slot_remap(slot_remap[0:sm_bs])
+
     def sample_decode_on_device(
         self,
         tt_logits,
@@ -1616,17 +1635,15 @@ class Generator(WarmupForwardMixin):
         sampling_module = self.model.sampling
         seed_manager = sampling_module.seed_manager
 
+        # Keep separated sampling independently usable.
+        self._apply_sampling_slot_remap(slot_remap)
+
         active_seed_slots = None
         if start_pos is not None:
             active_seed_slots = [
                 idx for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(pos) >= 0
             ]
 
-        # Apply slot remap from condense before advancing seeds.
-        if slot_remap is not None:
-            sm_bs = seed_manager.max_batch_size
-            rank_remap = slot_remap[0:sm_bs]
-            seed_manager.apply_slot_remap(rank_remap)
         if reload_sampling_params and sampling_params is not None:
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
             if active_seed_slots is not None:

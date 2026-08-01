@@ -1638,7 +1638,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # Host sampling
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
-            return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+            output = self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+            if sampling_params is None:
+                # Host sampling does not invoke the device sampler, but its
+                # dormant per-slot state must still follow the new layout.
+                # Apply only after decode/readback succeeds so a failed call
+                # can be retried with the still-pending, non-idempotent remap.
+                self._apply_sampling_slot_remap(slot_remap)
+            return output
+        if sampling_params is None:
+            self._apply_sampling_slot_remap(slot_remap)
         return tt_decode_output
 
     def _decode_forward_no_trace_text(
@@ -1901,6 +1910,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         return self.trace_output_decode[on_device_sampling]
 
+    def _apply_sampling_slot_remap(self, slot_remap) -> None:
+        if slot_remap is None:
+            return
+        for i in range(self.data_parallel):
+            sampling_module = getattr(self.model[i], "sampling", None)
+            if sampling_module is None:
+                continue
+            sm_bs = sampling_module.seed_manager.max_batch_size
+            rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
+            sampling_module.seed_manager.apply_slot_remap(rank_remap)
+
     def sample_decode_on_device(
         self,
         tt_logits,
@@ -1914,6 +1934,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         reload_sampling_params: bool,
         reset_sampling_state: bool,
     ):
+        # Keep this entry point independently usable by immediate and
+        # separated-sampling callers.
+        self._apply_sampling_slot_remap(slot_remap)
         # sampling_dp may differ from data_parallel for models that internally
         # shard users across mesh rows (users_row_sharded) — each row samples
         # 32 users independently, so sampling params must be chunked by the
@@ -1954,12 +1977,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 else None
             )
 
-            # Reindex continuing per-slot state before params/history are
-            # refreshed for the new layout.
-            if slot_remap is not None:
-                sm_bs = sampling_module.seed_manager.max_batch_size
-                rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
-                sampling_module.seed_manager.apply_slot_remap(rank_remap)
             sampling_module.apply_decode_state(
                 model_chunks,
                 reload_sampling_params=reload_sampling_params,
