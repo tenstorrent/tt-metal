@@ -403,6 +403,16 @@ FusedGatherContext build_fused_gather_context(
     ctx.enabled = true;
     ctx.tp = attrs.tp;
 
+    // num_links is part of the op's API but the fused path does not implement it: exactly one mux per
+    // direction is deployed, always on link 0. Accepting the parameter and quietly ignoring it would let a
+    // caller ask for 4 links, get 1, and read the resulting throughput as a property of the op. Refuse
+    // instead. (The Phase-0 composition does honour num_links, so that remains the option for multi-link.)
+    TT_FATAL(
+        attrs.num_links == 1,
+        "the fused gather implements a single fabric link per direction, but num_links={} was requested. "
+        "Use num_links=1, or the Phase-0 composition, which passes num_links through to all_gather_async",
+        attrs.num_links);
+
     const auto topology = attrs.topology_is_ring ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
     ctx.rank = ttnn::ccl::get_linearized_index_from_physical_coord(in0, mesh_coordinate, attrs.cluster_axis);
 

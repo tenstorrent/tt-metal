@@ -188,7 +188,32 @@ std::vector<ttnn::Tensor> all_gather_regime_a_matmul_async_split(
     // `dim` is kept in the wrapper signature for minimal_matmul API compatibility, validated here, and NOT
     // forwarded to the device op (only -1 is supported; the device op works on `chunks` alone).
     TT_FATAL(dim == -1, "all_gather_regime_a_matmul_async_split only supports dim=-1, got {}", dim);
-    validate_and_infer_tp(input_tensor, weight_tensor, multi_device_global_semaphore);
+    const uint32_t tp = validate_and_infer_tp(input_tensor, weight_tensor, multi_device_global_semaphore);
+
+    if (use_fused_gather()) {
+        // Kept in step with the non-split entry point on purpose. The two wrappers differ only in `chunks`,
+        // so letting one take the fused path while the other silently stayed on the Phase-0 composition
+        // would mean the same tp behaved differently depending on which name the caller reached for.
+        TT_FATAL(
+            persistent_output_buffer.has_value(),
+            "the fused gather needs the caller's persistent [M, K] buffer to gather into");
+        return ttnn::prim::all_gather_regime_a_matmul_async(
+            input_tensor,
+            weight_tensor,
+            config,
+            bias_tensor,
+            std::move(fused_activation),
+            fused_ternary_scalar,
+            fused_ternary_input_a,
+            fused_ternary_input_b,
+            chunks,
+            tp,
+            cluster_axis.value_or(0),
+            num_links,
+            topology == ttnn::ccl::Topology::Ring,
+            multi_device_global_semaphore,
+            persistent_output_buffer);
+    }
 
     const ttnn::Tensor gathered = gather_activation(
         input_tensor,
