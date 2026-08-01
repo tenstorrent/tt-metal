@@ -1513,9 +1513,23 @@ the 45-cell golden suite (which never runs a multi-M-block count):**
 3. `h_free_expected` must live OUTSIDE the M-block loop: `SEM_H_FREE` is monotone across blocks, so a
    per-block expectation is satisfied instantly from block 1 on and the flow control silently dies.
 
-`A > 2` is unreachable at the graded shapes anyway: `m_eff = M_BLOCK` gives `blocks_cap = 3`, so
-`A = 2`. Going deeper needs `DEPTH_H >= 4`, i.e. +52 224 B against ~10 560 B free at 88 cores — the
-CB-aliasing enabler recorded in Perf 2 §5.4 (104 448 B) is the way in, and is now worth building.
+**Deeper is a measured NULL, and this closes the lever.** `A > 2` needs `DEPTH_H >= 4` (at
+`m_eff = M_BLOCK`, `blocks_cap = DEPTH_H`), which needs L1. It is available without the Perf-2 §5.4
+aliasing enabler: `CB_X_TILES` is `DEPTH_X * M_BLOCK * KR_PAD` bfp8 = **487 424 B**, the largest CB
+in the op, and its second buffer only pays ACROSS M-blocks. Trading it (`DEPTH_X=1`) funds
+`DEPTH_H=6` with room to spare:
+
+| config | 128 | 256 | 512 | 5120 |
+|---|---|---|---|---|
+| shipped `DX=2 DH=3 A=2` | **98 433** | **146 648** | **243 754** | **2 003 063** |
+| `DX=1 DH=6 A=5` | 99 864 | 146 635 | 248 281 | 2 015 674 |
+
+**Identical at 128/256 and worse at 512/5120** (the latter is Refinement 3's resident-x win being
+given back, exactly as priced). Doubling the slot count and more than doubling the ack lookahead
+moves the focus cell by 13 ns. **The rounds are no longer slot-limited or ack-limited** — whatever
+remains of the ~1.7 us/round fixed cost after this graduation is the multicast and the per-round
+barriers themselves, not the rendezvous protocol. Do not spend another round on `DEPTH_H`, and the
+CB-aliasing enabler is NOT needed for this.
 
 ### 5. Still not enough — what is left
 
@@ -1530,8 +1544,7 @@ CB-aliasing enabler recorded in Perf 2 §5.4 (104 448 B) is the way in, and is n
 The rendezvous term is 34.3 us per M-block and this recovers roughly a sixth of it, because
 `DEPTH_H = 3` lets only three rounds overlap. Two levers remain, in order:
 
-**(a) `DEPTH_H >= 4` via the CB-aliasing enabler** — the same fix, deeper. Bounded by the remaining
-rendezvous, ~28 us/M-block.
+**(a) ~~`DEPTH_H >= 4`~~ — measured NULL above. Closed.**
 
 **(b) The 45 us DRAM-idle window** (§2b). Even a perfect rendezvous fix leaves count 256 at ~118 us
 and 512 at ~185 us, so 256/512 additionally require starting phase-2 rounds during phase 1 — legal,
