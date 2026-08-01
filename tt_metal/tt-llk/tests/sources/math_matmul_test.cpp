@@ -91,6 +91,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.RT_DIM);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+#ifdef SET_SRC_ZERO_FLAG
+    // Zero-flag isolation probe (tt-metal#49924): leave the Src keep-denormals state a preceding
+    // copy_init leaves, with no reconfig before the matmul. Trips the matmul zero-flag leak assert.
+    ckernel::math::_configure_unary_preserve_zero_flag_state_();
+#endif
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();

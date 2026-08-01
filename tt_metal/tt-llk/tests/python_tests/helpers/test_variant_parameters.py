@@ -87,6 +87,14 @@ class STOCHASTIC_ROUNDING(TemplateParameter):
 
 
 @dataclass
+class SET_SRC_ZERO_FLAG(TemplateParameter):
+    enabled: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "#define SET_SRC_ZERO_FLAG 1" if self.enabled else "// SET_SRC_ZERO_FLAG disabled"
+
+
+@dataclass
 class DATA_COPY_TYPE(TemplateParameter):
     data_copy_type: DataCopyType
 
