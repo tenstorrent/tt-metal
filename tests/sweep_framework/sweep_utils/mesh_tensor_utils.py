@@ -16,7 +16,7 @@ Environment Variables:
 import os
 import torch
 import ttnn
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Sequence, Tuple
 import ast
 from loguru import logger
 
@@ -1842,7 +1842,9 @@ def broadcast_torch_inputs_to_global(
     return result if result is not None else _fallback_global_broadcast()
 
 
-def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[Dict]) -> torch.Tensor:
+def tile_torch_to_global(
+    torch_tensor: torch.Tensor, tensor_placement: Optional[Dict], max_shape: Optional[Sequence[int]] = None
+) -> torch.Tensor:
     """Expand a per-chip torch tensor to its global shape based on placement.
 
     For each PlacementShard(d) entry in `placement` paired with a factor N from
@@ -1903,6 +1905,20 @@ def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[
             d = ndim - 1
         if d < 0:
             continue
+        if max_shape is not None and d < len(max_shape):
+            # Never tile past the gathered actual. `placement` records how the INPUT was
+            # distributed, but a Shard on a dim that could not actually be split -- e.g. a
+            # size-1 broadcast operand declared [Shard(1), Shard(0)] on a 4x8 mesh -- did not
+            # multiply the device output, so repeating by that factor invents data. Observed on
+            # lead-models 4x8 multiply vectors 9d1aa2d11efe / 828c7b4faac3: the golden was
+            # tiled 256x (dim0 1->64, dim1 4->16), which both mismatched the actual and, at
+            # (64,16,44544,3072) float64, asked the host for 1.02 TiB and OOMed. Capping keeps
+            # the golden bounded by the real output; the caller then finishes the match.
+            current = out.shape[d]
+            allowed = max_shape[d] // current if current else 1
+            n = min(n, max(1, allowed))
+            if n <= 1:
+                continue
         repeats = [1] * out.ndim
         repeats[d] = n
         out = out.repeat(*repeats)
@@ -1956,43 +1972,58 @@ def reconcile_golden_to_actual(
             return g
         torch_golden = g
 
-    # Strategy 2: per-dim integer-ratio tile.
-    if torch_golden.ndim == actual_global.ndim:
-        repeats = []
-        ok = True
-        for d in range(torch_golden.ndim):
-            g = torch_golden.shape[d]
-            a = actual_global.shape[d]
-            if g == 0 or a % g != 0:
-                ok = False
-                break
-            repeats.append(a // g)
-        if ok and any(r > 1 for r in repeats):
-            tiled = torch_golden.repeat(*repeats)
-            if tiled.shape == actual_global.shape:
-                return tiled
+    # Strategies 2 and 3: repeat up / slice down to the actual, using the actual's shape alone.
+    matched = _match_ratio_or_slice(torch_golden, actual_global)
+    if matched is not None:
+        return matched
 
-    # Strategy 3: golden LARGER than actual — slice golden to match.
-    if torch_golden.ndim == actual_global.ndim:
-        slice_ok = True
-        slices = []
-        for d in range(torch_golden.ndim):
-            g = torch_golden.shape[d]
-            a = actual_global.shape[d]
-            if a <= g:
-                slices.append(slice(0, a))
-            else:
-                slice_ok = False
-                break
-        if slice_ok and any(s.stop < torch_golden.shape[i] for i, s in enumerate(slices)):
-            sliced = torch_golden[tuple(slices)]
-            if sliced.shape == actual_global.shape:
-                return sliced
-
-    # Strategy 4: placement-driven tile (legacy path).
+    # Strategy 4: placement-driven tile (legacy path), capped at the actual's shape so a
+    # non-splittable Shard cannot inflate the golden (see tile_torch_to_global).
     out = torch_golden
     for plac in placements:
         if out.shape == actual_global.shape:
             break
-        out = tile_torch_to_global(out, plac)
+        out = tile_torch_to_global(out, plac, max_shape=actual_global.shape)
+    if out.shape != actual_global.shape:
+        # Capping can land short of the actual; finish with the shape-driven reconcilers rather
+        # than returning something that is merely closer and failing the caller's shape assert.
+        matched = _match_ratio_or_slice(out, actual_global)
+        if matched is not None:
+            return matched
     return out
+
+
+def _match_ratio_or_slice(torch_golden: torch.Tensor, actual_global: torch.Tensor) -> Optional[torch.Tensor]:
+    """Match `torch_golden` to `actual_global` by whole-dim repeat or slice, else None."""
+    if torch_golden.shape == actual_global.shape:
+        return torch_golden
+    if torch_golden.ndim != actual_global.ndim:
+        return None
+
+    # Per-dim integer-ratio tile (golden smaller than actual).
+    repeats = []
+    ok = True
+    for d in range(torch_golden.ndim):
+        g = torch_golden.shape[d]
+        a = actual_global.shape[d]
+        if g == 0 or a % g != 0:
+            ok = False
+            break
+        repeats.append(a // g)
+    if ok and any(r > 1 for r in repeats):
+        tiled = torch_golden.repeat(*repeats)
+        if tiled.shape == actual_global.shape:
+            return tiled
+
+    # Golden LARGER than actual — slice golden to match.
+    slices = []
+    for d in range(torch_golden.ndim):
+        if actual_global.shape[d] <= torch_golden.shape[d]:
+            slices.append(slice(0, actual_global.shape[d]))
+        else:
+            return None
+    if any(s.stop < torch_golden.shape[i] for i, s in enumerate(slices)):
+        sliced = torch_golden[tuple(slices)]
+        if sliced.shape == actual_global.shape:
+            return sliced
+    return None
