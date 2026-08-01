@@ -7,15 +7,8 @@
 //   1. the W_up weight stream — the NoC1 twin of the reader's W_gate stream (op_design.md §1.5
 //      dual-issue split: a phase with two independent weight streams uses BOTH data-movement
 //      RISC-Vs / both NoCs);
-//   2. this core's send side of the gate/up cross-column reduce, in ONE OF TWO SHAPES
-//      (MOE_SWIGLU_REDUCE):
-//        `tree`    — the CHILD side of the binary tree: wait for the parent's invite, unicast both
-//                    whole partials into the parent's cb_reduce_*_in, signal;
-//        `scatter` — PERF 2, the default: wait for the whole column's invites, then unicast MY SLICE
-//                    of gate (and of up, unless MOE_SWIGLU_SCATTER_NOC=split moved that half to the
-//                    reader's NoC) into every worker's landing CB, signal each; and, once compute has
-//                    finished my slice's epilogue, unicast the finished `h` slice straight into the
-//                    column ROOT's cb_h_local at its tile offset — the gather IS the assembly;
+//   2. the CHILD side of the gate/up cross-column reduce tree (wait for the parent's invite,
+//      unicast both partials into the parent's cb_reduce_*_in, signal);
 //   3. the coalesced bank-run output write-back, clamped to tile-rows < ceil_tile(count) so rows
 //      past the real token count are never touched.
 //
@@ -67,24 +60,7 @@ constexpr uint32_t cb_up_send = get_compile_time_arg_val(22);
 constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(23);
 constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(24);
 
-// PERF 2 — REDUCE-SCATTER (MOE_SWIGLU_REDUCE=scatter). 1 replaces the tree's single unicast-to-parent
-// with the column all-to-all plus the finished-h-slice scatter to the root; 0 reproduces the tree
-// byte-for-byte. See the knob in the program descriptor for the measurement and the predicate.
-constexpr uint32_t SCATTER = get_compile_time_arg_val(25);
-// 1 moves the UP half of the gather to the reader (NOC_0), leaving the GATE half here on NOC_1 — see
-// MOE_SWIGLU_SCATTER_NOC. Split by PAYLOAD, not by destination, because each RISC-V then owns ONE
-// CB outright: `cb_pop_front` writes the shared `tiles_acked` word with the popping RISC-V's own
-// local count, so two poppers on one CB is the same silent-corruption class as two pushers.
-constexpr uint32_t SCATTER_NOC_SPLIT = get_compile_time_arg_val(26);
-constexpr uint32_t SEM_HSLICE = get_compile_time_arg_val(27);
-constexpr uint32_t cb_gate_acc = get_compile_time_arg_val(28);
-constexpr uint32_t cb_up_acc = get_compile_time_arg_val(29);
-constexpr uint32_t cb_gather_gate = get_compile_time_arg_val(30);
-constexpr uint32_t cb_gather_up = get_compile_time_arg_val(31);
-constexpr uint32_t cb_h_slice = get_compile_time_arg_val(32);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(33);
-
-constexpr uint32_t TA_BASE = 34;
+constexpr uint32_t TA_BASE = 25;
 constexpr auto wu_args = TensorAccessorArgs<TA_BASE>();
 constexpr auto out_args = TensorAccessorArgs<wu_args.next_compile_time_args_offset()>();
 
@@ -93,9 +69,7 @@ constexpr auto out_args = TensorAccessorArgs<wu_args.next_compile_time_args_offs
 using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
 
 // PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off (see the reader's note
-// and the durability contract in `perf_instrumentation.hpp`). 5 records per M-block on either path:
-// `tree` = out_drain, wup, reduce_child, out_issue; `scatter` = out_drain, wup, scatter, hslice,
-// out_issue. Names of surviving stages are UNCHANGED so round-1 and round-2 numbers stay comparable.
+// and the durability contract in `perf_instrumentation.hpp`). 5 records per M-block here.
 
 void kernel_main() {
     const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
@@ -113,13 +87,6 @@ void kernel_main() {
     // This core's landing SLOT in its parent's reduce CBs (Refinement 2 lever 1) = its index in the
     // parent's child list modulo REDUCE_SLOTS, so the children of one invite wave never collide.
     const uint32_t my_slot = get_arg_val<uint32_t>(12);
-    // PERF 2 — my row in the grid column. It IS my contributor slot in every peer's landing CB and it
-    // IS the index of the slice I own, so the scatter needs no host-side plan table.
-    const uint32_t my_row = get_arg_val<uint32_t>(13);
-    // The row of THIS column's reduce root (`x % KGROUPS`) — the one core the finished h slices are
-    // gathered into, since it is the core that injects this column's h into the phase-2 all-gather.
-    const uint32_t root_row = get_arg_val<uint32_t>(14);
-    constexpr uint32_t RT_PEERS = 15;  // KGROUPS (vx, vy) pairs — the whole column, in row order
 
     const auto wu_acc = TensorAccessor(wu_args, w_up_addr, BFP4_TILE);
     const auto out_acc = TensorAccessor(out_args, out_addr, BFP8_TILE);
@@ -141,7 +108,6 @@ void kernel_main() {
     (void)parent_x;
     (void)parent_y;
     (void)my_slot;
-    (void)root_row;
 #endif
 
     constexpr uint32_t SLOTS_H = REMAP ? (HID_T / NUM_BANKS) : HID_T;
@@ -199,92 +165,8 @@ void kernel_main() {
         }
         cb_push_back(cb_w_up, WU_BLOCK_TILES);
 
-        // ---- PERF 2: REDUCE-SCATTER, contributor side + the finished-slice scatter ----
-        if constexpr (SCATTER) {
-            // The ONE shared slice plan (moe_fused_swiglu_common.hpp), from the SAME (m_eff, KGROUPS)
-            // compute and the reader use. `sl_w` workers own `sl_a` tiles each; rows >= sl_w are idle
-            // for the reduce but still CONTRIBUTE, which is why the send loop below is unconditional.
-            const uint32_t sl_w = moe_fused_swiglu::slice_workers(gu_block_tiles, KGROUPS);
-            const uint32_t sl_a = gu_block_tiles / sl_w;
-            const uint32_t slice_bytes = sl_a * BFP8_TILE;
-            {
-                MaybeDeviceZoneScope("writer_scatter");
-#ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
-                // KGROUPS invites per M-block is the generalisation of the tree's one-parent SEM_GO:
-                // every peer's reader reserves its landing CBs and THEN invites the whole column, so
-                // this wait is what stops block b+1's contribution from overwriting a landing slot
-                // compute has not consumed yet. MONOTONE, never reset — the running total only grows.
-                noc_semaphore_wait_min(sem_go_ptr, invites + KGROUPS);
-#endif
-                invites += KGROUPS;
-                cb_wait_front(cb_gate_acc, gu_block_tiles);
-                if constexpr (SCATTER_NOC_SPLIT == 0) {
-                    cb_wait_front(cb_up_acc, gu_block_tiles);
-                }
-#ifndef ABLATE_NO_REDUCE_XFER
-                const uint32_t gsrc = get_read_ptr(cb_gate_acc);
-                // LANDING ADDRESS = MY OWN write pointer + MY slot. Every core has the identical CB
-                // layout and the landing CBs are pushed WHOLE every M-block, so my write pointer is
-                // the CB base on the destination too — the same address proxy the tree edge uses,
-                // with KGROUPS disjoint slots instead of one parent's slot.
-                const uint32_t gdst = get_write_ptr(cb_gather_gate);
-                const uint32_t slot_bytes = my_row * slice_bytes;
-                for (uint32_t w = 0; w < sl_w; ++w) {
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                    // ONE coalesced transaction per leg: worker `w` owns the CONTIGUOUS tile range
-                    // [w*sl_a, (w+1)*sl_a) because the gate/up block layout is `m*HN_PAD + n`
-                    // (OUT_SUBBLOCK_H_GU == 1, SubblockMajor). A token-axis slice would be strided.
-                    noc_async_write(gsrc + w * slice_bytes, get_noc_addr(vx, vy, gdst + slot_bytes), slice_bytes);
-                }
-                if constexpr (SCATTER_NOC_SPLIT == 0) {
-                    const uint32_t usrc = get_read_ptr(cb_up_acc);
-                    const uint32_t udst = get_write_ptr(cb_gather_up);
-                    for (uint32_t w = 0; w < sl_w; ++w) {
-                        const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
-                        const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                        noc_async_write(usrc + w * slice_bytes, get_noc_addr(vx, vy, udst + slot_bytes), slice_bytes);
-                    }
-                }
-                noc_async_write_barrier();
-                const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
-                for (uint32_t w = 0; w < sl_w; ++w) {
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                    noc_semaphore_inc(get_noc_addr(vx, vy, sem_data), 1);
-                }
-                noc_async_atomic_barrier();
-#endif
-                cb_pop_front(cb_gate_acc, gu_block_tiles);
-                if constexpr (SCATTER_NOC_SPLIT == 0) {
-                    cb_pop_front(cb_up_acc, gu_block_tiles);
-                }
-            }
-            // ---- my finished h slice, straight into the ROOT's cb_h_local at its tile offset ----
-            // The gather IS the assembly. cb_h_local is never pushed or popped on this path, so its
-            // write pointer is the CB base on every core for every M-block — which is what lets this
-            // core use its OWN pointer as the root's. Flow control across M-blocks is the invite
-            // above, transitively: my send here is downstream of the gather, the gather is downstream
-            // of the ROOT's invite for this block, and the root only invites after its phase 2 of the
-            // PREVIOUS block has read cb_h_local (and barriered).
-            if (my_row < sl_w) {
-                MaybeDeviceZoneScope("writer_hslice");
-                cb_wait_front(cb_h_slice, sl_a);
-#ifndef ABLATE_NO_REDUCE_XFER
-                const uint32_t rvx = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 0);
-                const uint32_t rvy = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 1);
-                noc_async_write(
-                    get_read_ptr(cb_h_slice),
-                    get_noc_addr(rvx, rvy, get_write_ptr(cb_h_local) + my_row * slice_bytes),
-                    slice_bytes);
-                noc_async_write_barrier();
-                noc_semaphore_inc(get_noc_addr(rvx, rvy, static_cast<uint32_t>(get_semaphore(SEM_HSLICE))), 1);
-                noc_async_atomic_barrier();
-#endif
-                cb_pop_front(cb_h_slice, sl_a);
-            }
-        } else if (!is_root) {
-            // ---- reduce tree, CHILD side ----
+        // ---- reduce tree, CHILD side ----
+        if (!is_root) {
             MaybeDeviceZoneScope("writer_reduce_child");
             cb_wait_front(cb_gate_send, gu_block_tiles);
             cb_wait_front(cb_up_send, gu_block_tiles);

@@ -822,3 +822,256 @@ re-discover:
   structural failure, not a PCC drift), plus the full 45-cell golden suite and the 12-cell perf guard
   set. Six subagent experiment dirs are committed under `perf_experiments/` as durable artifacts,
   each with its own runnable bake-off.
+
+## Perf 2 — Tournament: the reduce-scatter, and the epilogue was 75 % of the bottleneck
+
+- **Date**: 2026-08-01
+- **Scope**: perf only. **`SUPPORTED` is byte-identical** — `git diff --exit-code` on
+  `moe_fused_swiglu.py` is clean, `EXCLUSIONS = []`, `INVALID = []`, `PROPERTIES` and
+  `INPUT_TAGGERS` unchanged. A perf tournament moves nothing in the registry; the signal is device-ns.
+- **Focus shape**: emb 7168, cap 5120, **count 256**, bf16_rm, bfp4_b weights, DRAM interleaved,
+  `default_compute_kernel_config()`. `LOOSE_CASES` still carries no `attention:` note, so the focus is
+  free-selected as the middle GRADED case — the same one Perf 1 used, for comparability. Every knob it
+  declares is in `SUPPORTED`; no generality gap.
+- **Headline**: focus shape **204 769 → 150 761 ns (−26.4 %)**, guard set **12/12 faster, sum −34.3 %**,
+  golden **45/45** on both paths, the three exact structural tests **bit-identical**, and L1 per core
+  **−82 816 B**. Utilization 0.270 → **0.368** (best-measured parity 0.463, stretch target 0.514).
+
+### 1. Measured breakdown — the round-1 graduation moved the path, so it was re-measured
+
+Instrumentation was reused and **extended**: `ABLATE_NO_XSTAGE_XFER` is new, because the activation
+DRAM stream had no ablation of its own (`no_x_xfer` drops the row *multicast*, a different stage).
+All `MaybeDeviceZoneScope` zones kept.
+
+Cumulative peel on the focus shape (one fresh-cache run each):
+
+| cumulative variant | ns | this stage |
+|---|---|---|
+| baseline | 204 769 | — |
+| − reduce transport | 194 356 | 10 413 (5.1 %) |
+| − activation DRAM (solo) | 196 734 | 8 035 (3.9 %) |
+| − **ALL** transports | **118 215** | 86 554 total (42 %) |
+
+The 11 reduce roots' TRISC was **100 % busy** — 193 µs of a 195.7 µs span — decomposing as
+`tilize 0-45 + gateup 36-53 + reduce 66-103 + swiglu 1.7 + down 30-37 + out_pack 0.9`. The other 99
+cores were `cb_wait`. **The single sharpest number of the round**: with the reduce transport ablated,
+`compute_reduce` collapses to **58 830 ns UNIFORM on all 11 roots** — that is PURE eltwise, 432
+tile-ops at **184 cycles/tile against a ~68 cycle/tile 2-unpack+1-pack roofline (2.7×)**.
+
+**Roofline gates (`/perf-ceiling-dm` + an FPU count), which killed four idea classes before they were
+floated** — every one measured, not argued, using the all-transports-ablated run as the pure-work floor:
+
+| stage | pure work | roofline | verdict |
+|---|---|---|---|
+| `compute_gateup` | 19–27 µs | ~26 µs (2208 tile-MACs, LoFi) | **AT roofline — no ideas** |
+| `compute_down` | 16.4 µs | ~18 µs (1536 tile-MACs) | **AT roofline — no ideas** |
+| weight DRAM | 50.6 µs | 48.4 µs (24.772 MB bfp4) | **AT roofline, 1.04× (Perf 1, unchanged)** |
+| activation DRAM | 8.0 µs exposed | 7.2 µs (3.67 MB) | **AT roofline, 1.1× — bytes gated, only scheduling open** |
+| `compute_tilize` | **0.52 µs** | — | **gated** — its 27–45 µs zone is ~99 % WAIT, not work |
+| `compute_out_pack` / `compute_swiglu` | 0.9 / 1.7 µs | — | gated |
+
+So the ranked bottleneck was: **(1) the 11 roots' 58 830 ns of eltwise reduce, (2) the 10 413 ns
+reduce transport, (3) the activation stream's head-of-line delay.** ~47 µs of a 204.8 µs op was
+addressable and everything else was at a wall. The portfolio was sized to that: 1 T3 + 4 T2, four of
+the five aimed at the reduce.
+
+**L1, the standing blocker**: 1 422 464 B used of a **1 461 376 B** per-core budget → 38 912 B free.
+A **per-core-range role split** was investigated and **rejected on evidence**: this allocator
+(`tt_metal/impl/program/program.cpp:1571-1594`) finds no allocator for a NEW sub-range, so
+`computed_addr` collapses to `base_cb_address` and the CB silently overlaps CBs 0..25 on those cores.
+The safe mechanism is **aliasing format descriptors inside one `CBDescriptor`** (the two role-exclusive
+pairs are both 48 × 1088 B and provably never co-live), worth 104 448 B — offered to the subagents as
+budget. **In the end nobody needed it**: the winner *returns* L1.
+
+### 2. The portfolio — 5 ideas, deliberately overlapping
+
+| # | idea | verdict | measured | predicate |
+|---|---|---|---|---|
+| 1 | **reduce-scatter + distributed SwiGLU epilogue** | **WIN → GRADUATED** | 78 011 → 27 853 ns (**2.80×** flat) / 25 273 (3.09× ragged); **3.08× on the real 110-core grid** | **unconditional**: every cell of KGROUPS {2,4,8,10} × m_eff {1,2,4,8} × HN_PAD {4,6}, 1.65–3.11×, zero regressions |
+| 2 | root accumulate mechanism | **WIN, superseded** | 12 609 → 6 900 ns (`pack_l1_pair`, **1.83×**); 1.90–2.09× *inside* the scatter | `fan_in >= 2` (0.91–1.01× at fan-in 1) |
+| 3 | root epilogue passes | **MIXED, superseded** | `add_silu_chain` 1.016× bit-identical; `sigappx_mul` **3.254×** priced; `single_pass` **0.685×** | `add_silu_chain` unconditional; both shrink ~8× under the scatter |
+| 4 | reduce transport shape | **WIN, partly folded in** | 21 201 → 19 642 ns (−7.35 %) = 0.7–1.2 % whole-op | root `fan_in >= 4` (KGROUPS >= 9) |
+| 5 | reader head-of-line scheduling | **NULL** | 203 869 → 203 834 ns best (−0.02 %), band 0.86 % | **empty** — null at every regime swept |
+
+Nulls and supersessions are results. Four mechanisms worth more than their verdicts:
+
+- **#3 disproved the coordinator's own hypothesis and reframed the round.** I ranked the 58 830 ns as
+  helper-entry overhead. It is not: **~44 100 ns (75 %) is the 48-tile SFPU SiLU**, ~10 700 (18 %) the
+  8 plain adds, ~2 700 (4.5 %) up-add + mul, and **~800 ns (1.4 %) is the *entire* per-helper-entry
+  cost of the `m_eff`-call bias walk** I had suspected. That is why #1's "keep the epilogue
+  distributed" sub-predicate carries ~85 % of its win, and why #2 — which makes the *adds* cheaper —
+  could never have been the headline. It also found `silu_tile` **hardcodes the accurate sigmoid and
+  ignores the user's `math_approx_mode=True`** (`ckernel_sfpu_silu.h`: `silu_init` calls
+  `sigmoid_init<false>()`), while `sigmoid_tile<RC,true>` honours it — worth 3.254× on the epilogue for
+  a worst-case −0.00196 PCC. **Recorded as a priced option, deliberately NOT graduated**: it is
+  ~40 % of the remaining margin over the 0.975 gate, and under the scatter its critical-path value
+  falls from −35 339 to −4 218 ns/core. It is the strongest remaining lever if a later round needs one.
+- **#2 invalidated its own round-1 result.** Round 1's 1.22×/1.35× was measured against the *per-tile
+  clamped* spelling, which Perf 1 then graduated away; that spelling is **0.55×** of the shipped one,
+  so both round-1 "winners" **lose** against the real baseline (`pack_l1_acc` 0.91×, `dest_pair` 0.86×,
+  `dest_full` 0.79×). It also fitted an engine-bound model that explains the whole menu: an
+  L1-accumulating pack ≈ 2.2 unpacks and `DestReuseBinary` ≈ 3.6, so halving accumulator traffic just
+  flips the stage from unpack-bound to pack-bound. Its `pingpong` arm is a clean null (1.00×) —
+  **the in-place `add` CB self-dependency costs nothing; do not spend L1 removing it.**
+- **#4 root-caused Refinement 2's parked `REDUCE_SLOTS` regression.** It was the **whole-CB WAVE
+  PUSH**, not the concurrency: one shared `SEM_DATA` says *how many* children arrived but not *which*,
+  so the parent cannot publish a slot until the whole wave lands, destroying the shipped protocol's
+  "child c's transfer under child c−1's add" interleave. Reproduced at +12.08 %; **one counter per
+  slot** turns it into −1.62 %. It also showed the 1.92× NoC asymmetry is **not link speed**
+  (3 176 ns NOC_1 vs 3 270 ns NOC_0 on a contention-free edge) but **torus-wrapped hop count** —
+  total payload hops predicts the entire ranking (273 / 197 / 907 / 915) — and that the op's
+  `parent = (root_y + r − lowbit(r)) % KGROUPS` orientation was **already** right for NOC_1.
+- **#5 is a null with a ceiling, not an effort.** The reader's serial head is at **1.016× its byte
+  roofline** (20 185 088 B must land before gate/up can start = 39 424 ns floor vs 40 064 ns measured),
+  so the entire winnable budget is **640 ns = 0.31 %**, under the 0.86 % run-to-run band. Transaction-ID
+  barriers *are* legal and *do* work — they pull `compute_tilize` 23 172 → 19 669 ns — but bandwidth is
+  conserved, so x-early means W-late (+0.9 to +1.0 % on every reorder arm). It also priced the
+  ungraduated round-1 dual-NoC x split at **−0.20 %**, closing that thread, and proved
+  `cb_x_in`/`cb_x_stage` can never be usefully deepened within an M-block (`inject_rows` gives exactly
+  1 tile-row per core at every count, since `m_eff <= M_BLOCK = 8 < HGROUPS = 11`).
+
+### 3. What graduated — the two-phase reduce-scatter with a distributed epilogue
+
+The binary tree down each grid column is replaced by an all-to-all within the column: every core owns
+a **disjoint flat tile-index slice** of the `m_eff * HN_PAD` block, every contributor pushes its slice
+straight into each worker's landing CB, each worker reduces **only its own slice** over all
+contributors, computes `SiLU(gate_slice) * up_slice` on it, and unicasts the finished `h` slice
+directly into the root's `cb_h_local` at its tile offset — **the gather IS the assembly**, no copy and
+no add at the root. `cb_gate_send` / `cb_up_send` and the two full-block copies on 99 cores are gone;
+the writer sends straight out of `cb_gate_acc` / `cb_up_acc`.
+
+- **Predicate: unconditional** on any grid where the slice plan is expressible, which is the whole
+  `SUPPORTED` set. The host asserts and **falls back to the byte-identical tree** (printing the reason)
+  when it is not: `KGROUPS >= 2`, and — for **every** reachable `m_eff` — the slice size must divide
+  both the slice CBs and the landing CBs. That page-count rule is not decoration: violating it makes
+  the write pointer wrap mid-block and **silently overrun the next CB** (measured PCC 0.709–0.886).
+  Verified expressible for HN_PAD {4,6} × KGROUPS {2,4,8,10}.
+- `MOE_SWIGLU_REDUCE=tree|scatter` (default `scatter`) is the live A/B, in this op's established knob
+  style. `MOE_SWIGLU_SCATTER_NOC=split|one` likewise.
+- **The token-(M)-axis slice was measured and rejected**: 0.79× **regression** at m_eff=1 and 1.25× at
+  m_eff=2, because that axis caps the worker count at `m_eff`. The tile-index axis strictly dominates.
+  `ragged` (10 workers × 5/4) is 1–10 % faster than `flat` (8 × 6) but forces `lcm(4,5)=20`-page CBs;
+  that footgun was deliberately not shipped.
+- **#4's finding was applied, partially, and the honest reason is recorded**: the ideal per-*destination*
+  NoC split needs both DM RISC-Vs to consume one accumulator CB, and `cb_pop_front` writes the shared
+  `tiles_acked` word with the popping RISC-V's own local count — the same single-owner hazard as the
+  hang below, one layer down. The shipped split is by **payload** (gate on NOC_1, up on NOC_0), which
+  captures the bandwidth half and none of the hop-count half: **−1.45 %** on the guard-set sum
+  (`one` 5 596 297 / 5 600 029 vs `split` 5 509 590 / 5 524 843 — the between-group gap is 5× the
+  within-group spread). Getting the hop-count half costs +52 KB/core or a private ready-signal.
+- **No raw LLK.** The graduated path is `eltwise_convenience` + `bias_add_helpers` + the two
+  raw-dataflow deviations already documented at the kernel heads (bank-run coalescing; point-to-point
+  scatter edges, because `mcast_pipe`'s `SenderPipe` is a rectangle multicast and its
+  `DataReadySignal::Counter` is a documented hang). Nothing new for the verifier's helper-usage pass.
+- Zones extended: `writer_scatter`, `writer_hslice`, and the surviving stages keep their **names**
+  (`reader_reduce`, `compute_reduce`, `compute_swiglu`) so Perf-1 and Perf-2 numbers are comparable.
+  Budget still 8 reader / 5 writer / 6 compute records per M-block, so per-stage time still resolves
+  to `m_blocks = 15`. All five `MOE_SWIGLU_ABLATE` hooks work on **both** paths.
+
+**Two silent-wrong-answer hazards were root-caused on the way, and both are general to this op:**
+
+1. **Exactly ONE RISC-V may ever push a given CB.** `cb_push_back` overwrites the shared L1
+   `tiles_received` word with the *pushing RISC-V's own local* push count. This is what round 1's
+   "the in-place `add<in(cb),in(cb2),out(cb)>` hangs" actually was — seeding an accumulator from the
+   reader and then letting the in-place add make PACK a second pusher drove the shared count
+   **backwards** (12 → 8) and deadlocked the consumer. **Round 1's 89–714 KB single-use-CB workaround,
+   the stated reason this idea did not graduate a round earlier, was unnecessary.**
+2. **An `eltwise_chain` containing a `DestReuseBinary` is correct at a DEST window <= 7 and silently
+   WRONG at 8 = `DEST_AUTO_LIMIT`** (PCC 0.999828 → 0.972295): `chain_max_block_value()`
+   (`eltwise_chain.inl:1482-1493`) subtracts the spare lane only on the `any_dest_accumulation` branch.
+   The graduated path uses no dest-reuse, so it does not bite here — checked, not assumed.
+
+**What did NOT transfer from the bench, and it mattered.** `rs_flat_epi` as measured was **not correct
+in situ**: with bfp8 slice accumulators the op passed golden 45/45 but **failed `test_emb_contraction`
+at max rel 0.0580 against the 0.05 gate** (tree: 0.0204). The bfp8 pack's rounding is a **biased**
+half-LSB and every partial here is positive, so the error is **linear in chain length** — the scatter
+re-packs a value `KGROUPS` = 10 times where the tree re-packs it `ceil(log2 10)` = 4 times. The bench's
+PCC metric (0.999777 vs 0.999823) hid this completely; only the structural test's max-relative-error on
+a pathological input exposed it. Fix: the **three slice CBs are `bfloat16`**, not bfp8 — DEST is bf16 at
+`fp32_dest_acc_en=False`, so packing DEST → bf16 is *exact*, which deletes the per-step quantisation
+rather than merely reducing it. Result **0.0204, bit-identical to the tree**, for +17 280 B/core.
+`cb_h_slice` stays bfp8, so the one genuine dtype boundary is still the SwiGLU pack. **Nothing in the
+precision contract was touched** — `math_fidelity=LoFi`, `math_approx_mode=True`,
+`fp32_dest_acc_en=False`, `dst_full_sync_en=False`, `bfp8_pack_precise=True`, bfp8 partials and bfp8
+output are all as shipped; an intermediate CB's format is an implementation choice, not a user knob.
+
+### 4. Results — every cell faster, none slower
+
+| cell (device_kernel_ns) | `tree` | `scatter` | delta |
+|---|---|---|---|
+| `bf16_rm` count 128 | 139 229 | **109 314** | **−21.5 %** |
+| `bf16_rm` count 256 (**the focus shape**) | 205 107 | **150 479** | **−26.6 %** |
+| `bf16_rm` count 512 (`m_blocks` 2) | 359 411 | **251 915** | **−29.9 %** |
+| `bf16_rm` cap 1024, count 256 | 203 590 | **149 036** | **−26.8 %** |
+| `bf16_rm` emb 6144, count 256 | 191 797 | **136 059** | **−29.1 %** |
+| `bf16_rm` count = capacity (`m_blocks` 20) | 3 175 661 | **2 037 988** | **−35.8 %** |
+| `bfp8_tile` 128 / 256 / 512 | 133 143 / 201 622 / 349 710 | **106 483 / 147 253 / 239 979** | −20.0 / −27.0 / −31.4 % |
+| `bfp8_tile` cap 1024 / emb 6144 / count=cap | 201 927 / 187 784 / 3 051 287 | **147 400 / 131 600 / 1 910 670** | −27.0 / −29.9 / −37.4 % |
+| **sum** | **8 400 268** | **5 518 176** | **−34.3 % (1.52×)** |
+
+Guard set = **12/12 cells faster, 0 regressions** — one representative per distinct kernel path
+(bf16_rm fused-tilize vs bfp8_tile) × emb width (7168 `EC_MAX` 3 vs 6144 `EC_MAX` 2) × M regime
+(`m_blocks` 1, 2 and 20, i.e. both sides of the weight-residency path) × all three capacities, plus
+`count = 0` via the golden suite. Coordinator's independent fresh-cache re-measure of the focus cell:
+**150 761 ns vs the 204 769 ns baseline = −26.4 %** (the subagent's own `tree` run measured 205 107,
+0.16 % from mine, so the A/B is on one binary).
+
+**Post-commit confirmation on the SHIPPED tree** (pre-commit's `black` + `clang-format` reformatted the
+descriptor and the compute kernel, so every gate was re-run against the committed bytes): golden
+**45/45**, the three structural tests still **0.0000 / 0/64 / 0.0204**, and the guard set
+**110 657 / 151 498 / 249 383 / 148 739 / 135 481 / 2 042 027** (bf16_rm) and
+**109 201 / 146 659 / 239 726 / 146 507 / 131 151 / 1 915 673** (bfp8_tile) ns — sum **5 526 702 vs the
+tree's 8 400 268 = −34.2 %**, **12/12 faster, 0 regressions**. The focus cell reads 151 498 here vs
+150 761/150 479 above, i.e. this op's ~1 % per-cell run-to-run noise; all three are quoted rather than
+the best one.
+
+The zones confirm the **mechanism**, not just the outcome. `compute_reduce` was 66 224–103 332 ns on
+11 roots and ~0 on the other 99; it is now **flat at 33 881–41 727 ns on every worker**. The single hot
+root is gone. `compute_swiglu` 1 730 → **283–349 ns** (−80 %), and the `m_eff`-call SiLU bias walk
+collapsed to one call for free (a slice is <= DEST). `compute_gateup` (45 404 mean, unmoved) and
+`compute_tilize` (22 347, unmoved) are exactly the stages the change does not touch.
+
+- **Accuracy**: **45/45 golden** on the default path AND on `MOE_SWIGLU_REDUCE=tree` AND on
+  `MOE_SWIGLU_SCATTER_NOC=one`; 0 hangs, 0 errors, 110/110 cores on every cell. The three exact
+  structural tests are still exact — `all_ones` max rel **0.0000**, `hidden_identity` **0/64 bad
+  hidden tiles**, `emb_contraction` **0.0204, bit-identical to the tree**. The other five op test files
+  are 79/79.
+- **L1**: **−82 816 B/core** on the reduce/epilogue CB set (417 792 → 334 976). The bench predicted
+  −104 448; the +17 280 is the bf16 slice accumulators above and +4 352 is 1-page placeholders for the
+  inactive path's CBs. The dual path costs the `tree` configuration +9 536 B of placeholders.
+
+### 5. Still open, with numbers — the bottleneck MOVED
+
+**The roots have stopped being the critical path.** After graduation the hottest stages on the focus
+cell are `compute_down` (49 933 mean / **97 664 max**), `writer_out_issue` (87 830 max),
+`compute_gateup` (83 471 max, **at its FPU roofline**) and `reader_phase2` (78 339 max) — i.e.
+**phase 2, the `h` all-gather and the `down` matmul, at 2–2.5× `compute_reduce`**. 91 % of the measured
+stage saving reached the wall clock, and the residual gap to the 3.08× isolated number is Amdahl, not
+erosion: the reduce+epilogue was ~33 % of the op, so −69 % of it is bounded at ~1.5×.
+
+Measured-and-ready, deliberately **not** graduated, each with its gate:
+
+1. **Approx-sigmoid SiLU, 3.254× on the epilogue.** `silu_tile` ignores the user's
+   `math_approx_mode=True`. Priced at worst −0.00196 PCC (~40 % of the margin over the 0.975 gate) and
+   its critical-path value fell from −35 339 to −4 218 ns/core under the scatter. Cheap to revisit if
+   phase 2 is ever fixed and compute becomes the bound again.
+2. **`pack_l1_pair` accumulate, 1.90–2.09× in the scatter regime** (bf16 accumulator + one
+   `BinaryFpu` folding two contributors into DEST, then one L1-accumulating pack; PCC 0.99997, *better*
+   than baseline). It now fits (~+102 KB against the freed 82 KB + 38 KB). Not taken because
+   `compute_reduce` is now **wait-dominated** — the subagent measured only ~2 µs of actual math in it.
+3. **The hop-count half of `dir_noc`** (+52 KB/core or a private ready-signal), and the whole
+   10-way slice sum + SiLU as **one** DEST window via `DestReuseBinary` — unmeasured, and it trips the
+   DEST <= 7 rule in §3. Both are bake-offs, not integrations.
+4. **The CB-aliasing L1 enabler** (104 448 B, root-only `cb_gate_silu`/`cb_h_local` aliased onto
+   non-root-only `cb_gate_send`/`cb_up_send`) — designed and verified safe against the address-proxy
+   invariant, then **not needed**, because the winner returns L1 instead of consuming it. Kept on
+   record as the correct mechanism should a later round need L1, along with the evidence that the
+   per-core-range role split is **unsafe** in this allocator.
+
+- **Tests added**: `tests/.../test_moe_fused_swiglu_r2_perf.py` — one env-selected perf harness
+  (`MOE_R2_CASES=guard`), because `run_safe_pytest.sh` preserves neither a quoted `-k` expression nor
+  `[...]` node-id brackets, so the Perf-1 harness could not be pointed at a single cell. Plus
+  `perf_experiments/parse_zones.py`, which turns a `--profile` report into per-stage zone statistics
+  and the per-core TRISC work decomposition that located the hot roots in the first place. Five
+  subagent experiment dirs are committed under `perf_experiments/` as durable artifacts, each with its
+  own runnable bake-off.

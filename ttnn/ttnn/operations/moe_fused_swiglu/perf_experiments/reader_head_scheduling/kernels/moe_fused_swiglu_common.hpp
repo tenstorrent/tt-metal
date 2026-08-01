@@ -56,41 +56,6 @@ inline uint32_t m_tiles_eff(uint32_t m_t, uint32_t b, uint32_t m_block, uint32_t
     return (p > m_block) ? m_block : p;
 }
 
-// ---------------------------------------------------------------------------
-// PERF 2 — the REDUCE-SCATTER slice plan (`MOE_SWIGLU_REDUCE=scatter`).
-//
-// SINGLE SOURCE OF TRUTH, called from ALL THREE kernels with the SAME (t, cap), for the same reason
-// m_tiles_eff() is: the column's all-to-all is only deadlock-free while every core agrees, to the
-// tile, on who owns which slice. `t = m_eff * HN_PAD` is the runtime tile count of ONE gate/up block
-// and `cap = KGROUPS` is the column height, so the plan is a pure function of the mailbox words and
-// the grid — identical on every core and every RISC-V, and it SHRINKS with the runtime m_eff exactly
-// as everything else in this op does.
-//
-// FLAT and UNIFORM by construction: the worker count is the LARGEST DIVISOR of `t` that is <= cap, so
-// every worker owns exactly `t / w` tiles and cores [w, cap) are IDLE for the reduce (they still
-// contribute their own partial). The ragged `ceil`/`floor` split measured 1-10% FASTER in the
-// bake-off (it puts every core to work and shortens the critical slice) and is deliberately NOT
-// shipped: unequal slice sizes force every slice CB to `lcm(a_min, a_max)` pages, and a slice CB
-// whose page count is not a multiple of the per-pass push size walks its write pointer past the CB
-// end and SILENTLY OVERRUNS INTO THE NEXT CB — measured PCC 0.709-0.886 for the ragged 5/5/../4/4
-// plan against >= 0.9955 for every uniform one. See MOE_SWIGLU_REDUCE in the program descriptor.
-inline uint32_t slice_workers(uint32_t t, uint32_t cap) {
-    uint32_t w = (t < cap) ? t : cap;
-    while (w > 1 && (t % w) != 0) {
-        --w;
-    }
-    return w;
-}
-
-// Tiles the core at column row `row` owns of a `t`-tile block, 0 if it is an idle core. The slice is
-// a CONTIGUOUS tile range at `row * (t / w)` because the gate/up block layout is `m * HN_PAD + n`
-// (OUT_SUBBLOCK_H_GU == 1, SubblockMajor), which is what makes every gather leg ONE coalesced
-// transaction instead of m_eff strided ones.
-inline uint32_t slice_assigned(uint32_t t, uint32_t cap, uint32_t row) {
-    const uint32_t w = slice_workers(t, cap);
-    return (row < w) ? (t / w) : 0;
-}
-
 // Tile-rows that core `my_col` injects into the x row-multicast for a block of `m_eff` tile-rows.
 // Round `t`'s rotating injector is column `t % hgroups`, so this counts t in [0, m_eff) with
 // `t % hgroups == my_col`. Shared so the reader's staging loop and compute's fused-tilize count

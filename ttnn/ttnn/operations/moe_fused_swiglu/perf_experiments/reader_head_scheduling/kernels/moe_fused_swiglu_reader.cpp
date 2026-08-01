@@ -1,6 +1,51 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
+// ############################################################################################
+// ISOLATED BAKE-OFF COPY — perf_experiments/reader_head_scheduling/. NOT the shipped kernel.
+//
+// A byte-for-byte copy of ttnn/ttnn/operations/moe_fused_swiglu/kernels/moe_fused_swiglu_reader.cpp
+// with ONE region parameterised: the READER'S SERIAL HEAD, i.e. everything from
+// `cb_reserve_back(cb_w_gate, ...)` down to `cb_push_back(cb_w_gate, ...)`. The rest of the file,
+// the writer, the compute kernel and the whole host descriptor are the REAL op (the bench imports
+// the op's own `create_program_descriptor` and only re-points its KERNEL_DIR here), so every
+// variant is measured at full 110-core fidelity with the real DRAM contention. Round 1's
+// single-core `xstage_coalesce` bench measured this stage at ~1.3 us against 15.2 us in situ — a
+// 12x understatement — which is exactly why this bake-off is a whole-op clone and not a micro-bench.
+//
+// The head schedule is selected by the `HEAD_VARIANT` define (host-side: MOE_HEAD_VARIANT):
+//
+//   0 baseline               verbatim: reserve+issue W_gate, then the x prologue whose PLAIN
+//                            `noc_async_read_barrier()` drains the whole W_gate stream with it.
+//   1 wg_after_prologue      W_gate issued AFTER the whole x prologue (the historical control the
+//                            shipped kernel's own comment records as "measured WORSE" pre-Perf-1).
+//   2 x_trid                 baseline issue ORDER, but the x reads carry transaction id TRID_X and
+//                            the prologue barriers are `barrier_with_trid(TRID_X)` — so cb_x_in /
+//                            cb_x_stage / the row-multicast stop waiting on the 79.5 KB weight block.
+//   3 x_first_trid           x sticks issued FIRST, W_gate issued ~30 instructions later (before the
+//                            x barrier, so it is NOT delayed the way variant 1 delays it), x drained
+//                            on its own trid. x wins the DRAM race; W_gate keeps its start time.
+//   4 wg_split_trid          W_gate rows [0, WG_HEAD_ROWS) first, then the x sticks, then the W_gate
+//                            tail — a middle point on the "who gets DRAM first" axis.
+//   5 x_first_notrid         variant 3's ORDER with PLAIN barriers. Discriminates "x-first ordering"
+//                            from "independent drain": here the x barrier still drains W_gate.
+//
+// PRECISION CONTRACT: untouched. No dtype, no `math_fidelity`, no `fp32_dest_acc_en`, no CB format
+// and no arithmetic changes anywhere in this bake-off — every variant issues the SAME NoC
+// transactions over the same bytes into the same L1 addresses, only re-ORDERED and re-BARRIERED, so
+// the op's output is expected BIT-IDENTICAL across variants (the bench asserts exactly that).
+//
+// RAW-DATAFLOW BYPASS (one call, deliberate): `noc_async_read_set_trid(TRID_X)` is the raw
+// `dataflow_api.h` primitive. The `Noc` object API's trid ISSUE path
+// (`Noc::set_async_read_state<NocOptions::TXN_ID>` + `async_read_with_state<NocOptions::TXN_ID>`)
+// static_asserts `max_page_size <= NOC_MAX_BURST_SIZE`, i.e. ONE-PACKET reads only — and this
+// stage's self-copy is KR_PAD*BFP8_TILE = 25 024 B, six packets. The trid register is documented
+// STICKY (noc.h: "The NOC_PACKET_TAG register is sticky — it was set once in set_async_read_state
+// and is not re-written here"), and `ncrisc_noc_fast_read` never writes NOC_PACKET_TAG in
+// DM_DEDICATED_NOC mode, so setting it once and issuing ordinary multi-packet `noc_async_read`s
+// tags them all. The BARRIER side does use the helper: `noc.async_read_barrier<NocOptions::TXN_ID>`.
+// ############################################################################################
+//
 // moe_fused_swiglu — READER (NoC0).
 //
 // Owns, per M-block:
@@ -9,14 +54,8 @@
 //   2. the `x` activation stage + the ROW-multicast of x along grid row y (rotating injector,
 //      one tile-row per round) via mcast_pipe;
 //   3. the coalesced bank-run W_gate stream (the W_up twin lives on the writer/NoC1);
-//   4. the RECEIVER side of the gate/up cross-column reduce, in ONE OF TWO SHAPES
-//      (MOE_SWIGLU_REDUCE):
-//        `tree`    — the PARENT side of the binary tree: invite child -> land its whole partials in
-//                    cb_reduce_*_in -> publish to compute;
-//        `scatter` — PERF 2, the default: reserve my two landing CBs, invite the WHOLE COLUMN, wait
-//                    for every contributor's slice, publish. On a column ROOT it additionally waits
-//                    on SEM_HSLICE instead of a cb_h_local front, because on this path the workers'
-//                    NoC writes ARE what assembles cb_h_local;
+//   4. the PARENT side of the gate/up cross-column reduce tree (invite child -> land its
+//      partials in cb_reduce_*_in -> publish to compute);
 //   5. the phase-2 loop: one coalesced W_down K-block + one round of the grid-wide `h`
 //      all-gather per iteration.
 //
@@ -120,34 +159,47 @@ constexpr uint32_t cb_h_local = get_compile_time_arg_val(37);
 constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(38);
 constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(39);
 
-// PERF 2 — REDUCE-SCATTER (MOE_SWIGLU_REDUCE=scatter). 1 replaces the tree's parent side with the
-// column's peer invite + gather, and makes the root's cb_h_local a pure LANDING region that the
-// workers tile directly; 0 reproduces the tree byte-for-byte. See the knob in the program descriptor.
-constexpr uint32_t SCATTER = get_compile_time_arg_val(40);
-// 1 = the UP half of the gather is issued from HERE (NOC_0) while the writer keeps the GATE half on
-// NOC_1 — see MOE_SWIGLU_SCATTER_NOC. Split by payload so each data-movement RISC-V owns ONE CB
-// outright (this kernel then pops cb_up_acc and the writer pops cb_gate_acc); two RISC-Vs popping one
-// CB corrupts the shared `tiles_acked` word exactly the way two pushers corrupt `tiles_received`.
-constexpr uint32_t SCATTER_NOC_SPLIT = get_compile_time_arg_val(41);
-constexpr uint32_t GATHER_PAGES = get_compile_time_arg_val(42);  // the WHOLE landing CB, in tiles
-constexpr uint32_t SEM_HSLICE = get_compile_time_arg_val(43);
-constexpr uint32_t cb_gather_gate = get_compile_time_arg_val(44);
-constexpr uint32_t cb_gather_up = get_compile_time_arg_val(45);
-constexpr uint32_t cb_up_acc = get_compile_time_arg_val(46);
-
-constexpr uint32_t CT_XMCAST = 47;
+constexpr uint32_t CT_XMCAST = 40;
 constexpr uint32_t CT_HMCAST = CT_XMCAST + 5;
 
 constexpr uint32_t TILE_H = 32;
 constexpr uint32_t BF16_TILE_ROW_BYTES = TILE_H * 2;  // one 32-element tile slice of a bf16 stick
 
+// ---------------------------------------------------------------------------
+// BAKE-OFF KNOBS (defines, not compile-time args, so the real host descriptor is reused verbatim)
+// ---------------------------------------------------------------------------
+#ifndef HEAD_VARIANT
+#define HEAD_VARIANT 0
+#endif
+#ifndef WG_HEAD_ROWS
+#define WG_HEAD_ROWS 4
+#endif
+constexpr uint32_t HV = HEAD_VARIANT;
+// Also a HARNESS CHECK: if the host-side `defines` hook ever stops reaching the compiler, every
+// variant would silently compile as variant 0 and the whole bake-off would report a false NULL.
+// `MOE_HEAD_VARIANTS=9` must therefore FAIL TO COMPILE — that is the proof the knob is live.
+static_assert(HV <= 5, "HEAD_VARIANT out of range (0..5) — see the banner at the head of this file");
+
+// Where the W_gate issue sits relative to the x staging.
+constexpr uint32_t WGP_BEFORE_X = 0;      // baseline: fully issued before the x prologue
+constexpr uint32_t WGP_AFTER_STAGE = 1;   // fully issued after the whole x prologue
+constexpr uint32_t WGP_AFTER_XISSUE = 2;  // issued between the x ISSUE and the x barrier
+constexpr uint32_t WGP_SPLIT = 3;         // head rows before the x issue, tail after it
+
+constexpr uint32_t WG_POS = (HV == 1)   ? WGP_AFTER_STAGE
+                            : (HV == 3) ? WGP_AFTER_XISSUE
+                            : (HV == 4) ? WGP_SPLIT
+                            : (HV == 5) ? WGP_AFTER_XISSUE
+                                        : WGP_BEFORE_X;  // HV 0, 2
+
+// Variants 2/3/4 give the x reads their own transaction id so the prologue can be drained WITHOUT
+// draining the weight stream. Variant 5 keeps variant 3's order but plain (all-or-nothing) barriers.
+constexpr bool X_TRID_ON = (HV == 2) || (HV == 3) || (HV == 4);
+constexpr uint32_t TRID_X = 1;  // 0 is the untagged/default id every other read in this kernel uses
+
 // runtime-arg layout
-constexpr uint32_t RT_CHILDREN = 16;
-// PERF 2 — the whole COLUMN in virtual coordinates, KGROUPS (vx, vy) pairs in ROW order: the invite
-// fan-out and (under SCATTER_NOC_SPLIT) the up-gather destinations. Row `r` is at index `r` on every
-// core in the column, which is what makes "worker r owns tiles [r*sl_a, (r+1)*sl_a)" agree grid-wide.
-constexpr uint32_t RT_PEERS = RT_CHILDREN + 2 * MAX_CHILDREN;
-constexpr uint32_t RT_XMCAST = RT_PEERS + 2 * KGROUPS;
+constexpr uint32_t RT_CHILDREN = 15;
+constexpr uint32_t RT_XMCAST = RT_CHILDREN + 2 * MAX_CHILDREN;
 constexpr uint32_t RT_HMCAST = RT_XMCAST + 4 + 2 * HGROUPS;
 
 // The x row-multicast: one rotating injector per tile-row over the HGROUPS-wide grid row.
@@ -183,9 +235,6 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(12);
     const uint32_t num_children = get_arg_val<uint32_t>(13);
     const uint32_t my_col = get_arg_val<uint32_t>(14);
-    // PERF 2 — my row in the grid column: which slice of the reduce-scatter I own (0 tiles = an idle
-    // core, which still contributes and still invites).
-    const uint32_t my_row = get_arg_val<uint32_t>(15);
 
     const auto x_acc = TensorAccessor(x_args, x_addr, X_PAGE);
     const auto wg_acc = TensorAccessor(wg_args, w_gate_addr, BFP4_TILE);
@@ -239,15 +288,9 @@ void kernel_main() {
     const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
     volatile tt_l1_ptr uint32_t* sem_data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_data);
     uint32_t data_arrivals = 0;
-    // PERF 2 — the h-slice gather counter (scatter path, roots only). Monotone and cumulative.
-    volatile tt_l1_ptr uint32_t* sem_h_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HSLICE)));
-    uint32_t h_arrivals = 0;
 #ifdef ABLATE_NO_REDUCE_XFER
     (void)sem_data_ptr;
     (void)data_arrivals;
-    (void)sem_h_ptr;
-    (void)h_arrivals;
 #endif
 
     constexpr uint32_t SLOTS_H = REMAP ? (HID_T / NUM_BANKS) : HID_T;
@@ -282,8 +325,8 @@ void kernel_main() {
         // cb_x_tiles is ONE slot of M_BLOCK*KR_PAD tiles, so its write pointer is the same L1
         // address on every core in the row (mcast_pipe requires an identical landing address).
         // -------------------------------------------------------------------
-        // W_gate is ISSUED HERE, ahead of the staging prologue and the x rounds, and only
-        // BARRIERED/pushed after them: with num_k_blocks == 1 the whole block must be fronted
+        // W_gate is ISSUED HERE (variant 0), ahead of the staging prologue and the x rounds, and
+        // only BARRIERED/pushed after them: with num_k_blocks == 1 the whole block must be fronted
         // before the gate matmul starts, so this is the only place its DRAM latency can overlap
         // anything.
         //
@@ -294,29 +337,119 @@ void kernel_main() {
         // really does cover it — was tried and measured WORSE (223 172 / 145 140 / 210 773 ns vs
         // 222 446 / 144 133 / 208 565 on count 256 / 128 / emb 6144): started later, the read no
         // longer overlaps the prologue's OWN stick reads, and that overlap is worth more than the
-        // handshake chain's. Kept here. The same defect class in phase 2 — where the barrier had
-        // nothing else to cover — is real and is fixed below.
-        cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
-        {
-            MaybeDeviceZoneScope("reader_wg_issue");
-            const uint32_t wg_wp = get_write_ptr(cb_w_gate);
+        // handshake chain's. That is HEAD_VARIANT 1 here, re-measured post-Perf-1.
+        //
+        // THE BAKE-OFF'S POINT: that old A/B only ever moved the ISSUE. It never split the two
+        // BARRIERS, so both arms paid the full weight block before cb_x_in could be pushed.
+        // Variants 2-4 give the x reads their own transaction id, which is what actually decouples
+        // "the small activation read has landed" from "the 79.5 KB weight block has landed".
+        //
+        // ---- issue helpers, so every variant emits BIT-IDENTICAL transactions ----
+        // W_gate rows [k0, k1) of this core's K-block, coalesced exactly as the shipped kernel does.
+        auto wg_issue_rows = [&](uint32_t wg_wp_, uint32_t k0, uint32_t k1) {
 #ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
             if (read_wg) {
-                for (uint32_t k = 0; k < kr; ++k) {
+                for (uint32_t k = k0; k < k1; ++k) {
                     BR::read(
                         wg_acc,
                         (kstart + k) * HID_T,
                         hstart,
                         hstart + hn,
                         SLOTS_H,
-                        wg_wp + k * HN_PAD * BFP4_TILE,
+                        wg_wp_ + k * HN_PAD * BFP4_TILE,
                         BFP4_TILE);
                 }
             }
 #else
-            (void)wg_wp;
+            (void)wg_wp_;
+            (void)k0;
+            (void)k1;
 #endif
+        };
+        // The 32 row-major bf16 stick SLICES of one tile-row (INPUT_FORMAT 0), ISSUE only.
+        auto x_issue_sticks = [&](uint32_t row, uint32_t wp) {
+#ifndef ABLATE_NO_XSTAGE_XFER  // /perf-measure: drop the ACTIVATION DRAM stream, keep the tilize
+            for (uint32_t s = 0; s < TILE_H; ++s) {
+                noc_async_read(
+                    x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
+                    wp + s * X_SLICE,
+                    kr * BF16_TILE_ROW_BYTES);
+            }
+#else
+            (void)row;
+            (void)wp;
+#endif
+        };
+        // The `kr` whole bfp8 tiles of one tile-row (INPUT_FORMAT 1), ISSUE only — no tilize.
+        auto x_issue_tiles = [&](uint32_t row, uint32_t dst) {
+#ifndef ABLATE_NO_XSTAGE_XFER
+            for (uint32_t i = 0; i < kr; ++i) {
+                noc_async_read(x_acc.get_noc_addr(row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
+            }
+#else
+            (void)row;
+            (void)dst;
+#endif
+        };
+        // The x drain. With X_TRID_ON this waits ONLY for the x reads — the hardware per-trid
+        // outstanding counter NIU_MST_REQS_OUTSTANDING_ID(TRID_X) — and leaves the weight stream in
+        // flight. Uses the `Noc` object API's barrier, which is the in-tree helper for exactly this.
+        auto x_barrier = [&]() {
+            if constexpr (X_TRID_ON) {
+                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = TRID_X});
+            } else {
+                noc_async_read_barrier();
+            }
+        };
+
+        const uint32_t wg_head = (WG_HEAD_ROWS < kr) ? WG_HEAD_ROWS : kr;
+        uint32_t wg_wp = 0;
+        bool wg_reserved = false;
+        bool wg_done = false;
+
+        // W_gate, part 1: variant 0 issues the WHOLE block here; variant 4 issues only `wg_head`
+        // rows; variants 1/3/5 issue nothing here.
+        if constexpr (WG_POS == WGP_BEFORE_X || WG_POS == WGP_SPLIT) {
+            cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
+            wg_reserved = true;
+            {
+                MaybeDeviceZoneScope("reader_wg_issue");
+                wg_wp = get_write_ptr(cb_w_gate);
+                if constexpr (WG_POS == WGP_SPLIT) {
+                    wg_issue_rows(wg_wp, 0, wg_head);
+                } else {
+                    wg_issue_rows(wg_wp, 0, kr);
+                    wg_done = true;
+                }
+            }
         }
+
+        // W_gate, part 2 (variants 3/4/5): issued INSIDE the staging loop, between the x stick
+        // ISSUE and the x barrier. The x reads are already in the NoC's queue, so they win the DRAM
+        // race, while the weight read starts only ~32 issue instructions later than the baseline's
+        // — NOT a whole prologue later, which is what made variant 1 lose.
+        auto wg_issue_mid = [&]() {
+            if constexpr (WG_POS == WGP_AFTER_XISSUE || WG_POS == WGP_SPLIT) {
+                if (!wg_done) {
+                    if constexpr (X_TRID_ON) {
+                        noc_async_read_set_trid(0);  // the weight stream stays on the default id
+                    }
+                    {
+                        MaybeDeviceZoneScope("reader_wg_issue");
+                        if (!wg_reserved) {
+                            cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
+                            wg_reserved = true;
+                            wg_wp = get_write_ptr(cb_w_gate);
+                        }
+                        wg_issue_rows(wg_wp, (WG_POS == WGP_SPLIT) ? wg_head : 0, kr);
+                    }
+                    wg_done = true;
+                    if constexpr (X_TRID_ON) {
+                        noc_async_read_set_trid(TRID_X);
+                    }
+                }
+            }
+        };
 
         cb_reserve_back(cb_x_tiles, x_slot_tiles);
         const uint32_t x_base = get_write_ptr(cb_x_tiles);
@@ -343,6 +476,13 @@ void kernel_main() {
         // the loopback altogether, for the same NoC bytes (one fewer multicast destination).
         {
             MaybeDeviceZoneScope("reader_xstage");
+            if constexpr (X_TRID_ON) {
+                // ONE raw call — see the RAW-DATAFLOW BYPASS note at the head of this file. The
+                // NOC_PACKET_TAG register is sticky, so every `noc_async_read` below carries TRID_X
+                // until it is set back to 0, including the multi-packet 25 KB self-copy that the
+                // object API's one-packet trid path cannot express.
+                noc_async_read_set_trid(TRID_X);
+            }
             for (uint32_t t = my_col; t < m_eff; t += HGROUPS) {
                 const uint32_t dst = x_base + t * X_ROW_BYTES;
                 uint32_t row = b * M_BLOCK + t;
@@ -354,32 +494,41 @@ void kernel_main() {
                     // them to bfp8 in cb_x_stage; copy the tile-row into the resident slot.
                     cb_reserve_back(cb_x_in, TILE_H);
                     const uint32_t wp = get_write_ptr(cb_x_in);
-#ifndef ABLATE_NO_XSTAGE_XFER  // /perf-measure: drop the ACTIVATION DRAM stream, keep the tilize
-                    for (uint32_t s = 0; s < TILE_H; ++s) {
-                        noc_async_read(
-                            x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
-                            wp + s * X_SLICE,
-                            kr * BF16_TILE_ROW_BYTES);
-                    }
-#else
-                    (void)wp;
-#endif
-                    noc_async_read_barrier();
+                    x_issue_sticks(row, wp);
+                    wg_issue_mid();
+                    x_barrier();
                     cb_push_back(cb_x_in, TILE_H);
 
                     cb_wait_front(cb_x_stage, KR_PAD);
                     noc_async_read(get_noc_addr(get_read_ptr(cb_x_stage)), dst, X_ROW_BYTES);
-                    noc_async_read_barrier();
+                    x_barrier();
                     cb_pop_front(cb_x_stage, KR_PAD);
                 } else {
                     // bfp8_b TILE: the tiles land straight in the resident slot, no tilize.
-#ifndef ABLATE_NO_XSTAGE_XFER
-                    for (uint32_t i = 0; i < kr; ++i) {
-                        noc_async_read(x_acc.get_noc_addr(row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
-                    }
-#endif
-                    noc_async_read_barrier();
+                    x_issue_tiles(row, dst);
+                    wg_issue_mid();
+                    x_barrier();
                 }
+            }
+            if constexpr (X_TRID_ON) {
+                noc_async_read_set_trid(0);  // every other read in this kernel uses the default id
+            }
+        }
+
+        // W_gate, part 3: the fallback issue site. It fires for (a) variant 1, which issues the
+        // whole block here by construction, and (b) any core with `my_col >= m_eff`, which injects
+        // no tile-row at all and therefore never ran `wg_issue_mid`. `cb_reserve_back` is
+        // unconditional (the handshake must be identical at every `read_wg`), the READ is not.
+        if constexpr (WG_POS != WGP_BEFORE_X) {
+            if (!wg_done) {
+                MaybeDeviceZoneScope("reader_wg_issue");
+                if (!wg_reserved) {
+                    cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
+                    wg_reserved = true;
+                    wg_wp = get_write_ptr(cb_w_gate);
+                }
+                wg_issue_rows(wg_wp, (WG_POS == WGP_SPLIT) ? wg_head : 0, kr);
+                wg_done = true;
             }
         }
 
@@ -455,13 +604,10 @@ void kernel_main() {
         }
 
         // -------------------------------------------------------------------
-        // Phase 1c — the cross-column reduce's RECEIVER side. The invite (SEM_GO) is the flow control
-        // that keeps a contributor from overwriting a landing slot compute has not consumed yet, on
-        // both paths; the two differ only in WHO invites WHOM (one parent -> its children, versus
-        // every core -> its whole column).
+        // Phase 1c — reduce tree, PARENT side. The invite (SEM_GO) is the flow control that keeps a
+        // child from overwriting a landing slot compute has not consumed yet.
         //
-        // THE TREE'S PROTOCOL, REFINEMENT 2 LEVER 1 — the invites go out in WAVES of REDUCE_SLOTS,
-        // not one at a time.
+        // REFINEMENT 2 LEVER 1 — the invites go out in WAVES of REDUCE_SLOTS, not one at a time.
         // With one slot the parent had to invite child `c`, wait for its ~102 KB, hand it to compute
         // and only then invite `c + 1`: up to 4 SEQUENTIAL round trips per M-block at the root.
         // With REDUCE_SLOTS slots, a wave's children all transfer CONCURRENTLY into disjoint slots
@@ -476,80 +622,8 @@ void kernel_main() {
         // shrink does not move THIS accounting: a slot stays M_BLOCK*HN_PAD tiles and the child
         // ships only the m_eff*HN_PAD tiles that carry live tokens (compute drops the tail).
         // -------------------------------------------------------------------
-        // PERF 2 — MY SLICE of this block, from the ONE shared plan (moe_fused_swiglu_common.hpp),
-        // identical on every core and every RISC-V. `slice_workers` cores own `slice_tiles` each.
-        const uint32_t sl_w = (SCATTER != 0) ? moe_fused_swiglu::slice_workers(h_block_tiles, KGROUPS) : 0;
-        const uint32_t sl_a = (sl_w != 0) ? (h_block_tiles / sl_w) : 0;  // uniform slice size
-        const uint32_t slice_tiles = (my_row < sl_w) ? sl_a : 0;         // 0 = an idle core
-        if constexpr (SCATTER) {
+        {
             MaybeDeviceZoneScope("reader_reduce");
-            // RECEIVER side of the reduce-scatter. Reserve the landing CBs WHOLE first (so every
-            // contributor's own-write-pointer proxy is the CB base on every core, at every m_eff),
-            // then invite the WHOLE COLUMN — the generalisation of the tree's parent-invites-child
-            // SEM_GO, and the flow control that keeps M-block b+1's contribution from overwriting a
-            // slot compute has not consumed. Then wait for every contributor and push WHOLE.
-            //
-            // This is ALSO the flow control for cb_h_local: my invite for block b+1 is issued here,
-            // strictly after my phase 2 of block b has read (and barriered) cb_h_local, and no
-            // worker's h-slice send for b+1 can precede this invite (its epilogue is downstream of
-            // the gather, which is downstream of every core's invite). So the h landing needs no
-            // second handshake.
-            if (slice_tiles) {
-                cb_reserve_back(cb_gather_gate, GATHER_PAGES);
-                cb_reserve_back(cb_gather_up, GATHER_PAGES);
-            }
-#ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
-            const uint32_t sem_go = static_cast<uint32_t>(get_semaphore(SEM_GO));
-            for (uint32_t p = 0; p < KGROUPS; ++p) {
-                const uint32_t px = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 0);
-                const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 1);
-                noc_semaphore_inc(get_noc_addr(px, py, sem_go), 1);
-            }
-            noc_async_atomic_barrier();
-#endif
-            // The UP half of the gather, when MOE_SWIGLU_SCATTER_NOC=split puts it on NOC_0. The
-            // GATE half stays on the writer's NOC_1; each RISC-V owns one accumulator CB outright.
-            if constexpr (SCATTER_NOC_SPLIT) {
-                const uint32_t up_bytes = sl_a * BFP8_TILE;
-                cb_wait_front(cb_up_acc, h_block_tiles);
-#ifndef ABLATE_NO_REDUCE_XFER
-                // Wait for the WHOLE column's invites before writing, exactly as the writer does:
-                // every core invites once per peer per M-block, so (b+1)*KGROUPS is the exact total.
-                volatile tt_l1_ptr uint32_t* go_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
-                noc_semaphore_wait_min(go_ptr, (b + 1) * KGROUPS);
-                const uint32_t usrc = get_read_ptr(cb_up_acc);
-                const uint32_t udst = get_write_ptr(cb_gather_up);
-                const uint32_t slot_bytes = my_row * up_bytes;
-                const uint32_t sem_data_id = static_cast<uint32_t>(get_semaphore(SEM_DATA));
-                for (uint32_t w = 0; w < sl_w; ++w) {
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                    noc_async_write(usrc + w * up_bytes, get_noc_addr(vx, vy, udst + slot_bytes), up_bytes);
-                }
-                noc_async_write_barrier();
-                for (uint32_t w = 0; w < sl_w; ++w) {
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                    noc_semaphore_inc(get_noc_addr(vx, vy, sem_data_id), 1);
-                }
-                noc_async_atomic_barrier();
-#endif
-                cb_pop_front(cb_up_acc, h_block_tiles);
-            }
-            if (slice_tiles) {
-#ifndef ABLATE_NO_REDUCE_XFER
-                // One signal per contributor per payload: KGROUPS under the single-NoC shape, 2 x
-                // KGROUPS when the up half is split off, so the total is what says "everything landed".
-                data_arrivals += KGROUPS * (SCATTER_NOC_SPLIT ? 2 : 1);
-                noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
-#endif
-                cb_push_back(cb_gather_gate, GATHER_PAGES);
-                cb_push_back(cb_gather_up, GATHER_PAGES);
-            }
-        } else {
-            MaybeDeviceZoneScope("reader_reduce");
-            // THE TREE, PARENT SIDE — the invite waves described above.
             for (uint32_t c0 = 0; c0 < num_children; c0 += REDUCE_SLOTS) {
                 uint32_t wave = num_children - c0;
                 if (wave > REDUCE_SLOTS) {
@@ -593,13 +667,6 @@ void kernel_main() {
             noc_async_read_barrier();
         }
         cb_push_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
-        // PERF 2 — on the scatter path this column's h block is ASSEMBLED IN cb_h_local BY THE
-        // WORKERS' NoC WRITES, not packed by compute, so the root's handshake is the SEM_HSLICE
-        // counter rather than a CB front. `sl_w` slices land per M-block; the counter is monotone and
-        // cumulative, like every other semaphore in this op.
-        if (SCATTER && is_root) {
-            h_arrivals += sl_w;
-        }
         {
             MaybeDeviceZoneScope("reader_phase2");
             bool wd_pending = false;
@@ -620,20 +687,8 @@ void kernel_main() {
                     // a fixed input still varied 0.959-0.979 run to run on BOTH activation formats (the
                     // bfp8 path has no x loopback, so this send was the only remaining suspect); with
                     // both fixed it is bit-stable. Same NoC bytes, one fewer mcast destination.
-                    if constexpr (SCATTER) {
-                        // The workers' finished slices already TILE cb_h_local (each wrote
-                        // `[row*sl_a, (row+1)*sl_a)` of the block), so nothing on the compute thread
-                        // produces it: no push, no pop, no CB front. That is exactly why the write
-                        // pointer is the CB base on every core every M-block, which is what let the
-                        // workers use their OWN pointer as this core's landing address.
-#ifndef ABLATE_NO_REDUCE_XFER  // the workers' sends are stubbed too, so this wait must go with them
-                        noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
-#endif
-                        noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
-                    } else {
-                        cb_wait_front(cb_h_local, h_block_tiles);
-                        noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
-                    }
+                    cb_wait_front(cb_h_local, h_block_tiles);
+                    noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
                 }
 
                 if (i_send) {
@@ -644,9 +699,7 @@ void kernel_main() {
                         cb_push_back(cb_w_down, WD_BLOCK_TILES);
                         wd_pending = false;
                     }
-                    if constexpr (SCATTER == 0) {
-                        cb_pop_front(cb_h_local, h_block_tiles);
-                    }
+                    cb_pop_front(cb_h_local, h_block_tiles);
 #ifndef ABLATE_NO_H_XFER  // /perf-measure: drop the h transport, keep cb_h's reserve/push
                     if constexpr (hmc.active) {
                         h_send.send(hdst, hdst, h_block_tiles * BFP8_TILE);

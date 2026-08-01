@@ -189,9 +189,14 @@ WRUN = int(os.environ.get("MOE_SWIGLU_WRUN", 8))
 #:   no_h_xfer      — the h all-gather send/receive is dropped (cb_h still cycles)
 #:   no_x_xfer      — the x row-multicast send/receive is dropped (cb_x_tiles still cycles)
 #:   no_w_xfer      — the three bfp4 weight DRAM streams are dropped (CBs + barriers still cycle)
+#:   no_xstage_xfer — the ACTIVATION DRAM stream is dropped (Perf 2): the bf16 stick reads / bfp8
+#:                    tile reads inside `reader_xstage` go away while the cb_x_in reserve/push, the
+#:                    fused tilize, the cb_x_stage wait/pop and the self-copy into the resident slot
+#:                    all stay. `no_x_xfer` drops the row MULTICAST of x, which is a DIFFERENT
+#:                    stage — the two together are the whole activation path.
 #: None is a correctness mode; each answers "how much of the 85% is THIS collective?".
 ABLATE = os.environ.get("MOE_SWIGLU_ABLATE", "")
-_DM_ABLATIONS = ("no_reduce_xfer", "no_h_xfer", "no_x_xfer", "no_w_xfer")
+_DM_ABLATIONS = ("no_reduce_xfer", "no_h_xfer", "no_x_xfer", "no_w_xfer", "no_xstage_xfer")
 
 #: PER-STAGE ZONES ARE PERMANENT AND UNCONDITIONAL — there is no knob here any more.
 #: Every serial stage of the per-M-block chain in all three kernels is bracketed by
@@ -298,6 +303,107 @@ MAX_CHILDREN = 5
 #: already fan-in-general if a later structure makes the transport latency-bound.
 REDUCE_SLOTS_CAP = int(os.environ.get("MOE_SWIGLU_REDUCE_SLOTS", 1))
 
+#: PERF 2 — THE CROSS-COLUMN REDUCE STRUCTURE. The one knob of this round, and the biggest single
+#: lever the op has had.
+#:
+#:   "tree"    — the shipped binary (Hillis-Steele) reduce tree of `_reduce_tree` below: every core
+#:               funnels its WHOLE `m_eff * HN_PAD` gate AND up block up the column to the root, and
+#:               the root alone runs the SwiGLU epilogue (the SiLU-fused bias add walked `m_eff`
+#:               times, then the multiply). Reproduced BYTE-IDENTICALLY by this value — it is the A/B
+#:               for any re-measurement and the honest fallback for any geometry the scatter's
+#:               preconditions do not hold on (see `_scatter_plan` below).
+#:   "scatter" — a two-phase REDUCE-SCATTER down each column with a DISTRIBUTED epilogue. Every core
+#:               owns a disjoint slice of the T = m_eff*HN_PAD tile block; all KGROUPS cores push
+#:               their slice of gate and up straight into every worker's landing CBs; each worker
+#:               reduces ONLY its own slice over all contributors, runs the SiLU + SwiGLU epilogue on
+#:               it, and unicasts the finished `h` slice straight into the ROOT's cb_h_local at its
+#:               tile offset — the gather IS the assembly, so the root does no copy and no add.
+#:
+#: WHY IT WINS, and the number that says it is the epilogue and not the adds. MEASURED in the
+#: isolated bake-off (`perf_experiments/reduce_scatter_swiglu/`, one grid column, KGROUPS 10,
+#: m_eff 8, HN_PAD 6, T = 48 bfp8 tiles, identical precision contract on every variant):
+#:     tree (shipped)             78 011 ns   1.00x   PCC 0.999823   417 792 B/core
+#:     scatter (this knob)        27 853 ns   2.80x   PCC 0.999777   313 344 B/core (-104 448)
+#:     scatter, epilogue at root  71 615 ns   1.09x   PCC 0.999775   +91 392 B/core
+#: i.e. ~85 % of the win is the EPILOGUE, not the adds — independently corroborated by a per-pass
+#: ablation of the shipped 58 830 ns stage: ~44 100 ns (75 %) is the 48-tile SFPU SiLU, ~10 700 (18 %)
+#: the plain adds, ~2 700 (4.5 %) the up-add + multiply, ~800 (1.4 %) the whole bias walk overhead.
+#: Scattering the epilogue parallelises the DOMINANT term, and a worker's slice is <= DEST (8 tiles),
+#: so the `m_eff`-call SiLU bias walk collapses to ONE call for free. On the real 11x10 grid with all
+#: 11 column collectives concurrent the isolated 3.08x eroded only 0.7 %.
+#:
+#: PREDICATE: UNCONDITIONAL. Every cell of KGROUPS {2,4,8,10} x m_eff {1,2,4,8} x HN_PAD {4,6} wins,
+#: 1.65x to 3.11x, zero regressions — including both degenerate ends (m_eff 1 = 6 tiles over 10 cores
+#: is still 1.65x; KGROUPS 2 is 1.76x). Two sub-predicates from the same sweep are honoured in the
+#: code rather than left as folklore: the slice axis is the flat TILE INDEX and never the token (M)
+#: axis (that axis caps the worker count at m_eff and REGRESSES to 0.79x at m_eff 1), and the `h`
+#: gather is fused straight into cb_h_local rather than through a landing CB the root copies (worth
+#: 8.6 % and 52 224 B).
+#:
+#: MEASURED IN SITU (Perf 2, the 12-cell guard set, one fresh-cache profiled run per value of THIS
+#: knob with everything else at its shipped setting, whole-op DEVICE KERNEL DURATION — a true A/B of
+#: one binary, not of two branches):
+#:   bf16_rm  7168/5120/128    139 229 -> 109 314 ns   -21.5 %   1.274x
+#:            7168/5120/256    205 107 -> 150 479      -26.6 %   1.363x   (the focus cell)
+#:            7168/5120/512    359 411 -> 251 915      -29.9 %   1.427x
+#:            7168/1024/256    203 590 -> 149 036      -26.8 %   1.366x
+#:            6144/5120/256    191 797 -> 136 059      -29.1 %   1.410x
+#:            7168/5120/5120 3 175 661 -> 2 037 988    -35.8 %   1.558x
+#:   bfp8     7168/5120/128    133 143 -> 106 483      -20.0 %   1.250x
+#:            7168/5120/256    201 622 -> 147 253      -27.0 %   1.369x
+#:            7168/5120/512    349 710 -> 239 979      -31.4 %   1.457x
+#:            7168/1024/256    201 927 -> 147 400      -27.0 %   1.370x
+#:            6144/5120/256    187 784 -> 131 600      -29.9 %   1.427x
+#:            7168/5120/5120 3 051 287 -> 1 910 670    -37.4 %   1.597x
+#:   12-cell sum            8 400 268 -> 5 518 176     -34.3 %   1.522x
+#: ZERO regressions; 1.25x to 1.60x, monotone in the M extent (more M-blocks = more repetitions of the
+#: collective, so more of the op is this stage). And it costs ~82.8 KB/core LESS L1.
+#:
+#: WHY 1.36x IN SITU AND NOT THE ISOLATED 3.08x — the honest ceiling, and it is AMDAHL, not erosion.
+#: The stage really did collapse: over the guard set the critical core's `compute_reduce` went
+#: 4 418 040 -> 1 351 719 ns (-69 %) and the whole-op sum moved 2 804 Ms of that 3 066 Ms, i.e. ~91 %
+#: of the stage saving reached the wall clock. What bounds it is that the reduce+epilogue was ~33 % of
+#: the op, so removing 69 % of it cannot exceed ~1.5x. After this change the focus cell's top stages
+#: are `reader_phase2` 78 kns / `compute_down` 98 kns / `writer_out_issue` 87 kns against
+#: `compute_reduce` 39 kns — the h all-gather and the phase-2 `down` matmul are the critical path now,
+#: and the reduce is a distant fourth whose remaining time is mostly WAITING for the all-to-all, not
+#: math. The next round belongs to phase 2.
+REDUCE = os.environ.get("MOE_SWIGLU_REDUCE", "scatter")
+
+#: PERF 2 — which NoC carries the two halves of the column all-to-all. `DM_DEDICATED_NOC` binds the
+#: reader to NOC_0 and the writer to NOC_1, so "which kernel issues the write" IS the NoC choice.
+#:   "one"   — both the gate and the up gather legs go out on the WRITER (NOC_1), the shape the
+#:             bake-off measured.
+#:   "split" — the GATE legs stay on the writer (NOC_1) and the UP legs move to the reader (NOC_0),
+#:             halving each NoC's payload for the same bytes. Split by PAYLOAD, not by direction: a
+#:             per-DESTINATION direction split (the ideal, since a sibling measured a bidirectional
+#:             all-to-all on one NoC paying up to 1.9x in torus-wrapped HOP COUNT) would need BOTH
+#:             data-movement RISC-Vs to consume ONE CB, and `cb_pop_front` writes the shared
+#:             `tiles_acked` word with the popping RISC-V's own local count — the exact single-owner
+#:             hazard that produced round 1's "in-place add hangs". Splitting by payload gives each
+#:             RISC-V its OWN CB (writer pops cb_gate_acc, reader pops cb_up_acc) and stays legal.
+#:
+#: MEASURED, and deliberately measured TWICE because the effect sits ON the noise band — the 12-cell
+#: guard-set sum, two independent fresh-cache runs per value:
+#:   "one"    5 596 297 / 5 600 029 ns   (the two runs agree to 0.07 %)
+#:   "split"  5 509 590 / 5 524 843 ns   (0.28 %)   = -1.45 % on the median, 12/12 cells faster in
+#:                                                    run 1 and 8/12 in run 2
+#: The between-group gap is 5x the within-group spread, and it CONCENTRATES exactly where the
+#: mechanism predicts: the two `count 5120` cells (20 M-blocks, so 20 repetitions of the collective)
+#: move -1.5 to -2.0 % in BOTH runs, while a single-dispatch focus-cell run is a coin flip
+#: (150 627 "one" vs 151 427 "split"). SHIPPED AT "split"; "one" reproduces the bake-off's shape.
+#:
+#: This is NOT the ideal split. A sibling measured a bidirectional all-to-all confined to one NoC
+#: paying up to 1.9x in torus-wrapped HOP COUNT (NOC_1 routes modular-decreasing, NOC_0
+#: modular-increasing), which says the right split is per-DESTINATION — "below me" on one NoC, "above
+#: me" on the other. That is NOT expressible here: both halves would then read the SAME accumulator
+#: CB from BOTH data-movement RISC-Vs, and `cb_pop_front` writes the shared `tiles_acked` word with
+#: the popping RISC-V's own local count. Getting it would need a second copy of the accumulator
+#: (+52 KB/core, giving back half the path's L1 win) or a private ready-signal so the second RISC-V
+#: can address the CB without owning its lifecycle — a real experiment, not a knob turn. The
+#: payload split captures the bandwidth half of the idea and none of the hop-count half.
+SCATTER_NOC = os.environ.get("MOE_SWIGLU_SCATTER_NOC", "split")
+
 #: Mailbox handshake word — the reader publishes {count, M_t, m_blocks} plus this flag.
 MAILBOX_MAGIC = 0xC0FFEE01
 MAILBOX_WORDS = 16
@@ -311,11 +417,19 @@ CB_X_STAGE = 2  # tilized x tile-row awaiting its multicast turn
 CB_W_GATE = 3
 CB_W_UP = 4
 CB_W_DOWN = 5
-CB_REDUCE_GATE_IN = 6  # incoming child partials (gate)
-CB_REDUCE_UP_IN = 7  # incoming child partials (up)
+CB_REDUCE_GATE_IN = 6  # `tree`: incoming child partials (gate)
+CB_REDUCE_UP_IN = 7  # `tree`: incoming child partials (up)
 CB_H = 8  # gathered h, one phase-2 K-block per round
 CB_IDX_SCRATCH = 9
 CB_COUNTS_SCRATCH = 10
+# `scatter` (PERF 2): the reduce-scatter's landing + slice CBs. One slot per CONTRIBUTOR in the two
+# landing CBs; the three slice CBs are only `slice_pages` deep, which is what makes this path
+# ~100 KB/core SMALLER than the tree it replaces.
+CB_GATHER_GATE = 11  # every contributor's gate slice, slot `row`
+CB_GATHER_UP = 12
+CB_SLICE_GATE = 13  # this worker's gate-slice accumulator (in-place)
+CB_SLICE_UP = 14
+CB_H_SLICE = 15  # this worker's finished h slice, unicast into the root's cb_h_local
 CB_OUT_TILES = 16
 CB_GATE_ACC = 24  # gate partial accumulator (matmul out + in-place reduce adds)
 CB_UP_ACC = 25
@@ -330,8 +444,12 @@ CB_OUT_INTERM = 30  # phase-2 packer-L1 accumulation region
 # ---------------------------------------------------------------------------
 SEM_X_BASE = 0  # x row multicast (data_ready, consumer_ready)
 SEM_H_BASE = 2  # h all-gather   (data_ready, consumer_ready)
-SEM_GO = 4  # reduce tree: parent -> child "your slot is free, send"
-SEM_DATA = 5  # reduce tree: child -> parent "partials landed"
+# `tree`: parent -> child "your slot is free, send". `scatter`: the peer INVITE — every core tells
+# every core in its column "my landing CBs are reserved", which is the same flow control generalised
+# from one parent to K peers.
+SEM_GO = 4
+SEM_DATA = 5  # `tree`: child -> parent "partials landed". `scatter`: contributor -> worker, same.
+SEM_HSLICE = 6  # `scatter`: worker -> column root "my finished h slice landed in your cb_h_local"
 
 
 def _pow2_ceil(v):
@@ -340,6 +458,59 @@ def _pow2_ceil(v):
     while p < v:
         p <<= 1
     return p
+
+
+def _largest_divisor_le(n, cap):
+    """The `scatter` worker count — largest divisor of `n` that is <= cap. The HOST twin of
+    `slice_workers()` in kernels/moe_fused_swiglu_common.hpp; the two must agree exactly, so the
+    kernel-side one is the definition and this one only SIZES the CBs it implies."""
+    return max(d for d in range(1, min(n, cap) + 1) if n % d == 0)
+
+
+def _scatter_plan(m_block, m_eff_min, hn_pad, kgroups):
+    """CB sizing for the `scatter` reduce path, or (None, reason) if this geometry cannot express it.
+
+    The whole point of this function is that it enumerates EVERY runtime m_eff the kernels can reach
+    (`m_tiles_eff` returns a power of two in [m_eff_min, m_block]) and sizes the CBs for all of them
+    at once, because the slice plan SHRINKS with m_eff while the CBs are allocated once.
+
+    TWO HARD PRECONDITIONS, both silent-wrong-answer class if broken — asserted here, never assumed
+    device-side, and a failure falls back to `tree` rather than shipping a wrong answer:
+
+      1. `P % B == 0` for every CB the kernels cycle in blocks of `B` pages. A CB's write pointer
+         advances by the pages pushed and wraps only at the CB END, so a block that starts mid-CB and
+         runs past the end does not wrap — it OVERRUNS INTO THE NEXT CB. Measured in the bake-off:
+         a plan violating this scored PCC 0.709-0.886 where every legal plan scored >= 0.9955.
+         Here `B` is the per-m_eff slice size `a`, so the slice CBs are `lcm(a)` pages and the
+         landing CBs (`KGROUPS * max(a)`, pushed WHOLE every block) must also be a multiple of every
+         `a`, since compute consumes them `a` pages at a time.
+      2. `KGROUPS >= 2`. The slice reduce is `copy` + (NC-2) in-place adds + one SiLU-fused final
+         add over NC == KGROUPS contributors, so a column of one has no reduce to scatter.
+    """
+    if kgroups < 2:
+        return None, f"KGROUPS {kgroups} < 2: a column of one has no cross-column reduce to scatter"
+    sizes, m = [], m_eff_min
+    while m <= m_block:
+        t = m * hn_pad
+        sizes.append(t // _largest_divisor_le(t, kgroups))
+        m *= 2
+    slice_pages = 1
+    for a in sizes:
+        slice_pages = slice_pages * a // _gcd(slice_pages, a)
+    gather_pages = kgroups * max(sizes)
+    for a in sizes:
+        if slice_pages % a or gather_pages % a:
+            return None, (
+                f"slice sizes {sorted(set(sizes))} over the reachable m_eff need slice CBs of "
+                f"{slice_pages} and landing CBs of {gather_pages} pages, and {a} divides neither"
+            )
+    return {"slice_pages": slice_pages, "gather_pages": gather_pages, "sizes": sizes}, None
+
+
+def _gcd(a, b):
+    while b:
+        a, b = b, a % b
+    return a
 
 
 def _split(total, groups):
@@ -598,6 +769,25 @@ def create_program_descriptor(
         for c, ch in enumerate(_node["children"]):
             _slot_of[ch] = c % reduce_slots
 
+    # ---- PERF 2: the reduce-scatter plan, or an honest fall back to the tree ----
+    # The tree is retained BYTE-IDENTICALLY on the `tree` value of the knob AND as the automatic
+    # fallback here, so a geometry whose slice plan is not expressible still produces a correct
+    # program instead of a raise (the scatter is a pure perf restructure; it owes the caller nothing).
+    scatter_plan, scatter_why_not = (
+        (None, "MOE_SWIGLU_REDUCE=tree") if REDUCE != "scatter" else _scatter_plan(M_BLOCK, M_EFF_MIN, HN_PAD, KGROUPS)
+    )
+    if REDUCE not in ("tree", "scatter"):
+        raise RuntimeError(f"moe_fused_swiglu: MOE_SWIGLU_REDUCE must be 'tree' or 'scatter', got {REDUCE!r}")
+    scatter = scatter_plan is not None
+    if not scatter and REDUCE == "scatter":
+        print(f"moe_fused_swiglu: MOE_SWIGLU_REDUCE=scatter unavailable, using the reduce tree — {scatter_why_not}")
+    # Pages per CB on each path. The inactive path's CBs get ONE page instead of ~50 KB each — the
+    # same trick the row-major staging CBs use on the bfp8 activation path, so both paths' kernels
+    # can name every CB index unconditionally while only the live path costs L1.
+    n_gather = scatter_plan["gather_pages"] if scatter else 1
+    n_slice = scatter_plan["slice_pages"] if scatter else 1
+    scatter_noc_split = 1 if (scatter and SCATTER_NOC == "split") else 0
+
     # ---- collectives: emit the mcast wire (Mcast1D / Mcast2D own the coord + rect math) ----
     # Reader runs on NOC_0 (ReaderDataMovementConfig -> preferred_noc_for_dram_read).
     #
@@ -698,17 +888,49 @@ def create_program_descriptor(
         _cb(CB_W_GATE, all_cores, depth_w * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
         _cb(CB_W_UP, all_cores, depth_w * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
         _cb(CB_W_DOWN, all_cores, n_w_down, bfp4_tile, ttnn.bfloat4_b),  # depth_wd K-blocks
-        _cb(CB_REDUCE_GATE_IN, all_cores, reduce_slots * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
-        _cb(CB_REDUCE_UP_IN, all_cores, reduce_slots * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        _cb(CB_REDUCE_GATE_IN, all_cores, 1 if scatter else reduce_slots * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        _cb(CB_REDUCE_UP_IN, all_cores, 1 if scatter else reduce_slots * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        # PERF 2 `scatter`: the landing CBs are pushed WHOLE every M-block (so every contributor's
+        # own-write-pointer proxy is the CB base on every core, at any m_eff), hence `gather_pages`
+        # must hold the LARGEST plan — KGROUPS slots of max(a).
+        _cb(CB_GATHER_GATE, all_cores, n_gather, bfp8_tile, ttnn.bfloat8_b),
+        _cb(CB_GATHER_UP, all_cores, n_gather, bfp8_tile, ttnn.bfloat8_b),
+        # THE SLICE ACCUMULATORS ARE bfloat16, NOT bfp8 — and that is a CORRECTNESS choice, measured.
+        # The scatter chains KGROUPS contributors through ONE accumulator, so a value is re-packed
+        # KGROUPS times where the tree re-packed it ceil(log2(KGROUPS)) times, and the bfp8 pack's
+        # rounding is a BIASED half-LSB (every partial here is positive), so the error is LINEAR in the
+        # chain length: `test_emb_contraction`'s max relative error measured 0.0204 on the tree and
+        # 0.0580 with bfp8 slice accumulators, against that test's 0.05 gate.
+        # DEST is bf16 at fp32_dest_acc_en=False, so packing DEST -> a bf16 CB is EXACT: it removes
+        # the per-step bfp8 quantisation and leaves only the FPU's own DEST rounding — HALF the
+        # rounding steps. Measured back at 0.0204 — BIT-IDENTICAL to the tree's, i.e. the scatter's
+        # longer accumulation chain costs NOTHING once the intermediate format stops quantising.
+        # Costs 3 * n_slice * (2048 - 1088) B/core (17 280 B here) against the path's ~100 KB saving.
+        # `cb_h_slice` STAYS bfp8: it is unicast into the bfp8 cb_h_local, so the ONE genuine dtype
+        # boundary of the epilogue is the SwiGLU multiply's pack, exactly as the tree has it.
+        _cb(CB_SLICE_GATE, all_cores, n_slice, bf16_tile, ttnn.bfloat16),
+        _cb(CB_SLICE_UP, all_cores, n_slice, bf16_tile, ttnn.bfloat16),
+        _cb(CB_H_SLICE, all_cores, n_slice, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_H, all_cores, DEPTH_H * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_IDX_SCRATCH, all_cores, 1, max(idx_page, dram_align), ttnn.uint32),
         _cb(CB_COUNTS_SCRATCH, all_cores, 1, max(counts_page, dram_align), ttnn.uint32),
         _cb(CB_OUT_TILES, all_cores, DEPTH_OUT * n_out_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_GATE_ACC, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_UP_ACC, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
-        _cb(CB_GATE_SEND, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
-        _cb(CB_UP_SEND, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
-        _cb(CB_GATE_SILU, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        # `scatter` deletes the send pair outright: a dataflow kernel is a first-class CB consumer, so
+        # the gather reads cb_gate_acc / cb_up_acc DIRECTLY and the two full-block copies every
+        # non-root core pays today go away with them.
+        _cb(CB_GATE_SEND, all_cores, 1 if scatter else n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        _cb(CB_UP_SEND, all_cores, 1 if scatter else n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        # SiLU(sum(gate)) — one SLICE on the scatter path (and bf16, for the reason above: it is the
+        # output of the LAST accumulation step), the whole bfp8 block on the tree path.
+        _cb(
+            CB_GATE_SILU,
+            all_cores,
+            n_slice if scatter else n_gu_block,
+            bf16_tile if scatter else bfp8_tile,
+            ttnn.bfloat16 if scatter else ttnn.bfloat8_b,
+        ),
         _cb(CB_H_LOCAL, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_OUT_INTERM, all_cores, n_out_block, bf16_tile, ttnn.bfloat16),
     ]
@@ -757,6 +979,15 @@ def create_program_descriptor(
         CB_H_LOCAL,
         CB_IDX_SCRATCH,
         CB_COUNTS_SCRATCH,
+        # PERF 2 — the scatter path. These sit BEFORE the mcast/accessor blocks because the reader's
+        # CT_XMCAST / CT_HMCAST / TA_BASE offsets are derived from the length of this scalar block.
+        1 if scatter else 0,
+        scatter_noc_split,
+        n_gather,
+        SEM_HSLICE,
+        CB_GATHER_GATE,
+        CB_GATHER_UP,
+        CB_UP_ACC,
     ]
     reader_ct.extend(x_mcast.compile_time_args())
     reader_ct.extend(h_mcast.compile_time_args())
@@ -789,6 +1020,17 @@ def create_program_descriptor(
         CB_UP_SEND,
         CB_REDUCE_GATE_IN,
         CB_REDUCE_UP_IN,
+        # PERF 2 — the scatter path (before the accessor block, which derives TA_BASE from this
+        # block's length).
+        1 if scatter else 0,
+        scatter_noc_split,
+        SEM_HSLICE,
+        CB_GATE_ACC,
+        CB_UP_ACC,
+        CB_GATHER_GATE,
+        CB_GATHER_UP,
+        CB_H_SLICE,
+        CB_H_LOCAL,
     ]
     for t in (w_up, output_tensor):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -825,6 +1067,16 @@ def create_program_descriptor(
         CB_H,
         CB_OUT_INTERM,
         CB_OUT_TILES,
+        # PERF 2 — the scatter path.
+        1 if scatter else 0,
+        KGROUPS,
+        n_gather,
+        DEST_AUTO_LIMIT_TILES,
+        CB_GATHER_GATE,
+        CB_GATHER_UP,
+        CB_SLICE_GATE,
+        CB_SLICE_UP,
+        CB_H_SLICE,
     ]
 
     mailbox_addr = mailbox.buffer_address()
@@ -860,6 +1112,11 @@ def create_program_descriptor(
                 1 if node["is_root"] else 0,
                 len(node["children"]),
                 x,
+                # PERF 2 — this core's ROW in its grid column. The scatter's whole plan (which slice
+                # I own, where it lands in the root's block, which slot I write in every peer's
+                # landing CB) is a pure function of this and the runtime m_eff, so there is no
+                # host-side slice table to keep in sync with the kernels.
+                y,
             ]
             for c in range(MAX_CHILDREN):
                 if c < len(node["children"]):
@@ -867,6 +1124,11 @@ def create_program_descriptor(
                 else:
                     cx, cy = 0, 0
                 args.extend([cx, cy])
+            # The whole COLUMN, row 0..KGROUPS-1, in virtual coordinates: the scatter's peer list
+            # (invite fan-out + gather destinations). Row `r` is at index `r` on every core in the
+            # column, which is what makes "worker r owns tiles [r*a, (r+1)*a)" agree grid-wide.
+            for r in range(KGROUPS):
+                args.extend(_virt(device, x, r))
             args.extend(x_mcast.runtime_args(core))
             args.extend(h_mcast.runtime_args(core))
             reader_rt[x][y] = args
@@ -874,7 +1136,7 @@ def create_program_descriptor(
             px, py = _virt(device, *node["parent"]) if node["parent"] is not None else (0, 0)
             # This core's landing slot in its parent's reduce CBs (Refinement 2 lever 1).
             my_slot = _slot_of.get((x, y), 0)
-            writer_rt[x][y] = [
+            wargs = [
                 mailbox_addr,
                 w_up.buffer_address(),
                 output_tensor.buffer_address(),
@@ -888,7 +1150,15 @@ def create_program_descriptor(
                 px,
                 py,
                 my_slot,
+                y,  # PERF 2 — my row in the column (see the reader's note)
+                x % KGROUPS,  # PERF 2 — the row of THIS column's reduce root == the h-gather target
             ]
+            # PERF 2 — the column peer list, in the SAME row order the reader uses. The scatter's
+            # root is column x's reduce root, i.e. row `x % KGROUPS`, so its coordinates are just
+            # entry `x % KGROUPS` of this list; no separate root argument.
+            for r in range(KGROUPS):
+                wargs.extend(_virt(device, x, r))
+            writer_rt[x][y] = wargs
 
             compute_rt[x][y] = [
                 mailbox_addr,
@@ -898,6 +1168,7 @@ def create_program_descriptor(
                 1 if node["is_root"] else 0,
                 len(node["children"]),
                 x,  # my_col — the x-multicast injection slot (round t's injector is column t % HGROUPS)
+                y,  # PERF 2 — my row in the column: which slice of the scatter I own
             ]
 
     # `/perf-measure` collective ablations: one transport stubbed, all CB scaffolding intact.
@@ -935,5 +1206,9 @@ def create_program_descriptor(
     semaphores = list(x_mcast.owned_semaphores()) + list(h_mcast.owned_semaphores())
     semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_GO, core_ranges=all_cores, initial_value=0))
     semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_DATA, core_ranges=all_cores, initial_value=0))
+    # PERF 2 — worker -> root "my h slice landed". MONOTONE like every other semaphore in this op
+    # (never reset, always compared with `wait_min` against a running total), which is what keeps it
+    # race-free across M-blocks. Allocated on both paths so the two programs differ only in kernels.
+    semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_HSLICE, core_ranges=all_cores, initial_value=0))
 
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
