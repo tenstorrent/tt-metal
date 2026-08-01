@@ -1312,3 +1312,45 @@ serialises phase 2. What does is the **LOOP ORDER**: a core sends its own column
 must first RECEIVE rounds 0..r. No signal change can touch that — only moving the send off the
 receiving RISC can, which is §6's dual-RISC split. One fewer candidate, and the remaining one is now
 the only one.
+
+### 8. Perf 3 addendum 3 — the dual-RISC split is BUILT, correct, and a measured NULL. Every route is now closed.
+
+§6/§7 left exactly one candidate for phase 2's serialisation: the LOOP ORDER (a core sends its own
+column at iteration `r == my_col` of the same loop in which it receives every other column, so the
+sender of round r+1 must first receive rounds 0..r). It is now implemented — `MOE_SWIGLU_HSEND=writer`
+— and it is a null.
+
+**What was built** (all behind the knob; `reader` remains the default and is byte-identical):
+- The h broadcast moved to the WRITER (NoC1), which is not in the receive loop, so a root sends as
+  soon as its column's h is assembled and the grid has freed its slot.
+- `DEPTH_H` per-slot monotone arrival counters (`SEM_H_RDY_BASE..`), because with senders decoupled
+  their increments interleave and a single counter says HOW MANY blocks arrived but not WHICH — the
+  same defect Perf 2 #4 root-caused in the reduce. Per-slot is enough: only `DEPTH_H` rounds are ever
+  in flight, so it costs no L1.
+- A window ack (`SEM_H_FREE`): the receiver acks round r's sender straight after its
+  `cb_reserve_back` and BEFORE waiting for data — that order is what makes the split deadlock-free.
+- The writer derives the landing address arithmetically (`cb_h_base + slot * block`), because
+  `cb_interface` is per-RISC-V local state and the writer is not cb_h's pusher, so `get_write_ptr`
+  would never advance there.
+- Each core keeps a PRIVATE per-slot expectation, which absorbs the fact that a root is excluded from
+  its own multicast (its counter for that slot is one behind the grid's) with no special case.
+
+**Correct**: golden **45/45** on `HSEND=writer`. **And slower**: 110 299 / 152 919 / 264 829 ns
+against `reader`'s 104 813 / 146 741 / 246 790 (**+5 to +7 %**).
+
+**The profile says why, and it disproves the hypothesis outright.** Phase 1 actually got FASTER
+(`compute_gateup` 2→81 µs vs 2→85, because the send no longer sits on the reader's critical path) —
+but `compute_down` stretched 40→144 vs 40→139. So the rounds were never waiting on the loop order.
+They wait on **ROOT READINESS**: `compute_reduce` spans 40→96 µs, i.e. the eleven column roots finish
+their reduce ~56 µs apart, and that spread is inherited straight from phase 1's DRAM stream. Round r
+cannot start before root r's h exists no matter which RISC-V sends it, and decoupling costs an acked
+write barrier + a non-posted atomic barrier per round on the sender plus one remote atomic per
+receiver per round — more than the ordering it removes.
+
+**Every candidate for the phase-2 serialisation has now been measured and eliminated**: CB depth
+(§6a), grid shape (§6), absolute slot addressing (§6b, L1-locked by 296 064 B), the flag reset (§7,
+Counter fixed and slower), and now the loop order (built and slower). What remains is not a phase-2
+defect at all — it is that the ELEVEN COLUMN ROOTS FINISH PHASE 1 ~56 us APART, and that spread is
+the weight stream's, which is already at its 490 GB/s roofline. Closing it means changing the
+blocking model so a column's reduce does not wait on the slowest core in its column — a
+planner-level scheme change, not a kernel one.

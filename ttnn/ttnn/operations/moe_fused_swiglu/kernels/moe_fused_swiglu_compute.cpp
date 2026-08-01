@@ -253,6 +253,9 @@ void kernel_main() {
             MaybeDeviceZoneScope("compute_gateup");
             gate_buf.reserve_back(gu_block_tiles);
             up_buf.reserve_back(gu_block_tiles);
+            // The ONE reconfig this phase needs, hoisted out of the loop (see the calls below).
+            reconfig_data_format(cb_w_gate, cb_x_tiles);
+            pack_reconfig_data_format(cb_gate_acc);
             for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
                 // The ragged column (hn < HN_PAD) narrows the FMA width of the chunk it falls in;
                 // the host guarantees every chunk keeps at least one real column. 0 means "full".
@@ -278,7 +281,15 @@ void kernel_main() {
                     KrSteps,
                     NoIn0Source,
                     NoIn1BaseOffset,
-                    /*caller_owns_pack_target=*/true>(
+                    /*caller_owns_pack_target=*/true,
+                    NoneActivation,
+                    // PERF 3 — RECONFIG ONLY ON THE FIRST CALL OF THE M-BLOCK. Every gate/up chunk
+                    // call has the identical operand formats (in0 bfp8 x, in1 bfp4 weights, out bfp8
+                    // accumulator), so every reconfig after the first is MMIO for a format change
+                    // that never happens. Only chunk 0's gate call follows a different phase (the
+                    // previous M-block's `down`, or the tilize), so only it must reconfig.
+                    // `examples/compute_block_size` measures this family at up to 1.19x.
+                    matmul_config::DataFormatReconfig::NONE>(
                     x_buf,
                     wg_buf,
                     gate_buf,
@@ -309,7 +320,9 @@ void kernel_main() {
                     KrSteps,
                     NoIn0Source,
                     NoIn1BaseOffset,
-                    /*caller_owns_pack_target=*/true>(
+                    /*caller_owns_pack_target=*/true,
+                    NoneActivation,
+                    matmul_config::DataFormatReconfig::NONE>(
                     x_buf,
                     wu_buf,
                     up_buf,

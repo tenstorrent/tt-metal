@@ -83,8 +83,11 @@ constexpr uint32_t cb_gather_gate = get_compile_time_arg_val(30);
 constexpr uint32_t cb_gather_up = get_compile_time_arg_val(31);
 constexpr uint32_t cb_h_slice = get_compile_time_arg_val(32);
 constexpr uint32_t cb_h_local = get_compile_time_arg_val(33);
+// PERF 3 (HSEND=writer) — the h all-gather CB. The writer never pushes it; it needs only its
+// BASE address, captured before any push, to derive each round's landing slot arithmetically.
+constexpr uint32_t cb_h = get_compile_time_arg_val(34);
 
-constexpr uint32_t TA_BASE = 34;
+constexpr uint32_t TA_BASE = 35;
 constexpr auto wu_args = TensorAccessorArgs<TA_BASE>();
 constexpr auto out_args = TensorAccessorArgs<wu_args.next_compile_time_args_offset()>();
 
@@ -120,6 +123,9 @@ void kernel_main() {
     // gathered into, since it is the core that injects this column's h into the phase-2 all-gather.
     const uint32_t root_row = get_arg_val<uint32_t>(14);
     constexpr uint32_t RT_PEERS = 15;  // KGROUPS (vx, vy) pairs — the whole column, in row order
+    // PERF 3 (HSEND=writer) — the h broadcast rect, NOC1 routing order: (far_x, far_y, near_x, near_y).
+    constexpr uint32_t RT_HRECT = RT_PEERS + 2 * KGROUPS;
+    constexpr uint32_t RT_MYCOL = RT_HRECT + 4;  // this core's grid COLUMN == the round it sends
 
     const auto wu_acc = TensorAccessor(wu_args, w_up_addr, BFP4_TILE);
     const auto out_acc = TensorAccessor(out_args, out_addr, BFP8_TILE);
@@ -135,6 +141,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_go_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
     uint32_t invites = 0;
+#if HSEND_WRITER
+    // PERF 3 — the h broadcast's two running totals, mirroring the reader's discipline: monotone,
+    // never reset, always compared with wait_min. `cb_h_base` MUST be read before any push.
+    const uint32_t my_col = get_arg_val<uint32_t>(RT_MYCOL);
+    const uint32_t cb_h_base = get_write_ptr(cb_h);
+    uint32_t h_arrivals = 0;
+    uint32_t hfree_expected = 0;
+#endif
 #ifdef ABLATE_NO_REDUCE_XFER
     (void)sem_go_ptr;
     (void)invites;
@@ -305,6 +319,69 @@ void kernel_main() {
 #endif
                 cb_pop_front(cb_h_slice, sl_a);
             }
+
+#if HSEND_WRITER
+            // ---- PERF 3: the h BROADCAST, moved off the reader ----
+            //
+            // THE POINT OF THE SPLIT. On the reader this send sat at iteration `r == my_col` of the
+            // same loop that receives every other column, so the sender of round r+1 could not start
+            // until it had RECEIVED rounds 0..r — an HGROUPS-long serial chain that measured as the
+            // whole of phase 2 (43 us ~= 11 x 3.9 us with every payload ablated). Here it is on a
+            // RISC-V that is not in that loop, so a root broadcasts as soon as (a) its column's h is
+            // assembled and (b) the grid has freed its slot. `consume(r)` then depends only on
+            // `consume(r - DEPTH_H)`, i.e. a chain of HGROUPS/DEPTH_H, and it costs NO extra L1
+            // because the rolling window is unchanged.
+            if (is_root) {
+                MaybeDeviceZoneScope("writer_hsend");
+                h_arrivals += sl_w;
+                // (a) my column's h block is complete — the same monotone counter the reader waits
+                //     on, and a wait (not a consume), so both RISC-Vs may read it.
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HSLICE))),
+                    h_arrivals);
+                // (b) every core has reserved the slot this round lands in. One ack per core per
+                //     round; the receiver sends it BEFORE waiting for data, which is what makes the
+                //     split deadlock-free.
+                hfree_expected += NUM_CORES;
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_H_FREE))),
+                    hfree_expected);
+#ifndef ABLATE_NO_H_XFER
+                // The landing address is NOT `get_write_ptr(cb_h)` — `cb_interface` is per-RISC-V
+                // local state and this RISC-V is not cb_h's pusher, so its copy never advances.
+                // It is derived instead: every core pushes cb_h in lockstep in units of
+                // `h_block_tiles`, so slot index = (b * HGROUPS + my_col) mod (capacity / block),
+                // measured from the base captured before any push.
+                const uint32_t blocks_cap = (DEPTH_H * M_BLOCK) / m_eff;
+                const uint32_t slot = (b * HGROUPS + my_col) % blocks_cap;
+                // `gu_block_tiles` IS the reader's `h_block_tiles`: both are m_eff * HN_PAD.
+                const uint32_t hbytes = gu_block_tiles * BFP8_TILE;
+                const uint64_t dst = get_noc_multicast_addr(
+                    get_arg_val<uint32_t>(RT_HRECT + 0),
+                    get_arg_val<uint32_t>(RT_HRECT + 1),
+                    get_arg_val<uint32_t>(RT_HRECT + 2),
+                    get_arg_val<uint32_t>(RT_HRECT + 3),
+                    cb_h_base + slot * hbytes);
+                // EXCLUDE-source: this core's own copy is the reader's local self-copy, so the
+                // multicast fan-out is NUM_CORES - 1 and this core's own SEM_H_RDY is not bumped —
+                // which is exactly why the reader keeps a private per-slot expectation.
+                noc_async_write_multicast(get_write_ptr(cb_h_local), dst, hbytes, NUM_CORES - 1, /*linked=*/false);
+                // ACKED, not merely flushed: the receivers key on the counter below, so the payload
+                // must have LANDED before it moves. Same rule the mcast_pipe Counter fix follows.
+                noc_async_write_barrier();
+                noc_semaphore_inc_multicast(
+                    get_noc_multicast_addr(
+                        get_arg_val<uint32_t>(RT_HRECT + 0),
+                        get_arg_val<uint32_t>(RT_HRECT + 1),
+                        get_arg_val<uint32_t>(RT_HRECT + 2),
+                        get_arg_val<uint32_t>(RT_HRECT + 3),
+                        static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + (my_col % DEPTH_H)))),
+                    1,
+                    NUM_CORES - 1);
+                noc_async_atomic_barrier();
+#endif
+            }
+#endif
         } else if (!is_root) {
             // ---- reduce tree, CHILD side ----
             MaybeDeviceZoneScope("writer_reduce_child");

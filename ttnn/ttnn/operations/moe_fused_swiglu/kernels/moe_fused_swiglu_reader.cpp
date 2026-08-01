@@ -243,6 +243,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_h_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HSLICE)));
     uint32_t h_arrivals = 0;
+#if HSEND_WRITER
+    // PERF 3 — per-cb_h-slot arrival expectation, this core's own running total. See the wait site.
+    uint32_t h_exp[DEPTH_H] = {0};
+#endif
 #ifdef ABLATE_NO_REDUCE_XFER
     (void)sem_data_ptr;
     (void)data_arrivals;
@@ -662,6 +666,26 @@ void kernel_main() {
                 // W_down block in one drain.
                 cb_reserve_back(cb_h, h_block_tiles);
                 const uint32_t hdst = get_write_ptr(cb_h);
+#if HSEND_WRITER
+                // PERF 3 — DUAL-RISC SPLIT, receive side. The send lives on the writer now, so this
+                // loop only receives. Two steps, and the ORDER of them is the whole protocol:
+                //
+                //   1. ACK FIRST. `cb_reserve_back` above is the proof that THIS core's slot
+                //      `r % DEPTH_H` is free, so tell round r's sender it may write. Acking before
+                //      waiting is what makes the split deadlock-free: the sender needs this core's
+                //      ack, and this core must not be blocked on the sender's data to give it.
+                //   2. THEN wait on the slot's own arrival counter. Per-slot, because senders are no
+                //      longer serialised by the loop and their increments can interleave.
+                //
+                // Round r's sender is column r's reduce root, core (r, r % KGROUPS); the h mcast's
+                // rotating-sender coord table is row-major over the grid and already in RT.
+                {
+                    const uint32_t sidx = (r % KGROUPS) * HGROUPS + r;
+                    const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
+                    const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                    noc_semaphore_inc(get_noc_addr(svx, svy, static_cast<uint32_t>(get_semaphore(SEM_H_FREE))), 1);
+                }
+#endif
                 const bool i_send = (is_root && r == my_col);
                 if (i_send) {
                     // Self-copy cb_h_local -> this round's cb_h slot, so the send below is `src == dst`
@@ -701,19 +725,40 @@ void kernel_main() {
                         cb_pop_front(cb_h_local, h_block_tiles);
                     }
 #ifndef ABLATE_NO_H_XFER  // /perf-measure: drop the h transport, keep cb_h's reserve/push
+#if !HSEND_WRITER
                     if constexpr (hmc.active) {
                         h_send.send(hdst, hdst, h_block_tiles * BFP8_TILE);
                     }
+#else
+                    // PERF 3 — the broadcast to the other 109 cores is the WRITER's job now; this
+                    // core only lands its own copy (the self-copy above). Nothing to do here.
+                    (void)hdst;
+#endif
 #endif
                 } else {
                     // The other 109 cores drain AFTER the multicast, so the previous round's W_down read
                     // had this whole round's grid-wide broadcast to land under — that is the deferral.
 #ifndef ABLATE_NO_H_XFER
+#if !HSEND_WRITER
                     if constexpr (hmc.active) {
                         // Round r's sender is column r's root, core (r, r % KGROUPS); the rotating
                         // sender list is row-major over the rect.
                         h_recv.receive((r % KGROUPS) * HGROUPS + r);
                     }
+#else
+                    // PERF 3 — wait on THIS SLOT's own monotone arrival counter. `h_exp[]` is this
+                    // core's private expectation: it is bumped only for rounds this core actually
+                    // waits on, which is what keeps a ROOT (which self-copies its own round and is
+                    // excluded from its own multicast, so its counter for that slot is one behind
+                    // everyone else's) consistent with the rest of the grid without a special case.
+                    {
+                        const uint32_t s = r % DEPTH_H;
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + s))),
+                            ++h_exp[s]);
+                    }
+#endif
 #endif
                     if (wd_pending) {
                         noc_async_read_barrier();

@@ -472,6 +472,29 @@ XPRIO = int(os.environ.get("MOE_SWIGLU_XPRIO", 1))
 #: touches that. `flag` is the default.
 HSIG = os.environ.get("MOE_SWIGLU_HSIG", "flag")
 
+#: PERF 3 — WHO SENDS the h all-gather: "reader" (Phase 0) or "writer" (the dual-RISC split).
+#:
+#: THE KEYSTONE. Phase 2 measures as HGROUPS SERIALISED rendezvous (43 us with every payload ablated
+#: ~= 11 x 3.9 us) and every cheaper explanation has been eliminated by measurement: not the CB depth
+#: (DEPTH_H 2/3/4/5 -> 149.9/145.9/147.4/147.6k), not the flag reset (the now-fixed monotone Counter
+#: is 7-13 % SLOWER), not the grid shape (HGROUPS 8/10 overflow L1 and break the scatter plan). What
+#: is left is the LOOP ORDER: a core sends its own column at iteration `r == my_col` of the same loop
+#: in which it receives every other column, so the sender of round r+1 must first RECEIVE rounds
+#: 0..r — an 11-long chain. Absolute per-slot addressing would break it but needs the whole of `h`
+#: resident: +417 792 B against 121 728 B free, over even after the 104 448 B aliasing enabler.
+#:
+#: The split moves the SEND to the writer (NoC1), which is not in the receive loop, so a root sends as
+#: soon as the grid has freed its slot. `consume(r)` then needs only `consume(r - DEPTH_H)` — chain
+#: depth HGROUPS/DEPTH_H ~= 4 instead of 11 — and it costs NO extra L1 because the rolling window is
+#: unchanged. Pairs with the per-slot arrival counters below (one monotone counter per cb_h slot, so
+#: out-of-order senders are distinguishable, which a single counter cannot do).
+#: BUILT AND MEASURED: correct (golden 45/45) and a NULL — 110 299 / 152 919 / 264 829 ns against
+#: reader's 104 813 / 146 741 / 246 790 (+5 to +7 %). Phase 1 got FASTER (compute_gateup 2->81 us
+#: vs 2->85) but compute_down stretched to 144, because the rounds were never waiting on the loop
+#: order: they wait on ROOT READINESS (compute_reduce spans 40->96 us, so the eleven roots finish
+#: ~56 us apart), and that spread is the weight stream's. `reader` is the default.
+HSEND = os.environ.get("MOE_SWIGLU_HSEND", "reader")
+
 #: Mailbox handshake word — the reader publishes {count, M_t, m_blocks} plus this flag.
 MAILBOX_MAGIC = 0xC0FFEE01
 MAILBOX_WORDS = 16
@@ -522,6 +545,13 @@ SEM_HSLICE = 6  # `scatter`: worker -> column root "my finished h slice landed i
 # intra-core semaphore in the op: no NoC traffic, just an L1 word the reader stores and the writer
 # polls. It exists to ORDER THE TWO DRAM STREAMS against each other — see XPRIO.
 SEM_XSTAGED = 7
+# PERF 3 (HSEND=writer) — ONE monotone arrival counter PER cb_h SLOT. Per-slot, not one shared
+# counter: with the senders decoupled from the receive loop their increments can interleave, and a
+# single counter says HOW MANY blocks arrived but not WHICH — the same "wave push" defect Perf 2 #4
+# root-caused in the reduce. DEPTH_H counters suffice because only DEPTH_H rounds are ever in flight.
+SEM_H_RDY_BASE = 8
+# ... and the window ack: receiver -> round r's sender, "I have reserved slot r, you may write it".
+SEM_H_FREE = SEM_H_RDY_BASE + DEPTH_H
 
 
 def _pow2_ceil(v):
@@ -1133,6 +1163,8 @@ def create_program_descriptor(
         CB_GATHER_UP,
         CB_H_SLICE,
         CB_H_LOCAL,
+        # PERF 3 (HSEND=writer) — the writer derives the h landing slot from this CB's BASE address.
+        CB_H,
     ]
     for t in (w_up, output_tensor):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -1260,6 +1292,14 @@ def create_program_descriptor(
             # entry `x % KGROUPS` of this list; no separate root argument.
             for r in range(KGROUPS):
                 wargs.extend(_virt(device, x, r))
+            # PERF 3 (HSEND=writer) — the h multicast rect, in NOC1 ROUTING ORDER (start = the far
+            # corner; the mcast hardware walks from `start` in the NoC's own direction, which is the
+            # reverse of NOC0's). The writer sends the whole-grid broadcast, so the rect is the whole
+            # worker grid. Appended AFTER the column peer list, at RT_PEERS + 2*KGROUPS.
+            far = _virt(device, HGROUPS - 1, KGROUPS - 1)
+            near = _virt(device, 0, 0)
+            wargs.extend([far[0], far[1], near[0], near[1]])
+            wargs.append(x)  # PERF 3 — my column == the h round this core broadcasts
             writer_rt[x][y] = wargs
 
             compute_rt[x][y] = [
@@ -1281,6 +1321,11 @@ def create_program_descriptor(
     dm_defines.append(("GU_CHUNKS", str(gu_chunks)))
     dm_defines.append(("XPRIO", str(XPRIO)))
     dm_defines.append(("SEM_XSTAGED", str(SEM_XSTAGED)))
+    dm_defines.append(("HSEND_WRITER", "1" if HSEND == "writer" else "0"))
+    dm_defines.append(("SEM_H_RDY_BASE", str(SEM_H_RDY_BASE)))
+    dm_defines.append(("SEM_H_FREE", str(SEM_H_FREE)))
+    dm_defines.append(("DEPTH_H", str(DEPTH_H)))
+    dm_defines.append(("NUM_CORES", str(num_cores)))
     compute_defines = [("GU_CHUNKS", str(gu_chunks))]
     if "skip_compute" in ABLATE.split("+"):
         compute_defines.append(("SKIP_COMPUTE", "1"))
@@ -1324,5 +1369,10 @@ def create_program_descriptor(
     # cannot race across M-blocks. Allocated unconditionally so both XPRIO settings share a program
     # shape; at XPRIO=0 nothing reads it.
     semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_XSTAGED, core_ranges=all_cores, initial_value=0))
+    # PERF 3 — the dual-RISC h split's counters. Allocated on BOTH settings of HSEND so the two
+    # programs differ only in kernel code; at HSEND=reader nothing touches them. Monotone, zero-init.
+    for s in range(DEPTH_H):
+        semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_H_RDY_BASE + s, core_ranges=all_cores, initial_value=0))
+    semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_H_FREE, core_ranges=all_cores, initial_value=0))
 
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
