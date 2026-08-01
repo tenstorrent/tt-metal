@@ -16,10 +16,10 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....pipelines.ltx.quant_config import LTX_QUANT_ACTIVATIONS, LinearQuantConfig, QuantConfig, _make_compute_config
 from ....utils.matmul import get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
+from .quant_config import LTX_QUANT_ACTIVATIONS, LinearQuantConfig, QuantConfig, _make_compute_config
 
 # to_gate_logits and to_q/to_qkv are both ColParallelLinear fed the SAME activation, and each fuses
 # its own TP all-gather of it (all_gather_minimal_matmul_async) — the activation crosses the fabric

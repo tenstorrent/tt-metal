@@ -20,13 +20,13 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....pipelines.ltx.quant_config import LTX_QUANT_ACTIVATIONS, LinearQuantConfig, QuantConfig, _make_compute_config
 from ....utils import cache as cache_module
 from ....utils.fuse_loras import LoraSpec, fuse_loras_into
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
+from .quant_config import LTX_QUANT_ACTIVATIONS, LinearQuantConfig, QuantConfig, _make_compute_config
 
 
 def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:

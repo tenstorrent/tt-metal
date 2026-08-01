@@ -620,7 +620,7 @@ class LTXPipeline:
         preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
         if not preset:
             return
-        from .quant_config import QuantConfig
+        from ...models.transformers.ltx.quant_config import QuantConfig
 
         factory = getattr(QuantConfig, preset, None)
         if factory is None or not callable(factory):
