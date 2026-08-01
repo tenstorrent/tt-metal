@@ -4572,8 +4572,6 @@ class TopKXLGolden:
     """
 
     def __call__(self, rows, K):
-        if not isinstance(rows, torch.Tensor):
-            rows = torch.tensor(rows)
         _, indices = torch.topk(rows.float(), K, dim=-1, largest=True, sorted=True)
         return indices
 
