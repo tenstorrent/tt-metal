@@ -379,6 +379,37 @@ class RowParallelLinear(Module):
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
 
+        # Ring: fuse matmul + reduce-scatter into one kernel (RS is fused into the matmul's
+        # strided output write, overlapping tensix compute with fabric). Strided RS is
+        # Ring-only, so this path requires the mesh opened with FABRIC_1D_RING. Supersedes
+        # the hand-rolled M-chunk overlap below.
+        if (
+            self._mesh_axis_size > 1
+            and self.ccl_manager is not None
+            and self.ccl_manager.topology == ttnn.Topology.Ring
+        ):
+            needs_reshape = len(x.shape) <= 3
+            if needs_reshape:
+                x = ttnn.unsqueeze(x, 0)
+            _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                input_tensor=x,
+                weight_tensor=weight,
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
+                **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
+                bias=self.bias.data if self.bias is not None else None,
+                memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.mesh_axis,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+                dtype=dtype,
+            )
+            if needs_reshape:
+                output = ttnn.squeeze(output, 0)
+            return output
+
         # Chunk the matmul over M and reduce-scatter each chunk as it lands, so chunk i's
         # RS (fabric workers) overlaps chunk i+1's matmul (tensix). The RS scatters on the
         # output-feature dim (3), independent across M rows, so M-chunking is exact. Only

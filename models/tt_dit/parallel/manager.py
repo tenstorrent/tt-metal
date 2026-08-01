@@ -133,7 +133,14 @@ class CCLManager:
             output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
 
             intermediate_buffer_shape = list(shape)
-            intermediate_buffer_shape = [2] + intermediate_buffer_shape
+            # reduce_scatter_minimal_async sizes its intermediate per topology: Line RS
+            # needs a double buffer for the fwd/bwd sweep, Ring RS holds one batch element.
+            # A Line-shaped intermediate under Ring makes the op wait on never-written
+            # offsets and hang.
+            if self.topology == ttnn.Topology.Ring:
+                intermediate_buffer_shape[0] = 1
+            else:
+                intermediate_buffer_shape = [2] + intermediate_buffer_shape
             for _ in range(2):
                 intermediate_buffer = bf16_tensor(torch.empty(intermediate_buffer_shape), device=self.mesh_device)
                 output_buffer = bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
