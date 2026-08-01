@@ -5,6 +5,8 @@ import inspect
 import random
 from types import SimpleNamespace
 
+import torch
+
 from models.common.sampling.generator import SamplingGenerator, SeedManager
 
 
@@ -53,6 +55,25 @@ def test_sampling_update_commands_are_required_and_have_no_legacy_alias():
     assert params["reload_sampling_params"].default is inspect.Parameter.empty
     assert params["reset_sampling_state"].default is inspect.Parameter.empty
     assert "reset_batch" not in params
+
+
+def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
+    from models.demos.qwen25_vl.tt.generator import Generator as Qwen25Generator
+    from models.demos.qwen3_vl.tt.generator import Generator as Qwen3Generator
+
+    for generator_cls in (Qwen25Generator, Qwen3Generator):
+        generator = SimpleNamespace(
+            model=SimpleNamespace(
+                rope_setup=SimpleNamespace(
+                    batch_size=4,
+                    rope_deltas=torch.tensor([10, 20, 30, 40]),
+                )
+            )
+        )
+
+        generator_cls.remap_rope_deltas(generator, [3, 1, 2, 3])
+
+        assert generator.model.rope_setup.rope_deltas.tolist() == [40, 20, 30, 40]
 
 
 def test_unseeded_decode_reset_loads_fresh_device_seed(monkeypatch):
