@@ -152,6 +152,8 @@ tt-metal requires **specialized Tenstorrent runners** and a long, heavy build. Y
 
 Instead, to validate any code change you make, **open a PR that triggers `build-artifact.yaml` via the existing `pr-gate.yaml`**. See the **Validating changes via CI** section below. If you cannot validate a change through CI, open the ready-for-review PR anyway but clearly mark under **Test Status** that it is **unverified** and needs a maintainer to run CI.
 
+**How you reach GitHub (applies everywhere below).** Your `bash` sandbox has **no GitHub credentials at all** — the `github` tool's token is deliberately kept out of it, and `gh` will not even fall back to anonymous access. So *every* `gh ...` or credentialed `git` command that talks to GitHub fails with an auth error, always. **Reads** (issues, PRs, checks, workflow runs, logs, file contents, search) go through the **`github` MCP tool**; **writes** (comments, PRs, commits, labels, issue updates) go through **safe-outputs**; **`bash` is for local filesystem work only** — cloning public repos anonymously, grepping, reading, editing files. When you need a GitHub fact, reach for a `github` tool method, never a shell command.
+
 ## Using DeepWiki (cross-repo grounding)
 
 You have a read-only **DeepWiki** MCP tool (`read_wiki_structure`, `read_wiki_contents`, `ask_question`). Use it to orient yourself on conceptual and cross-repo questions — especially about the sibling repos this workflow cannot easily clone and grep from the agent runner:
@@ -237,7 +239,7 @@ Check memory for already-submitted ideas; do not re-propose them. Create a fresh
 
 1. List all open PRs with the `[repo-assist]` title prefix.
 2. For each PR, address **maintainer reviews and inline comments first** — these take priority over everything else. Make the requested code changes, push a new commit to the PR branch, and post a comment explaining what you changed. If you cannot confidently address the feedback, acknowledge it and ask for clarification rather than leaving it silent.
-3. **Check CI outcomes asynchronously.** For each PR, look up the latest `build-artifact.yaml` / `pr-gate.yaml` run recorded in memory (or discover it via `gh pr checks` / `gh run list`). If a build has finished:
+3. **Check CI outcomes asynchronously — via the `github` MCP tool, not the `gh` CLI.** For each PR, look up the latest `build-artifact.yaml` / `pr-gate.yaml` run recorded in memory, or discover it with the `github` tool: `pull_request_read` with `method: get_check_runs` for the PR's check runs, or `actions_list` with `method: list_workflow_runs` (`resource_id: build-artifact.yaml`, `workflow_runs_filter: { branch: <pr-branch> }`). If a build has finished:
    - **Failed because of your change**: push a fix commit to the same branch (this re-triggers CI) and update the PR's **Test Status** section. If you cannot fix it after a couple of attempts, leave a comment and abandon the fix.
    - **Succeeded**: update the PR's **Test Status** section to say so and, if appropriate, leave a polite comment asking maintainers to review.
    - **Infrastructure failure** (runner unavailability, transient network, etc.): do not push a fix; comment that the failure looks unrelated and ask a maintainer to re-run CI.
@@ -326,7 +328,13 @@ Because the agent cannot build tt-metal locally, code changes are validated thro
 **Do not wait for the build inside the current run.** tt-metal builds take far longer than the agent's 60-minute budget, so validation is **asynchronous**:
 
 - On the **current run**: open the PR, record the build run ID in memory, and note in the PR's **Test Status** that the build is queued/running.
-- On a **subsequent run**: use `gh pr checks <pr>` / `gh run list --workflow=build-artifact.yaml` / `gh run view <run-id>` to check the outcome of the recorded run (or the latest run if you don't have the ID). Then act as follows:
+- On a **subsequent run**: check the outcome of the recorded run (or the latest run if you don't have the ID) with the **`github` MCP tool** — the agent sandbox has no GitHub credentials, so `gh run ...` will not work here. Use:
+  - `pull_request_read` with `method: get_check_runs` (`owner`, `repo`, `pullNumber`) — the per-check CI status for the PR's head commit; this is the equivalent of `gh pr checks`. (`method: get_status` returns the *legacy commit-status* API, which is typically empty for Actions-based CI like tt-metal's — prefer `get_check_runs`.)
+  - `actions_list` with `method: list_workflow_runs`, `resource_id: build-artifact.yaml` and `workflow_runs_filter: { branch: <pr-branch> }` — to find runs of a specific workflow on the PR branch.
+  - `actions_get` with `method: get_workflow_run` and `resource_id: <run-id>` — for a specific run's `status` and `conclusion`.
+  - `get_job_logs` with `run_id: <run-id>`, `failed_only: true` and `return_content: true` — to read the failing job's log and decide *why* it failed.
+
+  Then act as follows:
   - If the build **failed because of your change**, push a fix commit to the same branch (this re-triggers CI) and update the PR's **Test Status** section. If you cannot fix it after a couple of attempts, abandon the fix and note it in the PR and memory.
   - If the build **succeeded**, update the PR's **Test Status** section to say so and, if appropriate, leave a polite comment asking maintainers to review.
   - If it failed for **infrastructure reasons** (no runner, transient error), mark the PR **unverified** and ask a maintainer to re-run CI.
