@@ -492,7 +492,31 @@ def before_loop(
             )
     if pathmap is None:
         raise _last_exc if _last_exc else RuntimeError("discover produced no pathmap")
-    if pcc_abs is not None:
+    if pcc_abs is not None and config.get("perf_test"):
+        # An operator-supplied --perf-test WINS over auto-generation. Previously --pcc-test
+        # unconditionally generated a perf test and overwrote pathmap["perf_test"]/["pipelines"], so
+        # the two documented-as-complementary flags silently conflicted and --perf-test was discarded.
+        # That matters for any model whose real harness the generator cannot reproduce: pi0.5's is a
+        # trace+2CQ pipeline spanning two meshes with a device-to-device socket KV handoff, and the
+        # generated single-device test could not trace it at all ("pipeline could not trace at all
+        # (path=None) ... TRACE_REPLAY_SKIP"), which would have dropped the run back to EAGER timing --
+        # ~250 ms instead of ~24 ms traced, i.e. optimizing a configuration nobody ships.
+        _node = str(config["perf_test"])
+        _ppath, _, _pcase = _node.partition("::")
+        _pabs = Path(_ppath) if os.path.isabs(_ppath) else (tt_root / _ppath)
+        _prel = os.path.relpath(_pabs, model_root)
+        pathmap["perf_test"] = {"path": _prel, "case": _pcase, "note": "operator --perf-test"}
+        pathmap["perf_tests"] = [pathmap["perf_test"]]
+        pathmap["pipelines"] = [
+            {
+                "task": "main",
+                "perf_test": f"{_prel}::{_pcase}" if _pcase else _prel,
+                "pcc_test": pcc_override["path"],
+            }
+        ]
+        pathmap["is_multimodal"] = False
+        print(f"      operator --perf-test honored -> {_prel}::{_pcase}", file=sys.stderr, flush=True)
+    elif pcc_abs is not None:
         from .perf_test_gen import generate_perf_test
 
         _task = "main"
