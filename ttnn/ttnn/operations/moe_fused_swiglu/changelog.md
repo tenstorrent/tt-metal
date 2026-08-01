@@ -2188,3 +2188,63 @@ the off-loop send exists to remove.
 **The standing conclusion is unchanged and now better supported**: phase 2's cost is the loop-order
 chain plus phase 1's completion spread, and the one shape that would break the chain hangs on a
 documented cross-RISC race. Attacking it needs the mitigation built first, not the send moved.
+
+### Perf 15 addendum 2 — phase 2 FULLY ACCOUNTED: it is 70 % irreducible, and the rounds are a pipeline not a chain
+
+Perf 15 read `p2_hwait`'s 3 541 ns/round MEAN as "the receiver waits for the sender to finish its
+column's reduce". Per-round resolution shows that is wrong, and the mean was hiding the structure.
+Count 256, 88 cores, ND-sharded, one observer core:
+
+| round | waited | cadence |
+|---|---|---|
+| 0 | **14.03 us** | — |
+| 1..10 | 2.19-2.60 us | 2.85-3.46 us |
+
+`writer_hslice` (the column root's h assembly) across all 88 cores: **min 77.7, median 90.0, max 90.4
+us — spread 12.6 us and CLUSTERED at 90.** Round 0 fires at 92.0, immediately after the last core is
+ready at 90.4.
+
+**Two conclusions, both closing directions I had left open.**
+
+1. **Readiness-ordering the rounds is worth ZERO.** Every column is ready before round 0 fires. The
+   "send rounds in readiness order, not column order" idea — which would have needed a
+   caller-controlled `l1_acc` first-block flag plus per-round `In1BaseOffsetFn` selection — has no
+   prize. Closed on measurement, not on difficulty.
+2. **The steady-state cadence is a PIPELINE PERIOD, not rendezvous:**
+
+        h transport   52 224 B @ ~43 GB/s          = 1.21 us
+        down matmul   144 tile-MACs @ 16 cyc       = 1.71 us
+                                                    -------
+                                                     2.92 us   vs 2.85-3.46 measured
+
+   The rounds are transport + FPU pipelined at depth ~1, and the `cb_reserve_back` at the top of each
+   round is what couples them (compute must pop before the sender's next slot frees). There is no
+   handshake term of any size in the steady state.
+
+**Phase 2 fully accounted (measured 45-46 us):**
+
+| term | us | |
+|---|---|---|
+| round-0 head: waiting for phase 1's LAST core | **14.0** | **ADDRESSABLE — the phase-1 tail** |
+| h transport, 11 x 1.21 | 13.4 | irreducible at bfp8 |
+| `down` matmul, 11 x 1.71 | 18.8 | irreducible FPU |
+| total | 46.2 | matches |
+
+**Phase 2 is 70 % irreducible.** Its addressable slack is 14 us of a ~131 us op = **11 %**, and it is
+not in phase 2 at all — it is phase 1's completion tail, which round 0 sits and waits for.
+
+That retro-explains every phase-2 result this session in one line: per-slot flags + ack-ahead won 4 %
+(they shortened the coupling, which is real but small), `DEPTH_H` 4/6 won nothing (more slots cannot
+speed a transport+FPU pipeline), `HSEND=writer` lost, and the off-loop sender hangs — because **there
+was never a rendezvous term to remove.** The chain everyone including this changelog called THE
+KEYSTONE is a pipeline whose period is set by bytes and FLOPs.
+
+**Remaining addressable work, in full, with sizes:**
+* **14 us** — phase 1's completion tail (the h-assembly max at 90.4 vs median 90.0 is tight, so this
+  is the gate/up + reduce critical path, not a straggler).
+* Nothing else in phase 2. To go faster there you must move fewer h bytes (a precision trade) or do
+  fewer `down` FLOPs (impossible).
+
+At count 256 that leaves 130.8 - 14 = ~117 us as the floor of the current blocking scheme, against a
+108 000 target. **The scheme cannot reach it**; the targets at 256/512 need a different blocking
+model, not a further optimisation of this one.
