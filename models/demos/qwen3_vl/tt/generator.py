@@ -104,6 +104,20 @@ class Generator(WarmupForwardMixin):
         # convert to torch tensor
         self.model.rope_setup.rope_deltas = torch.tensor(rope_deltas_list)
 
+    def remap_rope_deltas(self, slot_remap):
+        """Move persistent per-slot RoPE state after vLLM condenses a batch."""
+        rope_setup = self.model.rope_setup
+        batch_size = rope_setup.batch_size
+        indices = torch.as_tensor(slot_remap, dtype=torch.long).reshape(-1)
+        if indices.numel() < batch_size:
+            raise ValueError(
+                f"slot_remap has {indices.numel()} entries, expected at least {batch_size}"
+            )
+        indices = indices[:batch_size]
+        if torch.any(indices < 0) or torch.any(indices >= batch_size):
+            raise ValueError(f"slot_remap entries must be in [0, {batch_size})")
+        rope_setup.rope_deltas = rope_setup.rope_deltas.index_select(0, indices).clone()
+
     def decode_forward(
         self,
         tokens,
