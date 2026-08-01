@@ -3157,8 +3157,26 @@ def _is_cached_model_id(cand) -> bool:
 
 
 def _resolve_model_id(demo_dir, hint=None) -> str | None:
+    """Which HF model this run is optimizing: hint, then HF_MODEL, then the directory scan.
+
+    The middle tier was missing. optimize.py passes `model_id_hint=(None if model_dir else
+    args.target)`, so pointing at a DEMO DIRECTORY -- which is how every brought-up model is
+    optimized -- nulls the hint and drops straight to the scan. The scan returns the first cached id
+    found in any .py under the model dir, and gemma3's tree names three variants: conftest.py pins
+    google/gemma-3-12b-it, test_ci_dispatch.py mentions the 4b and the 27b. It returned the 4b, so
+    every derived figure inherited a 4B model -- ceiling 102.4 tok/s/u instead of 34.1, band
+    61.4-81.9 instead of 20.5-27.3, utilisation 28% for a run that was actually at 84%.
+
+    Nothing was mismeasured: the tool runs a pytest node and the MODEL resolves its own identity from
+    HF_MODEL, so execution never needs this id. Only the roofline arithmetic does -- and HF_MODEL was
+    sitting in this process's own environment, correct, unread. before_loop.py:262 already reads it
+    (`config.get("model_id") or os.environ.get("HF_MODEL")`); this gives the cc engine the same tier.
+    """
     if _is_cached_model_id(hint):
         return hint
+    env_id = (os.environ.get("HF_MODEL") or "").strip()
+    if _is_cached_model_id(env_id):
+        return env_id
     try:
         for p in Path(demo_dir).rglob("*.py"):
             try:
@@ -3168,7 +3186,7 @@ def _resolve_model_id(demo_dir, hint=None) -> str | None:
             for cand in _HF_ID_RE.findall(txt):
                 if _is_cached_model_id(cand):
                     return cand
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
     return None
 
