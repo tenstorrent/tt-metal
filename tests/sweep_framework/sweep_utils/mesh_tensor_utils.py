@@ -331,7 +331,7 @@ def _guarded_close_mesh_device(device, *args, **kwargs):
     at job end (close_job_device) or on a config change (in create_mesh_device)."""
     if _JOB_DEVICE is not None and device is _JOB_DEVICE:
         return None
-    return _orig_close_mesh_device(device, *args, **kwargs)
+    return _close_mesh_and_parent(device, *args, **kwargs)
 
 
 # Install the deferred-close guard. No-op behavior when the job device is disabled
@@ -364,6 +364,108 @@ if _orig_set_fabric_config is not None:
 
 _orig_open_mesh_device = ttnn.open_mesh_device
 
+# Full-host mesh orientations a 2D submesh can be carved out of, per host device count.
+_FULL_HOST_MESH_CANDIDATES = {32: ((8, 4), (4, 8)), 16: ((8, 2), (2, 8), (4, 4))}
+
+# Carved submesh -> (submesh, parent full mesh). The submesh is kept referenced so its
+# id() cannot be reused by another object while the mapping is live.
+_SUBMESH_PARENTS = {}
+
+
+def _full_host_mesh_for(mesh_shape, num_devices):
+    """The full-host mesh a 2D SUBMESH must be carved from, or None to open directly.
+
+    Opening MeshShape(submesh) directly on a galaxy fails fabric router sync on the
+    submesh's BOUNDARY ethernet links -- they connect to chips outside the carved region,
+    so they never complete the handshake. Opening the full host mesh runs bring-up over the
+    whole (healthy) topology, and a submesh of an already-synced fabric works.
+
+    Returns None when mesh_shape is 1D (a line/ring is opened directly) or already spans
+    the host. Mirrors _full_galaxy_mesh_for in all_gather_async_model_traced, which has done
+    this per-vector for CCL since before the generic path existed.
+    """
+    try:
+        dims = tuple(int(d) for d in mesh_shape)
+    except (TypeError, ValueError):
+        return None
+    if len(dims) != 2:
+        return None
+    rows, cols = dims
+    if rows <= 1 or cols <= 1:
+        return None
+    if rows * cols >= num_devices:
+        return None
+    for full_rows, full_cols in _FULL_HOST_MESH_CANDIDATES.get(num_devices, ()):
+        if full_rows >= rows and full_cols >= cols and full_rows * full_cols == num_devices:
+            return (full_rows, full_cols)
+    return None
+
+
+def _open_mesh_carving_submesh(*args, **kwargs):
+    """Open the requested mesh, carving it out of the full host mesh when it is a 2D submesh.
+
+    Every non-CCL module reaches the device through here, so a batch that declares a submesh
+    shape (MESH_DEVICE_SHAPE=4x4 on a 32-card box) no longer opens that submesh directly.
+    conv2d on a directly-opened 4x4 tripped fabric router sync in every job that contained it
+    -- lead-models runs 30696173498 and 30702184301, 2 of 2, while every 4x4 job WITHOUT
+    conv2d passed (5 of 5, one with 352 vectors) -- and on the full 4x8 mesh conv2d passes.
+
+    The requested shape is preserved: the returned device's shape IS the submesh, so traced
+    placement metadata still matches and create_tensor_on_mesh does not fall back to
+    ReplicateTensorToMesh. That fallback is the original bug device-key batching removed, so
+    declaring the full mesh instead of carving would not be a fix.
+
+    Falls back to a direct open when carving is not applicable, not possible (e.g. a degraded
+    host with fewer chips than the full mesh needs), or disabled via
+    TTNN_SWEEP_NO_SUBMESH_CARVE=1.
+    """
+    requested = kwargs.get("mesh_shape")
+    if requested is None or os.environ.get("TTNN_SWEEP_NO_SUBMESH_CARVE", "").strip() == "1":
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    try:
+        num_devices = ttnn.get_num_devices()
+    except Exception:
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    full = _full_host_mesh_for(requested, num_devices)
+    if full is None:
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    submesh_shape = tuple(int(d) for d in requested)
+    parent = None
+    try:
+        logger.info(f"SWEEPS: opening full host mesh {full} then carving submesh {submesh_shape}")
+        parent_kwargs = dict(kwargs)
+        parent_kwargs["mesh_shape"] = ttnn.MeshShape(*full)
+        parent = _orig_open_mesh_device(*args, **parent_kwargs)
+        submesh = parent.create_submesh(ttnn.MeshShape(submesh_shape))
+    except Exception as e:
+        # Carving failed (commonly: the host has fewer chips than `full` needs, e.g. a box
+        # whose topology downgraded). Close the parent and fall back to a direct open so the
+        # behaviour is no worse than before this path existed.
+        logger.warning(f"SWEEPS: submesh carve of {submesh_shape} from {full} failed ({e}); opening directly")
+        if parent is not None:
+            try:
+                _orig_close_mesh_device(parent)
+            except Exception:
+                logger.exception("SWEEPS: failed to close the parent mesh after a failed carve")
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    _SUBMESH_PARENTS[id(submesh)] = (submesh, parent)
+    return submesh
+
+
+def _close_mesh_and_parent(device, *args, **kwargs):
+    """Close `device`, or its parent when `device` is a carved submesh.
+
+    Closing a submesh does not release the parent's devices, so the parent must be closed or
+    the next open runs a second live mesh (which corrupts context state on Galaxy)."""
+    entry = _SUBMESH_PARENTS.pop(id(device), None)
+    if entry is not None:
+        return _orig_close_mesh_device(entry[1], *args, **kwargs)
+    return _orig_close_mesh_device(device, *args, **kwargs)
+
 
 def _guarded_open_mesh_device(*args, **kwargs):
     """Some modules (linear/matmul gather_in0 ring, batched DRAM-sharded) open their
@@ -384,7 +486,7 @@ def _guarded_open_mesh_device(*args, **kwargs):
                 "open_mesh_device: refusing to open a new mesh because the cached job "
                 "device could not be closed (would leave two live mesh devices)"
             )
-    return _orig_open_mesh_device(*args, **kwargs)
+    return _open_mesh_carving_submesh(*args, **kwargs)
 
 
 ttnn.open_mesh_device = _guarded_open_mesh_device
@@ -415,7 +517,9 @@ def close_job_device() -> bool:
     if _JOB_DEVICE is None:
         return True
     try:
-        _orig_close_mesh_device(_JOB_DEVICE)
+        # _close_mesh_and_parent, not the raw close: the cached job device may be a submesh
+        # carved from a full host mesh, and closing the submesh would leave the parent open.
+        _close_mesh_and_parent(_JOB_DEVICE)
     except Exception:
         logger.exception("close_job_device: failed to close the cached job device; keeping it cached")
         return False
