@@ -780,6 +780,29 @@ def _is_fabric_infra_message(message) -> bool:
     return any(sig in msg for sig in _FABRIC_INFRA_SIGNATURES)
 
 
+# |PCC| below this is uncorrelated, not "slightly wrong". Sweep thresholds sit at 0.99+, and
+# every real correctness failure observed in these suites lands just under its threshold. 0.5
+# is far below anything a working op produces and far above the ~0.02 worst case seen from
+# corrupted data, so it separates the two without judgement calls.
+_UNCORRELATED_PCC_LIMIT = 0.5
+
+
+def _is_uncorrelated_pcc_message(message) -> bool:
+    """True when the test message is a bare PCC value whose magnitude is ~0.
+
+    The message for a PCC failure is the float itself (e.g. "-0.00040715786046026663"), so a
+    successful parse plus |value| < limit identifies the uncorrelated case. Anything that is
+    not a bare float -- exceptions, OOM, hangs, infra text -- returns False and follows its
+    own path, so this can only ever add a retry for the near-zero-PCC signature.
+    """
+    if message is None:
+        return False
+    try:
+        return abs(float(str(message).strip())) < _UNCORRELATED_PCC_LIMIT
+    except (TypeError, ValueError):
+        return False
+
+
 def _is_infra_failure_message(message) -> bool:
     """Return True for any infrastructure-class failure that has degraded the
     host: either a fabric / control-plane bring-up failure (the mesh never came
@@ -908,6 +931,27 @@ def _execute_vector_with_retry(
             # next operation blocked forever (49 min mid-vector / 24 min in teardown),
             # invisible to the per-vector watchdog because the block is below Python.
             # On Galaxy fall through to the abort path instead of retrying.
+            # An UNCORRELATED result (|PCC| ~ 0) is not how a wrong op fails -- a real
+            # correctness bug lands near the threshold (0.998 vs 0.999) or is systematically
+            # off. Near-zero means the output bears no relation to the input, i.e. the data
+            # never landed. Verified on a 32-chip Galaxy: slice's 6 CI failures
+            # (2fa7ad49cb 0.0, 383d35b745 -0.0004, 3497f8c8b5 -0.016, 2a5f2cd48f 0.0025,
+            # 349584a1ea -0.0004, 375b042cf7 -0.0002) all PASS 189/189 twice with the
+            # profiler off, and lerp/matmul/rms_norm behave the same way -- the ops and
+            # goldens are correct, and the corruption is collateral from the profiler read
+            # (DeviceProfiler::readResults segfault) of a PRECEDING vector.
+            # So retry once in place. No reset: the device is not wedged (subsequent vectors
+            # pass), so a Galaxy reset would cost minutes and risk the reopen wedge for
+            # nothing. A genuine op failure reproduces on the retry and is still reported.
+            if _is_uncorrelated_pcc_message(result.get("message")) and attempt < MAX_RETRIES:
+                logger.warning(
+                    f"UNCORRELATED RESULT (|PCC|~0, not a threshold miss) for "
+                    f"input_hash='{input_hash}': {result.get('message')}. This is the signature of "
+                    f"data that never landed, not a wrong op -- retrying in place "
+                    f"(attempt {attempt + 1}/{1 + MAX_RETRIES})."
+                )
+                continue
+
             if _is_device_hang_message(result.get("message")) and attempt < MAX_RETRIES and not _is_galaxy_job():
                 logger.warning(
                     f"DEVICE HANG (likely intermittent dispatch-state stall) for "
