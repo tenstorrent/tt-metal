@@ -33,9 +33,15 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+        .device = devices_[0].get(),
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = BufferType::DRAM};
     InterleavedBufferConfig l1_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::L1};
+        .device = devices_[0].get(),
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = BufferType::L1};
 
     auto src0_dram_buffer = CreateBuffer(dram_config);
     auto src1_dram_buffer = CreateBuffer(dram_config);

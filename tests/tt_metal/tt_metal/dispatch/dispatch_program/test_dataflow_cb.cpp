@@ -52,7 +52,10 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(),
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = BufferType::DRAM};
 
     auto src_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
@@ -119,7 +122,6 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
 
 TEST_F(MeshDispatchFixture, DataflowDfb) {
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -141,7 +143,10 @@ TEST_F(MeshDispatchFixture, DataflowDfb) {
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(),
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = BufferType::DRAM};
 
     auto src_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();

@@ -681,12 +681,12 @@ std::vector<uint32_t> run_sfpu_pipeline(
     const size_t out_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
     tt::tt_metal::InterleavedBufferConfig in_dram{
-        .device = mesh_device->get_devices()[0],
+        .device = mesh_device.get(),
         .size = in_bytes,
         .page_size = in_bytes,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
     tt::tt_metal::InterleavedBufferConfig out_dram{
-        .device = mesh_device->get_devices()[0],
+        .device = mesh_device.get(),
         .size = out_bytes,
         .page_size = out_bytes,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -993,17 +993,16 @@ std::vector<uint32_t> sfpu_quasar_run(
 /// @return
 bool run_sfpu_binary_two_input_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
-    auto* device = mesh_device->get_devices()[0];
     const size_t per_buffer_byte_size_input = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
     const size_t per_buffer_byte_size_output = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
     tt::tt_metal::InterleavedBufferConfig dram_config_input{
-        .device = device,
+        .device = mesh_device.get(),
         .size = per_buffer_byte_size_input,
         .page_size = per_buffer_byte_size_input,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
     tt::tt_metal::InterleavedBufferConfig dram_config_output{
-        .device = device,
+        .device = mesh_device.get(),
         .size = per_buffer_byte_size_output,
         .page_size = per_buffer_byte_size_output,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -1180,7 +1179,7 @@ bool run_sfpu_ternary_three_input_buffer(
     auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = per_buffer_byte_size,
         .page_size = per_buffer_byte_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};

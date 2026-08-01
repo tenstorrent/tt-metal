@@ -364,7 +364,6 @@ bool single_tile_matmul(
     const uint32_t in1_tile_size = tt::tile_size(in1_fmt);
     const uint32_t out_tile_size = tt::tile_size(out_fmt);
 
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -373,17 +372,17 @@ bool single_tile_matmul(
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     tt::tt_metal::InterleavedBufferConfig dram_in0_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = in0_tile_size,
         .page_size = in0_tile_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
     tt::tt_metal::InterleavedBufferConfig dram_in1_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = in1_tile_size,
         .page_size = in1_tile_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
     tt::tt_metal::InterleavedBufferConfig dram_out_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = out_tile_size,
         .page_size = out_tile_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -525,20 +524,19 @@ bool single_block_matmul(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
-        .device = device,
+        .device = mesh_device.get(),
         .size = in0_byte_size,
         .page_size = in0_byte_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
     tt::tt_metal::InterleavedBufferConfig dram_config_1{
-        .device = device,
+        .device = mesh_device.get(),
         .size = in1_byte_size,
         .page_size = in1_byte_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
     tt::tt_metal::InterleavedBufferConfig dram_config_out{
-        .device = device,
+        .device = mesh_device.get(),
         .size = out_byte_size,
         .page_size = out_byte_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -691,22 +689,21 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
-        .device = device,
+        .device = mesh_device.get(),
         .size = in0_total_size_bytes,
         .page_size = in0_total_size_bytes,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_1{
-        .device = device,
+        .device = mesh_device.get(),
         .size = in1_total_size_bytes,
         .page_size = in1_total_size_bytes,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_out{
-        .device = device,
+        .device = mesh_device.get(),
         .size = out_byte_size,
         .page_size = out_byte_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};

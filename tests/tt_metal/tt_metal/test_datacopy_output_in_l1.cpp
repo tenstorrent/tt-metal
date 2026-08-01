@@ -31,10 +31,10 @@ TEST_F(MeshDeviceSingleCardFixture, DatacopyOutputInL1) {
     uint32_t buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig dram_config{
-        .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::DRAM};
+        .device = devices_[0].get(), .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::DRAM};
 
     InterleavedBufferConfig l1_config{
-        .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::L1};
+        .device = devices_[0].get(), .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::L1};
 
     auto src_dram_buffer = CreateBuffer(dram_config);
     auto dst_l1_buffer = CreateBuffer(l1_config);

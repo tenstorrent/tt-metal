@@ -277,7 +277,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
     // One page per bank: interleaved allocation gives every bank the same bank-relative
     // base address, so each DRISC DMA can write into its own bank at that address.
     auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device_,
+        .device = mesh_device_,
         .size = num_banks * num_endpoints * total_bytes_per_core,
         .page_size = num_endpoints * total_bytes_per_core,
         .buffer_type = BufferType::DRAM,
@@ -379,7 +379,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
     // One page per bank: interleaved allocation gives every bank the same bank-relative
     // base address, so each DRISC DMA reads from its own bank at that address.
     auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device_,
+        .device = mesh_device_,
         .size = num_banks * num_endpoints * bytes_per_iter,
         .page_size = num_endpoints * bytes_per_iter,
         .buffer_type = BufferType::DRAM,
@@ -490,7 +490,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCReadFromDRAMMcastToTensix) {
 
     // Allocate a single-page DRAM buffer. Page_size == size pins it to bank 0 (logical_core x==0)
     auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device_,
+        .device = mesh_device_,
         .size = total_bytes,
         .page_size = total_bytes,
         .buffer_type = BufferType::DRAM,
@@ -570,7 +570,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCRTensixParallelDRAMReads) {
 
     // Allocate a single-page DRAM buffer. Page_size == size pins it to bank 0 (logical_core x==0)
     auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device_,
+        .device = mesh_device_,
         .size = total_bytes,
         .page_size = total_bytes,
         .buffer_type = BufferType::DRAM,
@@ -655,7 +655,7 @@ TEST_P(DramKernelDRISCGDDRBWSweepFixture, DRISCDMAUcastToTensix) {
 
     // Allocate a single-page DRAM buffer. Page_size == size pins it to bank 0 (logical_core x==0)
     auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device_,
+        .device = mesh_device_,
         .size = total_bytes,
         .page_size = total_bytes,
         .buffer_type = BufferType::DRAM,
@@ -768,7 +768,7 @@ TEST_P(DramKernelDRISCNocModeFixture, DramKernelDRISCNocModeStress) {
     // Fill GDDR with iters random distinct chunks. DRISC and the Tensix reader both walk the same region
     // Only the final chunk remains in L1 after the run, so verification compares against it
     auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device_,
+        .device = mesh_device_,
         .size = total_bytes,
         .page_size = total_bytes,  // single bank (bank 0)
         .buffer_type = BufferType::DRAM,

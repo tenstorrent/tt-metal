@@ -415,14 +415,11 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
         auto& program = programs[device->get_devices()[0]->id()];
 
-        auto input_buffer = CreateBuffer(
-            tt_metal::InterleavedBufferConfig{device->get_devices()[0], cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type});
+        auto input_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
+            device.get(), cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type});
         tt_metal::detail::WriteToBuffer(input_buffer, inputs[i]);
         output_buffers.emplace_back(CreateBuffer(tt_metal::InterleavedBufferConfig{
-            device->get_devices()[0],
-            cfg.size_bytes * sender_receivers.size(),
-            cfg.page_size_bytes,
-            cfg.output_buffer_type}));
+            device.get(), cfg.size_bytes * sender_receivers.size(), cfg.page_size_bytes, cfg.output_buffer_type}));
         tt_metal::detail::WriteToBuffer(output_buffers[i], all_zeros);
 
         auto eth_sender_kernel = tt_metal::CreateKernel(

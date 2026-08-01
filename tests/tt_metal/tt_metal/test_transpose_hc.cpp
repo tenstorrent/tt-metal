@@ -48,7 +48,10 @@ TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
     const uint32_t page_size = (!multibank) ? dram_buffer_bytes : single_tile_bytes;
 
     const InterleavedBufferConfig dram_config = {
-        .device = dev, .size = dram_buffer_bytes, .page_size = page_size, .buffer_type = BufferType::DRAM};
+        .device = devices_[0].get(),
+        .size = dram_buffer_bytes,
+        .page_size = page_size,
+        .buffer_type = BufferType::DRAM};
 
     auto src0_dram_buffer = CreateBuffer(dram_config);
     const uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();

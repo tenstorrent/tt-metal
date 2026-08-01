@@ -346,7 +346,8 @@ TEST_F(MeshDeviceFixture, CB_Boundary_GloballyAllocated_Exempt_NoViolation) {
     // Backing L1 buffer makes the CB globally allocated (sharded-style addressing).
     // Single-bank (one buffer page spanning the whole CB) so its bank size equals
     // the CB total_size — a globally-allocated CB must fit inside its backing bank.
-    auto backing = Buffer::create(device, num_pages * page_size, num_pages * page_size, BufferType::L1);
+    auto backing =
+        Buffer::create(this->devices_.at(0).get(), num_pages * page_size, num_pages * page_size, BufferType::L1);
     CircularBufferConfig cb_config = CircularBufferConfig(num_pages * page_size, {{cb_id, tt::DataFormat::Float16_b}})
                                          .set_page_size(cb_id, page_size)
                                          .set_globally_allocated_address(*backing);

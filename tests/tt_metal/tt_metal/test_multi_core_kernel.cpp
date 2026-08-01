@@ -94,7 +94,10 @@ TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelSameRuntimeArgs) {
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
     InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+        .device = devices_[0].get(),
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = BufferType::DRAM};
 
     auto src_dram_buffer = CreateBuffer(dram_config);
     auto dst_dram_buffer = CreateBuffer(dram_config);
@@ -139,7 +142,10 @@ TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelUniqueRuntimeArgs) {
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+        .device = devices_[0].get(),
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = BufferType::DRAM};
 
     auto src_dram_buffer = CreateBuffer(dram_config);
     auto dst_dram_buffer_1 = CreateBuffer(dram_config);

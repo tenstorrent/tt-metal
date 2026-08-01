@@ -265,13 +265,12 @@ TEST_F(MeshWorkloadFactorySlowDispatchHWTest, FactoryMethodsSupportSlowDispatch)
 
 TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsDfbResizeBetweenEnqueues) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     // Build a workload with a producer-consumer DFB loopback.
     distributed::MeshWorkload workload = MakeMeshWorkloadFromSpec(*mesh_device, MakeLoopbackSpec());
 
     InterleavedBufferConfig dram_config{
-        .device = device, .size = kBufferBytes, .page_size = kBufferBytes, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = kBufferBytes, .page_size = kBufferBytes, .buffer_type = BufferType::DRAM};
     auto input_buffer = CreateBuffer(dram_config);
     auto output_buffer = CreateBuffer(dram_config);
 

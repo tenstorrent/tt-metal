@@ -125,19 +125,19 @@ TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
             single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         tt_metal::InterleavedBufferConfig act_config{
-            .device = dev,
+            .device = devices_[0].get(),
             .size = dram_buffer_size_act,
             .page_size = dram_buffer_size_act,
             .buffer_type = tt_metal::BufferType::DRAM};
 
         tt_metal::InterleavedBufferConfig weights_config{
-            .device = dev,
+            .device = devices_[0].get(),
             .size = dram_buffer_size_weights,
             .page_size = dram_buffer_size_weights,
             .buffer_type = tt_metal::BufferType::DRAM};
 
         tt_metal::InterleavedBufferConfig dst_config{
-            .device = dev,
+            .device = devices_[0].get(),
             .size = dram_buffer_size_out,
             .page_size = dram_buffer_size_out,
             .buffer_type = tt_metal::BufferType::DRAM};
@@ -193,7 +193,7 @@ TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
         TT_FATAL(source_addresses.size() == num_blocks * src0_num_reads_per_block, "Error");
 
         tt_metal::InterleavedBufferConfig l1_config{
-            .device = dev,
+            .device = devices_[0].get(),
             .size = source_addresses.size() * sizeof(uint32_t),
             .page_size = source_addresses.size() * sizeof(uint32_t),
             .buffer_type = tt_metal::BufferType::L1};

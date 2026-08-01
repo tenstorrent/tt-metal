@@ -180,7 +180,7 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
 
         auto buffer_size = cb_config.page_size;
         tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = device->get_devices()[0],
+            .device = device.get(),
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::L1};
@@ -358,7 +358,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
 
         auto buffer_size = cb_config.page_size;
         tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = device->get_devices()[0],
+            .device = device.get(),
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::L1};
@@ -608,13 +608,13 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         uint32_t buffer_size = single_tile_size * num_tiles;
 
         tt::tt_metal::InterleavedBufferConfig dram_config{
-            .device = device->get_devices()[0],
+            .device = device.get(),
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::DRAM};
 
         tt::tt_metal::InterleavedBufferConfig l1_config{
-            .device = device->get_devices()[0],
+            .device = device.get(),
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::L1};

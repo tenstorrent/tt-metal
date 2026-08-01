@@ -91,7 +91,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // Create DRAM buffers (single-page so all data is on one bank)
     // -------------------------------------------------------
     InterleavedBufferConfig dram_config{
-        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
     auto input_buffer = CreateBuffer(dram_config);
     auto output_buffer = CreateBuffer(dram_config);
 
@@ -228,7 +228,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     const NodeCoord node{0, 0};
 
     InterleavedBufferConfig dram_config{
-        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
     auto input_buffer = CreateBuffer(dram_config);
     auto output_buffer = CreateBuffer(dram_config);
 
@@ -422,7 +422,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     const NodeCoord node{0, 0};
 
     InterleavedBufferConfig dram_config{
-        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
     auto input_buffer = CreateBuffer(dram_config);
     auto output_buffer = CreateBuffer(dram_config);
 
@@ -1018,7 +1018,7 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
 
     // Output buffer holds one DFB entry (single page → single bank).
     InterleavedBufferConfig dram_config{
-        .device = device, .size = entry_size, .page_size = entry_size, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = entry_size, .page_size = entry_size, .buffer_type = BufferType::DRAM};
     auto output_buffer = CreateBuffer(dram_config);
 
     // Input tensor for the tensor-binding section (interleaved DRAM; only its base address is read here).
@@ -1227,7 +1227,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadBaseReDeliveredAfterDfbResize) {
 
     // Output buffer holds one DFB entry (single page → single bank).
     InterleavedBufferConfig dram_config{
-        .device = device, .size = entry_size, .page_size = entry_size, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = entry_size, .page_size = entry_size, .buffer_type = BufferType::DRAM};
     auto output_buffer = CreateBuffer(dram_config);
 
     ProgramSpec spec;

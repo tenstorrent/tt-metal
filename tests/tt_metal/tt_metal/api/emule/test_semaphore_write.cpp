@@ -61,7 +61,7 @@ TEST_F(MeshDeviceFixture, Semaphore_OutsideRegion_NoViolation) {
 
     // A normal L1 buffer is allocated well away from the reserved semaphore
     // region (which lives in the low system area near EMULE_SEM_BASE).
-    auto buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buf = Buffer::create(this->devices_.at(0).get(), 1024, 1024, BufferType::L1);
     uint32_t addr = static_cast<uint32_t>(buf->address());
 
     std::string kernel_src = R"(

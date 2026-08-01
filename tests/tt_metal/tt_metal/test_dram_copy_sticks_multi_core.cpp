@@ -62,7 +62,7 @@ TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         tt_metal::InterleavedBufferConfig dram_config{
-            .device = dev,
+            .device = devices_[0].get(),
             .size = dram_buffer_size,
             .page_size = dram_buffer_size,
             .buffer_type = tt_metal::BufferType::DRAM};
@@ -78,7 +78,7 @@ TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
             for (int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 tt_metal::InterleavedBufferConfig l1_config{
-                    .device = dev,
+                    .device = devices_[0].get(),
                     .size = per_core_l1_size,
                     .page_size = per_core_l1_size,
                     .buffer_type = tt_metal::BufferType::L1};

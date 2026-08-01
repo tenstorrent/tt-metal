@@ -176,7 +176,7 @@ TEST(DescriptorPatching, ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
 
 class DescriptorPatchingDeviceTest : public GenericMeshDeviceFixture {
 protected:
-    IDevice* device() { return get_mesh_device()->get_devices()[0]; }
+    IDevice* device() { return get_mesh_device().get(); }
 };
 
 // resolve_bindings correctly maps a single per-core buffer arg.

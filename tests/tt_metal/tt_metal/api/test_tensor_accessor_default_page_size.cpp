@@ -69,7 +69,6 @@ constexpr uint32_t TILE_NUM_PAGES = 1;
 constexpr uint32_t TILE_TOTAL_SIZE = TILE_NUM_PAGES * TILE_PAGE_SIZE;
 
 void verify_default_page_size(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const Buffer* input_buffer) {
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -80,7 +79,10 @@ void verify_default_page_size(const std::shared_ptr<distributed::MeshDevice>& me
     auto& prog = workload.get_programs().at(device_range);
 
     auto output_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device, .size = OUTPUT_PAGE_SIZE, .page_size = OUTPUT_PAGE_SIZE, .buffer_type = BufferType::DRAM});
+        .device = mesh_device.get(),
+        .size = OUTPUT_PAGE_SIZE,
+        .page_size = OUTPUT_PAGE_SIZE,
+        .buffer_type = BufferType::DRAM});
 
     CircularBufferConfig cb_config =
         CircularBufferConfig(OUTPUT_PAGE_SIZE, {{0, tt::DataFormat::RawUInt32}}).set_page_size(0, OUTPUT_PAGE_SIZE);
@@ -122,7 +124,6 @@ void verify_runtime_page_size(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const Buffer* input_buffer,
     uint32_t sentinel_page_size) {
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -133,7 +134,10 @@ void verify_runtime_page_size(
     auto& prog = workload.get_programs().at(device_range);
 
     auto output_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device, .size = OUTPUT_PAGE_SIZE, .page_size = OUTPUT_PAGE_SIZE, .buffer_type = BufferType::DRAM});
+        .device = mesh_device.get(),
+        .size = OUTPUT_PAGE_SIZE,
+        .page_size = OUTPUT_PAGE_SIZE,
+        .buffer_type = BufferType::DRAM});
 
     CircularBufferConfig cb_config =
         CircularBufferConfig(OUTPUT_PAGE_SIZE, {{0, tt::DataFormat::RawUInt32}}).set_page_size(0, OUTPUT_PAGE_SIZE);

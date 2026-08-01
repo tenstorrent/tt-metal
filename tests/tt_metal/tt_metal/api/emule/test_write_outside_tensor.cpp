@@ -34,7 +34,7 @@ TEST_F(MeshDeviceFixture, OOB_Tensor_Gap_L1_SanityCheck) {
 
     // One small L1 buffer near the top of L1 (allocator is top-down for L1).
     constexpr uint32_t buffer_size = 1024;
-    auto buf = Buffer::create(device, buffer_size, buffer_size, BufferType::L1);
+    auto buf = Buffer::create(this->devices_.at(0).get(), buffer_size, buffer_size, BufferType::L1);
 
     // Pick a target that sits 64 KB below the buffer's start. That lands in
     // user-allocatable L1 (above l1_unreserved_base on a fresh device with a
@@ -79,7 +79,7 @@ TEST_F(MeshDeviceFixture, OOB_Tensor_Gap_DRAM_SanityCheck) {
     // One small DRAM buffer. DRAM allocates bottom-up from dram_unreserved_base
     // by default, so the buffer's address is close to that base.
     constexpr uint32_t buffer_size = 1024;
-    auto buf = Buffer::create(device, buffer_size, buffer_size, BufferType::DRAM);
+    auto buf = Buffer::create(this->devices_.at(0).get(), buffer_size, buffer_size, BufferType::DRAM);
 
     // Target a DRAM offset 1 MB above the buffer — well above the buffer's
     // end and above dram_unreserved_base, but not inside any allocated DRAM
@@ -122,7 +122,7 @@ TEST_F(MeshDeviceFixture, OOB_Tensor_HostPoke_JustPast_SanityCheck) {
     Program program = CreateProgram();
 
     constexpr uint32_t buffer_size = 1024;
-    auto anchor = Buffer::create(device, buffer_size, buffer_size, BufferType::L1);
+    auto anchor = Buffer::create(this->devices_.at(0).get(), buffer_size, buffer_size, BufferType::L1);
     constexpr uint32_t gap_distance = 64 * 1024;
     uint32_t poke_addr = static_cast<uint32_t>(anchor->address()) - gap_distance;
 
@@ -164,7 +164,7 @@ TEST_F(MeshDeviceFixture, OOB_Tensor_InBounds_L1_NoViolation) {
     Program program = CreateProgram();
 
     constexpr uint32_t buffer_size = 1024;
-    auto buf = Buffer::create(device, buffer_size, buffer_size, BufferType::L1);
+    auto buf = Buffer::create(this->devices_.at(0).get(), buffer_size, buffer_size, BufferType::L1);
     // A word comfortably inside the buffer.
     uint32_t in_addr = static_cast<uint32_t>(buf->address()) + 64;
 
@@ -200,7 +200,7 @@ TEST_F(MeshDeviceFixture, OOB_Tensor_InBounds_DRAM_NoViolation) {
     Program program = CreateProgram();
 
     constexpr uint32_t buffer_size = 1024;
-    auto buf = Buffer::create(device, buffer_size, buffer_size, BufferType::DRAM);
+    auto buf = Buffer::create(this->devices_.at(0).get(), buffer_size, buffer_size, BufferType::DRAM);
     uint32_t in_addr = static_cast<uint32_t>(buf->address()) + 64;
 
     std::string kernel_src = R"(
@@ -244,7 +244,7 @@ TEST_F(MeshDeviceFixture, OOB_Tensor_HostPoke_Accept_NoViolation) {
     // gap: above l1_unreserved_base, inside no allocated tensor) via
     // WriteToDeviceL1 — which registers the host-poke extent when ASAN is on.
     constexpr uint32_t buffer_size = 1024;
-    auto anchor = Buffer::create(device, buffer_size, buffer_size, BufferType::L1);
+    auto anchor = Buffer::create(this->devices_.at(0).get(), buffer_size, buffer_size, BufferType::L1);
     constexpr uint32_t gap_distance = 64 * 1024;
     uint32_t poke_addr = static_cast<uint32_t>(anchor->address()) - gap_distance;
 
