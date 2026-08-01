@@ -30,7 +30,7 @@ except ImportError:
 from framework.device_fixtures import default_device
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
-from framework.constants import parse_mesh_suffix
+from framework.constants import CCL_OP_TOKENS, parse_mesh_suffix
 from framework.statuses import TestStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
@@ -1836,8 +1836,7 @@ def _is_multidevice_ccl_module(module_name):
     profiler is safe to enable for the run -- see _should_skip_device_profiler."""
     if not module_name:
         return False
-    _ccl = ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "all_broadcast")
-    return any(any(c in m for c in _ccl) for m in str(module_name).split(",") if m)
+    return any(any(c in m for c in CCL_OP_TOKENS) for m in str(module_name).split(",") if m)
 
 
 def _should_skip_device_profiler(config):

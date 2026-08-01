@@ -26,8 +26,10 @@ a row batch and save ~4 jobs, but that relies on the grid scanner being right, a
 known gap (linear's gather_in0 path keys off output/hop grids, not the nominal compute width).
 Paying 4 extra jobs to avoid a wrong-grid failure is the better trade.
 
-All modules sharing a device key share the job -- there are no per-module carve-outs. A batch
-is bounded by VECTOR COUNT, not module count, which is what actually caps a job's runtime.
+Modules sharing a device key share the job, EXCEPT CCL collectives, which get their own batch:
+they open their own device per vector (a submesh-traced CCL vector opens the full galaxy), and
+the device profiler is disabled for a whole job whenever any of its modules is CCL. A batch is
+bounded by VECTOR COUNT, not module count, which is what actually caps a job's runtime.
 
 Writes one directory per batch plus a batch manifest for the CI matrix to consume.
 """
@@ -41,7 +43,7 @@ from pathlib import Path
 from split_vectors_by_axis import vector_dispatch_axis_hint
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "framework"))
-from constants import strip_grouping_suffix  # noqa: E402
+from constants import CCL_OP_TOKENS, strip_grouping_suffix  # noqa: E402
 
 # Time model for splitting an oversized batch across jobs. Deliberately conservative: the
 # 3s/vector figure comes from slice (a light op) -- conv2d/matmul/CCL are slower, so a batch
@@ -118,8 +120,8 @@ def vector_device_key(vec):
 
 
 def batch_name(mesh, axis, fabric, part=None, total_parts=1, solo=None):
-    """Deterministic batch/directory name. ``solo`` is retained for callers that pin a single
-    module into its own batch; the default planner no longer does (see plan_batches)."""
+    """Deterministic batch/directory name. ``solo`` tags a batch pinned to one module (CCL --
+    see plan_batches), keeping its directory distinct from the shared batch's."""
     mesh_str = f"{mesh[0]}x{mesh[1]}" if mesh else "unknown"
     name = f"mesh{mesh_str}_{axis}_{fabric}"
     if solo:
@@ -132,6 +134,17 @@ def batch_name(mesh, axis, fabric, part=None, total_parts=1, solo=None):
 def _base_module(file_name):
     """'model_traced.conv2d_model_traced.mesh_4x8.json' -> 'model_traced.conv2d_model_traced'."""
     return strip_grouping_suffix(Path(file_name).stem)
+
+
+def _is_ccl(file_name):
+    """Whether this file's module is a CCL collective, which must not share a job."""
+    return any(token in _base_module(file_name) for token in CCL_OP_TOKENS)
+
+
+def _solo_token(file_name):
+    """Short, filename-safe tag for an isolated module's batch ('...all_gather_async_model_traced'
+    -> 'all_gather_async')."""
+    return _base_module(file_name).split(".")[-1].replace("_model_traced", "") or "solo"
 
 
 def source_manifest(src_dir: Path):
@@ -190,12 +203,45 @@ def plan_batches(grouped, dst_root: Path = _DST_ROOT):
         # than by module must not quietly undo that isolation: conv2d's heavy convs deadlock
         # the dispatch hang-detector once device state has accumulated from OTHER modules in
         # the same process, and run clean alone (see LEAD_MODELS_BATCH_POLICY.solo_modules).
-        # Every module in a device key shares the job. No solo carve-outs: the reason ops like
-        # conv2d were isolated was cross-module device-state accumulation across a job that
-        # opened the device repeatedly, and a device-key job opens it exactly once, so the
-        # condition that motivated the split no longer holds. Batches are bounded by vector
-        # count instead (_plan_subset), which is what actually caps a job's runtime.
-        _plan_subset(batches, files, mesh, axis, fabric, None, cap, dst_root)
+        # CCL modules get their own batch inside the device key; everything else shares one.
+        #
+        # conv2d used to be isolated too, for cross-module device-state accumulation across a
+        # job that opened the device repeatedly. A device-key job opens it once, and merging
+        # was validated on lead-models run 30699228172 (12 conv2d vectors among 29 modules,
+        # 582/582, no hang), so conv2d now shares.
+        #
+        # CCL cannot share, for two independent reasons:
+        #  1. all_gather_async is the only module whose mesh_device_fixture() yields None -- it
+        #     opens its own device per vector via _full_galaxy_mesh_for(), which for a 2D
+        #     SUBMESH of the host opens the FULL galaxy and carves the submesh out (opening a
+        #     submesh directly fails fabric router sync on its boundary links). So in a submesh
+        #     batch the job opens the declared mesh for every other module and then a different,
+        #     larger one for CCL -- the in-job mesh switch this whole design exists to remove.
+        #     Observed in run 30699228172 mesh4x4_col_2d: 57 vectors at 4x4, then
+        #     MeshShape([8,4]). Two vectors with IDENTICAL metadata, so no grouping rule can
+        #     separate them -- the device opened is a property of the MODULE, not the vector.
+        #     On a healthy 32-card host this silently succeeds, which is why it needs isolating
+        #     rather than detecting.
+        #  2. The device profiler is a process-global toggle and _should_skip_device_profiler
+        #     disables it for the WHOLE job when ANY module in the selector is CCL. Merged, that
+        #     cost device-perf for all 41 modules of mesh8x4_col_2d; solo, it costs only CCL's
+        #     own batch.
+        ccl_groups = {}
+        shared = {}
+        for name, suites in files.items():
+            if _is_ccl(name):
+                # Group by MODULE, not per file: one module can contribute several files to the
+                # same device key (the key comes from each vector's recorded shape, not the
+                # filename), and one batch per file would mint duplicate batch names whose
+                # directories overwrite each other.
+                ccl_groups.setdefault(_solo_token(name), {})[name] = suites
+            else:
+                shared[name] = suites
+
+        for solo, subset in sorted(ccl_groups.items(), key=lambda kv: kv[0]):
+            _plan_subset(batches, subset, mesh, axis, fabric, solo, cap, dst_root)
+        if shared:
+            _plan_subset(batches, shared, mesh, axis, fabric, None, cap, dst_root)
 
     duplicates = {b["name"] for b in batches if sum(1 for o in batches if o["name"] == b["name"]) > 1}
     if duplicates:
