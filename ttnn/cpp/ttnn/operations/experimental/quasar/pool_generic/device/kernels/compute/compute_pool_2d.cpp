@@ -22,8 +22,8 @@
 //   0 = production path: narrow pack_untilize straight into the real output CB (out_cb), then DPRINT it.
 //   1 = experiment:      full-tile (32x32) pack of the reduced DEST into the scratch CB, then DPRINT it
 //                        (out_cb still gets a balancing push with garbage).
-// The inits (tilizeA_B_reduce_init + pack_untilize_dest_init) and the pack call all follow this switch,
-// so flipping this one value moves the whole pipeline between the two CBs consistently.
+// The pack_untilize_dest_init and the pack call all follow this switch, so flipping this one value moves
+// the whole pack pipeline between the two CBs consistently.
 // NOTE: PACK_TO_SCRATCH==1 requires the reader-side scratch consume (reader_pool_2d.cpp) to be enabled
 // too — compute PRODUCES the scratch CB and the DM reader CONSUMES it; they must be on/off together.
 #define PACK_TO_SCRATCH 1
@@ -41,22 +41,6 @@
 #define FACE_WIDTH 16
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
-
-// [#48552] Self-contained copy of the canonical minimal tilize+reduce re-init from the (not-yet-merged)
-// amokan/tilizeA_B_init_short compute-API change. It re-programs ONLY UNPACK (tilizeA_B) and MATH (reduce)
-// for a mid-kernel change of input CB or tiles-to-reduce, deliberately WITHOUT the one-time llk_*_hw_configure
-// that the full tilizeA_B_reduce_init runs at kernel start -- re-running hw_configure per c-block corrupts
-// unpacker state. PACK is re-init'd separately via pack_untilize_dest_init in the loop. This mirrors the LLK
-// team's canonical short init (UNPACK tilizeA_B + MATH reduce only; no pack-sync / pack init / dest-init),
-// which passes test_max_pool2d_strided_reduce.py. Both llk_* signatures match the full tilizeA_B_reduce_init
-// used at kernel start. Remove once amokan/tilizeA_B_init_short lands and this branch picks it up.
-template <bool neginf_srcA = true, bool zero_srcA_reduce = false>
-ALWI void tilizeA_B_reduce_init_short(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb) {
-    UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
-        icb0, icb1_scaler, block)));
-    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
-    (void)ocb;  // PACK re-init handled by pack_untilize_dest_init; ocb kept for call-site compatibility.
-}
 
 void kernel_main() {
 #if DEBUG_PRINT == 1
@@ -190,8 +174,8 @@ void kernel_main() {
 #else
     constexpr uint32_t pack_target_cb_id = tilize_untilize_cb;
 #endif
-    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, pack_target_cb_id);
+    compute_kernel_hw_startup(in_cb_id_0, in_scalar_cb_id_0, tilize_untilize_cb);
+    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter);
 
     pack_untilize_dest_init<max_tiles_per_iter>(pack_target_cb_id);
 
@@ -274,12 +258,7 @@ void kernel_main() {
             //   (b) tiles_to_reduce changes across c-blocks (e.g. 4 then 2 for 6 tiles / 192c) -- UNPACK and
             //       MATH must both be re-programmed for the new count (PACK is re-init'd via
             //       pack_untilize_dest_init below).
-            // Use the *_short variant: the full tilizeA_B_reduce_init (called once at kernel start) also runs
-            // llk_*_hw_configure, and re-running hw_configure per c-block corrupts unpacker state (UNPACKER
-            // fault). Re-initing only some engines desynced them (Risc IB interrupt, watcher 0x19, on MATH then
-            // PACK); the short compute API keeps unpack+math in lockstep without the illegal per-block reconfig.
-            tilizeA_B_reduce_init_short<neginf_srca_maxpool, zero_srca_avgpool>(
-                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce, pack_target_cb_id);
+            tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
             MATH(WATCHER_RING_BUFFER_PUSH(0xC0FFEE11u));
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {

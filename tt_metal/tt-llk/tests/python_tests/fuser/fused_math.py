@@ -191,7 +191,7 @@ class ComputePipeline:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> str:
-        return unpack_common.sync_with_packer(operation.stage_id)
+        return unpack_common.sync_with_packer(operation.needs_pack_sync)
 
     def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         unpack_ops = [
@@ -203,7 +203,9 @@ class ComputePipeline:
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
         init_code = ""
-        init_code += unpack_common.dvalid_init()
+        init_code += unpack_common.dvalid_init(
+            quasar_use_dvalid=config.quasar_use_dvalid
+        )
         init_code += config.sentinel.hw_configure_unpack(config, operation)
         if hoist_reconfig and unpack_ops:
             init_code += unpack_ops[0].unpack_reconfig(operation, config)
@@ -253,7 +255,10 @@ class ComputePipeline:
     ) -> str:
         if config.skip_sync:
             return ""
-        return fpu_common.math_wait_for_dest(operation.dest_sync.cpp_enum_value)
+        return fpu_common.math_wait_for_dest(
+            operation.dest_sync.cpp_enum_value,
+            quasar_use_dvalid=config.quasar_use_dvalid,
+        )
 
     def _math_dest_section_done(
         self, operation: "FusedOperation", config: "GlobalConfig"
@@ -263,14 +268,18 @@ class ComputePipeline:
         return fpu_common.math_dest_section_done(
             operation.dest_sync.cpp_enum_value,
             config.dest_acc.cpp_enum_value,
+            quasar_use_dvalid=config.quasar_use_dvalid,
         )
 
     def _math_pack_sync_init(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
+        if not config.quasar_use_dvalid and operation.stage_id != 1:
+            return ""
         return fpu_common.math_pack_sync_init(
             operation.dest_sync.cpp_enum_value,
             config.dest_acc.cpp_enum_value,
+            quasar_use_dvalid=config.quasar_use_dvalid,
         )
 
     def _math_constants(
@@ -332,7 +341,9 @@ class ComputePipeline:
     def _packer_wait_for_math(self, config: "GlobalConfig") -> str:
         if config.skip_sync:
             return ""
-        return pack_common.packer_wait_for_math()
+        return pack_common.packer_wait_for_math(
+            quasar_use_dvalid=config.quasar_use_dvalid
+        )
 
     def _packer_dest_section_done(
         self, operation: "FusedOperation", config: "GlobalConfig"
@@ -342,14 +353,18 @@ class ComputePipeline:
         return pack_common.packer_dest_section_done(
             operation.dest_sync.cpp_enum_value,
             config.dest_acc.cpp_enum_value,
+            quasar_use_dvalid=config.quasar_use_dvalid,
         )
 
     def _pack_dest_init(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
+        if not config.quasar_use_dvalid and operation.stage_id != 1:
+            return ""
         return pack_common.pack_dest_init(
             operation.dest_sync.cpp_enum_value,
             config.dest_acc.cpp_enum_value,
+            quasar_use_dvalid=config.quasar_use_dvalid,
         )
 
     def _pack_constants(
@@ -358,25 +373,12 @@ class ComputePipeline:
         stage = operation.stage_id
         return f"// Operation {stage}: Packer\n"
 
-    def _pack_reduce_mask_config(self, operation: "FusedOperation") -> str:
-        if operation.reduce_dim is not None:
-            reduce_dim = operation.reduce_dim.cpp_enum_value
-            return f"_llk_pack_reduce_mask_config_<{reduce_dim}>();\n"
-        return ""
-
-    def _pack_reduce_mask_clear(self, operation: "FusedOperation") -> str:
-        if operation.reduce_dim is not None:
-            return "_llk_pack_reduce_mask_clear_();\n"
-        return ""
-
     def packer_sync_with_unpacker(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> str:
-        return pack_common.packer_sync_with_unpacker(
-            operation.stage_id, operation.num_stages
-        )
+        return pack_common.packer_sync_with_unpacker(operation.has_pack_consumer)
 
     def _all_same_pack_formats(self) -> bool:
         pack_only = self._get_pack_nodes()
@@ -392,10 +394,10 @@ class ComputePipeline:
         hoist_reconfig = hoist or self._all_same_pack_formats()
 
         init_code = config.sentinel.hw_configure_pack(config, operation, pack_only)
-        init_code += self._pack_dest_init(operation, config)
-        init_code += self._pack_reduce_mask_config(operation)
         if hoist_reconfig and pack_only:
             init_code += pack_only[0].reconfig(operation, config)
+        init_code += pack_common.pack_reduce_mask_config(operation)
+        init_code += self._pack_dest_init(operation, config)
         if hoist:
             init_code += pack_only[0].configure(operation, config, None)
         code += self._zone(config, "INIT", init_code)
@@ -432,7 +434,7 @@ class ComputePipeline:
         uninit_code = self.packer_sync_with_unpacker(operation, config)
         if hoist:
             uninit_code += pack_only[0].uninit(operation, config)
-        uninit_code += self._pack_reduce_mask_clear(operation)
+        uninit_code += pack_common.pack_reduce_mask_clear(operation)
         code += self._zone(config, "INIT", uninit_code)
 
         return code
