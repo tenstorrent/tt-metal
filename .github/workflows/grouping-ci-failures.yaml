@@ -53,10 +53,13 @@ jobs:
           script: |
             const currentRunId = context.runId;
             try {
+              // Scoped to this branch so a manual run on a test branch picks up
+              // its own state rather than the most recent hourly run on main.
               const resp = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 workflow_id: 'grouping-ci-failures.yaml',
+                branch: context.ref.replace('refs/heads/', ''),
                 status: 'completed',
                 per_page: 20
               });
