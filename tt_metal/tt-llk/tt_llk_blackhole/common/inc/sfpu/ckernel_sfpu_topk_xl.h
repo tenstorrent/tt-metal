@@ -2214,8 +2214,6 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
 // Programs the ADDR_MODs used by `_topk_xl_add_lsb_indices_`. Reuses
 // ADDR_MOD_4 for a +16 advance — the other ADDR_MOD_4 user is the unfused
 // topk path, but `distributed_topk` runs fused, so the reuse is safe.
-// ADDR_MOD_7 (zero advance) is left at its kernel-startup default and
-// not touched here.
 inline void _topk_xl_add_lsb_indices_init_()
 {
     // ADDR_MOD_6 — +4 (one element).
@@ -2356,7 +2354,8 @@ inline void _topk_xl_add_lsb_indices_()
 
 // Program ADDR_MOD_0 with a +2 increment: the two Dest rows of an SFPU
 // load/store. Used by both `remove_msb_values` and `separate_indices`,
-// which both walk the K-element region 32 datums at a time.
+// which both walk the K-element region 32 datums at a time. Also sets
+// ADDR_MOD_7 (zero advance) for the load part of the sequence.
 inline void _topk_xl_remove_msb_values_init_()
 {
     // ADDR_MOD_0, +2 (one group of 32 lanes). Not programmed by
@@ -2409,10 +2408,6 @@ inline void _topk_xl_remove_msb_values_()
     TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
 }
 
-// Same +2-stride ADDR_MOD setup as `remove_msb_values_init`. Kept as a
-// separate function to keep the LLK API surface 1:1 with the compute
-// kernel API; the bodies are identical but the calling site differs.
-//
 // In addition to programming ADDR_MOD_0, this also stashes the runtime
 // `group_id_bit_shift` into LREG12 so that `_topk_xl_separate_indices_`
 // can SFPSHFT the (template-static) `group_id` by it at body issue time.

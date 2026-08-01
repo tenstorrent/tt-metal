@@ -437,7 +437,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (INDEX_OP_REMOVE_MSB)
     {
-        ckernel::sfpu::_topk_xl_remove_msb_values_init_(); // ADDR_MOD_0 (+2), once
+        ckernel::sfpu::_topk_xl_remove_msb_values_init_();
     }
 
     // remove_msb: the in-place fused region [0|index] (TILES_PER_SEQ). Otherwise the
