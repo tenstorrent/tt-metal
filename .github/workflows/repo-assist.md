@@ -218,19 +218,20 @@ For each in-scope item, apply the best-fitting labels from the allowed set, whic
 
 1. Review issues labelled `bug` or `ci-bug`, plus any small, clearly-scoped issues identified as fixable in Task 2.
 2. For each fixable issue:
-   a. Check memory — skip if you have already tried and the attempt is still open. Never create duplicate PRs.
-   b. Create a fresh branch off `main`: `repo-assist/fix-issue-<N>-<short-desc>`.
-   c. Implement a minimal, surgical fix. Do not refactor unrelated code. Respect existing style and naming conventions (see `CONTRIBUTING.md`).
-   d. **Trigger CI validation (required for code changes)**: open the PR so `pr-gate.yaml` runs `build-artifact.yaml` on your branch (see **Validating changes via CI** below). Record the build run ID in memory and move on — do not block the rest of this run waiting for a result. tt-metal builds take far longer than the agent run time.
-   e. Open a **ready-for-review** PR (the `[repo-assist]` prefix is applied automatically; PRs are not draft because `pr-gate.yaml` does not run on draft PRs) with: AI disclosure, `Closes #N`, root cause, fix rationale, trade-offs, and a **Test Status** section stating the build run link and its current status (e.g. "queued — outcome will be checked on the next repo-assist run").
-   f. Post a single brief comment on the issue linking to the PR.
+   a. **Check GitHub itself for an existing fix first — not just memory.** Look at the issue's linked/cross-referenced PRs (`gh issue view <N> --json timelineItems`, or `gh pr list --search "<N>" --state open`) and skim recent issue comments for a maintainer or contributor mentioning a PR they've already opened. If any open PR — from anyone, not only Repo Assist — already addresses this issue, do **not** open a new one. Post at most one brief comment noting the existing PR (skip the comment if one already points to it) and record the issue as covered in memory. Memory alone is not sufficient here: it only tracks Repo Assist's own past attempts, so it misses fixes opened by humans or other tools.
+   b. Check memory — skip if you have already tried and the attempt is still open. Never create duplicate PRs.
+   c. Create a fresh branch off `main`: `repo-assist/fix-issue-<N>-<short-desc>`.
+   d. Implement a minimal, surgical fix. Do not refactor unrelated code. Respect existing style and naming conventions (see `CONTRIBUTING.md`).
+   e. **Trigger CI validation (required for code changes)**: open the PR so `pr-gate.yaml` runs `build-artifact.yaml` on your branch (see **Validating changes via CI** below). Record the build run ID in memory and move on — do not block the rest of this run waiting for a result. tt-metal builds take far longer than the agent run time.
+   f. Open a **ready-for-review** PR (the `[repo-assist]` prefix is applied automatically; PRs are not draft because `pr-gate.yaml` does not run on draft PRs) with: AI disclosure, `Closes #N`, root cause, fix rationale, trade-offs, and a **Test Status** section stating the build run link and its current status (e.g. "queued — outcome will be checked on the next repo-assist run").
+   g. Post a single brief comment on the issue linking to the PR.
 3. Update memory with fix attempts, dispatched CI run IDs, and outcomes.
 
 ### Task 4: Small Coding & Documentation Improvements
 
 **Be highly selective — only propose clearly beneficial, low-risk improvements.** Good candidates for tt-metal: documentation gaps, README/CONTRIBUTING clarity, comment/typo fixes, dead-code removal, small Python test or tooling improvements, and CI/config cleanups that do not require hardware.
 
-Check memory for already-submitted ideas; do not re-propose them. Create a fresh branch `repo-assist/improve-<short-desc>` off `main`, implement the change, and — **if it touches build-affecting C++/Python code** — trigger CI validation (Task 3 step d). Documentation-only changes do not require a CI build. Open a **ready-for-review** PR with AI disclosure, rationale, and a Test Status section. If not ready to implement, file an issue instead. Update memory.
+Check memory for already-submitted ideas; do not re-propose them. Create a fresh branch `repo-assist/improve-<short-desc>` off `main`, implement the change, and — **if it touches build-affecting C++/Python code** — trigger CI validation (Task 3 step e). Documentation-only changes do not require a CI build. Open a **ready-for-review** PR with AI disclosure, rationale, and a Test Status section. If not ready to implement, file an issue instead. Update memory.
 
 ### Task 5: Maintain Repo Assist Pull Requests
 
