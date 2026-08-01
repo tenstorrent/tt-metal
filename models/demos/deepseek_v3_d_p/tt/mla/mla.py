@@ -1050,6 +1050,24 @@ class ttMLA:
             raise ValueError(f"MLA configured for KV geometry {self.kv_cache_geometry}, got {kvpe_cache.geometry}")
 
         if self.kv_only:
+            # HANG-INVESTIGATION instrumentation (see
+            # models/demos/deepseek_v3_d_p/tests/glm_chunked_hang_investigation/FINDINGS.md):
+            # _forward_kv_only() always returns bare None, ignoring return_kv_intermediates /
+            # return_indexer_indices entirely. If a kv_only layer is ever called with either flag
+            # set, the caller's unpack (`mla_out, mla_indices = mla_out` in tt_prefill_block.py)
+            # raises TypeError: cannot unpack non-iterable NoneType object -- this is the exact
+            # crash signature seen intermittently in CI at layer 77 (the last GLM-5.2 layer), and
+            # is suspected to be the same root cause as the sibling silent hang at the same layer.
+            if return_kv_intermediates or return_indexer_indices:
+                logger.warning(
+                    "[hang-investigation] layer_idx={} kv_only fast path entered with "
+                    "return_kv_intermediates={} return_indexer_indices={} -- these are silently "
+                    "dropped by _forward_kv_only (always returns None); the caller will raise "
+                    "TypeError unpacking this if it expects a tuple.",
+                    self.layer_idx,
+                    return_kv_intermediates,
+                    return_indexer_indices,
+                )
             return self._forward_kv_only(
                 hidden_states,
                 rope_tensors,

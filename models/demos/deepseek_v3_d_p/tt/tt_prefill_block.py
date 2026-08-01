@@ -499,6 +499,20 @@ class TtPrefillBlock(LightweightModule):
             return_indexer_indices=return_indexer_indices,
             index_kv_cache=index_kv_cache,
         )
+        # HANG-INVESTIGATION instrumentation (see
+        # models/demos/deepseek_v3_d_p/tests/glm_chunked_hang_investigation/FINDINGS.md): make the
+        # about-to-crash state visible before the unpack below raises, instead of a bare TypeError.
+        if mla_out is None and (return_kv_intermediates or return_indexer_indices):
+            logger.critical(
+                "[hang-investigation] layer_idx={} block.kv_only={} mla.kv_only={} "
+                "return_kv_intermediates={} return_indexer_indices={} -- mla.forward() returned "
+                "None, about to raise TypeError unpacking it.",
+                self.mla.layer_idx,
+                self.kv_only,
+                getattr(self.mla, "kv_only", None),
+                return_kv_intermediates,
+                return_indexer_indices,
+            )
         kv_intermediates = None
         mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
         if return_kv_intermediates and return_indexer_indices:
