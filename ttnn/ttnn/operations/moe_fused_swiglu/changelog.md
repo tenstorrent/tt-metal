@@ -1978,3 +1978,91 @@ the sweep was worth running even though the outcome looked certain.
   111 536 / 153 761 / 254 542 that is **-8.6 % / -11.5 % / -7.8 %**. Targets still not met.
 - **Accuracy**: unchanged. The remap moves which address a core reads, not what is computed; golden
   PCC gate passes on all 45 cells and the three structural debug tests are the sharp check.
+
+---
+
+## Perf 14 — K-chunking the gate/up phase: a REGRESSION, and the L1 number was wrong all along
+
+- **Date**: 2026-08-01
+- **Scope**: measurement + one `matmul_block_helpers` extension kept. Op-side diff REVERTED.
+
+### 1. The correction that matters most: the op has 10 560 B of L1 free, not ~121 KB
+
+The shipped program allocates **1 562 304 B of the 1 572 864 B cap = 99.3 %**. The "~159 KB free" and
+"~121 KB free" figures in the `REDUCE_SLOTS_CAP` and `HSEND` comments are **STALE** — later
+refinements ate them, and this changelog has been quoting them as current all round. Corroborated
+independently: forcing `DEPTH_H = 5` reports "grow to 1 666 752 B", and DEPTH_H 5 adds 104 448 B over
+3, so 3 sits at 1 562 304.
+
+**Every "spend L1" plan on the board is dead against that number, not merely tight:**
+
+| plan | needs | verdict |
+|---|---|---|
+| `M_BLOCK = 16` (halve the per-M-block cost) | ~415 KB | dead |
+| h concentration -> 4 fat rounds instead of 11 | ~261 KB | dead |
+| `DEPTH_H = 4` | +52 KB | dead |
+| `pack_l1_pair` bf16 accumulator | +102 KB | dead |
+| K-chunking's bf16 accumulation region | +98 KB | dead |
+
+### 2. K-chunking: the `raise` blamed the wrong thing
+
+`KB1_FRACTION`'s guard says K-blocking "needs the second-CB copy of the resident x block". That is
+not the blocker. **The blocker is the ACCUMULATOR FORMAT.** `cb_gate_acc`/`cb_up_acc` are bfp8, and
+packer L1 accumulation cannot target a block-float buffer. At one K-block the helper never fires the
+flag (`llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)`); turn K-blocks on and it does —
+**measured pcc = nan, maxrel = inf.** Corroborated twice over: the production matmul factory forces
+`interm0_data_format = Float16_b` whenever `packer_l1_acc_en`, and this op's own `down` matmul
+already accumulates into the **bf16** `CB_OUT_INTERM` and converts afterwards. Correct answers need a
+bf16 region of `n_gu_block` tiles = **98 304 B**, which §1 says does not exist.
+
+### 3. And K- and N-chunking are MUTUALLY EXCLUSIVE
+
+The bf16 region can only be copied back into the m-major bfp8 accumulator in ONE contiguous pass; an
+N-chunk's columns are strided inside the block, so a per-chunk copy-back cannot place them. So
+`GU_KCHUNKS > 1` forces `gu_chunks = 1`: this is K-granularity **instead of** N-, never on top. It
+also serialises gate and up (they share the one region), giving up the measured interleave.
+
+**Measured, count 256, bf16_rm, 88 cores, `DEPTH_X=1` on both arms, 2 samples:**
+
+| variant | ns | vs shipped | pcc |
+|---|---|---|---|
+| shipped, N=3 K=1 | 130 924 / 129 996 | — | 0.999457 |
+| N=1 K=1 (forfeit N-chunking only) | 139 184 / 139 356 | **+6.8 %** | 0.999457 |
+| N=1 K=2 + per-sub-block publish | 142 494 / 143 412 | **+9.6 %** | 0.999604 |
+| N=1 K=4 + per-sub-block publish | 143 037 | +9.4 % | 0.999671 |
+| N=1 K=4, bfp8 accumulator | — | — | **nan (inf)** |
+
+**The attribution is the finding.** K=2 ~= K=4 (142.5k vs 143.0k), so halving the extra accumulating
+packs recovers 0.4 % — the cost is **NOT** the extra packs Perf 3 predicted when it rejected
+K-chunking. It is the forfeited N-chunking (+6.8 %, which is that lever's own measured worth) plus a
+bf16->bfp8 copy pass. Per-K-sub-block publication is worth only **-0.7 %, inside the band**, because
+with `gu_chunks` forced to 1 the whole W_gate block is issued before the x-staging prologue, whose
+blanket `noc_async_read_barrier()` drains it — Perf 8's own finding, reproduced.
+
+**Predicate: none.** No regime wins. Only `HN_PAD == 1` (i.e. `HID_T <= HGROUPS`) would make K the
+only available pipelining axis, and that is unreachable at the supported `hidden = 2048`.
+
+### 4. One real win, and it is precision, not perf
+
+The bf16 accumulator removes a bfp8 quantisation step: **maxrel 0.0512 -> 0.0288, pcc 0.999457 ->
+0.999671**. If precision headroom is ever wanted, that is where it is, priced at 98 KB.
+
+### 5. What was kept
+
+Only `ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.{hpp,inl}`: a new `NoIn0BaseOffset` functor +
+`In0BaseOffsetFn` template param appended after `Buf`, in0 `wait_front`/`pop_front` gated on the
+policy, and the "NoWaitNoPop is in1-only" static_assert relaxed. Additive; the only policy whose
+behaviour changes is in0 `NoWaitNoPop`, which was previously a compile error. It is the general
+escape hatch for "K-block an in0 that is M-major over the full K extent" and worth keeping.
+
+**REVIEW HAZARD, unfixed**: with `num_k_blocks > 1` and `In0BaseOffsetFn` omitted, every K-block
+re-reads the same in0 tiles — a **silent wrong answer**, not a hang. The pairing was not asserted
+because the default is correct at one K-block. Our golden suite would NOT catch it (it never runs a
+multi-M-block count and a K-origin bug is identically zero at one K-block).
+
+The op-side diff was **reverted**: it cost 2 048 B of L1 even with the knob off (`CB_GU_INTERM` at one
+page, the house pattern for inactive CBs), taking free L1 10 560 -> 8 512 B, and nothing in it is
+worth that at 99.3 % occupancy.
+
+- **Perf achieved**: none. Default path re-measured after the revert: 90 576 / 130 780 ns
+  (counts 128/256), unchanged.

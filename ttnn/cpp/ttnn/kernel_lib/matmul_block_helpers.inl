@@ -86,7 +86,8 @@ template <
     bool caller_owns_pack_target,
     typename Activation,
     matmul_config::DataFormatReconfig reconfig,
-    typename Buf>
+    typename Buf,
+    typename In0BaseOffsetFn>
 ALWI void matmul_block(
     Buf& in0_buf,
     Buf& in1_buf,
@@ -101,7 +102,8 @@ ALWI void matmul_block(
     KBlockInnerDimFn k_block_inner_dim,
     In0SourceFn in0_source_fn,
     In1BaseOffsetFn in1_base_offset_fn,
-    uint32_t out_col_offset) {
+    uint32_t out_col_offset,
+    In0BaseOffsetFn in0_base_offset_fn) {
 
     // OutWithUntilize needs SubblockMajor: pack_untilize_dest packs from DST offset 0 for a
     // fixed block_ct_dim and can't compose with the per-tile absolute-offset row-major pack.
@@ -113,12 +115,14 @@ ALWI void matmul_block(
     static_assert(
         last_block_target != LastBlockTarget::OutWithUntilize || untilize_block_ct_dim > 0,
         "OutWithUntilize requires untilize_block_ct_dim > 0 (= shape.out_subblock_h * shape.out_subblock_w)");
-    // NoWaitNoPop is in1-only: cross-chip global-CB receivers and L1-sharded weight CBs
-    // are in1-side patterns; in0 has no analogous external-management case.
-    static_assert(
-        in0_policy != InputPolicy::NoWaitNoPop,
-        "InputPolicy::NoWaitNoPop is only valid for in1 — use WaitAndPopPerKBlock or "
-        "WaitAndRetainOnLastBlock for in0.");
+    // NoWaitNoPop on in0 hands the caller the WHOLE in0 lifecycle: one wait_front before the
+    // call and one pop_front after, for as many matmul_block calls as read that block. It is the
+    // only policy that fits an in0 which is (a) read by SEVERAL matmuls, so no call may pop, and
+    // (b) M-major over the full K extent, so successive K-blocks are strided column windows the
+    // pop lifecycle cannot reach — pair it with In0BaseOffsetFn, which shifts the K origin
+    // instead. Without a base-offset functor at num_k_blocks > 1 it degenerates to "every K-block
+    // reads block 0" — a SILENT WRONG ANSWER, not a hang. That pairing cannot be asserted here
+    // (the default functor is the right choice at one K-block), so it is a review item.
     // last_block_target == Interm feeds a downstream phase; whether activation belongs HERE
     // (matmul pack) or in that phase is the caller's choice via the Activation parameter (the
     // helper can't infer it). Set Activation here only when the downstream phase reads the
@@ -260,7 +264,12 @@ ALWI void matmul_block(
             // Full-block wait for both modes. Every caller has the
             // full in0 block resident before invoking the helper, so progressive
             // per-subblock waits are pure polling overhead on TRISCs.
-            active_in0_buf.wait_front(in0_block_num_tiles);
+            // in0_policy=NoWaitNoPop: the caller fronted the whole in0 region once (it is read by
+            // several matmuls and/or the K-blocks are strided windows of it), so a per-K-block
+            // wait here would over-wait the region's own size and deadlock.
+            if constexpr (in0_policy != InputPolicy::NoWaitNoPop) {
+                active_in0_buf.wait_front(in0_block_num_tiles);
+            }
             // in1_policy=NoWaitNoPop: caller manages in1 lifecycle externally
             // (cross-chip global-CB receivers; pre-populated L1-sharded in1).
             if constexpr (in1_policy != InputPolicy::NoWaitNoPop) {
@@ -288,7 +297,9 @@ ALWI void matmul_block(
             // keep subblock-major so the last-block per-subblock reload reads partials contiguously.
             constexpr bool spill_row_grouped = (tile_order == OutputCBLayout::TileRowMajor) && packer_l1_acc;
 
-            int in0_index_subblock_offset = 0;
+            // Per-K-block in0 base tile offset (default 0). Nonzero reads a different K window of
+            // the same fronted in0 region — the in0 mirror of in1_base_offset (see NoIn0BaseOffset).
+            int in0_index_subblock_offset = static_cast<int>(in0_base_offset_fn(block));
             for (uint32_t in0_subblock = 0; in0_subblock < shape.in0_num_subblocks; in0_subblock++) {
                 if constexpr (tile_order == OutputCBLayout::TileRowMajor && !caller_owns_pack_target) {
                     // Row-major path reserves per M-row-group (one row of all N-subblocks).
@@ -539,11 +550,12 @@ ALWI void matmul_block(
             // intermediate blocks always pop. Pops target active_in0_buf (the In0SourceFn CB).
             if constexpr (in0_policy == InputPolicy::WaitAndPopPerKBlock) {
                 active_in0_buf.pop_front(in0_block_num_tiles);
-            } else {
+            } else if constexpr (in0_policy == InputPolicy::WaitAndRetainOnLastBlock) {
                 if (!last_out) {
                     active_in0_buf.pop_front(in0_block_num_tiles);
                 }
             }
+            // NoWaitNoPop: no pop at all — the caller owns in0's rd_ptr.
             // WaitAndRetainOnLastBlock: skip the pop on the last K-block (caller reuses in1);
             // intermediate blocks pop. NoWaitNoPop: no pop at all (caller manages in1's rd_ptr).
             if constexpr (in1_policy == InputPolicy::WaitAndPopPerKBlock) {

@@ -224,6 +224,25 @@ struct NoIn1BaseOffset {
     ALWI uint32_t operator()(uint32_t /*block*/) const { return 0; }
 };
 
+// Per-K-block in0 base-offset functor (default returns 0) — the in0 mirror of
+// NoIn1BaseOffset, and the one hook that lets a K-blocked matmul read a STRIDED column
+// window of a fronted in0 region instead of the contiguous K-block-major layout the pop
+// lifecycle implies.
+//
+// WHY IT EXISTS. The helper addresses in0 as `subblock * (out_subblock_h * in0_block_k) +
+// step`, so a K-block is a CONTIGUOUS `in0_num_subblocks * out_subblock_h * in0_block_k`
+// run and successive K-blocks are reached by POPPING that run. That model only fits an in0
+// block laid out K-block-major. A caller whose in0 is M-MAJOR over the full K extent (row
+// stride K_full > in0_block_k) — e.g. one resident activation block consumed by several
+// matmuls, so no per-K-block pop is possible — instead keeps in0_block_k = K_full (which
+// makes the subblock stride the real row stride) and shifts the K origin per block with
+// this functor, returning `block * k_sub`. Pair with in0_policy=NoWaitNoPop (the caller
+// owns the one wait and the one pop) and KBlockInnerDimFn returning the sub-block's real
+// step count.
+struct NoIn0BaseOffset {
+    ALWI uint32_t operator()(uint32_t /*block*/) const { return 0; }
+};
+
 /**
  * matmul_block: sub-blocked tiled matmul C = A × B with K-blocking. One helper for all
  * matmul callers; behavior is selected by the template parameters below.
@@ -275,8 +294,9 @@ struct NoIn1BaseOffset {
  *   tile_order         SubblockMajor / TileRowMajor — see OutputCBLayout. The helper cannot
  *                      infer this; it follows the writer's read contract.
  *   init_mode          Short / None / ShortAfterPreKBlock — see InitMode.
- *   in0_policy,        per-operand input lifecycle — see InputPolicy (NoWaitNoPop is in1-only).
- *   in1_policy
+ *   in0_policy,        per-operand input lifecycle — see InputPolicy. NoWaitNoPop on in0 means
+ *   in1_policy         the caller owns in0's wait AND pop (one resident block read by several
+ *                      matmuls); pair it with In0BaseOffsetFn to walk the K-blocks.
  *   PostComputeFn      per-subblock hook on the MATH thread, last K-block, before pack.
  *   PreKBlockFn        per-K-block hook before the input waits (see the restore contract).
  *   PostKBlockFn       per-K-block hook after the input pops and the L1_ACC drain.
@@ -285,6 +305,9 @@ struct NoIn1BaseOffset {
  *   KBlockInnerDimFn   per-K-block FMA step count (for unpadded/partial K-blocks).
  *   In0SourceFn        per-K-block in0 CB selector (alternates must share in0's dataformat).
  *   In1BaseOffsetFn    per-K-block in1 base-offset shift within the fronted region.
+ *   In0BaseOffsetFn    per-K-block in0 base-offset shift within the fronted region — for an
+ *                      in0 that is M-major over the full K extent, so a K-block is a strided
+ *                      column window rather than a poppable contiguous run. See NoIn0BaseOffset.
  *   out_col_offset     (TileRowMajor only) N-tile column at which this call's output starts
  *                      inside the row-major output block. Lets a caller that STREAMS the in1
  *                      width in chunks — issuing one matmul_block per chunk so the matmul can
@@ -357,7 +380,9 @@ template <
     bool caller_owns_pack_target = false,
     typename Activation = NoneActivation,
     matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT,
-    typename Buf = ::CircularBuffer>
+    typename Buf = ::CircularBuffer,
+    // Appended AFTER Buf so every existing explicit template-argument list is unchanged.
+    typename In0BaseOffsetFn = NoIn0BaseOffset>
 ALWI void matmul_block(
     Buf& in0_buf,
     Buf& in1_buf,
@@ -372,7 +397,8 @@ ALWI void matmul_block(
     KBlockInnerDimFn k_block_inner_dim = {},
     In0SourceFn in0_source_fn = {},
     In1BaseOffsetFn in1_base_offset_fn = {},
-    uint32_t out_col_offset = 0);
+    uint32_t out_col_offset = 0,
+    In0BaseOffsetFn in0_base_offset_fn = {});
 
 }  // namespace compute_kernel_lib
 

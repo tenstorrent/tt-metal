@@ -43,7 +43,14 @@ HIDDEN = 2048
 #: two >= its real tile-row count, so count 128 does 4 tile-rows of work in a block sized for 8.
 #: MUST be a power of two, so every `m_eff` divides it and no shrunk CB reserve can straddle a FIFO
 #: end (the reserve granularity has to divide the DEPTH * M_BLOCK * W total).
-M_BLOCK = 8
+M_BLOCK = int(os.environ.get("MOE_SWIGLU_M_BLOCK", 8))
+
+#: PERF 14 — K tiles held resident in `cb_x_tiles`, i.e. the K extent of the resident in0 block.
+#: 0 = the whole per-row K extent (KR_PAD), the shipped shape. A smaller value is what K-chunked x
+#: would buy: the matmul then consumes x one K-block at a time and only this many K tiles need to be
+#: resident. EXPOSED FOR THE L1 ARITHMETIC — see the L1 note in the report. It resizes the CB only;
+#: making the KERNELS honour it needs the K-block-major x multicast (not built).
+X_KB = int(os.environ.get("MOE_SWIGLU_X_KB", 0))
 
 #: DEST tile budget for one output sub-block: 8 at half sync (dst_full_sync_en=False) with
 #: fp32_dest_acc_en=False — `dest_helpers.hpp`'s DEST_AUTO_LIMIT. Named once; every sub-block
@@ -1196,7 +1203,9 @@ def create_program_descriptor(
     # the sized extent can, and it is the tightest host-time bound available.
     max_m_blocks = (M_T_MAX + M_BLOCK - 1) // M_BLOCK
     depth_x = DEPTH_X if max_m_blocks > 1 else 1
-    n_x_tiles = depth_x * M_BLOCK * KR_PAD
+    # PERF 14 — X_KB shrinks the RESIDENT K extent (see the knob). 0 = the whole KR_PAD.
+    x_kb = KR_PAD if (X_KB <= 0 or X_KB > KR_PAD) else X_KB
+    n_x_tiles = depth_x * M_BLOCK * x_kb
     n_gu_block = M_BLOCK * HN_PAD
     n_w_gu = KR_PAD * HN_PAD  # one gate/up K-block (num_k_blocks == 1)
     n_w_down = depth_wd * HN_PAD * EC_MAX  # DEPTH knob x one phase-2 K-block (see depth_wd above)
