@@ -35,9 +35,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     tdma_descriptor_t td_val_A;
     tdma_descriptor_t td_val_B;
-    const std::uint32_t buf_desc_id_a = 0;
-    const std::uint32_t buf_desc_id_b = 1;
-    const auto tensor_shape_A         = tensor_shape_from_params(params);
+    const std::uint32_t buf_desc_id_a         = 0;
+    const std::uint32_t buf_desc_id_b         = 1;
+    const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -102,11 +102,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
 #endif
-    DataFormat src_format         = static_cast<DataFormat>(formats.math);
-    DataFormat pack_src_format    = static_cast<DataFormat>(formats.pack_src);
-    const bool use_int32_dest_alu = is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32;
-    const bool is_int_fpu_en      = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
-    const auto tensor_shape_A     = tensor_shape_from_params(params);
+    DataFormat src_format                     = static_cast<DataFormat>(formats.math);
+    DataFormat pack_src_format                = static_cast<DataFormat>(formats.pack_src);
+    const bool use_int32_dest_alu             = is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32;
+    const bool is_int_fpu_en                  = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
+    const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -211,8 +211,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const std::uint32_t buf_desc_id = 8;
-    const auto tensor_shape_A       = tensor_shape_from_params(params);
+    const std::uint32_t buf_desc_id           = 8;
+    const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
 
     {
         ZONE_SCOPED("INIT")

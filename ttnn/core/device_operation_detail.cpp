@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -26,14 +27,6 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
 using MeshCoordinateRangeSet = tt::tt_metal::distributed::MeshCoordinateRangeSet;
 
-// ─────────────────────────────────────────────────────────────────────
-// compute_output_placements_and_shape
-// ─────────────────────────────────────────────────────────────────────
-//
-// Factored from the former template get_output_placements_and_shape<device_operation_t>.
-// The only reason it was templated was to call visit_object_of_type<Tensor> on tensor_args.
-// Callers now extract tensors first and pass them as a vector.
-
 static bool is_fully_replicated(const ttnn::Tensor& tensor) {
     for (const auto& placement : tensor.tensor_topology().placements()) {
         if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement)) {
@@ -43,6 +36,9 @@ static bool is_fully_replicated(const ttnn::Tensor& tensor) {
     return true;
 }
 
+// Factored from the former template get_output_placements_and_shape<device_operation_t>. The only
+// reason it was templated was to call visit_object_of_type<Tensor> on tensor_args; callers now
+// extract the tensors first and pass them as a vector.
 std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
@@ -144,10 +140,6 @@ compute_output_placements_and_shape(const std::vector<std::reference_wrapper<con
     return {result_placements, tt::tt_metal::distributed::MeshShape(result_strides)};
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// extract_tensor_coordinates_impl
-// ─────────────────────────────────────────────────────────────────────
-
 // Checks if the MeshCoordinateRangeSet containing all coordinates in b is a subset of a.
 static bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector<MeshCoordinate>& b) {
     MeshCoordinateRangeSet a_set;
@@ -221,6 +213,27 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
         }
     }
     return tensor_coordinates;
+}
+
+void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index) {
+    // Ask device_local_config().sharding_args, not the MeshBuffer overload of
+    // is_per_core_allocation. That overload resolves MeshBuffer::get_reference_buffer(), which
+    // TT_THROWs "no local buffer found" when no shard is local -- and this runs before launch()'s
+    // inactive-MeshDevice short-circuit, which exists precisely because most MeshDevice calls fail
+    // there. A guard whose contract is to be inert must not be able to throw.
+    // This is also the expression behind Tensor.is_per_core_allocated(), so the guard and the
+    // accessor callers branch on cannot disagree about what per-core means.
+    TT_FATAL(
+        !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
+            tensor.mesh_buffer().device_local_config().sharding_args),
+        "{}: tensor {} is per-core allocated, but this operation has not opted in to per-core "
+        "allocation. Ops address a buffer by a single L1 address, so a per-core buffer would be read as "
+        "though every core shared the first core's allocation (#51354). If the operation resolves "
+        "per-core addresses, declare `static constexpr bool supports_per_core_allocation = true` on it; "
+        "otherwise build the tensor with a lockstep memory config. Memory config: {}",
+        operation_name,
+        input_index,
+        tensor.memory_config());
 }
 
 }  // namespace ttnn::device_operation::detail

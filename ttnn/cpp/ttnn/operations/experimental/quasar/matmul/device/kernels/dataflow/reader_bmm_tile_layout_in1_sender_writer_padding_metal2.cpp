@@ -195,7 +195,9 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 
     //  WRITER
-    const auto s = TensorAccessor(tensor::out);
+    // Used only when the output-write path below is compiled in (some mcast configs write via DFB
+    // instead), so mark maybe_unused to avoid -Wunused-but-set-variable, matching s_sparsity below.
+    [[maybe_unused]] const auto s = TensorAccessor(tensor::out);
 
     // sparsity accessor. cb_sparsity is an inert DMA-landing scratch used only when sparsity is
     // enabled (batchB > 0). As a single-kernel self-loop DFB (PRODUCER+CONSUMER) it is rejected by
@@ -315,9 +317,14 @@ void kernel_main() {
                              .addr = static_cast<uint32_t>(in1_start_address)},
                             true);
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+                        // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without this
+                        // barrier the back-to-back in1-then-bias mcasts let the bias VALID semaphore write
+                        // race/drop on the NoC -> the receiver's bias wait(VALID) hangs (flaky: 1x1 256->128
+                        // flaked, bottleneck conv2 hung deterministically). Sender sends+acks bias but the
+                        // receiver never sees bias VALID. Matches the BH ordering requirement.
                         noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR
 
                         // We should also multicast the flag to destinations
                         receiver_sem.set_multicast(
@@ -386,9 +393,14 @@ void kernel_main() {
                              .noc_y_end = in1_mcast_dest_noc_end_y,
                              .addr = static_cast<uint32_t>(in3_start_address)},
                             true);
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+                        // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without this
+                        // barrier the back-to-back in1-then-bias mcasts let the bias VALID semaphore write
+                        // race/drop on the NoC -> the receiver's bias wait(VALID) hangs (flaky: 1x1 256->128
+                        // flaked, bottleneck conv2 hung deterministically). Sender sends+acks bias but the
+                        // receiver never sees bias VALID. Matches the BH ordering requirement.
                         noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR
 
                         receiver_sem.set_multicast(
                             noc,
@@ -517,5 +529,6 @@ void kernel_main() {
 
     // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
     noc.async_full_barrier();
+    DPRINT("WSM barrier ok\n");  // [#48552 DEBUG] if this prints but "WSM end" does not, the hang is past the barrier
     DPRINT("WSM end\n");  // DEBUG: matmul layer3 hang
 }

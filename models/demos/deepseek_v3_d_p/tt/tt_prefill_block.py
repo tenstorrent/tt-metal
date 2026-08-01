@@ -467,7 +467,9 @@ class TtPrefillBlock(LightweightModule):
                 tt_kv_rope, tt_kvpe) and this returns (output_tensor, kv_intermediates_dict) — also
                 carrying post_mla_residual + post_attn_norm — instead of (output_tensor, kv_cache).
             actual_isl: actual (unpadded) count of real tokens; threaded to the MoE FFN for
-                padding-aware routing.
+                padding-aware routing. Paired with actual_start there: under chunked prefill the MoE
+                sees the ROTATED block-cyclic layout, so the per-chip real-token split depends on
+                BOTH values (see MoeGate.build_padding_config).
             padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
 
         Returns:
@@ -562,6 +564,7 @@ class TtPrefillBlock(LightweightModule):
                 return_intermediates=return_intermediates,
                 actual_isl=actual_isl,
                 padding_side=padding_side,
+                actual_start=actual_start,
             )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
@@ -598,6 +601,7 @@ class TtPrefillBlock(LightweightModule):
         return_intermediates: bool = False,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        actual_start: Optional[int] = None,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
@@ -607,6 +611,7 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates=return_intermediates,
             actual_isl=actual_isl,
             padding_side=padding_side,
+            actual_start=actual_start,
         )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)

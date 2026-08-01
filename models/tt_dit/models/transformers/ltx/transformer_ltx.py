@@ -121,6 +121,7 @@ class LTXTransformerBlock(Module):
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
         quant_config: QuantConfig | None = None,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -149,6 +150,7 @@ class LTXTransformerBlock(Module):
             "is_fsdp": is_fsdp,
             "apply_gated_attention": apply_gated_attention,
             "quant_config": quant_config,
+            "lora_enabled": lora_enabled,
         }
 
         # FFN precision, shared by the video and audio ParallelFeedForwards. Default configs (no
@@ -161,6 +163,7 @@ class LTXTransformerBlock(Module):
             "ff2_dtype": ffn_ff2_lc.weight_dtype,
             "activation_dtype": ffn_ff1_lc.activation_dtype if quant_active else None,
             "pin_blockfloat_output": quant_active,
+            "lora_enabled": lora_enabled,
         }
 
         # FSDP fractures FFN weights across the SP axis (on top of the TP fracture);
@@ -573,6 +576,7 @@ class LTXTransformerModel(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        lora_enabled: bool = False,
         image_conditioning: bool = False,
         quant_config: QuantConfig | None = None,
     ) -> None:
@@ -584,6 +588,7 @@ class LTXTransformerModel(Module):
         self.num_layers = num_layers
         self.has_audio = has_audio
         self.cross_attention_adaln = cross_attention_adaln
+        self.lora_enabled = lora_enabled
         # I2V: video AdaLN modulation is per-token (denoise_mask * sigma) instead of batch-scalar.
         # Audio / prompt / A<->V cross AdaLN stay batch-scalar regardless.
         self.image_conditioning = image_conditioning
@@ -721,6 +726,7 @@ class LTXTransformerModel(Module):
                     apply_gated_attention=apply_gated_attention,
                     cross_attention_adaln=cross_attention_adaln,
                     quant_config=quant_config,
+                    lora_enabled=lora_enabled,
                 )
             )
 
@@ -1187,6 +1193,7 @@ class LTXTransformerCheckpoint:
         has_audio: bool,
         image_conditioning: bool,
         quant_config: QuantConfig | None = None,
+        lora_enabled: bool = False,
     ) -> LTXTransformerModel:
         """Construct an ``LTXTransformerModel`` for this checkpoint (weights NOT loaded).
 
@@ -1210,6 +1217,7 @@ class LTXTransformerCheckpoint:
             cross_attention_adaln=self.cross_attention_adaln,
             image_conditioning=image_conditioning,
             quant_config=quant_config,
+            lora_enabled=lora_enabled,
         )
 
     def load(

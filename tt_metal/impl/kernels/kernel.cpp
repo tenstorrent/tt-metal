@@ -128,8 +128,8 @@ Kernel::Kernel(
     const std::map<std::string, std::string>& defines,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
     bool is_metal2_kernel,
-    const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles,
-    const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles,
+    const DataflowBufferBindingHandleMap& dataflow_buffer_binding_handles,
+    const SemaphoreBindingHandleMap& semaphore_binding_handles,
     const std::vector<std::string>& runtime_arg_names,
     const std::vector<std::string>& common_runtime_arg_names,
     const std::vector<TensorBindingHandle>& tensor_binding_handles,
@@ -141,8 +141,8 @@ Kernel::Kernel(
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
     is_metal2_kernel_(is_metal2_kernel),
-    dataflow_buffer_local_accessor_handles_(dataflow_buffer_local_accessor_handles),
-    semaphore_local_accessor_handles_(semaphore_local_accessor_handles),
+    dataflow_buffer_binding_handles_(dataflow_buffer_binding_handles),
+    semaphore_binding_handles_(semaphore_binding_handles),
     runtime_arg_names_(runtime_arg_names),
     common_runtime_arg_names_(common_runtime_arg_names),
     tensor_binding_handles_(tensor_binding_handles),
@@ -306,16 +306,16 @@ void Kernel::process_named_compile_time_args(
     callback(this->named_compile_time_args());
 }
 
-void Kernel::process_dataflow_buffer_local_accessor_handles(
+void Kernel::process_dataflow_buffer_binding_handles(
     const std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)> callback) const {
-    for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_local_accessor_handles_) {
+    for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_binding_handles_) {
         callback(accessor_name, logical_dfb_id);
     }
 }
 
-void Kernel::process_semaphore_local_accessor_handles(
+void Kernel::process_semaphore_binding_handles(
     const std::function<void(const std::string& accessor_name, uint16_t semaphore_id)> callback) const {
-    for (const auto& [accessor_name, semaphore_id] : this->semaphore_local_accessor_handles_) {
+    for (const auto& [accessor_name, semaphore_id] : this->semaphore_binding_handles_) {
         callback(accessor_name, semaphore_id);
     }
 }
@@ -337,6 +337,18 @@ void Kernel::process_scratchpad_binding_handles(
         callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
     }
 }
+
+////////////////////////////////////////////////////////////
+// Blaze-only experimental named args
+// Removal is tracked by issue #50953
+void Kernel::process_named_runtime_args(const std::function<void(const NamedRuntimeArgNamespaces&)> callback) const {
+    callback(this->named_runtime_arg_namespaces());
+}
+
+void Kernel::process_named_ct_arg_namespaces(const std::function<void(const NamedCTArgNamespaces&)> callback) const {
+    callback(this->named_ct_arg_namespaces());
+}
+////////////////////////////////////////////////////////////
 
 void Kernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
     // For FILE_PATH kernels, add the kernel source directory to the include path.
@@ -534,11 +546,11 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
-    for (const auto& it : sorted_iters(this->dataflow_buffer_local_accessor_handles_)) {
+    for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
-    for (const auto& it : sorted_iters(this->semaphore_local_accessor_handles_)) {
+    for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
@@ -576,6 +588,36 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& name : this->common_runtime_arg_names_) {
         hasher.update(name);
     }
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Hash the Blaze named-arg SCHEMA baked into named_args_generated.h. Without this, two
+    // kernels sharing source but differing only in their named args would collide in the cache.
+    //  - RT namespaces: ns/field/index/length/dispatch (the emitted Arg/ArrayArg descriptors).
+    //    RT VALUES are runtime data (written per enqueue) and are NOT part of the build.
+    //  - CT namespaces: ns/field/value (emitted as `constexpr uint32_t field = value`).
+    // std::map iterates in sorted key order; sizes are hashed first to avoid ["a","b"] vs ["ab"].
+    hasher.update(static_cast<uint64_t>(this->named_runtime_arg_namespaces_.size()));
+    for (const auto& [ns, entries] : this->named_runtime_arg_namespaces_) {
+        hasher.update(ns);
+        hasher.update(static_cast<uint64_t>(entries.size()));
+        for (const auto& entry : entries) {
+            hasher.update(entry.field);
+            hasher.update(static_cast<uint64_t>(entry.index));
+            hasher.update(static_cast<uint64_t>(entry.length));
+            hasher.update(static_cast<uint64_t>(entry.dispatch));
+        }
+    }
+    hasher.update(static_cast<uint64_t>(this->named_ct_arg_namespaces_.size()));
+    for (const auto& [ns, entries] : this->named_ct_arg_namespaces_) {
+        hasher.update(ns);
+        hasher.update(static_cast<uint64_t>(entries.size()));
+        for (const auto& [field, value] : entries) {
+            hasher.update(field);
+            hasher.update(static_cast<uint64_t>(value));
+        }
+    }
+    ////////////////////////////////////////////////////////////
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
     hasher.update(this->config_hash());
@@ -1464,7 +1506,7 @@ std::string QuasarComputeKernel::config_hash() const {
     }
 
     return fmt::format(
-        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}_{}",
         fmt::join(compute_processors_, "_"),
         enchantum::to_string(config_.math_fidelity),
         config_.fp32_dest_acc_en,
@@ -1472,7 +1514,6 @@ std::string QuasarComputeKernel::config_hash() const {
         config_.dst_full_sync_en,
         config_.bfp8_pack_precise,
         config_.enable_2x_src_format,
-        config_.unpack_to_dest_en,
         unpack_mode_descriptor);
 }
 
@@ -1488,7 +1529,6 @@ void QuasarComputeKernel::set_build_options(JitBuildOptions& build_options) cons
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
     build_options.enable_2x_src_format = this->config_.enable_2x_src_format;
-    build_options.unpack_to_dest_en = this->config_.unpack_to_dest_en;
 }
 
 }  // namespace experimental::quasar

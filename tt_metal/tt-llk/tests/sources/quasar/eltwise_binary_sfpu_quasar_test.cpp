@@ -162,8 +162,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_math_eltwise_sfpu_init_();
-    test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP>();
-    test_utils::call_binary_sfpu_operation_quasar<SFPU_BINARY_OP, dest_sync, is_fp32_dest_acc_en>(
+    test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, SFPU_SIGN_MAGNITUDE>(params.ZERO_POINT);
+    test_utils::call_binary_sfpu_operation_quasar<SFPU_BINARY_OP, dest_sync, is_fp32_dest_acc_en, SFPU_ITERATIONS, SFPU_SIGN_MAGNITUDE>(
         params.SRC0_TILE_IDX, params.SRC1_TILE_IDX, params.DST_TILE_IDX, math_format);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

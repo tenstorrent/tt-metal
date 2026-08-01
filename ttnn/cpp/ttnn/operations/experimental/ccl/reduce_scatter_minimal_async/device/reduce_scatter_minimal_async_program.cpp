@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
@@ -339,6 +340,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -495,8 +497,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     // Extract compute kernel config parameters
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
     const tt::tt_metal::MathFidelity math_fidelity = compute_kernel_config.has_value()
-        ? ttnn::get_math_fidelity(compute_kernel_config)
-        : tt::tt_metal::MathFidelity::HiFi4;
+                                                         ? ttnn::get_math_fidelity(compute_kernel_config)
+                                                         : tt::tt_metal::MathFidelity::HiFi4;
     // Hardware constraint: FP32 destination accumulator can only hold 4 tiles vs 8 for FP16
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4 : 8;
 
@@ -504,13 +506,38 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     uint32_t max_target_noc_addresses_per_packet = 4;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t tile_granularity = std::min(4 * num_tiles_to_write_per_packet, max_dst_size);
     uint32_t cb_num_pages = 2 * tile_granularity;  // double buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+
+    // Contiguous fast path: when enabled, the intermediate is a chunk-paged row-major staging tensor
+    // and the writer sends whole chunks with fused-unicast writes instead of scatter. The sizing must
+    // match compute_output_specs exactly, so both derive it from the same helper. Which layout applies
+    // is read off the intermediate tensor actually in use (either caller-provided or the one
+    // compute_output_specs sized), so this cannot disagree with what was allocated. See
+    // rs-contiguous-interm-design.
+    const auto staging = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_params(
+        input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    const bool use_contiguous_interm = ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
+        input_tensor, intermediate_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    if (use_contiguous_interm) {
+        TT_FATAL(
+            staging.tile_granularity == tile_granularity,
+            "contiguous-interm tile_granularity mismatch: {} vs {}",
+            staging.tile_granularity,
+            tile_granularity);
+        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        TT_FATAL(
+            staging.page_bytes % dram_alignment == 0,
+            "contiguous-interm page bytes ({}) must be a multiple of DRAM alignment ({}); otherwise the "
+            "device page stride (aligned_page_size) would not match chunk_id*page_bytes addressing",
+            staging.page_bytes,
+            dram_alignment);
+    }
 
     // input_tensor from reader -> compute
     uint32_t input_cb_index = tt::CB::c_in0;
@@ -598,12 +625,30 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Wt,
         fuse_op,
         normalized_dim);
+    if (normalized_dim != 0) {
+        // Staging-layout switch consumed by the unified ring reader. chunks_per_channel is only read
+        // by the chunk-paged branch, but the named arg must always be present for the kernel to
+        // compile, so it is passed unconditionally.
+        reader_named_compile_args["contiguous_interm"] = use_contiguous_interm ? 1 : 0;
+        reader_named_compile_args["chunks_per_channel"] = staging.chunks_per_channel;
+    }
 
     // Positional args: TensorAccessorArgs
     std::vector<uint32_t> reader_compile_args;
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+    if (normalized_dim != 0) {
+        TT_FATAL(
+            !use_contiguous_interm || penult_intermediate_tensor.has_value(),
+            "contiguous-interm path requires a penult intermediate staging tensor");
+        // Penult intermediate staging accessor. Only the chunk-paged branch reads it; the tiled branch gets the
+        // output tensor's args as a placeholder (paired with a null address below) so that both
+        // branches share one compile-time/runtime arg layout.
+        const auto& penult_intermediate_accessor_source =
+            use_contiguous_interm ? *penult_intermediate_tensor : output_tensor;
+        tt::tt_metal::TensorAccessorArgs(penult_intermediate_accessor_source.buffer()).append_to(reader_compile_args);
+    }
 
     std::string reader_kernel_path = normalized_dim == 0
                                          ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -638,6 +683,13 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Ht,
         slice_Wt,
         normalized_dim);
+    if (normalized_dim != 0) {
+        // Staging-layout switch consumed by the unified ring writer. The chunk-paged sizing args are
+        // only read by that branch, but must always be present for the kernel to compile.
+        writer_named_compile_args["contiguous_interm"] = use_contiguous_interm ? 1 : 0;
+        writer_named_compile_args["chunks_per_channel"] = staging.chunks_per_channel;
+        writer_named_compile_args["interm_tiles_per_packet"] = staging.interm_tiles_per_packet;
+    }
 
     // Positional args: routing info, TensorAccessorArgs. The V2 fabric mux client needs no worker-side
     // compile-time args (the device-side FabricMuxV2Sender is built entirely from runtime args).
@@ -649,6 +701,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+    if (normalized_dim != 0) {
+        // See the reader above: placeholder accessor args keep one arg layout for both branches.
+        const auto& penult_intermediate_accessor_source =
+            use_contiguous_interm ? *penult_intermediate_tensor : output_tensor;
+        tt::tt_metal::TensorAccessorArgs(penult_intermediate_accessor_source.buffer()).append_to(writer_compile_args);
+    }
 
     std::string writer_kernel_path = normalized_dim == 0
                                          ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -763,6 +821,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_tiles_to_read,                      // start_tiles_to_read
                         start_pages_read_in_row,                  // start_pages_read_in_row
                         start_row_offset,                         // start_row_offset
+                        // penult_intermediate_tensor_address; 0 (unread) on the tiled staging layout
+                        use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
                     };
                 }
                 if (fuse_op) {
@@ -810,6 +870,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_row_offset,         // start_row_offset
                         start_tiles_read,         // start_tiles_read
                         start_tiles_to_read,      // tiles_to_read
+                        // penult_intermediate_tensor_address; 0 (unread) on the tiled staging layout. Precedes
+                        // the mux/fabric-connection args appended after this block.
+                        use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
                     };
                 }
                 if (num_mux_cores_per_direction_per_link) {
@@ -886,7 +949,8 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
-    const Tensor& output) {
+    const Tensor& output,
+    const std::optional<Tensor>& penult_intermediate) {
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -911,6 +975,14 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                     worker_reader_sender_runtime_args[2] = output.buffer()->address();
                     worker_reader_sender_runtime_args[3] = semaphore.at(dir).address();
                     worker_reader_sender_runtime_args[4] = semaphore.at(!dir).address();
+                    if (penult_intermediate.has_value()) {
+                        // Contiguous staging layout only, and it must be patched: the penult intermediate is
+                        // an op output now, so it is reallocated on every invocation and its address is
+                        // not stable across program-cache hits. Index 11 — see the reader RT arg list in
+                        // build_ring_reduce_scatter_minimal_async_program_artifacts; the fused-op args
+                        // are appended after it, so the position is fixed.
+                        worker_reader_sender_runtime_args[11] = penult_intermediate->buffer()->address();
+                    }
                 }
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
@@ -930,6 +1002,12 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                     if (barrier_semaphore.has_value()) {
                         worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
                     }
+                    if (penult_intermediate.has_value()) {
+                        // Index 16 — see the writer RT arg list in
+                        // build_ring_reduce_scatter_minimal_async_program_artifacts; the mux/fabric
+                        // connection args are appended after it, so the position is fixed.
+                        worker_writer_sender_runtime_args[16] = penult_intermediate->buffer()->address();
+                    }
                 }
             }
         }
@@ -940,6 +1018,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    // Unused (Line never takes the Ring-only contiguous penult intermediate path); present only for call-signature
+    // parity with build_ring_reduce_scatter_minimal_async_program_artifacts.
+    [[maybe_unused]] const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1068,8 +1149,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     // Extract compute kernel config parameters
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
     const tt::tt_metal::MathFidelity math_fidelity = compute_kernel_config.has_value()
-        ? ttnn::get_math_fidelity(compute_kernel_config)
-        : tt::tt_metal::MathFidelity::HiFi4;
+                                                         ? ttnn::get_math_fidelity(compute_kernel_config)
+                                                         : tt::tt_metal::MathFidelity::HiFi4;
     // Hardware constraint: FP32 destination accumulator can only hold 4 tiles vs 8 for FP16
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4 : 8;
 
@@ -1336,8 +1417,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             input_tensor_B,
             slice_B,
             slice_C,
-            normalized_dim)
-    };
+            normalized_dim)};
 
     std::string sender_reduce_kernel_path =
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -1579,6 +1659,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1602,6 +1683,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         program,
         input_tensor,
         intermediate_tensor,
+        penult_intermediate_tensor,
         sender_device_coord,
         forward_coord,
         backward_coord,
@@ -1627,6 +1709,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1650,6 +1733,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         program,
         input_tensor,
         intermediate_tensor,
+        penult_intermediate_tensor,
         sender_device_coord,
         forward_coord,
         backward_coord,
@@ -1686,7 +1770,8 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
-    const Tensor& output) {
+    const Tensor& output,
+    const std::optional<Tensor>& penult_intermediate) {
     ::ttnn::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
         program,
         reader_kernel_id,
@@ -1702,7 +1787,8 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
         semaphore,
         input,
         intermed,
-        output);
+        output,
+        penult_intermediate);
 }
 
 void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
@@ -1766,6 +1852,15 @@ RingReduceScatterMeshWorkloadFactory::create_at(
     const auto& input_tensor = tensor_args.input_tensor;
     auto& intermediate_tensor = tensor_return_value.at(0);
     auto& output_tensor = tensor_return_value.at(1);
+    // Contiguous staging layout only: the penult intermediate the 2nd-last iteration stages one
+    // direction's contribution into, instead of scatter-writing it directly into the tiled output
+    // tensor. compute_output_specs declares it as a third output on exactly the configurations that use
+    // it (and create_output_tensors either allocates it or adopts the caller's persistent buffer), so
+    // its presence here is the signal that the contiguous layout is in play — the factory never
+    // allocates it. Absent on the tiled layout (Linear, Ring with scatter dim 0, or a caller-provided
+    // input-shaped intermediate). See rs-contiguous-interm-design.
+    const std::optional<Tensor> penult_intermediate_tensor =
+        tensor_return_value.size() > 2 ? std::optional<Tensor>(tensor_return_value.at(2)) : std::nullopt;
 
     const auto forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
         input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
@@ -1782,6 +1877,7 @@ RingReduceScatterMeshWorkloadFactory::create_at(
         program,
         input_tensor,
         intermediate_tensor,
+        penult_intermediate_tensor,
         mesh_coordinate,
         forward_coord,
         backward_coord,
@@ -1813,6 +1909,10 @@ void RingReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     const auto& input = tensor_args.input_tensor;
     const auto& intermediate = tensor_return_value.at(0);
     const auto& output = tensor_return_value.at(1);
+    // See create_at: index 2 exists exactly on the contiguous staging layout. It is reallocated per
+    // invocation like the intermediate, so its address has to be re-published to the kernels here.
+    const std::optional<Tensor> penult_intermediate =
+        tensor_return_value.size() > 2 ? std::optional<Tensor>(tensor_return_value.at(2)) : std::nullopt;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -1832,7 +1932,8 @@ void RingReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             operation_attributes.semaphore,
             input,
             intermediate,
-            output);
+            output,
+            penult_intermediate);
     }
 }
 
@@ -1878,6 +1979,7 @@ LineReduceScatterMeshWorkloadFactory::create_at(
         program,
         input_tensor,
         intermediate_tensor,
+        /*penult_intermediate_tensor=*/std::nullopt,
         mesh_coordinate,
         forward_coord,
         backward_coord,

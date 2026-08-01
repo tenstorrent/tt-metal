@@ -34,6 +34,10 @@
 #include "internal/circular_buffer_interface.h"
 #endif
 #include "risc_common.h"
+#if defined(ARCH_QUASAR)
+// USER_TXN_ID_MAX: Quasar user vs DFB txn-id pool split.
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#endif
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -836,6 +840,29 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
 #define DEBUG_SANITIZE_L1_ADDR(addr, l) debug_sanitize_l1_access(addr, l);
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l) debug_sanitize_eth(src_addr, dst_addr, l)
 
+// Validate a user-stamped NoC transaction id.
+// WH/BH: [0, NOC_MAX_TRANSACTION_ID]. Quasar: [0, USER_TXN_ID_MAX] (DFB owns the upper pool).
+// On failure, l1_addr holds the bad trid and len holds the max allowed.
+inline void debug_sanitize_noc_txn_id(uint8_t noc_id, uint32_t trid) {
+#if defined(ARCH_QUASAR)
+    constexpr uint32_t max_trid = USER_TXN_ID_MAX;
+#else
+    constexpr uint32_t max_trid = NOC_MAX_TRANSACTION_ID;
+#endif
+    if (trid > max_trid) {
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            0,
+            trid,
+            max_trid,
+            DEBUG_SANITIZE_NOC_UNICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeNocInvalidTxnId);
+    }
+}
+#define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid) debug_sanitize_noc_txn_id(noc_id, trid)
+
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
 #if defined(WATCHER_DEBUG_DELAY)
@@ -886,5 +913,6 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 
 #define DEBUG_SANITIZE_L1_ADDR(addr, l)
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l)
+#define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid)
 
 #endif  // WATCHER_ENABLED

@@ -11,7 +11,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear, maybe_cast_activation, resolve_output_dtype
+from ....layers.linear import ColParallelLinear, LoRAColParallelLinear, maybe_cast_activation, resolve_output_dtype
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -83,6 +83,7 @@ class LTXAttention(Module):
         output_dim: int | None = None,
         apply_gated_attention: bool = False,
         quant_config: QuantConfig | None = None,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -148,8 +149,13 @@ class LTXAttention(Module):
         def _act(lc):
             return lc.activation_dtype if quant_active else None
 
+        # Fuse-mode LoRA lives in weight.data, so the chunked (to_qkv/to_kv) and
+        # fused-addcmul (to_out) paths work unchanged; runtime mode is unsupported here. The quant
+        # kwargs forward through LoRAColParallelLinear's **kwargs to the base linear.
+        ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
+
         if is_self:
-            self.to_qkv = ColParallelLinear(
+            self.to_qkv = ColCls(
                 dim,
                 3 * dim,
                 chunks=3,
@@ -159,7 +165,7 @@ class LTXAttention(Module):
                 **col_parallel_kwargs,
             )
         else:
-            self.to_q = ColParallelLinear(
+            self.to_q = ColCls(
                 self.query_input_dim,
                 dim,
                 dtype=qkv_lc.weight_dtype,
@@ -167,7 +173,7 @@ class LTXAttention(Module):
                 pin_blockfloat_output=quant_active,
                 **col_parallel_kwargs,
             )
-            self.to_kv = ColParallelLinear(
+            self.to_kv = ColCls(
                 self.kv_input_dim,
                 2 * dim,
                 chunks=2,
@@ -177,7 +183,7 @@ class LTXAttention(Module):
                 **col_parallel_kwargs,
             )
 
-        self.to_out = ColParallelLinear(
+        self.to_out = ColCls(
             dim,
             self.output_dim,
             bias=True,

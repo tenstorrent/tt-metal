@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/internal/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -92,6 +93,18 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
         mesh_shapes[mesh_id] = control_plane.get_physical_mesh_shape(mesh_id);
     }
     return mesh_shapes;
+}
+
+std::vector<FabricType> get_all_mgd_fabric_types() {
+    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& mgd = mesh_graph.get_mesh_graph_descriptor();
+    std::vector<FabricType> fabric_types;
+    for (const auto mesh : mgd.all_meshes()) {
+        const auto& instance = mgd.get_instance(mesh);
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        fabric_types.push_back(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc));
+    }
+    return fabric_types;
 }
 
 #if defined(TT_METAL_USE_EMULE)

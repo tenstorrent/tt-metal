@@ -42,21 +42,18 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
             continue;
         }
 
-        // TODO: with multiple TCs are there multiple descriptors?
-        buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B = get_local_dfb_interface(i).tc_slots[0].base_addr;
-        bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
-        bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
-        bd_val.f.y_dim = pack_tile_face_r_dim[i];
-        bd_val.f.z_dim = pack_tile_num_faces[i];
+        const tdma_descriptor_t td = ckernel::trisc::construct_tdma_desc(
+            get_output_tensor_shape(i),
+            get_local_dfb_interface(i).tc_slots[0].base_addr,
+            pack_dst_format[i],
+            i,
+            pack_src_format[i]);
 
-        ckernel::trisc::validate_buffer_desc<ckernel::trisc::L1AccessMode::Continuous>(bd_val);
-        ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
+        ckernel::trisc::_configure_buf_desc_table_(i, td.buf_desc);
     }
 
     tdma_descriptor_t td_val;
     td_val.reg_data_format = static_cast<std::uint8_t>(pack_src_format[output_id]);
-
     _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(td_val, ckernel::ReluConfig::none());
 }
 

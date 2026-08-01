@@ -178,14 +178,14 @@
   cmd: |
     exit_code=0
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
-    export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
+    export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache GLM52_MLA_REF_CACHE=/tmp/glm_5_2_mla_ref_cache
     export DS_SPARSE_FABRIC=fabric2d
-    # Sparse MLA (V3.2 + GLM-5.1) vs MLACPU. Random weights + on-the-fly CPU truth -> no staged weights.
-    # GLM-5.1 reshards heads->sequence in _sparse_mla so it now runs at tp=4; 2x4 is its coverage (accuracy
+    # Sparse MLA (V3.2 + GLM-5.2) vs MLACPU. Random weights + on-the-fly CPU truth -> no staged weights.
+    # GLM-5.2 reshards heads->sequence in _sparse_mla so it now runs at tp=4; 2x4 is its coverage (accuracy
     # + the determinism/chunked anchor cases, which pin to the highest-TP mesh). DeepSeek-V3.2 covers the
     # asymmetric 2x4 mesh (its 8x4 coverage is on Galaxy). The sparse suite carries no tier markers, so
     # there is no -m gate.
-    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_1 and 2x4 and fabric2d" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and 2x4 and fabric2d" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 2x4 and fabric2d" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:

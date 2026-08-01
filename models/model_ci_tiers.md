@@ -45,6 +45,7 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Llama3.3-70B | WH Galaxy |
 | Qwen3-32B | WH Galaxy |
 | GPT-OSS 120B | WH Galaxy, BH Galaxy, BH QuietBox 2 |
+| MiniMax-M3 | BH P150, BH Galaxy |
 | Whisper | WH N150, BH P150 |
 | Gemma-4-12B | BH QuietBox 2 |
 | Gemma-4-26B-A4B | BH QuietBox 2 |

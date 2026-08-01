@@ -75,6 +75,9 @@ def build_and_serialize_kv_chunk_table(
     chunk_size_global,
     path,
     index_kv_cache=None,
+    first_layer_idx=0,
+    num_my_layers=None,
+    stage_layout=None,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -90,7 +93,12 @@ def build_and_serialize_kv_chunk_table(
 
     ``index_kv_cache`` (sparse/DSA models only): when given, a single MERGED table describes BOTH
     caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
-    side table. None (dense models) → the usual single-config table over the KVPE cache alone."""
+    side table. None (dense models) → the usual single-config table over the KVPE cache alone.
+
+    ``first_layer_idx`` / ``num_my_layers`` / ``stage_layout`` (pipeline-parallel only): this rank owns
+    layers [first_layer_idx, first_layer_idx + num_my_layers); ``stage_layout`` is the all-gathered
+    per-stage layout so rank 0 builds one table spanning every stage. Single-rank defaults (stage_layout
+    None) build over this host's KVPE cache alone. Only the single-config (KVPE) path is PP-aware."""
     assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
         f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
         f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
@@ -100,6 +108,12 @@ def build_and_serialize_kv_chunk_table(
     primary_cache = kvpe_cache.storage
     all_caches = (primary_cache,) + ((index_kv_cache,) if index_kv_cache is not None else ())
     if len(all_caches) > 1:
+        # The cross-stage (pipeline-parallel) merge is not wired through the dual-cache merged table
+        # yet; callers gate this out (build_kv_chunk_table asserts index is None on the PP path).
+        assert stage_layout is None, (
+            "build_and_serialize_kv_chunk_table: pipeline-parallel stage_layout is not supported for the "
+            "merged (KVPE + index) table yet."
+        )
         return _build_and_serialize_merged_kv_chunk_table(
             mesh_device=mesh_device,
             caches=all_caches,
@@ -118,9 +132,12 @@ def build_and_serialize_kv_chunk_table(
             mesh_shape=mesh_shape,
             seq_len=seq_len,
             sp_axis=sp_axis,
-            tt_kvpe_cache=primary_cache,
+            kvpe_cache=primary_cache,
             chunk_size_bytes=chunk_size_bytes,
             num_users=num_users,
+            first_layer_idx=first_layer_idx,
+            num_my_layers=num_my_layers,
+            stage_layout=stage_layout,
         )
 
     return serialize_kv_chunk_table(
@@ -168,7 +185,7 @@ def _build_and_serialize_merged_kv_chunk_table(
             mesh_shape=mesh_shape,
             seq_len=seq_len,
             sp_axis=sp_axis,
-            tt_kvpe_cache=cache,
+            kvpe_cache=cache,
             chunk_size_bytes=cfg.chunk_size_bytes,
             num_users=num_users,
             config_id=config_id,

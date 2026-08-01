@@ -246,7 +246,7 @@ class PrefillModelAdapter(ABC):
 # model is one line here (plus the adapter class in that model's package). Keeping
 # these as strings means importing this common module never imports a model's
 # device/runtime stack — only the selected model is imported, at get_adapter time.
-DEFAULT_MODEL = "deepseek_v3_d_p"
+DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",

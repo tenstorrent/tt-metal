@@ -464,6 +464,9 @@ protected:
 
     void SetUp() override {
         BaseTestFixture::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         dram_base_ = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
         num_banks_ = device_->allocator_impl()->get_num_banks(BufferType::DRAM);
         l1_alignment_ = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -1998,6 +2001,9 @@ protected:
 
     void SetUp() override {
         BasePrefetcherTestFixture::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         if (mesh_device_->num_devices() < 2) {
             GTEST_SKIP() << "Skipping RelayLinearHTest: need MMIO+remote pair in mesh";
         }
@@ -2637,7 +2643,7 @@ public:
         this->send_to_all_ = this->cfg_.send_to_all;
         this->host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
         // Cap inline command size to avoid cmddat_q L1 overflow on the prefetch-d core.
-        this->max_fetch_bytes_ = Common::sd_dispatch_mem_map(this->device_).scratch_db_size();
+        this->max_fetch_bytes_ = Common::sd_dispatch_mem_map().scratch_db_size();
 
         this->dram_base_ = this->device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
         this->num_banks_ = this->device_->allocator_impl()->get_num_banks(BufferType::DRAM);
@@ -2677,7 +2683,7 @@ public:
         uint32_t num_iterations,
         bool /*wait_for_completion*/ = true,
         bool /*wait_for_host_writes*/ = false) override {
-        const auto& memmap = Common::sd_dispatch_mem_map(this->device_);
+        const auto& memmap = Common::sd_dispatch_mem_map();
         const tt::CoreType cq_core_type = Common::sd_cq_kernel_core_type(this->device_);
         const CoreCoord prefetch_logical = Common::sd_prefetch_core(this->device_);
         const CoreCoord dispatch_logical = Common::dispatch_core(this->device_);
@@ -2993,7 +2999,7 @@ public:
             quasar_completion_buf_.resize(this->sd_completion_queue_size());
             return quasar_completion_buf_.data();
         }
-        const auto& memmap = Common::sd_dispatch_mem_map(device_);
+        const auto& memmap = Common::sd_dispatch_mem_map();
         const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         const ChipId mmio_id =
             tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
@@ -3010,7 +3016,7 @@ public:
         if (Common::is_quasar_cq_dram_backed()) {
             // Read the dispatch kernel's DRAM completion writes into the host staging buffer so device_data.validate()
             // sees the correct data.
-            const auto& memmap = Common::sd_dispatch_mem_map(device_);
+            const auto& memmap = Common::sd_dispatch_mem_map();
             const CoreCoord phys_disp = Common::sd_virtual_core(this->device_, Common::dispatch_core(this->device_));
             const tt_cxy_pair dispatch_cxy(this->device_->id(), phys_disp);
             // CQ0: this is a slow-dispatch (SD) test with no real command queue.

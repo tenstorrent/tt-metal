@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
 inline uint32_t get_output_grad_tile(
@@ -32,28 +33,29 @@ inline uint32_t get_output_grad_tile(
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t input_grad_rank = get_compile_time_arg_val(0);
-    constexpr auto output_grad_args = TensorAccessorArgs<1>();
+    constexpr uint32_t input_grad_rank = get_arg(args::input_grad_rank);
 
     // runtime args
-    ArgFetcher arg_fetcher;
-    const auto output_grad_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto num_output_tiles = get_arg(args::num_output_tiles);
+    const auto start_id = get_arg(args::start_id);
+
+    // The three per-dim blocks (each of length input_grad_rank) arrive as positional runtime
+    // varargs, read in the same order the host appended them.
+    uint32_t vararg_idx = 0;
 
     uint32_t output_grad_dim[MAX_NUM_DIMENSIONS];
     for (uint32_t i = 0; i < input_grad_rank; ++i) {
-        output_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        output_grad_dim[i] = get_vararg(vararg_idx++);
     }
 
     uint32_t input_grad_dim[MAX_NUM_DIMENSIONS];
     for (uint32_t i = 0; i < input_grad_rank; ++i) {
-        input_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        input_grad_dim[i] = get_vararg(vararg_idx++);
     }
 
     bool need_bcast_dim[MAX_NUM_DIMENSIONS];
     for (uint32_t i = 0; i < input_grad_rank; ++i) {
-        need_bcast_dim[i] = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
+        need_bcast_dim[i] = (get_vararg(vararg_idx++) == 1);
     }
 
     uint32_t output_grad_stride[MAX_NUM_DIMENSIONS];
@@ -69,8 +71,6 @@ void kernel_main() {
     }
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
 
     // zero tile
     union {
@@ -78,14 +78,14 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 0.0f;
-    DataflowBuffer dfb_in1_obj(cb_id_in1);
+    DataflowBuffer dfb_in1_obj(dfb::in1);
     fill_cb_with_value(dfb_in1_obj, scaler.u);
 
-    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
+    const auto output_grad_addrg = TensorAccessor(tensor::output_grad);
 
     Noc noc;
-    DataflowBuffer dfb_in0_obj(cb_id_in0);
-    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    const auto in0_tile_bytes = dfb_in0_obj.get_tile_size();
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         auto read_tile_id = get_output_grad_tile(
