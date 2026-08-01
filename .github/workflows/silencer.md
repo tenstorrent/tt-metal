@@ -151,15 +151,23 @@ safe-outputs:
       - runtime-unit-tests
       - runtime-integration-tests
       - runtime-perf-tests
-    # THE SAFETY BOUNDARY for the per-call `ref`. Patterns are normalized to
-    # `refs/heads/...` before matching, so `silencer/*` becomes `refs/heads/silencer/*`
-    # and matches exactly the branches Silencer names itself (*Pull request
-    # conventions*) — it can dispatch CI onto branches it created and nothing else:
-    # not `main`, not a release branch, not a maintainer's branch. Without this field
-    # any per-call `ref` is refused outright ("message.ref is not allowed unless
-    # 'allowed-refs' is configured"), so it is also what makes the feature usable.
-    # `target-ref` is deliberately NOT set: it is a single static string, and
-    # Silencer's branch differs every run.
+    # A NAMESPACE RESTRICTION on the per-call `ref` — not provenance enforcement.
+    # Patterns are normalized to `refs/heads/...` before matching, so `silencer/*`
+    # becomes `refs/heads/silencer/*` and dispatch is confined to the namespace
+    # Silencer names its own branches in (*Pull request conventions*): not `main`,
+    # not a release branch, not a maintainer's branch. The handler matches the ref
+    # string against this glob only — it does **not** correlate it with a
+    # `create-pull-request` / `push-to-pull-request-branch` output from the same
+    # turn, so any pre-existing `silencer/*` branch (stale, or created by someone
+    # else) passes too. Residual risk, assessed and accepted: such a branch can only
+    # be created by an actor who already has write access to this repo (or by
+    # Silencer's own `create-pull-request`), so a misdirected dispatch burns CI
+    # minutes on already-trusted code — it cannot run untrusted fork code. The blast
+    # radius of a heavyweight workflow is bounded by the repo's existing trust
+    # boundary, not by this glob. Without this field any per-call `ref` is refused
+    # outright ("message.ref is not allowed unless 'allowed-refs' is configured"), so
+    # it is also what makes the feature usable. `target-ref` is deliberately NOT set:
+    # it is a single static string, and Silencer's branch differs every run.
     allowed-refs: ["silencer/*"]
     # One dispatch for the single PR touched in a turn, matching the `max: 1` on
     # `create-pull-request` / `push-to-pull-request-branch` above (also the default).
@@ -749,9 +757,12 @@ Therefore:
   (`search_pull_requests`, then `pull_request_read` with `method: "get_check_runs"` — see *Scan
   procedure* step 7) and can then re-grep the dispatched run's logs to confirm a category 3/5/6
   pattern is genuinely absent.
-- In the PR's **Test Status** section, state plainly that a run was dispatched onto this branch,
-  that no result is available yet, and that a maintainer should check that run's outcome —
-  keeping the compile-vs-runtime distinction explicit.
+- In the PR's **Test Status** section, state plainly that a dispatch was **requested** for this
+  branch — not that a run exists. The request is only handled after your turn, and the
+  `safe_outputs` job can still reject or fail it (ref rejected by `allowed-refs`, workflow
+  missing from the compile-time `workflows` allowlist, `max` exceeded) while leaving the PR in
+  place, so say that too and ask the maintainer to verify a run actually exists on the branch
+  before relying on it — keeping the compile-vs-runtime distinction explicit.
 - A dispatched run is **not** a substitute for maintainer review, and it does not make the PR
   ready for review. It stays a draft.
 
@@ -770,17 +781,21 @@ Therefore:
   - **Root cause** — *why* the noise was emitted, and why this fix removes it at the source.
   - **Why this is not suppression** — one sentence confirming you fixed the emitter (or, for
     the rare justified suppression, why the source is unreachable and the scope is minimal).
-  - **Test Status** — on PR creation, name the tracked workflow you dispatched onto this
-    branch (see *Validating changes via CI*) and state plainly that its result is not in
-    yet: the PR and the dispatched run do not exist until gh-aw's `safe_outputs` job runs
-    after your agent turn, so no run ID or outcome is available to cite. Keep the
-    compile-vs-runtime distinction explicit — a green run confirms **compilation** only,
-    not that a runtime/log-spam pattern (categories 3/5/6) is gone, which needs that
-    run's own logs re-grepped for the pattern's absence. Ask the maintainer to check the
-    dispatched run's outcome. If the workflow was **not** in the `dispatch-workflow`
-    allowlist and could not be dispatched, say so here instead and note that the
-    allowlist needs the entry. On later runs, update with whatever run link/state exists,
-    keeping that same distinction explicit.
+  - **Test Status** — on PR creation, name the tracked workflow you **requested** a
+    dispatch of onto this branch (see *Validating changes via CI*) and state plainly that
+    no result is in yet: the PR and the requested run do not exist until gh-aw's
+    `safe_outputs` job runs after your agent turn, so no run ID or outcome is available to
+    cite. Say too that the request may have been **rejected or failed** by that job — the
+    ref refused by `allowed-refs`, the workflow missing from the compile-time allowlist,
+    `max` exceeded — leaving this PR with no run behind it, so a maintainer must verify a
+    run actually exists on the branch before relying on it. Keep the compile-vs-runtime
+    distinction explicit — a green run confirms **compilation** only, not that a
+    runtime/log-spam pattern (categories 3/5/6) is gone, which needs that run's own logs
+    re-grepped for the pattern's absence. Ask the maintainer to check that run's outcome.
+    If the workflow was **not** in the `dispatch-workflow` allowlist and no dispatch could
+    be requested at all, say so here instead and note that the allowlist needs the entry.
+    On later runs, update with whatever run link/state exists, keeping that same
+    distinction explicit.
 - Match tt-metal's existing C++/Python style. **No new
   dependencies, no broad refactors, no behavior changes** — noise removal must be
   behavior-preserving (a demoted log still logs at lower severity; a removed unused variable
