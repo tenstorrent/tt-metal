@@ -143,7 +143,7 @@ every accepted version-1 decode. State read by the forward is remapped before
 that read. A dormant sampler may consume it after successful decode/readback,
 which preserves retry safety because slot remaps are non-idempotent. An
 authoritative rebuild may replace the remap for that subsystem; inactivity may
-not. Empty-batch handling resets the composed layout to identity.
+not. Version-0 adapters retain their historical remap behavior unchanged.
 
 Generators execute these commands without adding page-table comparisons,
 sampling-mode checks, or model-specific forced reloads. The corresponding
