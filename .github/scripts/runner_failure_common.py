@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-08-01-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-08-01-v2"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -139,6 +139,12 @@ ERROR_SIGNATURES = (
         key="FAILED_RESET_FOUND",
         label="Failed reset",
         needle="Unable to reset board successfully",
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="PHYSICAL_DISCOVERY_FAILURE_FOUND",
+        label="Physical discovery failure",
+        pattern=r"Physical\s+Discovery\s+found\s+[1-9]\d*\s+missing\s+(?:channel|port/cable)\s+connections",
         case_sensitive=False,
     ),
 )
