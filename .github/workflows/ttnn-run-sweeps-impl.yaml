@@ -114,6 +114,10 @@ jobs:
           echo "│ Run Mode:             Parallel Execution (${{ matrix.test_group_name }})"
           echo "│ Batch:                ${{ matrix.batch_display }}"
           echo "│ Module Selector:      ${{ matrix.module_selector }}"
+          echo "│ Device-key Batch:     ${{ matrix.vectors_dir || 'none (un-partitioned export)' }}"
+          echo "│ Mesh Shape:           ${{ matrix.mesh_shape || 'auto-detect' }}"
+          echo "│ Dispatch Axis:        ${{ matrix.dispatch_axis || 'default' }}"
+          echo "│ Fabric:               ${{ matrix.fabric || 'n/a' }}"
           echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
           echo "│ Architecture:         ${{ matrix.arch }}"
           echo "│ Runner:               ${{ toJSON(matrix.runs_on) }}"
@@ -139,21 +143,20 @@ jobs:
         run: |
           rm -rf "${HOME}/.cache/tt-metal-cache" /github/home/.cache/tt-metal-cache 2>/dev/null || true
           echo "Cleared tt-metal kernel cache"
-      - name: Split sweep vectors by required dispatch axis
+      - name: Split sweep vectors into device-key batches
         run: |
-          # Two-pass dispatch-axis design: lead_models traces include configs
-          # that need ROW dispatch (compute 8x9, x=7 cores) and configs that
-          # need COL dispatch (compute 7x10, y=9 cores). Pre-split the vector
-          # set so each pass only sees vectors for its own mesh axis.
+          # Materialise the batch directories this job's matrix entry refers to. The matrix
+          # planned the same partition from the same vectors (both call plan_batches), so the
+          # directory named by matrix.vectors_dir is produced here.
+          #
+          # split_vectors_by_axis.py still runs because the plain axis partitions remain
+          # referenced elsewhere; the device-key batches are what the run consumes.
           cd /work
-          # Group by full device key (mesh shape, dispatch axis, fabric) so each pass below
-          # opens exactly one device. split_vectors_by_axis.py still runs because the axis
-          # partitions remain referenced elsewhere; the device-key batches are what the run
-          # actually consumes.
           python3 tests/sweep_framework/split_vectors_by_axis.py
           python3 tests/sweep_framework/split_vectors_by_device_key.py
-          echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ 2>/dev/null | head -20 || true; echo "::endgroup::"
-          echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ 2>/dev/null | head -20 || true; echo "::endgroup::"
+          echo "::group::Device-key batches"
+          ls tests/sweep_framework/vectors_export_by_device/ 2>/dev/null || true
+          echo "::endgroup::"
       - name: Run ttnn sweeps (batch)
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
@@ -222,56 +225,38 @@ jobs:
             CMD+=("--fail-on-test-failure")
           fi
 
-          # Device-key passes. Each batch produced by split_vectors_by_device_key.py holds
-          # vectors for exactly ONE (mesh shape, dispatch axis, fabric), so a pass opens one
-          # device and never switches -- no reopen, and therefore no Galaxy dispatch-wedge
-          # risk from a mid-job reopen. Both MESH_DEVICE_SHAPE and TTNN_DISPATCH_AXIS are
-          # DECLARED here from the batch manifest rather than auto-detected: previously the
-          # shape came from hardware auto-detect and every vector inherited it, so vectors
-          # traced at a different shape silently fell back to ReplicateTensorToMesh instead
-          # of their traced placement.
-          run_batch() {
-            local vectors_dir="$1" mesh="$2" axis="$3" name="$4"
-            # Skip when no vector file in this batch belongs to this job's modules --
-            # sweeps_runner errors on empty inputs.
-            local matched=0
-            local _IFS_old="$IFS"; IFS=','
-            for module in $MODULE_SELECTOR; do
-              for f in "$vectors_dir/${module}".*.json "$vectors_dir/${module}.json"; do
-                [[ -f "$f" ]] && matched=1 && break 2
-              done
-            done
-            IFS="$_IFS_old"
-            if [[ "$matched" == "0" ]]; then
-              echo "[device-key] $name has no vectors for this batch's modules — skipping"
-              return 0
-            fi
-            echo "[device-key] === $name (mesh=$mesh axis=$axis) ==="
-            MESH_DEVICE_SHAPE="$mesh" \
-              TTNN_DISPATCH_AXIS="$axis" \
-              TTNN_VECTORS_EXPORT_DIR="$vectors_dir" \
-              "${CMD[@]}"
-          }
+          # ONE device-key batch per job. The matrix (compute_sweep_matrix.py) and the
+          # splitter (split_vectors_by_device_key.py) share the same planner, so the batch
+          # named by the matrix is the directory the split step just wrote. That batch holds
+          # vectors for exactly ONE (mesh shape, dispatch axis, fabric), so the job opens one
+          # device and never switches -- no mid-job reopen, and therefore no Galaxy
+          # dispatch-wedge risk from one.
+          #
+          # MESH_DEVICE_SHAPE and TTNN_DISPATCH_AXIS are DECLARED from the matrix rather than
+          # auto-detected. Previously the shape came from hardware auto-detect and every
+          # vector in the job inherited it, so vectors traced at a different shape silently
+          # fell back to ReplicateTensorToMesh instead of their traced placement.
+          BATCH_DIR="${{ matrix.vectors_dir }}"
+          BATCH_MESH="${{ matrix.mesh_shape }}"
+          BATCH_AXIS="${{ matrix.dispatch_axis }}"
 
-          BATCH_TSV="tests/sweep_framework/vectors_export_by_device/batch_manifest.tsv"
-          set +e
-          overall_rc=0
-          if [[ -s "$BATCH_TSV" ]]; then
-            while IFS=$'\t' read -r b_name b_mesh b_axis b_dir; do
-              [[ -z "$b_name" ]] && continue
-              run_batch "$b_dir" "$b_mesh" "$b_axis" "$b_name"
-              rc=$?
-              if [[ $rc -ne 0 ]]; then echo "[device-key] $b_name exited $rc"; overall_rc=$rc; fi
-            done < "$BATCH_TSV"
-          else
-            echo "[device-key] no batch manifest — falling back to the un-partitioned export"
+          if [[ -z "$BATCH_DIR" || ! -d "$BATCH_DIR" ]]; then
+            # Module-batched matrix (SWEEP_DEVICE_KEY_BATCHING=0) or a nightly/comprehensive
+            # run: no device-key batch was planned, so run the export as a whole.
+            echo "[device-key] no batch directory for this entry — using the un-partitioned export"
             TTNN_VECTORS_EXPORT_DIR="tests/sweep_framework/vectors_export" "${CMD[@]}"
-            overall_rc=$?
+            exit $?
           fi
-          set -e
-          # Surface a non-zero exit if either pass actually failed (not just skipped).
-          # Surface a non-zero exit if any device-key batch actually failed (not just skipped).
-          if [[ $overall_rc -ne 0 ]]; then echo "[device-key] a batch exited $overall_rc"; exit $overall_rc; fi
+
+          echo "[device-key] === ${{ matrix.batch_display }} (mesh=${BATCH_MESH:-auto} axis=$BATCH_AXIS) ==="
+          # A mesh-less batch (no traced shape recorded) leaves MESH_DEVICE_SHAPE unset so the
+          # runner falls back to auto-detect, rather than exporting an empty value.
+          if [[ -n "$BATCH_MESH" ]]; then
+            export MESH_DEVICE_SHAPE="$BATCH_MESH"
+          fi
+          TTNN_DISPATCH_AXIS="$BATCH_AXIS" \
+            TTNN_VECTORS_EXPORT_DIR="$BATCH_DIR" \
+            "${CMD[@]}"
       - name: Compute artifact suffix
         # Must run even when the sweep step fails so the upload step gets a unique
         # BATCH_SUFFIX; without it the artifact name is incomplete and results may collide.

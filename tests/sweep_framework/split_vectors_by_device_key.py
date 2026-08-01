@@ -32,9 +32,19 @@ Writes one directory per batch plus a batch manifest for the CI matrix to consum
 import ast
 import json
 import math
+import sys
 from pathlib import Path
 
 from split_vectors_by_axis import vector_dispatch_axis_hint
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "framework"))
+from constants import strip_grouping_suffix  # noqa: E402
+from matrix_runner_config import LEAD_MODELS_BATCH_POLICY  # noqa: E402
+
+# Modules that must not share a job with anything else, even inside their own device key.
+# Imported rather than restated so the CI matrix and this script cannot disagree about which
+# modules are solo -- they partition the same vectors and must produce identical batches.
+SOLO_MODULES = frozenset(LEAD_MODELS_BATCH_POLICY.get("solo_modules", ()))
 
 # Time model for splitting an oversized batch across jobs. Deliberately conservative: the
 # 3s/vector figure comes from slice (a light op) -- conv2d/matmul/CCL are slower, so a batch
@@ -42,6 +52,19 @@ from split_vectors_by_axis import vector_dispatch_axis_hint
 DEVICE_OPEN_MINUTES = 4
 SECONDS_PER_VECTOR = 3.0
 USABLE_BUDGET_MINUTES = 45
+
+_SWEEP_FRAMEWORK = Path(__file__).resolve().parent
+_SRC_DIR = _SWEEP_FRAMEWORK / "vectors_export"
+_DST_ROOT = _SWEEP_FRAMEWORK / "vectors_export_by_device"
+_MANIFEST = _DST_ROOT / "batch_manifest.json"
+# Same content as the JSON, one batch per line, tab separated: name, mesh ("4x8"), axis, dir.
+# Kept for local/ad-hoc use and as the workflow's fallback path -- embedding a multi-line
+# python one-liner inside a YAML block scalar is fragile (unindented lines silently break
+# the workflow).
+_MANIFEST_TSV = _DST_ROOT / "batch_manifest.tsv"
+# Path a batch directory is reported under, relative to the repo. Both the CI matrix and the
+# run job build this string, so it lives here rather than being spelled out in either.
+VECTORS_BATCH_ROOT = "tests/sweep_framework/vectors_export_by_device"
 
 
 def _max_vectors_per_job() -> int:
@@ -97,19 +120,51 @@ def vector_device_key(vec):
     return mesh, axis, fabric
 
 
-def batch_name(mesh, axis, fabric, part=None, total_parts=1):
+def batch_name(mesh, axis, fabric, part=None, total_parts=1, solo=None):
     mesh_str = f"{mesh[0]}x{mesh[1]}" if mesh else "unknown"
     name = f"mesh{mesh_str}_{axis}_{fabric}"
+    if solo:
+        name = f"{name}_{solo}"
     if total_parts > 1:
         name = f"{name}_p{part}"
     return name
 
 
-def group_vectors(src_dir: Path):
-    """Return {device_key: {suite: {vector_id: vector}}} plus the source file each came from."""
+def _base_module(file_name):
+    """'model_traced.conv2d_model_traced.mesh_4x8.json' -> 'model_traced.conv2d_model_traced'."""
+    return strip_grouping_suffix(Path(file_name).stem)
+
+
+def _solo_token(file_name):
+    """Short, filename-safe tag for a solo module's batch ('...conv2d_model_traced' -> 'conv2d')."""
+    return _base_module(file_name).split(".")[-1].replace("_model_traced", "") or "solo"
+
+
+def source_manifest(src_dir: Path):
+    """The export's generation_manifest.json, or {} if unreadable."""
+    path = src_dir / "generation_manifest.json"
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def group_vectors(src_dir: Path, manifest=None):
+    """Return {device_key: {suite: {vector_id: vector}}} plus the source file each came from.
+
+    The manifest's vector_files list is the authoritative index of what THIS run generated
+    (vector_source treats it that way too). Honour it: an export directory can also hold
+    files left by an earlier run, and partitioning those would schedule jobs for vectors the
+    run never asked for -- and bill their time against the lane's budget.
+    """
+    declared = (manifest or {}).get("vector_files")
+    declared = set(declared) if isinstance(declared, list) and declared else None
     grouped = {}
     for path in sorted(src_dir.glob("*.json")):
         if path.name == "generation_manifest.json":
+            continue
+        if declared is not None and path.name not in declared:
             continue
         try:
             data = json.loads(path.read_text())
@@ -126,38 +181,104 @@ def group_vectors(src_dir: Path):
     return grouped
 
 
-def write_batches(grouped, dst_root: Path):
-    """Write one directory per batch (splitting oversized ones) and return the manifest."""
+def plan_batches(grouped, dst_root: Path = _DST_ROOT):
+    """Decide the batches WITHOUT writing anything.
+
+    Kept separate from write_batches so the CI matrix can derive the exact same batch set
+    (names included) at matrix-build time, where only the plan is needed and writing 17k
+    vectors would be wasted work. Both callers therefore agree by construction rather than
+    by two implementations that have to be kept in step.
+    """
     cap = _max_vectors_per_job()
     batches = []
     for (mesh, axis, fabric), files in sorted(grouped.items(), key=lambda kv: -_count(kv[1])):
-        total = _count(files)
-        parts = max(1, math.ceil(total / cap))
-        # Split by FILE (a file is one module x one hw/mesh variant), never mid-file, so a
-        # module's vectors stay together and the per-module device/program cache still helps.
-        chunks = _chunk_files(files, parts)
-        for index, chunk in enumerate(chunks, start=1):
-            name = batch_name(mesh, axis, fabric, index, len(chunks))
-            out_dir = dst_root / name
-            out_dir.mkdir(parents=True, exist_ok=True)
-            written = []
-            for file_name, suites in chunk.items():
-                (out_dir / file_name).write_text(json.dumps(suites, indent=2))
-                written.append(file_name)
-            (out_dir / "generation_manifest.json").write_text(
-                json.dumps({"vector_files": sorted(written), "vector_grouping_mode": "device_key"}, indent=2)
-            )
-            batches.append(
-                {
-                    "name": name,
-                    "mesh_shape": list(mesh) if mesh else None,
-                    "dispatch_axis": axis,
-                    "fabric": fabric,
-                    "vectors": _count(chunk),
-                    "modules": len(written),
-                    "vectors_dir": str(out_dir.relative_to(dst_root.parent)),
-                }
-            )
+        # Solo modules keep their own job inside the device key. Grouping by device rather
+        # than by module must not quietly undo that isolation: conv2d's heavy convs deadlock
+        # the dispatch hang-detector once device state has accumulated from OTHER modules in
+        # the same process, and run clean alone (see LEAD_MODELS_BATCH_POLICY.solo_modules).
+        # Group solo files by MODULE, not per file: one module can contribute several files
+        # to the same device key (the key comes from each vector's recorded shape, not the
+        # filename, so a .mesh_2x4 file can hold vectors traced at 1x8). One subset per file
+        # would mint two batches with the same name, and the second would overwrite the
+        # first's manifest on disk -- silently dropping its vectors.
+        solo_groups = {}
+        shared = {}
+        for name, suites in files.items():
+            if _is_solo(name):
+                solo_groups.setdefault(_solo_token(name), {})[name] = suites
+            else:
+                shared[name] = suites
+
+        subsets = sorted(solo_groups.items(), key=lambda kv: kv[0])
+        for solo, subset in subsets:
+            _plan_subset(batches, subset, mesh, axis, fabric, solo, cap, dst_root)
+        if shared:
+            _plan_subset(batches, shared, mesh, axis, fabric, None, cap, dst_root)
+
+    duplicates = {b["name"] for b in batches if sum(1 for o in batches if o["name"] == b["name"]) > 1}
+    if duplicates:
+        # A duplicate name means two batches share one directory, and the later write wins.
+        # Fail loudly rather than dispatch a run that quietly skips vectors.
+        raise ValueError(f"device-key batch names are not unique: {sorted(duplicates)}")
+    return batches
+
+
+def _is_solo(file_name):
+    return _base_module(file_name) in SOLO_MODULES
+
+
+def _plan_subset(batches, files, mesh, axis, fabric, solo, cap, dst_root):
+    """Chunk one subset of a device key's files into cap-sized batches."""
+    total = _count(files)
+    parts = max(1, math.ceil(total / cap))
+    # Split by FILE (a file is one module x one hw/mesh variant), never mid-file, so a
+    # module's vectors stay together and the per-module device/program cache still helps.
+    chunks = _chunk_files(files, parts)
+    for index, chunk in enumerate(chunks, start=1):
+        name = batch_name(mesh, axis, fabric, index, len(chunks), solo)
+        batches.append(
+            {
+                "name": name,
+                "mesh_shape": list(mesh) if mesh else None,
+                "dispatch_axis": axis,
+                "fabric": fabric,
+                "vectors": _count(chunk),
+                "modules": len(chunk),
+                "vector_files": sorted(chunk),
+                "file_vectors": {f: sum(len(v) for v in suites.values()) for f, suites in chunk.items()},
+                "vectors_dir": f"{dst_root.name}/{name}",
+                "_files": chunk,
+            }
+        )
+    return batches
+
+
+def write_batches(grouped, dst_root: Path, src_manifest=None):
+    """Write one directory per batch (splitting oversized ones) and return the manifest."""
+    batches = plan_batches(grouped, dst_root)
+    for batch in batches:
+        out_dir = dst_root / batch["name"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for file_name, suites in batch["_files"].items():
+            (out_dir / file_name).write_text(json.dumps(suites, indent=2))
+        # Inherit the SOURCE export's vector_grouping_mode verbatim. It must stay "mesh" or
+        # "hw": vector_source rejects anything else outright, and it selects the mesh- vs
+        # hardware-capability load filter that keeps a lane from running another lane's
+        # vectors. A batch is a re-partition of the same vectors, not a new grouping scheme,
+        # so the mode is copied rather than restated.
+        manifest = {
+            "vector_grouping_mode": (src_manifest or {}).get("vector_grouping_mode", "mesh"),
+            "vector_files": batch["vector_files"],
+            "device_key_batch": {
+                "name": batch["name"],
+                "mesh_shape": batch["mesh_shape"],
+                "dispatch_axis": batch["dispatch_axis"],
+                "fabric": batch["fabric"],
+            },
+        }
+        (out_dir / "generation_manifest.json").write_text(json.dumps(manifest, indent=2))
+    for batch in batches:
+        del batch["_files"]
     return batches
 
 
@@ -179,22 +300,13 @@ def _chunk_files(files, parts):
     return [c for c in chunks if c]
 
 
-_SWEEP_FRAMEWORK = Path(__file__).resolve().parent
-_SRC_DIR = _SWEEP_FRAMEWORK / "vectors_export"
-_DST_ROOT = _SWEEP_FRAMEWORK / "vectors_export_by_device"
-_MANIFEST = _DST_ROOT / "batch_manifest.json"
-# Same content as the JSON, one batch per line, tab separated: name, mesh ("4x8"), axis, dir.
-# The CI shell loop reads this directly -- embedding a multi-line python one-liner inside a
-# YAML block scalar is fragile (unindented lines silently break the workflow).
-_MANIFEST_TSV = _DST_ROOT / "batch_manifest.tsv"
-
-
 def main():
     if not _SRC_DIR.is_dir():
         raise SystemExit(f"No vectors at {_SRC_DIR}")
-    grouped = group_vectors(_SRC_DIR)
+    src_manifest = source_manifest(_SRC_DIR)
+    grouped = group_vectors(_SRC_DIR, src_manifest)
     _DST_ROOT.mkdir(parents=True, exist_ok=True)
-    batches = write_batches(grouped, _DST_ROOT)
+    batches = write_batches(grouped, _DST_ROOT, src_manifest)
     _MANIFEST.write_text(json.dumps({"batches": batches}, indent=2))
     _MANIFEST_TSV.write_text(
         "".join(
@@ -203,7 +315,7 @@ def main():
                     b["name"],
                     f"{b['mesh_shape'][0]}x{b['mesh_shape'][1]}" if b["mesh_shape"] else "",
                     b["dispatch_axis"],
-                    "tests/sweep_framework/" + b["vectors_dir"],
+                    f"{VECTORS_BATCH_ROOT}/{b['name']}",
                 ]
             )
             + "\n"
@@ -214,9 +326,17 @@ def main():
     total = sum(b["vectors"] for b in batches)
     print(f"{total} vectors -> {len(batches)} batches (max {_max_vectors_per_job()} vectors/job)")
     print(f"{'batch':<26}{'mesh':>8}{'axis':>6}{'fab':>5}{'vectors':>9}{'modules':>9}")
+    cap = _max_vectors_per_job()
     for b in batches:
         mesh = f"{b['mesh_shape'][0]}x{b['mesh_shape'][1]}" if b["mesh_shape"] else "?"
-        print(f"{b['name']:<26}{mesh:>8}{b['dispatch_axis']:>6}{b['fabric']:>5}{b['vectors']:>9}{b['modules']:>9}")
+        # A batch can exceed the cap only when ONE file does: files are never split, so the
+        # module's vectors stay in one job (as they did under module batching). Flagged, not
+        # silently accepted, because it is the one case the time model cannot bound.
+        over = "  <-- over cap, single file" if b["vectors"] > cap else ""
+        print(
+            f"{b['name']:<34}{mesh:>8}{b['dispatch_axis']:>6}{b['fabric']:>5}"
+            f"{b['vectors']:>9}{b['modules']:>9}{over}"
+        )
     print(f"\nmanifest: {_MANIFEST}")
 
 

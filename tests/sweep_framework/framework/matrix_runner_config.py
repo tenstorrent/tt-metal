@@ -317,6 +317,26 @@ def get_batch_timeout(target, sku, module_selector, default=DEFAULT_JOB_TIMEOUT_
     return max(1, int(round(total)))
 
 
+def get_weighted_batch_timeout(target, sku, module_shares, default=DEFAULT_JOB_TIMEOUT_MIN):
+    """Per-batch timeout for a batch holding a FRACTION of each of its ops' vectors.
+
+    Device-key batches are sized by vector count, so one batch can touch 40 modules while
+    carrying only a slice of each. Charging every module its full per-op ceiling (what
+    get_batch_timeout does, correctly, for module-sized batches) would bill an op once per
+    batch it appears in and blow the SKU budget. Here each module is charged its ceiling
+    scaled by the share of that op's vectors present in this batch, so summed over a whole
+    run every op is still billed exactly once.
+
+    ``module_shares`` maps module token -> that op's share of its own vectors in this batch
+    (0..1, summing to 1 across the run)."""
+    policy = _sweep_batch_policy_map().get((target, sku)) or DEFAULT_BATCH_POLICY
+    if not module_shares:
+        return default
+    overhead = policy.get("overhead", DEFAULT_BATCH_OVERHEAD_MIN)
+    total = overhead + sum(_op_timeout_min(token, policy) * share for token, share in module_shares.items())
+    return max(1, int(round(total)))
+
+
 def get_sku_total_budget(target, sku):
     """Total per-run budget (minutes) declared for a (target, sku), or None if the
     pair is not budget-tracked in the yaml (e.g. nightly / comprehensive)."""
