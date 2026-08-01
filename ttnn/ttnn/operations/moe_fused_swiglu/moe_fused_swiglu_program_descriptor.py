@@ -1401,6 +1401,15 @@ def create_program_descriptor(
     compute_defines = [("GU_CHUNKS", str(gu_chunks))]
     if "skip_compute" in ABLATE.split("+"):
         compute_defines.append(("SKIP_COMPUTE", "1"))
+    # PERF 7 — the peel had a HOLE. `SKIP_COMPUTE` is a matmul_block_helpers define and elides ONLY
+    # the inner `ckernel::matmul_block` LLK call; every `eltwise_chain` in the TU keeps running. So
+    # the "all payloads stubbed" floor silently contained the whole combine add chain, the SiLU, the
+    # SwiGLU multiply and the fused tilize -- the same trap the reference op hit when its `down` peel
+    # bottomed out in a 47 % floor that turned out to hold its DRAM output stream. `skip_eltwise`
+    # closes it: `CKL_ELTWISE_CHAIN_SKIP_COMPUTE` keeps every CB reserve/wait/push/pop, DEST sync and
+    # trip count and drops only the math.
+    if "skip_eltwise" in ABLATE.split("+"):
+        compute_defines.append(("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1"))
 
     kernels = [
         ttnn.KernelDescriptor(

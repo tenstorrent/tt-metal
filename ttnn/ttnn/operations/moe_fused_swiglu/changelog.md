@@ -1658,3 +1658,87 @@ the obvious suspect and is now worth a bench rather than being retired.
 Lever 1 is NOT a prefetch reorder (measured above). It needs the gate/up matmul to stop being a
 barrier — i.e. consume W_gate/W_up chunk-by-chunk as they land, which `GU_CHUNKS` already does for
 the READ but not for the round-trip through reduce -> h -> down.
+
+---
+
+## Perf 7 — the peel had a HOLE, and closing it kills two of Perf 6's recommendations
+
+- **Date**: 2026-08-01
+- **Scope**: instrumentation + measurement. New ablation `skip_eltwise`. No default-path change.
+
+### 1. The hole
+
+`SKIP_COMPUTE` is a **`matmul_block_helpers` define** and elides only the inner
+`ckernel::matmul_block` LLK call. Every `eltwise_chain` in the translation unit keeps running — it
+has its own define, `CKL_ELTWISE_CHAIN_SKIP_COMPUTE`, which this op never set. So every
+"all payloads stubbed" floor this op has quoted since Perf 3 **silently contained the entire combine
+add chain, the SiLU, the SwiGLU multiply and the fused tilize**. Exactly the reference op's `owrite`
+trap, where its `down` peel bottomed out in a 47 % "floor" that turned out to hold a 1.95 MB DRAM
+stream.
+
+`MOE_SWIGLU_ABLATE=skip_eltwise` closes it.
+
+### 2. The complete peel (88 cores, all transports already stubbed)
+
+| arm | 128 | 256 | 512 |
+|---|---|---|---|
+| all transports stubbed | 42 379 | 78 976 | 150 123 |
+| + `skip_eltwise` | 41 647 | 78 264 | 148 359 |
+| + `skip_compute` + `skip_eltwise` | **22 141** | **40 400** | **70 853** |
+
+**The whole eltwise costs 712 ns at count 256.** Combine chain, SiLU, SwiGLU multiply and tilize
+together, 0.5 % of the op.
+
+### 3. Two of Perf 6's conclusions are RETRACTED on this measurement
+
+1. **`pack_l1_pair` is dead.** Perf 6 called it "the right next build" on the strength of a
+   1.90-2.09x isolated number and the fact that it now fits in L1. It is worth **at most 712 ns**,
+   because the stage it speeds up is 0.5 % of the op. The isolated number was real; the stage is not
+   material. Same for `dest_acc` (1.35x) and `pack_l1_acc` (1.22x) — all three are now closed on
+   size, not on risk.
+2. **The matmul is NOT 26 % off shape.** Perf 6 read 10.8 cycles/tile-MAC and blamed the small-N
+   `matmul_block` window (N=2, 2 of 8 DEST). Measured directly, with weights stubbed so weight-stream
+   pipelining cannot confound it:
+
+   | | 128 | 256 | 512 |
+   |---|---|---|---|
+   | `GU_CHUNKS=3` (shipped, N=2) | 61 773 | 107 088 | 205 073 |
+   | `GU_CHUNKS=2` (N=3) | 61 335 | 106 912 | 204 317 |
+   | `GU_CHUNKS=1` (N=6, 6 of 8 DEST) | 60 835 | 105 991 | 202 652 |
+
+   Tripling the DEST width and cutting the call count 3x buys **1.0-1.5 %**. The matmul is not
+   shape-limited; the 8 cycles/tile-MAC roofline was an unverified assumption and ~10.5 is very
+   likely the real bfp8 x bfp4 LoFi limit (the unpacker decompresses bfp4). **Treat the matmul as
+   done** — and note this also re-kills the custom fused gate+up block for the third time, now on a
+   direct measurement rather than an inference.
+
+### 4. The corrected budget — count 256, 146 648 ns total
+
+| term | ns | share |
+|---|---|---|
+| **true sync floor** (CB + semaphore bookkeeping ONLY) | **40 400** | **28 %** |
+| weight DRAM | 39 560 | 27 % |
+| matmul LLK | 33 135 | 23 % |
+| x DRAM + staging | 16 282 | 11 % |
+| reduce transport | 6 825 | 5 % |
+| h transport | 5 005 | 3 % |
+| all eltwise | 712 | 0.5 % |
+
+**The true sync floor is now the largest single term in the op**, and it is not fixed overhead:
+22 141 / 40 400 / 70 853 scales as ~M^0.86, i.e. per-block CB ops, not launch cost.
+
+At **count 128 the bookkeeping alone (22 141 ns) is 1.75x the entire matmul roofline (12 658 ns)**
+before a single byte moves anywhere. That is the honest reason M=128's math utilisation is ~13 %
+shipped and only ~30 % with every transport stubbed.
+
+### 5. What this leaves
+
+Only two terms are big enough to matter, and neither is a knob:
+
+* **the 40 us sync floor** — CB reserve/wait/push/pop and semaphore ops, counted per block. Reducing
+  it means fewer, coarser CB transactions across the reduce-scatter's all-to-all and the phase-2
+  round loop, not a faster stage.
+* **the 39 us weight stream** — M-independent, and `WD_AHEAD=11` proved it cannot be hidden by
+  reordering alone (Perf 6 §3).
+
+Everything else in the op is now measured to be at or near its floor.
