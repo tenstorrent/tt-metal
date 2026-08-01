@@ -5,11 +5,11 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "mesh_tensor_impl.hpp"
 #include "spec/layout/tensor_layout_impl.hpp"
+#include "tensor_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -81,9 +81,9 @@ std::size_t MeshTensor::element_size() const {
 
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().impl().compute_strides(logical_shape()); }
 
-MeshTensor MeshTensor::allocate_on_device(distributed::MeshDevice& mesh_device, const TensorSpec& spec) {
+MeshTensor MeshTensor::allocate_on_device(distributed::MeshDevice& mesh_device, TensorSpec spec) {
     return allocate_mesh_tensor_on_device_with_topology(
-        mesh_device, spec, TensorTopology::create_fully_replicated_tensor_topology(mesh_device.shape()));
+        mesh_device, std::move(spec), TensorTopology::create_fully_replicated_tensor_topology(mesh_device.shape()));
 }
 
 MeshTensor MeshTensor::from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec) {

@@ -42,8 +42,7 @@ Tensor FillPadDeviceOperation::create_output_tensors(
     return input_tensor;
 }
 
-ttnn::Tensor fill_pad(
-    const Tensor& input, tt::tt_metal::PadValue fill_value, const MemoryConfig& output_memory_config) {
+ttnn::Tensor fill_pad(const Tensor& input, ttnn::PadValue fill_value, const MemoryConfig& output_memory_config) {
     using OperationType = ttnn::prim::FillPadDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
