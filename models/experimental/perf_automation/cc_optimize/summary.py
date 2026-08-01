@@ -973,11 +973,26 @@ def render_summary(
             lever = _disp_level(a.get("kernel_kind") or "?")
             ms = a.get("measured_ms")
             ms_s = f"{ms:.2f}" if isinstance(ms, (int, float)) else "—"
-            _fp, _fb = a.get("fullpipe_ms"), a.get("fullpipe_best_ms")
-            if isinstance(_fp, (int, float)) and isinstance(_fb, (int, float)):
-                gain_s = f"{_fp - _fb:+.2f} ms"
+            # READ THE ONE COMPARISON, DO NOT RE-DERIVE IT. This subtracted fullpipe_ms -
+            # fullpipe_best_ms itself, and since attempts that never ran an end-to-end inherited the
+            # last verdict's numbers, the SAME delta printed on row after row -- so "-41.77 ms",
+            # earned by one win, appeared beside a dozen rows marked "no gain". perf_mcp now stamps
+            # the attempt's own delta once (_attempt_fullpipe_verdict); absent means this attempt
+            # measured no end-to-end of its own, which is a real distinction and reads as "n/m".
+            _d = a.get("fullpipe_delta_ms")
+            if isinstance(_d, (int, float)):
+                gain_s = f"{_d:+.2f} ms"
+            elif "fullpipe_measured_here" not in a:
+                # LEGACY ROW, written before the stamp existed: subtract as the renderer used to, so
+                # old kernel logs still render. Same fallback winning_indices keeps for the ✓ marks.
+                _fp, _fb = a.get("fullpipe_ms"), a.get("fullpipe_best_ms")
+                gain_s = (
+                    f"{_fp - _fb:+.2f} ms" if isinstance(_fp, (int, float)) and isinstance(_fb, (int, float)) else "—"
+                )
+            elif a.get("fullpipe_measured_here"):
+                gain_s = "—"  # measured its own, but nothing to compare against
             else:
-                gain_s = "—"
+                gain_s = "n/m"  # this attempt ran no end-to-end of its own
             res = "✓ win" if _i in _wins else ("· wedged" if a.get("wedged") else "· no gain")
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
             lines.append(f"{sig:<34} {lever:>12} {ms_s:>18} {gain_s:>16}  {res:<10} {note}")

@@ -127,7 +127,21 @@ def winning_indices(attempts, baseline_ms=None) -> set:
     times the end-to-end time moved.
 
     Order matters, so this takes the attempt list rather than one row; callers must not re-derive it.
+
+    WHEN THE ATTEMPT CARRIES ITS OWN VERDICT, THAT IS THE ANSWER. perf_mcp now makes the end-to-end
+    comparison ONCE per attempt and stamps `fullpipe_delta_ms` (this attempt's own trace+1cq minus
+    the running best); the sign is the verdict. Re-deriving a staircase here is what made three
+    components disagree about the same row -- 16 raw flags, 3 ticks, 2 real improvements. The
+    staircase below remains for logs written before that stamp existed.
     """
+    stamped = [
+        i
+        for i, a in enumerate(attempts or [])
+        if isinstance(a, dict) and isinstance(a.get("fullpipe_delta_ms"), (int, float))
+    ]
+    if stamped:
+        return {i for i in stamped if attempts[i]["fullpipe_delta_ms"] < 0}
+
     # ONE STAIRCASE PER RULER. A single `best` across mixed units let the smallest-scoped reading win
     # once and then disqualify everything else; see staircase_value.
     best: dict = {}

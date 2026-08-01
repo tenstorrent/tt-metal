@@ -2338,10 +2338,44 @@ def gate_set_new_best() -> bool:
         return False
     try:
         ms = float(fp.get("full_pipeline_ms"))
-        prev = fp.get("best_ms")
-        return ms > 0 and (prev is None or ms < float(prev))
     except (TypeError, ValueError):
         return False
+    if not ms > 0:
+        return False
+    prev = _fullpipe_reference_ms(fp)
+    if prev is None:
+        # NOTHING TO RATCHET AGAINST -> NOT A WIN. `prev is None or ms < prev` credited the FIRST
+        # full-pipeline measurement of a run unconditionally: on gemma-3-12b-it attempt #0 measured
+        # 87.9294 ms -- EXACTLY the baseline it was supposed to beat -- and was banked as a win that
+        # improved nothing, while the attempt that really moved 87.93 -> 46.16 recorded False.
+        # Failing closed is right: a run always measures its baseline before the loop starts, so a
+        # missing reference means something is wrong, and a fabricated win is the one outcome that
+        # cannot be corrected afterwards.
+        return False
+    return ms < prev
+
+
+def _fullpipe_reference_ms(fp: dict):
+    """What this measurement must beat: the banked best, else the run's BASELINE.
+
+    The gate only ever consulted `best_ms`, which does not exist until something has already won, so
+    the first measurement had nothing to compare against. The baseline was never missing -- merely
+    unread: the ledger holds `fullpipe_e2e / before` from the pre-loop measurement, keyed by
+    (model, task) and durable across reruns.
+    """
+    prev = fp.get("best_ms")
+    if prev is not None:
+        try:
+            return float(prev)
+        except (TypeError, ValueError):
+            return None
+    try:
+        led = _ledger()
+        model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+        row = led.first(led.KIND_FULLPIPE, led.PHASE_BEFORE, model=model, task=os.environ.get("PERF_MCP_TASK", "main"))
+        return float(row["value_ms"]) if row else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _emit_fullpipe(result: dict) -> dict:
@@ -3095,6 +3129,79 @@ def _baseline_at_record():
         return None
 
 
+def _consumed_verdict_path():
+    return state_dir() / (
+        "perf_mcp_fullpipe_consumed_%s_%s.json"
+        % (_MODEL_ROOT.name if _MODEL_ROOT else "model", os.environ.get("PERF_MCP_TASK", "main"))
+    )
+
+
+def _verdict_identity(fp: dict):
+    """What makes one end-to-end measurement distinct from the next.
+
+    The ms alone is not enough: after a revert the pipeline legitimately measures the same number
+    again, and the sha repeats too. The verdict file's mtime moves on every recorded verdict, so the
+    triple separates a genuinely NEW measurement from the SAME one being read a second time.
+    """
+    try:
+        mt = _gate_verdict_path().stat().st_mtime_ns
+    except OSError:
+        mt = 0
+    return [str(fp.get("sha") or ""), fp.get("full_pipeline_ms"), mt]
+
+
+def _attempt_fullpipe_verdict() -> dict:
+    """THE single end-to-end comparison for the attempt being recorded.
+
+    One number per attempt, one subtraction, and the sign is the verdict:
+
+        delta = this attempt's OWN end-to-end  -  the running best
+        delta < 0  ->  win, and the best moves;  delta >= 0  ->  no gain, best unchanged
+
+    Three separate implementations used to answer this, and they disagreed. `gate_set_new_best`
+    banked, the report's Δ column subtracted `fullpipe_ms - fullpipe_best_ms`, and `winning_indices`
+    re-derived the ✓ marks from a staircase -- so one run showed 16 raw flags, 3 ticks and 2 real
+    improvements, with a "-41.77 ms" printed next to rows marked "no gain".
+
+    The reason those numbers repeated down the page is that an end-to-end measurement is EXPENSIVE
+    (a full trace replay, minutes) so it is not run per attempt: attempts that did not trigger one
+    simply re-read the last verdict and inherited its value as though it were their own. So this
+    attributes a verdict ONCE. The attempt that caused the measurement owns it; every later attempt
+    reading the same verdict reports `own=False` and carries no delta and no win -- honest about
+    having measured nothing, rather than borrowing someone else's result.
+    """
+    out = {"own": False, "ms": None, "ref": None, "delta": None, "win": False}
+    fp = gate_verdicts().get("full_pipeline") or {}
+    if str(fp.get("status")) != "ok":
+        return out
+    try:
+        ms = float(fp.get("full_pipeline_ms"))
+    except (TypeError, ValueError):
+        return out
+    if not ms > 0:
+        return out
+
+    ident = _verdict_identity(fp)
+    path = _consumed_verdict_path()
+    try:
+        already = json.loads(path.read_text())
+    except Exception:  # noqa: BLE001
+        already = None
+    if already == ident:
+        return out  # this measurement already belongs to an earlier attempt
+
+    ref = _fullpipe_reference_ms(fp)
+    out.update(own=True, ms=round(ms, 4), ref=None if ref is None else round(ref, 4))
+    if ref is not None:
+        out["delta"] = round(ms - ref, 4)
+        out["win"] = ms < ref
+    try:
+        path.write_text(json.dumps(ident))
+    except OSError:
+        pass
+    return out
+
+
 def _fullpipe_ms_now():
     """The end-to-end full-pipeline ms behind the CURRENT gate verdict, or None.
 
@@ -3171,21 +3278,22 @@ def record_kernel_attempt(
     except Exception:  # noqa: BLE001
         stages = []
     _ms = round(float(measured_ms), 4)
+    _fpv = _attempt_fullpipe_verdict()
     rec = {
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,
         "measured_ms": _ms,
-        # THE GATE DECIDES, NOT THE CALLER. beat_baseline arrived as a parameter, so a caller could
-        # pass True from measure_candidate's device_ms verdict while the end-to-end gate had returned
-        # `regressed` -- which is exactly how two ticks appeared for commits that did not move the
-        # end-to-end best. A win is trace_replay end-to-end lower than before, so it is read from the
-        # gate's own recorded verdict; the parameter is kept only as the caller's CLAIM, for the note.
-        "beat_baseline": bool(gate_set_new_best()) and _ledger().is_win({"beat_baseline": True, "measured_ms": _ms}),
+        # ONE COMPARISON, MADE ONCE, FOR THIS ATTEMPT -- see _attempt_fullpipe_verdict. This attempt's
+        # OWN end-to-end minus the running best; the SIGN IS THE VERDICT. The banked flag, the delta
+        # the report prints and the win mark all read this one result, so they cannot disagree about
+        # the same row -- which they did: 16 beat_baseline flags from 14 measurements, 3 rendered
+        # ticks, and 2 improvements that actually happened.
+        "beat_baseline": _fpv["win"],
         "claimed_beat_baseline": bool(beat_baseline),
-        # The end-to-end reading this attempt is judged against -- one ruler for every row -- and the
-        # gate's own previous best, so the staircase never needs a reference from a different ruler.
-        "fullpipe_ms": (_fullpipe_ms_now() or (None, None))[0],
-        "fullpipe_best_ms": (_fullpipe_ms_now() or (None, None))[1],
+        "fullpipe_ms": _fpv["ms"],
+        "fullpipe_best_ms": _fpv["ref"],
+        "fullpipe_delta_ms": _fpv["delta"],
+        "fullpipe_measured_here": _fpv["own"],
         "note": note,
         "stages": stages,
         "kernel_detected_in_source": detected,
