@@ -277,7 +277,13 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
         "n_open": len(open_ops),
         "n_modeled": len(modeled),
         "n_unmodeled": r["unmodeled_op_count"],
-        "open_ops": open_ops[:10],  # the ttnn-reachable work still on the table, biggest gap first
+        # EVERY open op, biggest gap first -- NOT a top-N. This was open_ops[:10], a display limit for
+        # the report that became the gate's work queue: blocking_ops is built from this list, so an op
+        # below the cut could never be selected however many rounds remained. On gemma-3-12b-it the
+        # roofline found 28 open ops, the gate saw 10, and can_stop fired with PagedUpdateCache
+        # (4.18 ms gap, on ONE core), SdpaDecode (4.08) and NLPCreateQKVHeadsDecode (3.27) never
+        # attempted. Ranking still decides ORDER; it no longer decides visibility.
+        "open_ops": open_ops,
         "rows": rows,
     }
 

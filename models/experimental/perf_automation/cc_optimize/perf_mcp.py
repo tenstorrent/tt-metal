@@ -1110,6 +1110,23 @@ def _tp_candidate(open_op: dict, op_code: str) -> bool:
     return (open_op.get("bound_by") or "").lower() == "memory"
 
 
+def _untried_material_ops(blocking, attempts) -> list:
+    """Ops with a material gap that have no recorded attempt at all, in gap order.
+
+    Shape-aware via _op_match, so an attempt on one matmul does not clear a different-shape matmul.
+    A `wedged` attempt counts as tried -- the candidate crashed the device, which is a result, and
+    demanding a clean one would loop forever on a shape that cannot be built.
+    """
+    out = []
+    for b in blocking or []:
+        op = (b or {}).get("op") or ""
+        if not op:
+            continue
+        if not any(_op_match(op, a) for a in (attempts or []) if isinstance(a, dict)):
+            out.append(op)
+    return out
+
+
 def _rung_state(matches, kind):
     clean = any((a.get("kernel_kind") or "").lower() == kind and not a.get("wedged") for a in matches)
     wedged = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == kind and a.get("wedged"))
@@ -1762,7 +1779,7 @@ def profile_model() -> dict:
         # the ops still on the table (biggest reachable gap first) — these are what's NOT done yet
         open_ops = [
             {"op": o.get("op_code") or o.get("bucket"), "gap_ms": o.get("gap_ms"), "bound_by": o.get("bound_by")}
-            for o in (rep.get("open_ops") or [])[:8]
+            for o in (rep.get("open_ops") or [])
         ]
         _persist_throughput(rep)  # fresh static target for the RUN_REPORT roofline table (non-stale)
     except Exception:
@@ -4029,6 +4046,14 @@ def termination_check() -> dict:
         blocking.append(decode_block)
     blocking.sort(key=lambda b: -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0))
     can_stop = not blocking
+    # AND NOTHING MATERIAL MAY BE UNTRIED. `blocking` empties as each op's checklist fills, so an op
+    # that was never SELECTED never appears there and never blocks -- which is how a run ends with
+    # known gaps untouched. Attempted, not won: a measured dead end clears an op, per the existing
+    # contract that "even a measured kernel that does NOT beat ttnn clears the op as 'tried'". The
+    # round budget still bounds the run; it lives in the loop (`while rounds < max_rounds`), not here.
+    _untried = _untried_material_ops(blocking, _load_attempts())
+    if _untried:
+        can_stop = False
     pt_status = _perf_target_status(rep, dev)
     # STOPPING IS ONLY ALLOWED AGAINST A REAL BANDWIDTH BAND. 60-80% of peak DRAM bandwidth is a
     # hardware fact; 60-80% of 1000/modeled_floor is not -- the floor is a sum of per-op minimum times
