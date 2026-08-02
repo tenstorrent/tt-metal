@@ -3299,6 +3299,31 @@ def record_kernel_attempt(
         stages = []
     _ms = round(float(measured_ms), 4)
     _fpv = _attempt_fullpipe_verdict()
+    # AN ATTEMPT NEEDS ITS OWN MEASUREMENT. gates_allow_banking already enforces this at COMMIT time
+    # -- "absent verdicts are refused, not assumed: an unrun gate is not a passed gate" -- but nothing
+    # enforced it here, so a row could be written with fullpipe_ms=None and render `n/m`. On
+    # gemma-3-12b-it that was 79 of 94 attempts with no end-to-end number, and 13 more that inherited
+    # someone else's. The device side was never the gap: measure_candidate runs for every attempt.
+    # What was missing is the replay that decides whether the change moved the metric being scored.
+    #
+    # WEDGED is exempt because a candidate that crashed or hung the device cannot be measured, and
+    # dropping that row would hide the crash and invite the next run to re-derive it. The env override
+    # mirrors PERF_MCP_ALLOW_UNGATED_COMMIT for a resumed session whose verdict belongs to a previous
+    # process. A refusal RETURNS -- it does not raise -- because this runs inside a live agent loop
+    # and an exception would end the round instead of redirecting it.
+    if (
+        not _fpv["own"]
+        and "wedged" not in (note or "").lower()
+        and os.environ.get("PERF_MCP_ALLOW_UNMEASURED_ATTEMPT") != "1"
+    ):
+        return {
+            "recorded": False,
+            "refused": (
+                "this attempt owns no end-to-end measurement: call check_full_pipeline_latency for "
+                "THIS candidate, then record it. A verdict measured for an earlier attempt cannot be "
+                "reused -- one replay, one attempt."
+            ),
+        }
     rec = {
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,

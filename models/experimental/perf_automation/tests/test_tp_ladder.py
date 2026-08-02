@@ -55,11 +55,21 @@ def test_tp_fracture_credited_only_with_shard_and_ccl(tmp_path, monkeypatch):
     monkeypatch.setattr(perf_mcp, "_MODEL_ROOT", tmp_path)
     monkeypatch.setattr(perf_mcp, "_KERNEL_LOG_PATH", tmp_path / "attempts.json")
 
+    # An attempt is only recorded when it owns an end-to-end measurement (see
+    # test_an_attempt_needs_its_own_measurement.py). This test is about TP-fracture CREDITING, so give
+    # each record a fresh verdict rather than exercising the measurement gate here.
+    def _measured(mid):
+        perf_mcp.record_gate_verdict(
+            "full_pipeline", "ok", full_pipeline_ms=35.0, best_ms=36.0, sha="", measurement_id=mid
+        )
+
     (tmp_path / "model.py").write_text("w = ShardTensorToMesh(mesh, dim=-1)\ny = ttnn.all_gather(z)\n")
+    _measured("tp-1")
     ok = perf_mcp.record_kernel_attempt("MatmulDeviceOperation", "tp-fracture", 1.0, True)
     assert ok["attempt"]["kernel_detected_in_source"] is True
 
     (tmp_path / "model.py").write_text("w = ShardTensorToMesh(mesh, dim=-1)\n")
+    _measured("tp-2")
     bad = perf_mcp.record_kernel_attempt("MatmulDeviceOperation", "tp-fracture", 1.0, True)
     assert bad["attempt"]["kernel_detected_in_source"] is False
 
