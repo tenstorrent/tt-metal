@@ -2146,6 +2146,22 @@ def _record_wedge_to_log(kernel_log: str, reason: str) -> None:
         pass
 
 
+def _kernel_log_path(model_name: str, task: str) -> str:
+    """Where this (model, task)'s attempt log lives -- in the state dir, not hardcoded /tmp.
+
+    PERF_MCP_STATE_DIR already moves the ledger, the gate verdicts and the full-pipeline baseline onto
+    real disk; this path ignored it, so a crash took the history and left the anchors. The host went
+    down mid-run on 2026-08-02, /tmp was cleared at boot, and run 20's 98 attempts -- every lever
+    tried, every measurement, every recorded reason -- went with it. Rebuilding the ladder meant
+    hand-transcribing the report text.
+
+    Unset, state_dir() is tempfile.gettempdir(), so the default is exactly the old location. The
+    derived .cumulative / .target / .agent.log are built as str(path) + suffix and follow it, which
+    is the point: the ladder history is what a resumed run reads.
+    """
+    return str(state_dir() / ("cc_kernlog_%s_%s.json" % (model_name, task)))
+
+
 def _fold_cumulative(kernel_log: str) -> None:
     cum = str(kernel_log) + ".cumulative"
 
@@ -3049,7 +3065,7 @@ def optimize_pipeline(
     hitl=True runs the human-in-the-loop gate: the agent proposes one lever at a time via hitl_gate and
     a watcher thread renders the pause screen + performs the operator's commit/revert."""
     task = pipe["task"]
-    kernel_log = f"/tmp/cc_kernlog_{model_name}_{task}.json"
+    kernel_log = _kernel_log_path(model_name, task)
     try:
         _fold_cumulative(kernel_log)
         os.path.exists(kernel_log) and os.remove(kernel_log)  # fresh ladder state per pipeline
@@ -3788,7 +3804,7 @@ def run_cc_optimize(
     if e2e_only:
         os.environ["PERF_MCP_FULLPIPE_E2E"] = "1"
         for pipe in pipes:
-            kernel_log = f"/tmp/cc_kernlog_{model_name}_{pipe['task']}.json"
+            kernel_log = _kernel_log_path(model_name, pipe["task"])
             mcp_env = _mcp_config(repo_root, manifest_path, pipe, devices, kernel_log)["mcpServers"]["perf-mcp"]["env"]
             print(f"  [optimize/cc] === full-model end-to-end MEASURE (no optimization): {pipe['task']} ===")
             _fullpipe_e2e(repo_root, mcp_env, devices, "MEASURE")
