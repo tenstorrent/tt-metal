@@ -36,11 +36,32 @@ from .ltx_mesh_params import (
 )
 
 
+def _ltx_checkpoint_cached(filename: str) -> bool:
+    """True if the LTX checkpoint is available -- either a real local file (LTX_CHECKPOINT / flat
+    ~/.cache/ltx-checkpoints) OR already in the HF hub cache. The old guard checked
+    os.path.exists(default_ltx_checkpoint(...)), but when the checkpoint resolves from the hub that
+    returns a "repo:file" string (never a path), so it always skipped in CI even with the weights
+    cached. Checking the hub cache too (local_files_only) lets the offline CI run actually execute."""
+    ref = default_ltx_checkpoint(filename)
+    if os.path.exists(ref):
+        return True
+    if ":" in ref:  # "repo_id:filename" -> resolvable from the local hub cache without a network call
+        repo_id, fname = ref.split(":", 1)
+        try:
+            from huggingface_hub import hf_hub_download
+
+            hf_hub_download(repo_id=repo_id, filename=fname, local_files_only=True)
+            return True
+        except Exception:
+            return False
+    return False
+
+
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
 # (no checkpoint present). Runs the same prompt as the girl audio fixture (DEFAULT_LTX_PROMPT — the
 # "young woman with a guitar sings Doo-be-doo" clip the audio tests use), so e2e and audio stay aligned.
 @pytest.mark.skipif(
-    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
@@ -337,7 +358,7 @@ def _temporal_seam_score(path):
 
 
 @pytest.mark.skipif(
-    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
@@ -515,7 +536,7 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
 
 
 @pytest.mark.skipif(
-    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(

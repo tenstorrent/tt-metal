@@ -1133,6 +1133,10 @@
     echo "===== LTX bh_sc1 WORKER DIAGNOSTICS ====="
     mpirun --pernode --tag-output bash -lc 'echo "host=$(hostname) HOME=$HOME"; echo "fwd: HF_HOME=$HF_HOME HF_TOKEN=${HF_TOKEN:+<set>} TT_DIT_CACHE_DIR=$TT_DIT_CACHE_DIR VBENCH_CACHE_DIR=$VBENCH_CACHE_DIR MGD=$TT_MESH_GRAPH_DESC_PATH"; echo "weights:"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1; d=/mnt/models/huggingface; if touch "$d/.ltxprobe" 2>/dev/null; then echo "WRITABLE $d"; rm -f "$d/.ltxprobe"; else echo "READ-ONLY-or-absent $d"; fi; echo -n "devices: "; ls /dev/tenstorrent 2>/dev/null | tr "\n" " "; echo; echo -n "MGD on worker: "; ls -l "$TT_MESH_GRAPH_DESC_PATH" 2>&1'
     echo "===== END DIAGNOSTICS ====="
+    # TEMPORARY (remove once /mnt/models holds the distilled files): LTX is not gated, so use the CI
+    # HF token to fetch the missing distilled + upscaler files into the cache online; the offline
+    # pytest below then resolves them locally. Delete this mpirun once the weights are staged.
+    mpirun --pernode --tag-output bash -lc 'HF_HUB_OFFLINE=0 python3 -c "from huggingface_hub import snapshot_download as s; print(s(\"Lightricks/LTX-2.3\", allow_patterns=[\"*distilled*\",\"*upscaler*\"]))"'
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-fast-t2v
@@ -1159,6 +1163,10 @@
     mpirun --pernode --tag-output bash -lc 'echo "host=$(hostname) HOME=$HOME"; echo "fwd: HF_HOME=$HF_HOME HF_TOKEN=${HF_TOKEN:+<set>} TT_DIT_CACHE_DIR=$TT_DIT_CACHE_DIR VBENCH_CACHE_DIR=$VBENCH_CACHE_DIR MGD=$TT_MESH_GRAPH_DESC_PATH"; echo "weights:"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1; d=/mnt/models/huggingface; if touch "$d/.ltxprobe" 2>/dev/null; then echo "WRITABLE $d"; rm -f "$d/.ltxprobe"; else echo "READ-ONLY-or-absent $d"; fi; echo -n "devices: "; ls /dev/tenstorrent 2>/dev/null | tr "\n" " "; echo; echo -n "MGD on worker: "; ls -l "$TT_MESH_GRAPH_DESC_PATH" 2>&1'
     echo "===== END DIAGNOSTICS ====="
     export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
+    # TEMPORARY (remove once /mnt/models holds the distilled files): LTX is not gated, so use the CI
+    # HF token to fetch the missing distilled + upscaler files into the cache online; the offline
+    # pytest below then resolves them locally. Delete this mpirun once the weights are staged.
+    mpirun --pernode --tag-output bash -lc 'HF_HUB_OFFLINE=0 python3 -c "from huggingface_hub import snapshot_download as s; print(s(\"Lightricks/LTX-2.3\", allow_patterns=[\"*distilled*\",\"*upscaler*\"]))"'
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-pro-i2v
@@ -1184,6 +1192,10 @@
     echo "===== LTX bh_sc1 WORKER DIAGNOSTICS ====="
     mpirun --pernode --tag-output bash -lc 'echo "host=$(hostname) HOME=$HOME"; echo "fwd: HF_HOME=$HF_HOME HF_TOKEN=${HF_TOKEN:+<set>} TT_DIT_CACHE_DIR=$TT_DIT_CACHE_DIR VBENCH_CACHE_DIR=$VBENCH_CACHE_DIR MGD=$TT_MESH_GRAPH_DESC_PATH"; echo "weights:"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1; d=/mnt/models/huggingface; if touch "$d/.ltxprobe" 2>/dev/null; then echo "WRITABLE $d"; rm -f "$d/.ltxprobe"; else echo "READ-ONLY-or-absent $d"; fi; echo -n "devices: "; ls /dev/tenstorrent 2>/dev/null | tr "\n" " "; echo; echo -n "MGD on worker: "; ls -l "$TT_MESH_GRAPH_DESC_PATH" 2>&1'
     echo "===== END DIAGNOSTICS ====="
+    # TEMPORARY (remove once /mnt/models holds the distilled files): LTX is not gated, so use the CI
+    # HF token to fetch the missing distilled + upscaler files into the cache online; the offline
+    # pytest below then resolves them locally. Delete this mpirun once the weights are staged.
+    mpirun --pernode --tag-output bash -lc 'HF_HUB_OFFLINE=0 python3 -c "from huggingface_hub import snapshot_download as s; print(s(\"Lightricks/LTX-2.3\", allow_patterns=[\"*distilled*\",\"*upscaler*\"]))"'
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-fast-i2v
