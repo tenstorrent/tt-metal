@@ -109,3 +109,9 @@ EP=32 + CCL2 on. `test_image3_t2i_perf` (32L/12step/1024², trace) steady ms/ste
 `_mm_grid()` default OFF->ON (`_stubs/mo_e.py:113`); `HUNYUAN_MM_FULLGRID=0` restores op-default
 grid. Grid-only (no math change): PCC 0.9936 / 0.99999. Cumulative vs original EP-off baseline:
 7770 -> 5736 ms/step (-26.2%), E2E 157.8 -> 131.6s (-16.6%).
+
+## 2026-08-02 — Lever 1d: MM_FIDELITY=lofi = NO-OP (not flipped)
+
+PCC-safe (lofi 0.9936 == default), but perf 5759.6 vs 5736.0 ms/step = +0.4% (jitter). The ttnn
+default is already LoFi-equivalent for the bf4_b MoE matmuls, so explicit lofi buys nothing. Left
+at default "". Cheap-gated-knob vein exhausted (EP/CCL2/FULLGRID landed, -26.2% cumulative).
