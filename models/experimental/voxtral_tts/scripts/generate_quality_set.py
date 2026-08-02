@@ -34,7 +34,8 @@ import torch
 import ttnn
 
 from models.experimental.voxtral_tts.reference import voxtral_pipeline_ref as pref
-from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import FRAME_RATE, TtVoxtralPipeline
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (
+    FRAME_RATE, TtVoxtralPipeline, open_device)
 
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(_HERE, "tests", "prompt_fixture.json")
@@ -100,7 +101,7 @@ def main():
              else [int(c) for c in args.cases.split(",")])
     os.makedirs(args.out, exist_ok=True)
 
-    dev = ttnn.open_device(device_id=0, l1_small_size=65536)
+    dev = open_device()          # sizes a trace region if any block is traced
     try:
         pipe = TtVoxtralPipeline(dev, max_seq_len=2048)
         results = []

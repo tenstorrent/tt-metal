@@ -41,6 +41,7 @@ stay on host, deliberately, and both are once per frame rather than once per ste
 schedule is fixed, so `_schedule()` builds its projections once and caches them on device.
 """
 
+import os
 import torch
 import ttnn
 
@@ -95,8 +96,12 @@ DTYPE = ttnn.bfloat16
 # It was only worth ~6.5 ms/frame (~6%) anyway -- host dispatch is nearly all hidden behind device
 # work. Kept because it is correct standalone and useful for isolating device time from host time
 # (that is how the ~6.5 ms figure was measured). Read at CALL time so it can be flipped for that.
-# Needs the device opened with trace_region_size=TRACE_REGION_SIZE.
-USE_TRACE = False
+#
+# THE BLOCKER IS NOW LIFTABLE. Block 1's decode can itself be traced (ttnn_voxtral_gpt.USE_TRACE),
+# and a replayed step allocates nothing per frame -- which is exactly the interference described
+# above. So enabling BOTH is the supported combination; enabling only this one still corrupts.
+# `ttnn_voxtral_pipeline.open_device` sizes the trace region for whichever are on.
+USE_TRACE = os.environ.get("VOXTRAL_FLOW_TRACE", "0") == "1"
 TRACE_REGION_SIZE = 64 * 1024 * 1024
 
 # MATMUL weight storage, independent of the activation dtype (None = same as DTYPE). bfp8 here is
