@@ -152,5 +152,9 @@ lever_type: single-shot
 
 Batching amortises the weight read across more users: read once, produce B tokens. It raises
 aggregate tok/s and leaves **tok/s/u** — the per-user rate the decode ceiling bounds — essentially
-unchanged. Both levers above change the per-user rate at fixed batch. If the target is tok/s/u,
-batching is not the answer.
+unchanged. Both levers above change the per-user rate at fixed batch.
+
+**And it is not an optimize lever at all.** Batch size is a build-time property of the pipeline,
+chosen when emit-e2e constructs the demo (`build_pipeline(..., batch_size=…)`). optimize measures
+whatever the demo was built with and cannot change it mid-run — so if a batch change is wanted, it
+belongs upstream in emit-e2e, not as a rung here. Do not record a `model:batch` attempt.
