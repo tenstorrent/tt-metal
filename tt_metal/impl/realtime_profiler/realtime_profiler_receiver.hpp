@@ -5,7 +5,6 @@
 #pragma once
 
 #include <atomic>
-#include <stop_token>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -42,10 +41,10 @@ struct RealtimeProfilerCoreL1Addrs {
     uint32_t socket_config = 0;
 };
 
-// Owns the RT-profiler producers for one MeshDevice: the per-device sockets, the record ring, and the two threads
-// behind them. Bring-up fits a device-cycle<->host-time line per device; the sync thread then resyncs each on a fixed
-// cadence, re-anchoring the offset to track clock drift, while the receiver thread drains the sockets and stamps every
-// record it publishes with the mapping current at that moment.
+// Owns the RT-profiler producers for one MeshDevice: the per-device sockets, the record ring, and the receiver
+// thread behind them. Bring-up fits a device-cycle<->host-time line per device; the receiver then drains the sockets,
+// stamps every record it publishes with the mapping current at that moment, and between drains probes each device's
+// clock, re-anchoring the ones whose mapping has visibly moved.
 class RealtimeProfilerReceiver {
 public:
     // Null when no local device passed the eligibility gate; a constructed receiver always has devices to drain.
@@ -61,7 +60,6 @@ public:
     // Idempotent: writes terminate flags, joins the receiver, and drains/detaches the record ring.
     void shutdown();
 
-    // RT-profiler diagnostics
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
     uint32_t host_fifo_capacity_pages() const;
     uint64_t num_published_records() const { return num_published_records_.load(std::memory_order_relaxed); }
@@ -98,19 +96,17 @@ private:
 
     RealtimeProfilerReceiver(ContextId context_id, std::vector<DeviceState> devices);
 
-    // Bring-up, before the receiver thread starts.
-    // Sets up the D2H socket and launches the BRISC/NCRISC kernels on each eligible local device. Devices failing the
-    // eligibility gate or socket creation are skipped, so the result may be empty.
+    // Sets up the D2H socket and launches the BRISC/NCRISC kernels on each eligible local device. Devices failing
+    // the eligibility gate or socket creation are skipped, so the result may be empty.
     static std::vector<DeviceState> initialize_devices(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
-    void calibrate_devices();
-    void calibrate_device(DeviceState& dev_state);
+    void bring_up_device_clocks();
 
-    // The sync thread. Kept off the drain loop because a probe burst there shows up directly as page backlog.
-    void run_sync(std::stop_token stop);
-    void resync_all_devices(std::chrono::steady_clock::time_point now);
+    // Runs on the drain loop: one probe per device, offered straight to its clock model. Costs the drain a read per
+    // device per interval, far under the drain-gap threshold, and far less than a second thread costs in wakeups.
+    void sync_devices(std::chrono::steady_clock::time_point now);
 
-    // Receiver thread: drain every device socket and publish decoded records to the ring.
+    // Receiver thread body.
     void run();
     uint64_t run_loop(std::vector<uint32_t>& page_buf, std::vector<ProgramRealtimeRecord>& record_buf);
     uint64_t drain_on_shutdown(std::vector<uint32_t>& page_buf, std::vector<ProgramRealtimeRecord>& record_buf);
@@ -137,15 +133,13 @@ private:
     const DataCollector* data_collector_ = nullptr;
     RealtimeProfilerService* realtime_profiler_service_ = nullptr;
 
-    // What the receiver thread drains, and where it publishes.
     std::vector<DeviceState> devices_;
     RealtimeProfilerRecordRing ring_;
     std::thread receiver_thread_;
-    // Declared last so its join runs before anything the resync pass touches is destroyed.
-    std::jthread sync_thread_;
     std::atomic<bool> stop_{false};
+    std::chrono::steady_clock::time_point next_poll_at_{};
+    std::chrono::steady_clock::time_point last_excursion_at_{};
 
-    // Diagnostics, read by tests through the accessors above.
     std::atomic<uint32_t> peak_fifo_pages_{0};  // all-time peak D2H FIFO usage
     uint32_t fifo_pages_window_max_ = 0;        // peak since the last Tracy plot sample
     std::chrono::steady_clock::time_point last_drain_gap_warn_{};
@@ -153,8 +147,6 @@ private:
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
     std::atomic<uint64_t> num_malformed_records_{0};  // dropped at decode for having end < start
 
-    // Both recur on every pass once they start, so the log says so once rather than every time; the running totals
-    // are what carry the magnitude.
     std::chrono::steady_clock::time_point last_malformed_warn_{};
     std::chrono::steady_clock::time_point last_probe_timeout_warn_{};
 };

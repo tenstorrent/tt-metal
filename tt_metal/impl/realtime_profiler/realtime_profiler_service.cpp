@@ -97,6 +97,7 @@ experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfilerService::reg
         }
         registration.thread =
             std::jthread([this, &registration](std::stop_token stop_token) { run_consumer(stop_token, registration); });
+        num_consumers_.fetch_add(1, std::memory_order_relaxed);
     } catch (...) {
         consumers_.erase(it);
         throw;
@@ -310,6 +311,7 @@ void RealtimeProfilerService::reap_retired_consumers() {
 }
 
 void RealtimeProfilerService::destroy_consumer(ConsumerRegistration& registration) {
+    num_consumers_.fetch_sub(1, std::memory_order_relaxed);
     registration.thread.request_stop();
     wake_consumers();
     if (registration.thread.joinable()) {

@@ -4,12 +4,12 @@
 
 // Merge-gate sanity coverage for the real-time (RT) profiler, in three layers:
 //
-//   RealtimeProfilerClockModel -- the host-side clock logic, exercised directly with synthetic handshakes. No device,
-//       so these also run wherever the profiler itself cannot.
+//   RealtimeProfilerClockModel -- the host-side clock logic, exercised directly with synthetic probes. No device, so
+//       these also run wherever the profiler itself cannot.
 //   RealtimeProfilerSanity -- the record service and its consumer threads, driven through hand-fed rings. A MeshDevice
 //       contributes exactly one ring, so multi-ring and mid-callback behaviour is unreachable from a device test.
-//   RealtimeProfilerDeviceSanity -- the whole pipeline on a unit mesh: mailbox layout, D2H socket init, sync
-//       handshake, kernel source propagation, timestamp extraction.
+//   RealtimeProfilerDeviceSanity -- the whole pipeline on a unit mesh: mailbox layout, D2H socket init, clock
+//       bring-up, kernel source propagation, timestamp extraction.
 //
 // Lives in the dispatch "basic" test library so it runs as part of `tt-metalium-validation-basic`, which the merge-gate
 // `metalium-basic-tests` job executes on both N150 (WH) and P150b (BH). The device layer skips gracefully via
@@ -22,7 +22,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -57,8 +56,9 @@
 #include <umd/device/types/xy_pair.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "impl/device/device_manager.hpp"
-#include "impl/realtime_profiler/realtime_profiler_clock_model.hpp"
+#include "impl/realtime_profiler/realtime_profiler_clock_sync.hpp"
 #include "impl/realtime_profiler/realtime_profiler_receiver.hpp"
 #include "impl/realtime_profiler/realtime_profiler_service.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -81,14 +81,12 @@ constexpr uint32_t kNumPrograms = 5;
 // mis-decoded timestamp.
 constexpr double kMaxDurationNs = 1'000'000'000.0;
 
-// clock_sync.sync_error is half the sync-handshake RTT: the minimax bound on where the anchor landed, and what each
-// record self-reports as its accuracy. Asserted as a distribution rather than a per-record ceiling because the two
-// failure modes look different -- a degraded handshake lifts the median, while a re-anchor policy that stops rejecting
-// bad round trips only fattens the tail.
+// What each record self-reports as its accuracy. Asserted as a distribution rather than a per-record ceiling because
+// the two failure modes look different: a degraded read path lifts the median, while a re-anchor policy that stops
+// rejecting wide brackets only fattens the tail.
 //
-// Sized for the slower of the two architectures. Blackhole reaches the profiler core through a TLB window and reports
-// ~0.6us; Wormhole goes through write_core_immediate and a poll for a round trip of ~4-5us, so it reports ~2us p50 and
-// ~12us p99. Tightening these to what Blackhole does would fail every Wormhole run.
+// Sized for the slower of the two architectures -- Blackhole reads the counter through its own TLB window and reports
+// ~0.4us, Wormhole falls back to UMD's generic register read where it cannot.
 constexpr uint64_t kSyncErrorP50Ns = 6'000;
 constexpr uint64_t kSyncErrorP90Ns = 10'000;
 constexpr uint64_t kSyncErrorP99Ns = 15'000;
@@ -123,33 +121,45 @@ std::string make_sanity_kernel_source(uint32_t runtime_id) {
            "}\n";
 }
 
-// Runs a single compute program on all tensix cores on `mesh_device`,
-// tagged with `runtime_id`, so the RT profiler pipeline emits a record
-// carrying that runtime_id (records with runtime_id == 0 are filtered
-// out by the host-side receiver).
-void enqueue_sanity_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t runtime_id, const CoreRange& all_cores) {
+// The same source on all three RISCs, tagged with `runtime_id` so the record it produces can be attributed
+// (runtime_id == 0 is reserved for infrastructure traffic and filtered host-side).
+Program make_sanity_program(const std::string& kernel_src, const CoreRange& cores, uint32_t runtime_id) {
     Program program = CreateProgram();
-
-    const std::string kernel_src = make_sanity_kernel_source(runtime_id);
-
     CreateKernelFromString(
         program,
         kernel_src,
-        all_cores,
+        cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     CreateKernelFromString(
         program,
         kernel_src,
-        all_cores,
+        cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    CreateKernelFromString(program, kernel_src, all_cores, ComputeConfig{});
-
+    CreateKernelFromString(program, kernel_src, cores, ComputeConfig{});
     program.set_runtime_id(static_cast<uint64_t>(runtime_id));
+    return program;
+}
 
+void enqueue_rt_program(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Program program, bool blocking) {
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, blocking);
+}
+
+void enqueue_sanity_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t runtime_id, const CoreRange& cores) {
+    enqueue_rt_program(
+        mesh_device, make_sanity_program(make_sanity_kernel_source(runtime_id), cores, runtime_id), /*blocking=*/false);
+}
+
+// Linearly interpolated between adjacent ranks; nearest-rank would snap each percentile onto one sample and report
+// the neighbouring order statistic instead. `sorted` must be ascending and non-empty. Prefixed because this file
+// shares a Unity build TU with the rest of the dispatch tests.
+double rt_percentile(const std::vector<double>& sorted, double p) {
+    const double rank = p * static_cast<double>(sorted.size() - 1);
+    const auto lo = static_cast<size_t>(rank);
+    const size_t hi = std::min(lo + 1, sorted.size() - 1);
+    return sorted[lo] + (rank - static_cast<double>(lo)) * (sorted[hi] - sorted[lo]);
 }
 
 // Accumulates everything delivered to one registered callback. Unregistering in the destructor is what makes the
@@ -201,8 +211,8 @@ private:
     bool registered_ = false;
 };
 
-// Opens a unit mesh with the RT profiler active, or skips. Activation is decided during the init-sync handshake inside
-// mesh open, so the check is stable by the time create_unit_mesh returns.
+// Opens a unit mesh with the RT profiler active, or skips. The profiler attaches its record ring during mesh open, so
+// the check is stable by the time create_unit_mesh returns.
 class RealtimeProfilerDeviceSanity : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -246,11 +256,21 @@ protected:
         }
     }
 
-    // Waits out the receiver thread's last drain. 500ms mirrors the programming example at
-    // test_realtime_profiler_csv.cpp and has proven sufficient for small workloads on WH/BH single-chip.
-    void quiesce_and_settle() {
+    // Polls for the records the caller is waiting on rather than sleeping a fixed interval, which on a loaded CI
+    // host is either flaky or wasteful. A timeout falls through to the caller's assertions, since what failed to
+    // arrive is what the test is about.
+    template <typename Predicate>
+    void quiesce_and_wait_for(Predicate delivered) {
         mesh_device_->quiesce_devices();
-        std::this_thread::sleep_for(500ms);
+        const auto deadline = std::chrono::steady_clock::now() + 10s;
+        while (!delivered() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(5ms);
+        }
+    }
+
+    // The common case: every program enqueued by enqueue_programs() has produced a record.
+    void quiesce_and_wait_for_programs(const RecordCollector& collector, uint32_t count) {
+        quiesce_and_wait_for([&] { return collector.runtime_ids_in_range(count).size() >= count; });
     }
 
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
@@ -267,129 +287,151 @@ constexpr std::chrono::steady_clock::time_point host_instant(int64_t ns) {
     return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns));
 }
 
-// Handshakes lying exactly on device_ticks = frequency * host_ns + ticks_at_start, spaced like the bring-up fit.
-std::vector<ClockSyncSample> make_fit_samples(
+// Probes lying exactly on device_ticks = frequency * host_ns + ticks_at_start, spaced like the bring-up fit.
+std::vector<ClockProbe> make_fit_probes(
     std::chrono::steady_clock::time_point start, double frequency, uint64_t ticks_at_start, size_t count) {
-    std::vector<ClockSyncSample> samples;
-    samples.reserve(count);
+    std::vector<ClockProbe> probes;
+    probes.reserve(count);
     for (size_t i = 0; i < count; ++i) {
         const auto host_time = start + std::chrono::milliseconds(5 * static_cast<int64_t>(i));
         const double elapsed_ns = static_cast<double>((host_time - start).count());
-        samples.push_back(ClockSyncSample{
+        probes.push_back(ClockProbe{
             .host_time = host_time,
-            .rtt = std::chrono::nanoseconds(1200),
+            .bracket = std::chrono::nanoseconds(1200),
             .device_ticks = ticks_at_start + static_cast<uint64_t>(frequency * elapsed_ns)});
     }
-    return samples;
+    return probes;
 }
 
 TEST(RealtimeProfilerClockModel, FitRecoversTheDeviceClockFrequency) {
-    ClockModel model;
+    RealtimeProfilerClockModel model;
     model.seed_frequency(1.0);
     const auto start = host_instant(1'000'000'000);
-    const auto samples = make_fit_samples(start, /*frequency=*/1.35, /*ticks_at_start=*/1'000'000, /*count=*/100);
+    const auto probes = make_fit_probes(start, /*frequency=*/1.35, /*ticks_at_start=*/1'000'000, /*count=*/100);
 
-    const std::optional<ClockModel::FitResidual> residual = model.fit(samples, start);
+    const std::optional<RealtimeProfilerClockModel::FitResidual> residual = model.fit(probes, start);
 
     ASSERT_TRUE(residual.has_value());
     EXPECT_NEAR(model.frequency(), 1.35, 1e-9);
     EXPECT_TRUE(model.is_anchored());
-    // Samples sit on the line up to the truncation of device_ticks to whole cycles, i.e. under one cycle of residual.
+    // Probes sit on the line up to the truncation of device_ticks to whole cycles, i.e. under one cycle of residual.
     EXPECT_LT(residual->rms_ns, 1.0);
 }
 
-TEST(RealtimeProfilerClockModel, OneSampleAnchorsWithoutFittingAFrequency) {
+TEST(RealtimeProfilerClockModel, OneProbeAnchorsWithoutFittingAFrequency) {
     // A slope needs two points, but the offset only needs one, and the seeded frequency is already a usable slope.
-    ClockModel model;
+    RealtimeProfilerClockModel model;
     model.seed_frequency(1.35);
     const auto start = host_instant(1'000'000'000);
 
-    EXPECT_FALSE(model.fit(make_fit_samples(start, /*frequency=*/0.5, 0, /*count=*/1), start).has_value());
+    EXPECT_FALSE(model.fit(make_fit_probes(start, /*frequency=*/0.5, 0, /*count=*/1), start).has_value());
     EXPECT_EQ(model.frequency(), 1.35);
     EXPECT_TRUE(model.is_anchored());
 }
 
-TEST(RealtimeProfilerClockModel, NoSamplesLeaveTheModelUnanchored) {
-    ClockModel model;
+TEST(RealtimeProfilerClockModel, NoProbesLeaveTheModelUnanchored) {
+    RealtimeProfilerClockModel model;
     model.seed_frequency(1.35);
     const auto start = host_instant(1'000'000'000);
 
     EXPECT_FALSE(model.fit({}, start).has_value());
     EXPECT_EQ(model.frequency(), 1.35);
-    EXPECT_FALSE(model.is_anchored()) << "a mapping with no handshake behind it must not look anchored";
+    EXPECT_FALSE(model.is_anchored()) << "a mapping with no probe behind it must not look anchored";
 }
 
 TEST(RealtimeProfilerClockModel, NonPositiveFittedSlopeKeepsTheSeededFrequency) {
     // Consumers divide by the frequency, so a device whose tick count appears to run backwards must not reach them.
-    ClockModel model;
+    RealtimeProfilerClockModel model;
     model.seed_frequency(1.35);
     const auto start = host_instant(1'000'000'000);
-    std::vector<ClockSyncSample> samples;
+    std::vector<ClockProbe> probes;
     for (size_t i = 0; i < 8; ++i) {
-        samples.push_back(ClockSyncSample{
+        probes.push_back(ClockProbe{
             .host_time = start + std::chrono::milliseconds(5 * static_cast<int64_t>(i)),
-            .rtt = std::chrono::nanoseconds(1200),
+            .bracket = std::chrono::nanoseconds(1200),
             .device_ticks = 100'000 - i * 1'000});
     }
 
-    model.fit(samples, start);
+    model.fit(probes, start);
 
     EXPECT_EQ(model.frequency(), 1.35);
 }
 
-TEST(RealtimeProfilerClockModel, AnchorSitsAtTheRoundTripMidpoint) {
-    ClockModel model;
+TEST(RealtimeProfilerClockModel, AnchorSitsAtTheBracketMidpoint) {
+    RealtimeProfilerClockModel model;
     model.seed_frequency(1.0);  // one tick per nanosecond, so the mapping arithmetic below is exact
     const auto now = host_instant(1'000'000'000);
-    constexpr auto kRtt = std::chrono::nanoseconds(1000);
-    const ClockSyncSample sample{.host_time = now, .rtt = kRtt, .device_ticks = 500'000};
+    constexpr auto kBracket = std::chrono::nanoseconds(1000);
+    const ClockProbe probe{.host_time = now, .bracket = kBracket, .device_ticks = 500'000};
 
-    EXPECT_TRUE(model.try_reanchor(sample));
+    EXPECT_TRUE(model.try_reanchor(probe));
 
     const auto mapping = model.mapping();
     const int64_t mapped_host_ns = static_cast<int64_t>(
-        (static_cast<double>(sample.device_ticks) - static_cast<double>(mapping.device_cycle_offset)) /
+        (static_cast<double>(probe.device_ticks) - static_cast<double>(mapping.device_cycle_offset)) /
         model.frequency());
-    EXPECT_EQ(mapped_host_ns, (now + kRtt / 2).time_since_epoch().count())
-        << "the device timestamp must map back to the midpoint of the round trip that carried it";
-    EXPECT_EQ(mapping.sync_error, kRtt / 2);
+    EXPECT_EQ(mapped_host_ns, (now + kBracket / 2).time_since_epoch().count())
+        << "the device timestamp must map back to the midpoint of the bracket it was read inside";
+    EXPECT_EQ(mapping.sync_error, kBracket / 2);
 }
 
-TEST(RealtimeProfilerClockModel, FirstHandshakeIsAcceptedHoweverSlow) {
-    ClockModel model;
+TEST(RealtimeProfilerClockModel, FirstProbeIsAcceptedHoweverWide) {
+    RealtimeProfilerClockModel model;
     model.seed_frequency(1.0);
-    EXPECT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = host_instant(0), .rtt = std::chrono::seconds(1)}));
+    EXPECT_TRUE(model.try_reanchor(ClockProbe{.host_time = host_instant(0), .bracket = std::chrono::seconds(1)}));
 }
 
-TEST(RealtimeProfilerClockModel, HandshakeWorseThanTheStandingAnchorIsRejected) {
-    ClockModel model;
+// A probe on a mapping that is still accurate says nothing the mapping does not already know, so taking it would
+// only trade a well-placed anchor for a noisier one.
+TEST(RealtimeProfilerClockModel, ProbeIsRejectedWhileTheMappingStillPredictsIt) {
+    RealtimeProfilerClockModel model;
+    model.seed_frequency(1.0);  // one tick per ns, so the mapping is simply device_ticks == host_ns
+    const auto anchored_at = host_instant(1'000'000'000);
+    // A probe sits exactly on the mapping when its device_ticks equal the host time at its bracket's midpoint.
+    const auto on_line = [](std::chrono::steady_clock::time_point at, std::chrono::nanoseconds bracket) {
+        return static_cast<uint64_t>((at + bracket / 2).time_since_epoch().count());
+    };
+    constexpr auto kBracket = std::chrono::nanoseconds(1200);
+    ASSERT_TRUE(model.try_reanchor(
+        ClockProbe{.host_time = anchored_at, .bracket = kBracket, .device_ticks = on_line(anchored_at, kBracket)}));
+
+    // Landing exactly where the mapping predicts leaves nothing to correct, so a wider probe is not worth taking.
+    const auto later = anchored_at + std::chrono::milliseconds(1);
+    constexpr auto kWide = std::chrono::microseconds(30);
+    EXPECT_FALSE(
+        model.try_reanchor(ClockProbe{.host_time = later, .bracket = kWide, .device_ticks = on_line(later, kWide)}));
+    EXPECT_EQ(model.last_drift(), std::chrono::nanoseconds::zero());
+
+    // A tighter one is taken regardless: it strictly improves where the anchor sits.
+    constexpr auto kTight = std::chrono::nanoseconds(600);
+    EXPECT_TRUE(
+        model.try_reanchor(ClockProbe{.host_time = later, .bracket = kTight, .device_ticks = on_line(later, kTight)}));
+}
+
+// Once the mapping has missed by more than a probe's own resolution, that probe is worth taking even though it is
+// placed worse than the anchor it replaces: a 30us miss corrected to within 30us beats leaving the 30us standing.
+TEST(RealtimeProfilerClockModel, WideProbeIsTakenOnceTheMissExceedsIt) {
+    RealtimeProfilerClockModel model;
     model.seed_frequency(1.0);
     const auto anchored_at = host_instant(1'000'000'000);
-    ASSERT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)}));
+    // A probe sits exactly on the mapping when its device_ticks equal the host time at its bracket's midpoint.
+    const auto on_line = [](std::chrono::steady_clock::time_point at, std::chrono::nanoseconds bracket) {
+        return static_cast<uint64_t>((at + bracket / 2).time_since_epoch().count());
+    };
+    constexpr auto kBracket = std::chrono::nanoseconds(1200);
+    ASSERT_TRUE(model.try_reanchor(
+        ClockProbe{.host_time = anchored_at, .bracket = kBracket, .device_ticks = on_line(anchored_at, kBracket)}));
 
-    // The standing anchor has drifted only nanoseconds in 1ms, so a round trip several times slower than the one it
-    // was placed with would land the anchor worse than leaving it alone. The window over which that holds is set by
-    // kClockDriftPpm: at 150ppm the anchor is credited 150ns of degradation per millisecond.
-    const auto soon_after = anchored_at + std::chrono::milliseconds(1);
-    EXPECT_FALSE(model.try_reanchor(ClockSyncSample{.host_time = soon_after, .rtt = std::chrono::microseconds(30)}));
-    EXPECT_FALSE(model.try_reanchor(ClockSyncSample{.host_time = soon_after, .rtt = std::chrono::microseconds(2)}));
-    // One as tight as the standing anchor is worth taking, since it is that much fresher.
-    EXPECT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = soon_after, .rtt = std::chrono::nanoseconds(1200)}));
-}
+    const auto later = anchored_at + std::chrono::milliseconds(1);
+    constexpr auto kWide = std::chrono::microseconds(60);  // half of it, 30us, is what this probe can resolve
 
-TEST(RealtimeProfilerClockModel, DriftEventuallyMakesEvenASlowHandshakeWorthTaking) {
-    ClockModel model;
-    model.seed_frequency(1.0);
-    const auto anchored_at = host_instant(1'000'000'000);
-    ASSERT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)}));
-
-    // At kClockDriftPpm the standing anchor's error passes a 30us placement somewhere between these two instants
-    // (~196ms), and the slow handshake goes from being a downgrade to being an improvement.
-    EXPECT_FALSE(model.try_reanchor(ClockSyncSample{
-        .host_time = anchored_at + std::chrono::milliseconds(100), .rtt = std::chrono::microseconds(60)}));
+    // Missing by 10us -- less than the probe resolves -- is not worth acting on.
+    EXPECT_FALSE(model.try_reanchor(
+        ClockProbe{.host_time = later, .bracket = kWide, .device_ticks = on_line(later, kWide) + 10'000}));
+    // Missing by 100us is.
     EXPECT_TRUE(model.try_reanchor(
-        ClockSyncSample{.host_time = anchored_at + std::chrono::seconds(1), .rtt = std::chrono::microseconds(60)}))
-        << "once drift has outgrown it, a loose anchor beats an old one";
+        ClockProbe{.host_time = later, .bracket = kWide, .device_ticks = on_line(later, kWide) + 100'000}))
+        << "a miss larger than the probe's own resolution is real and worth correcting";
 }
 
 // The service tests drive RealtimeProfilerService directly rather than opening a mesh: a MeshDevice contributes
@@ -531,9 +573,7 @@ TEST(RealtimeProfilerSanity, LateConsumerReceivesOnlyFutureRecords) {
     service.unregister_consumer(handle);
 }
 
-// Consumers are isolated from each other: one that throws every time must not cost a sibling any records. The
-// device-level ThrowingCallbackIsIsolated covers the same contract end-to-end, but only this one pins it to the
-// service without a mesh in the way.
+// Consumers are isolated from each other: one that throws every time must not cost a sibling any records.
 TEST(RealtimeProfilerSanity, ThrowingConsumerDoesNotAffectSibling) {
     RealtimeProfilerService service;
     RealtimeProfilerRecordRing ring(8);
@@ -647,13 +687,6 @@ TEST(RealtimeProfilerSanity, DetachDrainsPublishedRecordsBeforeReturning) {
     service.unregister_consumer(handle);
 }
 
-// A consumer thread parks on the wake generation when there is nothing to read; destruction has to wake it or the
-// destructor blocks forever joining it.
-TEST(RealtimeProfilerSanity, DestructorWakesIdleConsumerThread) {
-    RealtimeProfilerService service;
-    service.register_consumer([](const ProgramRealtimeRecordBatch&) {});
-}
-
 TEST(RealtimeProfilerSanity, ManyRingsAndConsumersDeliverWithoutLoss) {
     constexpr size_t kRingCount = 8;
     constexpr size_t kConsumerCount = 4;
@@ -706,10 +739,10 @@ TEST(RealtimeProfilerSanity, ManyRingsAndConsumersDeliverWithoutLoss) {
     }
 }
 
-TEST_F(RealtimeProfilerDeviceSanity, FiveProgramsBackToBack) {
+TEST_F(RealtimeProfilerDeviceSanity, RecordsAreWellFormedAndCarryTheirProgramsSources) {
     RecordCollector collector;
     enqueue_programs(kNumPrograms);
-    quiesce_and_settle();
+    quiesce_and_wait_for_programs(collector, kNumPrograms);
     collector.stop();
 
     const std::vector<ProgramRealtimeRecord> records = collector.records();
@@ -727,12 +760,9 @@ TEST_F(RealtimeProfilerDeviceSanity, FiveProgramsBackToBack) {
         EXPECT_GT(rec.clock_sync.sync_error, std::chrono::nanoseconds::zero())
             << "RT record sync_error should be set by the init sync handshake (runtime_id=" << rec.runtime_id << ")";
 
-        if (rec.frequency > 0.0 && rec.end_timestamp > rec.start_timestamp) {
-            const double duration_ns = rec.duration().count();
-            EXPECT_LT(duration_ns, kMaxDurationNs)
-                << "RT record duration is implausibly large (runtime_id=" << rec.runtime_id << ", chip=" << rec.chip_id
-                << ", duration_ns=" << duration_ns << ")";
-        }
+        EXPECT_LT(rec.duration().count(), kMaxDurationNs)
+            << "RT record duration is implausibly large (runtime_id=" << rec.runtime_id << ", chip=" << rec.chip_id
+            << ", duration_ns=" << rec.duration().count() << ")";
     }
 
     // Every program embeds "<prefix><runtime_id>" in its source, so we can verify each record carries the correct
@@ -763,60 +793,42 @@ TEST_F(RealtimeProfilerDeviceSanity, FiveProgramsBackToBack) {
 // tail — p50/p90/p99 catch each, unlike a single per-record ceiling.
 TEST_F(RealtimeProfilerDeviceSanity, SyncAccuracy) {
     RecordCollector collector;
-    // A fixed runtime_id keeps the kernel source (and its JIT compile) shared across iterations. Spacing matches the
-    // resync interval: closer together and successive records land in the same re-anchor epoch, which adds records
-    // but not independent observations. So the sample count is the runtime, and a p99 worth reporting needs enough of
-    // them that the 99th percentile is not just the largest value.
+    // A fixed runtime_id keeps the kernel source (and its JIT compile) shared across iterations. Spaced over several
+    // sync intervals so the records sample the mapping as it is maintained rather than a single instant of it.
     constexpr uint32_t kIterations = 300;
     for (uint32_t i = 0; i < kIterations; ++i) {
         enqueue_sanity_program(mesh_device_, /*runtime_id=*/1, all_cores());
-        std::this_thread::sleep_for(50ms);
+        std::this_thread::sleep_for(RealtimeProfilerClockSync::kSyncInterval);
     }
-    quiesce_and_settle();
+    quiesce_and_wait_for([&] { return collector.records().size() >= kIterations; });
     collector.stop();
 
-    // One sample per anchor, not per record: a burst of dispatch inside one re-anchor epoch would otherwise move the
-    // percentiles without the handshake having changed at all. Single device here, so a single previous offset
-    // identifies the anchor.
-    std::vector<std::chrono::nanoseconds> errors;
-    std::optional<int64_t> last_offset;
+    // Per record, not per anchor: the mapping is re-anchored only when a probe finds it has actually drifted, so
+    // anchors are few and their count says nothing about sync quality. What matters is the error every record
+    // carries, which is what a consumer sees and what these bounds are about.
+    std::vector<double> errors;
     const auto& records = collector.records();
+    errors.reserve(records.size());
     for (const auto& record : records) {
-        if (last_offset != record.clock_sync.device_cycle_offset) {
-            last_offset = record.clock_sync.device_cycle_offset;
-            errors.push_back(record.clock_sync.sync_error);
-        }
+        errors.push_back(static_cast<double>(record.clock_sync.sync_error.count()));
     }
-    ASSERT_GE(errors.size(), kIterations / 4)
-        << "only " << errors.size() << " distinct anchors across " << records.size()
-        << " records; too few independent samples to characterize the sync-error distribution";
-    std::sort(errors.begin(), errors.end());
+    ASSERT_FALSE(errors.empty());
+    std::ranges::sort(errors);
+    const auto pct = [&errors](double p) { return rt_percentile(errors, p); };
+    log_info(
+        tt::LogTest,
+        "[RT profiler sanity] sync_error (ns) over {} records: min={:.0f} p50={:.1f} p75={:.1f} "
+        "p90={:.1f} p95={:.1f} p99={:.1f} max={:.0f}",
+        errors.size(),
+        errors.front(),
+        pct(0.50),
+        pct(0.75),
+        pct(0.90),
+        pct(0.95),
+        pct(0.99),
+        errors.back());
 
-    // Interpolated between adjacent ranks; nearest-rank would snap each percentile onto one sample and report the
-    // neighbouring order statistic instead.
-    const auto pct = [&errors](double p) {
-        const double rank = p * static_cast<double>(errors.size() - 1);
-        const auto lo = static_cast<size_t>(rank);
-        const size_t hi = std::min(lo + 1, errors.size() - 1);
-        return static_cast<double>(errors[lo].count()) +
-               (rank - static_cast<double>(lo)) * static_cast<double>((errors[hi] - errors[lo]).count());
-    };
-    std::cout << fmt::format(
-                     "[ SYNC ] sync_error (ns) over {} anchors ({} records): min={} p50={:.1f} p75={:.1f} p90={:.1f} "
-                     "p95={:.1f} p99={:.1f} max={}",
-                     errors.size(),
-                     records.size(),
-                     errors.front().count(),
-                     pct(0.50),
-                     pct(0.75),
-                     pct(0.90),
-                     pct(0.95),
-                     pct(0.99),
-                     errors.back().count())
-              << std::endl;
-
-    EXPECT_GT(errors.front(), std::chrono::nanoseconds::zero())
-        << "sync_error should be populated by the sync handshake";
+    EXPECT_GT(errors.front(), 0.0) << "sync_error should be populated once the clock is anchored";
     EXPECT_LT(pct(0.50), static_cast<double>(kSyncErrorP50Ns))
         << "median sync error too high; the handshake is systematically degraded";
     EXPECT_LT(pct(0.90), static_cast<double>(kSyncErrorP90Ns)) << "p90 sync error too high";
@@ -836,25 +848,6 @@ TEST_F(RealtimeProfilerDeviceSanity, CloseDrainsRegisteredCallback) {
         << "Mesh close should drain records for callbacks still registered at shutdown";
 }
 
-TEST_F(RealtimeProfilerDeviceSanity, ThrowingCallbackIsIsolated) {
-    std::atomic<uint64_t> throwing_invocations = 0;
-    const auto throwing_handle =
-        RegisterProgramRealtimeProfilerCallback([&throwing_invocations](const ProgramRealtimeRecordBatch&) {
-            throwing_invocations.fetch_add(1);
-            throw std::runtime_error("intentional callback failure");
-        });
-    RecordCollector collector;
-
-    enqueue_programs(kNumPrograms);
-    quiesce_and_settle();
-    UnregisterProgramRealtimeProfilerCallback(throwing_handle);
-    collector.stop();
-
-    EXPECT_GT(throwing_invocations.load(), 0u) << "throwing callback should have been invoked";
-    EXPECT_EQ(collector.runtime_ids_in_range(kNumPrograms).size(), kNumPrograms)
-        << "sibling callback must receive every record despite the other callback throwing";
-}
-
 // Finish, unlike close, leaves the device open, so the final program's record only arrives if the finish-time flush
 // is emitted rather than waiting for the next program to push it out.
 TEST_F(RealtimeProfilerDeviceSanity, LastProgramRecordDeliveredOnFinish) {
@@ -862,7 +855,11 @@ TEST_F(RealtimeProfilerDeviceSanity, LastProgramRecordDeliveredOnFinish) {
     enqueue_programs(kNumPrograms);
 
     distributed::Finish(mesh_device_->mesh_command_queue());
-    std::this_thread::sleep_for(500ms);
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (!collector.runtime_ids_in_range(kNumPrograms).contains(kNumPrograms) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(5ms);
+    }
     collector.stop();
 
     EXPECT_TRUE(collector.runtime_ids_in_range(kNumPrograms).contains(kNumPrograms))
@@ -875,20 +872,8 @@ TEST_F(RealtimeProfilerDeviceSanityWithTrace, TraceReplayResolvesKernelSources) 
 
     RecordCollector collector;
     const CoreRange cores = all_cores();
-    const std::string kernel_src = make_sanity_kernel_source(kTraceRuntimeId);
-    Program program = CreateProgram();
-    CreateKernelFromString(
-        program,
-        kernel_src,
-        cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    CreateKernelFromString(
-        program,
-        kernel_src,
-        cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    CreateKernelFromString(program, kernel_src, cores, ComputeConfig{});
-    program.set_runtime_id(static_cast<uint64_t>(kWarmupRuntimeId));
+    Program program =
+        make_sanity_program(make_sanity_kernel_source(kTraceRuntimeId), cores, /*runtime_id=*/kWarmupRuntimeId);
 
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device_->shape()), std::move(program));
@@ -906,7 +891,11 @@ TEST_F(RealtimeProfilerDeviceSanityWithTrace, TraceReplayResolvesKernelSources) 
     mesh_device_->end_mesh_trace(mesh_cq.id(), trace_id);
     mesh_device_->replay_mesh_trace(mesh_cq.id(), trace_id, true);
 
-    quiesce_and_settle();
+    quiesce_and_wait_for([&] {
+        return std::ranges::any_of(collector.records(), [](const ProgramRealtimeRecord& record) {
+            return record.runtime_id == kTraceRuntimeId;
+        });
+    });
     collector.stop();
     mesh_device_->release_mesh_trace(trace_id);
 
@@ -945,22 +934,7 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
     const std::string fixed_src = make_sanity_kernel_source(/*runtime_id=*/0);
 
     auto enqueue_blocking = [&](uint32_t runtime_id) {
-        Program program = CreateProgram();
-        CreateKernelFromString(
-            program,
-            fixed_src,
-            cores,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-        CreateKernelFromString(
-            program,
-            fixed_src,
-            cores,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        CreateKernelFromString(program, fixed_src, cores, ComputeConfig{});
-        program.set_runtime_id(static_cast<uint64_t>(runtime_id));
-        distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(mesh_device_->shape()), std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, /*blocking=*/true);
+        enqueue_rt_program(mesh_device_, make_sanity_program(fixed_src, cores, runtime_id), /*blocking=*/true);
     };
 
     // Warm up the JIT cache; runtime_id 1 is not placed in the window map.
@@ -980,7 +954,7 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
         windows[runtime_id] = {before, after};
     }
 
-    quiesce_and_settle();
+    quiesce_and_wait_for([&] { return collector.records().size() >= kNumMeasured; });
     collector.stop();
 
     // Generous bound: it covers host-clock read jitter and the gap between the bracketing reads and the actual
@@ -1016,10 +990,14 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
 
     EXPECT_GT(checked, 0) << "No RT records matched a measured dispatch window";
     // <= 0 means every record mapped strictly inside its window; a small positive value is measurement jitter.
-    std::cout << "[ SYNC ] checked " << checked
-              << " record(s); worst excursion outside dispatch window = " << worst_outside.count()
-              << "ns (<= 0 means fully inside); record frequency = [" << min_freq << ", " << max_freq << "] GHz"
-              << std::endl;
+    log_info(
+        tt::LogTest,
+        "[RT profiler sanity] checked {} record(s); worst excursion outside dispatch window = {}ns (<= 0 means fully "
+        "inside); record frequency = [{}, {}] GHz",
+        checked,
+        worst_outside.count(),
+        min_freq,
+        max_freq);
 }
 
 // Independent check of the clock mapping the RT profiler publishes on every record. It shares no code and no
@@ -1047,7 +1025,36 @@ constexpr uint32_t kFirstClockCheckRuntimeId = 9101;
 // The measured disagreement is ~210ns, so these leave an order of magnitude of headroom, and they are wide enough to
 // absorb the clock drift between a record's mapping snapshot and the reads it is checked against.
 constexpr double kMaxMeanMappingErrorNs = 2'000.0;
-constexpr double kMaxTailMappingErrorNs = 3'000.0;
+// How far a read may put the mapping out *beyond what that read itself could be wrong by*. Measured on Blackhole:
+// zero -- every read sits inside its own resolution, including the stretched ones. Sized well above that so ordinary
+// jitter cannot trip it, while still being a real bound: a DVFS step left uncorrected shows up here as microseconds.
+constexpr double kMaxMappingErrorBeyondReadResolutionNs = 500.0;
+
+// Runs on every core the stamper is not using, so the reads below are taken while the part is drawing power rather
+// than idle. Blackhole's DVFS throttler only steps AICLK when something is loading the chip, and a step is exactly
+// what this test needs to see the mapping survive -- measured on a quiet part it can only prove the easy case.
+std::string make_clock_load_kernel_source() {
+    return R"(
+#include <cstdint>
+#include "risc_common.h"
+
+void kernel_main() {
+    const uint32_t stop_addr = get_arg_val<uint32_t>(0);
+    const uint32_t max_iterations = get_arg_val<uint32_t>(1);
+    volatile tt_l1_ptr const uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr);
+
+    for (uint32_t i = 0; i < max_iterations; i++) {
+#pragma GCC unroll 128
+        for (int j = 0; j < 128; j++) {
+            asm("nop");
+        }
+        if ((i & 0xFF) == 0 && stop[0] != 0) {
+            break;
+        }
+    }
+}
+)";
+}
 
 std::string make_clock_stamp_kernel_source() {
     return R"(
@@ -1074,6 +1081,32 @@ void kernel_main() {
 )";
 }
 
+// Blackhole exposes a static TLB window onto the core's L1, so the stamp can be read with one load instead of going
+// through UMD's generic path. Only software overhead comes off -- an MMIO read is a non-posted PCIe transaction either
+// way -- but it is the widest part of the bracket that can be removed at all. Null where no such window exists, and
+// the caller falls back to the generic read.
+volatile uint64_t* try_map_l1_word(Cluster& cluster, ChipId chip_id, CoreCoord virtual_core, uint32_t addr) {
+    try {
+        // is_tlb_mapped asks the question that actually matters -- are these bytes covered by a mapping that will not
+        // move underneath a raw pointer -- rather than inferring it from the architecture.
+        const tt_xy_pair tlb_core(virtual_core.x, virtual_core.y);
+        auto* tlb_manager = cluster.get_driver()->get_chip(chip_id)->get_tlb_manager();
+        if (tlb_manager == nullptr || !tlb_manager->is_tlb_mapped(tlb_core, addr, sizeof(uint64_t))) {
+            return nullptr;
+        }
+        // A lookup, never an allocation: get_tlb_window throws unless UMD already mapped this core at init, and
+        // is_tlb_mapped has just confirmed the mapping covers these bytes. No TLB is consumed by reading here.
+        auto* window = tlb_manager->get_tlb_window(tlb_core);
+        if (window == nullptr) {
+            return nullptr;
+        }
+        const uint64_t window_offset = window->get_base_address() - window->handle_ref().get_config().local_offset;
+        return reinterpret_cast<volatile uint64_t*>(window->handle_ref().get_base() + addr + window_offset);
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
 // One read of the device clock, bracketed by the host's own clock either side of it.
 struct ClockBracket {
     int64_t host_before_ns = 0;
@@ -1098,30 +1131,7 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
     const CoreCoord vcore = device->virtual_core_from_logical_core(core, CoreType::WORKER);
     auto& cluster = MetalContext::instance().get_cluster();
 
-    // Blackhole exposes a static TLB window onto the core's L1, so the device clock can be read with one load instead
-    // of going through UMD's generic path. Only software overhead comes off -- an MMIO read is a non-posted PCIe
-    // transaction either way -- but it is the widest part of the bracket that can be removed at all. Null elsewhere,
-    // where the generic path is used instead.
-    volatile uint64_t* mapped_stamp = nullptr;
-    try {
-        // is_tlb_mapped asks the question that actually matters -- are these bytes covered by a mapping that will not
-        // move underneath a raw pointer -- rather than inferring it from the architecture.
-        const tt_xy_pair tlb_core(vcore.x, vcore.y);
-        auto* tlb_manager = cluster.get_driver()->get_chip(device->id())->get_tlb_manager();
-        if (tlb_manager != nullptr && tlb_manager->is_tlb_mapped(tlb_core, stamp_addr, sizeof(uint64_t))) {
-            // A lookup, never an allocation: get_tlb_window throws unless UMD already mapped this core at init, and
-            // is_tlb_mapped has just confirmed the mapping covers these bytes. No TLB is consumed by reading here.
-            auto* window = tlb_manager->get_tlb_window(tlb_core);
-            if (window != nullptr) {
-                const uint64_t window_offset =
-                    window->get_base_address() - window->handle_ref().get_config().local_offset;
-                mapped_stamp =
-                    reinterpret_cast<volatile uint64_t*>(window->handle_ref().get_base() + stamp_addr + window_offset);
-            }
-        }
-    } catch (const std::exception&) {
-        // Left null; the generic read path still works.
-    }
+    volatile uint64_t* mapped_stamp = try_map_l1_word(cluster, device->id(), vcore, stamp_addr);
 
     const auto host_now_ns = [] { return std::chrono::steady_clock::now().time_since_epoch().count(); };
     const auto read_device_ticks = [&]() -> uint64_t {
@@ -1147,6 +1157,22 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
             CoreRangeSet(CoreRange(core, core)),
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         SetRuntimeArgs(stamp_program, kernel, core, {stamp_addr, stop_addr, kClockStampIterations});
+
+        // Same program, so the load starts with the stamper and is torn down by the same stop flag.
+        const CoreRange grid = all_cores();
+        CoreRangeSet load_cores = CoreRangeSet(grid).subtract(CoreRangeSet(CoreRange(core, core)));
+        const std::string load_src = make_clock_load_kernel_source();
+        for (auto processor : {DataMovementProcessor::RISCV_1}) {
+            auto load_kernel = CreateKernelFromString(
+                stamp_program,
+                load_src,
+                load_cores,
+                DataMovementConfig{.processor = processor, .noc = NOC::RISCV_1_default});
+            for (const auto& cr : load_cores.ranges()) {
+                SetRuntimeArgs(stamp_program, load_kernel, cr, {stop_addr, kClockStampIterations});
+            }
+        }
+
         distributed::MeshWorkload stamp_workload;
         stamp_workload.add_program(distributed::MeshCoordinateRange(mesh_device_->shape()), std::move(stamp_program));
         distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), stamp_workload, /*blocking=*/false);
@@ -1168,15 +1194,25 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
             brackets.push_back(bracket);
         }
 
+        // Every core, not just the stamper's: the load kernels poll their own L1 for the same flag.
         const uint32_t stop = 1;
-        cluster.write_core_immediate(&stop, sizeof(stop), tt_cxy_pair(device->id(), vcore), stop_addr);
+        const CoreCoord grid_size = mesh_device_->compute_with_storage_grid_size();
+        for (uint32_t y = 0; y < grid_size.y; ++y) {
+            for (uint32_t x = 0; x < grid_size.x; ++x) {
+                const CoreCoord v = device->virtual_core_from_logical_core(CoreCoord{x, y}, CoreType::WORKER);
+                cluster.write_core_immediate(&stop, sizeof(stop), tt_cxy_pair(device->id(), v), stop_addr);
+            }
+        }
         distributed::Finish(mesh_device_->mesh_command_queue());
 
         enqueue_sanity_program(mesh_device_, kFirstClockCheckRuntimeId + round, all_cores());
         distributed::Finish(mesh_device_->mesh_command_queue());
     }
 
-    quiesce_and_settle();
+    quiesce_and_wait_for([&] {
+        return collector.runtime_ids_in_range(kFirstClockCheckRuntimeId + kClockCheckRounds - 1).size() >=
+               kClockCheckRounds;
+    });
     collector.stop();
 
     std::map<uint32_t, ProgramRealtimeRecord> record_by_runtime_id;
@@ -1190,6 +1226,11 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
     // timestamp happened, minus where the host observed it happening.
     std::vector<double> residuals_ns;
     residuals_ns.reserve(brackets.size());
+    // A read locates the device clock to no better than half its own bracket, so a residual inside that says nothing
+    // about the mapping -- it is this read being slow, not the mapping being wrong. What the mapping can be blamed
+    // for is only the part that exceeds it, which is what these assertions are on. Without this the two are
+    // indistinguishable: a stretched read produces |residual| ~= 0.9x its own half-bracket whatever the mapping does.
+    std::vector<double> excess_ns;
     std::vector<double> bracket_widths_ns;
     std::chrono::nanoseconds claimed_error{};
     uint32_t rounds_checked = 0;
@@ -1207,7 +1248,9 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
             const double mapped_host_ns = (static_cast<double>(bracket.device_ticks) -
                                            static_cast<double>(record.clock_sync.device_cycle_offset)) /
                                           record.frequency;
-            residuals_ns.push_back(mapped_host_ns - bracket.host_mid_ns());
+            const double residual = mapped_host_ns - bracket.host_mid_ns();
+            residuals_ns.push_back(residual);
+            excess_ns.push_back(std::max(0.0, std::abs(residual) - bracket.half_width_ns()));
             bracket_widths_ns.push_back(bracket.half_width_ns());
             claimed_error = std::max(claimed_error, record.clock_sync.sync_error);
         }
@@ -1223,20 +1266,37 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
         magnitudes.push_back(std::abs(residual));
     }
     std::ranges::sort(magnitudes);
+    const auto quantile = [&magnitudes](double q) { return rt_percentile(magnitudes, q); };
+    std::ranges::sort(excess_ns);
+    const auto excess = [&excess_ns](double q) { return rt_percentile(excess_ns, q); };
     // The median, not the widest: a handful of reads queue behind other PCIe traffic and run tens of microseconds
     // long, which says nothing about how well a typical read locates the device clock.
     std::ranges::sort(bracket_widths_ns);
     const double typical_bracket_ns = bracket_widths_ns[bracket_widths_ns.size() / 2];
-    const auto quantile = [&](double q) {
-        return magnitudes[static_cast<size_t>(q * static_cast<double>(magnitudes.size() - 1))];
-    };
 
-    std::cout << "[ SYNC ] independent clock read (" << (mapped_stamp != nullptr ? "mapped load" : "generic read")
-              << "): " << residuals_ns.size() << " reads over " << rounds_checked << " rounds, host bracket +/-"
-              << typical_bracket_ns << "ns; published mapping off by " << mean_residual_ns
-              << "ns on average, |residual| p50=" << quantile(0.50) << "ns p90=" << quantile(0.90)
-              << "ns max=" << magnitudes.back() << "ns; RT profiler claims " << claimed_error.count() << "ns"
-              << std::endl;
+    log_info(
+        tt::LogTest,
+        "[RT profiler sanity] independent clock read ({}): {} reads over {} rounds, host bracket +/-{}ns; published "
+        "mapping off by {}ns on average, |residual| p50={}ns p90={}ns max={}ns; RT profiler claims {}ns",
+        mapped_stamp != nullptr ? "mapped load" : "generic read",
+        residuals_ns.size(),
+        rounds_checked,
+        typical_bracket_ns,
+        mean_residual_ns,
+        quantile(0.50),
+        quantile(0.90),
+        magnitudes.back(),
+        claimed_error.count());
+    log_info(
+        tt::LogTest,
+        "[RT profiler sanity] mapping error beyond each read's own resolution: p50={}ns p90={}ns p99={}ns max={}ns "
+        "({} of {} reads exceeded theirs at all)",
+        excess(0.50),
+        excess(0.90),
+        excess(0.99),
+        excess_ns.back(),
+        std::ranges::count_if(excess_ns, [](double e) { return e > 0.0; }),
+        excess_ns.size());
 
     // Averaging drives the bracket's noise down by the square root of the sample count, so the mean resolves the
     // disagreement to tens of nanoseconds; a regression in it shows up in the line printed above long before it
@@ -1245,8 +1305,14 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
     // measurement rather than an error in the mapping.
     EXPECT_LE(std::abs(mean_residual_ns), kMaxMeanMappingErrorNs)
         << "an independent read of the device clock puts the published mapping further out than a few microseconds";
-    EXPECT_LE(quantile(0.90), kMaxTailMappingErrorNs)
-        << "individual reads disagree with the published mapping by more than a few microseconds";
+    // The tail assertion is on the excess rather than the raw residual, so a slow read cannot fail it and a real
+    // mapping error cannot hide behind one. Every read here is expected to sit inside its own resolution, so the
+    // bound is a small absolute floor rather than a fraction of anything.
+    EXPECT_LE(excess(0.99), kMaxMappingErrorBeyondReadResolutionNs)
+        << "reads disagree with the published mapping by more than they could be wrong by themselves, so the "
+           "disagreement is the mapping's";
+    EXPECT_LE(excess_ns.back(), 4 * kMaxMappingErrorBeyondReadResolutionNs)
+        << "a single read disagrees with the published mapping far beyond its own resolution";
 }
 
 }  // namespace

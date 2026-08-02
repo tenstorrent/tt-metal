@@ -163,16 +163,20 @@ void py_device_module_types(nb::module_& m_device) {
         .def_ro(
             "device_cycle_offset",
             &tt::tt_metal::experimental::ProgramRealtimeClockSync::device_cycle_offset,
-            "Clock offset: a device timestamp maps to time.monotonic_ns() host time as "
+            "A device timestamp maps to time.monotonic_ns() host time as "
             "host_ns = (timestamp - device_cycle_offset) / frequency")
         .def_prop_ro(
             "sync_error_ns",
             [](const tt::tt_metal::experimental::ProgramRealtimeClockSync& self) { return self.sync_error.count(); },
-            "Estimated sync mapping error: half the round trip of the handshake the mapping was last anchored on");
+            "Estimated error in a host time derived from this mapping, in ns, based on the most recent measurement "
+            "against the device clock");
 
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
-        .def_ro("runtime_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id, "Runtime ID")
+        .def_ro(
+            "runtime_id",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id,
+            "Runtime ID. Currently truncated to 16 bits; widening tracked in #46103.")
         .def_ro(
             "start_timestamp",
             &tt::tt_metal::experimental::ProgramRealtimeRecord::start_timestamp,
@@ -193,21 +197,23 @@ void py_device_module_types(nb::module_& m_device) {
         .def_prop_ro(
             "duration_ns",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) { return record.duration().count(); },
-            "On-device duration, in ns")
+            "Program execution duration, in ns. Assumes the device clock frequency is stable")
         .def_prop_ro(
             "host_start_ns",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::chrono::duration_cast<std::chrono::nanoseconds>(record.host_start().time_since_epoch())
                     .count();
             },
-            "Program start on the host's time.monotonic_ns() clock, in ns")
+            "When the program began executing, on the time.monotonic_ns() timeline, in ns. Error estimated by "
+            "clock_sync.sync_error_ns")
         .def_prop_ro(
             "host_end_ns",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::chrono::duration_cast<std::chrono::nanoseconds>(record.host_end().time_since_epoch())
                     .count();
             },
-            "Program end on the host's time.monotonic_ns() clock, in ns")
+            "When the program finished executing, on the time.monotonic_ns() timeline, in ns. Error estimated by "
+            "clock_sync.sync_error_ns")
         .def(
             "device_timestamp_at",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record, int64_t host_ns) {
@@ -215,14 +221,15 @@ void py_device_module_types(nb::module_& m_device) {
                     std::chrono::round<std::chrono::steady_clock::duration>(std::chrono::nanoseconds{host_ns})});
             },
             nb::arg("host_ns"),
-            "The device timestamp (raw ticks) a time.monotonic_ns() host time maps to; accurate only for host times "
-            "near this record")
+            "The device timestamp (raw ticks) a time.monotonic_ns() host time maps to. Accurate only near this "
+            "record; a host time far from this record's window carries more error than clock_sync.sync_error_ns "
+            "reports.")
         .def_prop_ro(
             "kernel_sources",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
-            "Kernel source paths associated with this runtime ID");
+            "Kernel source paths; valid for the lifetime of the process.");
 
     nb::class_<PythonProgramRealtimeRecordBatch>(
         m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")

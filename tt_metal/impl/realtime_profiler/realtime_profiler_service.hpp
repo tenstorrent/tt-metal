@@ -48,6 +48,10 @@ public:
 
     bool is_active() const;
 
+    // Whether any callback is registered. Read on the drain loop, so it is an atomic rather than a look at
+    // consumers_ under the topology lock.
+    bool has_consumers() const { return num_consumers_.load(std::memory_order_relaxed) != 0; }
+
 private:
     struct RingReader {
         RingReader(RealtimeProfilerRecordRing* ring, RealtimeProfilerRecordRing::Reader reader, size_t max_batch) :
@@ -108,6 +112,7 @@ private:
     experimental::ProgramRealtimeProfilerCallbackHandle next_consumer_handle_ = 0;
 
     std::atomic<uint32_t> wake_generation_{0};
+    std::atomic<size_t> num_consumers_{0};
 };
 
 // Process-wide: a registration is owned by whoever made it and ends only at Unregister, so it cannot be scoped to

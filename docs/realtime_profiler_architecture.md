@@ -100,9 +100,9 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 
 ## 3. Sync (Timestamp Calibration)
 
-Host and device timestamps are aligned so consumers (Tracy, callbacks) can relate device cycles to host time. The host keeps a per-chip affine mapping `device_cycle = frequency * host_ns + device_cycle_offset`: `frequency` is fit once at init; `device_cycle_offset` is re-anchored continuously from the sync thread (~every 50 ms per device).
+Host and device timestamps are aligned so consumers can relate device cycles to host time. The host keeps a per-chip affine mapping `device_cycle = frequency * host_ns + device_cycle_offset`: `frequency` is fit once at init; `device_cycle_offset` is re-anchored whenever a probe finds the mapping has visibly moved.
 
-Nothing runs on device for this. The tensix free-running cycle counter is a hardware register the NOC serves directly, so the host reads it through its own uncached TLB window with a single load, bracketed between two `steady_clock` reads. The device timestamp is known to have been sampled somewhere inside that bracket, so the anchor goes at its midpoint and the reported `sync_error` is half its width.
+The tensix free-running cycle counter is a hardware register the NOC serves directly, so the host reads it through its own uncached TLB window with a single load, bracketed between two `steady_clock` reads. The device timestamp is known to have been sampled somewhere inside that bracket, so the anchor goes at its midpoint and the reported `sync_error` is half its width.
 
 ```
   HOST                                   REAL-TIME PROFILER CORE
@@ -119,9 +119,13 @@ Reading the low word latches the high word, so the pair is coherent and only the
 
 Because no device software is in the path, a sample cannot be delayed by whatever the profiler core's push loop is doing, and sync costs the device nothing at all.
 
-**Init** takes ~100 samples at 5 ms spacing and fits `frequency` by linear regression. A settled clock fits that line to ~2 ns rms; a fit taken while AICLK is ramping still uses every sample but lands a frequency tens of ppm off, which the servo would then spend the session correcting as though it were drift, so a residual far above that floor is rejected and the calibration retried. **Steady state:** each device is resynced every 10 ms and `device_cycle_offset` re-anchored. The frequency is held from bring-up while AICLK moves ~123 ppm under load, so the error accrued between anchors is that rate times the interval -- which is why the cadence is what bounds it, and why it is 10 ms rather than 50 ms.
+**Init** takes ~100 samples at 5 ms spacing and fits `frequency` by linear regression, each sample the tightest of a few reads. A settled clock fits that line to ~2 ns rms; a fit taken while AICLK is ramping still uses every sample but lands a frequency tens of ppm off, so a residual far above that floor is rejected and the calibration retried.
 
-Each resync takes a burst of 8 reads and anchors on the tightest bracket. Ranked rather than compared against a threshold: under record load the whole bracket distribution shifts, and an absolute threshold would reject every read in a pass instead of picking that pass's best. Syncing runs on its own thread, not the receiver's: it is a slow control loop where draining is a data path. The receiver reads each device's mapping through a seqlock the sync thread publishes into.
+**Steady state:** every 1 ms the receiver takes one read per device and asks what the standing mapping predicted for it. A probe cannot locate the clock better than half its own bracket, so a miss smaller than that says nothing and the mapping is left alone -- re-anchoring on it would trade a good anchor for a noisier one. A larger miss is real, and the probe is taken as the new anchor. No assumed drift rate enters anywhere: the decision is made on what the probe measured. A slow read rejects itself, since its own miss is always smaller than the resolution it would bring.
+
+What this bounds is set by how the clock actually misbehaves. Blackhole's DVFS throttler runs on a 1 ms tick and steps AICLK by one PLL multiplier (1350 -> 1343 MHz, ~5200 ppm) for one or more of those ticks under load; the mapping error a step leaves is that rate times however long it goes uncorrected, and those cycles are never given back. Measured worst case: 14.2 us when re-anchoring every 10 ms, 5.7 us at 1 ms. Steps arrive in bursts, so the interval drops to 250 us for 5 ms once one is seen.
+
+Sync runs on the receiver thread rather than its own. A read is ~700 ns against a drain-gap threshold of 5 ms, so it costs the drain far less than a second thread costs in wakeups, and it leaves the mapping owned by one thread -- the receiver both maintains it and stamps records with it, so no publication protocol is needed.
 
 ---
 
@@ -144,7 +148,7 @@ Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::
 | Profiler-core kernels (BRISC reader + NCRISC pusher/sync) | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp`, `cq_realtime_profiler_push.cpp` |
 | Host init and receiver thread (per MeshDevice) | `tt_metal/impl/realtime_profiler/realtime_profiler_receiver.cpp` |
 | Clock mapping: fit, re-anchor policy, drift, error bar | `realtime_profiler_clock_model.cpp` |
-| Clock read path, probe burst, published mapping, calibration cache | `realtime_profiler_clock_sync.cpp` |
+| Clock read path, clock model and re-anchor rule, calibration cache | `realtime_profiler_clock_sync.cpp` |
 | Shared struct + HAL accessors | `realtime_profiler_msgs.h` → `realtime_profiler_msgs` (generated) |
 | Public API (register / unregister / is-active) | `tt_metal/impl/realtime_profiler/realtime_profiler.cpp` |
 | Record fan-out (service, Tracy, user callbacks) | `tt_metal/impl/realtime_profiler/realtime_profiler_service.cpp`, `realtime_profiler_tracy_consumer.cpp` |
