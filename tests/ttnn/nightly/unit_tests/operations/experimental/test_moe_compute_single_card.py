@@ -753,13 +753,14 @@ _MOE_50669_SWEEP_TOKENS = [1, 2, 3, 6, 16, 32, 48, 63, 64]
 def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, cfg, tokens_per_device):
     """Regression for tt-metal#50669: correctness across non-tile-aligned token counts / configs."""
     ring_n = effective_matmul_ring_size(mesh_device)
+    N = max(cfg["N"], 32 * ring_n)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
         experts_per_device=cfg["experts_per_device"],
         tokens_per_device=tokens_per_device,
         selected_experts_k=cfg["selected_experts_k"],
-        N=cfg["N"],
+        N=N,
         hidden_size=cfg["hidden_size"],
         output_height_shard_dim=4,
         output_width_shard_dim=auto_output_width_shard_dim(cfg["hidden_size"], matmul_ring_size=ring_n),
