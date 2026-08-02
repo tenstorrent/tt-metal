@@ -1292,9 +1292,34 @@ def create_tensor_on_mesh(
                     dims.append(None)
             dims_tuple = tuple(dims)
 
-            # Traced shapes are global (pre-shard); ShardTensor2dMesh splits
-            # them across the mesh internally.
-            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
+            # Both mesh axes sharding the SAME tensor dim cannot go through
+            # ShardTensor2dMesh: its C++ chunk_ndim normalizes the dims and then hard-fails
+            # "dims must be unique" (partition.cpp), because it chunks each listed dim once.
+            # A traced ['PlacementShard(-1)', 'PlacementShard(3)'] on a 4D tensor is exactly
+            # that -- -1 and 3 are the same dim -- and it means dim 3 is split rows*cols ways
+            # in total. That IS expressible, as a 1D shard of that dim over the flattened
+            # mesh, so use it. Scatter and gather then use the same 1D scheme (see
+            # mesh_tensor_to_torch), which makes them inverses by construction regardless of
+            # how devices are ordered.
+            #
+            # Without this the mapper throws at distribution time, the tensor ends up
+            # distributed some other way, and the op returns a CORRECTLY SHAPED but wrong
+            # result -- no assert fires and it surfaces as an unexplained low PCC. That is the
+            # near-zero-PCC class: lead-models run 30706921019 mesh8x4_col_2d, 8 multiply
+            # vectors at PCC 0.0096-0.0152 plus 1 linear at 0.093, every one of them carrying
+            # this placement, with 6 "dims must be unique" TT_FATALs in the same log.
+            _dup_dim = _same_shard_dim(dims_tuple, torch_tensor.ndim)
+            if _dup_dim is not None:
+                logger.info(
+                    f"SWEEPS: placement shards dim {_dup_dim} on BOTH mesh axes "
+                    f"{mesh_shape_tuple}; using a 1D shard over the flattened mesh "
+                    f"({mesh_shape_tuple[0] * mesh_shape_tuple[1]} devices)"
+                )
+                mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=_dup_dim)
+            else:
+                # Traced shapes are global (pre-shard); ShardTensor2dMesh splits
+                # them across the mesh internally.
+                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
         elif len(entries) == 1:
             shard_match = re.search(r"PlacementShard\((?:dim=)?(-?\d+)\)", entries[0])
             if shard_match:
@@ -1752,6 +1777,16 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
         try:
             d0 = placements[0].dim
             d1 = placements[1].dim
+            # Mirror the scatter side: when both mesh axes shard the SAME tensor dim,
+            # create_tensor_on_mesh used a 1D shard over the flattened mesh (ConcatMesh2d
+            # cannot express it either -- same "dims must be unique" constraint), so gather
+            # it back the same way. Using the same 1D scheme on both sides is what makes the
+            # round trip an identity.
+            _dup = _same_shard_dim((d0, d1), per_dev_ndim)
+            if _dup is not None:
+                result = ttnn.to_torch(ttnn_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=_dup))
+                torch_dtype = _get_torch_dtype(ttnn_tensor)
+                return result.to(torch_dtype) if torch_dtype is not None else result
             comp = ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(dist_dims), dims=(d0, d1))
             result = ttnn.to_torch(ttnn_tensor, mesh_composer=comp)
             torch_dtype = _get_torch_dtype(ttnn_tensor)
@@ -1806,6 +1841,29 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
     if device_tensors:
         return _to_torch_safe(device_tensors[0])
     return _to_torch_safe(ttnn_tensor)
+
+
+def _same_shard_dim(dims, ndim):
+    """The tensor dim both mesh axes shard, or None.
+
+    ttnn's chunk_ndim normalizes negative dims and then requires them to be unique, so a
+    placement naming the same dim twice (e.g. ['PlacementShard(-1)', 'PlacementShard(3)'] on a
+    4D tensor) cannot go through the 2D mapper/composer at all. It is still meaningful --
+    that dim is split rows*cols ways -- and is expressible as a 1D shard over the flattened
+    mesh, which is what callers substitute. Returns the normalized dim so both the scatter and
+    gather sides agree on which one it is.
+    """
+    if ndim is None or len(dims) != 2:
+        return None
+    try:
+        d0, d1 = (int(d) for d in dims)
+    except (TypeError, ValueError):
+        return None
+    d0 = d0 + ndim if d0 < 0 else d0
+    d1 = d1 + ndim if d1 < 0 else d1
+    if d0 != d1 or not (0 <= d0 < ndim):
+        return None
+    return d0
 
 
 def broadcast_torch_inputs_to_global(
