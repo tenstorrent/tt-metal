@@ -136,6 +136,40 @@ class TtVoxtralPipeline:
         self.flow = TtVoxtralFlow(device, ckpt_path=ckpt_path)
         self.codec = TtVoxtralCodecDecoder(device, ckpt_path=ckpt_path)
 
+    def _prepare_traces(self, prompt_len, cfg_alpha):
+        """Warm up EVERY traced block, then capture them all. Order is the whole point.
+
+        Allocating a device buffer while a trace is live corrupts that trace. Capturing lazily --
+        each block on its own first call, inside the generation loop -- means block B's warm-up
+        allocates after block A is already captured, and the result is a HANG in A's first replay
+        (observed exactly there: a py-spy dump parked in Block 1's post-`execute_trace` readback).
+        So: prefill first (it allocates), then all warm-ups, then all captures, then nothing but
+        replays. Traces are released at the end of the utterance because the NEXT prefill
+        allocates again.
+        """
+        from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
+        from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
+
+        if not (gpt.USE_TRACE or flow.USE_TRACE):
+            return
+        if gpt.USE_TRACE:
+            self.backbone.warmup_decode(self.backbone.decode_window(prompt_len))
+        if flow.USE_TRACE:
+            self.flow.warmup_trace(1, flow.N_DECODING_STEPS, cfg_alpha)
+        if gpt.USE_TRACE:
+            self.backbone.capture_decode(self.backbone.decode_window(prompt_len))
+        if flow.USE_TRACE:
+            self.flow.capture_trace(1, flow.N_DECODING_STEPS, cfg_alpha)
+
+    def _release_traces(self):
+        from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
+        from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
+
+        if gpt.USE_TRACE and hasattr(self.backbone, "release_trace"):
+            self.backbone.release_trace()
+        if flow.USE_TRACE:
+            self.flow.release_traces()
+
     @torch.no_grad()
     def generate(self, embeds, max_frames=150, cfg_alpha=CFG_ALPHA, seed=0, verbose=True):
         """prompt embeds [1,P,3072] -> frames [T,37] int64 (offset applied, [END_AUDIO] excluded)."""
@@ -151,6 +185,8 @@ class TtVoxtralPipeline:
         t_prefill = time.perf_counter() - t0
         if verbose:
             print(f"[pipeline] prefill P={embeds.shape[1]} in {t_prefill:.2f}s")
+
+        self._prepare_traces(embeds.shape[1], cfg_alpha)
 
         frames, t0 = [], time.perf_counter()
         stopped = False
@@ -171,6 +207,7 @@ class TtVoxtralPipeline:
             print(f"[pipeline] hit max_frames={max_frames} without [END_AUDIO]")
         if not frames:
             raise RuntimeError("model emitted [END_AUDIO] on the first frame -- nothing to decode")
+        self._release_traces()
         return torch.cat(frames, dim=0), t_prefill, time.perf_counter() - t0
 
     @torch.no_grad()

@@ -197,6 +197,7 @@ class TtVoxtralGPT:
         self.max_seq_len = max_seq_len
         self.pos = 0
         self._dec_trace = None      # (tid, x_in, cos_in, sin_in, mask_in, pos_t, out, L, host)
+        self._warm = None           # persistent trace inputs, allocated by warmup_decode
         wd = weight_dtype or WEIGHT_DTYPE or dtype
         w = state if state is not None else load_backbone_state(ckpt_path)
 
@@ -455,43 +456,73 @@ class TtVoxtralGPT:
         return ttnn.rms_norm(x, weight=self.norm, epsilon=NORM_EPS,
                              compute_kernel_config=COMPUTE_CONFIG)
 
-    def _capture_decode(self, L):
-        """Allocate the persistent inputs and capture one decode step. Cached per window length.
+    def decode_window(self, prompt_len=0):
+        """The window `step` will attend over. Tracing needs it CONSTANT for the whole
+        generation, so it demands FIXED_WINDOW rather than the growing bucketed one."""
+        if not FIXED_WINDOW:
+            raise RuntimeError("tracing the decode step needs one fixed window; "
+                               "set VOXTRAL_GPT_WINDOW >= prompt+generation length")
+        if prompt_len >= FIXED_WINDOW:
+            raise ValueError(f"prompt of {prompt_len} does not fit the pinned window "
+                             f"{FIXED_WINDOW}")
+        return min(self.max_seq_len, FIXED_WINDOW)
 
-        Ordering matters twice over: the warm-up pass runs BEFORE capture so weight uploads and
-        kernel compilation are not recorded into the trace, and `end_trace_capture` sits in a
-        `finally` so an exception cannot leave the capture open and wedge the card (trap #1).
+    def warmup_decode(self, L):
+        """Allocate the persistent inputs and run ONE eager pass. Allocates; capture must not.
+
+        Split from `capture_decode` on purpose. Allocating a device buffer while ANY trace is live
+        corrupts that trace, so with more than one block traced every warm-up has to finish before
+        the first capture starts -- see `ttnn_voxtral_pipeline._prepare_traces`.
         """
         if self._dec_trace is not None:
-            return self._dec_trace
+            return
         host = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
                                                  layout=ttnn.TILE_LAYOUT)
         dev = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
                                                 layout=ttnn.TILE_LAYOUT, device=self.device)
-        x_in = dev(torch.zeros(1, 1, DIM))
-        cos_in = dev(torch.zeros(1, 1, 1, HEAD_DIM))
-        sin_in = dev(torch.zeros(1, 1, 1, HEAD_DIM))
-        mask_in = dev(torch.zeros(1, 1, 1, L), ttnn.bfloat16)
         # THE WARM-UP AND THE CAPTURE BOTH EXECUTE THE GRAPH, so both WRITE the KV cache at
-        # whatever pos_t says. Capture happens after prefill has filled the cache, so pointing
-        # them at row 0 corrupts the prompt's first position -- measured, and it drags decode from
-        # PCC 0.9998 to 0.86 with no error anywhere. Aim them at the last cache row instead, which
-        # `step` is barred from ever reaching, so the two junk writes land somewhere harmless.
-        pos_t = ttnn.from_torch(torch.tensor([self.max_seq_len - 1], dtype=torch.int32),
-                                device=self.device)
-
-        # Warm-up OUTSIDE the capture, so weight uploads and kernel compilation are not recorded.
-        self._decode_graph(x_in, cos_in, sin_in, mask_in, L, pos_t)
+        # whatever pos_t says. This runs after prefill has filled the cache, so pointing them at
+        # row 0 corrupts the prompt's first position -- measured, and it drags decode from PCC
+        # 0.9998 to 0.86 with no error anywhere. Aim them at the last cache row instead, which
+        # `step` is barred from ever reaching.
+        self._warm = dict(
+            x_in=dev(torch.zeros(1, 1, DIM)),
+            cos_in=dev(torch.zeros(1, 1, 1, HEAD_DIM)),
+            sin_in=dev(torch.zeros(1, 1, 1, HEAD_DIM)),
+            mask_in=dev(torch.zeros(1, 1, 1, L), ttnn.bfloat16),
+            pos_t=ttnn.from_torch(torch.tensor([self.max_seq_len - 1], dtype=torch.int32),
+                                  device=self.device),
+            L=L, host=host)
+        b = self._warm
+        self._decode_graph(b["x_in"], b["cos_in"], b["sin_in"], b["mask_in"], L, b["pos_t"])
         ttnn.synchronize_device(self.device)
 
+    def capture_decode(self, L):
+        """Capture the decode step. Allocates NOTHING outside the trace region -- call after every
+        block's warm-up. `end_trace_capture` is in a `finally`: an exception escaping an open
+        capture wedges the card for the rest of the process (trap #1)."""
+        if self._dec_trace is not None:
+            return self._dec_trace
+        self.warmup_decode(L)
+        b = self._warm
         tid = ttnn.begin_trace_capture(self.device, cq_id=0)
         try:
-            out = self._decode_graph(x_in, cos_in, sin_in, mask_in, L, pos_t)
+            out = self._decode_graph(b["x_in"], b["cos_in"], b["sin_in"], b["mask_in"], L,
+                                     b["pos_t"])
         finally:
             ttnn.end_trace_capture(self.device, tid, cq_id=0)
         ttnn.synchronize_device(self.device)
-        self._dec_trace = (tid, x_in, cos_in, sin_in, mask_in, pos_t, out, L, host)
+        self._dec_trace = (tid, b["x_in"], b["cos_in"], b["sin_in"], b["mask_in"], b["pos_t"],
+                           out, L, b["host"])
         return self._dec_trace
+
+    def release_trace(self):
+        """Drop the captured decode trace. Anything that ALLOCATES -- notably the next prefill --
+        must happen with no trace live, so the pipeline releases around utterance boundaries."""
+        if self._dec_trace is not None:
+            ttnn.release_trace(self.device, self._dec_trace[0])
+            self._dec_trace = None
+            self._warm = None
 
     def _step_traced(self, embed, cosb, sinb, m, pos, L):
         """Refresh the captured inputs IN PLACE, replay, read the captured output.
@@ -499,7 +530,7 @@ class TtVoxtralGPT:
         In place is not a style choice: the trace holds these buffers' ADDRESSES, so uploading a
         fresh tensor would be silently ignored and the previous frame replayed.
         """
-        tid, x_in, cos_in, sin_in, mask_in, pos_t, out, Lc, host = self._capture_decode(L)
+        tid, x_in, cos_in, sin_in, mask_in, pos_t, out, Lc, host = self.capture_decode(L)
         if Lc != L:
             raise RuntimeError(f"decode trace captured at window {Lc} but this step wants {L}; "
                                f"tracing needs one fixed window (set VOXTRAL_GPT_WINDOW)")
