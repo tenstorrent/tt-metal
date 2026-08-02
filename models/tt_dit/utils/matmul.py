@@ -728,10 +728,7 @@ fused_mmrs_configs = {
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
         (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
-        # M_block=5 == M_tiles_per_core (ceil(36/8)): a larger M_block only inflates the in0/out/
-        # intermediate CBs (and the epilogue trip count) past what one core can hold, which
-        # overflowed L1 against the L1-sharded MM output.
-        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 5, 4, 8, 1, 1, None, 1, 5),
+        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 12, 4, 8, 1, 1, None, 1, 5),
         (512, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 2, None, 1),
         (512, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
         (1024, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),

@@ -92,6 +92,13 @@ struct MinimalMatmulStridedReduceScatterAsyncInputs {
 
     /* Virtual concatenation: the second in0 source (suffix K-tiles). */
     const std::optional<const Tensor> mm_optional_input_tensor = std::nullopt;
+
+    /* Caller-owned scratch for the per-MM-core progress counters the MM uses to signal the RS
+       (one uint32 slot per MM core, one row per core, height-sharded in L1 so the row sits at the
+       same local address everywhere). Supplying it lets one device-lifetime allocation serve every
+       MMRS program; when omitted the RS factory allocates a private array per program, which
+       permanently lowers the device's L1 floor and starves later ops of circular-buffer space. */
+    const std::optional<const Tensor> mm_progress_counters = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -254,7 +254,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2,
     std::optional<tt::tt_metal::DataType> dtype,
-    const std::optional<const Tensor>& mm_optional_input_tensor) {
+    const std::optional<const Tensor>& mm_optional_input_tensor,
+    const std::optional<const Tensor>& mm_progress_counters) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -300,7 +301,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         bias,
         addcmul_input_tensor1,
         addcmul_input_tensor2,
-        mm_optional_input_tensor};
+        mm_optional_input_tensor,
+        mm_progress_counters};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

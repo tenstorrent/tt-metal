@@ -585,8 +585,6 @@ class VaeAttention(Module):
 
         rina_attn_axis = self._ctx.h_mesh_axis or self._ctx.w_mesh_axis
         if rina_attn_axis is not None:
-            # TEMP DIAGNOSTIC (remove): dumps generated/reports/vae_sdpa_detailed_memory_usage.csv
-            ttnn.dump_device_memory_state(self._ctx.device, "vae_sdpa_")
             x, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
