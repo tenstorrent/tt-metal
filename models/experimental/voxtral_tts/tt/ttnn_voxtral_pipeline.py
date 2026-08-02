@@ -53,24 +53,32 @@ FRAME_RATE = 12.5
 # Diagnosis, on the sequence that fails -- fixture cases 0,1,2,3, which hangs inside case 3's
 # Block 3 decode. Every block is fine alone: Block 1 runs 1400 decode steps standalone, Block 3
 # decodes case 3's own real frames in 0.10 s in a fresh process, and cases 2,3 run clean as a
-# pair. What decides it is how many programs have accumulated:
+# pair. What is measured:
 #     memory at the hang         flat, 8 GB free -- NOT exhaustion, so bucketing is not the lever
 #     program cache DISABLED     completes, but ~12x slower (every op rebuilds its program)
-#     Block 1 decode shape pinned (VOXTRAL_GPT_WINDOW=1024)   still hangs
 #     cache CLEARED per utterance                             completes
-#     entries: 193 after case 1, 325 after case 2, hang during case 3's decode; with clearing,
-#     never above 245
-# So it is cumulative program-cache growth, and Block 1's decode shapes are not the driver --
-# pinning them changes nothing. Ours merely reaches the threshold sooner than the tt_transformers
-# path, which contributes far fewer distinct shapes.
+#     Block 1 decode shape pinned (VOXTRAL_GPT_WINDOW=1024)   STILL HANGS
+#     entries 193 after case 1, 325 after case 2, hang in case 3; with clearing, never above 245
+#
+# IT IS NOT A COUNT LIMIT, and the obvious story is disproven. tt_transformers through the SAME
+# four cases with the SAME counter and no clearing reaches 329 entries -- more than the 325 we die
+# at -- and completes. So "ours builds more shapes and crosses a threshold sooner" is measured to
+# be FALSE; the two build about the same number. Pinning our decode shape not helping says the
+# same thing from the other side.
+#
+# What is left is a SPECIFIC bad program, or a specific pair, that our Block 1 causes to be built
+# and tt_transformers never builds. Which one is unknown. Clearing works because it throws the
+# entry away before anything uses it.
 #
 # The cost is a per-utterance rebuild of ~245 entries, amortised over tens of seconds of
 # generation, with per-step cost untouched -- which is why this is preferred over disabling the
 # cache or pinning the decode window, both of which are far more expensive.
 #
-# This is a MITIGATION. The underlying failure is in the program cache itself and is not
-# understood; a hang rather than an error, past a few hundred entries, is worth an upstream
-# report with a minimal repro.
+# This is a MITIGATION for a failure we cannot yet name, so treat it as load-bearing: it is why a
+# multi-utterance run finishes at all. Finding the actual entry needs a bisect (start by moving
+# Block 3 to the CPU reference to see whether the hang follows Block 3 or just lands on whatever
+# op runs next), and the result is worth an upstream report -- a hang rather than an error is a
+# bug in the cache regardless of what we feed it.
 CLEAR_PROGRAM_CACHE = os.environ.get("VOXTRAL_CLEAR_PCACHE", "1") != "0"
 
 # Which Block 1 to run. "tt_transformers" is the older wrapper and REMAINS THE DEFAULT; "gpt" is
