@@ -23,6 +23,7 @@ import statistics
 import subprocess
 import sys
 from pathlib import Path
+import os
 from typing import Any, Callable, Sequence
 
 from .opclass import SIGNPOST_CODES, base_op_code, classify_op, is_layout_conversion
@@ -464,8 +465,22 @@ def _op_bytes(raw: dict) -> float:
     return sum(_tensor_bytes(raw, p) for p in ("INPUT_0", "INPUT_1", "INPUT_2", "OUTPUT_0"))
 
 
-def _top_ops(members: list[dict[str, Any]], available_cores: int, k: int = 6) -> list[dict[str, Any]]:
-    """Rank the bucket's hot ops by fingerprint (op + shape + memory) by total device-ms, top k."""
+def _top_ops(members: list[dict[str, Any]], available_cores: int, k: int | None = None) -> list[dict[str, Any]]:
+    """EVERY distinct op in the bucket, by fingerprint (op + shape + memory), ranked by device-ms.
+
+    This returned out[:6]. Everything past the sixth fingerprint was folded into the bucket total and
+    never appeared as an op again -- not in the roofline, not in open_ops, not in blocking_ops, not in
+    the report. The same display-limit-as-work-queue mistake as open_ops[:10], one layer upstream: the
+    queue is FED from this list, so an op cut here can never be selected however wide the queue is.
+
+    gemma-3-12b-it runs 8 buckets, so the whole model was describable in at most 48 op fingerprints
+    regardless of how many it actually executes -- and PagedUpdateCache (4.18 ms gap, on ONE core) sat
+    below its bucket's cut and was never optimized.
+
+    Hotness still decides ORDER; it no longer decides EXISTENCE. PERF_MCP_TOP_OPS_MAX bounds the list
+    for anyone who needs the old fixed size, so the limit is a decision someone makes rather than a
+    constant nobody remembers choosing.
+    """
     groups: dict[tuple, dict[str, Any]] = {}
     for m in members:
         rep, raw = m.get("report", {}), m.get("raw", {})
@@ -493,7 +508,10 @@ def _top_ops(members: list[dict[str, Any]], available_cores: int, k: int = 6) ->
     out = sorted(groups.values(), key=lambda x: x["device_ms"], reverse=True)
     for g in out:
         g["device_ms"] = round(g["device_ms"], 4)
-    return out[:k]
+    if k is None:
+        _env = (os.environ.get("PERF_MCP_TOP_OPS_MAX") or "").strip()
+        k = int(_env) if _env.isdigit() and int(_env) > 0 else None
+    return out[:k] if k else out
 
 
 def _most_common(values: Sequence[str]) -> str:
