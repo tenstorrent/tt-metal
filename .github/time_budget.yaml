@@ -361,7 +361,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 260
     bh_galaxy: 550
-    bh_sc1: 140  # Flux (20) + LTX-2.3 component unit leg (120)
+    bh_sc1: 170  # Flux (20) + LTX-2.3 component unit leg (150)
     bh_sc4-mgd: 50
   unit_tier2:
     wh_llmbox: 114

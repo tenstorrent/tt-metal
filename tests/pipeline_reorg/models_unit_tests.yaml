@@ -1109,22 +1109,25 @@
     # random weights; audio/upsampler/lora resolve offline from /mnt/models. Run all, accumulate
     # failures, fail the leg if any component failed.
     rc=0
-    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1200 "$@" || rc=1; }
-    run models/tt_dit/tests/models/ltx/test_transformer_ltx.py   -k "4x8sp1tp0nl2_ring_is_fsdp0 and video"
-    run models/tt_dit/tests/models/ltx/test_attention_ltx.py     -k "4x8sp1tp0nl2_line_is_fsdp0"
-    run models/tt_dit/tests/models/ltx/test_vae_ltx.py           -k "4x8h0w1nl2_line"
-    run models/tt_dit/tests/models/ltx/test_audio_ltx.py         -k "4x8sp1tp0nl2_ring_is_fsdp0"
-    run models/tt_dit/tests/models/ltx/test_rope_ltx.py
-    run models/tt_dit/tests/models/ltx/test_embeddings_ltx.py
-    run models/tt_dit/tests/models/ltx/test_latent_upsampler.py  -k "4x8h0w1nl2_line"
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || rc=1; }
+    # Cheap/CPU/block tests first so a slow later test can never starve them out of the leg timeout.
     run models/tt_dit/tests/models/ltx/test_ltx_adapter_loader.py
+    run models/tt_dit/tests/models/ltx/test_embeddings_ltx.py
+    run models/tt_dit/tests/models/ltx/test_rope_ltx.py
+    run models/tt_dit/tests/models/ltx/test_attention_ltx.py     -k "4x8sp1tp0nl2_line_is_fsdp0"
+    # video block; ckpt_fast pins one checkpoint_variant (video ignores it -> avoids redundant skips).
+    run models/tt_dit/tests/models/ltx/test_transformer_ltx.py   -k "4x8sp1tp0nl2_ring_is_fsdp0 and video and ckpt_fast"
     run models/tt_dit/tests/models/ltx/test_ltx_lora_ondevice.py -k "bh_4x8sp1tp0"
+    run models/tt_dit/tests/models/ltx/test_latent_upsampler.py  -k "4x8h0w1nl2_line"
+    # heavier last. VAE: drop the 145-frame full-res decode (e2e-scale, >20 min); 9f-2K still covers decode.
+    run models/tt_dit/tests/models/ltx/test_vae_ltx.py           -k "4x8h0w1nl2_line and not 145f"
+    run models/tt_dit/tests/models/ltx/test_audio_ltx.py         -k "4x8sp1tp0nl2_ring_is_fsdp0"
     exit $rc
   model: ltx-2.3-pro-t2v
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 120
+      timeout: 150
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
