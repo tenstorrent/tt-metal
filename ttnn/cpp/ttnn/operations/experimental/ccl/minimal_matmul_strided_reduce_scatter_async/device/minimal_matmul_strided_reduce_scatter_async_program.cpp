@@ -59,7 +59,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
+    const std::optional<const Tensor>& mm_progress_counters = std::nullopt);
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
@@ -106,6 +107,19 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     std::vector<Tensor>& output_tensor) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.shared_variables.at(range);
+
+        // The progress-counter address is baked into the reader + MM runtime args at build time and
+        // is not re-pointed here, so a caller-supplied array must stay put for the cached program's
+        // life; otherwise the kernels would signal/poll whatever now occupies that L1 address.
+        if (tensor_args.mm_progress_counters.has_value()) {
+            TT_FATAL(
+                static_cast<uint32_t>(tensor_args.mm_progress_counters->buffer()->address()) ==
+                    shared_variables.rs_shared_variables.mm_progress_counters_addr,
+                "mm_progress_counters moved from L1 address {} to {} since this program was compiled; the "
+                "array must be allocated once and kept alive for every call that reuses the program",
+                shared_variables.rs_shared_variables.mm_progress_counters_addr,
+                tensor_args.mm_progress_counters->buffer()->address());
+        }
 
         // Override RS runtime arguments
         // output_tensor[0] = MM output = RS input
@@ -183,7 +197,10 @@ minimal_matmul_strided_reduce_scatter_async_program(
     /* Fused addcmul params */
     const std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt) {
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
+
+    /* Caller-owned per-MM-core progress counter scratch shared across MMRS programs. */
+    const std::optional<const Tensor>& mm_progress_counters = std::nullopt) {
     tt::tt_metal::Program program{};
 
     // Derive matmul geometry parameters for the RS factory.
@@ -242,7 +259,8 @@ minimal_matmul_strided_reduce_scatter_async_program(
         // Phase 2: fuse addcmul at the RS final write step (not in MM kernel)
         fused_ternary_scalar,
         addcmul_input_tensor1,
-        addcmul_input_tensor2);
+        addcmul_input_tensor2,
+        mm_progress_counters);
 
     // =========================================================================
     // STEP 2: Create the Matmul program SECOND
@@ -325,7 +343,10 @@ MinimalMatmulStridedReduceScatterAsyncProgramFactory::create_at(
         /* Fused addcmul params */
         attributes.fused_ternary_scalar,
         tensor_args.addcmul_input_tensor1,
-        tensor_args.addcmul_input_tensor2);
+        tensor_args.addcmul_input_tensor2,
+
+        /* Shared MM->RS progress counter scratch */
+        tensor_args.mm_progress_counters);
 }
 
 }  // namespace ttnn::experimental::prim
