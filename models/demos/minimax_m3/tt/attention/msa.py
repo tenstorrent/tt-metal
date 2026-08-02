@@ -159,11 +159,10 @@ def msa_indexer_sparse(
         cluster_axis=cluster_axis,
         block_cyclic_sp_axis=block_cyclic_sp_axis,
         block_cyclic_chunk_local=block_cyclic_chunk_local,
+        output_layout=ttnn.TILE_LAYOUT,
     )
 
-    # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
-    # dense (ring_joint) output so the shared post-attention path works for MSA layers too.
-    out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+    # The native tiled output matches the dense (ring_joint) output consumed by concat_heads (prefill.py).
     return (out, block_ids) if return_block_ids else out
 
 

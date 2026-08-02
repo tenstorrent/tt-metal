@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// sparse_sdpa_msa writer: co-gather lower K/V tile halves, write row-major output, and build persistent compute
-// tiles used by softmax normalization.
+// sparse_sdpa_msa writer: co-gather lower K/V tile halves, write row-major output or scatter the native tiled
+// accumulator directly, and build persistent compute tiles used by softmax normalization.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -11,8 +11,9 @@
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"  // generate_bcast_col_scalar
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
-#include "dataflow_common.hpp"         // fill_neginf_tile (persistent causal -inf mask tile)
-#include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
+#include "sparse_sdpa_tiled_output.hpp"
+#include "dataflow_common.hpp"     // fill_neginf_tile (persistent causal -inf mask tile)
+#include "block_cyclic_remap.hpp"  // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 
@@ -47,7 +48,10 @@ void kernel_main() {
     constexpr uint32_t bc_sp = get_compile_time_arg_val(22);
     constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(23);
     constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(24);
-    constexpr auto out_args = TensorAccessorArgs<25, 0>();
+    constexpr uint32_t cb_out_im = get_compile_time_arg_val(25);
+    constexpr bool tiled_output = get_compile_time_arg_val(26) != 0;
+    constexpr uint32_t vDHt = get_compile_time_arg_val(27);
+    constexpr auto out_args = TensorAccessorArgs<28, 0>();
     // K/V use RuntimeTensorShape so T can vary without recompilation.
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
@@ -69,10 +73,25 @@ void kernel_main() {
     }
 
     Noc noc;
-    experimental::CB out_cb(cb_out_rm), k_cb(cb_k_in), v_cb(cb_v_in), kreq_cb(cb_kreq), kack_cb(cb_kack);
+    experimental::CB out_cb(tiled_output ? cb_out_im : cb_out_rm), k_cb(cb_k_in), v_cb(cb_v_in), kreq_cb(cb_kreq),
+        kack_cb(cb_kack), scale_cb(cb_scale);
     const auto out = TensorAccessor(out_args, out_addr);
     const auto k = TensorAccessor(k_args, k_addr);
     const auto v = TensorAccessor(v_args, v_addr);
+    if constexpr (tiled_output && S % tt::constants::TILE_HEIGHT != 0) {
+        // cb_scale is fresh at startup. Pre-zero each KV group's trailing output rows before it becomes the
+        // persistent reduction scaler, so direct tiled output can omit cb_out_rm.
+        noc.async_write_zeros(scale_cb, get_tile_size(cb_scale));
+        noc.write_zeros_l1_barrier();
+        for (uint32_t work = 0; work < work_count; ++work) {
+            const uint32_t absolute_work = work_start + work;
+            if ((absolute_work + 1) % S == 0) {
+                zero_tiled_output_padding<vDHt>(
+                    noc, out, scale_cb, (absolute_work / S) * H_logical, H_logical, S, /*bf16=*/2);
+            }
+        }
+        noc.write_zeros_dram_barrier();
+    }
 
     // Reduce identity scaler; softmax scale is applied in compute.
     dataflow_kernel_lib::
@@ -131,14 +150,19 @@ void kernel_main() {
             kack_cb.push_back(1);
         }
 
-        out_cb.wait_front(block_tiles);  // one untilized [H, v_dim] block
+        out_cb.wait_front(block_tiles);
         for (uint32_t h = 0; h < H_logical; ++h) {
             // Row h at CB byte offset h*row_bytes maps to output head h within this KV group.
             uint32_t out_head = h;
             if constexpr (n_kv > 1) {
                 out_head += kv_group * H_logical;
             }
-            noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = out_head * S + tok});
+            if constexpr (tiled_output) {
+                write_tiled_output_row<vDHt>(noc, out_cb, out, tok, h, out_head, S, /*bf16=*/2);
+            } else {
+                noc.async_write(
+                    out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = out_head * S + tok});
+            }
         }
         noc.async_write_barrier();
         out_cb.pop_front(block_tiles);

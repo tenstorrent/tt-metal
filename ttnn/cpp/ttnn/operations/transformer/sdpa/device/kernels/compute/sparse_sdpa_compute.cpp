@@ -127,6 +127,7 @@ void kernel_main() {
     constexpr uint32_t qsb =
         get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::QUERY_SUBBLOCK);  // query tile-rows per DST group
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::PACKED_ROW_BYTES);
+    constexpr bool tiled_output = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::TILED_OUTPUT) != 0;
     constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;  // total query tile-rows (32 heads each)
     constexpr uint32_t q_groups = Sqt / qsb;                  // DST-bound work runs in this many query-row passes
     constexpr uint32_t KT_stride = Skt;                       // cb_qk_im physical row width
@@ -518,7 +519,9 @@ void kernel_main() {
 
         q_in_cb.pop_front(Sqt * DHt);  // Q reused across all chunks; drop it so >1 token/core stays clean
 
-        // cb_out_im was written by normalize_row_streaming; untilize -> row-major out for the writer.
-        compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
+        // A tiled result is already in cb_out_im. ROW_MAJOR output retains the legacy untilize for its writer.
+        if constexpr (!tiled_output) {
+            compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
+        }
     }
 }

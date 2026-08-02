@@ -19,6 +19,7 @@ struct SparseSDPAParams {
     transformer::SparseKVFormat kv_format;
     uint32_t k_chunk_size = 128;
     DeviceComputeKernelConfig compute_kernel_config;
+    Layout output_layout = Layout::ROW_MAJOR;
     // Indexed KV cache: when set, kv is a [B,1,T,K_DIM] shared cache and this selects the batch slot to
     // attend to (the gather page ids are offset by cache_batch_idx * T). It is a DYNAMIC runtime arg
     // (excluded from the program hash, re-applied every dispatch), so changing it does NOT recompile.
@@ -28,6 +29,7 @@ struct SparseSDPAParams {
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
     bool has_scaled_kv() const { return kv_format == transformer::SparseKVFormat::SCALED_FP8; }
+    bool tiled_output() const { return output_layout == Layout::TILE; }
 };
 
 struct SparseSDPAInputs {

@@ -144,12 +144,14 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
         attrs.block_size);
     TT_FATAL(attrs.scale > 0.0f, "scale must be > 0");
 
-    // Row-byte alignment for the ROW-MAJOR DMAs (q rows, index rows, output rows). K/V are TILE tensors (the
+    // Row-byte alignment for the ROW-MAJOR DMAs (q rows, index rows, and ROW_MAJOR output). K/V are TILE tensors (the
     // reader reads whole tiles, which are inherently aligned), so no row-byte check applies to them.
     const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
     TT_FATAL((d * q.element_size()) % dram_align == 0, "q row bytes must be {}B aligned", dram_align);
     TT_FATAL((TOPK * idx.element_size()) % dram_align == 0, "indices row bytes must be {}B aligned", dram_align);
-    TT_FATAL((v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
+    if (!attrs.tiled_output()) {
+        TT_FATAL((v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
+    }
 
     // Block-cyclic ("slab") cache: the invP block remap bakes T/sp and chunk_local (in blocks) as compile-time
     // arguments, so the layout must divide cleanly. Miss-only — the constants are hashed.
@@ -184,14 +186,16 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
 }
 
 SparseSDPAMsaOperation::spec_return_value_t SparseSDPAMsaOperation::compute_output_specs(
-    const SparseSDPAMsaParams& /*attrs*/, const SparseSDPAMsaInputs& t) {
+    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     auto shape = t.q.logical_shape();   // [1, H, S, d]
     shape[3] = t.v.logical_shape()[3];  // [1, H, S, v_dim]
-    // Output is DRAM-interleaved ROW_MAJOR, with dtype matching q.
+    // Direct TILE output keeps the bf16 accumulator tiled and avoids an untilize. ROW_MAJOR preserves the
+    // legacy dtype-matching behavior.
     const tt::tt_metal::MemoryConfig out_mem{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    const auto output_dtype = attrs.tiled_output() ? tt::tt_metal::DataType::BFLOAT16 : t.q.dtype();
     return tt::tt_metal::TensorSpec(
-        shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
+        shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(attrs.output_layout), out_mem));
 }
 
 SparseSDPAMsaOperation::tensor_return_value_t SparseSDPAMsaOperation::create_output_tensors(
@@ -209,6 +213,7 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         std::bit_cast<uint32_t>(attrs.scale),
         attrs.block_size,
         attrs.compute_kernel_config,
+        attrs.output_layout,
         t.q.logical_shape(),
         t.q.dtype(),
         t.k.dtype(),
@@ -355,13 +360,15 @@ Tensor sparse_sdpa_msa(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> chunk_start_idx,
     std::optional<uint32_t> cluster_axis,
-    std::optional<BlockCyclicLayout> block_cyclic) {
+    std::optional<BlockCyclicLayout> block_cyclic,
+    Layout output_layout) {
     using OperationType = ttnn::prim::SparseSDPAMsaOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .scale = scale,
             .block_size = block_size,
             .compute_kernel_config = compute_kernel_config,
+            .output_layout = output_layout,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
             .chunk_start_idx = chunk_start_idx,

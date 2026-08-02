@@ -92,7 +92,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const bool q_is_fp8 = (t.q.dtype() == DataType::FP8_E4M3);
     const tt::DataFormat q_in_df = q_is_fp8 ? tt::DataFormat::Bfp8_b : q_rm_df;
     const uint32_t q_in_tile_bytes = tt::tile_size(q_in_df);
-    // Output dtype matches Q.
+    // The normalized accumulator is bf16. Direct tiled output is written from cb_out_im; row-major output
+    // retains the legacy untilized cb_out_rm path.
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
@@ -104,9 +105,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t base_work = total_work / num_cores;
     const uint32_t extra = total_work % num_cores;
 
-    // ---- CBs (fixed order = SparseCB enum) ----
+    // ---- CBs (fixed ids = SparseCB enum) ----
+    uint32_t cb_id = 0;
     const auto cb = [&](uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
-        const uint32_t idx = desc.cbs.size();
+        const uint32_t idx = cb_id++;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = page_size * num_pages,
             .core_ranges = core_grid,
@@ -117,25 +119,29 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     cb(q_row_bytes, H, q_rm_df);              // cb_q_rm : H row-sticks (native Q dtype: bf16/fp8)
     cb(q_in_tile_bytes, Sqt * DHt, q_in_df);  // cb_q_in : [Sqt,DHt] (bfp8 when Q is fp8, else Q's float format)
     // Single-buffered: reader reserves one block and writer fills its half into the same L1 region.
-    cb(k_tile_bytes, Skt * DHt, k_df);       // cb_k_in : [Skt,DHt] tiled cache (reader-filled, no tilize)
-    cb(v_tile_bytes, Skt * vDHt, v_df);      // cb_v_in : [Skt,vDHt] tiled cache (reader-filled, no tilize)
-    cb(tile_bytes, 1, bf);                   // cb_scale
-    cb(tile_bytes, Sqt * Skt, bf);           // cb_qk_im : [Sqt,Skt]
-    cb(tile_bytes, Sqt, bf);                 // cb_max_a
-    cb(tile_bytes, Sqt, bf);                 // cb_max_b
-    cb(tile_bytes, Sqt, bf);                 // cb_sum_a
-    cb(tile_bytes, Sqt, bf);                 // cb_sum_b
-    cb(tile_bytes, Sqt * vDHt, bf);          // cb_out_a
-    cb(tile_bytes, Sqt * vDHt, bf);          // cb_out_b
-    cb(tile_bytes, Sqt, bf);                 // cb_corr
-    cb(tile_bytes, Sqt * vDHt, bf);          // cb_out_im (bf16 accumulator, full precision)
-    cb(out_tile_bytes, Sqt * vDHt, out_df);  // cb_out_rm : untilized output in Q's dtype
-    cb(topk * idx_elem_bytes, 1, bf);        // cb_idx : one block-id row
-    cb(16, 2, bf);                           // cb_ctrl : active block count (double-buffered)
-    cb(tile_bytes, 1, bf);                   // cb_col_identity
-    cb(tile_bytes, 1, bf);                   // cb_recip_scratch
-    cb(16, 2, bf);                           // cb_kreq : {block_id, is_last} reader->writer (double-buffered)
-    cb(16, 2, bf);                           // cb_kack : writer->reader ack (double-buffered)
+    cb(k_tile_bytes, Skt * DHt, k_df);   // cb_k_in : [Skt,DHt] tiled cache (reader-filled, no tilize)
+    cb(v_tile_bytes, Skt * vDHt, v_df);  // cb_v_in : [Skt,vDHt] tiled cache (reader-filled, no tilize)
+    cb(tile_bytes, 1, bf);               // cb_scale
+    cb(tile_bytes, Sqt * Skt, bf);       // cb_qk_im : [Sqt,Skt]
+    cb(tile_bytes, Sqt, bf);             // cb_max_a
+    cb(tile_bytes, Sqt, bf);             // cb_max_b
+    cb(tile_bytes, Sqt, bf);             // cb_sum_a
+    cb(tile_bytes, Sqt, bf);             // cb_sum_b
+    cb(tile_bytes, Sqt * vDHt, bf);      // cb_out_a
+    cb(tile_bytes, Sqt * vDHt, bf);      // cb_out_b
+    cb(tile_bytes, Sqt, bf);             // cb_corr
+    cb(tile_bytes, Sqt * vDHt, bf);      // cb_out_im (bf16 accumulator, full precision)
+    if (!attrs.tiled_output()) {
+        cb(out_tile_bytes, Sqt * vDHt, out_df);  // cb_out_rm : untilized output in Q's dtype
+    } else {
+        ++cb_id;  // cb_out_rm is not instantiated for direct tiled output.
+    }
+    cb(topk * idx_elem_bytes, 1, bf);  // cb_idx : one block-id row
+    cb(16, 2, bf);                     // cb_ctrl : active block count (double-buffered)
+    cb(tile_bytes, 1, bf);             // cb_col_identity
+    cb(tile_bytes, 1, bf);             // cb_recip_scratch
+    cb(16, 2, bf);                     // cb_kreq : {block_id, is_last} reader->writer (double-buffered)
+    cb(16, 2, bf);                     // cb_kack : writer->reader ack (double-buffered)
     // Mask tiles are touched only under CAUSAL_MASK_ENABLED in the kernels, so skip their L1 when causal
     // masking is off. Safe to gate: these are the trailing CBs, so omitting them shifts no other buffer index.
     if (attrs.causal_enabled()) {
@@ -210,6 +216,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     writer_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
     writer_ct.push_back(cb_neginf);                         // writer builds the persistent -inf mask tile
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    writer_ct.push_back(cb_out_im);
+    writer_ct.push_back(attrs.tiled_output() ? 1u : 0u);
+    writer_ct.push_back(vDHt);
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -257,6 +266,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     compute_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
     compute_ct.push_back(cb_neginf);                         // full -inf mask tile (future key-tiles)
     compute_ct.push_back(cb_vmask);                          // partial-column mask tile (boundary key-tile)
+    compute_ct.push_back(attrs.tiled_output() ? 1u : 0u);
 
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = kdir + "compute/sparse_sdpa_msa_compute.cpp";

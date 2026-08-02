@@ -170,8 +170,8 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // Row-byte alignment: each Q/K/index/output row is a DRAM page the reader DMAs from / the writer DMAs
     // to (and tensors are unpadded, so the page == one row). The row byte count must be a multiple of the
     // DRAM access alignment; that also covers the in-L1 row offsets (DRAM alignment >= L1 alignment).
-    // Each Q/K row is one DRAM page in its native dtype (fp8 -> 1 byte, bf16 -> 2). The output dtype
-    // matches q (compute_output_specs), so its row width uses q's element size.
+    // Each Q/K row is one DRAM page in its native dtype (fp8 -> 1 byte, bf16 -> 2). Row-major output uses
+    // q's dtype; direct TILE output is bf16 and does not issue row writes.
     const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
     TT_FATAL((K_DIM * q.element_size()) % dram_align == 0, "Q row bytes must be {}B aligned", dram_align);
     if (!attrs.has_scaled_kv()) {
@@ -181,7 +181,10 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
             dram_align);
     }
     TT_FATAL((TOPK * idx.element_size()) % dram_align == 0, "indices row bytes must be {}B aligned", dram_align);
-    TT_FATAL((attrs.v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
+    if (!attrs.tiled_output()) {
+        TT_FATAL(
+            (attrs.v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
+    }
 
     // fp8 q/kv tilizes through a 32-bit dest accumulator (fp8 unpacks to fp32 in DEST, packs to bf16/bfp8),
     // so it requires fp32_dest_acc_en. The op factory defaults it on for fp8 inputs (see sparse_sdpa.cpp).
@@ -196,14 +199,13 @@ SparseSDPAOperation::spec_return_value_t SparseSDPAOperation::compute_output_spe
     const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
     auto shape = t.q.logical_shape();  // [1, H, S, K_DIM]
     shape[3] = attrs.v_dim;            // [1, H, S, v_dim]
-    // Output dtype matches q (bf16 -> bf16, fp8_e4m3 -> fp8_e4m3): the final untilize packs the bf16
-    // accumulator to the output dtype (fp8 is a regular float8, not block-float, so it untilizes fine).
-    // The output is always DRAM-interleaved ROW_MAJOR — the writer drains it with per-head-row paged
-    // noc writes, so no caller-supplied memory_config is exposed (it could only ever be this).
+    // Direct TILE output keeps the bf16 accumulator tiled and is written by the dataflow kernel without an
+    // untilize. ROW_MAJOR preserves the legacy dtype-matching behavior.
     const tt::tt_metal::MemoryConfig out_mem{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    const auto output_dtype = attrs.tiled_output() ? tt::tt_metal::DataType::BFLOAT16 : t.q.dtype();
     return tt::tt_metal::TensorSpec(
-        shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
+        shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(attrs.output_layout), out_mem));
 }
 
 SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_tensors(
@@ -230,6 +232,7 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.kv_format,
         attrs.k_chunk_size,
         attrs.compute_kernel_config,
+        attrs.output_layout,
         t.q.logical_shape(),
         t.q.dtype(),
         t.kv.dtype(),
@@ -263,7 +266,8 @@ Tensor sparse_sdpa(
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
-    std::optional<BlockCyclicLayout> block_cyclic) {
+    std::optional<BlockCyclicLayout> block_cyclic,
+    Layout output_layout) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -272,6 +276,7 @@ Tensor sparse_sdpa(
             .kv_format = kv_format,
             .k_chunk_size = k_chunk_size,
             .compute_kernel_config = compute_kernel_config,
+            .output_layout = output_layout,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
         },

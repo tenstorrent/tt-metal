@@ -90,9 +90,7 @@ def run_op(
         k_chunk_size=k_chunk_size,
         compute_kernel_config=compute_kernel_config,
     )
-    # Output dtype matches q. fp8 tensors can't be converted directly with to_torch, so typecast to bf16.
-    if tt_out.dtype == ttnn.fp8_e4m3:
-        tt_out = ttnn.typecast(tt_out, ttnn.bfloat16)
+    # Default output remains ROW_MAJOR and retains q's dtype.
     return ttnn.to_torch(tt_out), scale
 
 

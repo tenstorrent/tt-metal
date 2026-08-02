@@ -26,7 +26,8 @@ enum class SparseKVFormat : uint8_t {
 //   indices [1, 1, S, TOPK] uint32 ROW_MAJOR (0xFFFFFFFF = masked; sentinels are a contiguous tail)
 //   v_dim   width of V (leading v_dim cols of the K_DIM-wide cache); the output width.
 //   kv_format explicitly identifies the KV representation and must agree with its dtype and logical width.
-// Returns out [1, H, S, v_dim] ROW_MAJOR; the output dtype MATCHES q (bf16 q -> bf16 out, fp8 q -> fp8 out).
+// Returns out [1, H, S, v_dim] in output_layout (ROW_MAJOR by default). TILE output is explicitly requested
+// with output_layout=Layout::TILE and is emitted directly by the kernel as bf16, avoiding the final untilize.
 // (K_DIM is taken from q/kv; scale defaults to K_DIM**-0.5.)
 //
 // cache_batch_idx: when set, kv is a shared [B, 1, T, K_DIM] cache and this selects the batch slot to attend
@@ -62,6 +63,7 @@ ttnn::Tensor sparse_sdpa(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    Layout output_layout = Layout::ROW_MAJOR);
 
 }  // namespace ttnn::transformer

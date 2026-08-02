@@ -99,9 +99,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const bool q_is_fp8 = (q_rm_df == tt::DataFormat::Fp8_e4m3);
     const tt::DataFormat q_in_df = q_is_fp8 ? tt::DataFormat::Bfp8_b : bf;
     const uint32_t q_in_tile_bytes = tt::tile_size(q_in_df);
-    // Output dtype matches q (compute_output_specs). The final untilize packs the bf16 accumulator
-    // (cb_out_im) to this format in cb_out_rm — fp8_e4m3 is a regular float8, not block-float, so it
-    // untilizes fine. cb_out_rm's tile-sized pages use the output format's tile size (fp8 -> 1024, bf16 -> 2048).
+    // The normalized accumulator is bf16. For a direct tiled result the writer consumes cb_out_im; otherwise
+    // compute untilizes it into cb_out_rm using the legacy output dtype.
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
@@ -158,7 +157,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_out_b, tile_bytes, Sqt * vDHt, bf);
     cb(cb_corr, tile_bytes, Sqt, bf);
     cb(cb_out_im, tile_bytes, Sqt * vDHt, bf);
-    cb(cb_out_rm, out_tile_bytes, Sqt * vDHt, out_df);
+    if (!attrs.tiled_output()) {
+        cb(cb_out_rm, out_tile_bytes, Sqt * vDHt, out_df);
+    }
     cb(cb_idx, topk * idx_elem_bytes, 1, bf);
     cb(cb_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_col_identity, tile_bytes, 1, bf);
@@ -217,7 +218,17 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
-    std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
+    std::vector<uint32_t> writer_ct = {
+        H,
+        S,
+        vDHt,
+        cb_out_rm,
+        cb_out_im,
+        static_cast<uint32_t>(attrs.tiled_output()),
+        cb_scale,
+        cb_col_identity,
+        cb_neginf,
+        out_elem_bytes};
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     writer_ct.insert(
         writer_ct.end(),
@@ -299,6 +310,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     compute_ct.push_back(static_cast<uint32_t>(math_approx));
     compute_ct.push_back(qsb);
     compute_ct.push_back(packed_page_bytes);
+    compute_ct.push_back(static_cast<uint32_t>(attrs.tiled_output()));
     TT_FATAL(
         compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
         "sparse_sdpa compute compile-time argument layout is out of sync");

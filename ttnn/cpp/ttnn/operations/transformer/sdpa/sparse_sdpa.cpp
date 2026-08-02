@@ -21,9 +21,13 @@ ttnn::Tensor sparse_sdpa(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    Layout output_layout) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
+    TT_FATAL(
+        output_layout == Layout::ROW_MAJOR || output_layout == Layout::TILE,
+        "sparse_sdpa: output_layout must be ROW_MAJOR or TILE");
 
     // Block-cyclic remap: sp_axis and chunk_local must be provided together (or neither). `sp` is DERIVED from
     // the mesh (the cache's stripe count == the size of the SP mesh axis), so a caller cannot pass an sp that
@@ -66,7 +70,17 @@ ttnn::Tensor sparse_sdpa(
         /*default_l1_acc=*/false);
 
     return ttnn::prim::sparse_sdpa(
-        q, kv, indices, resolved_scale, v_dim, kv_format, k_chunk_size, kernel_config, cache_batch_idx, block_cyclic);
+        q,
+        kv,
+        indices,
+        resolved_scale,
+        v_dim,
+        kv_format,
+        k_chunk_size,
+        kernel_config,
+        cache_batch_idx,
+        block_cyclic,
+        output_layout);
 }
 
 }  // namespace ttnn::transformer

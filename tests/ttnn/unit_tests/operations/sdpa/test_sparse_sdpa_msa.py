@@ -157,6 +157,24 @@ def _msa_op(device, q, k_tt, v_tt, indices):
 
 
 @run_for_blackhole()
+def test_sparse_sdpa_msa_native_tiled_output(device):
+    H, n_kv, S, T, topk = 32, 1, 33, 4096, 16
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, _D, causal=False, seed=19)
+    out = ttnn.transformer.sparse_sdpa_msa(
+        _rm(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        _tile(k, device),
+        _tile(v, device),
+        _rm(indices.to(torch.int32), device, ttnn.uint32),
+        scale=_D**-0.5,
+        block_size=BLK_KV,
+        output_layout=ttnn.TILE_LAYOUT,
+    )
+    assert out.layout == ttnn.TILE_LAYOUT
+    assert out.dtype == ttnn.bfloat16
+    assert pcc(ttnn.to_torch(out), sparse_attention_ref_msa(q, k, v, indices, _D**-0.5)) > DEVICE_PCC
+
+
+@run_for_blackhole()
 def test_msa_gqa_kv_len_no_recompile(device):
     H, n_kv, S, topk = 64, 4, 8, 16
     device.clear_program_cache()

@@ -1427,12 +1427,12 @@ class ttMLA:
             block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
             cache_batch_idx=cache_batch_idx,
+            output_layout=ttnn.TILE_LAYOUT,
         )
         ttnn.deallocate(q_rm)
         if idx is not indices:
             ttnn.deallocate(idx)
-        ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
-        ttnn.deallocate(out)
+        ret = out  # native TILE output for the downstream wkv_b2 linear
 
         if transpose_head_to_seq:
             # Invert the redistribution so the result matches the head-sharded

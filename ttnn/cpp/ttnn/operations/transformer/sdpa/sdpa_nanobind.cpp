@@ -373,8 +373,10 @@ void bind_sdpa(nb::module_& mod) {
             block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
                 Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
+            output_layout (ttnn.Layout): output layout. Defaults to ROW_MAJOR. TILE requests a native bf16 tiled
+                result and skips the compute-kernel untilize.
         Returns:
-            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
+            ttnn.Tensor: [1, H, S, v_dim] in output_layout. ROW_MAJOR preserves q's dtype; TILE is bf16.
         )doc",
         &ttnn::transformer::sparse_sdpa,
         nb::arg("q").noconvert(),
@@ -388,7 +390,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR));
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
@@ -423,9 +426,11 @@ void bind_sdpa(nb::module_& mod) {
                 physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.
             block_cyclic_chunk_local (int, optional): per-shard chunk length (chunk_size_global / sp). Required
                 iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).
+            output_layout (ttnn.Layout): output layout. Defaults to ROW_MAJOR. TILE requests a native bf16 tiled
+                result and skips the compute-kernel untilize.
 
         Returns:
-            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
+            ttnn.Tensor: [1, H, S, v_dim] in output_layout. ROW_MAJOR preserves q's dtype; TILE is bf16.
 
         Additional preconditions: d and v_dim must be multiples of 32; TOPK times 4 and output row bytes must meet
         device DRAM alignment.
@@ -443,7 +448,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("chunk_start_idx") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR));
 
     const auto* const chunked_doc =
         R"doc(

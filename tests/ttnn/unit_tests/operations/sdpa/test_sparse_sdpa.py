@@ -245,6 +245,25 @@ def test_sparse_sdpa_output_dtype(device, q_dtype):
     assert out.dtype == q_dtype, f"output dtype {out.dtype} != q dtype {q_dtype}"
 
 
+@run_for_blackhole()
+def test_sparse_sdpa_native_tiled_output(device):
+    H, S, T, TOPK, kc = 32, 33, 256, 64, 32
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda _: TOPK, seed=17)
+    out = ttnn.transformer.sparse_sdpa(
+        to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16),
+        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        V_DIM,
+        kv_format=BF16_KV,
+        scale=K_DIM**-0.5,
+        k_chunk_size=kc,
+        output_layout=ttnn.TILE_LAYOUT,
+    )
+    assert out.layout == ttnn.TILE_LAYOUT
+    assert out.dtype == ttnn.bfloat16
+    assert pcc(ttnn.to_torch(out), golden(q, kv, indices, K_DIM**-0.5, V_DIM)) >= 0.99
+
+
 # ---- minimal PCC vs the sparse_mla golden: single chunk + multi chunk, all-valid + a boundary mask ----
 @run_for_blackhole()
 @pytest.mark.parametrize(

@@ -92,6 +92,8 @@ enum : uint32_t {
     S,
     V_DHT,
     CB_OUT_RM,
+    CB_OUT_IM,
+    TILED_OUTPUT,
     CB_SCALE,
     CB_COL_IDENTITY,
     CB_NEGINF,
@@ -147,6 +149,7 @@ enum : uint32_t {
     MATH_APPROX_MODE,
     QUERY_SUBBLOCK,
     PACKED_ROW_BYTES,
+    TILED_OUTPUT,
     END,
 };
 }  // namespace compute_ct_arg

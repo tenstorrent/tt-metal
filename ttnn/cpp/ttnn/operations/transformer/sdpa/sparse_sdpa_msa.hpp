@@ -17,7 +17,8 @@ namespace ttnn::transformer {
 //   k       [B, n_kv, T, d]      bf16 | bfp8_b     TILE  (pre-tiled, block-aligned; may be ND-sharded)
 //   v       [B, n_kv, T, v_dim]  bf16 | bfp8_b     TILE  (separate tensor; v_dim = the output width, taken from v)
 //   indices [1, n_kv, S, TOPK]   uint32 BLOCK-ids  ROW_MAJOR  (-1 = 0xFFFFFFFF = sentinel; a contiguous tail)
-// Returns [1, H, S, v_dim] ROW_MAJOR with dtype matching q. `scale` defaults to d**-0.5; `block_size`
+// Returns [1, H, S, v_dim] in output_layout (ROW_MAJOR by default). TILE output is explicitly requested and
+// is emitted directly as bf16, avoiding the final untilize. `scale` defaults to d**-0.5; `block_size`
 // defaults to 128. H must be divisible by n_kv; H/n_kv may be 16 (internally padded to one head tile) or a
 // multiple of 32.
 //
@@ -46,6 +47,7 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    Layout output_layout = Layout::ROW_MAJOR);
 
 }  // namespace ttnn::transformer

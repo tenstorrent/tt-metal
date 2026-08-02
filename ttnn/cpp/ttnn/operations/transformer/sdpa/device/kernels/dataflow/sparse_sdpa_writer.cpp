@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// sparse_sdpa writer: per token, drain the untilized [H, V_DIM] row-major block from compute (Sqt*vDHt
-// tile-sized pages, row-major bytes inside) and write each head-row to the ROW-MAJOR [1,H,S,V_DIM] output.
+// sparse_sdpa writer: per token, drain either the untilized [H, V_DIM] row-major block or the native tiled
+// accumulator from compute. The tiled path scatters each 16-element face-row to its [head, sequence] tile,
+// avoiding the compute-kernel untilize.
 // Also builds the three persistent compute-input tiles once at startup (the reader is busier): the reduce
 // identity scaler, the col-identity (row-sum finalize), and the all-(-inf) mask tile.
 // Uses the object-based NoC + circular-buffer APIs.
@@ -15,6 +16,7 @@
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"  // generate_bcast_col_scalar
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_gather.hpp"  // dual-NoC trid-ring gather helper (shared with the reader)
+#include "sparse_sdpa_tiled_output.hpp"
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 constexpr uint16_t neg_inf_bf16 = 0xFF80u;
@@ -26,6 +28,8 @@ void kernel_main() {
     // CB ids — passed by the factory (the SparseCB enum is the single source); order must match the
     // factory's writer CB-arg block (compile args 3..6).
     constexpr uint32_t cb_out_rm = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_OUT_RM);
+    constexpr uint32_t cb_out_im = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_OUT_IM);
+    constexpr bool tiled_output = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::TILED_OUTPUT) != 0;
     constexpr uint32_t cb_scale = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SCALE);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_COL_IDENTITY);
     constexpr uint32_t cb_neginf = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_NEGINF);
@@ -59,8 +63,18 @@ void kernel_main() {
     constexpr uint32_t block_tiles = (H / tt::constants::TILE_HEIGHT) * vDHt;          // Sqt*vDHt: the [H,V_DIM] block
 
     Noc noc;
-    experimental::CB out_cb(cb_out_rm);
+    experimental::CB out_cb(tiled_output ? cb_out_im : cb_out_rm), scale_cb(cb_scale);
     const auto out = TensorAccessor(out_args, out_addr);
+    if constexpr (tiled_output && S % tt::constants::TILE_HEIGHT != 0) {
+        // cb_scale is fresh at startup. Zero the output padding before creating the persistent scaler, so direct
+        // tiled output needs no row-major output CB or dedicated zero scratch.
+        noc.async_write_zeros(scale_cb, get_tile_size(cb_scale));
+        noc.write_zeros_l1_barrier();
+        if (tok_start <= S - 1 && tok_start + tok_count > S - 1) {
+            zero_tiled_output_padding<vDHt>(noc, out, scale_cb, 0, H, S, out_elem_bytes);
+            noc.write_zeros_dram_barrier();
+        }
+    }
     // Dual-NoC K gather: the writer co-gathers half of each K chunk on ITS NoC into the shared cb_k_rm L1
     // (the reader owns the reserve/push; we fill rows [0,half) at the same write ptr). This spreads the
     // K response-data load over both NoC links. Indices live in the reader's shared cb_idx
@@ -140,10 +154,16 @@ void kernel_main() {
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);
         }
-        out_cb.wait_front(block_tiles);  // one untilized [H, V_DIM] block
-        for (uint32_t h = 0; h < H; ++h) {
-            // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
-            noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
+        out_cb.wait_front(block_tiles);
+        if constexpr (tiled_output) {
+            for (uint32_t h = 0; h < H; ++h) {
+                write_tiled_output_row<vDHt>(noc, out_cb, out, tok, h, h, S, out_elem_bytes);
+            }
+        } else {
+            for (uint32_t h = 0; h < H; ++h) {
+                // row h (head h) at CB byte offset h*row_bytes; DRAM page = h*S + tok.
+                noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
+            }
         }
         noc.async_write_barrier();
         out_cb.pop_front(block_tiles);

@@ -91,6 +91,7 @@ Tensor sparse_sdpa_msa(
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
-    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt);
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
+    Layout output_layout = Layout::ROW_MAJOR);
 
 }  // namespace ttnn::prim

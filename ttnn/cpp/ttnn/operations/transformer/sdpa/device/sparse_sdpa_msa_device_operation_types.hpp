@@ -17,6 +17,7 @@ struct SparseSDPAMsaParams {
     float scale = 1.0f;         // compile-time; included in the program hash
     uint32_t block_size = 128;  // tokens per selected KV block
     DeviceComputeKernelConfig compute_kernel_config;
+    Layout output_layout = Layout::ROW_MAJOR;
     // Selects one [B,n_kv,T,*] cache slot. The value is patched as runtime K/V tile offsets and is not hashed.
     std::optional<uint32_t> cache_batch_idx = std::nullopt;
     // Set -> the K/V cache is block-cyclic across SP; the gather kernels apply the invP block remap. Hashed.
@@ -30,6 +31,7 @@ struct SparseSDPAMsaParams {
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
+    bool tiled_output() const { return output_layout == Layout::TILE; }
 };
 
 struct SparseSDPAMsaInputs {
