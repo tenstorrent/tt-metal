@@ -326,11 +326,25 @@ struct FusedGatherContext {
     uint32_t chunk_ready_sem_id = 0;   // VALID/INVALID go-ahead flag, on EVERY core
     uint32_t gather_count_sem_id = 0;  // masters-done counter, meaningful on master 0
     uint32_t local_done_sem_id = 0;    // local-staging-done counter, held by EVERY master
+    // Progressive consumption. Each direction has a COORDINATOR master (bank 0 fwd, bank m_groups bwd).
+    // Its peers report each arrival into dir_count_sem on the coordinator; the coordinator then publishes
+    // the highest globally-complete arrival index into wave_{fwd,bwd}_sem on EVERY core by multicast.
+    // Single writer per wave semaphore and monotone values, so consumers can wait_min on them -- this is
+    // the per-slot epoch the design spec asks for, not an ambiguous shared counter.
+    uint32_t dir_count_sem_id = 0;
+    uint32_t wave_fwd_sem_id = 0;
+    uint32_t wave_bwd_sem_id = 0;
+    CoreCoord fwd_coord_virtual{};
+    CoreCoord bwd_coord_virtual{};
     // Barrier geometry, in VIRTUAL (translated) coords.
     CoreCoord master0_virtual{};
     // Multicast rectangles covering every core master 0 releases: {start_x, start_y, end_x, end_y, dests}.
     struct ReleaseRange {
-        uint32_t sx, sy, ex, ey, dests;
+        // Two destination counts, one per possible sender. A non-loopback multicast must NOT count the
+        // sender in num_dests, and there are now two cores that publish: the forward coordinator (master 0)
+        // and the backward coordinator (master m_groups). Counting the sender waits on an ack that never
+        // arrives, which hangs.
+        uint32_t sx, sy, ex, ey, dests_fwd, dests_bwd;
     };
     std::vector<ReleaseRange> release_ranges;
     std::vector<CoreCoord> master_virtuals;  // all masters, for the local-staging barrier
@@ -375,17 +389,27 @@ enum FusedGatherArg : uint32_t {
     kFgNumMasters = 19,
     kFgMaster0X = 20,
     kFgMaster0Y = 21,
-    kFgLocalDoneSem = 22,  // masters-finished-local-staging counter (one per master, not just master 0)
+    // Progressive consumption: per-direction arrival publication.
+    kFgDirCountSem = 22,
+    kFgWaveFwdSem = 23,
+    kFgWaveBwdSem = 24,
+    kFgFwdCoordX = 25,
+    kFgFwdCoordY = 26,
+    kFgBwdCoordX = 27,
+    kFgBwdCoordY = 28,
+    kFgFwdRecvTotal = 29,  // arrivals the FORWARD stream will deliver (both needed by every core)
+    kFgBwdRecvTotal = 30,
+    kFgLocalDoneSem = 31,  // masters-finished-local-staging counter (one per master, not just master 0)
     // Blocked-cyclic K assignment (see the k-stripe comment at the runtime-arg push site). The writer needs
     // these to map its capacity-local K index onto a global staging column.
-    kFgKRunLen = 23,
-    kFgKStripeBase = 24,
-    kFgKShardStride = 25,
-    kFgNumReleaseRanges = 26,
-    // Followed by kFgNumReleaseRanges 5-word records {start_x, start_y, end_x, end_y, num_dests} in VIRTUAL
+    kFgKRunLen = 32,
+    kFgKStripeBase = 33,
+    kFgKShardStride = 34,
+    kFgNumReleaseRanges = 35,
+    // Followed by kFgNumReleaseRanges 6-word records {sx, sy, ex, ey, dests_fwd, dests_bwd} in VIRTUAL
     // coords: the multicast rectangles master 0 releases. Per-range rather than one bounding box because
     // the bank-adjacent placement is deliberately not a filled rectangle.
-    kFusedArgCount = 27,  // + 5*num_release_ranges + 2*num_masters words, then the mux client block
+    kFusedArgCount = 36,  // + 6*num_release_ranges + 2*num_masters words, then the mux client block
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -394,6 +418,7 @@ enum FusedGatherArg : uint32_t {
 // (masters-per-direction / num_links). Mux v2 self-terminates by counting close() calls against its
 // compile-time channel count, so an over-provisioned mux simply never exits -- it does not error, it
 // hangs. Every change to the client split has to move this number with it.
+constexpr uint32_t kGatherScratchTiles = 8;  // must equal kGatherBatch in the writer kernel
 constexpr uint8_t kMuxBuffersPerChannel = 8;
 constexpr size_t kMuxChannelBufferBytes = 4096;  // 4 KiB packet
 
@@ -440,8 +465,30 @@ FusedGatherContext build_fused_gather_context(
     // apply -- and dispatch re-zeroes them on every enqueue, which is exactly the re-arm we want.
     // Both live on ALL cores: every core waits on the go-ahead flag, not just the master ring.
     ctx.chunk_ready_sem_id = CreateSemaphore(program, all_cores, 0);  // 0 == INVALID
-    ctx.gather_count_sem_id = CreateSemaphore(program, all_cores, 0);
     ctx.local_done_sem_id = CreateSemaphore(program, all_cores, 0);
+    // ONE SLOT PER REPORTER, not per arrival. Two constraints have to be met at once:
+    //
+    //  * A single shared counter is ambiguous -- with 4 masters, a cumulative count of 2*4 is produced
+    //    equally by all four at arrival 2 and by two at arrival 4 with the other two empty, so it would
+    //    publish a wave that has not landed. Silent wrong answer, not a hang.
+    //  * One semaphore per ARRIVAL scales with tp and blew the 16-semaphore-per-core budget at tp=8
+    //    ("Cannot add semaphore on core 0-9"), which fails program creation outright.
+    //
+    // Per-reporter slots satisfy both: master b only ever increments slot b, so slot b IS master b's
+    // arrival count -- single writer, monotone, and a fixed m_groups slots regardless of tp. The
+    // coordinator publishes arrival i once every slot has reached i.
+    ctx.dir_count_sem_id = CreateSemaphore(program, all_cores, 0);
+    const uint32_t reporter_slots = ctx.num_masters / 2u;
+    for (uint32_t b = 1; b < reporter_slots; ++b) {
+        const uint32_t nxt = CreateSemaphore(program, all_cores, 0);
+        TT_FATAL(
+            nxt == ctx.dir_count_sem_id + b,
+            "per-reporter semaphores must be consecutive for base+b indexing, got {} after base {}",
+            nxt,
+            ctx.dir_count_sem_id);
+    }
+    ctx.wave_fwd_sem_id = CreateSemaphore(program, all_cores, 0);
+    ctx.wave_bwd_sem_id = CreateSemaphore(program, all_cores, 0);
     ctx.num_masters = static_cast<uint32_t>(master_ring_cores.size());
     // Hard-tie the mux sizing to the client split. Getting these out of step does not fail loudly: the
     // mux's forwarder RISC just spins waiting for close() calls that never come.
@@ -876,6 +923,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         for (const auto& mc : master_ring_cores) {
             fused_gather.master_virtuals.push_back(device->worker_core_from_logical_core(mc));
         }
+        const uint32_t mg = fused_gather.num_masters / 2u;
+        fused_gather.fwd_coord_virtual = device->worker_core_from_logical_core(master_ring_cores[0]);
+        fused_gather.bwd_coord_virtual = device->worker_core_from_logical_core(master_ring_cores[mg]);
 
         // Release the grid with ONE MULTICAST PER CoreRange. A single bounding-box mcast is not an option:
         // the bank-adjacent placement is deliberately not a filled rectangle, so the box also covers cores
@@ -904,17 +954,20 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             if (master0_on_noc1) {
                 std::swap(s, e);  // NOC_1 traverses the grid in the opposite direction
             }
-            const bool holds_master0 = cr.contains(master_ring_cores[0]);
-            const uint32_t dests = static_cast<uint32_t>(cr.size()) - (holds_master0 ? 1u : 0u);
-            if (dests == 0u) {
-                continue;  // a range that is master 0 alone: it already set its own flag
+            const uint32_t mgc = fused_gather.num_masters / 2u;
+            const uint32_t dests_fwd = static_cast<uint32_t>(cr.size()) - (cr.contains(master_ring_cores[0]) ? 1u : 0u);
+            const uint32_t dests_bwd =
+                static_cast<uint32_t>(cr.size()) - (cr.contains(master_ring_cores[mgc]) ? 1u : 0u);
+            if (dests_fwd == 0u && dests_bwd == 0u) {
+                continue;  // a range holding only a coordinator: it sets its own copy directly
             }
             fused_gather.release_ranges.push_back(
                 {static_cast<uint32_t>(s.x),
                  static_cast<uint32_t>(s.y),
                  static_cast<uint32_t>(e.x),
                  static_cast<uint32_t>(e.y),
-                 dests});
+                 dests_fwd,
+                 dests_bwd});
         }
         TT_FATAL(
             fused_gather.release_ranges.size() <= 48u,
@@ -931,6 +984,20 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     mkcb(program, all_cores, 1, cb.cb1_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1 (depth 4)
     mkcb(program, all_cores, 2, cb.cb2_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // out
     mkcb(program, all_cores, 3, cb.cb3_tiles, tt::DataFormat::Float32, kTileBytesFp32);    // fp32 intermediate
+    if (fused_gather.enabled) {
+        // DEDICATED gather scratch. It used to be cb0's head via get_write_ptr(in0_cb) -- but
+        // cb_reserve_back does not move the write pointer, so that address IS ring slot 0, and slots
+        // 1..k sit immediately after it. While the coarse barrier existed nothing could fill those slots
+        // during the gather. Under progressive consumption a non-master core (which has no fabric work)
+        // clears its gate immediately and writes its shard into a master's slot 1 while that master is
+        // still DMA-ing through its scratch -- the scratch overwrites the delivered shard, the master
+        // then sees the ring credit and consumes garbage.
+        //
+        // It only bites when W*M_block*K_block < kGatherBatch, i.e. when a ring shard is smaller than the
+        // batch: the small shape at Pk>=2. Staging stays byte-exact throughout, which is exactly why the
+        // readback diagnostic looked clean.
+        mkcb(program, all_cores, 11, kGatherScratchTiles, tt::DataFormat::Float16_b, kTileBytesBf16);
+    }
     // cb7 is the CHAIN's running-sum buffer. Reduce-scatter never touches it (its partials travel through the
     // c_4/c_5 chunk CBs instead), so don't spend the L1 on it there.
     // cb7_tiles is already 0 under reduce-scatter (the sizer decides that), so this one test covers both
@@ -1355,6 +1422,15 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(fused_gather.num_masters);
             wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.x));
             wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.y));
+            wa.push_back(fused_gather.dir_count_sem_id);
+            wa.push_back(fused_gather.wave_fwd_sem_id);
+            wa.push_back(fused_gather.wave_bwd_sem_id);
+            wa.push_back(static_cast<uint32_t>(fused_gather.fwd_coord_virtual.x));
+            wa.push_back(static_cast<uint32_t>(fused_gather.fwd_coord_virtual.y));
+            wa.push_back(static_cast<uint32_t>(fused_gather.bwd_coord_virtual.x));
+            wa.push_back(static_cast<uint32_t>(fused_gather.bwd_coord_virtual.y));
+            wa.push_back(fwd_recv);
+            wa.push_back(bwd_recv);
             wa.push_back(fused_gather.local_done_sem_id);
             wa.push_back(k_run_len);
             wa.push_back(k_stripe_base);
@@ -1365,16 +1441,17 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
                 wa.push_back(rr.sy);
                 wa.push_back(rr.ex);
                 wa.push_back(rr.ey);
-                wa.push_back(rr.dests);
+                wa.push_back(rr.dests_fwd);
+                wa.push_back(rr.dests_bwd);
             }
             for (const auto& mv : fused_gather.master_virtuals) {
                 wa.push_back(static_cast<uint32_t>(mv.x));
                 wa.push_back(static_cast<uint32_t>(mv.y));
             }
             TT_FATAL(
-                wa.size() == fused_rt_base + kFusedArgCount + 5u * fused_gather.release_ranges.size() +
+                wa.size() == fused_rt_base + kFusedArgCount + 6u * fused_gather.release_ranges.size() +
                                  2u * fused_gather.master_virtuals.size(),
-                "fused-gather arg block is {} words but FusedGatherArg says {} + 5*{}; the push order and "
+                "fused-gather arg block is {} words but FusedGatherArg says {} + 6*{}; the push order and "
                 "the offsets used by override_runtime_arguments have drifted",
                 wa.size() - fused_rt_base,
                 static_cast<uint32_t>(kFusedArgCount),

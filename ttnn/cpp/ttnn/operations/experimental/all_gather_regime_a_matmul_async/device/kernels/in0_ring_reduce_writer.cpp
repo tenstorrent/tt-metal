@@ -80,6 +80,10 @@ void kernel_main() {
     // Blocked-cyclic global-K mapping, filled in by the fused prologue below (0 => contiguous, the
     // single-chip layout). Declared out here because the in0 ring load further down needs them.
     uint32_t k_run_len = 0u, k_stripe_base = 0u, k_shard_stride = 0u;
+    // Progressive consumption: filled in by the fused prologue, read by the in0 ring below so it can gate
+    // each shard on that source rank having actually landed rather than on the whole gather being done.
+    uint32_t wave_fwd_sem_id = 0u, wave_bwd_sem_id = 0u, ready_sem_id_c = 0u;
+    uint32_t fwd_recv_total = 0u, bwd_recv_total = 0u, my_rank = 0u, my_tp = 1u;
 
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_bytes);
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
@@ -92,9 +96,10 @@ void kernel_main() {
     // Fused-gather transfer batch: how many tiles are kept in flight between synchronization points.
     // Bounded by the per-RISC packet-header pool (12 on Blackhole; we need batch + 1 for the credit) and
     // by cb0's capacity, whose first tiles double as the scratch ring during the prologue.
-    constexpr uint32_t kGatherBatchMax = 8;
-    constexpr uint32_t kCb0Tiles = K_num_blocks * in0_blk;
-    constexpr uint32_t kGatherBatch = (kCb0Tiles < kGatherBatchMax) ? kCb0Tiles : kGatherBatchMax;
+    // Must match kGatherScratchTiles on the host: the scratch is its own CB (c_11), NOT cb0's head.
+    // Sharing cb0 aliased the on-chip ring's slots; see the comment at the c_11 allocation.
+    constexpr uint32_t kGatherBatch = 8;
+    constexpr uint32_t gather_scratch_cb = 11;
 
     const uint32_t fwd_addr = get_semaphore(fwd_sem_id);
     volatile tt_l1_ptr uint32_t* fwd_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_addr);
@@ -316,10 +321,13 @@ void kernel_main() {
         std::size_t fa = fused_rt_base;
         const uint32_t is_fabric_client = get_arg_val<uint32_t>(fa++);
         const uint32_t rank = get_arg_val<uint32_t>(fa++);
+        my_rank = rank;
         const uint32_t tp = get_arg_val<uint32_t>(fa++);
+        my_tp = tp;
         const uint32_t k_shard_tiles = get_arg_val<uint32_t>(fa++);
         const uint32_t stage_addr = get_arg_val<uint32_t>(fa++);
         const uint32_t ready_sem_id = get_arg_val<uint32_t>(fa++);
+        ready_sem_id_c = ready_sem_id;
         const uint32_t has_fwd = get_arg_val<uint32_t>(fa++);
         const uint32_t has_bwd = get_arg_val<uint32_t>(fa++);
         const uint32_t Mt_total = get_arg_val<uint32_t>(fa++);
@@ -339,13 +347,22 @@ void kernel_main() {
         const uint32_t num_masters = get_arg_val<uint32_t>(fa++);
         const uint32_t master0_x = get_arg_val<uint32_t>(fa++);
         const uint32_t master0_y = get_arg_val<uint32_t>(fa++);
+        const uint32_t dir_count_sem_id = get_arg_val<uint32_t>(fa++);
+        wave_fwd_sem_id = get_arg_val<uint32_t>(fa++);
+        wave_bwd_sem_id = get_arg_val<uint32_t>(fa++);
+        const uint32_t fwd_coord_x = get_arg_val<uint32_t>(fa++);
+        const uint32_t fwd_coord_y = get_arg_val<uint32_t>(fa++);
+        const uint32_t bwd_coord_x = get_arg_val<uint32_t>(fa++);
+        const uint32_t bwd_coord_y = get_arg_val<uint32_t>(fa++);
+        fwd_recv_total = get_arg_val<uint32_t>(fa++);
+        bwd_recv_total = get_arg_val<uint32_t>(fa++);
         const uint32_t local_done_sem_id = get_arg_val<uint32_t>(fa++);
         k_run_len = get_arg_val<uint32_t>(fa++);
         k_stripe_base = get_arg_val<uint32_t>(fa++);
         k_shard_stride = get_arg_val<uint32_t>(fa++);
         const uint32_t num_release_ranges = get_arg_val<uint32_t>(fa++);
-        const std::size_t release_base = fa;  // 5 words per range: sx, sy, ex, ey, num_dests
-        fa += 5u * num_release_ranges;
+        const std::size_t release_base = fa;  // 6 words per range: sx, sy, ex, ey, dests_fwd, dests_bwd
+        fa += 6u * num_release_ranges;
         const std::size_t master_base = fa;  // num_masters (x, y) virtual coord pairs
         fa += 2u * num_masters;
         // has_fwd / has_bwd are mutually exclusive: a core is a client of exactly the one mux it drives
@@ -366,6 +383,63 @@ void kernel_main() {
         // it rather than declaring a second view of the same buffer.
         const auto stage_acc = TensorAccessor(in0_args, stage_addr, tile_bytes);
         const auto shard_acc = TensorAccessor(shard_args, shard_addr, tile_bytes);
+
+        // Multicast an already-set semaphore word to every core running this kernel. NON-loopback, so the
+        // caller sets its own copy first; each record's num_dests already excludes the sender. The
+        // rectangles come from the host because the bank-adjacent placement is not one filled box.
+        auto publish_to_grid = [&](uint32_t sem_addr, bool as_bwd_coord) {
+            for (uint32_t r = 0; r < num_release_ranges; ++r) {
+                const std::size_t b = release_base + 6u * r;
+                const uint64_t box = get_noc_multicast_addr(
+                    get_arg_val<uint32_t>(b),
+                    get_arg_val<uint32_t>(b + 1u),
+                    get_arg_val<uint32_t>(b + 2u),
+                    get_arg_val<uint32_t>(b + 3u),
+                    sem_addr);
+                // num_dests must exclude ME specifically -- the host precomputed a count for each of the
+                // two possible senders, because a non-loopback multicast that counts the sender waits on
+                // an ack that never comes.
+                const uint32_t dests = get_arg_val<uint32_t>(b + (as_bwd_coord ? 5u : 4u));
+                if (dests != 0u) {
+                    noc_semaphore_set_multicast(sem_addr, box, dests);
+                }
+            }
+            // The multicast SOURCES from that word; on Blackhole NoC latency exceeds RISC->L1 latency, so
+            // without this flush the RISC can overwrite it before the NoC has read it out.
+            noc_async_writes_flushed();
+        };
+
+        // Report that MY M-slice of arrival `i` has landed, and -- if I am this direction's coordinator --
+        // publish arrival `i` to the whole grid once every master of this direction has reported it.
+        //
+        // A single master's credit only covers its own M slice, so one master's arrival is not the shard.
+        // Routing through a per-direction coordinator means the published value has a single writer and is
+        // monotone, which is what lets consumers wait_min on it. Arrivals within a direction are strictly
+        // ordered (one upstream neighbour), so a plain count is unambiguous here.
+        const bool is_dir_coord = (bank_id == (my_dir == 0u ? 0u : m_groups));
+        // Which reporter slot I own within my direction: banks 0..m_groups-1 forward, the rest backward.
+        const uint32_t my_reporter_slot = (my_dir == 0u) ? bank_id : (bank_id - m_groups);
+        const uint32_t coord_x = (my_dir == 0u) ? fwd_coord_x : bwd_coord_x;
+        const uint32_t coord_y = (my_dir == 0u) ? fwd_coord_y : bwd_coord_y;
+        const uint32_t my_wave_sem_id = (my_dir == 0u) ? wave_fwd_sem_id : wave_bwd_sem_id;
+        auto report_arrival = [&](uint32_t i) {
+            volatile tt_l1_ptr uint32_t* my_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_recv_sem_addr);
+            noc_semaphore_wait_min(my_recv, i);
+            // Increment MY OWN slot on the coordinator. Slot b therefore holds master b's arrival count:
+            // one writer per slot, monotone, and a fixed number of slots regardless of tp.
+            noc_semaphore_inc(get_noc_addr(coord_x, coord_y, get_semaphore(dir_count_sem_id + my_reporter_slot)), 1);
+            if (is_dir_coord) {
+                // Arrival i is complete chip-wide only once EVERY reporter has reached i.
+                for (uint32_t b = 0; b < m_groups; ++b) {
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dir_count_sem_id + b)), i);
+                }
+                volatile tt_l1_ptr uint32_t* wv =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_wave_sem_id));
+                noc_semaphore_set(wv, i);
+                publish_to_grid(get_semaphore(my_wave_sem_id), my_dir != 0u);
+            }
+        };
 
         // The 8 master-ring cores split the shard by M tiles; bank_id picks the slice. Ceil-divide so the
         // last core takes the short tail rather than dropping rows.
@@ -389,7 +463,7 @@ void kernel_main() {
             // link, which is what a latency-bound (rather than bandwidth-bound) loop looks like.
             // Issuing kGatherBatch reads, then one barrier, then kGatherBatch writes, then one flush
             // keeps that many transfers in flight and cuts the serialization points by the batch factor.
-            const uint32_t scratch = get_write_ptr(in0_cb);
+            const uint32_t scratch = get_write_ptr(gather_scratch_cb);
             // Packet headers come from the per-RISC PacketHeaderPool (12 per RISC on Blackhole),
             // allocated ONCE outside the loops. One per in-flight payload, because the header stays live
             // until the send drains; plus a separate one for the credit, since to_noc_unicast_write and
@@ -449,6 +523,14 @@ void kernel_main() {
                 noc_semaphore_wait(local_done, num_masters);
             }
 
+            // Wave 0 -- the local shard -- is staged chip-wide now. Publish it immediately: the entire
+            // point of progressive consumption is that consumers start on it while the remote shards are
+            // still crossing the fabric.
+            if (is_master0) {
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id)), VALID);
+                publish_to_grid(get_semaphore(ready_sem_id), false);
+            }
+
             // ---- 2. bidirectional store-and-forward ring ----
             // This core drives ONE direction (my_dir). On a RING fwd runs tp/2 rounds and bwd the
             // remainder, so the two sum to exactly tp-1 and at even tp the antipode rides the forward
@@ -475,7 +557,10 @@ void kernel_main() {
 
                 for (uint32_t r = 1; r <= my_send_rounds; ++r) {
                     if (r >= 2) {
-                        noc_semaphore_wait_min(my_recv, r - 1);  // previous hop has landed
+                        // This round has to wait for arrival r-1 before it can forward it, so publish that
+                        // arrival here rather than in a separate pass -- consumers get it as early as it
+                        // can possibly be known.
+                        report_arrival(r - 1);
                     }
                     // Forward carries ranks rank-1, rank-2, ...; backward carries rank+1, rank+2, ...
                     const uint32_t src_rank = (my_dir == 0u) ? ((rank + tp - (r - 1)) % tp) : ((rank + (r - 1)) % tp);
@@ -544,56 +629,30 @@ void kernel_main() {
             }
         }
 
-        // ---- 3. block until every shard has landed ----
-        // Coarse barrier in v1: wait for all tp-1 remote shards before the on-chip ring starts. The design
-        // spec's progressive per-chunk consumption is the overlap step and comes next.
+        // ---- 3. publish each remaining arrival as it lands ----
+        // Arrivals 1..my_send_rounds-1 were already published inside the send loop (the loop has to wait
+        // for them anyway before it can forward). Anything past the last send round has no forwarding
+        // work attached to it, so it is picked up here.
+        if (is_fabric_client) {
+            // Start at 1, not my_send_rounds: at a LINE end there is no forwarding work in this
+            // direction (send_rounds == 0) and i == 0 would be a spurious report that inflates the
+            // coordinator's count and publishes a wave before it has landed.
+            const uint32_t tail_lo = (my_send_rounds > 1u) ? my_send_rounds : 1u;
+            for (uint32_t i = tail_lo; i <= my_recv_rounds; ++i) {
+                report_arrival(i);
+            }
+        }
+
+        // ---- 4. (the all-or-nothing barrier is gone) ----
+        // Consumers no longer wait for the whole gather. Wave 0 was published right after the local
+        // staging barrier above, and each remote arrival is published by its direction coordinator as it
+        // lands; the in0 ring below gates each shard on its own source rank. All that remains here is to
+        // re-arm this direction's credit counter for the next invocation.
         if (is_fabric_client) {
             volatile tt_l1_ptr uint32_t* my_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_recv_sem_addr);
             noc_semaphore_wait_min(my_recv, my_recv_rounds);
-            // Re-arm for the next invocation. A global semaphore is caller-owned memory and nothing else
-            // zeroes it, so without this the next call that lands on this same ping-pong slot would see a
-            // satisfied counter and read staging before any shard arrived.
-            //
-            // Safe to do here: only ONE neighbour ever increments this slot (store-and-forward, one
-            // direction per core), and it sends exactly my_recv_rounds credits, so seeing the last one proves
-            // that neighbour has finished with this slot for this invocation. It does NOT protect against
-            // a neighbour running a whole ping-pong cycle ahead -- that is the caller's depth>=2 rotation.
             noc_semaphore_set(my_recv, 0);
-
-            // Report in to master 0. A master's own fwd_recv count only proves ITS M slice landed, and the
-            // gather splits M by bank_id while the matmul splits it by the planner's m_start -- so no core
-            // may proceed on its own count alone.
-            noc_semaphore_inc(get_noc_addr(master0_x, master0_y, get_semaphore(gather_count_sem_id)), 1);
         }
-
-        // ---- 4. on-chip barrier: master 0 waits for every master, then releases the whole grid ----
-        volatile tt_l1_ptr uint32_t* ready =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id));
-        if (is_master0) {
-            volatile tt_l1_ptr uint32_t* count =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather_count_sem_id));
-            noc_semaphore_wait(count, num_masters);
-            noc_semaphore_set(count, 0);  // re-arm within this launch; dispatch re-zeroes across launches
-
-            // Our own flag first: the multicasts below are NON-loopback (they never write to self, and
-            // their num_dests already excludes master 0), so nothing else sets it.
-            noc_semaphore_set(ready, VALID);
-            for (uint32_t r = 0; r < num_release_ranges; ++r) {
-                const std::size_t b = release_base + 5u * r;
-                const uint64_t box = get_noc_multicast_addr(
-                    get_arg_val<uint32_t>(b),
-                    get_arg_val<uint32_t>(b + 1u),
-                    get_arg_val<uint32_t>(b + 2u),
-                    get_arg_val<uint32_t>(b + 3u),
-                    get_semaphore(ready_sem_id));
-                noc_semaphore_set_multicast(get_semaphore(ready_sem_id), box, get_arg_val<uint32_t>(b + 4u));
-            }
-            // The sends SOURCE from our own `ready` word, so it must not be touched until they drain.
-            // Blackhole makes this the likely case rather than the rare one: NoC latency there exceeds
-            // RISC->L1 latency, so the RISC really can get ahead of the read.
-            noc_async_writes_flushed();
-        }
-        noc_semaphore_wait(ready, VALID);
     }
 #endif  // FUSED_GATHER
 
@@ -607,6 +666,52 @@ void kernel_main() {
             uint32_t p = slot;
             for (uint32_t wb = 0; wb < W; ++wb) {
                 const uint32_t sb = ring_pos * W + wb;  // capacity-local block index of own shard
+#if defined(FUSED_GATHER)
+                // PROGRESSIVE CONSUMPTION. Gate this block on the SOURCE RANK it comes from rather than on
+                // the whole gather. Under the blocked-cyclic mapping l / run_len IS the source rank, so a
+                // block spans at most two ranks and waiting on the later one covers it.
+                //
+                // Each of the 8 ring cores owns a different contiguous stretch of K, hence different source
+                // ranks -- so cores whose data has already landed read, forward and start feeding compute
+                // while the remaining shards are still in flight. That is where the overlap comes from.
+                if (k_run_len != 0u && valid_k != 0u) {
+                    // Wait for EVERY source rank this block touches, not just the last one. l / run_len is
+                    // the rank in NUMERIC order, but arrival order is local-first then outward, so a higher
+                    // numeric rank can land before a lower one -- waiting only on the block's last rank
+                    // would let an earlier, later-arriving rank be read too soon. Measured as PCC 0.93-0.97.
+                    //
+                    // The upper bound is clamped into the valid range: tiles past valid_k are zero-filled,
+                    // never read, and would otherwise index a rank that does not exist.
+                    const uint32_t l_lo = sb * K_block;
+                    uint32_t l_hi = l_lo + K_block - 1u;
+                    if (l_hi >= valid_k) {
+                        l_hi = valid_k - 1u;
+                    }
+                    if (l_lo <= l_hi) {
+                        for (uint32_t src = l_lo / k_run_len; src <= l_hi / k_run_len; ++src) {
+                            if (src == my_rank) {
+                                // Local shard: published right after the on-chip staging barrier.
+                                noc_semaphore_wait(
+                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id_c)),
+                                    VALID);
+                            } else {
+                                // Forward carries my_rank-1, my_rank-2, ...; backward my_rank+1, my_rank+2.
+                                const uint32_t a = (my_rank + my_tp - src) % my_tp;
+                                if (a <= fwd_recv_total) {
+                                    noc_semaphore_wait_min(
+                                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(wave_fwd_sem_id)),
+                                        a);
+                                } else {
+                                    const uint32_t b = (src + my_tp - my_rank) % my_tp;
+                                    noc_semaphore_wait_min(
+                                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(wave_bwd_sem_id)),
+                                        b);
+                                }
+                            }
+                        }
+                    }
+                }
+#endif
                 for (uint32_t m = 0; m < M_block; ++m) {
                     for (uint32_t k = 0; k < K_block; ++k) {
                         const uint32_t l = sb * K_block + k;  // capacity-local K index within the slice
