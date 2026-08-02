@@ -120,11 +120,16 @@ def _mm_grid(device):
 
 
 def _ccl_links():
-    """num_links for collectives from HUNYUAN_CCL_LINKS (default 1)."""
+    """num_links for collectives from HUNYUAN_CCL_LINKS (default 2).
+
+    2 links measured -4.3% steady ms/step (6368->6093) vs 1 on the EP=32 full
+    (8,4) mesh -- the 2-axis reduce likes the extra bandwidth. HUNYUAN_CCL_LINKS=1
+    restores single-link.
+    """
     try:
-        return max(1, int(os.environ.get("HUNYUAN_CCL_LINKS", "1")))
+        return max(1, int(os.environ.get("HUNYUAN_CCL_LINKS", "2")))
     except ValueError:
-        return 1
+        return 2
 
 
 class _TtMoE:

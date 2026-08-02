@@ -83,3 +83,16 @@ to the TP-axis shard). PCC re-verified: sharded default 0.9940/0.99999/1.0, esca
 Profile insight: per-step device compute (attn+moe) ~3s but traced-replay wall-clock ~6.4s
 => ~55% CCL/sync-bound. The ~58s host VAE tail is now the single largest chunk of the 143s E2E
 => Lever 2 (on-device VAE) next, then CCL/CFG levers.
+
+## 2026-08-01 — Lever 1b: CCL_LINKS default 1 -> 2
+
+EP=32 on. `test_image3_t2i_perf` (32L/12step/1024², trace) steady ms/step:
+
+| CCL_LINKS | steady ms/step | E2E s/image |
+|---|---|---|
+| 1 | 6368 | 143.1 |
+| **2 (new default)** | **6093 (-4.3%)** | **135.8** |
+
+`_ccl_links()` default 1->2 (`_stubs/mo_e.py:122`); `HUNYUAN_CCL_LINKS=1` restores single-link.
+PCC unchanged (num_links = transport, not math): sharded 0.9940 / 0.99999.
+Cumulative vs original EP-off/links=1 baseline: 7770 -> 6093 ms/step (-21.6%), E2E 157.8 -> 135.8s.
