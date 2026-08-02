@@ -23,7 +23,7 @@ from .paged_cache import (
     build_groups,
     plan_pool_blocks,
 )
-from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard
+from .common import DeepSeekV4Module, _MASK_NEG, _profile, _region, _trace_capture_guard
 from .decoder_layer import DeepSeekV4DecoderLayer
 from .embedding import DeepSeekV4Embedding
 from .hyperconnection import DeepSeekV4HyperHead
@@ -841,8 +841,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         to_submesh = self.submeshes[to_submesh_id]
         sender_socket, receiver_socket = self.submesh_socket_pairs[(from_submesh_id, to_submesh_id)]
         output_tensor = ttnn.allocate_tensor_on_device(streams.spec, to_submesh)
-        ttnn.experimental.send_direct_async(streams, sender_socket)
-        ttnn.experimental.recv_direct_async(output_tensor, receiver_socket)
+        with _region("PIPELINE_HANDOFF"):
+            ttnn.experimental.send_direct_async(streams, sender_socket)
+            ttnn.experimental.recv_direct_async(output_tensor, receiver_socket)
         streams.deallocate(True)
         return output_tensor
 
@@ -857,10 +858,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ids_tt = ttnn.from_torch(
             ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.first_device
         )
-        inputs_embeds = self.embed_tokens(ids_tt)  # [B, 1, D]
-        b, s, d = inputs_embeds.shape
-        streams = ttnn.reshape(inputs_embeds, [b, s, 1, d])
-        streams = ttnn.repeat(streams, ttnn.Shape([1, 1, self.config.hc_mult, 1]))  # [B, 1, hc_mult, D]
+        with _region("EMBED"):
+            inputs_embeds = self.embed_tokens(ids_tt)  # [B, 1, D]
+            b, s, d = inputs_embeds.shape
+            streams = ttnn.reshape(inputs_embeds, [b, s, 1, d])
+            streams = ttnn.repeat(streams, ttnn.Shape([1, 1, self.config.hc_mult, 1]))  # [B, 1, hc_mult, D]
 
         rope_cache: dict = {}
         last_submesh_id = 0
@@ -915,7 +917,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
             next_on_device = self._next_layer_on_submesh(li)
             if next_on_device is not None:
                 self.layers[next_on_device].self_attn.prefetch_weights()
-        return self.norm(self.hc_head(streams))
+        with _region("HC_HEAD"):
+            hidden = self.hc_head(streams)
+        with _region("FINAL_NORM"):
+            return self.norm(hidden)
 
     # ------------------------------------------------------------------ #
     # Traced decode (one reusable trace per submesh / device)
