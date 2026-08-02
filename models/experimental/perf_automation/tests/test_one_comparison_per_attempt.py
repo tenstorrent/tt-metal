@@ -55,8 +55,19 @@ def _mods(monkeypatch, tmp_path):
 
 
 def _set_verdict(pm, monkeypatch, ms, best=None, bump=[0]):  # noqa: B006
-    """Record a NEW end-to-end verdict, with a distinct identity each time."""
-    fp = {"status": "ok", "full_pipeline_ms": ms, "sha": "sha%d" % bump[0]}
+    """Record a NEW end-to-end verdict, with a distinct identity each time.
+
+    measurement_id is what makes it distinct now. It used to be the verdict file's mtime, which moved
+    on every recorded verdict rather than on every MEASUREMENT -- so an attempt that ran no trace
+    replay could claim one that had (14 times, on gemma-3-12b-it). The id is minted only by
+    check_full_pipeline_latency, so a fresh one here stands for a fresh measurement, exactly as a
+    fresh mtime used to be assumed to."""
+    fp = {
+        "status": "ok",
+        "full_pipeline_ms": ms,
+        "sha": "sha%d" % bump[0],
+        "measurement_id": "meas-%d" % bump[0],
+    }
     if best is not None:
         fp["best_ms"] = best
     bump[0] += 1

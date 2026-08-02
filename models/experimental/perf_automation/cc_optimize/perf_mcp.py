@@ -24,6 +24,7 @@ import os
 import signal
 import statistics
 import sys
+import time
 import tempfile
 from pathlib import Path
 
@@ -2856,6 +2857,9 @@ def check_full_pipeline_latency() -> dict:
         {
             "status": "diverged" if diverged else ("regressed" if regressed else "ok"),
             "full_pipeline_ms": round(ms, 4),
+            # MINTED HERE, where a trace replay actually ran. _verdict_identity keys ownership on it,
+            # so exactly one attempt can claim this reading and every later one reports own=False.
+            "measurement_id": _measurement_id(),
             "best_ms": round(best, 4),
             "delta_pct": delta_pct,
             "method": method,
@@ -3137,18 +3141,30 @@ def _consumed_verdict_path():
     )
 
 
-def _verdict_identity(fp: dict):
-    """What makes one end-to-end measurement distinct from the next.
+def _measurement_id() -> str:
+    """A fresh id, minted by the code that actually runs a trace replay."""
+    return "fp-%d" % time.monotonic_ns()
 
-    The ms alone is not enough: after a revert the pipeline legitimately measures the same number
-    again, and the sha repeats too. The verdict file's mtime moves on every recorded verdict, so the
-    triple separates a genuinely NEW measurement from the SAME one being read a second time.
+
+def _verdict_identity(fp: dict):
+    """What makes one end-to-end measurement distinct from the next: the MEASUREMENT's own id.
+
+    This used to key on the verdict FILE's mtime, reasoning that ms alone is not enough (after a
+    revert the pipeline legitimately measures the same number again, and the sha repeats too). But
+    that file is rewritten whenever ANY gate records a verdict -- pcc, measure, commit -- not only
+    when a trace replay runs. The mtime therefore moved with no measurement behind it, the identity
+    looked new, and the next attempt claimed a reading it never took. On gemma-3-12b-it that produced
+    fourteen attempts across five ops all carrying the identical -0.1926 win, one of them a
+    PCC-rejected structural change that was 2.1x slower and had already been reverted.
+
+    An id minted at measurement time cannot drift, because nothing else mints one. A verdict without
+    an id has not been shown to correspond to a trace replay, so it is NOT ownable -- failing closed,
+    since a fabricated win is the one outcome that cannot be corrected afterwards.
     """
-    try:
-        mt = _gate_verdict_path().stat().st_mtime_ns
-    except OSError:
-        mt = 0
-    return [str(fp.get("sha") or ""), fp.get("full_pipeline_ms"), mt]
+    mid = fp.get("measurement_id")
+    if not mid:
+        return None
+    return [str(fp.get("sha") or ""), fp.get("full_pipeline_ms"), str(mid)]
 
 
 def _attempt_fullpipe_verdict() -> dict:
@@ -3183,6 +3199,9 @@ def _attempt_fullpipe_verdict() -> dict:
         return out
 
     ident = _verdict_identity(fp)
+    if ident is None:
+        # No measurement id -> this verdict cannot be traced to a trace replay. Not ownable.
+        return out
     path = _consumed_verdict_path()
     try:
         already = json.loads(path.read_text())
