@@ -396,6 +396,7 @@ _MATERIAL_GAP_ENV_SET = "PERF_MCP_MATERIAL_GAP_MS" in os.environ
 _MATERIAL_GAP_FRAC = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FRAC", "0.03"))
 _MATERIAL_GAP_FLOOR = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FLOOR", "0.05"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
+_STRUCTURAL_RUNGS = {"structural", "gather", "fusion", "fuse", "sparse", "cache", "kv-cache"}
 
 _KNOB_ORDER = {
     "memory": ("grid", "dtype", "shard", "fidelity"),
@@ -1210,6 +1211,16 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             "blocking, the residual here is redundant recompute, reducible ONLY by a KV-cache (NOT irreducible).",
         )
     tries = {"grid": grid_tries, "fidelity": fidelity_tries, "dtype": dtype_tries, "shard": shard_tries}
+    # A DEEPER RUNG ON FILE SPENDS THE SECOND-VARIANT ALLOWANCE. _MAX_KNOB_RETRIES exists so a
+    # preferred knob can be tried twice -- the first attempt reads the profile, the second acts on what
+    # it learned. That is for an op still ON the knob rungs. Counted per-knob with no reference to how
+    # far the op has climbed, it also owes a second grid try to an op that already has a C++ kernel:
+    # NLPConcatHeads carried grid=374.56 and cpp=366.85 from earlier runs, run 22 resumed, saw
+    # grid_tries==1 < 2, and handed out grid a third time for 377.08 -- slower than both, a full round
+    # (edit + PCC + end-to-end) spent walking back down while untried ops waited. Spending the RETRY
+    # allowance is not sealing the rung: a knob with ZERO attempts has not been tried at all and is
+    # still offered once, which is what the completeness sweep guarantees.
+    _went_deeper = bool(kinds & (_STRUCTURAL_RUNGS | {"tt-lang", "cpp", "tp-fracture"}))
     applicable = {
         "grid": grid != "full",
         "fidelity": True,
@@ -1227,7 +1238,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
         for knob in order:
             if not applicable[knob] or preferred[knob] is not want_preferred:
                 continue
-            if tries[knob] >= (_MAX_KNOB_RETRIES if want_preferred else 1):
+            if tries[knob] >= (_MAX_KNOB_RETRIES if (want_preferred and not _went_deeper) else 1):
                 continue
             lead = "" if want_preferred else "LOW-PRIORITY SWEEP (bound_by=%s): " % (bound or "unknown")
             return (False, "knob:" + knob, lead + _KNOB_REASON[knob](grid, fidelity, wdtype))
@@ -1248,8 +1259,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # dispatch-bound chain) is usually a BIGGER and CHEAPER win than a hand-written kernel -> try it
     # BEFORE tt-lang/C++, so a long ladder can't burn the whole iteration budget on kernels and never
     # reach it. Cleared once a measured 'structural' attempt is on file (a 'none: <evidence>' counts).
-    _STRUCTURAL = {"structural", "gather", "fusion", "fuse", "sparse", "cache", "kv-cache"}
-    if not (kinds & _STRUCTURAL):
+    if not (kinds & _STRUCTURAL_RUNGS):
         return (
             False,
             "structural",
