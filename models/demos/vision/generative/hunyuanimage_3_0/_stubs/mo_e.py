@@ -151,11 +151,14 @@ class _TtMoE:
             self.mesh_shape = tuple(int(x) for x in device.shape)
             self.tp_axis = self._pick_tp_axis()
             self.tp = int(self.mesh_shape[self.tp_axis])
-            # EP=32 opt-in (63cfd0eb26): shard routed experts across ALL mesh chips (2/chip)
+            # EP=32 (63cfd0eb26): shard routed experts across ALL mesh chips (2/chip)
             # instead of TP-axis + DP-replicate. Re-expressed onto the merged-2D-matmul MoE.
-            # UNVERIFIED on this form pending the wedged Galaxy fabric -> OFF by default; verify
-            # test_mo_e_sharded on the mesh, then flip the default.
-            self._ep_fullmesh = os.environ.get("HUNYUAN_EP_FULLMESH") == "1"
+            # DEFAULT ON (2026-08-01): PCC-verified (test_mo_e_sharded 0.9940 == EP-off) AND
+            # measured -18% steady ms/step (7770->6368, E2E 157.8->143.1s) on the full (8,4)
+            # mesh. HUNYUAN_EP_FULLMESH=0 forces OFF; requires num_experts divisible by the
+            # device count (else the TP-axis shard fallback below).
+            _ep_on = os.environ.get("HUNYUAN_EP_FULLMESH", "1") != "0"
+            self._ep_fullmesh = _ep_on and (self.num_experts % int(self.device.get_num_devices()) == 0)
             self._build_sharded(torch_module)
         else:
             self._build_single(torch_module)

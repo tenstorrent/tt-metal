@@ -61,3 +61,25 @@ multi-chip.
 The EP=32/shard-shared opt-ins are now PCC-verified (were UNVERIFIED). Still gated OFF
 by default — flipping the default should be gated on a perf (device_ms) comparison, not
 just PCC. Remaining deferred: the pipeline lm_head/argmax splice + gen-perf harness.
+
+---
+
+## 2026-08-01 — Lever 1 LANDED: EP=32 + shard-shared DEFAULT ON
+
+Measured on the full (8,4) mesh via `tests/e2e/test_image3_t2i_perf.py` (32 layers, 12 steps,
+1024², CCL_LINKS=1, trace on); metric = trimmed steady-state ms/step (drop step-1 compile).
+
+| config | steady ms/step | loop_s | E2E s/image | vae_s |
+|---|---|---|---|---|
+| EP off (`HUNYUAN_EP_FULLMESH=0`) | 7770 | 98.1 | 157.8 | 59.2 |
+| **EP on (new default)** | **6368 (-18.0%)** | 85.2 | **143.1 (-9.3%)** | 57.4 |
+
+EP-on steps 2-12 rock-steady 6282-6522ms (zero overlap with EP-off 7658-8078); both rendered
+correctly. Flipped `HUNYUAN_EP_FULLMESH` default ON at `_stubs/mo_e.py:158` (`!= "0"` + a
+num_experts-%-num_devices divisibility guard; `=0` forces OFF, non-divisible meshes fall back
+to the TP-axis shard). PCC re-verified: sharded default 0.9940/0.99999/1.0, escape-hatch EP-off
+0.9940, single-chip 0.9996/0.99999.
+
+Profile insight: per-step device compute (attn+moe) ~3s but traced-replay wall-clock ~6.4s
+=> ~55% CCL/sync-bound. The ~58s host VAE tail is now the single largest chunk of the 143s E2E
+=> Lever 2 (on-device VAE) next, then CCL/CFG levers.
