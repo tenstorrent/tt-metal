@@ -93,6 +93,46 @@ DECODE_WINDOW = 256
 # projects to ~48 ms/step, giving back the entire margin over tt_transformers. If it does cure
 # the hang, prefer a cheaper remedy that keeps the bucketing.
 FIXED_WINDOW = int(os.environ.get("VOXTRAL_GPT_WINDOW", "0"))
+
+# DIAGNOSTIC TOGGLES for the program-cache hang, via VOXTRAL_SAFE as a comma list.
+#
+# The hang is one specific bad cached program, not too many of them (tt_transformers reaches 329
+# entries against the 325 we die at, and lives). The suspects are the four decode ops we use that
+# NEITHER working implementation does -- tt_transformers and the ssinghal/voxtral_tts branch both
+# run sdpa_decode over a fixed cache with paged_update_cache, while we hand-roll:
+#
+#   update    ttnn.update_cache            -> ttnn.experimental.paged_update_cache
+#   slice     per-step ttnn.slice of the cache -> attend the whole cache, no slice
+#   softmax   scale_mask_softmax_in_place  -> separate multiply / add / softmax
+#   gqa       reshape [1,32,1,d]->[1,8,4,d] -> repeat_interleave k/v 8->32
+#
+# We hand-rolled on purpose: it is why decode scores 0.99984 where tt_transformers scores 0.981
+# (STATUS.md 4.1 -- sdpa carries a mask-independent worst-case penalty). So the goal is to find
+# WHICH of these four builds the bad program and replace only that one, not to adopt sdpa_decode.
+SAFE = set(filter(None, os.environ.get("VOXTRAL_SAFE", "").split(",")))
+
+# DEVICE TRACE for the decode step, via VOXTRAL_GPT_TRACE=1. Capture the 26 layers once, then
+# replay them per frame against persistent input buffers.
+#
+# This is the prerequisite for tracing Block 2, not just an optimisation of Block 1.
+# ttnn_voxtral_flow's USE_TRACE note records that Block 2's trace is correct standalone but
+# produces UNCORRELATED audio in the pipeline, because allocating device buffers while a trace is
+# live corrupts it and "Block 1's decode step ... allocate[s] every single frame". Replaying a
+# trace writes into buffers allocated once, so tracing Block 1 removes exactly those allocations.
+#
+# Tracing forces two things that are otherwise optional, both already built and validated as hang
+# diagnostics: ONE fixed decode shape (FIXED_WINDOW -- a captured graph has fixed shapes), and the
+# position as a DEVICE TENSOR rather than a Python int, since ttnn.update_cache bakes the int into
+# the program. The latter is why the traced path uses paged_update_cache.
+#
+# Read trap #1 before touching capture: an exception escaping an open capture wedges the card for
+# the rest of the process, and only a tt-smi board reset recovers it.
+USE_TRACE = os.environ.get("VOXTRAL_GPT_TRACE", "0") == "1"
+TRACE_REGION_SIZE = 64 * 1024 * 1024
+# L1 shard for the "update" toggle's paged_update_cache input: one tile row on one core.
+_DECODE_SHARD = ttnn.create_sharded_memory_config(
+    (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)
 # None of these may leave the tile grid: prefill's mask and decode's cache slice are cut at these
 # boundaries, and a ragged one would silently misalign them rather than raise.
 assert PREFILL_MULTIPLE % TILE == 0 and DECODE_WINDOW % TILE == 0
@@ -154,6 +194,7 @@ class TtVoxtralGPT:
             max_seq_len = -(-max_seq_len // DECODE_WINDOW) * DECODE_WINDOW
         self.max_seq_len = max_seq_len
         self.pos = 0
+        self._dec_trace = None      # (tid, x_in, cos_in, sin_in, mask_in, pos_t, out, L, host)
         wd = weight_dtype or WEIGHT_DTYPE or dtype
         w = state if state is not None else load_backbone_state(ckpt_path)
 
@@ -278,7 +319,7 @@ class TtVoxtralGPT:
         a = self._attend(qh, kh, vh, S, mask)
         return self._mlp(ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG)), w)
 
-    def _layer_step(self, x, w, cos, sin, cache, pos, mask, L):
+    def _layer_step(self, x, w, cos, sin, cache, pos, mask, L, pos_t=None):
         """One decode position. x [1,1,3072] -> same, against `cache` filled to `pos`.
 
         The new k/v go into the cache in place, then the whole [0, L) window is attended with the
@@ -303,16 +344,42 @@ class TtVoxtralGPT:
         """
         rep = N_HEADS // N_KV_HEADS
         qh, kh, vh = self._qkv(x, w, 1, cos, sin)
-        ttnn.update_cache(cache[0], kh, pos)
-        ttnn.update_cache(cache[1], vh, pos)
-        ks = ttnn.slice(cache[0], [0, 0, 0, 0], [1, N_KV_HEADS, L, HEAD_DIM])
-        vs = ttnn.slice(cache[1], [0, 0, 0, 0], [1, N_KV_HEADS, L, HEAD_DIM])
-        qg = ttnn.reshape(qh, [1, N_KV_HEADS, rep, HEAD_DIM])
+        if pos_t is not None or "update" in SAFE:
+            # paged_update_cache wants the DECODE head layout [1, batch, n_kv, d] (it asserts
+            # input.shape[1] == cache.shape[0]) AND an L1-SHARDED input. The other implementations
+            # get both free from nlp_create_qkv_heads_decode; here we permute and shard by hand.
+            # REQUIRED under trace: it takes the position as a device tensor, whereas
+            # ttnn.update_cache takes a Python int and would bake this step's position into the
+            # captured graph, so every replay would rewrite the same cache row.
+            idx = pos_t if pos_t is not None else ttnn.from_torch(
+                torch.tensor([pos], dtype=torch.int32), device=self.device)
+            sh = lambda t: ttnn.to_memory_config(ttnn.permute(t, (0, 2, 1, 3)), _DECODE_SHARD)
+            ttnn.experimental.paged_update_cache(cache[0], sh(kh), update_idxs_tensor=idx)
+            ttnn.experimental.paged_update_cache(cache[1], sh(vh), update_idxs_tensor=idx)
+        else:
+            ttnn.update_cache(cache[0], kh, pos)
+            ttnn.update_cache(cache[1], vh, pos)
+        if "slice" in SAFE:
+            ks, vs = cache[0], cache[1]        # attend the whole cache; `mask` covers the tail
+        else:
+            ks = ttnn.slice(cache[0], [0, 0, 0, 0], [1, N_KV_HEADS, L, HEAD_DIM])
+            vs = ttnn.slice(cache[1], [0, 0, 0, 0], [1, N_KV_HEADS, L, HEAD_DIM])
+        if "gqa" in SAFE:
+            qg = qh                                                    # keep the 32-head batch
+            ks, vs = ttnn.repeat_interleave(ks, rep, dim=1), ttnn.repeat_interleave(vs, rep, dim=1)
+        else:
+            qg = ttnn.reshape(qh, [1, N_KV_HEADS, rep, HEAD_DIM])
         s = ttnn.matmul(qg, ttnn.transpose(ks, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
         # mask is [1,1,1,L]: one row, which is the only row this op reads. See `_attend`.
-        a = ttnn.scale_mask_softmax_in_place(s, SCALE, mask, numeric_stable=True,
-                                             compute_kernel_config=COMPUTE_CONFIG)
-        a = ttnn.reshape(ttnn.matmul(a, vs, compute_kernel_config=COMPUTE_CONFIG), [1, 1, Q_WIDTH])
+        if "softmax" in SAFE:
+            a = ttnn.softmax(ttnn.add(ttnn.multiply(s, SCALE), mask), dim=-1, numeric_stable=True,
+                             compute_kernel_config=COMPUTE_CONFIG)
+        else:
+            a = ttnn.scale_mask_softmax_in_place(s, SCALE, mask, numeric_stable=True,
+                                                 compute_kernel_config=COMPUTE_CONFIG)
+        a = ttnn.matmul(a, vs, compute_kernel_config=COMPUTE_CONFIG)
+        a = (ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, 1, Q_WIDTH])
+             if "gqa" in SAFE else ttnn.reshape(a, [1, 1, Q_WIDTH]))
         return self._mlp(ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG)), w)
 
     @torch.no_grad()
@@ -361,6 +428,77 @@ class TtVoxtralGPT:
         all Block 2 ever sees, and `ttnn_voxtral_backbone` exposes the same name."""
         return self.prefill(embeds, last_only=True)
 
+    # ----------------------------------------------------------------------------------
+    # Device trace of the decode step. See USE_TRACE.
+    # ----------------------------------------------------------------------------------
+    def _decode_graph(self, x, cos, sin, mask, L, pos_t):
+        """The captured region: 26 layers + final norm, reading ONLY device tensors.
+
+        Nothing host-side may appear in here -- one host op makes the whole step untraceable.
+        `pos_t` is a device tensor precisely so the cache write position is not a Python constant.
+        """
+        for i, w in enumerate(self.layers):
+            x = self._layer_step(x, w, cos, sin, self.caches[i], None, mask, L, pos_t=pos_t)
+        return ttnn.rms_norm(x, weight=self.norm, epsilon=NORM_EPS,
+                             compute_kernel_config=COMPUTE_CONFIG)
+
+    def _capture_decode(self, L):
+        """Allocate the persistent inputs and capture one decode step. Cached per window length.
+
+        Ordering matters twice over: the warm-up pass runs BEFORE capture so weight uploads and
+        kernel compilation are not recorded into the trace, and `end_trace_capture` sits in a
+        `finally` so an exception cannot leave the capture open and wedge the card (trap #1).
+        """
+        if self._dec_trace is not None:
+            return self._dec_trace
+        host = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
+                                                 layout=ttnn.TILE_LAYOUT)
+        dev = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
+                                                layout=ttnn.TILE_LAYOUT, device=self.device)
+        x_in = dev(torch.zeros(1, 1, DIM))
+        cos_in = dev(torch.zeros(1, 1, 1, HEAD_DIM))
+        sin_in = dev(torch.zeros(1, 1, 1, HEAD_DIM))
+        mask_in = dev(torch.zeros(1, 1, 1, L), ttnn.bfloat16)
+        # THE WARM-UP AND THE CAPTURE BOTH EXECUTE THE GRAPH, so both WRITE the KV cache at
+        # whatever pos_t says. Capture happens after prefill has filled the cache, so pointing
+        # them at row 0 corrupts the prompt's first position -- measured, and it drags decode from
+        # PCC 0.9998 to 0.86 with no error anywhere. Aim them at the last cache row instead, which
+        # `step` is barred from ever reaching, so the two junk writes land somewhere harmless.
+        pos_t = ttnn.from_torch(torch.tensor([self.max_seq_len - 1], dtype=torch.int32),
+                                device=self.device)
+
+        # Warm-up OUTSIDE the capture, so weight uploads and kernel compilation are not recorded.
+        self._decode_graph(x_in, cos_in, sin_in, mask_in, L, pos_t)
+        ttnn.synchronize_device(self.device)
+
+        tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+        try:
+            out = self._decode_graph(x_in, cos_in, sin_in, mask_in, L, pos_t)
+        finally:
+            ttnn.end_trace_capture(self.device, tid, cq_id=0)
+        ttnn.synchronize_device(self.device)
+        self._dec_trace = (tid, x_in, cos_in, sin_in, mask_in, pos_t, out, L, host)
+        return self._dec_trace
+
+    def _step_traced(self, embed, cosb, sinb, m, pos, L):
+        """Refresh the captured inputs IN PLACE, replay, read the captured output.
+
+        In place is not a style choice: the trace holds these buffers' ADDRESSES, so uploading a
+        fresh tensor would be silently ignored and the previous frame replayed.
+        """
+        tid, x_in, cos_in, sin_in, mask_in, pos_t, out, Lc, host = self._capture_decode(L)
+        if Lc != L:
+            raise RuntimeError(f"decode trace captured at window {Lc} but this step wants {L}; "
+                               f"tracing needs one fixed window (set VOXTRAL_GPT_WINDOW)")
+        cp = ttnn.copy_host_to_device_tensor
+        cp(host(embed.reshape(1, 1, DIM)), x_in)
+        cp(host(cosb.reshape(1, 1, 1, HEAD_DIM)), cos_in)
+        cp(host(sinb.reshape(1, 1, 1, HEAD_DIM)), sin_in)
+        cp(host(m, ttnn.bfloat16), mask_in)
+        cp(ttnn.from_torch(torch.tensor([pos], dtype=torch.int32)), pos_t)
+        ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+        return ttnn.to_torch(out).float().reshape(1, 1, DIM)
+
     @torch.no_grad()
     def step(self, embed):
         """embed torch [1,1,3072] (one frame) -> hidden torch [1,1,3072]. Advances self.pos.
@@ -370,10 +508,14 @@ class TtVoxtralGPT:
         """
         if not self.caches:
             raise RuntimeError("step() needs a KV cache; construct with max_seq_len > 0")
-        if self.pos >= self.max_seq_len:
-            raise ValueError(f"KV cache full at {self.max_seq_len} positions")
+        # -1: the last cache row is reserved as the trace capture's scratch target (see
+        # `_capture_decode`), so no real position may ever land on it.
+        if self.pos >= self.max_seq_len - 1:
+            raise ValueError(f"KV cache full at {self.max_seq_len - 1} usable positions")
         pos = self.pos
-        if FIXED_WINDOW:
+        if "slice" in SAFE:
+            L = self.max_seq_len          # no slice: attend the whole cache, mask the tail
+        elif FIXED_WINDOW:
             # One shape for the whole generation. See FIXED_WINDOW.
             if pos >= FIXED_WINDOW:
                 raise ValueError(f"pos {pos} past the pinned window {FIXED_WINDOW}; "
@@ -384,12 +526,15 @@ class TtVoxtralGPT:
             # DECODE_WINDOW.
             L = min(self.max_seq_len, (pos + DECODE_WINDOW) // DECODE_WINDOW * DECODE_WINDOW)
         cosb, sinb = rope_tables(1, offset=pos)
+        m = torch.zeros(1, 1, 1, L)
+        m[..., pos + 1:] = float("-inf")                 # the stale tail of the rounded-up slice
+        if USE_TRACE:
+            self.pos = pos + 1
+            return self._step_traced(embed, cosb, sinb, m, pos, L)
         up = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
                                               layout=ttnn.TILE_LAYOUT, device=self.device)
         cos = up(cosb.reshape(1, 1, 1, HEAD_DIM))
         sin = up(sinb.reshape(1, 1, 1, HEAD_DIM))
-        m = torch.zeros(1, 1, 1, L)
-        m[..., pos + 1:] = float("-inf")                 # the stale tail of the rounded-up slice
         mask = up(m, ttnn.bfloat16)
         x = up(embed.reshape(1, 1, DIM))
         for i, w in enumerate(self.layers):
@@ -533,7 +678,10 @@ def main():
     if args.weights:
         WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[args.weights]
 
-    dev = ttnn.open_device(device_id=0, l1_small_size=65536)
+    # A trace region is only needed when USE_TRACE is on, but asking for it unconditionally would
+    # tax every caller -- which is exactly the coupling that keeps Block 2's USE_TRACE off.
+    kw = {"trace_region_size": TRACE_REGION_SIZE} if USE_TRACE else {}
+    dev = ttnn.open_device(device_id=0, l1_small_size=65536, **kw)
     try:
         cases = [int(c) for c in args.cases.split(",")]
         if args.gate == "wiring":
