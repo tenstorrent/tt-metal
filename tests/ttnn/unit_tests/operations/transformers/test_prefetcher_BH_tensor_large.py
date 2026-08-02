@@ -880,7 +880,7 @@ def test_tensor_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_til
     bank_to_receivers = [
         (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
     ]
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, gcb_size)
 
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(M, N // ring_size),
@@ -1004,7 +1004,7 @@ def test_tensor_prefetcher_recv_contig_batched_matmul_ring32_mesh_qkv(
 
     tile_bytes = _bytes_per_tile(dtype)
     in1_block_size_bytes = (K // ring_size // ttnn.TILE_SIZE) * out_block_w * tile_bytes
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
         mesh_device,
         [
             (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols))
@@ -1127,7 +1127,7 @@ def test_tensor_prefetcher_recv_contig_batched_matmul_ring16_mesh_ff2(mesh_devic
 
     tile_bytes = _bytes_per_tile(dtype)
     in1_block_size_bytes = in0_block_w * out_block_w * tile_bytes
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
         mesh_device,
         [
             (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols))
@@ -1275,7 +1275,7 @@ def test_tensor_prefetcher_recv_contig_batched_mixed_sequence_ring32(device):
         expected_outputs.append(pt_act.float() @ pt_weight.float())
         max_in1_block_size = max(max_in1_block_size, k_tiles_per_shard * n_tiles_per_receiver * tile_bytes)
 
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
         device, bank_to_receivers, ring_size * max_in1_block_size
     )
 
@@ -1465,7 +1465,7 @@ def test_tensor_prefetcher_recv_contig_batched_mixed_sequence_ring16_mesh(mesh_d
             max_in1_block_size, program_config.in0_block_w * program_config.per_core_N * tile_bytes
         )
 
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
         mesh_device, bank_to_receivers, ring_size * max_in1_block_size
     )
 

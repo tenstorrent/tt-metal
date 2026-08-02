@@ -168,9 +168,9 @@ class TensorPrefetcher(LightweightModule):
         self.num_senders: int = mesh_device.dram_grid_size().x
         self.model_name: str = os.getenv("HF_MODEL", "")
         assert self.model_name != "", "HF_MODEL is not set. Tensor Prefetcher must be run with a model."
-        # Dual senders per bank and in1 streaming are always on — they are the validated,
-        # highest-throughput configuration and the GCB sizing below assumes streaming.
-        self.dual_senders_per_bank: bool = True
+        # in1 streaming is always on — the validated, highest-throughput configuration, and the
+        # GCB sizing below assumes it. Dual senders per bank come from the receiver-contiguous
+        # layout: create_global_circular_buffer_for_matmul_1d derives them from the weight.
         self.stream_in1: bool = True
         self.uses_tensor_prefetcher: bool = True
 
@@ -274,7 +274,7 @@ class TensorPrefetcher(LightweightModule):
             f"tensors (num_tensors per layer), got {len(self.registered_weights)}."
         )
         self._build_global_cb()
-        ttnn.experimental.start_tensor_prefetcher(self.mesh_device, dual_senders_per_bank=self.dual_senders_per_bank)
+        ttnn.experimental.start_tensor_prefetcher(self.mesh_device)
         self._started = True
         logger.info(f"[TensorPrefetcher.init] started decode prefetcher with ring={self.ring_size}")
 
@@ -458,11 +458,12 @@ class TensorPrefetcher(LightweightModule):
             f"[TensorPrefetcher] Creating GCB: ring={self.ring_size} window={num_blocks} "
             f"max_in1={max_in1_block_size} size={gcb_size}"
         )
-        self.global_cb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
+        # The factory auto-detects the receiver-contiguous (NdShardSpec) layout of the registered
+        # weights and derives dual senders per bank from it; no layout-specific override here.
+        self.global_cb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
             self.mesh_device,
             self.registered_program_configs,
             self.registered_weights,
             self._bank_to_receivers,
             gcb_size,
-            dual_senders_per_bank=self.dual_senders_per_bank,
         )
