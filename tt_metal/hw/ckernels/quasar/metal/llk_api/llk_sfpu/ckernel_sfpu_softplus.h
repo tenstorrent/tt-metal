@@ -95,10 +95,17 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
                 SOFTPLUS_BF16_POLY_C6);
 
             // The degree-6 poly diverges past its [0, 5] fit domain, while the true residual <
-            // exp(-5) = 0.0067 there; clamp to 0 to keep softplus(t>0) = t within bf16 rounding.
+            // exp(-5) = 0.0067 there. For t > 0, clamp to 0 to keep softplus(t>0) = t within bf16
+            // rounding. For t < 0, residual *is* the entire result (softplus(t) = 0 + residual), so
+            // it must not be clamped to 0 there; fall back to the accurate exp tail instead.
             v_if (a > SOFTPLUS_POLY_BOUNDARY)
             {
                 residual = 0.0f;
+                v_if (t < 0.0f)
+                {
+                    residual = _sfpu_exp_fp32_accurate_(-a);
+                }
+                v_endif;
             }
             v_endif;
         }
