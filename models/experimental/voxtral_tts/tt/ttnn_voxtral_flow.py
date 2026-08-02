@@ -81,26 +81,28 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 # default binds at definition time.
 DTYPE = ttnn.bfloat16
 
-# Capture the whole n_steps solve as one device trace. OFF, and NOT merely because it is
-# unprofitable.
+# Capture the whole n_steps solve as one device trace. WORKS IN THE PIPELINE NOW, and is still
+# OFF -- because it measures SLOWER here, not because it is broken.
 #
-# DO NOT TURN THIS ON INSIDE THE PIPELINE. It is correct in ISOLATION -- this module's own main()
-# reports the full 37-code frame IDENTICAL with it on, and a standalone replay loop is repeatable --
-# but in the end-to-end pipeline it silently produces UNCORRELATED audio (PCC 0.002 against the
-# untraced build) and is not even deterministic run to run. Cause: allocating device buffers while a
-# trace is live corrupts it, and Block 1's decode step plus Block 3 allocate every single frame, on
-# top of the trace's recorded intermediate addresses. The XTTS-v2 work hit the same rule and could
-# work around it by releasing and re-capturing around prefill; that escape hatch does not exist
-# here, because the interfering allocations happen per frame rather than per utterance.
+# It used to be unusable end to end: correct standalone, but uncorrelated audio (PCC 0.002 against
+# the untraced build) and not even deterministic. Cause: allocating device buffers while a trace
+# is live corrupts it, and Block 1's decode allocated every frame. Two things fixed it --
+# ttnn_voxtral_gpt.USE_TRACE makes Block 1's step a replay that allocates nothing per frame, and
+# ttnn_voxtral_pipeline._prepare_traces warms up EVERY traced block before capturing ANY of them.
+# Capturing lazily is what bit us: block B's warm-up allocated after block A was captured, and A's
+# next replay hung. With the ordering fixed, eager and dual-traced frames are BIT-IDENTICAL --
+# 0 differing codes of 2849 across three cases.
 #
-# It was only worth ~6.5 ms/frame (~6%) anyway -- host dispatch is nearly all hidden behind device
-# work. Kept because it is correct standalone and useful for isolating device time from host time
-# (that is how the ~6.5 ms figure was measured). Read at CALL time so it can be flipped for that.
+# THE MEASUREMENT, which is why it stays off. On a 466-frame clip: 96.2 ms/frame dual-traced
+# against 90.0 eager, so tracing both blocks COSTS ~6 ms/frame. Block 1's trace needs one pinned
+# decode window (~4 ms/step of extra attention) and is itself 0.7 ms slower at equal window, and
+# Block 2's trace does not recover that. The old "~6.5 ms/frame" estimate for this trace was
+# measured as a host/device gap, not as an end-to-end saving. Decode on this N150 is device-bound,
+# not host-dispatch bound -- the ign/voxtral_p150_qb2 branch reports the opposite, but that is
+# Blackhole.
 #
-# THE BLOCKER IS NOW LIFTABLE. Block 1's decode can itself be traced (ttnn_voxtral_gpt.USE_TRACE),
-# and a replayed step allocates nothing per frame -- which is exactly the interference described
-# above. So enabling BOTH is the supported combination; enabling only this one still corrupts.
-# `ttnn_voxtral_pipeline.open_device` sizes the trace region for whichever are on.
+# Kept because it is correct, cheap to re-enable, and the picture may invert on other silicon.
+# Enable BOTH or neither: this one alone still corrupts. Read trap #1 before touching capture.
 USE_TRACE = os.environ.get("VOXTRAL_FLOW_TRACE", "0") == "1"
 TRACE_REGION_SIZE = 64 * 1024 * 1024
 
@@ -123,6 +125,7 @@ class TtVoxtralFlow:
         self._sched = {}                     # (batch, n_steps) -> (time tokens, step widths)
         self._cfgbuf = {}                    # batch -> reused [2B,3072] cond++uncond host buffer
         self._traces = {}                    # (batch, n_steps, cfg_alpha) -> (tid, x_in, h_in, out)
+        self._warm = {}                      # same key -> (x_in, h_in) before capture
 
         up = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT,
                                          device=device)
@@ -292,27 +295,35 @@ class TtVoxtralFlow:
             x = ttnn.add(x, ttnn.multiply(v_cfg, dt))
         return x
 
-    def _trace(self, B, n_steps, cfg_alpha):
+    def warmup_trace(self, B, n_steps, cfg_alpha):
+        """Allocate this trace's persistent inputs and run one eager solve. ALLOCATES.
+
+        Split from `capture_trace` because allocating a device buffer while ANY trace is live
+        corrupts it: with Block 1 traced too, every warm-up must finish before the first capture.
+        `ttnn_voxtral_pipeline._prepare_traces` owns that ordering.
+        """
+        key = (B, n_steps, float(cfg_alpha))
+        if key in self._traces or key in self._warm:
+            return
+        x_in = self._up(torch.zeros(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32)
+        h_in = self._up(torch.zeros(2 * B, FM_INPUT_DIM))
+        self._schedule(2 * B, n_steps)                    # constants, outside the capture
+        self._solve(x_in, h_in, B, n_steps, cfg_alpha)    # compile kernels, outside the capture
+        ttnn.synchronize_device(self.device)
+        self._warm[key] = (x_in, h_in)
+
+    def capture_trace(self, B, n_steps, cfg_alpha):
         """-> (trace_id, x_in, h_in, out). Captured once per (batch, n_steps, cfg_alpha).
 
-        cfg_alpha and n_steps are baked into the captured graph as constants, hence the key: calling
-        with a different guidance strength captures a second trace rather than silently replaying
-        the first one's alpha.
-
-        The device must be opened with a trace region. Two ordering requirements: the schedule
-        constants and one warm-up solve happen BEFORE capture, so that weight uploads and kernel
-        compilation are not recorded into the trace."""
+        cfg_alpha and n_steps are baked into the captured graph as constants, hence the key:
+        calling with a different guidance strength captures a second trace rather than silently
+        replaying the first one's alpha.
+        """
         key = (B, n_steps, float(cfg_alpha))
         if key in self._traces:
             return self._traces[key]
-
-        B2 = 2 * B
-        x_in = self._up(torch.zeros(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32)
-        h_in = self._up(torch.zeros(B2, FM_INPUT_DIM))
-        self._schedule(B2, n_steps)                       # build constants outside the capture
-        self._solve(x_in, h_in, B, n_steps, cfg_alpha)    # compile kernels outside the capture
-        ttnn.synchronize_device(self.device)
-
+        self.warmup_trace(B, n_steps, cfg_alpha)
+        x_in, h_in = self._warm[key]
         tid = ttnn.begin_trace_capture(self.device, cq_id=0)
         try:
             out = self._solve(x_in, h_in, B, n_steps, cfg_alpha)
@@ -321,9 +332,14 @@ class TtVoxtralFlow:
             # device wedged for the rest of the process (STATUS.md trap #1).
             ttnn.end_trace_capture(self.device, tid, cq_id=0)
         ttnn.synchronize_device(self.device)
-
         self._traces[key] = (tid, x_in, h_in, out)
         return self._traces[key]
+
+    def release_traces(self):
+        """Drop every captured trace, so the caller may allocate again (e.g. the next prefill)."""
+        for tid, *_ in self._traces.values():
+            ttnn.release_trace(self.device, tid)
+        self._traces, self._warm = {}, {}
 
     @torch.no_grad()
     def decode_frame(self, sem_code, llm_hidden, cfg_alpha=CFG_ALPHA,
@@ -356,7 +372,7 @@ class TtVoxtralFlow:
         h_host = self._cfg_input(B, llm_hidden)
 
         if USE_TRACE:
-            tid, x_in, h_in, out = self._trace(B, n_steps, cfg_alpha)
+            tid, x_in, h_in, out = self.capture_trace(B, n_steps, cfg_alpha)
             # Refresh the captured inputs IN PLACE -- the trace holds their addresses, so a fresh
             # tensor here would be silently ignored and the previous frame's data replayed.
             ttnn.copy_host_to_device_tensor(
