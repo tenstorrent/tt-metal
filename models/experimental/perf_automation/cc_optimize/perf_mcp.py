@@ -3475,6 +3475,28 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
                 hits = router.all_entries(index)
         if not hits and not q:
             hits = router.all_entries(index)
+        # MODEL-SCOPED GUIDANCE FOLLOWS THE BOUND, NOT THE OP CLASS. GUIDELINES 13's sections declare
+        # op_class: matmul, which is right for what they describe -- weight streaming is a matmul
+        # concern -- but it means the agent only meets them while standing on a matmul. Run 22 on
+        # gemma-3-12b-it: 1 of 52 recall_knobs calls was a matmul, and the two hours before it went to
+        # reduction, eltwise, datamove and RoPE. The one body of guidance that addresses the actual
+        # bottleneck was never handed over.
+        #
+        # The bottleneck does not belong to an op: 34.4 ms of producer wait on a GeGLU mul is the decode
+        # weight stream stalling, and that op's own guidance is about eltwise. So on a MEMORY-bound
+        # recall the model-level sections are appended whatever the class -- appended, not promoted, so
+        # the named rung's own levers still come first. This is not a rung and makes nothing a target;
+        # can_stop still does not wait for them. It only guarantees the knowledge is present when it
+        # applies. Compute-bound and unstated-bound recalls are untouched: prefetch hides DRAM latency,
+        # and a FLOP-bound op has none to hide.
+        if b:
+            _have = {h.get("id") for h in hits}
+            try:
+                for _m in router.route(index, {"bound": b}):  # bound only -- op_class deliberately wild
+                    if str(_m.get("id", "")).startswith("model-") and _m.get("id") not in _have:
+                        hits = list(hits) + [_m]
+            except Exception:  # noqa: BLE001
+                pass
         # tuned learned levers first (most specific to this op), then baseline guidance
         rank = {"GRADUATED_": 0, "LEARNED_": 1}
         hits = sorted(hits, key=lambda h: next((v for k, v in rank.items() if (h.get("file") or "").startswith(k)), 2))
@@ -3499,6 +3521,10 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
                     "source": fname,
                     "status": status,
                     "lever_type": h.get("lever_type"),
+                    # A model-scoped section is NOT this op's rung. Without the marker the agent files
+                    # it under whichever op it was standing on -- run 20 recorded the prefetcher as
+                    # `Matmul 32x3840x15360 / shard`, which is where the agent was, not what changed.
+                    "scope": "model" if str(h.get("id", "")).startswith("model-") else "op",
                     "text": text,
                 }
             )
