@@ -21,11 +21,10 @@ WHAT RUNS WHERE. Blocks 1-3 all run on device. Three host steps remain, each del
     and these tables are large-valued, the same reasoning as the codec's semantic gather.
   * Block 2's semantic argmax and FSQ quantise (see ttnn_voxtral_flow's docstring)
 
-FIDELITY, measured per block against the fp32 CPU reference. Block 1 figures are for the DEFAULT
-backbone, the `tt_transformers` wrapper; `ttnn_voxtral_gpt` scores far better per block but is not
-default yet, for the reasons at BACKBONE_IMPL below:
-    Block 1 prefill  PCC 0.999564  (last position; ours 0.999874)
-    Block 1 decode   PCC 0.981     (ours 0.99984)
+FIDELITY, measured per block against the fp32 CPU reference, on real prompts -- never random ones,
+which are a pessimistic proxy and cost a lot of time once (STATUS.md trap #12):
+    Block 1 prefill  PCC 0.999881  (last position -- the only one Block 2 consumes)
+    Block 1 decode   PCC 0.99991
     Block 2 velocity PCC 0.9999989, semantic codes EXACT, 73/74 frame codes exact on synthetic h
     Block 3          real speech PCC 0.999984, worst sample 1.16% of peak
 The end-to-end question is not any of those PCCs -- it is how many of the 37 INTEGER codes per
@@ -46,70 +45,70 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import CFG_ALPHA, TtVo
 
 FRAME_RATE = 12.5
 
-# Clear ttnn's program cache at the start of every utterance. THIS IS A CORRECTNESS FIX, not a
-# tuning knob: without it a multi-utterance run hangs, and the hang takes the card down with it
-# (recovery needs a tt-smi board reset).
+# Clear ttnn's program cache each utterance. DEFAULT OFF -- it is no longer needed, because the
+# hang it worked around has a known root cause that the default weight config now avoids.
 #
-# Diagnosis, on the sequence that fails -- fixture cases 0,1,2,3, which hangs inside case 3's
-# Block 3 decode. Every block is fine alone: Block 1 runs 1400 decode steps standalone, Block 3
-# decodes case 3's own real frames in 0.10 s in a fresh process, and cases 2,3 run clean as a
-# pair. What is measured:
-#     memory at the hang         flat, 8 GB free -- NOT exhaustion, so bucketing is not the lever
-#     program cache DISABLED     completes, but ~12x slower (every op rebuilds its program)
-#     cache CLEARED per utterance                             completes
-#     Block 1 decode shape pinned (VOXTRAL_GPT_WINDOW=1024)   STILL HANGS
-#     entries 193 after case 1, 325 after case 2, hang in case 3; with clearing, never above 245
+# THE HANG, for the record. A multi-utterance run used to hang inside Block 3's decode and take
+# the card down with it (recovery needs a tt-smi board reset). It required ALL FIVE of these at
+# once, and removing any one avoids it:
+#     all-BFP8 weights in Block 1    <- the one we control; "mixed" avoids it
+#     Block 2 in the loop            raw Block 1 steps alone: completes
+#     Block 3 on device              codec on CPU: completes
+#     >= 2 distinct codec buckets    one bucket everywhere: completes
+#     a generation BETWEEN two same-bucket decodes
+# Minimal repro under all-BFP8, ~90 s: short gen + 128-bucket decode, long gen, 512-bucket decode,
+# long gen, 512-bucket decode -- the last is a pure cache HIT and hangs.
 #
-# IT IS NOT A COUNT LIMIT, and the obvious story is disproven. tt_transformers through the SAME
-# four cases with the SAME counter and no clearing reaches 329 entries -- more than the 325 we die
-# at -- and completes. So "ours builds more shapes and crosses a threshold sooner" is measured to
-# be FALSE; the two build about the same number. Pinning our decode shape not helping says the
-# same thing from the other side.
+# tt_transformers never sees it because it uses this same mixed precision (BF16 for WQKV/WO/FF2/
+# KV_CACHE, BFP8 only for FF1_FF3). It was never about sdpa, paged attention, tracing or shapes.
 #
-# What is left is a SPECIFIC bad program, or a specific pair, that our Block 1 causes to be built
-# and tt_transformers never builds. Which one is unknown. Clearing works because it throws the
-# entry away before anything uses it.
+# Measured and ELIMINATED, so none of these get retried: memory (flat, 8 GB free at the hang);
+# program-cache COUNT (576 entries over 4 buckets completes, while we died at 310-341 and
+# tt_transformers lives at 329); Block 3 length/content; a Block 1 leak (1400 steps clean); and
+# every distinctive Block 1 op -- slice, fused softmax, GQA fold, paged_update_cache, a pinned
+# decode window, device trace, sdpa_decode, and sdpa on both prefill and decode.
 #
-# The cost is a per-utterance rebuild of ~245 entries, amortised over tens of seconds of
-# generation, with per-step cost untouched -- which is why this is preferred over disabling the
-# cache or pinning the decode window, both of which are far more expensive.
-#
-# This is a MITIGATION for a failure we cannot yet name, so treat it as load-bearing: it is why a
-# multi-utterance run finishes at all. Finding the actual entry needs a bisect (start by moving
-# Block 3 to the CPU reference to see whether the hang follows Block 3 or just lands on whatever
-# op runs next), and the result is worth an upstream report -- a hang rather than an error is a
-# bug in the cache regardless of what we feed it.
-CLEAR_PROGRAM_CACHE = os.environ.get("VOXTRAL_CLEAR_PCACHE", "1") != "0"
+# Keep the switch: it is the escape hatch if all-BFP8 is ever wanted for its extra ~5 ms/step, and
+# the underlying ttnn failure (a silent hang, not an error) is still unfixed upstream.
+CLEAR_PROGRAM_CACHE = os.environ.get("VOXTRAL_CLEAR_PCACHE", "0") != "0"
 
-# Which Block 1 to run. "tt_transformers" is the older wrapper and REMAINS THE DEFAULT; "gpt" is
-# ours (tt/ttnn_voxtral_gpt.py), selected with VOXTRAL_BACKBONE=gpt.
+# L1 scratch every caller needs: the codec's convs fail with "bank size is 0 B" without it.
+L1_SMALL_SIZE = 65536
+
+
+def open_device(device_id=0, extra_trace_bytes=0):
+    """Open a device configured for whatever THIS build needs, so no caller has to know.
+
+    Tracing is per-block and opt-in, and a trace region must be requested when the device is
+    opened -- there is no way to add one later. Getting that wrong is a confusing failure at
+    capture time, far from the `ttnn.open_device` call that caused it, so the decision lives here
+    rather than in each script.
+    """
+    from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
+    from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
+
+    kw = {"l1_small_size": L1_SMALL_SIZE}
+    need = extra_trace_bytes
+    if gpt.USE_TRACE:
+        need += gpt.TRACE_REGION_SIZE
+    if flow.USE_TRACE:
+        need += flow.TRACE_REGION_SIZE
+    if need:
+        kw["trace_region_size"] = need
+    return ttnn.open_device(device_id=device_id, **kw)
+
+# Which Block 1 to run. "gpt" is OURS (tt/ttnn_voxtral_gpt.py) and is the default;
+# "tt_transformers" is the older wrapper, kept runnable for bisection with
+# VOXTRAL_BACKBONE=tt_transformers (it needs HF_MODEL; see scripts/export_backbone_hf.py).
 #
-# Ours is better on every per-block metric -- prefill last-position PCC 0.999874 vs 0.999564,
-# decode 0.99984 vs 0.981, 33.6 ms/step vs 48 -- and on the full 15-case fixture it scores 14 of
-# 15 natural-text cases at 0.0% WER against the current build's 1.17%, with BOTH 125-word
-# paragraphs at 0.0% (465 and 482 frames, natural stop), 15/15 natural [END_AUDIO], and the voice
-# identity control passing. It is NOT the default because of two open failures:
-#
-#   * CASE 4 COLLAPSES INTO A REPETITION LOOP. "Hello." (P=74, the shortest prompt) emits 157
-#     frames of "you know you know ..." where the current build says "Hello." in 9. That one case
-#     IS the 87.39% headline; the other 340 natural words are perfect. Not simply prompt length --
-#     case 13 (P=79) and case 12 (P=100) both match baseline within 2 frames.
-#
-#   * A CUMULATIVE HANG in Block 3's decode. Every part works alone, checked with REAL data and
-#     not just at the right shapes:
-#         frames valid?                reference CPU codec decodes them in 2.2 s
-#         device codec, real frames    3.04 s cold / 0.10 s warm, in any order, fresh process
-#         Block 1 alone                1400 consecutive steps, no hang, no memory growth
-#         cases 2,3 alone              BOTH complete, case 3 at RTF 1.12
-#         cases 0,1,2,3                hangs in case 3's decode, reproducibly
-#     So it needs cases 0 and 1 to run FIRST -- it is accumulation, not shape, not content, and
-#     not either block in isolation. Those two decode at bucket 128 and cases 2/3 at 512, so the
-#     next probe is device memory across a multi-bucket sequence. Note the hang wedges the card:
-#     recovery needs a tt-smi board reset, which is why this is disqualifying for a default.
-#
-# STATUS.md's rule for this swap is that the working pipeline is the thing to beat, so it stays
-# default until both are closed. Flip this line, not a caller, when they are.
-BACKBONE_IMPL = os.environ.get("VOXTRAL_BACKBONE", "tt_transformers")
+# Measured against the fp32 CPU reference on real prompts, and end to end on all 15 fixture cases:
+#                          ours (mixed W)    tt_transformers
+#     prefill last pos       0.999881          0.999564
+#     decode step            0.99991           0.981
+#     decode ms/step         38.7              48
+#     natural-text WER       0.88%             1.17%
+#     termination            15/15             15/15
+BACKBONE_IMPL = os.environ.get("VOXTRAL_BACKBONE", "gpt")
 
 
 class TtVoxtralPipeline:
@@ -234,7 +233,7 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
 
 
 def main():
-    dev = ttnn.open_device(device_id=0, l1_small_size=65536)
+    dev = open_device()
     try:
         pipe = TtVoxtralPipeline(dev)
         # Synthetic prompt embeddings: this checks the WIRING and the code agreement without
