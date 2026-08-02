@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-07-31",
+  "last_scan_date": "2026-08-02",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -7,14 +7,16 @@
     "30582544934",
     "30586242428",
     "30587963164",
-    "30618649345"
+    "30618649345",
+    "30675480001"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
     "pr-gate.yaml",
     "runtime-unit-tests.yaml",
     "sanity-tests.yaml",
-    "galaxy-unit-tests.yaml"
+    "galaxy-unit-tests.yaml",
+    "t3000-unit-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -25,10 +27,16 @@
       "status": "ci-passed-commented",
       "asan_build_run_id": "30501808830",
       "note": "asan-build ASan ubuntu 24.04 conclusion=success on run 30501808830. Posted confirmation comment on 2026-07-30. Awaiting maintainer review/merge - no further Silencer action needed until reviewed."
+    },
+    {
+      "branch": "silencer/demote-fabric-initialized-per-device-log",
+      "pattern": "Fabric initialized on Device {} - redundant per-device info log (952x in one job)",
+      "status": "pr-just-opened-dispatch-requested",
+      "note": "Dispatched t3000_unit_tests safe-output tool in same turn; that tool's schema has no explicit ref/branch input, so it's unconfirmed whether the dispatch targets this PR branch or main. Next run: resolve PR number via search_pull_requests, check_runs, and verify which branch the dispatched run actually built."
     }
   ],
   "backlog_cursor": {
     "next_category": 6,
-    "note": "Fixed 'Using pre-compiled firmware from' info->debug demotion (build_env_manager.cpp) on branch silencer/demote-precompiled-firmware-log, from galaxy-unit-tests run 30618649345. Histogram also showed high-volume UMD hugepage/numa warnings (hwloc_set_area_membind / init_hugepage, 256x each, tracked upstream tt-umd Issue #893 - out of scope, lives in submodule) and Fabric 'routing planes' warning (160x) worth investigating next. Test-info spam (5477x) dominates the histogram but is mostly per-test setup lines, needs closer look at subsystem breakdown before targeting."
+    "note": "After fabric-initialized-per-device demotion, histogram (run 30675480001, t3000-unit-tests jobs 91305340419/441/448) still shows: UMD hugepage/numa warnings (72x, tracked upstream tt-umd, out of scope), 'Using pre-compiled firmware from' info (912x, likely already fixed by PR #51794 pending), Distributed/Fabric 'Using auto discovery to generate mesh graph' + 'Constructing control plane using auto-discovery' (100x each) - possible next category-6 candidate, worth checking if these are single-shot-per-process or per-device."
   }
 }
