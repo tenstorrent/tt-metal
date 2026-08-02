@@ -206,11 +206,14 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+    DPRINT("waiting for buf capacity {} - {}\n", tc_id, ckernel::trisc::tile_counters[tc_id].f.buf_capacity);
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
     if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
+        DPRINT("returning early\n");
         return;
     }
     llk_wait_tiles(logical_dfb_id_, num_entries);
+    DPRINT("done waiting for tiles {}\n", num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);

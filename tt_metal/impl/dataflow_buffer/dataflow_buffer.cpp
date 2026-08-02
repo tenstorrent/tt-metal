@@ -606,8 +606,12 @@ size_t serialize_dfb_config_for_core(
             if (rc.is_producer) {
                 flags |= DFB_HART_FLAG_IS_PRODUCER;
             }
+            // Exactly one of these can be set: either DM1 programs this producer's pair and the
+            // producer waits on it, or the producer programs the pair itself (inta-tensix dfb case).
             if (dfb->use_remapper) {
-                flags |= DFB_HART_FLAG_REMAPPER_EN;
+                flags |= (dfb->remapper_programmer == RemapperProgrammer::TENSIX_PACKER)
+                             ? DFB_HART_FLAG_REMAPPER_SELF_PROG
+                             : DFB_HART_FLAG_REMAPPER_WAIT_DM1;
             }
             if (rc.config.broadcast_tc) {
                 flags |= DFB_HART_FLAG_BROADCAST_TC;
@@ -631,6 +635,10 @@ size_t serialize_dfb_config_for_core(
             entry.remapper_pair_index = (dfb->use_remapper && rc.is_producer)
                 ? rc.config.remapper_pair_index
                 : 0xFFu;
+            // Only meaningful for self-programming (intra-tensix) producers; DM harts reclaim this byte.
+            entry.intra_shadow_tc_id = (dfb->remapper_programmer == RemapperProgrammer::TENSIX_PACKER && rc.is_producer)
+                                           ? rc.config.intra_shadow_tc_id
+                                           : 0xFFu;
 
             // Zero the full entry region first (covers padding between packed_tc and next 4B boundary).
             std::memset(out.data() + offset, 0, entry_sz);
@@ -841,14 +849,84 @@ namespace detail {
         (tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
 }
 
-uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
-    uint8_t idx = next_index_[core_coord]++;
+std::pair<::dfb::PackedTileCounter, ::dfb::PackedTileCounter> TileCounterAllocator::allocate_intra_tensix_pair(
+    const CoreCoord& core, uint8_t tensix_id) {
+    // ClientL + sacrificial ClientR shadow. Remapper can map any two Tensix-only TCs; adjacency is
+    // not required — these just happen to come out consecutive because the Tensix-only pool is
+    // allocated monotonically.
+    auto client_l = allocate(core, tensix_id, /*use_t6_only=*/true);
+    auto shadow = allocate(core, tensix_id, /*use_t6_only=*/true);
+    return {client_l, shadow};
+}
+
+void RemapperIndexAllocator::reserve_packer_ranges(
+    const CoreCoord& core_coord, const std::array<uint8_t, ::dfb::NUM_TENSIX>& counts) {
+    auto& pools = next_index_[core_coord];
+    uint8_t packer_floor = ::dfb::NUM_REMAPPER_PAIRINGS;
+    for (uint8_t neo = 0; neo < ::dfb::NUM_TENSIX; neo++) {
+        pools.packer_base[neo] = 0xFFu;
+        pools.packer_count[neo] = 0;
+        pools.packer_next[neo] = 0;
+        if (counts[neo] == 0) {
+            continue;
+        }
+        TT_FATAL(
+            counts[neo] <= ::dfb::MAX_INTRA_TENSIX_DFBS_PER_TENSIX,
+            "Neo {} on core ({}, {}) needs {} packer remapper pairs but at most {} intra-tensix DFBs are supported",
+            neo,
+            core_coord.x,
+            core_coord.y,
+            counts[neo],
+            ::dfb::MAX_INTRA_TENSIX_DFBS_PER_TENSIX);
+        TT_FATAL(
+            packer_floor >= ::dfb::REMAPPER_ONE_TO_ONE_PAIR_START + counts[neo],
+            "Out of 1-to-1 remapper pairs on core ({}, {}) while reserving {} packer pairs for Neo {}",
+            core_coord.x,
+            core_coord.y,
+            counts[neo],
+            neo);
+        packer_floor = static_cast<uint8_t>(packer_floor - counts[neo]);
+        pools.packer_base[neo] = packer_floor;
+        pools.packer_count[neo] = counts[neo];
+    }
+    pools.packer_floor = packer_floor;
+}
+
+uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord, bool one_to_many) {
+    auto& pools = next_index_[core_coord];
+    if (one_to_many) {
+        TT_FATAL(
+            pools.next_one_to_many < ::dfb::NUM_REMAPPER_ONE_TO_MANY_PAIRINGS,
+            "Out of 1-to-many remapper pairs for core ({}, {}): only {} of the {} pairs support fan-out",
+            core_coord.x,
+            core_coord.y,
+            ::dfb::NUM_REMAPPER_ONE_TO_MANY_PAIRINGS,
+            ::dfb::NUM_REMAPPER_PAIRINGS);
+        return pools.next_one_to_many++;
+    }
+    const uint8_t pair_index = static_cast<uint8_t>(::dfb::REMAPPER_ONE_TO_ONE_PAIR_START + pools.next_one_to_one);
     TT_FATAL(
-        idx < ::dfb::NUM_REMAPPER_PAIRINGS,
-        "Out of remapper pairs for core ({}, {})",
+        pair_index < pools.packer_floor,
+        "Out of DM1 1-to-1 remapper pairs for core ({}, {}): bottom-up allocation reached "
+        "packer-owned range [{}, {})",
+        core_coord.x,
+        core_coord.y,
+        pools.packer_floor,
+        ::dfb::NUM_REMAPPER_PAIRINGS);
+    pools.next_one_to_one++;
+    return pair_index;
+}
+
+uint8_t RemapperIndexAllocator::allocate_for_packer(const CoreCoord& core_coord, uint8_t tensix_id) {
+    TT_FATAL(tensix_id < ::dfb::NUM_TENSIX, "Invalid tensix_id: {}", tensix_id);
+    auto& pools = next_index_[core_coord];
+    TT_FATAL(
+        pools.packer_base[tensix_id] != 0xFFu && pools.packer_next[tensix_id] < pools.packer_count[tensix_id],
+        "No reserved packer remapper pair left for Neo {} on core ({}, {}): call reserve_packer_ranges first",
+        tensix_id,
         core_coord.x,
         core_coord.y);
-    return idx;
+    return static_cast<uint8_t>(pools.packer_base[tensix_id] + pools.packer_next[tensix_id]++);
 }
 
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
@@ -1188,7 +1266,8 @@ uint16_t DataflowBufferImpl::dm1_remapper_slot_count() const {
     if (!MetalContext::instance().hal().has_tile_counter_registers()) {
         return 0;
     }
-    return use_remapper ? static_cast<uint16_t>(config.num_producers) : 0;
+    // Intra-tensix pairs are programmed by each Neo's packer, so they contribute no DM1 slots.
+    return remapper_programmer == RemapperProgrammer::DM1 ? static_cast<uint16_t>(config.num_producers) : 0;
 }
 
 void DataflowBufferImpl::append_dm1_remapper_slots_for_core(const CoreCoord& core, std::vector<uint8_t>& data) const {
@@ -1604,8 +1683,10 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         TT_FATAL(
             *config.tensix_scope != TensixScope::INTER,
             "Inter-tensix DFBs are not yet supported. Use TensixScope::INTRA for same-Neo packer→unpacker DFBs.");
-        // INTRA: each Neo has an independent packer (TRISC2) → unpacker (TRISC0) credit flow, one Tensix-only TC per Neo.
-        // Always STRIDED for both producer and consumer — blocked access and remapper are never used.
+        // INTRA: each Neo has an independent packer (TRISC2) → unpacker (TRISC0) credit flow, one Tensix-only TC per
+        // Neo. Access pattern is always STRIDED producer → STRIDED consumer (no ALL / BLOCKED). The remapper may still
+        // be enabled as a HW workaround to alias the Tensix-only ClientL TC away from overlay TCs 0-15; that is
+        // not an ALL fan-out remapper path.
         // num_producers == num_consumers == number of Neos (one packer-unpacker pair per Neo).
         TT_FATAL(
             config.num_producers == config.num_consumers,
@@ -1613,7 +1694,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             config.num_producers, config.num_consumers);
         TT_FATAL(
             config.pap == dfb::AccessPattern::STRIDED && config.cap == dfb::AccessPattern::STRIDED,
-            "Intra-tensix DFBs require STRIDED access for both producer (packer) and consumer (unpacker)");
+            "Intra-tensix DFBs require STRIDED producer → STRIDED consumer access patterns");
         TT_FATAL(
             !config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync,
             "Intra-tensix DFBs do not support implicit sync (ISR-based credits)");
@@ -1747,16 +1828,32 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
     // Process each core's DFBs together
     for (auto& [core, core_dfbs] : dfbs_by_core) {
         bool core_needs_remapper = false;
+        std::array<uint8_t, ::dfb::NUM_TENSIX> packer_pair_counts{};
         for (const auto& dfb : core_dfbs) {
-            if (dfb->config.cap == dfb::AccessPattern::ALL) {
+            const bool is_intra =
+                dfb->config.tensix_scope.has_value() && *dfb->config.tensix_scope == TensixScope::INTRA;
+            if (is_intra) {
+                // Intra DFBs need remapper HW for the Tensix-only TC alias workaround.
+                core_needs_remapper = true;
+                for (uint8_t risc_id = ::dfb::TENSIX_RISC_OFFSET;
+                     risc_id < ::dfb::TENSIX_RISC_OFFSET + ::dfb::NUM_TENSIX;
+                     risc_id++) {
+                    if (dfb->config.producer_risc_mask & (1u << risc_id)) {
+                        packer_pair_counts[risc_id - ::dfb::TENSIX_RISC_OFFSET]++;
+                    }
+                }
+            } else if (dfb->config.cap == dfb::AccessPattern::ALL) {
                 bool dm_dm_all = !has_tensix_risc(dfb->config.producer_risc_mask) &&
                                      !has_tensix_risc(dfb->config.consumer_risc_mask);
                 if (!dm_dm_all) {
                     core_needs_remapper = true;
-                    break;
                 }
             }
         }
+        // Count every INTRA DFB on this core first, then reserve exact contiguous packer remapper
+        // blocks per Neo from pair 63 downward. Finalize sees the full core DFB set in one pass —
+        // there is no incremental reassignment if more INTRA DFBs are added later in the same program.
+        remapper_index_allocator_.reserve_packer_ranges(core, packer_pair_counts);
 
         log_debug(
             tt::LogMetal,
@@ -1798,12 +1895,11 @@ void ProgramImpl::finalize_single_dfb_config(
                 }
                 const auto& ca = a[i].config;
                 const auto& cb = b[i].config;
-                if (ca.num_tcs_to_rr != cb.num_tcs_to_rr ||
-                    ca.broadcast_tc != cb.broadcast_tc ||
-                    ca.remapper_pair_index != cb.remapper_pair_index ||
-                    ca.consumer_tcs != cb.consumer_tcs ||
+                if (ca.num_tcs_to_rr != cb.num_tcs_to_rr || ca.broadcast_tc != cb.broadcast_tc ||
+                    ca.remapper_pair_index != cb.remapper_pair_index || ca.consumer_tcs != cb.consumer_tcs ||
                     ca.remapper_consumer_ids_mask != cb.remapper_consumer_ids_mask ||
-                    ca.producer_client_type != cb.producer_client_type) {
+                    ca.producer_client_type != cb.producer_client_type ||
+                    ca.intra_shadow_tc_id != cb.intra_shadow_tc_id) {
                     return false;
                 }
                 for (int j = 0; j < ca.num_tcs_to_rr; j++) {
@@ -1879,14 +1975,22 @@ void ProgramImpl::finalize_single_dfb_config(
 
     // ---------------------------------------------------------------------------
     // Intra-tensix: packer TRISC2 (producer) → unpacker TRISC0 (consumer) within the same Neo.
-    // No DM RISC, no remapper, no strided/blocked access pattern — each Neo is a fully
-    // independent packer→unpacker credit flow backed by one Tensix-only TC on that Neo.
-    // For N Neos (num_producers == num_consumers == N): N Tensix-only TCs, one per Neo.
+    // Each Neo is a fully independent packer→unpacker credit flow backed by one Tensix-only TC on that Neo.
+    //
+    // HW workaround: a T6 update to a Tensix-only TC aliases into overlay TCs 0-15 unless the
+    // remapper routes that TC elsewhere, so each Neo also burns a sacrificial ClientR shadow TC as
+    // the remapper target and needs its own 1-to-1 remapper pair. Both packer and unpacker keep using
+    // the ClientL TC; nothing ever reads the shadow. ClientL/ClientR need not be adjacent. The pair
+    // must be programmed by that Neo's packer — DM1 cannot see the Tensix-only pool, and no Neo can
+    // see another Neo's TCs.
     // ---------------------------------------------------------------------------
     if (is_intra_tensix) {
-        // Iterate over every Neo bit in producer_risc_mask and allocate a separate Tensix-only
-        // TC for each, giving each Neo its own independent credit counter.
-        dfb->use_remapper = false;
+        TT_FATAL(
+            core_has_remapper,
+            "Intra-tensix DFBs require the remapper to alias the Tensix-only tile counter away from "
+            "overlay counters 0-15");
+        dfb->use_remapper = true;
+        dfb->remapper_programmer = RemapperProgrammer::TENSIX_PACKER;
 
         for (uint8_t risc_id = ::dfb::TENSIX_RISC_OFFSET;
              risc_id < ::dfb::TENSIX_RISC_OFFSET + ::dfb::NUM_TENSIX;
@@ -1896,16 +2000,20 @@ void ProgramImpl::finalize_single_dfb_config(
             }
             uint8_t tensix_id = risc_id - ::dfb::TENSIX_RISC_OFFSET;
 
-            ::dfb::PackedTileCounter t6_only_tc =
-                tile_counter_allocator_.allocate(core, tensix_id, /*use_t6_only=*/true);
+            auto [t6_only_tc, shadow_tc] = tile_counter_allocator_.allocate_intra_tensix_pair(core, tensix_id);
+            // Contiguous within this Neo's exact reserved block (see reserve_packer_ranges).
+            const uint8_t pair_index = remapper_index_allocator_.allocate_for_packer(core, tensix_id);
 
             log_info(
                 tt::LogMetal,
-                "Intra-tensix DFB {}: Neo{} Tensix-only TC (tensix_id={}, tc_id={})",
+                "Intra-tensix DFB {}: Neo{} Tensix-only TC (tensix_id={}, tc_id={}) aliased to shadow tc_id={} "
+                "via remapper pair {}",
                 dfb->id,
                 tensix_id,
                 (uint32_t)::dfb::get_tensix_id(t6_only_tc),
-                (uint32_t)::dfb::get_counter_id(t6_only_tc));
+                (uint32_t)::dfb::get_counter_id(t6_only_tc),
+                (uint32_t)::dfb::get_counter_id(shadow_tc),
+                (uint32_t)pair_index);
 
             DFBRiscConfig risc_config;
             risc_config.risc_id = risc_id;
@@ -1913,6 +2021,8 @@ void ProgramImpl::finalize_single_dfb_config(
             risc_config.config.packed_tile_counter[0] = t6_only_tc;
             risc_config.config.num_tcs_to_rr = 1;
             risc_config.config.broadcast_tc = false;
+            risc_config.config.remapper_pair_index = pair_index;
+            risc_config.config.intra_shadow_tc_id = ::dfb::get_counter_id(shadow_tc);
             new_hw_risc_configs.push_back(risc_config);
         }
 
@@ -2121,7 +2231,6 @@ void ProgramImpl::finalize_single_dfb_config(
         risc_config.config.broadcast_tc = dm_dm_all;
 
         if (use_remapper) {
-            risc_config.config.remapper_pair_index = remapper_index_allocator_.allocate(core);
             risc_config.config.producer_client_type = producer_client_types[producer_idx];
 
             // Build consumer_tcs packed and consumer_ids_mask for this producer
@@ -2147,6 +2256,11 @@ void ProgramImpl::finalize_single_dfb_config(
             }
             risc_config.config.consumer_tcs = packed;
             risc_config.config.remapper_consumer_ids_mask = consumer_ids_mask;
+
+            // The ClientR valid mask decides which pool this pair must come from: fan-out needs one
+            // of the 16 grouped-capable pairs, a single consumer can use the plentiful 1-to-1 pairs.
+            const bool one_to_many = __builtin_popcount(consumer_ids_mask) > 1;
+            risc_config.config.remapper_pair_index = remapper_index_allocator_.allocate(core, one_to_many);
 
             log_debug(
                 tt::LogMetal,
@@ -2281,6 +2395,7 @@ void ProgramImpl::finalize_single_dfb_config(
     }
 
     dfb->use_remapper = use_remapper;
+    dfb->remapper_programmer = use_remapper ? RemapperProgrammer::DM1 : RemapperProgrammer::NONE;
     log_debug(
         tt::LogMetal, "DFB {} finalized risc_mask: 0x{:x} use_remapper: {}", dfb->id, dfb->risc_mask, use_remapper);
 
