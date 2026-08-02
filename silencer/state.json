@@ -8,7 +8,8 @@
     "30586242428",
     "30587963164",
     "30618649345",
-    "30675480001"
+    "30675480001",
+    "30765286317"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -16,7 +17,8 @@
     "runtime-unit-tests.yaml",
     "sanity-tests.yaml",
     "galaxy-unit-tests.yaml",
-    "t3000-unit-tests.yaml"
+    "t3000-unit-tests.yaml",
+    "galaxy-sanity.yaml"
   ],
   "in_flight_prs": [
     {
@@ -29,14 +31,35 @@
       "note": "asan-build ASan ubuntu 24.04 conclusion=success on run 30501808830. Posted confirmation comment on 2026-07-30. Awaiting maintainer review/merge - no further Silencer action needed until reviewed."
     },
     {
+      "number": 51849,
       "branch": "silencer/demote-fabric-initialized-per-device-log",
-      "pattern": "Fabric initialized on Device {} - redundant per-device info log (952x in one job)",
+      "pattern": "Fabric initialized on Device {} - redundant per-device info log (384-952x per job)",
+      "status": "ci-passed",
+      "note": "PR Gate Status check on run 30732237919 conclusion=success as of 2026-08-02. Awaiting maintainer review/merge."
+    },
+    {
+      "number": 51794,
+      "branch": "silencer/demote-precompiled-firmware-log",
+      "pattern": "Using pre-compiled firmware from: {} - info log firing once per device (384-768x per job)",
+      "status": "open-pr",
+      "note": "Awaiting maintainer review/merge."
+    },
+    {
+      "number": 51643,
+      "branch": "silencer/dedupe-unknown-motherboard-warning",
+      "pattern": "Unknown motherboard warning fires once per chip instead of once per host",
+      "status": "open-pr",
+      "note": "Awaiting maintainer review/merge."
+    },
+    {
+      "branch": "silencer/demote-finalize-dfb-log",
+      "pattern": "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {} - info log in finalize_dfbs() firing once per programmable-core-type per program (165x in one job sample)",
       "status": "pr-just-opened-dispatch-requested",
-      "note": "Dispatched t3000_unit_tests safe-output tool in same turn; that tool's schema has no explicit ref/branch input, so it's unconfirmed whether the dispatch targets this PR branch or main. Next run: resolve PR number via search_pull_requests, check_runs, and verify which branch the dispatched run actually built."
+      "note": "Demoted log_info->log_debug in tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:1569. Dispatched pr_gate safe-output tool in same turn; that tool's schema (platform only) has no explicit ref/branch input, so as with PR #51849 it is unconfirmed whether the dispatch targets this PR branch or main. Next run: resolve PR number via search_pull_requests, check_runs, and verify which branch the dispatched run actually built."
     }
   ],
   "backlog_cursor": {
     "next_category": 6,
-    "note": "After fabric-initialized-per-device demotion, histogram (run 30675480001, t3000-unit-tests jobs 91305340419/441/448) still shows: UMD hugepage/numa warnings (72x, tracked upstream tt-umd, out of scope), 'Using pre-compiled firmware from' info (912x, likely already fixed by PR #51794 pending), Distributed/Fabric 'Using auto discovery to generate mesh graph' + 'Constructing control plane using auto-discovery' (100x each) - possible next category-6 candidate, worth checking if these are single-shot-per-process or per-device."
+    "note": "Histogram from run 30765286317 (galaxy-sanity, jobs 91543540096/91543540098) info/Metal subsystem: 'Fabric initialized on Device' (384x, PR #51849 open), '[Real-time profiler] Device N sync complete' (352x realtime_profiler_manager.cpp:1397, next category-6 candidate - fires once per device per profiler sync, likely demotable), 'Finalize dfb' (165x, this PR). info/BuildKernels: 'Using pre-compiled firmware from' (384x, PR #51794 open). warning/UMD: hwloc_set_area_membind + init_hugepage NUMA warnings (352x each) - tracked upstream tt-umd submodule, out of scope. info/Distributed: 'Using auto discovery to generate mesh graph' + 'Constructing control plane using auto-discovery' (13x each in metal_env.cpp:437,499) - low frequency (13x), likely fires once per process/control-plane-init, probably NOT good demotion candidate (low volume, may be useful one-time startup info) - deprioritize unless frequency grows in future scans."
   }
 }
