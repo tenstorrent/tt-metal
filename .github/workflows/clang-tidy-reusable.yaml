@@ -144,7 +144,8 @@ jobs:
       - name: Test S3 write+readback
         # The probe above only confirms S3 *reads* work; writes can fail silently
         # (IAM policy, ACL, proxy stripping PUT) with nothing to catch it. Writes,
-        # reads back, and deletes a per-invocation sentinel object; hard-fails on error.
+        # reads back, and deletes a per-invocation sentinel object; warns (does not
+        # fail the job) on error so a broken ctcache doesn't block clang-tidy analysis.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           python3 - << 'PYEOF'
@@ -174,9 +175,9 @@ jobs:
                   response = s3.get_object(Bucket=bucket, Key=key)
                   body = response["Body"].read()
                   if body != payload:
-                      print(f"::error::S3 readback MISMATCH: expected {payload!r}, got {body!r}")
-                      sys.exit(1)
-                  print("Readback: content matches ✓")
+                      print(f"::warning::S3 readback MISMATCH: expected {payload!r}, got {body!r}")
+                  else:
+                      print("Readback: content matches ✓")
               finally:
                   try:
                       s3.delete_object(Bucket=bucket, Key=key)
@@ -184,9 +185,8 @@ jobs:
                   except Exception:
                       print(f"::warning::Failed to delete write-test sentinel {key} — manual cleanup may be needed")
           except Exception as e:
-              print(f"::error::ctcache S3 write+readback FAILED: {type(e).__name__}")
-              print("::error::Writes to Garage S3 are broken — ctcache will run but results will NOT be persisted")
-              sys.exit(1)
+              print(f"::warning::ctcache S3 write+readback FAILED: {type(e).__name__}")
+              print("::warning::Writes to Garage S3 may be broken — ctcache will run but results may not be persisted")
           PYEOF
 
       - name: Create ccache tmpdir
