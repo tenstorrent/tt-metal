@@ -115,3 +115,20 @@ grid. Grid-only (no math change): PCC 0.9936 / 0.99999. Cumulative vs original E
 PCC-safe (lofi 0.9936 == default), but perf 5759.6 vs 5736.0 ms/step = +0.4% (jitter). The ttnn
 default is already LoFi-equivalent for the bf4_b MoE matmuls, so explicit lofi buys nothing. Left
 at default "". Cheap-gated-knob vein exhausted (EP/CCL2/FULLGRID landed, -26.2% cumulative).
+
+## 2026-08-02 — Lever 2: attention all_reduce refactor (−3.9%) + CFG-parallel opt-in (marginal)
+
+Two changes from the CFG-parallel work (`test_image3_t2i_perf`, 32L/12step/1024², EP+CCL2+FULLGRID on):
+
+**(a) LANDED — attention `_mesh_reduce`: `all_gather(dim=0)+sum` -> fused `all_reduce`** (matches mo_e).
+Same math (PCC 0.99999 bsz=1, identical), batch-safe, and faster: steady **5736 -> 5512 ms/step (-3.9%)**,
+E2E 131.6 -> 125.1s. Also made the two attention reshapes bsz-generic (`[bsz,...]`). New default.
+Cumulative vs original EP-off baseline: **7770 -> 5512 ms/step (-29.1%), E2E 157.8 -> 125.1s (-20.7%)**.
+
+**(b) GATED OPT-IN (default OFF) — CFG-parallel** (`HUNYUAN_CFG_PARALLEL=1`): run cond+uncond as one
+bsz=2 forward instead of 2 sequential forwards. Renders CORRECTLY (pixel-corr 0.99447 vs sequential).
+But only -1.8% steady/step (5512 -> 5411) — batching doubles matmul flops + collective payload, nearly
+cancelling the halved collective COUNT (step is NOT purely latency-bound) — AND the bsz=2 trace compile
+is 3x bigger (step1 24.2s vs 8.6s). At 50 cold steps that +15.6s compile outweighs the 49x0.1s steady
+saving => ~10s SLOWER per cold render. Kept gated: only net-positive if the compile amortizes across
+renders (resident server). NOT flipped default.

@@ -159,19 +159,34 @@ def install_tt_layer_stack(model, tt_pipe, use_trace=False):
             inputs_embeds = self.wte(input_ids)
         cos, sin = custom_pos_emb  # each [bsz, S, head_dim] (already gathered)
         bsz = inputs_embeds.shape[0]
-        outs = []
-        for i in range(bsz):
-            emb_i = inputs_embeds[i : i + 1].to(torch.float32)
-            cos_i, sin_i = cos[i].to(torch.float32), sin[i].to(torch.float32)
-            mask_i = attention_mask[i] if attention_mask is not None else None  # [1,S,S]
+        # CFG-parallel: run cond+uncond as ONE bsz=2 forward. cos/sin/mask are identical
+        # across CFG samples (position-based, not token-content), so share sample 0's.
+        # Halves the per-layer TP collectives. HUNYUAN_CFG_PARALLEL=1 to enable.
+        if os.environ.get("HUNYUAN_CFG_PARALLEL") == "1" and bsz > 1:
+            emb = inputs_embeds.to(torch.float32)  # [bsz, S, H]
+            cos0, sin0 = cos[0].to(torch.float32), sin[0].to(torch.float32)
+            mask0 = attention_mask[0] if attention_mask is not None else None  # [1,S,S], shared
             if use_trace:
                 if getattr(tt_pipe, "_img_trace", None) is None:
-                    tt_pipe.image_trace_setup(emb_i, cos_i, sin_i, mask_i)
-                h_i = tt_pipe.image_trace_step(emb_i)
+                    tt_pipe.image_trace_setup(emb, cos0, sin0, mask0)
+                hidden = tt_pipe.image_trace_step(emb)
             else:
-                h_i = tt_pipe.forward_image(emb_i, cos_i, sin_i, mask_i)
-            outs.append(h_i)
-        hidden = torch.cat(outs, dim=0).to(inputs_embeds.dtype).to(inputs_embeds.device)
+                hidden = tt_pipe.forward_image(emb, cos0, sin0, mask0)
+            hidden = hidden.to(inputs_embeds.dtype).to(inputs_embeds.device)
+        else:
+            outs = []
+            for i in range(bsz):
+                emb_i = inputs_embeds[i : i + 1].to(torch.float32)
+                cos_i, sin_i = cos[i].to(torch.float32), sin[i].to(torch.float32)
+                mask_i = attention_mask[i] if attention_mask is not None else None  # [1,S,S]
+                if use_trace:
+                    if getattr(tt_pipe, "_img_trace", None) is None:
+                        tt_pipe.image_trace_setup(emb_i, cos_i, sin_i, mask_i)
+                    h_i = tt_pipe.image_trace_step(emb_i)
+                else:
+                    h_i = tt_pipe.forward_image(emb_i, cos_i, sin_i, mask_i)
+                outs.append(h_i)
+            hidden = torch.cat(outs, dim=0).to(inputs_embeds.dtype).to(inputs_embeds.device)
         return BaseModelOutputWithPast(
             last_hidden_state=hidden, past_key_values=None, hidden_states=None, attentions=None
         )

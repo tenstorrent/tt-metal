@@ -346,18 +346,15 @@ class _TtDecoderLayer:
 
     # ------------------------------------------------------------------
     def _mesh_reduce(self, x):
-        """All-reduce (sum) a per-device partial across the TP mesh axis:
-        all_gather along the TP axis (cluster_axis) then sum, so every device on
-        that axis holds the full result. Confined to the TP axis so the
-        DP-replicated columns each keep their own identical full result."""
+        """All-reduce (sum) a per-device partial across the TP mesh axis. Fused ring
+        all_reduce (cluster_axis=TP) -- same math as the old all_gather(dim=0)+sum but
+        it does NOT touch dim 0, so it is batch-safe (a [bsz,S,H] partial stays
+        [bsz,S,H]). Required for CFG-parallel (bsz=2); equivalent at bsz=1."""
         if not self.is_mesh:
-            return x  # single chip: no TP axis to gather over; partial is complete
-        g = ttnn.all_gather(
-            x, dim=0, cluster_axis=self.tp_axis, num_links=_mo_e._ccl_links(), topology=ttnn.Topology.Linear
+            return x  # single chip: no TP axis to reduce over; partial is complete
+        return ttnn.all_reduce(
+            x, cluster_axis=self.tp_axis, num_links=_mo_e._ccl_links(), topology=ttnn.Topology.Linear
         )
-        r = ttnn.sum(g, dim=0, keepdim=True)
-        ttnn.deallocate(g)
-        return r
 
     def _swiglu(self, x, gu_w, down_w, inter):
         gu = ttnn.linear(x, gu_w)
@@ -433,11 +430,12 @@ class _TtDecoderLayer:
 
     # ------------------------------------------------------------------
     def _attention_sharded(self, x, custom_pos_emb, attn_mask=None):
+        bsz = x.shape[0]  # 1, or 2 under CFG-parallel
         S = x.shape[1]
         qkv = ttnn.linear(
             x, self.qkv_w, compute_kernel_config=_mo_e._mm_cfg(), core_grid=_mo_e._mm_grid(self.device)
         )  # [1, S, tp_qkv] per device
-        qkv = ttnn.reshape(qkv, [1, 1, S, qkv.shape[-1]])
+        qkv = ttnn.reshape(qkv, [bsz, 1, S, qkv.shape[-1]])
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=self.tp_num_heads,
@@ -463,7 +461,7 @@ class _TtDecoderLayer:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn = ttnn.reshape(attn, [1, S, self.tp_num_heads * self.head_dim])
+        attn = ttnn.reshape(attn, [bsz, S, self.tp_num_heads * self.head_dim])
         out_partial = ttnn.linear(
             attn, self.o_w, compute_kernel_config=_mo_e._mm_cfg(), core_grid=_mo_e._mm_grid(self.device)
         )  # [1, S, hidden] partial sum
