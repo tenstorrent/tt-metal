@@ -81,6 +81,7 @@ ALL_MATHOPS = [
     MathOperation.Threshold,
     MathOperation.ReluMax,
     MathOperation.ReluMin,
+    MathOperation.I0,
 ]
 
 FORMATS = input_output_formats(
