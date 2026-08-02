@@ -377,7 +377,12 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
             if rows <= ttnn.TILE_SIZE:
                 x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, x.device()))
         x = reshard_to_rectangular_grid(x)
-        return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
+        # Keep the output in the same (rectangular) sharded layout the norm just
+        # consumed, so the next op (LinearDecode / _apply_rope) doesn't round-trip
+        # through DRAM-interleaved. ``ttnn.rms_norm`` requires a sharded output to
+        # match the input's memory layout, so passing the input's own config is the
+        # documented contract; for DRAM-interleaved inputs this is the default anyway.
+        return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps, memory_config=x.memory_config())
 
 
 def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
@@ -387,4 +392,7 @@ def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
     #     x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
     #     x = ttnn.to_memory_config(x, x_mem_config)
     x = reshard_to_rectangular_grid(x)
-    return ttnn.rms_norm(x, epsilon=eps)
+    # See ``DeepSeekV4RMSNorm.forward``: keep the output in the input's (sharded)
+    # layout instead of dropping to DRAM-interleaved, so the next op avoids a
+    # sharded->DRAM->sharded round-trip.
+    return ttnn.rms_norm(x, epsilon=eps, memory_config=x.memory_config())
