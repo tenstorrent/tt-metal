@@ -38,6 +38,9 @@ When a user asks to **"generate {kernel} for {target_arch}"**:
 - `KERNEL_NAME` = the kernel to generate
 - `TASK_ID` = `generated-{KERNEL_NAME}-{TARGET_ARCH}` (e.g., `generated-gelu-quasar`)
 - `SFPI_MODE` = `true` if the user **explicitly** asked for an SFPI version (phrases like "as SFPI", "sfpi version", "in sfpi", "write it in sfpi"); otherwise `false`
+- `QSR_SIM_BACKEND` = the inherited environment value for Quasar (`emu` by
+  default, or `vcs`). Validate it without prompting. Dashboard-scheduled runs
+  always provide this value and the matching UMD paths.
 
 ### Address Review Comments on an Open PR
 
@@ -165,6 +168,7 @@ via `state.py --worktree-dir` — do not hand-construct the state file path
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set KERNEL_NAME     "{kernel}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set TARGET_ARCH     "{target_arch}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set SFPI_MODE       "{SFPI_MODE}" --json
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set QSR_SIM_BACKEND "{emu|vcs}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set WORKTREE_BRANCH "{worktree_branch}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/llk_code_gen"
 # From execute_step_begin_setup (Step 2) so the orchestrator reuses the same run identity:
