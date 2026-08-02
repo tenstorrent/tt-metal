@@ -236,6 +236,11 @@ def _disp_level(label: str) -> str:
     return "ttnn" if label == "tt-lang" and _ttl_absent() else label
 
 
+# A lever whose scope is the whole model, not one op: prefetch, the host decode loop. Prefixed so the
+# per-op matrix can exclude it and the report can list it where it belongs.
+_MODEL_LEVER_PREFIX = "model:"
+
+
 def _op_label(sig: str, width: int = 34) -> str:
     """Display label for an op, KEEPING THE SHAPE that distinguishes it.
 
@@ -802,6 +807,22 @@ def render_summary(
     # decided here and every section below reads this set instead of re-judging rows.
     _base_row = _ledger_pair(_ledger().KIND_EAGER, model, task)[0]
     hdr_base = float(_base_row["value_ms"]) if _base_row else None
+    # MODEL-LEVEL LEVERS ARE NOT A ROW IN A PER-OP LADDER. Every row below is one op walking its own
+    # rungs; a lever that rebuilds how the whole model streams has no owning op. The DRAM prefetcher is
+    # built once, every layer's weights are registered with it and global_cb goes to all the decode
+    # matmuls together -- run 20 recorded that attempt as "Matmul 32x3840x15360 / shard", true of where
+    # the agent was standing and useless to anyone asking whether the prefetcher had been tried.
+    # Attaching it to all six matmuls instead would count one change six times. They get their own
+    # block, keyed by a `model:` prefix, so the matrix stays one-ladder-per-op.
+    _model_levers = [
+        a for a in attempts if isinstance(a, dict) and str(a.get("op_signature", "")).startswith(_MODEL_LEVER_PREFIX)
+    ]
+    attempts = [
+        a
+        for a in attempts
+        if not (isinstance(a, dict) and str(a.get("op_signature", "")).startswith(_MODEL_LEVER_PREFIX))
+    ]
+
     _wins = _win_set(attempts, hdr_base)
 
     by_op: dict[str, dict] = {}
@@ -943,6 +964,24 @@ def render_summary(
         _vint = " · totals %.2f ms; per-stage notes are the agent's words AT CAPTURE TIME" % _stot if _stot > 0 else ""
         lines.append(f"Block-level timing (per-stage trace) — {_lbl}{_vint}:")
         lines.extend(_stage_table_lines(_stages))
+        lines.append("")
+
+    if _model_levers:
+        lines.append("Model-level levers")
+        lines.append("=" * len("Model-level levers"))
+        _h = f"{'lever':<16} {'result':<9} {'e2e Δ':>10}  note"
+        lines.append(_h)
+        lines.append("-" * len(_h))
+        # THE OWNING HELPER, not beat_baseline. "is a win" has one derivation (_win_set); a second
+        # reader is how the flag and the marks drifted apart in the first place.
+        _lever_wins = _win_set(_model_levers, hdr_base)
+        for _j, a in enumerate(_model_levers):
+            _name = str(a.get("op_signature", ""))[len(_MODEL_LEVER_PREFIX) :] or "?"
+            _d = a.get("fullpipe_delta_ms")
+            _dl = f"{_d:+.2f} ms" if isinstance(_d, (int, float)) else "n/m"
+            _res = "✓ win" if _j in _lever_wins else ("· wedged" if a.get("wedged") else "· try")
+            _n = " ".join((a.get("note") or "").split())[:110] or "(no reason recorded)"
+            lines.append(f"{_name:<16} {_res:<9} {_dl:>10}  {_n}")
         lines.append("")
 
     if by_op:
