@@ -3333,7 +3333,23 @@ def record_kernel_attempt(
         # the report prints and the win mark all read this one result, so they cannot disagree about
         # the same row -- which they did: 16 beat_baseline flags from 14 measurements, 3 rendered
         # ticks, and 2 improvements that actually happened.
-        "beat_baseline": _fpv["win"],
+        # A WIN IS WHAT GOT COMMITTED. This used to be _fpv["win"] -- the end-to-end verdict, read at
+        # RECORD time, before the commit-or-revert decision exists. _record_committed_win then sets the
+        # same flag from the commit, which is what the report was always meant to show: "git_commit IS
+        # the bank-a-verified-win action ... Deriving the win mark from the commit itself makes the
+        # report reflect what was actually banked." Two writers, and the early one fires on changes
+        # that never reach the tree.
+        #
+        # gemma-3-12b-it run 21: three ✓win marks in 80 minutes with ZERO commits. One was a shard the
+        # agent applied, measured at -0.84%, and REVERTED as noise (claimed_beat_baseline=False). Two
+        # were investigations that made no edit at all -- note "none: ...", device_ms unchanged at
+        # 381.2266. All three "beat" the reference because the run's baseline was measured on freshly
+        # reset chips (36.2548 cold vs ~35 warm) and, with nothing committed, the ratchet never moved
+        # off it.
+        #
+        # So the flag has ONE writer now: the commit. The verdict fields below stay -- they are the
+        # evidence -- they simply stop deciding a mark only a commit can earn.
+        "beat_baseline": False,
         "claimed_beat_baseline": bool(beat_baseline),
         "fullpipe_ms": _fpv["ms"],
         "fullpipe_best_ms": _fpv["ref"],
