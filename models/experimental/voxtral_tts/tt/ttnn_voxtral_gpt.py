@@ -129,6 +129,21 @@ SAFE = set(filter(None, os.environ.get("VOXTRAL_SAFE", "").split(",")))
 # the rest of the process, and only a tt-smi board reset recovers it.
 USE_TRACE = os.environ.get("VOXTRAL_GPT_TRACE", "0") == "1"
 TRACE_REGION_SIZE = 64 * 1024 * 1024
+
+# Use ttnn's fused attention instead of the hand-rolled interior, via VOXTRAL_SDPA=prefill,decode.
+# A module global rather than a constructor arg so one process can A/B it without reloading 13 GB
+# of weights.
+#
+# This is the LAST structural difference between us and the two implementations that do not hang:
+# both tt_transformers and ign/voxtral_p150_qb2 run sdpa for prefill and sdpa_decode for decode.
+# We hand-rolled deliberately -- STATUS.md 4.1 measures sdpa carrying a mask-independent
+# worst-case penalty, and our decode scores 0.99984 where tt_transformers' sdpa_decode path
+# scores 0.981 -- but that 0.981 is THEIR number, and was never measured for OUR implementation.
+#
+# sdpa_decode wants q as [1, b, nh, dh] (heads in dim 2, not dim 1) and takes k/v as the WHOLE
+# cache [b, nkv, s, dh] with cur_pos_tensor, which is our cache layout exactly -- so it replaces
+# the slice, transpose, two matmuls, softmax and reshape with one op and needs no mask.
+SDPA = set(filter(None, os.environ.get("VOXTRAL_SDPA", "").split(",")))
 # L1 shard for the "update" toggle's paged_update_cache input: one tile row on one core.
 _DECODE_SHARD = ttnn.create_sharded_memory_config(
     (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
@@ -282,6 +297,11 @@ class TtVoxtralGPT:
         continuing to mean what our mask assumes.
         """
         rep = N_HEADS // N_KV_HEADS
+        if "prefill" in SDPA:
+            # GQA native: k/v go in unexpanded, and is_causal replaces our explicit mask.
+            a = ttnn.transformer.scaled_dot_product_attention(
+                qh, kh, vh, is_causal=True, scale=SCALE, compute_kernel_config=COMPUTE_CONFIG)
+            return ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, S, Q_WIDTH])
         kr, vr = ttnn.repeat_interleave(kh, rep, dim=1), ttnn.repeat_interleave(vh, rep, dim=1)
         s = ttnn.matmul(qh, ttnn.transpose(kr, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
         s = ttnn.add(ttnn.multiply(s, SCALE), mask)
@@ -359,6 +379,17 @@ class TtVoxtralGPT:
         else:
             ttnn.update_cache(cache[0], kh, pos)
             ttnn.update_cache(cache[1], vh, pos)
+        if "decode" in SDPA:
+            # k/v are the WHOLE cache; cur_pos_tensor bounds it, so no slice and no mask. q must
+            # be [1, b, nh, dh] -- heads in dim 2, not our dim 1.
+            idx = pos_t if pos_t is not None else ttnn.from_torch(
+                torch.tensor([pos], dtype=torch.int32), device=self.device)
+            o = ttnn.transformer.scaled_dot_product_attention_decode(
+                ttnn.permute(qh, (0, 2, 1, 3)), cache[0], cache[1], cur_pos_tensor=idx,
+                scale=SCALE, compute_kernel_config=COMPUTE_CONFIG)
+            a = ttnn.reshape(o, [1, 1, Q_WIDTH])
+            return self._mlp(
+                ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG)), w)
         if "slice" in SAFE:
             ks, vs = cache[0], cache[1]        # attend the whole cache; `mask` covers the tail
         else:
