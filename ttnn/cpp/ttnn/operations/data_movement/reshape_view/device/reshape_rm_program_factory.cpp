@@ -112,10 +112,13 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
 
     const bool pages_noc_aligned = (source_page_size_bytes % noc_page_alignment_bytes == 0) &&
                                    (dest_page_size_bytes % noc_page_alignment_bytes == 0);
+    const bool dest_noc_aligned = (dest_page_size_bytes % noc_page_alignment_bytes == 0);
     const bool pages_divisible =
         (source_page_size_bytes % dest_page_size_bytes == 0 || dest_page_size_bytes % source_page_size_bytes == 0);
-    // Avoid dual-kernel on non-aligned DRAM dests (Blackhole SYS-1419 / #50191).
-    const bool can_use_dual_kernel = pages_divisible && (pages_noc_aligned || !dst_buffer->is_dram());
+    // Avoid dual-kernel when dest writes are too small for DRAM (Blackhole SYS-1419 / #50191).
+    // Only dest alignment matters: source alignment selects the clean-vs-staging read path
+    // but doesn't affect the size of writes hitting DRAM.
+    const bool can_use_dual_kernel = pages_divisible && (dest_noc_aligned || !dst_buffer->is_dram());
 
     const uint32_t num_dest_write_slots =
         choose_num_dest_write_slots(device, pages_noc_aligned, can_use_dual_kernel, cb_size0, dest_slot_size_bytes);
