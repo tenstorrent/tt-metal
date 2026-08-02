@@ -11,7 +11,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/math.hpp>
@@ -20,6 +19,8 @@
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
+
+#include "tensor_impl.hpp"
 
 namespace tt::tt_metal {
 

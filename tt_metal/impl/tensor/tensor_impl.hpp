@@ -14,13 +14,6 @@
 #include <tt_stl/span.hpp>
 #include <vector>
 
-/**
- * Functions in this file are internal utilities for Runtime Tensors.
- * They are exported out in the public API area as a transiet state,
- * many of them are used by ttnn python binding.
- * We should disperse these functions as public APIs in tensor_apis.hpp or make them private to tt_metal.
- */
-
 namespace tt::tt_metal::tensor_impl {
 
 // ======================================================================================
