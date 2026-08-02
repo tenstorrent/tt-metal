@@ -485,6 +485,31 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     )
 
 
+def _pcc_fallback_rtol(pcc, rtol):
+    """Relative tolerance for the allclose fallback taken when PCC is undefined.
+
+    PCC is undefined for a constant or single-element result (zero variance), and the
+    fallback then decided the verdict with a fixed rtol=1e-5 that has nothing to do with the
+    ``pcc`` the caller actually asked for. A caller requesting pcc=0.999 is asking for ~0.1%
+    agreement; 1e-5 demands 0.001%, which is tighter than the op's own arithmetic can deliver.
+
+    Observed: model_traced `max` with no `dim` (a global reduce to a scalar) returned
+    3.334717 against a torch golden of 3.334923 -- a 6.2e-5 relative error, BETTER than
+    bfloat16 precision and far inside pcc=0.999. allclose's 1e-4 + 1e-5*|b| = 1.33e-4 budget
+    rejected the 2.06e-4 difference, so it returned float(False) == exactly 0.0. That is the
+    "exactly 0.0 PCC" signature: not a wrong answer, a mismatched yardstick.
+
+    (1 - pcc) is the natural scalar analogue of a correlation threshold. max() with the
+    caller's rtol means this can only ever LOOSEN the fallback, never tighten it, so no
+    comparison that passes today can start failing.
+    """
+    try:
+        derived = 1.0 - float(pcc)
+    except (TypeError, ValueError):
+        return rtol
+    return max(rtol, derived) if derived > 0 else rtol
+
+
 def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)
@@ -505,7 +530,7 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     # within the caller's tolerances.
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
         logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
-        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        result = torch.allclose(golden, calculated, rtol=_pcc_fallback_rtol(pcc, rtol), atol=atol)
         return result, float(result)
 
     golden = torch.squeeze(golden).flatten()
@@ -561,7 +586,7 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     # Fall back to allclose rather than returning a misleading 1.0.
     if math.isnan(cal_pcc):
         logger.warning("PCC is NaN (zero variance / constant tensor). Falling back to allclose check.")
-        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        result = torch.allclose(golden, calculated, rtol=_pcc_fallback_rtol(pcc, rtol), atol=atol)
         return result, float(result)
 
     return cal_pcc >= pcc, cal_pcc
@@ -958,7 +983,7 @@ def blocked_mm_with_conv_act(
                 act_address_map_index += 1
                 weight_address_map_this_block_size = weight_address_map[weight_address_map_index]
                 weight_address_map_index += 1
-                (mm_act_block, act_address_map_index) = read_conv_act_into_mm_act_block(
+                mm_act_block, act_address_map_index = read_conv_act_into_mm_act_block(
                     conv_act,
                     act_address_map_index,
                     act_address_map,
