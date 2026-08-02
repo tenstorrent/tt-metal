@@ -913,13 +913,57 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     // cores are the only fabric clients for now (load-balancing forwarding across the other rings is a
     // deliberate follow-up). Built here, after `cores` exists and before runtime args are emitted.
     const uint32_t preaders_pf = geo.num_cores / 8u;
+
+    // ---- DEDICATED gather cores ----
+    // The fabric workers used to BE matmul cores (ring group p == 0). That made them structurally the
+    // slowest cores in the grid: a master ran its entire fabric prologue on the same writer RISC that
+    // afterwards has to feed its own in0 ring, so its wall time was gather + matmul while every other
+    // core's was just matmul. The op finishes with the slowest core, so the gather never overlapped for
+    // them and only the non-master ring groups benefited from progressive consumption.
+    //
+    // Giving the gather its own 8 cores makes EVERY matmul core a pure consumer, so the whole gather
+    // hides behind the matmul instead of adding to it. Cost is 8 cores that do no matmul, taken from grid
+    // space the planner left unused.
+    //
+    // Side benefit: the publishers are now OUTSIDE the consumer rectangles, which is the case
+    // non-loopback multicast actually wants -- num_dests is simply the full rectangle, with no
+    // sender-exclusion bookkeeping.
+    // Must mirror mux_core_for() in build_fused_gather_context: muxes take the top row from the right.
+    const CoreCoord grid_size = device->compute_with_storage_grid_size();
+    std::set<CoreCoord> used_cores(cores.begin(), cores.end());
+    for (uint32_t slot = 0; slot < 2u * operation_attributes.num_links; ++slot) {
+        used_cores.insert(CoreCoord{grid_size.x - 1u - slot, grid_size.y - 1u});
+    }
     std::vector<CoreCoord> master_ring_cores;
     master_ring_cores.reserve(8);
-    for (uint32_t b = 0; b < 8u; ++b) {
-        master_ring_cores.push_back(cores[b * preaders_pf]);
+    for (uint32_t y = grid_size.y; y-- > 0 && master_ring_cores.size() < 8u;) {
+        for (uint32_t x = grid_size.x; x-- > 0 && master_ring_cores.size() < 8u;) {
+            const CoreCoord c{x, y};
+            if (used_cores.find(c) == used_cores.end()) {
+                master_ring_cores.push_back(c);
+            }
+        }
     }
+    TT_FATAL(
+        master_ring_cores.size() == 8u,
+        "the fused gather needs 8 cores outside the matmul grid, but only {} of the {}x{} grid were free "
+        "after the planner took {} and the muxes took {}",
+        master_ring_cores.size(),
+        grid_size.x,
+        grid_size.y,
+        geo.num_cores,
+        2u * operation_attributes.num_links);
+    const CoreRangeSet gather_crs(std::vector<CoreRange>([&] {
+        std::vector<CoreRange> v;
+        for (const auto& c : master_ring_cores) {
+            v.emplace_back(c, c);
+        }
+        return v;
+    }()));
+    // Semaphores the gather publishes into must exist on the consumers AND on the publishers.
+    const CoreRangeSet gather_and_workers = all_cores.merge(gather_crs);
     FusedGatherContext fused_gather = build_fused_gather_context(
-        program, operation_attributes, mesh_coordinate, in0, master_ring_cores, all_cores, device);
+        program, operation_attributes, mesh_coordinate, in0, master_ring_cores, gather_and_workers, device);
 
     // ---- On-chip gather barrier geometry ----
     // A master core's fwd_recv count only proves ITS OWN M slice arrived: the gather splits M by bank_id,
@@ -957,9 +1001,10 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         // because the forward and backward coordinators are different cores: deciding it here from
         // master 0 alone was correct only by accident (every master is slice p == 0, so they all land on
         // the same NOC). NoC group 0 runs writerA on RISCV_1 / NOC_1, hence the inversion.
-        const uint32_t mgc0 = fused_gather.num_masters / 2u;
-        fused_gather.fwd_coord_swaps = (core_noc[0] == 0u) ? 1u : 0u;
-        fused_gather.bwd_coord_swaps = (core_noc[mgc0 * preaders_pf] == 0u) ? 1u : 0u;
+        // Both coordinators are dedicated gather cores, outside every consumer rectangle, so nothing
+        // needs excluding from num_dests. Their kernel is created on NOC_0, so no corner swap either.
+        fused_gather.fwd_coord_swaps = 0u;
+        fused_gather.bwd_coord_swaps = 0u;
         // all_cores was built one CoreRange(c, c) per core and CoreRangeSet does NOT auto-coalesce, so
         // without this the "per-range" multicast degenerates to one rectangle per core (79 for an 80-core
         // grid) and buys nothing.
@@ -1009,7 +1054,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         // It only bites when W*M_block*K_block < kGatherBatch, i.e. when a ring shard is smaller than the
         // batch: the small shape at Pk>=2. Staging stays byte-exact throughout, which is exactly why the
         // readback diagnostic looked clean.
-        mkcb(program, all_cores, 11, kGatherScratchTiles, tt::DataFormat::Float16_b, kTileBytesBf16);
+        mkcb(program, gather_crs, 11, kGatherScratchTiles, tt::DataFormat::Float16_b, kTileBytesBf16);
     }
     // cb7 is the CHAIN's running-sum buffer. Reduce-scatter never touches it (its partials travel through the
     // c_4/c_5 chunk CBs instead), so don't spend the L1 on it there.
@@ -1145,6 +1190,15 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     KernelHandle readerB = mk(kIn1ReaderKernel, g1, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, rct, rdefs);
     KernelHandle writerA = mk(kWriterKernel, g0, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, wct, wdefs);
     KernelHandle writerB = mk(kWriterKernel, g1, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, wct, wdefs);
+    // The dedicated gather cores run the SAME writer kernel with GATHER_ONLY, so the fabric prologue has
+    // exactly one implementation. The define makes them return once the gather is published, before any
+    // matmul work -- they own no output block and are not part of any in0 ring.
+    KernelHandle gatherK{};
+    if (fused_gather.enabled) {
+        auto gdefs = wdefs;
+        gdefs["GATHER_ONLY"] = "1";
+        gatherK = mk(kWriterKernel, gather_crs, DataMovementProcessor::RISCV_1, NOC::RISCV_0_default, wct, gdefs);
+    }
 
     // compute (spec §6c). fp32 DST limit: subblock_h * subblock_w <= 4.
     // Subblock geometry. fp32_dest_acc_en gives 4 DST tiles, so the hard limit is sbh*sbw <= 4 (exceeding it
@@ -1365,7 +1419,10 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             // EVERY core gets the common block at the same index (`fused_rt_base`, a compile-time arg), so
             // the kernel can locate it without knowing which optional fusion args preceded it. The first
             // word says whether this core is a fabric client; only master-ring cores get the mux block.
-            const bool is_master_ring = (i % preaders_pf) == 0u;
+            // No matmul core is a fabric client any more -- the dedicated gather cores do all of it.
+            // These cores still read the whole fused block (they need the wave semaphores, the K stripe
+            // and the rank info to gate on), they just never send.
+            const bool is_master_ring = false;
             // Kt must divide evenly by tp, and each shard must be tile-aligned. Two distinct silent
             // corruptions otherwise: the kernel strides the local shard as m * k_shard_tiles, which is
             // only the true row stride when k_local is tile-aligned; and when Kt % tp != 0 the staging
@@ -1521,6 +1578,107 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         SetRuntimeArgs(program, compute, cores[i], ca);
     }
 
+    // ---- runtime args for the dedicated gather cores ----
+    if (fused_gather.enabled) {
+        const uint32_t k_shard_tiles_g = geo.Kt / fused_gather.tp;
+        const uint32_t m_groups_g = fused_gather.num_masters / 2u;
+        const uint32_t rk_g = fused_gather.rank;
+        uint32_t fwd_send_g, fwd_recv_g, bwd_send_g, bwd_recv_g;
+        if (operation_attributes.topology_is_ring) {
+            fwd_send_g = fwd_recv_g = fused_gather.tp / 2u;
+            bwd_send_g = bwd_recv_g = (fused_gather.tp - 1u) - fwd_send_g;
+        } else {
+            fwd_send_g = !fused_gather.mux_cfgs_fwd.empty() ? (rk_g + 1u) : 0u;
+            fwd_recv_g = rk_g;
+            bwd_send_g = !fused_gather.mux_cfgs_bwd.empty() ? (fused_gather.tp - rk_g) : 0u;
+            bwd_recv_g = fused_gather.tp - 1u - rk_g;
+        }
+        for (uint32_t b = 0; b < 8u; ++b) {
+            const bool is_bwd_g = (b >= m_groups_g);
+            const CoreRangeSet self_crs(CoreRange(master_ring_cores[b], master_ring_cores[b]));
+            std::vector<uint32_t> ga(fused_rt_base, 0u);  // matmul args unused: GATHER_ONLY returns first
+            ga.push_back(1u);                             // is_fabric_client
+            ga.push_back(rk_g);
+            ga.push_back(fused_gather.tp);
+            ga.push_back(k_shard_tiles_g);
+            ga.push_back(tensor_args.gather_staging_buffer->buffer()->address());
+            ga.push_back(fused_gather.chunk_ready_sem_id);
+            ga.push_back((!is_bwd_g && !fused_gather.mux_cfgs_fwd.empty()) ? 1u : 0u);
+            ga.push_back((is_bwd_g && !fused_gather.mux_cfgs_bwd.empty()) ? 1u : 0u);
+            ga.push_back(Mt_r);
+            ga.push_back(geo.Kt);
+            ga.push_back(in0.buffer()->address());
+            ga.push_back(b);
+            ga.push_back(is_bwd_g ? fused_gather.bwd_recv_sem_addr : fused_gather.fwd_recv_sem_addr);
+            ga.push_back(is_bwd_g ? 1u : 0u);
+            ga.push_back(is_bwd_g ? bwd_send_g : fwd_send_g);
+            ga.push_back(is_bwd_g ? bwd_recv_g : fwd_recv_g);
+            ga.push_back(m_groups_g);
+            ga.push_back((b == 0u) ? 1u : 0u);  // master 0 publishes wave 0
+            ga.push_back(fused_gather.gather_count_sem_id);
+            ga.push_back(fused_gather.num_masters);
+            ga.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.x));
+            ga.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.y));
+            ga.push_back(fused_gather.dir_count_sem_id);
+            ga.push_back(fused_gather.wave_fwd_sem_id);
+            ga.push_back(fused_gather.wave_bwd_sem_id);
+            ga.push_back(static_cast<uint32_t>(fused_gather.fwd_coord_virtual.x));
+            ga.push_back(static_cast<uint32_t>(fused_gather.fwd_coord_virtual.y));
+            ga.push_back(static_cast<uint32_t>(fused_gather.bwd_coord_virtual.x));
+            ga.push_back(static_cast<uint32_t>(fused_gather.bwd_coord_virtual.y));
+            ga.push_back(fwd_recv_g);
+            ga.push_back(bwd_recv_g);
+            ga.push_back(fused_gather.local_done_sem_id);
+            ga.push_back(0u);  // k_run_len   } consumer-side only; a gather core never reaches the ring
+            ga.push_back(0u);  // k_stripe_base
+            ga.push_back(0u);  // k_shard_stride
+            ga.push_back(fused_gather.fwd_coord_swaps);
+            ga.push_back(fused_gather.bwd_coord_swaps);
+            ga.push_back(static_cast<uint32_t>(fused_gather.release_ranges.size()));
+            for (const auto& rr : fused_gather.release_ranges) {
+                ga.push_back(rr.sx);
+                ga.push_back(rr.sy);
+                ga.push_back(rr.ex);
+                ga.push_back(rr.ey);
+                ga.push_back(rr.dests_fwd);
+                ga.push_back(rr.dests_bwd);
+            }
+            for (const auto& mv : fused_gather.master_virtuals) {
+                ga.push_back(static_cast<uint32_t>(mv.x));
+                ga.push_back(static_cast<uint32_t>(mv.y));
+            }
+            TT_FATAL(
+                ga.size() == fused_rt_base + kFusedArgCount + 6u * fused_gather.release_ranges.size() +
+                                 2u * fused_gather.master_virtuals.size(),
+                "gather-core arg block is {} words, expected {} + 6*{} + 2*{}",
+                ga.size() - fused_rt_base,
+                static_cast<uint32_t>(kFusedArgCount),
+                fused_gather.release_ranges.size(),
+                fused_gather.master_virtuals.size());
+            if (!is_bwd_g && !fused_gather.mux_cfgs_fwd.empty()) {
+                const uint32_t L = b % fused_gather.num_links;
+                const auto fc = CreateSemaphore(program, self_crs, 0);
+                const auto tc = CreateSemaphore(program, self_crs, 0);
+                fused_gather.mux_cfgs_fwd[L]->append_client_connection_rt_args(
+                    fused_gather.mux_virtual_cores_fwd[L],
+                    fused_gather.next_channel_fwd[L]++,
+                    tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
+                    ga);
+            }
+            if (is_bwd_g && !fused_gather.mux_cfgs_bwd.empty()) {
+                const uint32_t L = (b - m_groups_g) % fused_gather.num_links;
+                const auto fc = CreateSemaphore(program, self_crs, 0);
+                const auto tc = CreateSemaphore(program, self_crs, 0);
+                fused_gather.mux_cfgs_bwd[L]->append_client_connection_rt_args(
+                    fused_gather.mux_virtual_cores_bwd[L],
+                    fused_gather.next_channel_bwd[L]++,
+                    tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
+                    ga);
+            }
+            SetRuntimeArgs(program, gatherK, master_ring_cores[b], ga);
+        }
+    }
+
     return ttnn::device_operation::CachedProgram<shared_variables_t>{
         std::move(program),
         shared_variables_t{
@@ -1538,7 +1696,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             .fused_gather = fused_gather.enabled,
             .fused_rt_base = fused_rt_base,
             .preaders = preaders_pf,
-            .fwd_master_count = fused_gather.enabled ? (fused_gather.num_masters / 2u) : 0u}};
+            .fwd_master_count = fused_gather.enabled ? (fused_gather.num_masters / 2u) : 0u,
+            .gather_cores = fused_gather.enabled ? master_ring_cores : std::vector<CoreCoord>{},
+            .gatherK = gatherK}};
 }
 
 AllGatherRegimeAMatmulAsyncProgramFactory::cached_mesh_workload_t
@@ -1634,6 +1794,21 @@ void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
                 // hardcoded 4 here would desync silently.
                 const bool is_bwd = ((i / sv.preaders) >= sv.fwd_master_count);
                 wa[g + kFgMyRecvSem] = operation_attributes.gather_semaphores[is_bwd ? 1u : 0u].address();
+            }
+        }
+
+        // The dedicated gather cores live outside `cores`, so they need the same replay patching: the
+        // caller ping-pongs the staging buffer and the gather semaphores, and a cached program that kept
+        // the first invocation's addresses would gather into a buffer nobody reads.
+        if (sv.fused_gather && !sv.gather_cores.empty()) {
+            auto& gargs = GetRuntimeArgs(program, sv.gatherK);
+            for (uint32_t b = 0; b < sv.gather_cores.size(); ++b) {
+                auto& ga = gargs[sv.gather_cores[b].x][sv.gather_cores[b].y];
+                const uint32_t g = sv.fused_rt_base;
+                ga[g + kFgStageAddr] = tensor_args.gather_staging_buffer->buffer()->address();
+                ga[g + kFgShardAddr] = tensor_args.input_tensor.buffer()->address();
+                const bool is_bwd = (b >= sv.fwd_master_count);
+                ga[g + kFgMyRecvSem] = operation_attributes.gather_semaphores[is_bwd ? 1u : 0u].address();
             }
         }
     }  // per-coordinate program

@@ -34,7 +34,11 @@ struct AllGatherRegimeAMatmulAsyncProgramFactory {
         bool fused_gather{false};
         uint32_t fused_rt_base{};  // index of the first fused-gather writer arg
         uint32_t preaders{1};      // ring groups; core i is a fabric client iff (i % preaders) == 0
-        uint32_t fwd_master_count{};  // masters with bank id < this drive forward, the rest backward
+        uint32_t fwd_master_count{};
+        // The dedicated gather cores are NOT in `cores`, so a replay that only walks `cores` leaves them
+        // holding the first invocation's staging buffer and semaphores.
+        std::vector<tt::tt_metal::CoreCoord> gather_cores;
+        tt::tt_metal::KernelHandle gatherK{};  // masters with bank id < this drive forward, the rest backward
     };
     // MESH WORKLOAD, not a single broadcast program. The fused fabric gather needs PER-DEVICE runtime
     // args -- each rank has its own index in the TP group and its own forward/backward neighbour
