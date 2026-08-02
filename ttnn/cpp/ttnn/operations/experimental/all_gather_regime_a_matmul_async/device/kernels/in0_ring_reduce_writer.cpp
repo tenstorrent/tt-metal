@@ -360,6 +360,8 @@ void kernel_main() {
         k_run_len = get_arg_val<uint32_t>(fa++);
         k_stripe_base = get_arg_val<uint32_t>(fa++);
         k_shard_stride = get_arg_val<uint32_t>(fa++);
+        const uint32_t fwd_coord_swaps = get_arg_val<uint32_t>(fa++);
+        const uint32_t bwd_coord_swaps = get_arg_val<uint32_t>(fa++);
         const uint32_t num_release_ranges = get_arg_val<uint32_t>(fa++);
         const std::size_t release_base = fa;  // 6 words per range: sx, sy, ex, ey, dests_fwd, dests_bwd
         fa += 6u * num_release_ranges;
@@ -390,12 +392,15 @@ void kernel_main() {
         auto publish_to_grid = [&](uint32_t sem_addr, bool as_bwd_coord) {
             for (uint32_t r = 0; r < num_release_ranges; ++r) {
                 const std::size_t b = release_base + 6u * r;
-                const uint64_t box = get_noc_multicast_addr(
-                    get_arg_val<uint32_t>(b),
-                    get_arg_val<uint32_t>(b + 1u),
-                    get_arg_val<uint32_t>(b + 2u),
-                    get_arg_val<uint32_t>(b + 3u),
-                    sem_addr);
+                // Records hold NOC_0 corner order; swap for a coordinator whose writer runs on NOC_1,
+                // which traverses the grid the other way. Decided per-sender: the two coordinators are
+                // different cores and need not share a NOC.
+                const bool swap_corners = as_bwd_coord ? (bwd_coord_swaps != 0u) : (fwd_coord_swaps != 0u);
+                const uint32_t c0 = get_arg_val<uint32_t>(b + (swap_corners ? 2u : 0u));
+                const uint32_t c1 = get_arg_val<uint32_t>(b + (swap_corners ? 3u : 1u));
+                const uint32_t c2 = get_arg_val<uint32_t>(b + (swap_corners ? 0u : 2u));
+                const uint32_t c3 = get_arg_val<uint32_t>(b + (swap_corners ? 1u : 3u));
+                const uint64_t box = get_noc_multicast_addr(c0, c1, c2, c3, sem_addr);
                 // num_dests must exclude ME specifically -- the host precomputed a count for each of the
                 // two possible senders, because a non-loopback multicast that counts the sender waits on
                 // an ack that never comes.

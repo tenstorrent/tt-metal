@@ -336,6 +336,8 @@ struct FusedGatherContext {
     uint32_t wave_bwd_sem_id = 0;
     CoreCoord fwd_coord_virtual{};
     CoreCoord bwd_coord_virtual{};
+    uint32_t fwd_coord_swaps = 0;
+    uint32_t bwd_coord_swaps = 0;
     // Barrier geometry, in VIRTUAL (translated) coords.
     CoreCoord master0_virtual{};
     // Multicast rectangles covering every core master 0 releases: {start_x, start_y, end_x, end_y, dests}.
@@ -405,11 +407,16 @@ enum FusedGatherArg : uint32_t {
     kFgKRunLen = 32,
     kFgKStripeBase = 33,
     kFgKShardStride = 34,
-    kFgNumReleaseRanges = 35,
+    // Whether each coordinator's writer NOC traverses the grid opposite to NOC_0, i.e. whether it must
+    // hand the multicast rectangle its corners swapped. Per-coordinator because the forward and backward
+    // coordinators are different cores and need not share a NOC.
+    kFgFwdCoordSwap = 35,
+    kFgBwdCoordSwap = 36,
+    kFgNumReleaseRanges = 37,
     // Followed by kFgNumReleaseRanges 6-word records {sx, sy, ex, ey, dests_fwd, dests_bwd} in VIRTUAL
     // coords: the multicast rectangles master 0 releases. Per-range rather than one bounding box because
     // the bank-adjacent placement is deliberately not a filled rectangle.
-    kFusedArgCount = 36,  // + 6*num_release_ranges + 2*num_masters words, then the mux client block
+    kFusedArgCount = 38,  // + 6*num_release_ranges + 2*num_masters words, then the mux client block
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -478,6 +485,10 @@ FusedGatherContext build_fused_gather_context(
     // arrival count -- single writer, monotone, and a fixed m_groups slots regardless of tp. The
     // coordinator publishes arrival i once every slot has reached i.
     ctx.dir_count_sem_id = CreateSemaphore(program, all_cores, 0);
+    // Assigned here, not 10 lines further down: reporter_slots below derives from it, and reading the
+    // struct default instead would silently desync the host slot count from the kernel's m_groups the
+    // moment the master count stops being 8.
+    ctx.num_masters = static_cast<uint32_t>(master_ring_cores.size());
     const uint32_t reporter_slots = ctx.num_masters / 2u;
     for (uint32_t b = 1; b < reporter_slots; ++b) {
         const uint32_t nxt = CreateSemaphore(program, all_cores, 0);
@@ -489,7 +500,6 @@ FusedGatherContext build_fused_gather_context(
     }
     ctx.wave_fwd_sem_id = CreateSemaphore(program, all_cores, 0);
     ctx.wave_bwd_sem_id = CreateSemaphore(program, all_cores, 0);
-    ctx.num_masters = static_cast<uint32_t>(master_ring_cores.size());
     // Hard-tie the mux sizing to the client split. Getting these out of step does not fail loudly: the
     // mux's forwarder RISC just spins waiting for close() calls that never come.
     // Split each direction's masters across num_links muxes. Must divide evenly: an uneven split would
@@ -943,17 +953,20 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         // Getting this backwards is near-invisible on a single ring: those 8 cores are bank-adjacent and
         // scattered, so merge_ranges leaves them as 1x1 rectangles where start == end and the swap is a
         // no-op. It only bites once several cores actually merge into a rectangle.
-        const bool master0_on_noc1 = (core_noc[0] == 0u);
+        // Rectangles are stored in NOC_0 corner order. The swap is applied per-SENDER in the kernel,
+        // because the forward and backward coordinators are different cores: deciding it here from
+        // master 0 alone was correct only by accident (every master is slice p == 0, so they all land on
+        // the same NOC). NoC group 0 runs writerA on RISCV_1 / NOC_1, hence the inversion.
+        const uint32_t mgc0 = fused_gather.num_masters / 2u;
+        fused_gather.fwd_coord_swaps = (core_noc[0] == 0u) ? 1u : 0u;
+        fused_gather.bwd_coord_swaps = (core_noc[mgc0 * preaders_pf] == 0u) ? 1u : 0u;
         // all_cores was built one CoreRange(c, c) per core and CoreRangeSet does NOT auto-coalesce, so
         // without this the "per-range" multicast degenerates to one rectangle per core (79 for an 80-core
         // grid) and buys nothing.
         const CoreRangeSet release_crs = all_cores.merge_ranges();
         for (const auto& cr : release_crs.ranges()) {
-            CoreCoord s = device->worker_core_from_logical_core(cr.start_coord);
-            CoreCoord e = device->worker_core_from_logical_core(cr.end_coord);
-            if (master0_on_noc1) {
-                std::swap(s, e);  // NOC_1 traverses the grid in the opposite direction
-            }
+            const CoreCoord s = device->worker_core_from_logical_core(cr.start_coord);
+            const CoreCoord e = device->worker_core_from_logical_core(cr.end_coord);
             const uint32_t mgc = fused_gather.num_masters / 2u;
             const uint32_t dests_fwd = static_cast<uint32_t>(cr.size()) - (cr.contains(master_ring_cores[0]) ? 1u : 0u);
             const uint32_t dests_bwd =
@@ -1435,6 +1448,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(k_run_len);
             wa.push_back(k_stripe_base);
             wa.push_back(k_shard_stride);
+            wa.push_back(fused_gather.fwd_coord_swaps);
+            wa.push_back(fused_gather.bwd_coord_swaps);
             wa.push_back(static_cast<uint32_t>(fused_gather.release_ranges.size()));
             for (const auto& rr : fused_gather.release_ranges) {
                 wa.push_back(rr.sx);
