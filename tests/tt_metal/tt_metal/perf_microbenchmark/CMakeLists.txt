@@ -6,6 +6,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
     list(APPEND PERF_MICROBENCH_TESTS_SRCS ${X86_64_ONLY_TESTS})
 endif()
 
+# Test files that only need target_link_libraries(... PRIVATE benchmark::benchmark) with no
+# extra sources/include dirs. Tests requiring additional per-test handling (extra sources,
+# include dirs, or libraries) keep their own dedicated if(STREQUAL) block below.
+set(BENCHMARK_LINKED_TESTS
+    dispatch/test_pgm_dispatch.cpp
+    dispatch/benchmark_rw_buffer.cpp
+    disaggregation/bench_kv_chunk_address_table.cpp
+)
+
 foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
     get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
@@ -19,18 +28,12 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     target_precompile_headers(${TEST_TARGET} REUSE_FROM metal_common_pch)
     target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
 
-    if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
-        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
-    endif()
-    if(${TEST_SRC} STREQUAL "dispatch/benchmark_rw_buffer.cpp")
+    if(${TEST_SRC} IN_LIST BENCHMARK_LINKED_TESTS)
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
     if(${TEST_SRC} STREQUAL "routing/benchmark_fabric_mux_v2_throughput.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
         target_sources(${TEST_TARGET} PRIVATE routing/fabric_mux_v2_benchmark_program.cpp)
-    endif()
-    if(${TEST_SRC} STREQUAL "disaggregation/bench_kv_chunk_address_table.cpp")
-        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
     if(${TEST_SRC} STREQUAL "disaggregation/bench_kv_chunk_address_table_serialization.cpp")
         target_link_libraries(
