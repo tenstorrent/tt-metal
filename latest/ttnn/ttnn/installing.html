@@ -241,7 +241,13 @@
 <li class="toctree-l4"><a class="reference internal" href="#step-2-for-models-users-only-set-up-environment-for-models">Step 2. (For models users only) Set Up Environment for Models:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#docker-release-image">Docker Release Image</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#container-based-setup">Container-Based Setup</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#recommended-image">Recommended image</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#docker-workflow">Docker workflow</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#rootless-podman-workflow">Rootless Podman workflow</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#verification-steps">Verification steps</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#source">Source</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#step-1-clone-the-repository">Step 1. Clone the Repository:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#step-2-build-the-library">Step 2. Build the Library:</a></li>
@@ -450,8 +456,8 @@ The following dependencies versions are examples. Install the versions above dep
 <p>Install pre-built binaries for quick setup and immediate access to TT-NN APIs and AI models.</p>
 </li>
 <li>
-<p><a class="reference internal" href="#docker-release-image"><span class="std std-ref">Option 2: From Docker Release Image</span></a></p>
-<p>Installing from Docker Release Image is a quick way to access our APIs and start running AI models.</p>
+<p><a class="reference internal" href="#container-based-setup"><span class="std std-ref">Option 2: Container-Based Setup</span></a></p>
+<p>Container-based setup is the fastest way to access our APIs and start running AI models in a known user-space environment.</p>
 </li>
 <li>
 <p><a class="reference internal" href="#source"><span class="std std-ref">Option 3: From Source</span></a></p>
@@ -504,19 +510,77 @@ sudo<span class="w"> </span>cpupower<span class="w"> </span>frequency-set<span c
 </section>
 </section>
 <hr class="docutils">
-<section id="docker-release-image">
-<h3>Docker Release Image<a class="headerlink" href="#docker-release-image" title="Permalink to this heading"></a>
+<section id="container-based-setup">
+<h3>Container-Based Setup<a class="headerlink" href="#container-based-setup" title="Permalink to this heading"></a>
 </h3>
-<p>Download the latest Docker release from our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-release-amd64">Docker registry</a> page</p>
+<p>Container-based setup is recommended when you want a predictable user-space environment with minimal host-side package management.</p>
+<p>Use this path when:</p>
+<ul class="simple">
+<li><p>you want to evaluate the stack quickly,</p></li>
+<li><p>you want to run demos in a known image,</p></li>
+<li><p>you want to avoid debugging host Python dependency drift,</p></li>
+<li><p>you prefer Docker or rootless Podman over modifying the host environment.</p></li>
+</ul>
+<p>Use the source path instead when:</p>
+<ul class="simple">
+<li><p>you are changing <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> source code,</p></li>
+<li><p>you need editable local builds,</p></li>
+<li><p>you are iterating on kernels, C++, or Python bindings,</p></li>
+<li><p>you need direct control over build flags or toolchains.</p></li>
+</ul>
+<section id="recommended-image">
+<h4>Recommended image<a class="headerlink" href="#recommended-image" title="Permalink to this heading"></a>
+</h4>
+<p>The documented release image for TT-Metalium is:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+</pre></div>
+</div>
+<p>For more information on the Docker release images, visit our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-release-amd64">Docker registry page</a>.</p>
+</section>
+<section id="docker-workflow">
+<h4>Docker workflow<a class="headerlink" href="#docker-workflow" title="Permalink to this heading"></a>
+</h4>
 <div class="highlight-sh notranslate">
 <div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
 docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>--rm<span class="w"> </span>--device<span class="w"> </span>/dev/tenstorrent<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc<span class="w"> </span>bash
 </pre></div>
 </div>
+</section>
+<section id="rootless-podman-workflow">
+<h4>Rootless Podman workflow<a class="headerlink" href="#rootless-podman-workflow" title="Permalink to this heading"></a>
+</h4>
+<p>If your environment standardizes on rootless containers, use Podman with the same image:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>podman<span class="w"> </span>pull<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+podman<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>--rm<span class="w"> </span>--device<span class="w"> </span>/dev/tenstorrent<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc<span class="w"> </span>bash
+</pre></div>
+</div>
+<blockquote>
+<div>
+<p>[!NOTE]
+Device access requirements depend on your host configuration. If <code class="docutils literal notranslate"><span class="pre">/dev/tenstorrent</span></code> is not visible inside the container, confirm that the device node exists on the host and that your container runtime is configured to pass it through.</p>
+</div>
+</blockquote>
+</section>
+<section id="verification-steps">
+<h4>Verification steps<a class="headerlink" href="#verification-steps" title="Permalink to this heading"></a>
+</h4>
+<p>After entering the container:</p>
+<ol class="arabic">
+<li>
+<p>Confirm that the Tenstorrent device node is visible:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>ls<span class="w"> </span>/dev/tenstorrent
+</pre></div>
+</div>
+</li>
+</ol>
 <ul class="simple">
-<li><p>For more information on the Docker Release Images, visit our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-release-amd64">Docker registry page</a>.</p></li>
-<li><p>You are all set! Try some <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples">TT-NN Basic Examples</a> next.</p></li>
+<li><p>You are all set to explore the packaged environment. Try some <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples">TT-NN Basic Examples</a> next.</p></li>
 </ul>
+<p>If you plan to run models or edit code from a local source checkout instead of staying inside the packaged container environment, continue with the source-based environment setup for model-specific dependencies and environment variables.</p>
+</section>
 </section>
 <hr class="docutils">
 <section id="source">
