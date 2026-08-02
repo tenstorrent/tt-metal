@@ -520,6 +520,20 @@ def _ledger_fullpipe(ms: float, mode: str, label: str) -> None:
         )
         _task = os.environ.get("PERF_MCP_TASK", "main")
         seen = led.first(led.KIND_FULLPIPE, led.PHASE_BEFORE, model=_model, task=_task)
+        # A RERUN'S OWN BASELINE IS NOT A RESULT. Write-once BEFORE is right for RESULTS -- it keeps the
+        # original anchor alive across reruns so the headline reads 84.05 -> x instead of resetting.
+        # Applied to the next run's BEFORE bookend it reclassifies a starting measurement as an
+        # outcome, and readers take the last AFTER as the current state. gemma-3-12b-it: run 21's cold
+        # 36.2548 landed as an AFTER behind run 20's committed 34.9909, so the report showed 36.25 as
+        # where the model stood and the next run's bar became 36.25 -- then the run measured warm and
+        # "beat" its own cold start three times. The source string on that row still read BEFORE:
+        # correctly labelled, filed in the wrong phase.
+        #
+        # So drop it. The anchor already exists, the run's starting number lives in the gate's own
+        # per-run baseline file, and the ledger keeps only readings that describe progress. An
+        # UNLABELLED bookend still records: unknown provenance must fail toward keeping the reading.
+        if seen and "before" in (label or "").strip().lower():
+            return
         phase = led.PHASE_AFTER if seen else led.PHASE_BEFORE
         led.record(
             led.KIND_FULLPIPE,
@@ -533,6 +547,10 @@ def _ledger_fullpipe(ms: float, mode: str, label: str) -> None:
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+# Public alias: this is the ledger's whole-model bookend recorder.
+_record_fullpipe_bookend = _ledger_fullpipe
 
 
 _HOST_XFER_OPS = (
