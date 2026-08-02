@@ -6,11 +6,23 @@
 
 #include <cstdint>
 
+// Transaction-id space is [0, HW_TXN_ID_MAX]. Id 0 is NOC_V2_TRID_STATIC (untagged).
+// Quasar-only pool split:
+//   user / kernel : [0, USER_TXN_ID_MAX]
+//   DFB / runtime : [DFB_TXN_ID_BASE, HW_TXN_ID_MAX]  (allocated top-down)
+constexpr uint8_t HW_TXN_ID_MAX = 31;
+constexpr uint8_t USER_TXN_ID_MAX = 15;
+constexpr uint8_t DFB_TXN_ID_BASE = USER_TXN_ID_MAX + 1;                       // 16
+constexpr uint8_t NUM_DFB_POOL_TXN_IDS = HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1;  // 16
+static_assert(USER_TXN_ID_MAX >= 1);
+static_assert(DFB_TXN_ID_BASE > USER_TXN_ID_MAX);
+
 namespace dfb {
 
 enum AccessPattern : uint8_t {
     STRIDED,
     ALL,
+    BLOCKED,
     UNKNOWN,
 };
 
@@ -25,8 +37,14 @@ constexpr uint8_t NUM_TENSIX_TILE_COUNTERS_FOR_DM = 16;
 // Note: The Remapper can be programmed to expose these TCs to DMs.
 constexpr uint8_t TC_TENSIX_POOL_START = NUM_TENSIX_TILE_COUNTERS_FOR_DM;  // = 16
 constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
+// Max txn ids assigned to one DFB producer or consumer side
 constexpr uint8_t NUM_TXN_IDS = 4;
+static_assert(NUM_DFB_POOL_TXN_IDS >= NUM_TXN_IDS);
 constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 6;
+// Max tile counter ids that can be collected for one side (producer or consumer) of a DFB during
+// init, summed across that side's riscs. Bounded by TxnDFBDescriptor::tile_counters, the ISR
+// descriptor the collected ids are copied into, so the two must never diverge.
+constexpr uint8_t MAX_TILE_COUNTERS_PER_SIDE = 18;
 
 constexpr uint16_t TENSIX_RISC_OFFSET = 8; // First 8 represent DMs
 
@@ -66,7 +84,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     | dfb_initializer_per_risc_t | risc 0
     | dfb_initializer_per_risc_t | risc 1
     ...
-    (36 + (62 * 12)) * 16 = 12480 bytes
+    (38 + (62 * 12)) * 16 = 12512 bytes
 */
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
@@ -76,7 +94,7 @@ struct dfb_txn_id_descriptor_t {
     uint8_t num_entries_per_txn_id_per_tc;
 } __attribute__((packed));
 
-struct dfb_initializer_t {  // 36 bytes
+struct dfb_initializer_t {  // 38 bytes
     uint32_t logical_id;
     uint32_t entry_size;
     uint32_t stride_in_entries;
@@ -92,6 +110,11 @@ struct dfb_initializer_t {  // 36 bytes
     dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
     uint8_t implicit_sync_configured; // 0: init state, 1: configured
+    // BLOCKED block_size per side (host serializes 1 for a non-BLOCKED side, so the device assigns
+    // LocalDFBInterface::block_size unconditionally). Used device-side to make the implicit-sync commit
+    // advance the tile-counter per-BLOCK (not per-entry), so asymmetric BLOCKED keeps block-granularity.
+    uint8_t producer_block_size;
+    uint8_t consumer_block_size;
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 62 bytes
@@ -128,6 +151,6 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint8_t tensix_mask;
 } __attribute__((packed));
 
-static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
+static_assert(sizeof(dfb_initializer_t) == 38, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 62, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");

@@ -813,6 +813,9 @@ class TT_CCL:
                 subdevice_id=self.worker_sub_device_id,
                 use_noc1_only=use_noc1_only,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
+                # fp32 dest accumulation for the LM-head all_reduce only: its bf16 cross-device sum was
+                # order-dependent (ETH ring arrival order) -> per-row logit non-determinism -> greedy flips.
+                fp32_dest_acc=lm_head,
             )
             if lm_head:
                 persistent_buffer.deallocate(True)
@@ -1605,6 +1608,7 @@ def tt_distributed_rmsnorm(
     mesh_device,
     compute_kernel_config,
     tt_ccl=None,
+    output_dtype=None,
 ):
     use_2d_grid = False
 
@@ -1618,7 +1622,8 @@ def tt_distributed_rmsnorm(
     )
     tt_stats.deallocate(True)
 
-    # Run distributed rmsnorm part 2
+    # Run distributed rmsnorm part 2. output_dtype lets the caller keep the norm output bf8 even when
+    # the residual input is bf16 (BH no-prefetch), so downstream matmul activations stay small in L1.
     tt_out = ttnn.rms_norm_post_all_gather(
         inp,
         tt_stats_gathered,
@@ -1626,6 +1631,7 @@ def tt_distributed_rmsnorm(
         weight=gamma,
         compute_kernel_config=compute_kernel_config,
         use_2d_core_grid=use_2d_grid,
+        dtype=output_dtype,
     )
     # tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)

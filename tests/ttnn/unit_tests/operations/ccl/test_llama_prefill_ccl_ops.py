@@ -9,7 +9,7 @@ import math
 import pytest
 from loguru import logger
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
+from tests.nightly.t3000.ccl.test_all_gather import is_unsupported_case
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 
@@ -72,7 +72,7 @@ def run_all_gather_impl(
 
     # Skip unsupported cases
     (is_known_failure, message) = is_unsupported_case(
-        ag_output_shape, dim, mem_config, num_devices, num_links, ag_input_dtype, layout, tile
+        ag_output_shape, dim, mem_config, num_devices, ag_input_dtype, layout, tile
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")

@@ -9,6 +9,8 @@
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "minimal_matmul.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -29,12 +31,13 @@ void bind_minimal_matmul(nb::module_& mod) {
 
         Parameters
         ----------
-        input_tensor : ttnn.Tensor
-            Activation/input matrix A.
-            - Layout: TILE (required).
-            - Device: must be on device and allocated in a device buffer.
-            - DType: one of {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::BFLOAT4_B}.
-            - Shape: [..., M, K]. Upper (leading) dimensions are broadcast over rows (folded into M).
+        input_tensor : ttnn.Tensor | list[ttnn.Tensor]
+            Activation/input matrix A, shape [..., M, K] (leading dims broadcast over rows, folded into M).
+            - Layout: TILE (required); on device; dtype in {BFLOAT16, BFLOAT8_B, BFLOAT4_B}.
+            - Virtual concat: pass exactly 2 tensors [prefix, suffix] to source in0's K from both (no host
+              concat). Concatenation is on the channel (K, last) axis ONLY — the two must be identical on
+              every other axis, and the prefix's K must be a multiple of the tile width (32), since the
+              split is on tile boundaries. The weight is the stacked [W_prefix; W_suffix] in that K order.
 
         weight_tensor : ttnn.Tensor
             Weight matrix B.

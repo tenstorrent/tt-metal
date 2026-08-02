@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from collections.abc import Sequence
 
 import torch
 
@@ -91,7 +92,9 @@ class Linear(Module):
                 bias = prepare_for_fused_swiglu(bias, ndev=1)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None, use_1d_fallback=False
+    ) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
@@ -218,7 +221,15 @@ class ColParallelLinear(Module):
             state["bias"] = bias
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None, dtype=None
+        self,
+        x: ttnn.Tensor,
+        compute_kernel_config=None,
+        default_block_size=None,
+        parallel_config=None,
+        dtype=None,
+        core_grid=None,
+        use_heuristic_mmcfg=False,
+        use_1d_fallback=False,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -235,14 +246,16 @@ class ColParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+        parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
+        needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
+        if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
-            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic=use_heuristic_mmcfg)
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
-                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
             )
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
@@ -275,9 +288,15 @@ class ColParallelLinear(Module):
         else:
             M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
             core_grid = get_matmul_core_grid(self.mesh_device)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+
+            # Gather if needed here. Helps cleanup upstream code
+            if needs_gather:
+                x = self.ccl_manager.all_gather_persistent_buffer(
+                    x, dim=-1, mesh_axis=parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                )
 
             if self.chunks is not None:
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
                 outputs = ttnn.experimental.minimal_matmul_split(
                     x,
                     weight,
@@ -291,20 +310,92 @@ class ColParallelLinear(Module):
                     fuse_swiglu=self.fuse_swiglu,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
-            else:
-                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-                output = ttnn.experimental.minimal_matmul(
-                    input_tensor=x,
-                    weight_tensor=weight,
-                    bias_tensor=self.bias.data if self.bias is not None else None,
-                    config=matmul_config,
-                    fused_activation=self.fused_activation_fn,
-                    compute_kernel_config=compute_kernel_config or self.compute_config,
-                    dtype=dtype,
-                    fuse_swiglu=self.fuse_swiglu,
-                )
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                fused_activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+                fuse_swiglu=self.fuse_swiglu,
+            )
 
         return _apply_activation_fn(output, self.activation_fn)
+
+    def forward_fused_addcmul(
+        self,
+        x: ttnn.Tensor,
+        addcmul_residual: ttnn.Tensor,
+        addcmul_gate: ttnn.Tensor,
+        compute_kernel_config=None,
+        parallel_config=None,
+        dtype=None,
+        core_grid=None,
+    ) -> ttnn.Tensor:
+        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
+
+        # Handle FSDP weight gathering (mirrors ColParallelLinear.forward)
+        if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            weight = self.ccl_manager.all_gather_persistent_buffer(
+                unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
+            )
+            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
+        else:
+            weight = self.weight.data
+
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid)
+
+            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            )
+            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
+                parallel_config.tensor_parallel.mesh_axis
+            )
+            output = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                persistent_output_buffer=ag_persistent_buffer,
+                multi_device_global_semaphore=ag_global_semaphores,
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                scalar=1.0,
+                addcmul_input_tensor1=addcmul_residual,
+                addcmul_input_tensor2=addcmul_gate,
+                dtype=dtype,
+            )[0]
+        else:
+            M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            matmul_config = get_matmul_config(M, K, N_out, core_grid)
+
+            output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                x,
+                weight,
+                1.0,  # scalar
+                addcmul_residual,
+                addcmul_gate,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+            )
+
+        return output
 
 
 class RowParallelLinear(Module):
@@ -375,7 +466,7 @@ class RowParallelLinear(Module):
 
     def forward(
         self,
-        x: ttnn.Tensor,
+        x: ttnn.Tensor | list[ttnn.Tensor],
         *,
         compute_kernel_config=None,
         use_persistent_buffer: bool = True,
@@ -384,6 +475,7 @@ class RowParallelLinear(Module):
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
+        x may be a 2-element list [prefix, suffix] for virtual concat over K (concat-free).
         Return output fractured on columns.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
@@ -396,11 +488,19 @@ class RowParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        if isinstance(x, (list, tuple)):
+            assert len(x) == 2, f"RowParallelLinear.forward: list x must be [prefix, suffix], got {len(x)}"
+            x, x_second = x
+            K = weight.padded_shape[-2]
+        else:
+            x_second = None
+            K = x.padded_shape[-1]
+
+        M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
+            input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
             bias_tensor=self.bias.data if self.bias is not None else None,
             config=matmul_config,
@@ -409,22 +509,15 @@ class RowParallelLinear(Module):
         )
 
         if self._mesh_axis_size > 1:
-            needs_reshape = len(output.shape) <= 3
-            if needs_reshape:
-                output = ttnn.unsqueeze(output, 0)
-
             output = self.ccl_manager.reduce_scatter(
-                output, dim=3, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output, dim=-1, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
-
-            if needs_reshape:
-                output = ttnn.squeeze(output, 0)
 
         return output
 
     def forward_fused_addcmul(
         self,
-        x: ttnn.Tensor,
+        x: ttnn.Tensor | list[ttnn.Tensor],
         addcmul_a: ttnn.Tensor,
         addcmul_b: ttnn.Tensor,
         scalar: float = 1.0,
@@ -435,6 +528,9 @@ class RowParallelLinear(Module):
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
 
         Computes: output = addcmul_a + scalar * rs_result * addcmul_b
+
+        ``x`` may be a single tensor or a 2-element list ``[prefix, suffix]`` for virtual concat over K.
+        The weight must be per-segment tile-padded (see ``prepare_weight_for_concatenated_input``).
 
         Both addcmul_a and addcmul_b must already be at their per-TP-device slice size
         [D/tp]. The RS kernel fuses the addcmul at the final ring write, eliminating
@@ -449,14 +545,29 @@ class RowParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        # x: single tensor, or [prefix, suffix] virtually concatenated over K (concat-free).
+        if isinstance(x, (list, tuple)):
+            assert len(x) == 2, f"forward_fused_addcmul: list x must be exactly [prefix, suffix], got {len(x)}"
+            x, x_second = x
+        else:
+            x_second = None
+
+        # For virtual concat the matmul K spans both halves = the weight's K; x is only the prefix half.
+        K = weight.padded_shape[-2] if x_second is not None else x.padded_shape[-1]
+        M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
 
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:
             x = ttnn.unsqueeze(x, 0)
+            if x_second is not None:
+                x_second = ttnn.unsqueeze(x_second, 0)
+        pre_rs_shape = tuple(list(x.shape)[:-1] + [N])
+        _, rs_output_buffer = self.ccl_manager.get_rs_ping_pong_buffer(
+            pre_rs_shape, 3, self.mesh_axis, return_intermediate=False
+        )
         _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
-            input_tensor=x,
+            input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
             dim=3,
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
@@ -467,7 +578,8 @@ class RowParallelLinear(Module):
             topology=self.ccl_manager.topology,
             cluster_axis=self.mesh_axis,
             compute_kernel_config=compute_kernel_config or self.compute_config,
-            barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+            using_persistent_buffers=True,
+            optional_rs_output_tensor=rs_output_buffer,
             fused_ternary_scalar=scalar,
             addcmul_input_tensor1=addcmul_a,
             addcmul_input_tensor2=addcmul_b,
@@ -489,10 +601,40 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
-        return t * ttnn.silu(gate)
+        return ttnn.multiply_(t, ttnn.silu(gate, output_tensor=gate))
 
     msg = f"Activation function {activation_fn} not supported"
     raise ValueError(msg)
+
+
+_TILE_WIDTH = 32
+
+
+def prepare_weight_for_concatenated_input(
+    weight: torch.Tensor,
+    sizes: Sequence[int],
+    *,
+    device_count: int,
+    tile_pad_segments: bool = True,
+) -> torch.Tensor:
+    """Shard weight by device_count per segment and stack.
+
+    tile_pad_segments=True (virtual concat): zero-pad each per-device segment K to a tile boundary
+    so minimal_matmul([prefix, suffix], weight) works for any channel count.
+    tile_pad_segments=False (materialized concat): contiguous stack, for use with ttnn.concat.
+    """
+    segments = weight.split(sizes, dim=1)
+    padded_segments = []
+    for seg in segments:
+        unf = seg.unflatten(1, [device_count, -1])  # [out, device_count, K_seg/dev]
+        if tile_pad_segments:
+            k_per_dev = unf.shape[2]
+            k_padded = ((k_per_dev + _TILE_WIDTH - 1) // _TILE_WIDTH) * _TILE_WIDTH
+            if k_padded != k_per_dev:
+                pad = torch.zeros(*unf.shape[:2], k_padded - k_per_dev, dtype=unf.dtype)
+                unf = torch.cat([unf, pad], dim=2)
+        padded_segments.append(unf)
+    return torch.cat(padded_segments, dim=2).flatten(1, 2)
 
 
 def prepare_chunked_linear_output(

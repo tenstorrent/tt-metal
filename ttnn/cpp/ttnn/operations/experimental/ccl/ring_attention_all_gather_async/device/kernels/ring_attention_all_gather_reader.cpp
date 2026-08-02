@@ -10,6 +10,8 @@
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ring_attention_all_gather_metadata.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -30,6 +32,13 @@ constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(7);  // 2
 constexpr uint32_t num_inputs = get_compile_time_arg_val(8);
 constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(10);
+// Trace-safe metadata path: when set, the single-slot gather offset (input_batch_base) is recomputed
+// on-device from slot = slot_id[0] instead of taken from the (trace-frozen) runtime arg. cb_meta_id
+// is a tiny L1 CB for the read page; the metadata accessor's compile args follow the output accessors.
+// slot_id / kv_actual_isl are 1-element uint32 DRAM tensors sharing one accessor. When has_metadata is
+// false neither is emitted and this kernel is bit-identical.
+constexpr bool has_metadata = get_compile_time_arg_val(11);
+constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -89,11 +98,27 @@ FORCE_INLINE void prefetch_batch_read_tiles(
 }
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 11;
+    constexpr uint32_t page_size_base_idx = 13;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
         std::get<num_inputs - 1>(inputs_args).next_compile_time_args_offset()>();
+    // The metadata accessor's compile args follow the output accessors (metadata path only). When
+    // has_metadata is false the metadata accessor is NOT emitted, so fall back to a VALID (but unused)
+    // accessor offset -- the inputs-accessor start -- rather than 0: TensorAccessorArgs<> is instantiated
+    // here unconditionally (it is not a dependent template), and offset 0 names my_chip_id, which fails
+    // the accessor's internal static_assert. meta_args is only *used* inside `if constexpr(has_metadata)`.
+    constexpr uint32_t kMetaArgsOffset = has_metadata
+                                             ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
+                                             : (page_size_base_idx + num_inputs);
+    constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();  // slot_id accessor
+    // kv_actual_isl gets its OWN accessor: a separately-allocated single-page DRAM tensor can land in a
+    // DIFFERENT DRAM bank than slot_id, so reusing slot_id's dspec would read the wrong bank for it (the
+    // kv read silently returns 0). Mirrors the SDPA reader's kv_meta_args. The program factory appends it
+    // right after slot_id's accessor when has_metadata; otherwise fall back to meta_args' (valid, unused)
+    // offset so the unconditional TensorAccessorArgs<> never names a non-accessor compile arg.
+    constexpr uint32_t kKvMetaArgsOffset = has_metadata ? meta_args.next_compile_time_args_offset() : kMetaArgsOffset;
+    constexpr auto kv_meta_args = TensorAccessorArgs<kKvMetaArgsOffset>();  // kv_actual_isl accessor
 
     ///////////////////////////////////////////////////
     // ARGS
@@ -124,9 +149,9 @@ void kernel_main() {
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_base[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        // valid_pages_per_batch_head: clamp the gather to the logical_n-valid slab prefix so only
-        // kv_actual-sized data moves. Uniform across cores/devices, so producer/consumer page counts
-        // and the ring slice protocol stay matched. Default (full input) leaves the range unchanged.
+        // valid_pages_per_batch_head (slot 8): clamp the gather to the logical_n-valid slab prefix so
+        // only kv_actual-sized data moves. Uniform across cores/devices, so producer/consumer page
+        // counts and the ring slice protocol stay matched. Default (full input) leaves it unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
         if (valid_pages < input_tile_id_end[input_idx]) {
             input_tile_id_end[input_idx] = valid_pages;
@@ -139,6 +164,73 @@ void kernel_main() {
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_tensor_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
+
+    // Trace-safe single-slot gather: recompute input_batch_base from slot = slot_id[0] on-device,
+    // so a captured trace replays across cache slots (the host runtime-arg input_batch_base, set for the
+    // capture-time slot, would otherwise be frozen). input_batch_base = slot * num_heads * Ht * Wt,
+    // matching ring_attention_all_gather_async_detail::input_batch_base_pages. The slot_id and
+    // kv_actual_isl DRAM addresses are the next two runtime args (emitted before the optional signaler args).
+    if constexpr (has_metadata) {
+        // Two 1-element uint32 DRAM tensors: slot_id (was metadata[0]) and kv_actual_isl (was
+        // metadata[1]). Each gets its OWN accessor (meta_args / kv_meta_args): they are separately
+        // allocated and can land in different DRAM banks, so a shared accessor reads the wrong bank for
+        // one (the kv_actual read silently returned 0).
+        // Read all metadata runtime args first, in emission order (slot addr, kv addr, chunk_local_tiles,
+        // then the per-layer factor) so OpSignaler downstream sees the correct arg_idx.
+        const uint32_t slot_id_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
+        // chunk_local_tiles (per-device Q slab in tiles): recompute the gather extent on-device so the
+        // gather moves only the logical_n-valid prefix even when the host logical_n is a placeholder.
+        const uint32_t chunk_local_tiles = get_arg_val<uint32_t>(arg_idx++);
+        // (user, layer)-major KV-cache batch dim: cache_batch_idx = slot_id * kv_cache_num_layers +
+        // kv_cache_layer_idx (mirrors the SDPA reader / update_padded_kv_cache). slot_id holds only the
+        // user slot. Defaults (1, 0) reduce to slot_id, keeping callers bit-identical.
+        const uint32_t kv_cache_num_layers = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t kv_cache_layer_idx = get_arg_val<uint32_t>(arg_idx++);
+        Noc meta_noc;
+        // Read the metadata scalars into the OUTPUT CB's L1 as scratch (it is allocated but not yet
+        // reserved/filled here; the gather loop below reserves + overwrites it before first use). The tiny
+        // dedicated meta CB (cb_meta_id) gave an intermittent drop-to-zero on ~10% of cores; reading into
+        // the real output CB (as the proven SDPA ring_joint_reader does with cb_q_in) is reliable.
+        //
+        // Scope of the empirical workarounds here (read-into-output-CB + single-read below): they hold for
+        // the tested configuration -- full worker core grids, ring sizes 1..8, on Blackhole, single dispatch
+        // and captured-trace replay. The two KNOWN root causes are handled deterministically, not
+        // empirically: the wrong-DRAM-bank read is fixed by kv_meta_args (its own accessor, above), and
+        // cross-chunk L1 staleness under trace by the invalidate_l1_cache() inside
+        // read_metadata_scalar_u32. The remaining empirical part is the op-start NoC
+        // drop-to-zero on the FIRST read; a change to core allocation / ring size / dispatch timing could
+        // resurface it, so it is not guaranteed outside the above envelope and wants a silicon root-cause
+        // before this path is relied on under those changes.
+        CircularBuffer cb_meta(cb_output_id);
+        const uint32_t meta_l1 = cb_meta.get_write_ptr();
+        // read_metadata_scalar_u32 is the shared protocol (async_read page 0 -> barrier ->
+        // invalidate_l1_cache -> volatile load); the invalidate matters because this tensor sits at a
+        // fixed DRAM address the host refreshes in place between trace replays, so a cached L1 line would
+        // hand back the prior chunk's slot.
+        const uint32_t slot_id = trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, meta_l1);
+        const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
+                                          input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+        }
+        // Now read kv_actual_isl (reusing meta_l1) and clamp the gather extent. kv_actual_isl has its OWN
+        // accessor (kv_meta_args): it is a separately-allocated single-page tensor that can land in a
+        // different DRAM bank than slot_id, and a shared accessor's dspec bakes page 0's bank from one
+        // buffer -- reusing meta_args here silently returned the wrong bank's data.
+        //
+        // Only the slot read (the kernel's FIRST NoC read, issued at peak op-start contention) suffers the
+        // drop-to-zero corruption; this kv read runs a few instructions later once the storm subsides and
+        // is reliable with a single read (verified: the rotation tests, which exercise kv_actual != 0, pass
+        // with a single read and regress under the max-of-K re-read).
+        const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
+            meta_noc, kv_meta_args, kv_actual_isl_addr, meta_l1);  // kv_actual_isl (tile-aligned)
+        // Shared with the writer, which must clamp to the same prefix (see the header's KEEP IN SYNC note).
+        const uint32_t gather_valid_Ht =
+            ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
+        ring_attention_all_gather::clamp_input_ranges_to_gather_extent(
+            gather_valid_Ht, input_tensor_Ht, input_tensor_Wt, input_tile_id_end);
+    }
 
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
@@ -197,6 +289,17 @@ void kernel_main() {
         }
     }
 
+    // Mirror the writer's split-forwarding (see ring_attention_all_gather_writer.cpp): on an even ring
+    // the diametric slice is relayed in halves across both links. Direction 1 receives one extra slice
+    // (its own diametric shard's second half, signaled but never relayed) and relays one extra (the
+    // second half of its downstream neighbor's diametric shard). Gated on ring geometry only so the
+    // writer and the SDPA op receiver make the identical decision.
+    const bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    if (split_forwarding_enabled && direction == 1) {
+        slices_expected++;
+        writes_expected++;
+    }
+
     while (slices_received < slices_expected) {
         // Do i expect more from the backward direction?
         // In the linear case, I expect num_targets_backward_direction slices from the left
@@ -236,16 +339,34 @@ void kernel_main() {
         // In the ring case, if I have received on the right less than my targets on the left, forward
         if ((topology == Topology::Linear && writes_expected > 0) ||
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
+            // The last slice we relay is the diametric shard of our downstream neighbor; relay only
+            // this link's half so the paired writer pops a matching cb_output count.
+            const bool is_split_forwarded_slice = split_forwarding_enabled && (slices_received == writes_expected);
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                uint32_t tiles_read = input_tile_id_start[input_idx];
-                uint32_t tiles_to_read = input_tile_id_end[input_idx];
-
-                uint32_t output_tile_id_start = 0;
-                uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                uint32_t row_offset =
-                    (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
                 uint32_t slice_Wt = input_tensor_Wt[input_idx];
                 uint32_t stride_Wt = output_tensor_Wt[input_idx];
+
+                // Packet-aligned midpoint of this input's per-batch-head page range (matches the
+                // writer). Direction 0 relays [start, mid); direction 1 relays [mid, end).
+                const uint32_t total_pages = input_tile_id_end[input_idx] - input_tile_id_start[input_idx];
+                const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
+                const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
+                const bool split_this_input = is_split_forwarded_slice;
+                uint32_t relay_start = input_tile_id_start[input_idx];
+                uint32_t relay_end = input_tile_id_end[input_idx];
+                if (split_this_input) {
+                    if (direction == 0) {
+                        relay_end = input_tile_id_start[input_idx] + first_half_pages;
+                    } else {
+                        relay_start = input_tile_id_start[input_idx] + first_half_pages;
+                    }
+                }
+
+                uint32_t tiles_read = relay_start;
+                uint32_t tiles_to_read = relay_end;
+                uint32_t output_tile_id_start = 0;
+                uint32_t pages_read_in_row = relay_start % slice_Wt;
+                uint32_t row_offset = (relay_start / slice_Wt) * stride_Wt;
                 if (gather_dim == 3) {
                     output_tile_id_start = actual_sender_chip_id * input_tensor_Wt[input_idx];
                 } else {
@@ -270,16 +391,21 @@ void kernel_main() {
                             }
                             return pid;
                         });
-                    pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                    row_offset =
-                        (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
-                    tiles_read = input_tile_id_start[input_idx];
-                    tiles_to_read = input_tile_id_end[input_idx];
+                    pages_read_in_row = relay_start % slice_Wt;
+                    row_offset = (relay_start / slice_Wt) * stride_Wt;
+                    tiles_read = relay_start;
+                    tiles_to_read = relay_end;
                     output_tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
                 }
             }
         }
     }
+
+    // Flush non-posted atomics from op_signaler before kernel exit (mirrors the writer's barrier).
+    if constexpr (fuse_op) {
+        noc_obj.async_atomic_barrier();
+    }
+
     // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

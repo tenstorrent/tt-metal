@@ -450,6 +450,11 @@ class TtModelArgs:
         "LLAMA3_3_70B_PARAMS": "models/demos/llama3_70b_galaxy/model_params/Llama-3.3-70B-Instruct",
     }
 
+    @property
+    def blackhole_no_prefetcher(self):
+        """True on the Blackhole no-prefetcher decode/prefill path; WH/prefetcher (incl. 70B) stays False."""
+        return self.is_blackhole and not self.use_prefetcher
+
     def __init__(
         self,
         mesh_device,

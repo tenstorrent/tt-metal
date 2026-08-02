@@ -22,6 +22,7 @@ class FeedForward(Module):
         inner_dim=None,
         bias: bool = True,
         mesh_device=None,
+        fuse_swiglu: bool = False,
     ):
         super().__init__()
 
@@ -35,7 +36,9 @@ class FeedForward(Module):
         self.activation_fn = activation_fn
         self.bias = bias
 
-        self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn)
+        self.ff1 = Linear(
+            dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn, fuse_swiglu=fuse_swiglu
+        )
         self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
@@ -118,6 +121,7 @@ class ParallelFeedForward(Module):
         scalar: float = 1.0,
         compute_kernel_config=None,
         parallel_config=None,
+        core_grid=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -125,7 +129,9 @@ class ParallelFeedForward(Module):
         Both addcmul_a and addcmul_b are already at their per-TP-device [D/tp] slice —
         no AllGather or scatter matmul is required.
         """
-        ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config, parallel_config=parallel_config)
+        ff1_out = self.ff1(
+            x, compute_kernel_config=compute_kernel_config, parallel_config=parallel_config, core_grid=core_grid
+        )
         return self.ff2.forward_fused_addcmul(
             ff1_out,
             addcmul_a,

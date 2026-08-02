@@ -13,8 +13,8 @@ bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_
     return tt::tt_metal::experimental::IsTensorPrefetcherSupported(*mesh_device);
 }
 
-void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool dual_senders_per_bank) {
-    tt::tt_metal::experimental::StartTensorPrefetcher(*mesh_device, {.dual_senders_per_bank = dual_senders_per_bank});
+void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    tt::tt_metal::experimental::StartTensorPrefetcher(*mesh_device, {});
 }
 
 void queue_tensor_prefetcher_request(

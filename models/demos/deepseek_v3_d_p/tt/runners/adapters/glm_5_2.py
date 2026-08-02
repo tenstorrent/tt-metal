@@ -17,9 +17,7 @@ CONFIG-DRIVEN — ``glm_5_2_hf_config`` carries the ``indexer_types`` full/share
 indices — so no reuse-specific wiring lives in the adapter.
 
 Like GLM-5.1 (and Kimi) it has a single expert group with a device gate, so the MoE routing all-gather's
-semaphores go to L1_SMALL (needs the L1_SMALL carve-out at mesh-open). Run with
-``PREFILL_KV_ONLY_LAST_LAYER=0`` (the sparse path can't run a kv-only last layer); the glm52 manifest
-sets it.
+semaphores go to L1_SMALL (needs the L1_SMALL carve-out at mesh-open).
 """
 
 from __future__ import annotations
@@ -27,9 +25,9 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-from models.demos.common.prefill.adapter import KvCaches
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config, glm_5_2_hf_config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
+from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 
 
 class GLM52Adapter(MLAPrefillAdapter):
@@ -53,7 +51,7 @@ class GLM52Adapter(MLAPrefillAdapter):
         max_seq = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 8192))
         return glm_5_2_hf_config(max_seq=max_seq)
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> KvCaches:
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
         """GLM is sparse (DSA), so it owns TWO device caches, returned as a KvCaches tuple (the runner
         hands the whole tuple to every runtime call; the runtime pulls index 0 as the primary KV cache
         and index 1 as the secondary index cache). Mirrors glm_5_1.py:
@@ -71,18 +69,21 @@ class GLM52Adapter(MLAPrefillAdapter):
         The engine owns both, exactly like the dense KVPE cache."""
         import ttnn
         from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+            MlaKvCacheFormat,
+            init_kvpe_cache,
+            init_mla_kv_cache,
+        )
 
-        kvpe_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=hf_config.qk_rope_head_dim + hf_config.kv_lora_rank,
+        kvpe_cache = init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
+            hf_config=hf_config,
             mesh_device=mesh_device,
             seq_len=params.max_seq_len,
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         num_index_layers = num_full_indexer_layers(hf_config) or params.num_layers
         index_cache = init_kvpe_cache(
@@ -95,7 +96,7 @@ class GLM52Adapter(MLAPrefillAdapter):
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
         )
-        return KvCaches([kvpe_cache, index_cache])
+        return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 
     def layer_split_boundaries(self, num_layers):
         """GLM-5.2 cross-layer reuse: a pipeline rank must start on a ``full`` layer (it seeds that
@@ -115,7 +116,9 @@ class GLM52Adapter(MLAPrefillAdapter):
     mla_pcc_threshold = 0.995
     moe_pcc_threshold = 0.971
     prefill_trace_layout = "chunked_group_a_v1"
-    test_prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_52_55k_vllm"
+    # Default trace must carry the DSA indexer-K cache (dsa/indexer_k_layer_*); the older
+    # golden/structured_traces/glm_52_55k_vllm omits it, so the indexer-K PCC checks would silently skip.
+    test_prefill_trace_default = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
 
     @property
     def config_builder(self) -> Callable:

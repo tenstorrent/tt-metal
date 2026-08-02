@@ -62,8 +62,11 @@ void kernel_main() {
                 } else {
                     // Slow path: element-wise copy for unaligned data
                     // Cast to uint16_t* for element-level access to pixel data
-                    uint16_t* src_ptr = (uint16_t*)(src_addr_base + src_col_offset + h_offset);
-                    uint16_t* dst_ptr = (uint16_t*)dst_pixel_addr;
+                    // Cast through uintptr_t: L1 addresses are uint32_t but the Quasar kernel pointer
+                    // width differs, so a direct uint32_t->ptr cast trips -Werror=int-to-pointer-cast
+                    // (no-op on WH/BH where the widths match).
+                    uint16_t* src_ptr = (uint16_t*)(uintptr_t)(src_addr_base + src_col_offset + h_offset);
+                    uint16_t* dst_ptr = (uint16_t*)(uintptr_t)dst_pixel_addr;
 
                     // Gather pixels along stride_w dimension
                     for (uint32_t w = 0; w < stride_w; ++w) {

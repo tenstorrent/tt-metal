@@ -134,7 +134,7 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec TypecastDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec TypecastDeviceOperation::compute_output_specs(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -143,14 +143,15 @@ TensorSpec TypecastDeviceOperation::compute_output_specs(
     const Layout output_layout = tensor_args.input.layout();
 
     const Shape output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
 
 Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
     }
-    return tt::tt_metal::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+    return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 bool TypecastDeviceOperation::skip_launch(

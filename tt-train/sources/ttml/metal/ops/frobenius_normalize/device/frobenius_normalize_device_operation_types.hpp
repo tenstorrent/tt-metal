@@ -19,6 +19,6 @@ struct FrobeniusNormalizeTensorArgs {
 
 using FrobeniusNormalizeTensorReturn = std::vector<ttnn::Tensor>;
 
-using FrobeniusNormalizeSpecReturn = std::vector<ttnn::TensorSpec>;
+using FrobeniusNormalizeSpecReturn = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttml::metal::ops::frobenius_normalize::device

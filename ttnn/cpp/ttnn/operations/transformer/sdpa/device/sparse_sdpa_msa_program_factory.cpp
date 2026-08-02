@@ -9,6 +9,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <array>
 #include <bit>
 #include <map>
 #include <string>
@@ -142,6 +143,27 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb(tile_bytes, 2, bf);  // cb_vmask : per-token partial-column mask tile
     }
 
+    // Block-cyclic ("slab") cache: the invP remap is baked as compile-time args, so a natural-order cache folds
+    // to identity. Units are BLOCKS here (sparse_sdpa works in rows, indexer_score in tiles). Reader and writer
+    // take the same block {enable, chunk_local, sp, shard_stride_gap, slab_stride_gap}.
+    const auto block_cyclic_ct = [&attrs, &t, block_size]() {
+        std::array<uint32_t, 5> args{0, 1, 1, 0, 0};
+        if (!attrs.has_block_cyclic()) {
+            return args;
+        }
+        const auto& bc = attrs.block_cyclic.value();
+        const uint32_t chunk_local_blk = bc.chunk_local / block_size;
+        const uint32_t shard_len_blk = (t.k.logical_shape()[2] / bc.sp) / block_size;
+        args = {
+            1,
+            chunk_local_blk,
+            bc.sp,
+            shard_len_blk - chunk_local_blk,
+            chunk_local_blk * (bc.sp - 1),
+        };
+        return args;
+    }();
+
     // ---- compile-time args ----
     // Reader args: scalars, derived geometry, CB ids, element sizes, then q/k/v/indices accessors.
     // K/V use RuntimeTensorShape.
@@ -155,6 +177,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     reader_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
     reader_ct.push_back(block_size);                        // block_size: for diag_block = p/bs, offset = p%bs
     reader_ct.push_back(cb_vmask);                          // reader builds the per-token partial-column tile
+    reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -186,6 +209,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     writer_ct.push_back(v_tile_bytes);
     writer_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
     writer_ct.push_back(cb_neginf);                         // writer builds the persistent -inf mask tile
+    writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)

@@ -21,7 +21,7 @@ namespace ttnn::prim {
 struct TilizeWithValPaddingDeviceOperation {
     using operation_attributes_t = TilizeWithValPaddingParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<

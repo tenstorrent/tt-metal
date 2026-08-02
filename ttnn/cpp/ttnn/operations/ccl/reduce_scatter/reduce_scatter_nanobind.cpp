@@ -37,17 +37,27 @@ void bind_reduce_scatter(nb::module_& mod) {
             chunks_per_sync (int, optional): Hyperparameter.
             num_workers_per_link (int, optional): Hyperparameter.
             num_buffers_per_channel (int, optional): Hyperparameter.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the reduction. Defaults to `None`.
             use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: The reduced and scattered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
-        Example:
-            >>> # ttnn_tensor shape is [1, 8, 32, 256]
-            >>> # num_devices along cluster_axis is 8
-            >>> output = ttnn.reduce_scatter(ttnn_tensor, dim=1, cluster_axis=1)
-            >>> print(output.shape)
-            [1, 1, 32, 256]
+        Supported dtypes and layouts:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
+                  - TILE, ROW_MAJOR
+
+            Input must be rank 2 or greater and the scatter dim must be divisible by the number of devices (for tiled inputs scattered on the last two dims, by ``num_devices * tile_size``). The output preserves the input dtype. Row-major inputs, and tiled inputs whose scatter breaks a tile, are routed through the composite implementation.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED and ND_SHARDED may reside in DRAM or L1; BLOCK_SHARDED must be in L1.
         )doc";
 
     ttnn::bind_function<"reduce_scatter">(

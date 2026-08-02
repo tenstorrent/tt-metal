@@ -319,7 +319,10 @@ class DropInVisionTransformer(torch.nn.Module):
             # 3. Aggregate in batched users list
             final_outputs.append(tt_out)
 
-        # concatenate all the outputs
+        # concatenate all the outputs. With a single image, ttnn.concat aliases
+        # its lone input, so deallocating the sources would free the return.
+        if len(final_outputs) == 1:
+            return final_outputs[0]
         tt_out = ttnn.concat(final_outputs, dim=1)
         for t in final_outputs:
             ttnn.deallocate(t)

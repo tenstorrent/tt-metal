@@ -43,13 +43,15 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         return opt.has_value() ? std::optional<Tensor>(opt.value()) : std::nullopt;
     };
 
+    // Delegate to the matmul validator. The virtual-concat checks (two sources concatenable on K,
+    // K's sum to the weight K) are driven by the presence of optional_input_tensor below.
     matmul_device_operation_t::validate_on_program_cache_miss(
         attributes.matmul_struct,
         matmul_device_operation_t::tensor_args_t{
             .input_tensor = tensor_args.input_tensor,
             .weight_tensor = tensor_args.weight_tensor,
             .bias_tensor = to_mutable_opt(tensor_args.bias),
-            .optional_input_tensor = std::nullopt,
+            .optional_input_tensor = to_mutable_opt(tensor_args.mm_optional_input_tensor),
             .fused_ternary_input_a = std::nullopt,
             .fused_ternary_input_b = std::nullopt,
         });
@@ -148,7 +150,7 @@ MinimalMatmulStridedReduceScatterAsync::spec_return_value_t
 MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Output tensor[0]: MM output spec (= RS input)
-    ttnn::TensorSpec mm_output_spec = matmul_device_operation_t::compute_output_specs(
+    tt::tt_metal::TensorSpec mm_output_spec = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor})[0];
 
     // Derive RS intermediate and output specs from the MM output shape
@@ -158,7 +160,7 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     MemoryConfig rs_intermediate_mem_config =
         attributes.rs_intermediate_mem_config.value_or(mm_output_spec.memory_config());
 
-    ttnn::TensorSpec rs_intermediate_spec(
+    tt::tt_metal::TensorSpec rs_intermediate_spec(
         mm_output_shape,
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), rs_intermediate_mem_config));
@@ -167,7 +169,7 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     auto rs_output_shape = mm_output_shape;
     rs_output_shape[attributes.dim] /= attributes.ring_size;
 
-    ttnn::TensorSpec rs_output_spec(
+    tt::tt_metal::TensorSpec rs_output_spec(
         rs_output_shape,
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), attributes.rs_output_mem_config));
@@ -190,7 +192,7 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
             CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(gx - 1, gy - 1))),
             {Mt_per_core * tt::constants::TILE_HEIGHT, Nt_per_core * tt::constants::TILE_WIDTH});
         const auto mm_l1_sharded = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, mm_shard_spec};
-        mm_output_spec = ttnn::TensorSpec(
+        mm_output_spec = tt::tt_metal::TensorSpec(
             mm_output_shape,
             tt::tt_metal::TensorLayout(mm_output_spec.data_type(), mm_output_spec.page_config(), mm_l1_sharded));
     }
@@ -251,7 +253,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2,
-    std::optional<tt::tt_metal::DataType> dtype) {
+    std::optional<tt::tt_metal::DataType> dtype,
+    const std::optional<const Tensor>& mm_optional_input_tensor) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -296,7 +299,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         optional_rs_output_tensor,
         bias,
         addcmul_input_tensor1,
-        addcmul_input_tensor2};
+        addcmul_input_tensor2,
+        mm_optional_input_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

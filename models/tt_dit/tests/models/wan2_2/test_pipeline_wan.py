@@ -13,12 +13,13 @@ from PIL import Image
 
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
+from models.tt_dit.pipelines.events import log_event_section
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
 
 
 @pytest.mark.parametrize(
@@ -28,29 +29,24 @@ from ....utils.test import line_params, ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, quant_config_name",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True, None],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True, None],
-        # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False, None],
-        # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True, None],
-        # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False, None],
-        # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, None],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, None],
-        # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True, "all_bf8_lofi"],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True, None],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False, None],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False, None],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
     ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0_linear",
-        "bh_4x8sp1tp0_ring",
-        "bh_4x32sp1tp0",
-        "2x4sp0tp1_bf8_lofi",
+        "2x2sp0tp1nl2_linear_is_fsdp1",
+        "2x4sp0tp1nl1_linear_is_fsdp1",
+        "2x4sp1tp0nl2_linear_is_fsdp0",  # BH on 2x4
+        "4x8sp1tp0nl4_ring_is_fsdp1",  # WH (ring) on 4x8
+        "4x8sp1tp0nl2_linear_is_fsdp0",  # BH (linear) on 4x8
+        "4x8sp1tp0nl2_ring_is_fsdp0",  # BH (ring) on 4x8
+        "4x32sp1tp0nl2_ring_is_fsdp0",
+        "2x4sp0tp1nl1_linear_is_fsdp1_bf8_lofi",  # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -81,6 +77,11 @@ def test_pipeline_inference(
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    if (not is_fsdp) and (not ttnn.device.is_blackhole()):
+        pytest.skip("FSDP=False unsupported on non-blackhole systems due to memory constraints")
 
     num_frames = 81
     num_inference_steps = 40
@@ -127,6 +128,7 @@ def test_pipeline_inference(
                 guidance_scale=4.0,
                 guidance_scale_2=3.0,
                 output_type="uint8",
+                on_event=log_event_section,
             )
 
         logger.info(f"Inference completed successfully")

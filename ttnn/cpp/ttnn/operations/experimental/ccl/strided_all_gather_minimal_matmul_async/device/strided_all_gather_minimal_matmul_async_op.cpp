@@ -64,7 +64,7 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
 StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalMatmulAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather shape
-    ttnn::TensorSpec strided_all_gather_output_shape = StridedAllGatherAsync::compute_output_specs(
+    tt::tt_metal::TensorSpec strided_all_gather_output_shape = StridedAllGatherAsync::compute_output_specs(
         attributes.strided_all_gather_async_struct, StridedAllGatherAsyncInputs{tensor_args.input_tensor});
 
     // Matmul specs: one per output chunk (chunks == 1 by default). Output layout is

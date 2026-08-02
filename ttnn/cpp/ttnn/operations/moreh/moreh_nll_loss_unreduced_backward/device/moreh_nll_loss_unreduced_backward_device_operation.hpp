@@ -28,7 +28,7 @@ struct MorehNllLossUnreducedBackwardDeviceOperation {
         const std::optional<Tensor>& input_grad_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using tensor_return_value_t = ttnn::Tensor;
 

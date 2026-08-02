@@ -124,6 +124,22 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 #endif
 }
 
+inline void DataflowBuffer::evil_set_write_ptr(uint32_t addr) {
+#if DFB_IS_COMPUTE_MATH
+    (void)addr;
+#else
+    local_dfb_interface_.fifo_wr_ptr = addr;
+#endif
+}
+
+inline void DataflowBuffer::evil_set_read_ptr(uint32_t addr) {
+#if DFB_IS_COMPUTE_MATH
+    (void)addr;
+#else
+    local_dfb_interface_.fifo_rd_ptr = addr;
+#endif
+}
+
 #ifdef COMPILE_FOR_TRISC
 
 inline uint32_t DataflowBuffer::get_tile_address(uint32_t tile_index) {

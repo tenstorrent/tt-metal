@@ -305,20 +305,28 @@ void kernel_main() {
 
     // ----- Padding fill -----
 #ifdef ENABLE_PADDING
-#ifdef USE_PAD_SCRATCH
     {
-        // Non-zero pad value: materialize the immediate pad stick into this reader's pad DFB
-        // (pad_fill) and publish it, then broadcast from the PEER reader's identical pad DFB
-        // (pad_read).  Cross-reader so neither DM kernel self-loops a DFB; the pad value is the
-        // same constant on both readers and both run on the same core, so the peer buffer is an
-        // equivalent local-L1 source.
+        // Materialize the immediate pad stick into this reader's pad DFB (pad_fill) and publish it,
+        // then broadcast from the PEER reader's identical pad DFB (pad_read).  Cross-reader so neither
+        // DM kernel self-loops a DFB; the pad value is the same constant on both readers and both run
+        // on the same core, so the peer buffer is an equivalent local-L1 source.
+        //
+        // Quasar has no static MEM_ZEROS L1 region (WH/BH-only in dev_mem_map.h), so the zero-pad case
+        // can't copy from it. Instead always go through the pad-scratch DFB (the factory now allocates
+        // it for pad_val==0 too) and zero it with the Quasar noc zero-write for pad_val==0, else fill
+        // with the immediate value.
         constexpr uint16_t pad_val = static_cast<uint16_t>(pad_val_u32);
         constexpr uint32_t num_elements_to_fill = aligned_stick_nbytes / elem_nbytes;
         DataflowBuffer pad_fill_cb(dfb::pad_fill);
         DataflowBuffer pad_read_cb(dfb::pad_read);
 
         pad_fill_cb.reserve_back(1);
-        fill_with_val<num_elements_to_fill, pad_val>(pad_fill_cb.get_write_ptr());
+        if constexpr (pad_val == 0) {
+            noc.async_write_zeros(pad_fill_cb, aligned_stick_nbytes, {.offset_bytes = 0});
+            noc.write_zeros_l1_barrier();
+        } else {
+            fill_with_val<num_elements_to_fill, pad_val>(pad_fill_cb.get_write_ptr());
+        }
         pad_fill_cb.push_back(1);
 
         pad_read_cb.wait_front(1);
@@ -327,14 +335,6 @@ void kernel_main() {
             noc, padding_config_l1_addr, out_base_l1_addr, pad_read_cb.get_read_ptr());
         pad_read_cb.pop_front(1);
     }
-#else
-    {
-        // Zero padding sources from MEM_ZEROS.
-        constexpr uint32_t padding_region_size = MEM_ZEROS_SIZE;
-        copy_padding<aligned_stick_nbytes, padding_region_size>(
-            noc, padding_config_l1_addr, out_base_l1_addr, MEM_ZEROS_BASE);
-    }
-#endif
 #endif
 
     // ----- Gather -----

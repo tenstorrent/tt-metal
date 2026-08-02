@@ -15,7 +15,10 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+// Renamed from copy_block to avoid an ambiguous overload with ckernel::copy_block (added to
+// api/compute/tile_move_copy.h in #49070), which has the identical (uint32_t, uint32_t, uint32_t,
+// uint32_t) signature and is in scope here via `using namespace ckernel`. See tt-metal#50386.
+void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     CircularBuffer cb_out(out_cb);
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
@@ -215,7 +218,9 @@ void add_bias_and_addcmul_block(
         unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
 #endif  // TERNARY_B_IS_FLOAT32
 
+#ifndef ADDCMUL_SCALAR_IS_ONE
         binop_with_scalar_tile_init();
+#endif
         reconfig_data_format(intermediate_cb, ternary_b_cb);
         pack_reconfig_data_format(intermediate_cb);
 
@@ -238,7 +243,9 @@ void add_bias_and_addcmul_block(
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
 #endif  // TERNARY_B_IS_FLOAT32
 
+#ifndef ADDCMUL_SCALAR_IS_ONE
                 mul_unary_tile(DST_ID, scalar_value);
+#endif
 
                 tile_regs_commit();
                 tile_regs_wait();
@@ -254,7 +261,9 @@ void add_bias_and_addcmul_block(
 #ifndef TERNARY_B_IS_FLOAT32
         mul_tiles_init(intermediate_cb, ternary_b_cb);
 #endif
+#ifndef ADDCMUL_SCALAR_IS_ONE
         binop_with_scalar_tile_init();
+#endif
         reconfig_data_format(intermediate_cb, ternary_b_cb);
         pack_reconfig_data_format(intermediate_cb);
 
@@ -278,7 +287,9 @@ void add_bias_and_addcmul_block(
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
 #endif  // TERNARY_B_IS_FLOAT32
 
+#ifndef ADDCMUL_SCALAR_IS_ONE
                 mul_unary_tile(DST_ID, scalar_value);
+#endif
 
                 tile_regs_commit();
                 tile_regs_wait();
@@ -526,7 +537,7 @@ void kernel_main() {
             cb_out.reserve_back(out_block_num_tiles);
             cb_intermediate.wait_front(out_block_num_tiles);
 #ifndef FUSE_BIAS
-            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+            copy_and_pack_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
 #else
             cb_in2.wait_front(N_block_tiles);
             add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);

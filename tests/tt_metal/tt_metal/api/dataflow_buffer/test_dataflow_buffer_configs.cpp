@@ -1067,8 +1067,8 @@ TEST_F(MeshDeviceFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
             ::testing::HasSubstr("num_entries override 3 is not divisible by")));
 }
 
-// An entry_size override that pushes the TRISC ring extent past the uint16 L1-aligned-unit limit is
-// rejected by the ring-extent re-validation.
+// Ring extent past Tensix unreserved L1 is rejected. entry_size stays within the TRISC uint16
+// L1-unit field so this hits the L1 check rather than the entry_size width check.
 TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB ring-extent check requires Quasar";
@@ -1079,12 +1079,31 @@ TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
     program.impl().finalize_dataflow_buffer_configs();
 
     auto params = MakeMinimalRunArgs(node);
-    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u * 1024u});
+    // 64 KiB * 128 entries = 8 MiB ring > Quasar unreserved L1 (~4 MiB).
+    params.dfb_run_overrides.push_back(
+        {.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u, .num_entries = 128u});
 
     EXPECT_THAT(
         [&] { experimental::SetProgramRunArgs(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("exceeds uint16_t; reduce capacity, stride, or entry_size")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds Tensix unreserved L1 size")));
+}
+
+// TRISC stores entry_size in uint16 L1 units; 1 MiB is 65536 units and must fail before init truncates.
+TEST_F(MeshDeviceFixture, DFBReentryEntrySizeExceedsUint16Fails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB TRISC entry_size check requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 1024u * 1024u});
+
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("TRISC entry_size")));
 }
 
 // capacity (num_entries / max(producers, consumers)) is stored as uint16_t (the tile-counter register
@@ -1540,6 +1559,40 @@ CONFIG_TC_TEST_2_0(DMTest1xDFB2Sx4BConfig, DM, DM, 2, 4, STRIDED, ALL, 4, 2)
 // Group 2 M2: B2 (txn-id allocator) + B4 (cached threshold) + B10 (divisibility)
 // =====================================================================================
 
+// Host-only: DFB pool is [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], allocated top-down in ascending blocks.
+TEST(TxnIdAllocatorTest, AllocatesTopDownFromDfbPool) {
+    using tt::tt_metal::experimental::dfb::detail::TxnIdAllocator;
+    TxnIdAllocator alloc;
+
+    auto first = alloc.allocate(2);
+    ASSERT_EQ(first.size(), 2u);
+    EXPECT_EQ(first[0], static_cast<uint8_t>(HW_TXN_ID_MAX - 1));
+    EXPECT_EQ(first[1], HW_TXN_ID_MAX);
+
+    auto second = alloc.allocate(3);
+    ASSERT_EQ(second.size(), 3u);
+    EXPECT_EQ(second[0], static_cast<uint8_t>(HW_TXN_ID_MAX - 4));
+    EXPECT_EQ(second[1], static_cast<uint8_t>(HW_TXN_ID_MAX - 3));
+    EXPECT_EQ(second[2], static_cast<uint8_t>(HW_TXN_ID_MAX - 2));
+
+    // Drain the rest of the pool, then the next allocate must fail.
+    const uint8_t used = 5;
+    const uint8_t leftover = static_cast<uint8_t>(NUM_DFB_POOL_TXN_IDS - used);
+    auto rest = alloc.allocate(leftover);
+    ASSERT_EQ(rest.size(), leftover);
+    EXPECT_EQ(rest.front(), DFB_TXN_ID_BASE);
+    EXPECT_EQ(rest.back(), static_cast<uint8_t>(DFB_TXN_ID_BASE + leftover - 1));
+
+    EXPECT_THAT(
+        [&]() { alloc.allocate(1); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("TxnIdAllocator exhausted")));
+
+    alloc.reset();
+    auto after_reset = alloc.allocate(1);
+    ASSERT_EQ(after_reset.size(), 1u);
+    EXPECT_EQ(after_reset[0], HW_TXN_ID_MAX);
+}
+
 // B2: For num_entries in {16, 15, 7}, producer_txn_descriptor.num_txn_ids should
 // land on {2, 3, 1} (divisibility-based selection).
 TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
@@ -1575,6 +1628,25 @@ TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
         auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
         ASSERT_EQ(dfbs.size(), 1u);
         EXPECT_EQ(dfbs[0]->producer_txn_descriptor.num_txn_ids, c.expected_num_txn_ids);
+        // DFB ids come from the runtime pool [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], never 0 or the user pool.
+        auto expect_in_dfb_pool = [](uint8_t txn_id, const char* side, int index) {
+            EXPECT_NE(txn_id, 0) << side << " txn_ids[" << index << "] must not be 0 (NOC_V2_TRID_STATIC)";
+            EXPECT_GE(txn_id, DFB_TXN_ID_BASE)
+                << side << " txn_ids[" << index << "]=" << static_cast<int>(txn_id) << " collides with user pool [0, "
+                << static_cast<int>(USER_TXN_ID_MAX) << "]";
+            EXPECT_LE(txn_id, HW_TXN_ID_MAX)
+                << side << " txn_ids[" << index << "]=" << static_cast<int>(txn_id) << " exceeds HW max";
+        };
+        for (uint8_t i = 0; i < dfbs[0]->producer_txn_descriptor.num_txn_ids; ++i) {
+            expect_in_dfb_pool(dfbs[0]->producer_txn_descriptor.txn_ids[i], "producer", i);
+        }
+        for (uint8_t i = 0; i < dfbs[0]->consumer_txn_descriptor.num_txn_ids; ++i) {
+            expect_in_dfb_pool(dfbs[0]->consumer_txn_descriptor.txn_ids[i], "consumer", i);
+        }
+        // First DFB on a program draws from the top of the pool.
+        if (c.expected_num_txn_ids > 0) {
+            EXPECT_EQ(dfbs[0]->producer_txn_descriptor.txn_ids[c.expected_num_txn_ids - 1], HW_TXN_ID_MAX);
+        }
     }
 }
 
@@ -1810,5 +1882,102 @@ TEST_F(MeshDeviceFixture, B8_FiveAllConsumers_Rejected_2_0) {
 TEST_F(MeshDeviceFixture, B9_InterTensixScope_Rejected_2_0) {
     GTEST_SKIP() << "Not applicable: M2 DataflowBufferSpec has no tensix_scope field";
 }
+
+
+// =====================================================================================
+// BLOCKED access-pattern config-rejection tests (migrated from monolithic)
+// =====================================================================================
+// --- REJECTED CONFIG: Tensix BLOCKED producer + IMPLICIT DM consumer ---
+// A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster dfb_tile_poster_irq_handler()
+// is #ifndef COMPILE_FOR_TRISC — compiled out on Tensix). For a STRIDED DM consumer those explicit per-tile
+// posts hand off to an implicit drain fine (the A1 Tensix→DM STRIDED pipeline passes). For a BLOCKED DM
+// consumer they do NOT: the per-block explicit posts never reach the implicit BLOCKED drain's ISR/txn
+// signal, so the DM consumer spin-waits forever (verified: a device-side deadlock, ~20s CPU / >10min wall).
+// The host now rejects this combination at config time (finalize_single_dfb_config), turning a silent hang
+// into a fast, deterministic failure. These two were added unverified in 4a0757c0a11; they now assert the
+// rejection. Real-use workaround: explicit DM consumer (the non-_impl TensixDMTest1xDFB{2Bx2B,4Bx4B}_blk4
+// tests above cover Tensix→DM BLOCKED), or a DM producer if the consumer must be implicit.
+static void expect_tensix_blocked_implicit_consumer_rejected(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_threads, uint32_t num_entries) {
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = num_threads,
+        .num_consumers = num_threads,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .num_entries = num_entries,
+        .block_size = 4,
+    };
+    EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
+}
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB2Bx2B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->devices_.at(0), /*num_threads=*/2, /*num_entries=*/16);
+}
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->devices_.at(0), /*num_threads=*/4, /*num_entries=*/32);
+}
+
+// --- REJECTED CONFIG: implicit BLOCKED whose txn window doesn't cover every tile counter ---
+// The ISR credits all of a RISC's tile counters equally each time a txn ID retires, but a BLOCKED
+// endpoint advances its counter only every block_size entries. With P=1, C=4, block_size=4 and 16
+// entries the producer gets 4 counters and num_entries_per_txn_id = 8, so one txn window fills only
+// 2 of the 4 sub-rings while all 4 counters are credited — consumers 2 and 3 would read entries that
+// were never written. compute_txn_descriptor rejects it (see the block_size * num_tcs_per_risc check).
+// The explicit twin (DMTest1xDFB1Bx4B_blk4) is unaffected and passes: it posts its own credits.
+TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
+    auto& mesh_device = this->devices_.at(0);
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 4,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
+}
+
+// B10 — a BLOCKED binding with block_size == 0 is rejected. BLOCKED is now supported (Phase 3),
+// so the lowering gate is gone; what remains is the host validation that block_size must be > 0
+// iff the access pattern is BLOCKED (check_block_size_validity in program_spec.cpp). This config
+// leaves block_size unset (0) on a BLOCKED consumer, so it must still throw.
+TEST_F(MeshDeviceFixture, B10_Blocked_Rejected_2_0) {
+    auto& mesh_device = this->devices_.at(0);
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB validation tested on Quasar";
+    }
+    using namespace m2_config_test_helpers;
+    M2ConfigDFBParams p{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::STRIDED,
+        .cap = m2::DFBAccessPattern::BLOCKED,  // <-- BLOCKED consumer but block_size left 0 (the offense)
+        .implicit_sync = false,
+    };
+    EXPECT_THROW(
+        {
+            Program program = build_single_dfb_program_2_0(mesh_device, p);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        std::exception);
+}
+
+// B7 — CB+DFB mix rejection.
+// Not applicable to M2: ProgramSpec doesn't expose a circular-buffer API
+// (CircularBufferConfig is a legacy host-API construct). M2 programs are
+// purely DFB-based; the legacy CB-then-DFB rejection path can't be exercised
 
 }  // end namespace tt::tt_metal

@@ -117,7 +117,14 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
         }
 
-    def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
+    def get_dim(self, dim, shape):
+        if dim < 0:
+            dim += len(shape)
+        return dim
+
+    def get_rs_ping_pong_buffer(
+        self, shape, dim, mesh_axis, return_output_buffer: bool = True, return_intermediate: bool = True
+    ):
         """
         Get or create ping pong buffers for reduce scatter operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -131,6 +138,7 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters
+        dim = self.get_dim(dim, shape)
         cache_key = (tuple(shape), dim, mesh_axis)
 
         # Create buffers if not cached
@@ -142,11 +150,24 @@ class CCLManager:
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
 
+            # The op's tiled intermediate is input-shaped, except on Linear topology where it holds
+            # two slices stacked on dim 0. Matching this exactly is required: reduce_scatter rejects
+            # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
+            # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            intermediate_buffer_shape = [2] + intermediate_buffer_shape
+            if self.topology == ttnn.Topology.Linear:
+                intermediate_buffer_shape[0] *= 2
             for _ in range(2):
-                intermediate_buffer = bf16_tensor(torch.empty(intermediate_buffer_shape), device=self.mesh_device)
-                output_buffer = bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
+                intermediate_buffer = (
+                    bf16_tensor(torch.empty(intermediate_buffer_shape), device=self.mesh_device)
+                    if return_intermediate
+                    else None
+                )
+                output_buffer = (
+                    bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
+                    if return_output_buffer
+                    else None
+                )
                 buffers.append([intermediate_buffer, output_buffer])
 
             self._ping_pong_buffer_cache[cache_key] = buffers
@@ -173,6 +194,7 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
+        dim = self.get_dim(dim, shape)
         cache_key = ("ag", tuple(shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached

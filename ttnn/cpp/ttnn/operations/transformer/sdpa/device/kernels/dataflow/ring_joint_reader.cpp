@@ -10,19 +10,31 @@
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
+#include "ring_joint_kv_pad_derivation.hpp"
+#include "metadata_scalar_read.hpp"
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
-template <bool has_joint_inputs, uint32_t joint_tensor_args_offset>
+template <bool has_joint_inputs, bool has_gathered_joint_k, uint32_t joint_tensor_args_offset>
 constexpr uint32_t get_post_tensor_args_offset() {
     if constexpr (has_joint_inputs) {
         constexpr auto joint_q_args = TensorAccessorArgs<joint_tensor_args_offset>();
         constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
         constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
-        return joint_v_args.next_compile_time_args_offset();
+        constexpr uint32_t after_joint_v = joint_v_args.next_compile_time_args_offset();
+        if constexpr (has_gathered_joint_k) {
+            // Two additional slots for gathered joint K and gathered joint V accessor args.
+            // IMPORTANT: these shift post_tensor_args_offset; all downstream index constants must account for this.
+            constexpr auto gathered_joint_k_args = TensorAccessorArgs<after_joint_v>();
+            constexpr auto gathered_joint_v_args =
+                TensorAccessorArgs<gathered_joint_k_args.next_compile_time_args_offset()>();
+            return gathered_joint_v_args.next_compile_time_args_offset();
+        } else {
+            return after_joint_v;
+        }
     } else {
         return joint_tensor_args_offset;
     }
@@ -30,26 +42,52 @@ constexpr uint32_t get_post_tensor_args_offset() {
 
 template <
     bool has_joint_k,
+    bool has_gathered_joint_k,
     uint32_t joint_tensor_args_offset,
     typename LocalKGenerator,
     typename GatheredKGenerator,
+    typename LocalJointTileLogical,
     typename JointInputTileLogical,
     typename FetchK>
 inline void fetch_k_from_source(
     bool kv_chunk_is_joint,
+    bool joint_chunk_is_local,
     uint32_t ring_iter,
     uint32_t joint_k_addr,
+    uint32_t gathered_joint_k_addr,
     const LocalKGenerator& local_k_generator,
     const GatheredKGenerator& gathered_k_generator,
+    const LocalJointTileLogical& local_joint_tile_logical,
     const JointInputTileLogical& joint_input_tile_logical,
     const FetchK& fetch_k) {
     if constexpr (has_joint_k) {
         if (kv_chunk_is_joint) {
             constexpr auto joint_q_args = TensorAccessorArgs<joint_tensor_args_offset>();
             constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
-            const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
-            const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
-            fetch_k(joint_k_generator);
+            if constexpr (has_gathered_joint_k) {
+                // Sharded-joint: the fused AG does NOT write the local device's own slice into
+                // the gathered buffer (each device already holds its slice locally). When this
+                // chunk belongs to the local device (ring_id == ring_index), read from the local
+                // joint K tensor; otherwise read from the gathered buffer.
+                if (joint_chunk_is_local) {
+                    const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
+                    const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, local_joint_tile_logical);
+                    fetch_k(joint_k_generator);
+                } else {
+                    constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
+                    constexpr auto gathered_joint_k_args =
+                        TensorAccessorArgs<joint_v_args.next_compile_time_args_offset()>();
+                    const auto gathered_joint_k_reader = TensorAccessor(gathered_joint_k_args, gathered_joint_k_addr);
+                    const auto gathered_joint_k_generator =
+                        PaddedAddrGenerator(gathered_joint_k_reader, joint_input_tile_logical);
+                    fetch_k(gathered_joint_k_generator);
+                }
+            } else {
+                // Replicated-joint path: read joint K from the local (full L) joint tensor.
+                const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
+                const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
+                fetch_k(joint_k_generator);
+            }
         } else if (ring_iter == 0) {
             fetch_k(local_k_generator);
         } else {
@@ -92,17 +130,22 @@ inline void read_q_from_source(
 
 template <
     bool has_joint_k,
+    bool has_gathered_joint_k,
     uint32_t joint_tensor_args_offset,
     typename LocalVGenerator,
     typename GatheredVGenerator,
+    typename LocalJointTileLogical,
     typename JointInputTileLogical,
     typename FetchV>
 inline void fetch_v_from_source(
     bool kv_chunk_is_joint,
+    bool joint_chunk_is_local,
     uint32_t ring_iter,
     uint32_t joint_v_addr,
+    uint32_t gathered_joint_v_addr,
     const LocalVGenerator& local_v_generator,
     const GatheredVGenerator& gathered_v_generator,
+    const LocalJointTileLogical& local_joint_tile_logical,
     const JointInputTileLogical& joint_input_tile_logical,
     const FetchV& fetch_v) {
     if constexpr (has_joint_k) {
@@ -110,9 +153,29 @@ inline void fetch_v_from_source(
             constexpr auto joint_q_args = TensorAccessorArgs<joint_tensor_args_offset>();
             constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
             constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
-            const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
-            const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
-            fetch_v(joint_v_generator);
+            if constexpr (has_gathered_joint_k) {
+                // Sharded-joint: read local device's slice from the local joint V tensor; all other
+                // slices come from the gathered buffer (which doesn't hold the local device's data).
+                if (joint_chunk_is_local) {
+                    const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
+                    const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, local_joint_tile_logical);
+                    fetch_v(joint_v_generator);
+                } else {
+                    constexpr auto gathered_joint_k_args =
+                        TensorAccessorArgs<joint_v_args.next_compile_time_args_offset()>();
+                    constexpr auto gathered_joint_v_args =
+                        TensorAccessorArgs<gathered_joint_k_args.next_compile_time_args_offset()>();
+                    const auto gathered_joint_v_reader = TensorAccessor(gathered_joint_v_args, gathered_joint_v_addr);
+                    const auto gathered_joint_v_generator =
+                        PaddedAddrGenerator(gathered_joint_v_reader, joint_input_tile_logical);
+                    fetch_v(gathered_joint_v_generator);
+                }
+            } else {
+                // Replicated-joint path: read joint V from the local (full L) joint tensor.
+                const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
+                const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
+                fetch_v(joint_v_generator);
+            }
         } else if (ring_iter == 0) {
             fetch_v(local_v_generator);
         } else {
@@ -205,21 +268,62 @@ void kernel_main() {
     // reader never materializes V. Shared with the program factory and compute kernel.
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
     constexpr uint32_t q_heads_per_v = NH / NHV;
+    // Slots 34-36: sharded-joint scalars appended by the factory after upstream's metadata flags
+    // (slots 32/33, declared below next to the accessor offsets they shift).
+    // Lt_local: per-device joint-Q tile count (Lt/ring_size on sharded path, Lt on replicated).
+    constexpr uint32_t Lt_local = get_compile_time_arg_val(34);
+    constexpr bool joint_is_sharded = get_compile_time_arg_val(35) == 1;
+    // Slot 36: true (unpadded) joint length in tiles (twins spatial logical_nt). Joint K chunks whose
+    // global start tile is at/after logical_lt are pure padding and are skipped.
+    constexpr uint32_t logical_lt = get_compile_time_arg_val(36);
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
     constexpr bool has_joint_inputs = has_joint_q || has_joint_k;
+    // Sharded joint requires the gathered joint K/V buffers (only meaningful when joint K is present).
+    constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
-    constexpr auto q_args = TensorAccessorArgs<32>();
+    // Slot 32: trace-safe slot select. When set, kv_cache_batch_idx is read from the slot_id tensor[0]
+    // on-device (common runtime arg 0 = slot_id DRAM addr) instead of the per-core runtime arg, so a
+    // captured trace replays across cache slots.
+    constexpr bool slot_from_metadata = get_compile_time_arg_val(32) == 1;
+    // Slot 33: trace-safe KV-pad derivation. When set, the reader reads kv_actual_isl from the
+    // kv_actual_isl tensor[0] (common runtime arg 3 = its DRAM addr), derives logical_nt / q-mapping /
+    // ring masks on-device, and hands the compute-needed values to the compute kernel via
+    // cb_kv_pad_derived (compute cannot NoC-read the DRAM tensor).
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(33) == 1;
+    // Slots 34-36 are the sharded-joint scalars (Lt_local, joint_is_sharded, logical_lt) declared
+    // above, so the tensor accessors start at compile-arg slot 37.
+    constexpr auto q_args = TensorAccessorArgs<37>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto gathered_v_args = TensorAccessorArgs<gathered_k_args.next_compile_time_args_offset()>();
     constexpr uint32_t joint_tensor_args_offset = gathered_v_args.next_compile_time_args_offset();
     constexpr uint32_t post_tensor_args_offset =
-        get_post_tensor_args_offset<has_joint_inputs, joint_tensor_args_offset>();
+        get_post_tensor_args_offset<has_joint_inputs, has_gathered_joint_k, joint_tensor_args_offset>();
+    // The metadata accessor (metadata path only) follows the tensor accessors and precedes the chain
+    // semaphore compile args. Gate its offset on slot_from_metadata: when absent, fall back to a VALID
+    // (unused) accessor offset (q_args' slot 37) so TensorAccessorArgs<> -- instantiated unconditionally
+    // here -- never names a non-accessor compile arg (which would fail its internal static_assert).
+    // The chain/CB compile args then start after the metadata accessor when present.
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 37;
+    constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();  // slot_id accessor
+    // kv_actual_isl gets its OWN accessor (a separately-allocated single-page DRAM tensor can land in a
+    // different DRAM bank than slot_id, so the slot accessor's dspec reads the wrong bank for it -- the kv
+    // read silently returned 0). Appended right after slot's when kv_pad_from_metadata; otherwise fall back
+    // to a VALID accessor offset so the unconditional TensorAccessorArgs<> never names a non-accessor arg.
+    constexpr uint32_t kv_meta_args_offset =
+        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
+    constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
+    // Split to avoid a nested conditional operator: first resolve the base when kv_pad is absent, then
+    // override it when kv_pad_from_metadata appends kv_actual_isl's accessor after slot's.
+    constexpr uint32_t chains_base_no_kv_pad =
+        slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
+    constexpr uint32_t chains_base_offset =
+        kv_pad_from_metadata ? kv_meta_args.next_compile_time_args_offset() : chains_base_no_kv_pad;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -235,9 +339,19 @@ void kernel_main() {
         joint_k_addr = get_arg_val<uint32_t>(argidx++);
         joint_v_addr = get_arg_val<uint32_t>(argidx++);
     }
+    // Gathered joint K/V buffer addresses (sharded path only) — pushed by the factory right after the
+    // local joint addresses, so they must be read here before global_q_start to keep argidx aligned.
+    uint32_t gathered_joint_k_addr = 0;
+    uint32_t gathered_joint_v_addr = 0;
+    if constexpr (has_gathered_joint_k) {
+        gathered_joint_k_addr = get_arg_val<uint32_t>(argidx++);
+        gathered_joint_v_addr = get_arg_val<uint32_t>(argidx++);
+    }
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
+    // Trace-safe slot select: kv_cache_batch_idx is read from metadata[0] on-device below (after the CB
+    // ids are known); the per-core arg here is a placeholder 0 on the metadata path.
+    uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)
@@ -257,8 +371,9 @@ void kernel_main() {
         gqa_max_q_per_core = get_arg_val<uint32_t>(argidx++);
     }
 
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    // Mutable: on the kv_pad_from_metadata path these are recomputed on-device below from metadata[1].
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
@@ -272,17 +387,16 @@ void kernel_main() {
     constexpr uint32_t chain_compile_arg_count = ring_joint::kChainCompileArgCount;
 
     uint32_t head_sender_semaphore_id =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_sender_semaphore_arg_offset);
+        get_compile_time_arg_val(chains_base_offset + chain_sender_semaphore_arg_offset);
     uint32_t head_receiver_semaphore_id =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_receiver_semaphore_arg_offset);
-    uint32_t head_valid_semaphore_id =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_valid_semaphore_arg_offset);
+        get_compile_time_arg_val(chains_base_offset + chain_receiver_semaphore_arg_offset);
+    uint32_t head_valid_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_valid_semaphore_arg_offset);
     constexpr bool head_mcast_enabled =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_mcast_enabled_arg_offset) == 1;
+        get_compile_time_arg_val(chains_base_offset + chain_mcast_enabled_arg_offset) == 1;
     constexpr uint32_t head_chain_arg_count = chain_compile_arg_count;
     constexpr uint32_t batch_chain_arg_count = k_uses_batch_chain ? chain_compile_arg_count : 0;
     constexpr uint32_t gqa_chain_arg_count = gqa_grouped_kv ? chain_compile_arg_count : 0;
-    constexpr uint32_t batch_chain_ct_offset = post_tensor_args_offset + head_chain_arg_count;
+    constexpr uint32_t batch_chain_ct_offset = chains_base_offset + head_chain_arg_count;
     constexpr uint32_t gqa_chain_ct_offset = batch_chain_ct_offset + batch_chain_arg_count;
 
     // Batch chain semaphores (only present for non-GQA shared-K modes).
@@ -322,10 +436,103 @@ void kernel_main() {
     }
 
     constexpr uint32_t cb_arg_offset =
-        post_tensor_args_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
+        chains_base_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+
+    // Trace-safe slot select: read the cache slot from the slot_id tensor[0] on-device (the per-core
+    // kv_cache_batch_idx above is a placeholder 0 on the metadata path and would be frozen by a captured
+    // trace). The slot_id DRAM address is common runtime arg 0 and the kv_actual_isl DRAM address is
+    // common runtime arg 3; the shared accessor (meta_args) sits between the tensor accessors and the
+    // chain semaphores.
+    if constexpr (slot_from_metadata || kv_pad_from_metadata) {
+        // Two 1-element uint32 DRAM tensors: slot_id (common arg 0, was metadata[0]) and kv_actual_isl
+        // (common arg 3, was metadata[1]). They share one layout, so ONE accessor (meta_args) reads each
+        // tensor's page 0 (4B). Read into cb_q_in's L1 as scratch -- it is allocated but not yet filled
+        // here, and the main loop overwrites it before first use. (A NoC read into a kernel stack buffer
+        // hangs; the destination must be a real L1 CB address.)
+        Noc meta_noc;
+        CircularBuffer cb_q_scratch(cb_q_in);
+        const uint32_t meta_l1 = cb_q_scratch.get_write_ptr();
+        // slot_id and kv_actual_isl both read into the SAME CB base offset (0), sequentially: slot is read,
+        // barrier'd, and FULLY consumed into kv_cache_batch_idx before the kv read reuses the slot. These
+        // small DRAM reads only land correctly at the CB page base (offset 0) on this platform -- a read
+        // into ANY nonzero offset (+16, +32) of the same CB silently lands zero (verified: kv_actual_isl at
+        // +32 deterministically returned 0, breaking the rotation q-mapping; +0 fixes it). Mirrors the
+        // proven all-gather reader, which also reads both scalars into offset 0.
+        constexpr uint32_t kSlotDstOffset = 0;
+        constexpr uint32_t kKvDstOffset = 0;
+        if constexpr (slot_from_metadata) {
+            const uint32_t slot_id_addr = get_common_arg_val<uint32_t>(0);
+            // read_metadata_scalar_u32 is the shared read protocol: async_read page 0 -> barrier ->
+            // invalidate_l1_cache -> volatile load. The invalidate is load-bearing -- the metadata tensor is
+            // at a FIXED DRAM address reused every chunk, so the RISC data cache may still hold the prior
+            // chunk's value for this L1 line (the barrier orders the DMA; a volatile load still reads cache),
+            // and an intermittently stale slot read corrupts the gather.
+            const uint32_t slot_id =
+                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, meta_l1 + kSlotDstOffset);
+            // The KV-cache batch dim is (user, layer)-major:
+            //   cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx
+            // (matches update_padded_kv_cache's writer: batch_idx = slot_idx * num_layers + layer_idx).
+            // slot_id holds only the cache user id; the per-layer factor comes from common runtime args
+            // 1/2. Defaults (num_layers=1, layer_idx=0) reduce this to slot_id, keeping single-layer
+            // callers bit-identical to the original slot_id behavior.
+            const uint32_t kv_cache_num_layers = get_common_arg_val<uint32_t>(1);
+            const uint32_t kv_cache_layer_idx = get_common_arg_val<uint32_t>(2);
+            kv_cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
+        }
+        if constexpr (kv_pad_from_metadata) {
+            // kv_actual_isl tensor (common arg 3) holds actual_start = kv_actual_isl (tile-aligned).
+            // Derive the per-chunk values the host would otherwise have computed from the kv_actual_isl
+            // scalar, and hand the compute-needed subset to the compute kernel via cb_kv_pad_derived
+            // (compute can't NoC-read DRAM). chunk_size_t == q_chunk_group_tile_count (ring_size *
+            // q_local_padded_Nt).
+            const uint32_t kv_actual_isl_addr = get_common_arg_val<uint32_t>(3);
+            // Its OWN accessor (kv_meta_args): slot_id and kv_actual_isl are separately allocated and can
+            // land in different DRAM banks, and a shared accessor's dspec bakes page 0's bank from one of
+            // them -- sharing silently returned the wrong bank's data.
+            const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+                meta_noc, kv_meta_args, kv_actual_isl_addr, meta_l1 + kKvDstOffset);
+            const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
+            const uint32_t chunk_global = chunk_size_t * 32;
+            logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_global, 32);
+            const auto qmap = ring_joint::build_kv_pad_q_mapping_device(
+                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, fused_op_receiver.seq.ring_index);
+            const auto masks = ring_joint::build_ring_work_masks_device(
+                fused_op_receiver.seq.ring_index,
+                ring_size,
+                fused_op_receiver.seq.expected[0],  // backward_writes_expected
+                fused_op_receiver.seq.expected[1],  // forward_writes_expected
+                num_local_k_chunks,
+                Sk_chunk_t,
+                kv_local_padded_Nt,
+                chunked_enabled,
+                chunk_size_t,
+                q_local_padded_Nt,
+                logical_nt,
+                num_joint_k_chunks,
+                L,
+                kv_pad_rotation_enabled,
+                is_causal != 0,
+                is_balanced != 0);
+            active_ring_iter_mask = masks.active_ring_iter_mask;
+
+            // Hand [logical_nt, q_pre_wrap_start, q_pre_wrap_count, q_post_wrap_start, q_valid_count,
+            // active_ring_iter_mask] to compute via cb_kv_pad_derived (cb_arg_offset + 3).
+            constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 3);
+            CircularBuffer cb_derived(cb_kv_pad_derived);
+            cb_derived.reserve_back(1);
+            CoreLocalMem<volatile uint32_t> d(cb_derived.get_write_ptr());
+            d[0] = logical_nt;
+            d[1] = qmap.q_pre_wrap_start_tile;
+            d[2] = qmap.q_pre_wrap_tile_count;
+            d[3] = qmap.q_post_wrap_start_tile;
+            d[4] = qmap.q_valid_tile_count;
+            d[5] = active_ring_iter_mask;
+            cb_derived.push_back(1);
+        }
+    }
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -446,7 +653,12 @@ void kernel_main() {
     const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
     const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, DHt);
     const auto gathered_k_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHK, padded_Nt, DHt);
+    // Joint K/V addressing: full gathered length (Lt rows). Used for the gathered joint buffer on the
+    // sharded path and for the local full-L joint tensor on the replicated path.
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
+    // Joint Q addressing: per-device shard (Lt_local rows). Equals Lt on the replicated path
+    // (Lt_local == Lt when joint is not sharded), so this is bit-identical there.
+    const auto joint_q_input_tile_logical = TensorTileShape(B, NH, Lt_local, DHt);
 
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
@@ -480,9 +692,13 @@ void kernel_main() {
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
-        // Iterate over KV blocks gathered on ring.
-        // Only the last ring ID will append joint_K, joint_V to K, V.
-        const bool do_joint_kv = ring_id == ring_size - 1;
+        // Sharded joint: the fused all-gather delivers one remote L/P shard per ring iteration (local
+        // slice is read from the local joint tensor, same as spatial). Each shard is available right
+        // after its ring_id sync, so we process joint K/V on EVERY ring iteration — no need to batch
+        // at the end.
+        // Replicated joint: Already present full joint K/V is processd after all spatial K/V is consumed.
+        const bool do_joint_kv =
+            has_gathered_joint_k ? true : is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
         uint32_t num_kv_chunks = num_local_k_chunks;
         if constexpr (has_joint_k) {
             if (do_joint_kv) {
@@ -581,13 +797,22 @@ void kernel_main() {
                 if (is_joint_q) {
                     const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
                     q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
-                    q_end_seq_tile = Lt;
+                    // Lt_local: per-device joint-Q shard tile count (== Lt on the replicated path).
+                    // joint_q is a local tensor starting at row 0; the mesh tensor tracks which global
+                    // prompt slice this device owns, so no ring_id offset is added here.
+                    q_end_seq_tile = Lt_local;
                 }
             }
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
+
+            // Q must be pushed on the first K chunk actually PROCESSED for this Q chunk — not a
+            // hardcoded k_chunk == 0. When spatial k_chunk 0 is beyond logical_n it is skipped, so
+            // anchoring Q to k_chunk == 0 would never push Q while compute still waits on it
+            // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
+            bool q_read_done_this_qiter = false;
 
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
@@ -604,8 +829,22 @@ void kernel_main() {
                                               chunk_size_t,
                                               q_local_padded_Nt>(ring_id, k_chunk * Sk_chunk_t, logical_nt);
 
-                if (kv_chunk_is_beyond_logical_n) {
-                    // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
+                // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile
+                // range starts at ring_id * Lt_local. A joint K chunk whose global start tile is
+                // at/after logical_lt lies entirely in the padded joint tail — skip it, exactly like
+                // the spatial per-chunk logical_n skip above. Compute mirrors this skip, so the
+                // K/V CB producer/consumer counts stay in lockstep (no deadlock).
+                bool kv_chunk_is_beyond_logical_l = false;
+                if constexpr (has_gathered_joint_k) {
+                    if (kv_chunk_is_joint) {
+                        const uint32_t joint_global_start_tile =
+                            ring_id * Lt_local + (k_chunk - num_local_k_chunks) * Sk_chunk_t;
+                        kv_chunk_is_beyond_logical_l = (joint_global_start_tile >= logical_lt);
+                    }
+                }
+
+                if (kv_chunk_is_beyond_logical_n || kv_chunk_is_beyond_logical_l) {
+                    // KV chunk on spatial input beyond logical N, or joint chunk beyond logical L. Skip it.
                     continue;
                 }
 
@@ -627,11 +866,32 @@ void kernel_main() {
                 }
                 if constexpr (has_joint_k) {
                     if (kv_chunk_is_joint) {
-                        const uint32_t joint_k_row_start_tile = (k_chunk - num_local_k_chunks) * Sk_chunk_t;
-                        k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                        end_seq_tile = Lt;
+                        const uint32_t joint_chunk_offset = (k_chunk - num_local_k_chunks) * Sk_chunk_t;
+                        if constexpr (has_gathered_joint_k) {
+                            // Sharded: each ring iteration processes the shard belonging to ring_id.
+                            // The fused AG does NOT write the local device's slice into the gathered
+                            // buffer — read from local tensor (local frame) when ring_id == ring_index,
+                            // from gathered buffer (global frame) for all other devices' slices.
+                            if (ring_id == ring_index) {
+                                // Local slice: k_slice in local tensor frame (rows 0..Lt_local).
+                                k_slice = Slice(nb, nk, joint_chunk_offset, joint_chunk_offset + Sk_chunk_t, 0, DHt);
+                                end_seq_tile = Lt_local;
+                            } else {
+                                // Remote slice: k_slice in gathered buffer frame.
+                                const uint32_t joint_k_row_start_tile = ring_id * Lt_local + joint_chunk_offset;
+                                k_slice =
+                                    Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                                end_seq_tile = ring_id * Lt_local + Lt_local;
+                            }
+                        } else {
+                            // Replicated: read starting at tile 0 of the local full-L joint tensor.
+                            k_slice = Slice(nb, nk, joint_chunk_offset, joint_chunk_offset + Sk_chunk_t, 0, DHt);
+                            end_seq_tile = Lt;
+                        }
                     }
                 }
+                const bool joint_chunk_is_local =
+                    has_gathered_joint_k ? (kv_chunk_is_joint && ring_id == ring_index) : false;
 
                 // K: either read locally (injector or not participant) or receive from chain
                 const uint32_t k_chain_head = [&]() {
@@ -666,12 +926,15 @@ void kernel_main() {
                             k_tile_bytes,
                             true /*transpose*/);
                     };
-                    fetch_k_from_source<has_joint_k, joint_tensor_args_offset>(
+                    fetch_k_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
                         kv_chunk_is_joint,
+                        joint_chunk_is_local,
                         ring_iter,
                         joint_k_addr,
+                        gathered_joint_k_addr,
                         local_k_generator,
                         gathered_k_generator,
+                        joint_q_input_tile_logical,
                         joint_input_tile_logical,
                         fetch_k);
                 }
@@ -708,7 +971,7 @@ void kernel_main() {
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (k_chunk == 0 && need_q_read) {
+                if (need_q_read && !q_read_done_this_qiter) {
                     const auto read_q = [&](const auto& q_gen) {
                         if constexpr (use_q_subblock_push) {
                             for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
@@ -736,8 +999,9 @@ void kernel_main() {
                         }
                     };
                     read_q_from_source<has_joint_q, joint_tensor_args_offset>(
-                        is_joint_q, joint_q_addr, q_generator, joint_input_tile_logical, read_q);
+                        is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
                     q_pushed = true;
+                    q_read_done_this_qiter = true;
                 }
 
                 // In-place latent-V (kt_inplace_v) materializes nothing: compute reads V straight
@@ -795,12 +1059,15 @@ void kernel_main() {
                                 v_tile_bytes,
                                 false /*transpose*/);
                         };
-                        fetch_v_from_source<has_joint_k, joint_tensor_args_offset>(
+                        fetch_v_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
                             kv_chunk_is_joint,
+                            joint_chunk_is_local,
                             ring_iter,
                             joint_v_addr,
+                            gathered_joint_v_addr,
                             v_generators.local,
                             v_generators.gathered,
+                            joint_q_input_tile_logical,
                             joint_input_tile_logical,
                             fetch_v);
                     }

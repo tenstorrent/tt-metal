@@ -225,13 +225,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     // Device compatibility checks
     TT_FATAL(
-        a.storage_type() == tt::tt_metal::StorageType::DEVICE && b.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        a.storage_type() == ttnn::StorageType::DEVICE && b.storage_type() == ttnn::StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
     TT_FATAL(
         a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
-        TT_FATAL(bias.value().storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias should be on device");
+        TT_FATAL(bias.value().storage_type() == ttnn::StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
     }
 
@@ -621,7 +621,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     // self-loops the borrowed ACT_SHARDED (input address source) and READER_INDICES.
     m2::DataMovementHardwareConfig act_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        act_hw = m2::DataMovementGen2Config{};
+        // QSR: this width-sharded activation reader fills the ACT_ROW_MAJOR/ACT DFB via per-window "stick"
+        // sub-tile NOC reads; that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
+        // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
+        act_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
     }
@@ -723,7 +726,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     m2::DataMovementHardwareConfig weights_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        weights_hw = m2::DataMovementGen2Config{};
+        // This weights reader does explicit reserve_back/push_back on WEIGHTS/BIAS. Full-tile page reads avoid
+        // the sub-tile *stall* the act reader hits, but they do NOT avoid the Quasar *counter double-count*: the
+        // implicit-sync ISR bumps the same 16-bit tile counter as the explicit push -> overflow ->
+        // TILE_COUNTERS fault on the compute unpack consuming WEIGHTS. Opt out so explicit credits are
+        // authoritative.
+        weights_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         weights_hw =
             m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};

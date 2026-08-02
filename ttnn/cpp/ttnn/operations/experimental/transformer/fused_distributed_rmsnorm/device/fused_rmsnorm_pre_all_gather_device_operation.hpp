@@ -24,7 +24,7 @@ struct FusedRMSNormPreAllGatherProgramFactory {
 struct FusedRMSNormPreAllGatherDeviceOperation {
     using operation_attributes_t = FusedRmsnormPreAllGatherParams;
     using tensor_args_t = FusedRmsnormPreAllGatherInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<FusedRMSNormPreAllGatherProgramFactory>;
 
@@ -39,5 +39,8 @@ struct FusedRMSNormPreAllGatherDeviceOperation {
 
 namespace ttnn::prim {
 Tensor fused_rmsnorm_pre_all_gather(
-    const Tensor& input_tensor, tt::tt_metal::DataType dtype, const DeviceComputeKernelConfig& compute_kernel_config);
+    const Tensor& input_tensor,
+    tt::tt_metal::DataType dtype,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    uint32_t num_heads = 1);
 }  // namespace ttnn::prim

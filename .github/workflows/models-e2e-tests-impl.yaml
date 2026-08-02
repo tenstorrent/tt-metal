@@ -35,7 +35,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
@@ -155,7 +155,7 @@ jobs:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
             mkdir -p generated/test_reports
-            # Perf/accuracy are enforced by the "Validate perf and accuracy targets"
+            # Perf/accuracy are enforced by the "Report and Validate Perf and Accuracy targets"
             # step below; the in-test checks are warning-only, so the tests write
             # complete benchmark JSON before validation runs.
             ${{ matrix.test-group.cmd }}
@@ -180,7 +180,7 @@ jobs:
           path: /work
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-      - name: Validate perf and accuracy targets
+      - name: Report and Validate Perf and Accuracy targets
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         shell: bash
         run: |

@@ -25,13 +25,14 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 
 #include "dfb_test_common.hpp"
 #include "device_fixture.hpp"
+#include "llrt/rtoptions.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/driver_atomics.hpp"
 
@@ -46,6 +47,9 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
     IDevice* device = mesh_device->get_devices()[0];
     if (device->arch() == ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar read_tile_value / get_tile_address on DFB is under debug; run on WH/BH";
+    }
+    if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        GTEST_SKIP() << "Skipping DataflowBufferReadTileValue for tt-sim until GH#50135 is resolved";
     }
 
     constexpr uint32_t num_producers = 1;
@@ -92,7 +96,7 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
     const uint32_t words_per_entry = entry_size / sizeof(DataT);
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,

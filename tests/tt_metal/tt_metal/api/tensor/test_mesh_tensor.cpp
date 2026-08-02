@@ -30,7 +30,7 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -43,6 +43,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/core_subset_write/tensor.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -116,7 +117,8 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
     auto topology = TensorTopology();
 
     auto buffer_address = mesh_buffer->address();
-    MeshTensor tensor = MeshTensor::from_buffer(std::move(*mesh_buffer), std::move(spec), std::move(topology));
+    MeshTensor tensor =
+        mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), std::move(spec), std::move(topology));
 
     EXPECT_EQ(tensor.address(), buffer_address);
     EXPECT_EQ(&tensor.device(), mesh_device_.get());
@@ -134,7 +136,8 @@ TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
     auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
     auto topology = TensorTopology();
 
-    MeshTensor original = MeshTensor::from_buffer(std::move(*mesh_buffer), std::move(spec), std::move(topology));
+    MeshTensor original =
+        mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), std::move(spec), std::move(topology));
     const auto* buffer_ptr = &original.mesh_buffer();
 
     MeshTensor moved(std::move(original));
@@ -154,8 +157,8 @@ TEST_F(MeshTensorDeviceTest, MoveAssignmentTransfersOwnership) {
     auto mesh_buffer1 = create_mesh_buffer(*mesh_device_, spec1);
     auto mesh_buffer2 = create_mesh_buffer(*mesh_device_, spec2);
 
-    MeshTensor tensor1 = MeshTensor::from_buffer(std::move(*mesh_buffer1), std::move(spec1), TensorTopology());
-    MeshTensor tensor2 = MeshTensor::from_buffer(std::move(*mesh_buffer2), std::move(spec2), TensorTopology());
+    MeshTensor tensor1 = MeshTensor::from_buffer(std::move(*mesh_buffer1), std::move(spec1));
+    MeshTensor tensor2 = MeshTensor::from_buffer(std::move(*mesh_buffer2), std::move(spec2));
 
     const auto* buffer1_ptr = &tensor1.mesh_buffer();
 
@@ -174,7 +177,8 @@ TEST_F(MeshTensorDeviceTest, TensorProperties) {
     auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
     auto topology = TensorTopology();
 
-    MeshTensor tensor = MeshTensor::from_buffer(std::move(*mesh_buffer), std::move(spec), std::move(topology));
+    MeshTensor tensor =
+        mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), std::move(spec), std::move(topology));
 
     EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
@@ -192,7 +196,7 @@ TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsFalse) {
     auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
 
     // A freshly constructed tensor is not valueless.
-    auto tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology());
+    auto tensor = MeshTensor::allocate_on_device(*mesh_device_, spec);
     EXPECT_FALSE(tensor.is_valueless_after_move());
 }
 
@@ -202,7 +206,7 @@ TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsTrueAfterMoveConstructio
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
     auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
 
-    auto original = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology());
+    auto original = MeshTensor::allocate_on_device(*mesh_device_, spec);
     MeshTensor moved(std::move(original));
 
     // Intentional use-after-move: verifying valueless-after-move semantics.
@@ -217,8 +221,8 @@ TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment)
     auto spec1 = TensorSpec(Shape{1, 32}, tensor_layout);
     auto spec2 = TensorSpec(Shape{2, 64}, tensor_layout);
 
-    auto source = MeshTensor::allocate_on_device(*mesh_device_, spec1, TensorTopology());
-    auto target = MeshTensor::allocate_on_device(*mesh_device_, spec2, TensorTopology());
+    auto source = MeshTensor::allocate_on_device(*mesh_device_, spec1);
+    auto target = MeshTensor::allocate_on_device(*mesh_device_, spec2);
 
     target = std::move(source);
 
@@ -248,7 +252,8 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithTooSmallBufferFails) {
 
     auto topology = TensorTopology();
 
-    EXPECT_ANY_THROW(MeshTensor::from_buffer(std::move(*mesh_buffer), std::move(spec), std::move(topology)));
+    EXPECT_ANY_THROW(
+        mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), std::move(spec), std::move(topology)));
 }
 
 // ======================================================================================
@@ -294,13 +299,13 @@ HostTensor make_full_coverage_aligned_host_tensor(
         return make_aligned_host_buffer(static_cast<size_t>(shape.volume()), shard_fills.at(idx++));
     });
     auto topology = TensorTopology::create_sharded_tensor_topology(mesh_shape);
-    return HostTensor::from_buffer(std::move(dhb), spec, topology);
+    return host_tensor_from_buffer_with_topology(std::move(dhb), spec, topology);
 }
 
 // Helper: create a HostTensor with a single shard at [0,0].
 HostTensor make_single_shard_host_tensor(const Shape& shape, uint32_t fill) {
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    return HostTensor::from_buffer(HostBuffer(std::vector<uint32_t>(shape.volume(), fill)), spec, TensorTopology{});
+    return HostTensor::from_buffer(HostBuffer(std::vector<uint32_t>(shape.volume(), fill)), spec);
 }
 
 // Helper: create a HostTensor with one shard per coordinate in a mesh.
@@ -315,7 +320,7 @@ HostTensor make_full_coverage_host_tensor(
         return HostBuffer(std::vector<uint32_t>(shape.volume(), shard_fills.at(idx++)));
     });
     auto topology = TensorTopology::create_sharded_tensor_topology(mesh_shape);
-    return HostTensor::from_buffer(std::move(dhb), spec, topology);
+    return host_tensor_from_buffer_with_topology(std::move(dhb), spec, topology);
 }
 
 // Helper: create a HostTensor with shards at only a subset of mesh coordinates.
@@ -331,7 +336,7 @@ HostTensor make_partial_coverage_host_tensor(
         return HostBuffer(std::vector<uint32_t>(shape.volume(), shard_fills.at(idx++)));
     });
     auto topology = TensorTopology::create_sharded_tensor_topology(distributed::MeshShape(coords.size()));
-    return HostTensor::from_buffer(std::move(dhb), spec, topology);
+    return host_tensor_from_buffer_with_topology(std::move(dhb), spec, topology);
 }
 
 // Helper: assert that two HostTensors have the same populated coords and identical shard contents.
@@ -418,7 +423,7 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_EmptyDistributedHostBuffer) {
     const Shape shape{1, 1, 32, 32};
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto dhb = DistributedHostBuffer::create(mesh_device_->shape());
-    auto host_tensor = HostTensor::from_buffer(std::move(dhb), spec, TensorTopology{});
+    auto host_tensor = host_tensor_from_buffer_with_topology(std::move(dhb), spec, TensorTopology{});
     EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
     EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
@@ -451,14 +456,15 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_CopyToHost_Roundtrip) {
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
+    MeshTensor device_tensor =
+        allocate_mesh_tensor_on_device_with_topology(*mesh_device_, spec, get_tensor_topology(host_tensor));
     enqueue_write_tensor(cq, host_tensor, device_tensor);
 
     auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
         result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
     }
-    auto result = HostTensor::from_buffer(std::move(result_dhb), spec, TensorTopology{});
+    auto result = host_tensor_from_buffer_with_topology(std::move(result_dhb), spec, TensorTopology{});
     enqueue_read_tensor(cq, device_tensor, result);
 
     expect_host_tensors_eq(host_tensor, result);
@@ -517,7 +523,7 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeHostWriteOverHardwarePinBudgetFall
             ttsl::Span<uint32_t>(reinterpret_cast<uint32_t*>(mapping_owner.get()), num_words),
             tt::tt_metal::MemoryPin(std::static_pointer_cast<void>(mapping_owner)));
     });
-    auto large_host_tensor = HostTensor::from_buffer(
+    auto large_host_tensor = host_tensor_from_buffer_with_topology(
         std::move(large_dhb), large_spec, TensorTopology::create_sharded_tensor_topology(mesh_device_->shape()));
 
     auto& cq = mesh_device_->mesh_command_queue();
@@ -566,7 +572,8 @@ TEST_F(MeshTensorDeviceTest, UniformCopyToDevice_ReusesPinnedMemoryCacheEntries)
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
+    MeshTensor device_tensor =
+        allocate_mesh_tensor_on_device_with_topology(*mesh_device_, spec, get_tensor_topology(host_tensor));
 
     const size_t entries_before = cache.num_entries();
     enqueue_write_tensor(cq, host_tensor, device_tensor);
@@ -664,7 +671,7 @@ TEST_F(MeshTensorDeviceTest, UniformCopyToHost_ReusesPinnedMemoryCacheEntries) {
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
         result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
     }
-    auto result = HostTensor::from_buffer(std::move(result_dhb), spec, TensorTopology{});
+    auto result = host_tensor_from_buffer_with_topology(std::move(result_dhb), spec, TensorTopology{});
 
     const size_t entries_before = cache.num_entries();
     enqueue_read_tensor(cq, device_tensor, result);
@@ -708,7 +715,8 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_WithCoreFilter_WritesOnly
     auto host_new = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {kNew, kNew, kNew, kNew});
 
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_sentinel.tensor_topology());
+    MeshTensor device_tensor =
+        allocate_mesh_tensor_on_device_with_topology(*mesh_device_, spec, get_tensor_topology(host_sentinel));
     enqueue_write_tensor(cq, host_sentinel, device_tensor);
     // Filter to logical core (0,0) -- the first shard slot of the ShardSpec grid.
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
@@ -741,7 +749,8 @@ TEST_F(MeshTensorDataMovementTest, EnqueueWriteTensor_FilterEmpty_Noop) {
     auto host_new = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {9u, 9u, 9u, 9u});
 
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_sentinel.tensor_topology());
+    MeshTensor device_tensor =
+        allocate_mesh_tensor_on_device_with_topology(*mesh_device_, spec, get_tensor_topology(host_sentinel));
     enqueue_write_tensor(cq, host_sentinel, device_tensor);
     CoreRangeSet empty_filter;
     tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(cq, host_new, device_tensor, empty_filter);
@@ -751,7 +760,7 @@ TEST_F(MeshTensorDataMovementTest, EnqueueWriteTensor_FilterEmpty_Noop) {
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
         result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
     }
-    auto result = HostTensor::from_buffer(std::move(result_dhb), spec, TensorTopology{});
+    auto result = host_tensor_from_buffer_with_topology(std::move(result_dhb), spec, TensorTopology{});
     enqueue_read_tensor(cq, device_tensor, result);
     expect_host_tensors_eq(host_sentinel, result);
 }
@@ -767,7 +776,7 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_RejectsPartialCoverage) {
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology{});
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec);
     EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, device_tensor));
 }
 
@@ -802,7 +811,7 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_CopyToHost_Roundtrip) 
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology{});
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec);
 
     auto written_coords = non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, device_tensor);
     ASSERT_EQ(written_coords.size(), coords.size());
@@ -811,7 +820,7 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_CopyToHost_Roundtrip) 
     for (const auto& coord : written_coords) {
         result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
     }
-    auto result = HostTensor::from_buffer(std::move(result_dhb), spec, TensorTopology{});
+    auto result = host_tensor_from_buffer_with_topology(std::move(result_dhb), spec, TensorTopology{});
     non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, result, written_coords);
     expect_host_tensors_eq(host_tensor, result);
 }
@@ -876,7 +885,8 @@ TEST_F(MeshTensorDataMovementTest, UniformEnqueueWriteTensor_FilteredWriteReject
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {1u, 2u, 3u, 4u});
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
+    MeshTensor device_tensor =
+        allocate_mesh_tensor_on_device_with_topology(*mesh_device_, spec, get_tensor_topology(host_tensor));
     enqueue_write_tensor(cq, host_tensor, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     EXPECT_ANY_THROW(
@@ -905,7 +915,7 @@ TEST_F(MeshTensorDeviceTest, LargeWriteRoundtrip_PinnedMemoryPath) {
         return HostBuffer(std::move(data));
     });
     auto topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape());
-    auto host_tensor = HostTensor::from_buffer(std::move(dhb), spec, topology);
+    auto host_tensor = host_tensor_from_buffer_with_topology(std::move(dhb), spec, topology);
 
     auto& cq = mesh_device_->mesh_command_queue();
     MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
@@ -944,7 +954,7 @@ TEST_F(MeshTensorDeviceTest, LargeWriteRoundtrip_HeightShardedDeviceRequiringSha
         return HostBuffer(std::move(data));
     });
     auto topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape());
-    auto host_tensor = HostTensor::from_buffer(
+    auto host_tensor = host_tensor_from_buffer_with_topology(
         std::move(dhb), TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{})), topology);
 
     const size_t entries_before = cache.num_entries();

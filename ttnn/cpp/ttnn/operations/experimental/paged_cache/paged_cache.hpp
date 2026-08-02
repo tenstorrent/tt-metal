@@ -45,6 +45,7 @@ ttnn::Tensor paged_fill_cache(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override = std::nullopt,
-    std::optional<uint32_t> cache_position_modulo = std::nullopt);
+    std::optional<uint32_t> cache_position_modulo = std::nullopt,
+    const std::optional<const Tensor>& valid_seq_len_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental

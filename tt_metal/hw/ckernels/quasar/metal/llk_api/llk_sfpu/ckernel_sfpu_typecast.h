@@ -53,7 +53,7 @@ inline void init_typecast() {
         .srcb = {.incr = 0},
         .dest = {.incr = ckernel::math::SFP_ROWS},
     }
-        .set(ADDR_MOD_6, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_6);
 }
 
 // Load one SFPU pass worth of rows from Dest as VTYPE (vFloat for floats, vSMag/vInt for ints —

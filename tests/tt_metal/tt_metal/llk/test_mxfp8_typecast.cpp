@@ -138,7 +138,7 @@ static vector<uint32_t> run_mxfp8_typecast(
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
             experimental::ComputeGen2Config{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .enable_32_bit_dest = fp32_dest_acc_en,
             },
     };
 

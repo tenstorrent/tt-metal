@@ -461,22 +461,21 @@ bool reader_datacopy_writer(
                                   (test_config.l1_input_data_format == tt::DataFormat::Int32) ||
                                   (test_config.l1_input_data_format == tt::DataFormat::UInt32);
     experimental::ComputeHardwareConfig compute_hw_config;
-    experimental::ComputeUnpackToDestModes unpack_modes{};
+    experimental::ComputeUnpackModes unpack_modes{};
     if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
-        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     if (is_quasar) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .unpack_to_dest_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_modes,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .unpack_to_dest_mode = unpack_modes,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -552,25 +551,19 @@ bool reader_datacopy_writer(
 namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        uint32_t l1_unreserved_base = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
-        ASSERT_TRUE(
-            unit_tests::dram::direct::reader_only(devices_.at(id), 1 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
-        ASSERT_TRUE(
-            unit_tests::dram::direct::reader_only(devices_.at(id), 2 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
-        ASSERT_TRUE(
-            unit_tests::dram::direct::reader_only(devices_.at(id), 16 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
+    for (auto& device : this->devices_) {
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        ASSERT_TRUE(unit_tests::dram::direct::reader_only(device, 1 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
+        ASSERT_TRUE(unit_tests::dram::direct::reader_only(device, 2 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
+        ASSERT_TRUE(unit_tests::dram::direct::reader_only(device, 16 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
     }
 }
 TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramWriterOnly) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        uint32_t l1_unreserved_base = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
-        ASSERT_TRUE(
-            unit_tests::dram::direct::writer_only(devices_.at(id), 1 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
-        ASSERT_TRUE(
-            unit_tests::dram::direct::writer_only(devices_.at(id), 2 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
-        ASSERT_TRUE(
-            unit_tests::dram::direct::writer_only(devices_.at(id), 16 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
+    for (auto& device : this->devices_) {
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        ASSERT_TRUE(unit_tests::dram::direct::writer_only(device, 1 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
+        ASSERT_TRUE(unit_tests::dram::direct::writer_only(device, 2 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
+        ASSERT_TRUE(unit_tests::dram::direct::writer_only(device, 16 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
     }
 }
 TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderWriter) {
@@ -579,13 +572,13 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderWriter) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_data_format = tt::DataFormat::Float16_b,
         .node = experimental::NodeCoord(0, 0)};
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         test_config.num_tiles = 1;
-        ASSERT_TRUE(unit_tests::dram::direct::reader_writer(devices_.at(id), test_config));
+        ASSERT_TRUE(unit_tests::dram::direct::reader_writer(device, test_config));
         test_config.num_tiles = 4;
-        ASSERT_TRUE(unit_tests::dram::direct::reader_writer(devices_.at(id), test_config));
+        ASSERT_TRUE(unit_tests::dram::direct::reader_writer(device, test_config));
         test_config.num_tiles = 8;
-        ASSERT_TRUE(unit_tests::dram::direct::reader_writer(devices_.at(id), test_config));
+        ASSERT_TRUE(unit_tests::dram::direct::reader_writer(device, test_config));
     }
 }
 TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
@@ -595,15 +588,15 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .node = experimental::NodeCoord(0, 0)};
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        if (devices_.at(id)->arch() != ARCH::QUASAR) { // Remove when we can run back to back tests on Quasar VCS (on CI)
+    for (auto& device : this->devices_) {
+        if (device->arch() != ARCH::QUASAR) {  // Remove when we can run back to back tests on Quasar VCS (on CI)
             test_config.num_tiles = 1;
-            ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+            ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(device, test_config));
             test_config.num_tiles = 4;
-            ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+            ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(device, test_config));
         }
         test_config.num_tiles = 8;
-        ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+        ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(device, test_config));
     }
 }
 
@@ -621,8 +614,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDatacopyToDestWriter) {
                 .l1_output_data_format = data_format,
                 .node = experimental::NodeCoord(0, 0),
                 .dst_full_sync_en = dst_full_sync_en};
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+            for (auto& device : this->devices_) {
+                EXPECT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(device, test_config));
             }
         }
     }
