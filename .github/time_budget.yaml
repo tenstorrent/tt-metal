@@ -356,7 +356,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 260
     bh_galaxy: 550
-    bh_sc1: 440  # Flux multihost tests (20) + 4 LTX-2.3 legs @100 (Pro/Fast x T2V/I2V)
+    bh_sc1: 300
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
