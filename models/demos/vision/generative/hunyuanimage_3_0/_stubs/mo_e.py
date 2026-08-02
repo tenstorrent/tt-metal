@@ -110,10 +110,11 @@ def _mm_cfg():
 
 
 def _mm_grid(device):
-    """Full CoreGrid from HUNYUAN_MM_FULLGRID=1 (else None => op default). Forces
-    matmuls that don't already pin a grid (e.g. the gate_up + attn linears) onto
-    the whole grid for max DRAM-read/compute throughput."""
-    if os.environ.get("HUNYUAN_MM_FULLGRID") != "1":
+    """Full CoreGrid by DEFAULT (HUNYUAN_MM_FULLGRID=0 disables -> op default).
+    Forces matmuls that don't already pin a grid (e.g. the gate_up + attn linears)
+    onto the whole grid for max DRAM-read/compute throughput. Measured -5.9% steady
+    ms/step (6093->5736) on the EP=32 mesh; grid-only, no math change (PCC identical)."""
+    if os.environ.get("HUNYUAN_MM_FULLGRID", "1") == "0":
         return None
     g = device.compute_with_storage_grid_size()
     return ttnn.CoreGrid(y=g.y, x=g.x)
