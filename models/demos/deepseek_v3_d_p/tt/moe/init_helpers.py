@@ -684,11 +684,11 @@ def load_captured_routing(
     returns the full Galaxy 4-row table of shape `(4, num_routed_experts)`; we slice `[0:1]` to get a
     `(1, num_routed_experts)` tensor — one row, to match LB's single-col mesh.  The slice's contents:
 
-        table[0,  0..num_routed_experts_per_col-1]   = [0,0,0,0,0,0,0,0, 1,1,...,1, ..., 7,7,7,7,7,7,7,7]   (chip ids, 8 per chip)
+        table[0,  0..num_routed_experts_per_col-1]   = [0,0,0,0,0,0,0,0, 1,1,...,1, ..., 7,7,7,7,7,7,7,7]   (chip ids 0..7, experts_per_chip = num_routed_experts/32 per chip)
         table[0, num_routed_experts_per_col..num_routed_experts-1]  = -1                                                    (kernel reads -1 → skip)
         table[0, num_routed_experts-1]      = -1                                                    (== sentinel target)
 
-    The chip-assignment function `chip_id = local_id // 8` is identical across every
+    The chip-assignment function `chip_id = local_id // experts_per_chip` is identical across every
     Galaxy column's row, so using row 0 against remapped (in-col-shifted) indices
     routes each expert to the same chip Galaxy would have:
 
@@ -702,9 +702,10 @@ def load_captured_routing(
     Worked example: captured column k = 2
     -------------------------------------
     Symbols: E = experts_per_col = num_routed_experts // 4; G = dispatch_group_size = 8
-    (chips per column, so G experts per chip); sentinel = num_routed_experts - 1. Column k
-    owns global IDs [k*E, (k+1)*E); the remap shifts an in-col pick v to v - k*E and sends
-    everything else to the sentinel. Its chip is then (v - k*E) // G.
+    (chips per column); experts_per_chip = E // G (8 for dsv3, 12 for kimi26);
+    sentinel = num_routed_experts - 1. Column k owns global IDs [k*E, (k+1)*E); the remap
+    shifts an in-col pick v to v - k*E and sends everything else to the sentinel. Its chip
+    is then (v - k*E) // experts_per_chip.
 
     dsv3 (num_routed_experts=256 → E=64, sentinel=255), one token's 8 picks::
 
@@ -713,9 +714,9 @@ def load_captured_routing(
         remap :  [ 10,  19, 255, 255,  22, 255, 255,  26]    (out-of-col → sentinel 255)
         route :  [ch1, ch2, skip, skip, ch2, skip, skip, ch3]   (chip_id = remap_value // 8)
 
-    kimi26 (num_routed_experts=384 → E=96, sentinel=383) is the same mechanic with a wider
-    column: col 2 range = [192, 288); in-col pick 200 → 200-192 = 8 → chip 1; out-of-col
-    pick 138 → sentinel 383 → skip.
+    kimi26 (num_routed_experts=384 → E=96, experts_per_chip=12, sentinel=383) is the same
+    mechanic with a wider column: col 2 range = [192, 288); in-col pick 200 → 200-192 = 8
+    → 8 // 12 = chip 0; out-of-col pick 138 → sentinel 383 → skip.
 
     Verification — Galaxy would have routed the dsv3 picks the same way via its own col-2 row::
 
@@ -728,7 +729,7 @@ def load_captured_routing(
     ---------------------------------------------
         layer:                  int, MoE layer index (e.g. 27)
         col:                    int, Galaxy column [0, 4) to simulate
-        model:                  str, model name ("dsv3", "kimi26"); selects the per-model
+        model:                  str, model name ("dsv3", "kimi26", "glm52"); selects the per-model
                                 capture file when captured_indices_path is unset
         captured_indices_path:  path to the capture safetensors; if falsy, falls back to
                                 CODE_DEBUG_5K_CHUNKED / "expert_routing_MODELNAME.safetensors"
@@ -793,7 +794,7 @@ def load_captured_routing(
     # In-col routings get shifted to [0, experts_per_col); out-of-col routings get the
     # sentinel num_routed_experts-1 — the last dispatch-table column, which is always -1 in
     # col 0's table (it is above experts_per_col) → kernel skips, preserving the per-col
-    # routing share 1:1 with Galaxy col k. It is model-dependent (dsv3=255, kimi26=383).
+    # routing share 1:1 with Galaxy col k. It is model-dependent.
     experts_per_col = num_routed_experts // GALAXY_NUM_DISPATCH_GROUPS
     SENTINEL = num_routed_experts - 1
     in_col_mask = (indices >= col * experts_per_col) & (indices < (col + 1) * experts_per_col)

@@ -3,17 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Device performance tests for DeepSeek/Kimi MoE dispatch and combine operations.
+Device performance tests for DeepSeekv3/KimiK2.6/GLM5.2 MoE dispatch and combine operations.
 
-Runs test_prefill_dispatch_combine.py::test_ttnn_dispatch_combine[perf_real_indices]
-on an LB 8x1 mesh. It replays the hottest (layer, col) pairs from a real prefill
+Runs test_prefill_dispatch_combine.py::test_ttnn_dispatch_combine[perf_captured_<model>_chunk]
+(<model> in {dsv3, kimi26, glm52}) on an LB 8x1 mesh. It replays the hottest (layer, col) pairs from a real prefill
 capture. The operation sequence is the same as the production workflow.
 Tests that were ran in order to capture the routing data:
-
-Ran on Galaxy:
-
-  - test_ds_prefill_transformer_chunked_no_pcc[blackhole-deepseek_v3-mesh-8x4-L61-chunks_eleven-iters1]
-  - test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-preload0-chunks_eleven-iters1-margin5pct]
 
 The captures hold Galaxy-global expert IDs; the loader (`load_captured_routing`)
 shifts a column's own experts down to [0, experts_per_col) and sends the rest to
@@ -31,96 +26,88 @@ _REAL_INDICES_TOPOS = [("linear", 2), ("ring", 2)]
 # Picks come from the production 11x5120 chunked-prefill run (code_debug), for DSv3 and KimiK2.6.
 # One chunk per case: 5120 tokens over the 8-chip dispatch group => seq_len_per_chip 640.
 
-_DS_CHUNK_PICKS = [(19, 2), (29, 0), (42, 3), (24, 1)]  # 37.2 / 37.0 / 36.9 / 36.7 % in-col share
-_KIMI_CHUNK_PICKS = [(45, 2), (48, 0), (44, 1), (50, 1)]  # 38.6 / 38.1 / 37.4 / 37.1 %
-# Baselines are medians over 5 tracy runs on LB 8x1. Key is (topo, nlinks, layer, col).
-_DISPATCH_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 19, 2): 1_533_332,
-    ("linear", 2, 29, 0): 1_926_464,
-    ("linear", 2, 42, 3): 1_552_909,
-    ("linear", 2, 24, 1): 1_308_836,
-    ("ring", 2, 19, 2): 1_042_299,
-    ("ring", 2, 29, 0): 1_071_193,
-    ("ring", 2, 42, 3): 881_885,
-    ("ring", 2, 24, 1): 819_476,
-}
-_COMBINE_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 19, 2): 1_749_833,
-    ("linear", 2, 29, 0): 1_874_665,
-    ("linear", 2, 42, 3): 1_376_552,
-    ("linear", 2, 24, 1): 1_318_127,
-    ("ring", 2, 19, 2): 1_412_458,
-    ("ring", 2, 29, 0): 1_377_090,
-    ("ring", 2, 42, 3): 1_042_437,
-    ("ring", 2, 24, 1): 1_030_253,
-}
-_DISPATCH_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 45, 2): 1_443_912,
-    ("linear", 2, 48, 0): 1_962_610,
-    ("linear", 2, 44, 1): 1_494_259,
-    ("linear", 2, 50, 1): 1_461_172,
-    ("ring", 2, 45, 2): 1_017_684,
-    ("ring", 2, 48, 0): 1_012_791,
-    ("ring", 2, 44, 1): 1_374_257,
-    ("ring", 2, 50, 1): 1_038_540,
-}
-_COMBINE_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 45, 2): 1_489_780,
-    ("linear", 2, 48, 0): 1_673_044,
-    ("linear", 2, 44, 1): 1_795_140,
-    ("linear", 2, 50, 1): 1_410_634,
-    ("ring", 2, 45, 2): 1_213_800,
-    ("ring", 2, 48, 0): 1_238_818,
-    ("ring", 2, 44, 1): 1_600_527,
-    ("ring", 2, 50, 1): 1_166_319,
-}
-
-# GLM5.2 picks from its own chunked-prefill capture: 4 worst-case in-col shares + 4 nominal (25%).
+# Column send volume (in-col picks × token bytes) drives device time; ranked by
+# analyze_routing_send.py. Each model gets its 2 hottest columns + 2 at uniform.
+_DS_CHUNK_PICKS = [
+    (19, 2),  # 37.2%
+    (29, 0),  # 37.0%
+    (4, 2),  # 25.0%
+    (56, 3),  # 25.0%
+]
+_KIMI_CHUNK_PICKS = [
+    (45, 2),  # 38.6%
+    (48, 0),  # 38.1%
+    (30, 3),  # 25.0%
+    (32, 1),  # 25.0%
+]
 _GLM52_CHUNK_PICKS = [
-    (3, 0),  # 47.3% in-col share
+    (3, 0),  # 47.3%
     (8, 0),  # 38.5%
-    (6, 1),  # 37.9%
-    (59, 2),  # 37.5%
     (14, 2),  # 25.0%
     (10, 0),  # 25.0%
-    (15, 0),  # 25.0%
-    (55, 3),  # 25.0%
 ]
+# Key is (topo, nlinks, layer, col). Baselines are single tracy runs on LB 8x1
+# (run-to-run spread measured at ~0.5%, well inside the margins below).
+_DISPATCH_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 19, 2): 1_532_188,
+    ("linear", 2, 29, 0): 2_013_572,
+    ("linear", 2, 4, 2): 868_328,
+    ("linear", 2, 56, 3): 1_195_248,
+    ("ring", 2, 19, 2): 969_226,
+    ("ring", 2, 29, 0): 1_074_814,
+    ("ring", 2, 4, 2): 561_040,
+    ("ring", 2, 56, 3): 753_133,
+}
+_COMBINE_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 19, 2): 1_716_614,
+    ("linear", 2, 29, 0): 1_690_610,
+    ("linear", 2, 4, 2): 1_012_207,
+    ("linear", 2, 56, 3): 1_179_193,
+    ("ring", 2, 19, 2): 1_433_990,
+    ("ring", 2, 29, 0): 1_372_652,
+    ("ring", 2, 4, 2): 749_534,
+    ("ring", 2, 56, 3): 905_037,
+}
+_DISPATCH_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 45, 2): 1_525_048,
+    ("linear", 2, 48, 0): 2_051_422,
+    ("linear", 2, 30, 3): 984_699,
+    ("linear", 2, 32, 1): 813_274,
+    ("ring", 2, 45, 2): 1_011_584,
+    ("ring", 2, 48, 0): 995_205,
+    ("ring", 2, 30, 3): 594_741,
+    ("ring", 2, 32, 1): 623_676,
+}
+_COMBINE_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 45, 2): 1_558_296,
+    ("linear", 2, 48, 0): 1_642_857,
+    ("linear", 2, 30, 3): 1_068_094,
+    ("linear", 2, 32, 1): 1_123_141,
+    ("ring", 2, 45, 2): 1_267_431,
+    ("ring", 2, 48, 0): 1_291_803,
+    ("ring", 2, 30, 3): 870_001,
+    ("ring", 2, 32, 1): 848_981,
+}
+
 _DISPATCH_GLM52_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 3, 0): 3_215_681,
-    ("linear", 2, 8, 0): 1_397_709,
-    ("linear", 2, 6, 1): 1_358_103,
-    ("linear", 2, 59, 2): 1_415_496,
-    ("linear", 2, 14, 2): 833_831,
-    ("linear", 2, 10, 0): 798_669,
-    ("linear", 2, 15, 0): 1_134_878,
-    ("linear", 2, 55, 3): 1_083_619,
-    ("ring", 2, 3, 0): 1_996_679,
-    ("ring", 2, 8, 0): 971_199,
-    ("ring", 2, 6, 1): 858_434,
-    ("ring", 2, 59, 2): 810_205,
-    ("ring", 2, 14, 2): 537_239,
-    ("ring", 2, 10, 0): 505_346,
-    ("ring", 2, 15, 0): 614_447,
-    ("ring", 2, 55, 3): 747_346,
+    ("linear", 2, 3, 0): 3_219_833,
+    ("linear", 2, 8, 0): 1_399_270,
+    ("linear", 2, 14, 2): 838_546,
+    ("linear", 2, 10, 0): 809_860,
+    ("ring", 2, 3, 0): 2_006_807,
+    ("ring", 2, 8, 0): 977_686,
+    ("ring", 2, 14, 2): 543_524,
+    ("ring", 2, 10, 0): 512_407,
 }
 _COMBINE_GLM52_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 3, 0): 2_064_644,
-    ("linear", 2, 8, 0): 1_539_358,
-    ("linear", 2, 6, 1): 1_210_064,
-    ("linear", 2, 59, 2): 1_514_169,
-    ("linear", 2, 14, 2): 885_887,
-    ("linear", 2, 10, 0): 970_758,
-    ("linear", 2, 15, 0): 1_005_250,
-    ("linear", 2, 55, 3): 953_341,
-    ("ring", 2, 3, 0): 1_549_368,
-    ("ring", 2, 8, 0): 1_208_534,
-    ("ring", 2, 6, 1): 1_022_902,
-    ("ring", 2, 59, 2): 1_176_984,
-    ("ring", 2, 14, 2): 685_226,
-    ("ring", 2, 10, 0): 792_624,
-    ("ring", 2, 15, 0): 716_709,
-    ("ring", 2, 55, 3): 830_004,
+    ("linear", 2, 3, 0): 2_071_561,
+    ("linear", 2, 8, 0): 1_543_287,
+    ("linear", 2, 14, 2): 898_859,
+    ("linear", 2, 10, 0): 977_011,
+    ("ring", 2, 3, 0): 1_576_451,
+    ("ring", 2, 8, 0): 1_218_739,
+    ("ring", 2, 14, 2): 692_124,
+    ("ring", 2, 10, 0): 806_988,
 }
 
 # model -> (picks, dispatch baselines, combine baselines).
