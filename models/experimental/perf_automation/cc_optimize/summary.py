@@ -1012,21 +1012,7 @@ def render_summary(
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
             lines.append(f"{sig:<34} {lever:>12} {ms_s:>18} {gain_s:>16}  {res:<10} {note}")
 
-    # --- Code changes: every attempt is LISTED, only surviving source is reproduced ---
-    # This printed the full diff of every attempt, "win or fail". On gemma-3-12b-it that was 3843 of
-    # the report's 4005 lines, and most of it had been reverted the moment it measured -- source NOT
-    # in the tree, at full length, indistinguishable at a glance from what was kept, so a reader could
-    # not tell which of two contradictory versions of a function is live.
-    #
-    # The ROW stays for every attempt: the matrix, the per-attempt table and this list must agree, and
-    # omitting a tried-and-reverted lever entirely would read as "never tried" and invite the next run
-    # to re-derive it. Only the diff BODY is dropped, and the line says so.
-    def _survived(_a: dict, idx: int) -> bool:
-        # The SHARED win set, not a second opinion -- one section judging rows for itself is how a ✓
-        # appeared in one place and "no gain" in another. Ownership of a win is settled upstream now
-        # (a verdict is claimable only by the attempt whose trace replay produced it).
-        return idx in _wins
-
+    # --- Code changes: the actual source diff for EVERY attempt tried (win or fail) ---
     if any(isinstance(a, dict) and (a.get("diff") or "").strip() for a in attempts):
         lines.append("")
         lines.append("Code changes:")
@@ -1044,9 +1030,6 @@ def render_summary(
             gain = f"  {_fp - _fb:+.2f} ms" if isinstance(_fp, (int, float)) and isinstance(_fb, (int, float)) else ""
             lines.append("")
             lines.append(f"[#{i}] {sig} · {lever} · {res}{gain}")
-            if not _survived(a, i - 1):
-                lines.append("    (reverted — not in the tree; diff omitted, %d line(s))" % len(d.splitlines()))
-                continue
             for dl in d.splitlines():
                 lines.append("    " + dl)
 
