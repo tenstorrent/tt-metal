@@ -202,6 +202,9 @@ def test_a4_report_prints_the_stamped_delta_and_marks_unmeasured(monkeypatch, tm
     )
     text = _render(summary, log)
     assert "-41.77 ms" in text, "the stamped delta is not rendered"
-    assert "n/m" in text, "an attempt with no end-to-end of its own is not marked as such"
+    # An attempt with no end-to-end of its own no longer gets an "n/m" row -- it is dropped from the
+    # detail table and counted in the footer instead. What this guards is unchanged: it must not
+    # silently vanish, and it must not inherit the other row's delta.
+    assert "omitted" in text, "an attempt with no end-to-end of its own is not accounted for"
     # the -41.77 must appear ONCE, not copied onto the second row
     assert text.count("-41.77 ms") == 1, "a delta was reused on a row that measured nothing"

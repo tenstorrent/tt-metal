@@ -1020,6 +1020,7 @@ def render_summary(
         ah = f"{'op':<34} {'lever':>12} {'Eager (device_ms)':>18} {'1CQ Δ vs current':>16}  {'result':<10} why tried / why it won or failed"
         lines.append(ah)
         lines.append("-" * min(len(ah), 120))
+        _unmeasured = 0
         for _i, a in enumerate(attempts):
             if not isinstance(a, dict):
                 continue
@@ -1047,9 +1048,27 @@ def render_summary(
                 gain_s = "—"  # measured its own, but nothing to compare against
             else:
                 gain_s = "n/m"  # this attempt ran no end-to-end of its own
+            # AN UNMEASURED ATTEMPT IS NOT A ROW IN A MEASUREMENT TABLE. The delta column answers one
+            # question -- what did this attempt do to the end-to-end number -- and an attempt that ran
+            # none has no answer. "n/m" was honest, but on gemma-3-12b-it it was 97 of 105 rows, and
+            # ninety-seven of them in front of eight real deltas is not a table anyone reads. They
+            # cannot be given a number either: they predate the attempt gate, so subtracting a baseline
+            # they never measured against is how a fake win gets manufactured. Dropped here and counted
+            # below. The op x rung matrix above still marks every one of them tried, and the kernel log
+            # is untouched -- resume still reads all of them. Self-limiting: record_kernel_attempt now
+            # refuses an attempt owning no end-to-end, so this count goes to zero on its own.
+            if gain_s == "n/m":
+                _unmeasured += 1
+                continue
             res = "✓ win" if _i in _wins else ("· wedged" if a.get("wedged") else "· no gain")
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
             lines.append(f"{sig:<34} {lever:>12} {ms_s:>18} {gain_s:>16}  {res:<10} {note}")
+        if _unmeasured:
+            lines.append("")
+            lines.append(
+                "(%d earlier attempt(s) omitted: no end-to-end measurement of their own. They are "
+                "marked tried in the matrix above.)" % _unmeasured
+            )
 
     # --- Code changes: the actual source diff for EVERY attempt tried (win or fail) ---
     if any(isinstance(a, dict) and (a.get("diff") or "").strip() for a in attempts):
