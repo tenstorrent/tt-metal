@@ -751,16 +751,24 @@ def load_captured_routing(
 
     if captured_indices_path:
         path = Path(captured_indices_path)
+        # Capture file must be named expert_routing_<model>.safetensors; model comes from the
+        # test_dispatch_combine_perf parametrization.
+        expected = f"expert_routing_{model}.safetensors"
+        if path.name != expected:
+            raise ValueError(
+                f"TT_DS_USE_CAPTURED_INDICES={path} does not match model={model!r} "
+                f"(expected a file named {expected!r}). Point at the matching capture, "
+                f"or unset the env var to use the per-model default."
+            )
     else:
         # Lazy import: transformer_helpers imports from this module in places.
         from models.demos.deepseek_v3_d_p.utils.transformer_helpers import CODE_DEBUG_5K_CHUNKED
 
-        if model == "kimi26":
-            path = CODE_DEBUG_5K_CHUNKED / "expert_routing_kimi26.safetensors"
-        elif model == "glm52":
-            path = CODE_DEBUG_5K_CHUNKED / "expert_routing_glm52.safetensors"
-        else:
-            path = CODE_DEBUG_5K_CHUNKED / "expert_routing_dsv3.safetensors"
+        if model not in {"dsv3", "kimi26", "glm52"}:
+            raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm52")
+
+        # Keep naming in this convention in order for other models to be consistent.
+        path = CODE_DEBUG_5K_CHUNKED / f"expert_routing_{model}.safetensors"
     if not path.exists():
         raise FileNotFoundError(
             f"Captured indices file not found at {path} (set TT_DS_USE_CAPTURED_INDICES to override)"
