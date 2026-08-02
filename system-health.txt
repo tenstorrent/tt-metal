@@ -1,0 +1,160 @@
+Running main() from gmock_main.cc
+[==========] Running 3 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 3 tests from Cluster
+[ RUN      ] Cluster.ReportIntermeshLinks
+2026-01-20 10:03:53.214 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:369)
+2026-01-20 10:03:53.260 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-01-20 10:03:53.337 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:369)
+2026-01-20 10:03:53.487 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:369)
+2026-01-20 10:03:53.559 | info     |             UMD | Harvesting masks for chip 3 tensix: 0xa dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:338)
+2026-01-20 10:03:53.573 | info     |             UMD | Initializing iommu for sysmem (size: 0x80000000). (silicon_sysmem_manager.cpp:267)
+2026-01-20 10:03:53.573 | info     |             UMD | Allocating sysmem without hugepages (size: 0x80000000). (silicon_sysmem_manager.cpp:273)
+2026-01-20 10:03:54.211 | info     |             UMD | Harvesting masks for chip 2 tensix: 0xc0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:338)
+2026-01-20 10:03:54.225 | info     |             UMD | Initializing iommu for sysmem (size: 0x80000000). (silicon_sysmem_manager.cpp:267)
+2026-01-20 10:03:54.225 | info     |             UMD | Allocating sysmem without hugepages (size: 0x80000000). (silicon_sysmem_manager.cpp:273)
+2026-01-20 10:03:54.852 | info     |             UMD | Harvesting masks for chip 1 tensix: 0x300 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:338)
+2026-01-20 10:03:54.866 | info     |             UMD | Initializing iommu for sysmem (size: 0x80000000). (silicon_sysmem_manager.cpp:267)
+2026-01-20 10:03:54.866 | info     |             UMD | Allocating sysmem without hugepages (size: 0x80000000). (silicon_sysmem_manager.cpp:273)
+2026-01-20 10:03:55.483 | info     |             UMD | Harvesting masks for chip 0 tensix: 0x300 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:338)
+2026-01-20 10:03:55.496 | info     |             UMD | Initializing iommu for sysmem (size: 0x80000000). (silicon_sysmem_manager.cpp:267)
+2026-01-20 10:03:55.496 | info     |             UMD | Allocating sysmem without hugepages (size: 0x80000000). (silicon_sysmem_manager.cpp:273)
+2026-01-20 10:03:56.090 | info     |             UMD | Harvesting masks for chip 7 tensix: 0x60 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:338)
+2026-01-20 10:03:56.103 | info     |             UMD | Harvesting masks for chip 6 tensix: 0x21 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:338)
+2026-01-20 10:03:56.117 | info     |             UMD | Harvesting masks for chip 5 tensix: 0x201 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:338)
+2026-01-20 10:03:56.130 | info     |             UMD | Harvesting masks for chip 4 tensix: 0x50 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:338)
+2026-01-20 10:03:56.144 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 0, 3, 2] and remote chip ids {4, 5, 6, 7} (cluster.cpp:185)
+2026-01-20 10:03:56.144 | info     |             UMD | IOMMU: enabled (cluster.cpp:161)
+2026-01-20 10:03:56.144 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:164)
+2026-01-20 10:03:56.149 | info     |             UMD | Starting devices in cluster (cluster.cpp:964)
+2026-01-20 10:03:56.193 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0xffffffff80000000; NOC address 0x800000000 (silicon_sysmem_manager.cpp:321)
+2026-01-20 10:03:56.240 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0xffffffff80000000; NOC address 0x800000000 (silicon_sysmem_manager.cpp:321)
+2026-01-20 10:03:56.276 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0xffffffff80000000; NOC address 0x800000000 (silicon_sysmem_manager.cpp:321)
+2026-01-20 10:03:56.338 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0xffffffff80000000; NOC address 0x800000000 (silicon_sysmem_manager.cpp:321)
+2026-01-20 10:03:56.421 | info     |            Test | Cluster does not support intermesh links (test_system_health.cpp:214)
+[       OK ] Cluster.ReportIntermeshLinks (3285 ms)
+[ RUN      ] Cluster.ReportSystemHealth
+2026-01-20 10:03:56.426 | info     |            Test | Found 8 chips in cluster:
+Chip: 7 Unique ID: 36183211b
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 3 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xc799 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 3 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x184426 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (WARP), connected to Chip 6 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x13376 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (WARP), connected to Chip 6 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x48e Uncorrected Codewords: 0x0
+
+Chip: 6 Unique ID: 361832119
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 2 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x5fc4 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 2 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2a4 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (WARP), connected to Chip 7 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x4d27 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (WARP), connected to Chip 7 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x985b Uncorrected Codewords: 0x0
+
+Chip: 5 Unique ID: 361832111
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 1 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xc8ca Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 1 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xa823 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (WARP), connected to Chip 4 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x395 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (WARP), connected to Chip 4 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x949 Uncorrected Codewords: 0x0
+
+Chip: 4 Unique ID: 36183206a
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 0 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xf706 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 0 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x36edd Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (WARP), connected to Chip 5 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x9ac Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (WARP), connected to Chip 5 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x3 Uncorrected Codewords: 0x0
+
+Chip: 3 PCIe: 2 Unique ID: 26183211b
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Chip 1 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x5fa Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Chip 1 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xecb5 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link DOWN/unconnected (QSFP)
+ eth channel 7 core (x=0,y=7) link DOWN/unconnected (QSFP)
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 7 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2081b Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 7 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xbecb3 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (WARP), connected to Chip 2 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x23e Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (WARP), connected to Chip 2 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x176f45 Uncorrected Codewords: 0x0
+
+Chip: 2 PCIe: 3 Unique ID: 261832119
+ eth channel 0 core (x=0,y=0) link DOWN/unconnected (QSFP)
+ eth channel 1 core (x=0,y=1) link DOWN/unconnected (QSFP)
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 0 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x40a0f Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 0 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2ef76e Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 6 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2a8d Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 6 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x66450 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (WARP), connected to Chip 3 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xfae4b6 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (WARP), connected to Chip 3 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2a8a Uncorrected Codewords: 0x0
+
+Chip: 1 PCIe: 0 Unique ID: 261832111
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Chip 3 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x500 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Chip 3 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x238da Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link DOWN/unconnected (QSFP)
+ eth channel 7 core (x=0,y=7) link DOWN/unconnected (QSFP)
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 5 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x11a1 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 5 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x17cb0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (WARP), connected to Chip 0 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x47e48f9 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (WARP), connected to Chip 0 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xc297 Uncorrected Codewords: 0x0
+
+Chip: 0 PCIe: 1 Unique ID: 26183206a
+ eth channel 0 core (x=0,y=0) link DOWN/unconnected (QSFP)
+ eth channel 1 core (x=0,y=1) link DOWN/unconnected (QSFP)
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 2 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xeb3d7 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 2 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x54da810 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 4 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x4e1 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 4 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2992f Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (WARP), connected to Chip 1 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x32 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (WARP), connected to Chip 1 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xe529e Uncorrected Codewords: 0x0
+
+ (test_system_health.cpp:354)
+2026-01-20 10:03:56.426 | warning  |            Test | Chip: 3 PCIe: 2 Unique ID: 26183211b eth channel 6 core (x=0,y=6) link DOWN/unconnected (QSFP) (test_system_health.cpp:358)
+2026-01-20 10:03:56.426 | warning  |            Test | Chip: 3 PCIe: 2 Unique ID: 26183211b eth channel 7 core (x=0,y=7) link DOWN/unconnected (QSFP) (test_system_health.cpp:358)
+2026-01-20 10:03:56.426 | warning  |            Test | Chip: 2 PCIe: 3 Unique ID: 261832119 eth channel 0 core (x=0,y=0) link DOWN/unconnected (QSFP) (test_system_health.cpp:358)
+2026-01-20 10:03:56.426 | warning  |            Test | Chip: 2 PCIe: 3 Unique ID: 261832119 eth channel 1 core (x=0,y=1) link DOWN/unconnected (QSFP) (test_system_health.cpp:358)
+2026-01-20 10:03:56.426 | warning  |            Test | Chip: 1 PCIe: 0 Unique ID: 261832111 eth channel 6 core (x=0,y=6) link DOWN/unconnected (QSFP) (test_system_health.cpp:358)
+2026-01-20 10:03:56.426 | warning  |            Test | Chip: 1 PCIe: 0 Unique ID: 261832111 eth channel 7 core (x=0,y=7) link DOWN/unconnected (QSFP) (test_system_health.cpp:358)
+2026-01-20 10:03:56.426 | warning  |            Test | Chip: 0 PCIe: 1 Unique ID: 26183206a eth channel 0 core (x=0,y=0) link DOWN/unconnected (QSFP) (test_system_health.cpp:358)
+2026-01-20 10:03:56.426 | warning  |            Test | Chip: 0 PCIe: 1 Unique ID: 26183206a eth channel 1 core (x=0,y=1) link DOWN/unconnected (QSFP) (test_system_health.cpp:358)
+[       OK ] Cluster.ReportSystemHealth (5 ms)
+[ RUN      ] Cluster.TestMeshFullConnectivity
+[       OK ] Cluster.TestMeshFullConnectivity (0 ms)
+[----------] 3 tests from Cluster (3290 ms total)
+
+[----------] Global test environment tear-down
+[==========] 3 tests from 1 test suite ran. (3290 ms total)
+[  PASSED  ] 3 tests.
+2026-01-20 10:03:56.426 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:472)
+2026-01-20 10:03:56.426 | info     |             UMD | Closing devices in cluster (cluster.cpp:975)
