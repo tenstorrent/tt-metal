@@ -25,12 +25,16 @@ GENERATED_KERNEL="$($ST --log-dir "$LOG_DIR" get GENERATED_KERNEL)"
 REFERENCE_ARCH="$($ST   --log-dir "$LOG_DIR" get REF_ARCH)"
 REFERENCE_PATH="$($ST   --log-dir "$LOG_DIR" get KERNEL_PATH)"
 SKIP_WRITER="$($ST      --log-dir "$LOG_DIR" get SKIP_WRITER)"
+QSR_SIM_BACKEND="$($ST  --log-dir "$LOG_DIR" get QSR_SIM_BACKEND)"
+export QSR_SIM_BACKEND
 ```
 
 - Kernel: `$WORKTREE_DIR/$GENERATED_KERNEL` (`GENERATED_KERNEL` is repo-root-relative).
 - Analysis: `codegen/artifacts/{KERNEL_NAME}_analysis.md`.
 - Reference: `$REFERENCE_PATH` (`$REFERENCE_ARCH`).
 - Self-log and `test_logs_optimizer/` compile + run logs go under `$LOG_DIR`.
+- Every `run_test.sh` call must retain the caller-selected
+  `QSR_SIM_BACKEND` (`emu` or `vcs`); do not silently fall back to emulator.
 
 ## Mode (read FIRST)
 

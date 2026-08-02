@@ -23,9 +23,13 @@ KERNEL_NAME="$($ST      --log-dir "$LOG_DIR" get KERNEL_NAME)"
 KERNEL_TYPE="$($ST      --log-dir "$LOG_DIR" get KERNEL_TYPE)"
 TARGET_ARCH="$($ST      --log-dir "$LOG_DIR" get TARGET_ARCH)"
 GENERATED_KERNEL="$($ST --log-dir "$LOG_DIR" get GENERATED_KERNEL)"
+QSR_SIM_BACKEND="$($ST --log-dir "$LOG_DIR" get QSR_SIM_BACKEND)"
+export QSR_SIM_BACKEND
 ```
 
 The kernel file is `$WORKTREE_DIR/$GENERATED_KERNEL` (`GENERATED_KERNEL` is repo-root-relative). The analysis is `codegen/artifacts/{KERNEL_NAME}_analysis.md`. Common headers are `tt_llk_{TARGET_ARCH}/common/inc/`.
+The final functional test must use the caller-selected `QSR_SIM_BACKEND`; never
+replace VCS with emulator or ask the user to choose again.
 
 ## Steps
 
