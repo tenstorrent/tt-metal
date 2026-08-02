@@ -162,8 +162,16 @@ DTYPE = ttnn.bfloat16
 # 194 GB/s, at the same ceiling a plain interleaved matmul reaches), so the weight dtype IS the
 # decode speed. See STATUS.md's Block 1 section for the measured accuracy/speed pair before
 # changing this. Env override so a quality run can A/B it without an edit.
-WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}.get(
-    os.environ.get("VOXTRAL_GPT_WEIGHTS", ""), None)
+#
+# "mixed" mirrors tt_transformers' precision_override: BFP8 on FF1_FF3 ONLY, bf16 everywhere else.
+# That combination is worth trying because ALL-BFP8 is the measured trigger for the multi-block
+# hang (see ttnn_voxtral_pipeline.CLEAR_PROGRAM_CACHE) while tt_transformers, which uses exactly
+# this mix, does not hang on the same sequence. FF1_FF3 is also where BFP8 buys the most -- the
+# two 3072x9216 matrices are half the layer's weight bytes.
+_W = os.environ.get("VOXTRAL_GPT_WEIGHTS", "")
+WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b,
+                "mixed": ttnn.bfloat16}.get(_W, None)
+FF_WEIGHT_DTYPE = ttnn.bfloat8_b if _W == "mixed" else None   # None = same as WEIGHT_DTYPE
 
 
 def interleaved_to_halfsplit(t, n_heads):
@@ -215,8 +223,9 @@ class TtVoxtralGPT:
 
         up = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT,
                                          device=device)
+        ffd = FF_WEIGHT_DTYPE or wd                         # FF1_FF3 may differ; see WEIGHT_DTYPE
         vec = lambda t: up(t.reshape(1, 1, -1), dtype)      # norm gammas: no bandwidth, keep bf16
-        lin = lambda t: up(t.t(), wd)                       # torch [out,in] -> ttnn wants [in,out]
+        lin = lambda t, d=None: up(t.t(), d or wd)          # torch [out,in] -> ttnn wants [in,out]
 
         self.norm = vec(w["norm"])
         self.layers = []
@@ -231,9 +240,9 @@ class TtVoxtralGPT:
                 # k and v fused into one weight -> one matmul, one weight stream (as in Block 2)
                 "wkv": lin(torch.cat([wk, w[p + "attention.wv"]], dim=0)),
                 "wo": lin(w[p + "attention.wo"]),
-                "w1": lin(w[p + "feed_forward.w1"]),
+                "w1": lin(w[p + "feed_forward.w1"], ffd),
                 "w2": lin(w[p + "feed_forward.w2"]),
-                "w3": lin(w[p + "feed_forward.w3"]),
+                "w3": lin(w[p + "feed_forward.w3"], ffd),
             })
         self._assert_shapes()
         # Allocated once and written in place, so a generation never reallocates. Zero-init is not
@@ -701,13 +710,16 @@ def main():
     ap.add_argument("--cases", default="0,2", help="prompt_fixture.json indices")
     ap.add_argument("--layers", type=int, default=N_LAYERS)
     ap.add_argument("--steps", type=int, default=8, help="decode steps for --gate decode")
-    ap.add_argument("--weights", default="", choices=("", "bf16", "bfp8"),
+    ap.add_argument("--weights", default="", choices=("", "bf16", "bfp8", "mixed"),
                     help="weight dtype override; default follows WEIGHT_DTYPE")
     args = ap.parse_args()
 
-    global WEIGHT_DTYPE
+    global WEIGHT_DTYPE, FF_WEIGHT_DTYPE
     if args.weights:
-        WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[args.weights]
+        WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b,
+                        "mixed": ttnn.bfloat16}[args.weights]
+        # "mixed" is TWO settings; forgetting the second silently runs plain bf16.
+        FF_WEIGHT_DTYPE = ttnn.bfloat8_b if args.weights == "mixed" else None
 
     # A trace region is only needed when USE_TRACE is on, but asking for it unconditionally would
     # tax every caller -- which is exactly the coupling that keeps Block 2's USE_TRACE off.
