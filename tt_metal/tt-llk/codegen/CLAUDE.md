@@ -17,13 +17,14 @@ Push/PR is a separate, user-confirmed action (`CREATE_PR=yes`).
 
 ## Orchestrators
 
-Three flows: kernel generation (arch-specific), single-arch issue solving, and multi-arch issue solving (one coordinated multi-arch run).
+Four flows: kernel generation (arch-specific), single-arch issue solving, multi-arch issue solving (one coordinated multi-arch run), and a review round on an already-open PR.
 
 | Flow | Orchestrator | Agents | Notes |
 |------|--------------|--------|-------|
 | Kernel gen | `codegen/agents/quasar/orchestrator.md` | `codegen/agents/quasar/llk-*.md` | Quasar only today. Unaffected by multi-arch issue-solver work. |
 | Issue solver (single-arch) | `codegen/agents/issue-solver/orchestrator.md` | `codegen/agents/issue-solver/*.md` | Used when `len(TARGET_ARCHES) == 1`. Parameterized by `TARGET_ARCH` — see `codegen/references/arch-profiles.md`. |
 | Issue solver (multi-arch) | `codegen/agents/issue-solver/orchestrator-multi.md` | same `codegen/agents/issue-solver/*.md` agents, run once with `TARGET_ARCHES` | Used when `len(TARGET_ARCHES) > 1`. One analyzer, one fixer, one tester, one dashboard run, one worktree, one branch, one optional PR. |
+| Review round | `codegen/agents/issue-solver/review/orchestrator.md` | `review/addresser.md` plus the same `tester.md` / `metal-tester.md` / `reviewer.md` / `perf-tester.md` | Addresses the review comments on an **already-open** PR. No analyze stage — scope, fix layer, and verification route are inherited from the solve that produced the PR. |
 
 ## Step 1: Classify the Request
 
@@ -37,6 +38,24 @@ When a user asks to **"generate {kernel} for {target_arch}"**:
 - `KERNEL_NAME` = the kernel to generate
 - `TASK_ID` = `generated-{KERNEL_NAME}-{TARGET_ARCH}` (e.g., `generated-gelu-quasar`)
 - `SFPI_MODE` = `true` if the user **explicitly** asked for an SFPI version (phrases like "as SFPI", "sfpi version", "in sfpi", "write it in sfpi"); otherwise `false`
+
+### Address Review Comments on an Open PR
+
+When a user asks to **address the review comments on a pull request** (e.g.,
+"address review comments on PR #51772", "resolve the review feedback on PR 123"):
+- `REQUEST_TYPE` = `review`
+- `PR_NUMBER` = the pull-request number
+- `TASK_ID` = `pr-{PR_NUMBER}-review` (e.g., `pr-51772-review`; `setup_worktree`
+  appends its own `-v<N>`, so repeat runs on the same PR never collide)
+
+**Do not** load the issue with `gh` for this request type. A review round has no
+GitHub credentials by design — every input is pre-seeded. Skip straight to Step 2;
+`execute_step_seed_review_state` (Step 3) reads the issue text, target arches, and
+verification route out of the solve run that produced the PR.
+
+This request type requires `CODEGEN_SOURCE_RUN_DIR`, `CODEGEN_REVIEW_INPUT`, and
+`CODEGEN_PR_NUMBER` in the environment. If any is missing, stop and report that —
+do not fall back to solving the issue.
 
 ### Solve a GitHub Issue
 
@@ -107,6 +126,10 @@ execute_step_begin_setup {kernel} {target_arch} /proj_sw/user_dev/llk_code_gen
 Set up an isolated worktree so all code changes happen on a dedicated branch
 based on `CODEGEN_BASE_COMMIT` when set, or `origin/main` otherwise.
 
+For `REQUEST_TYPE=review` the dashboard sets `CODEGEN_BASE_COMMIT` to the PR's
+head commit and has already fetched it, so the worktree comes up **as the PR
+stands today** and the round's commit fast-forwards that branch.
+
 ```bash
 source codegen/scripts/setup_worktree.sh
 setup_worktree {TASK_ID}
@@ -156,6 +179,21 @@ Optional per-run override flags — set the same way (`state.py --worktree-dir �
 Then invoke the orchestrator, telling it only `WORKTREE_DIR={worktree_dir}` —
 it reads everything else back the same way, via `state.py --worktree-dir`.
 
+### Address Review Comments (`REQUEST_TYPE` = `review`)
+
+One helper writes every bootstrap key, reading them out of the solve run that
+produced the PR — do not hand-write them:
+
+```bash
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_seed_review_state "{worktree_dir}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set WORKTREE_BRANCH "{worktree_branch}"
+```
+
+Stop on a `REJECT:`. Then invoke
+`codegen/agents/issue-solver/review/orchestrator.md`, telling it only
+`WORKTREE_DIR={worktree_dir}`.
+
 ### Solve Issue (`REQUEST_TYPE` = `issue`)
 
 Route by task type and by `len(TARGET_ARCHES)`:
@@ -165,6 +203,10 @@ Route by task type and by `len(TARGET_ARCHES)`:
 | single (any of blackhole / quasar / wormhole) | issue fix | `codegen/agents/issue-solver/orchestrator.md` | `TARGET_ARCH` |
 | **multiple** (e.g. `blackhole + wormhole`) | issue fix | `codegen/agents/issue-solver/orchestrator-multi.md` | `TARGET_ARCHES` (JSON array) |
 | Any | Generate Kernel | NOT SUPPORTED | - |
+
+(`REQUEST_TYPE=review` does not use this table — it always routes to
+`codegen/agents/issue-solver/review/orchestrator.md`, which reads `RUN_MODE` from
+the seeded state.)
 
 **Mandatory:** before invoking the orchestrator, seed its inputs via
 `state.py --worktree-dir` (do not pass them in the prompt). `RUN_MODE` and the

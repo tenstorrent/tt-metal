@@ -90,6 +90,16 @@ _PIPELINE_STEPS_SINGLE='[
   {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline (BH/WH local only)"},
   {"id":"fix_tests","name":"Retry","desc":"Debug and update the fix after a test, review, or perf failure"}
 ]'
+# RUN_KIND=review: an address-comments round on an open PR. No analyze stage —
+# scope and verification route are inherited from the solve that produced the PR.
+_PIPELINE_STEPS_REVIEW='[
+  {"id":"addresser","name":"Address","desc":"Turn the PR review feedback into code changes"},
+  {"id":"tester","name":"Test","desc":"Run the tt-llk Layer-1 suite"},
+  {"id":"metal_test","name":"Metal Test","desc":"Build+run the unit_tests_llk gtest for Layer-2/3/4 changes"},
+  {"id":"review","name":"Review","desc":"Senior LLK review of the updated diff (loop, no PR)"},
+  {"id":"perf","name":"Perf","desc":"Measure cycle counts only when a disposition asks for it"},
+  {"id":"fix_tests","name":"Retry","desc":"Debug and update the review fix after a test or review failure"}
+]'
 
 # ===========================================================================
 # Any step — emit a mid-step progress message (does not change the step).
@@ -190,6 +200,252 @@ execute_step_validate_env() {
 }
 
 # ===========================================================================
+# Router step (RUN_KIND=review) — seed the bootstrap state for an address-comments
+# round from the solve run that produced the PR. That run's state.json already
+# holds the issue text, scope and every verification key, so copying them is what
+# lets the round reuse the route_verification → tester tail unchanged.
+#
+# Arg: <worktree_dir>. Environment (set by the dashboard's dispatcher):
+#   CODEGEN_SOURCE_RUN_DIR   the solve run's LOG_DIR                    (required)
+#   CODEGEN_REVIEW_INPUT     the reviewer-feedback JSON document        (required)
+#   CODEGEN_PR_NUMBER        the PR being updated                       (required)
+#   CODEGEN_REVIEW_ARCHES    JSON array; overrides the source arches    (optional)
+#   CODEGEN_REVIEW_TEST_BACKEND  local|ttsim                            (default local)
+#   CODEGEN_PR_HEAD_SHA      the commit this round is based on          (optional)
+# ===========================================================================
+execute_step_seed_review_state() {
+    local wt="$1" S="$_ORCH_SCRIPTS" src="${CODEGEN_SOURCE_RUN_DIR:-}"
+    [ -n "$wt" ] && [ -d "$wt" ] || { echo "REJECT: WORKTREE_DIR missing or not a directory: '$wt'"; return 1; }
+    [ -n "$src" ] && [ -f "$src/state.json" ] || {
+        echo "REJECT: CODEGEN_SOURCE_RUN_DIR must point at a solve run dir containing state.json (got '${src:-unset}')"
+        return 1; }
+    [ -n "${CODEGEN_REVIEW_INPUT:-}" ] && [ -f "${CODEGEN_REVIEW_INPUT}" ] || {
+        echo "REJECT: CODEGEN_REVIEW_INPUT must point at the reviewer-feedback JSON (got '${CODEGEN_REVIEW_INPUT:-unset}')"
+        return 1; }
+    printf '%s' "${CODEGEN_PR_NUMBER:-}" | grep -qE '^[0-9]+$' || {
+        echo "REJECT: CODEGEN_PR_NUMBER must be numeric (got '${CODEGEN_PR_NUMBER:-unset}')"; return 1; }
+
+    # Resolve the arch list + run mode once, in python, so the "1 → single,
+    # N → multi" rule matches execute_step_setup_run exactly.
+    local plan
+    plan="$(SRC="$src" ARCHES="${CODEGEN_REVIEW_ARCHES:-}" python - <<'PY' || exit 1
+import json, os, sys
+state = json.load(open(os.path.join(os.environ["SRC"], "state.json")))
+raw = (os.environ.get("ARCHES") or "").strip()
+if raw:
+    arches = json.loads(raw)
+else:
+    arches = state.get("TARGET_ARCHES_JSON") or (
+        [state["TARGET_ARCH"]] if state.get("TARGET_ARCH") else [])
+    if isinstance(arches, str):
+        arches = json.loads(arches)
+aliases = {"bh": "blackhole", "wh": "wormhole", "qsr": "quasar"}
+seen, out = set(), []
+for value in arches:
+    arch = aliases.get(str(value).strip().lower(), str(value).strip().lower())
+    if arch not in {"blackhole", "wormhole", "quasar"}:
+        raise SystemExit(f"unknown target arch: {value}")
+    if arch not in seen:
+        seen.add(arch); out.append(arch)
+if not out:
+    raise SystemExit("source run recorded no target arch; cannot seed a review round")
+print(json.dumps({
+    "arches": out,
+    "mode": "single" if len(out) == 1 else "multi",
+    "issue_number": str(state.get("ISSUE_NUMBER") or ""),
+    "issue_title": state.get("ISSUE_TITLE") or "",
+    "issue_body": state.get("ISSUE_BODY") or "",
+    "issue_labels": state.get("ISSUE_LABELS") or "",
+    "issue_comments": state.get("ISSUE_COMMENTS") or "",
+    "issue_url": state.get("ISSUE_URL") or "",
+    "run_id": state.get("RUN_ID") or "",
+    "ttsim_so_path": state.get("TTSIM_SO_PATH") or "",
+    "ttsim_so_paths": state.get("TTSIM_SO_PATHS") or "",
+}))
+PY
+)" || { echo "REJECT: could not read the source run state"; return 1; }
+
+    jget() { printf '%s' "$plan" | python -c "import json,sys;print(json.load(sys.stdin)[sys.argv[1]])" "$1"; }
+    local mode arches_json num
+    mode="$(jget mode)"
+    arches_json="$(printf '%s' "$plan" | python -c "import json,sys;print(json.dumps(json.load(sys.stdin)['arches']))")"
+    num="$(jget issue_number)"
+    printf '%s' "$num" | grep -qE '^[0-9]+$' || {
+        echo "REJECT: source run has no numeric ISSUE_NUMBER"; return 1; }
+
+    local backend="${CODEGEN_REVIEW_TEST_BACKEND:-local}"
+    case "$backend" in local|ttsim) ;; *) echo "REJECT: CODEGEN_REVIEW_TEST_BACKEND must be local|ttsim"; return 1 ;; esac
+
+    bset() { _disk_guard python "$S/state.py" --worktree-dir "$wt" set "$@" >/dev/null; }
+    bset RUN_KIND            "review"
+    bset RUN_MODE            "$mode"
+    bset ISSUE_NUMBER        "$num"
+    bset ISSUE_TITLE         "$(jget issue_title)"
+    bset ISSUE_BODY          "$(jget issue_body)"
+    bset ISSUE_LABELS        "$(jget issue_labels)"
+    bset ISSUE_COMMENTS      "$(jget issue_comments)"
+    bset ISSUE_URL           "$(jget issue_url)"
+    bset TEST_BACKEND        "$backend"
+    # The round updates an existing PR: it commits locally and never opens one.
+    bset CREATE_LOCAL_BRANCH "yes"
+    bset CREATE_PR           "no"
+    if [ "$mode" = "single" ]; then
+        bset TARGET_ARCH "$(printf '%s' "$arches_json" | python -c "import json,sys;print(json.load(sys.stdin)[0])")"
+        [ -n "$(jget ttsim_so_path)" ] && bset TTSIM_SO_PATH "$(jget ttsim_so_path)"
+    else
+        bset TARGET_ARCHES "$arches_json"
+        [ -n "$(jget ttsim_so_paths)" ] && bset TTSIM_SO_PATHS "$(jget ttsim_so_paths)"
+    fi
+    # Review-round identity, carried into the run state by execute_step_setup_review_run.
+    bset PR_NUMBER      "${CODEGEN_PR_NUMBER}"
+    bset PR_HEAD_SHA    "${CODEGEN_PR_HEAD_SHA:-}"
+    bset REVIEW_INPUT   "${CODEGEN_REVIEW_INPUT}"
+    bset SOURCE_RUN_DIR "$src"
+    bset SOURCE_RUN_ID  "$(jget run_id)"
+
+    echo "OK: seeded review state for PR #${CODEGEN_PR_NUMBER}, issue #${num}, arches=${arches_json}, backend=${backend}"
+}
+
+# ===========================================================================
+# Step 0 (RUN_KIND=review) — carry the review identity into the run state and
+# import the source solve's artifacts. Run right after execute_step_setup_run.
+# The analysis artifact is what route_verification parses, so importing it gives
+# the round a route without re-analyzing; the addresser may amend it when the
+# review asks for coverage the solve did not add.
+# ===========================================================================
+execute_step_setup_review_run() {
+    local _L; _L="$(_LOG)"
+    local S="$_ORCH_SCRIPTS" wt src num; wt="$(_wt)"
+    src="$(python "$S/state.py" --worktree-dir "$wt" get SOURCE_RUN_DIR)"
+    num="$(sg ISSUE_NUMBER)"
+    [ -n "$src" ] && [ -d "$src" ] || {
+        echo "REJECT: SOURCE_RUN_DIR is missing from bootstrap state; run execute_step_seed_review_state first" >&2
+        return 1; }
+
+    ss PR_NUMBER      "$(python "$S/state.py" --worktree-dir "$wt" get PR_NUMBER)"
+    ss PR_HEAD_SHA    "$(python "$S/state.py" --worktree-dir "$wt" get PR_HEAD_SHA)"
+    ss REVIEW_INPUT   "$(python "$S/state.py" --worktree-dir "$wt" get REVIEW_INPUT)"
+    ss SOURCE_RUN_DIR "$src"
+    ss SOURCE_RUN_ID  "$(python "$S/state.py" --worktree-dir "$wt" get SOURCE_RUN_ID)"
+    # Perf off unless a disposition asks: a baseline measurement doubles wall clock.
+    ss PERF_REQUESTED 0 --json
+
+    local imported=0 f
+    _disk_guard mkdir -p codegen/artifacts || return $?
+    for f in "$src"/issue_"${num}"_*.md; do
+        [ -f "$f" ] || continue
+        cp "$f" codegen/artifacts/ 2>/dev/null && imported=$((imported + 1))
+        cp "$f" "$_L/" 2>/dev/null || true
+    done
+    if [ "$imported" -eq 0 ]; then
+        ss OBSTACLE "review round could not import the source run's analysis artifact"
+        execute_step_mark_status failed
+        echo "REJECT: no issue_${num}_*.md artifacts in $src — the round has no verification route" >&2
+        return 1
+    fi
+    # The reviewer agent reads the solve's own review verdict for continuity.
+    cp "$src/review_result.json" "$_L/source_review_result.json" 2>/dev/null || true
+
+    rj message --message "Addressing review on PR #$(sg PR_NUMBER); imported ${imported} artifact(s) from $(sg SOURCE_RUN_ID)"
+    echo "PR=#$(sg PR_NUMBER) SOURCE_RUN_ID=$(sg SOURCE_RUN_ID) ARTIFACTS=${imported}"
+}
+
+# ===========================================================================
+# Step 1 (RUN_KIND=review) — advance to the addresser. Optional arg: prev agent
+# (default "addresser" on the first pass; pass "fix_tests" on a debug retry).
+# ===========================================================================
+execute_step_advance_addresser() {
+    local _L; _L="$(_LOG)"
+    local agent="${1:-addresser}" pr n
+    pr="$(sg PR_NUMBER)"
+    n="$(python -c "import json,sys;print(len(json.load(open(sys.argv[1]))['actionable_threads']))" "$(sg REVIEW_INPUT)" 2>/dev/null || echo "?")"
+    rj advance --new-step "addresser" \
+        --new-message "Addressing ${n} review thread(s) on PR #${pr}" \
+        --prev-result "success" --prev-message "Review feedback collected" --agent "$agent"
+    ss PREVIOUS_AGENT "addresser"
+}
+
+# ===========================================================================
+# Step 1 (RUN_KIND=review) — validate and record the addresser's dispositions.
+# Every actionable thread needs exactly one; a missing one used to degrade into a
+# generic reply the agent had never considered, so this fails the run instead.
+# Also enforces the reply contract: length, and no commit sha (the dashboard owns
+# attribution, and a model-written sha is routinely the wrong one).
+# ===========================================================================
+execute_step_record_review_dispositions() {
+    local _L; _L="$(_LOG)"
+    local max_chars="${1:-600}" out
+    out="$(LOG_DIR="$_L" REVIEW_INPUT="$(sg REVIEW_INPUT)" MAX_CHARS="$max_chars" python - <<'PY'
+import json, os, re, sys
+
+log_dir = os.environ["LOG_DIR"]
+path = os.path.join(log_dir, "review_dispositions.json")
+try:
+    doc = json.load(open(path))
+except FileNotFoundError:
+    raise SystemExit(f"MISSING: the addresser wrote no {path}")
+except (ValueError, OSError) as e:
+    raise SystemExit(f"INVALID: {path} is not readable JSON ({e})")
+
+entries = doc.get("threads") if isinstance(doc, dict) else None
+if not isinstance(entries, list):
+    raise SystemExit(f"INVALID: {path} must be an object with a 'threads' array")
+
+required = {
+    str(t["comment_id"])
+    for t in json.load(open(os.environ["REVIEW_INPUT"]))["actionable_threads"]
+}
+max_chars = int(os.environ["MAX_CHARS"])
+allowed = {"changed", "no_change", "disagree", "deferred"}
+by_id, problems = {}, []
+for entry in entries:
+    if not isinstance(entry, dict):
+        problems.append("a thread entry is not an object"); continue
+    cid = str(entry.get("comment_id") or "")
+    action = str(entry.get("action") or "").strip()
+    reply = str(entry.get("reply") or "").strip()
+    if cid not in required:
+        continue                      # extra ids (summaries, stale threads) are ignored
+    if action not in allowed:
+        problems.append(f"{cid}: action must be one of {sorted(allowed)} (got {action!r})")
+    if not reply:
+        problems.append(f"{cid}: reply is empty")
+    elif len(reply) > max_chars:
+        problems.append(f"{cid}: reply is {len(reply)} chars (limit {max_chars})")
+    elif re.search(r"\b[0-9a-f]{7,40}\b", reply):
+        problems.append(f"{cid}: reply cites a commit sha; the dashboard adds that")
+    by_id[cid] = entry
+
+missing = sorted(required - set(by_id))
+if missing:
+    problems.append("no disposition for actionable thread(s): " + ", ".join(missing))
+if problems:
+    raise SystemExit("INVALID_DISPOSITIONS:\n  " + "\n  ".join(problems))
+
+arches, perf = set(), False
+for entry in by_id.values():
+    arches.update(str(a).strip().lower() for a in (entry.get("arches_required") or []))
+    perf = perf or bool(entry.get("perf_relevant"))
+normalized = {"version": 1, "threads": [by_id[k] for k in sorted(by_id)]}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(normalized, f, indent=2)
+print(json.dumps({
+    "count": len(by_id),
+    "changed": sum(1 for e in by_id.values() if e.get("action") == "changed"),
+    "arches_required": sorted(a for a in arches if a in {"blackhole", "wormhole", "quasar"}),
+    "perf_relevant": perf,
+}))
+PY
+)" || { echo "$out" >&2; ss OBSTACLE "invalid review dispositions"; return 1; }
+
+    local perf; perf="$(printf '%s' "$out" | python -c "import json,sys;print('1' if json.load(sys.stdin)['perf_relevant'] else '0')")"
+    ss PERF_REQUESTED "$perf" --json
+    ss REVIEW_ARCHES_REQUESTED "$(printf '%s' "$out" | python -c "import json,sys;print(','.join(json.load(sys.stdin)['arches_required']))")"
+    rj metric --patch-json "{\"review_dispositions\": $out}"
+    echo "$out"
+}
+
+# ===========================================================================
 # Step 0 — compute run identity/timing/dirs, resolve the log + knowledge roots,
 # seed counters, normalize the arch list, snapshot playbooks, and capture the
 # session. Reads the router handoff from the worktree state file + the ambient
@@ -201,8 +457,10 @@ execute_step_setup_run() {
 
     # --- router handoff (worktree bootstrap file) ---------------------------
     local MODE ISSUE_NUMBER ISSUE_TITLE ISSUE_BODY ISSUE_LABELS ISSUE_COMMENTS ISSUE_URL
-    local WORKTREE_BRANCH TEST_BACKEND CREATE_LOCAL_BRANCH CREATE_PR
+    local WORKTREE_BRANCH TEST_BACKEND CREATE_LOCAL_BRANCH CREATE_PR RUN_KIND
     MODE="$(python "$S/state.py" --worktree-dir "$wt" get RUN_MODE)"; MODE="${MODE:-single}"
+    # "issue" (solve, default) | "review". Selects the pipeline shape + first step.
+    RUN_KIND="$(python "$S/state.py" --worktree-dir "$wt" get RUN_KIND)"; RUN_KIND="${RUN_KIND:-issue}"
     ISSUE_NUMBER="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_NUMBER)"
     ISSUE_TITLE="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_TITLE)"
     WORKTREE_BRANCH="$(python "$S/state.py" --worktree-dir "$wt" get WORKTREE_BRANCH)"
@@ -290,6 +548,8 @@ PY
     local START_TIME RUN_ID LOG_DIR GIT_COMMIT GIT_BRANCH CODEGEN_VERSION suffix
     START_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     [ "$MODE" = "multi" ] && suffix="_multi" || suffix=""
+    # Tag the id so review runs stay distinguishable from the solve's in the dirs.
+    [ "$RUN_KIND" = "review" ] && suffix="${suffix}_review"
     RUN_ID="$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}${suffix}_$(head -c 4 /dev/urandom | xxd -p)"
     LOG_DIR="${LOGS_BASE}/${RUN_ID}"
     GIT_COMMIT="$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -309,7 +569,14 @@ PY
     fi
 
     _disk_guard mkdir -p "$LOG_DIR/instructions" codegen/artifacts || return $?
+    # Snapshot the playbooks this run executed. `review/` is nested, so a flat glob
+    # would skip it and the round would archive instructions it never ran.
     cp codegen/agents/issue-solver/*.md "$LOG_DIR/instructions/" 2>/dev/null || true
+    if [ "$RUN_KIND" = "review" ]; then
+        for f in codegen/agents/issue-solver/review/*.md; do
+            [ -f "$f" ] && cp "$f" "$LOG_DIR/instructions/review-$(basename "$f")" 2>/dev/null || true
+        done
+    fi
     cp .claude/CLAUDE.md "$LOG_DIR/instructions/tt-llk-CLAUDE.md" 2>/dev/null || true
     cp -R .claude/skills "$LOG_DIR/instructions/claude-skills" 2>/dev/null || true
 
@@ -320,6 +587,7 @@ PY
     # --- everything else lives in the run-state file ($LOG_DIR/state.json) --
     local _L="$LOG_DIR"
     ss RUN_MODE               "$MODE"
+    ss RUN_KIND               "$RUN_KIND"
     ss WORKTREE_DIR           "$wt"
     ss WORKTREE_BRANCH        "$WORKTREE_BRANCH"
     ss TEST_BACKEND           "$TEST_BACKEND"
@@ -356,7 +624,7 @@ PY
     ss REVIEW_RETRIES        0 --json
     ss MAX_REVIEW_RETRIES    2 --json
     ss PERF_GOAL             "$PERF_GOAL"
-    ss PREVIOUS_AGENT        "analyzer"
+    if [ "$RUN_KIND" = "review" ]; then ss PREVIOUS_AGENT "addresser"; else ss PREVIOUS_AGENT "analyzer"; fi
     ss VERIFY_DEFERRED       0 --json
     ss OBSTACLE              ""
     ss STATUS               ""
@@ -377,10 +645,12 @@ PY
 # ===========================================================================
 execute_step_write_initial_run_json() {
     local _L; _L="$(_LOG)"
-    local S="$_ORCH_SCRIPTS" mode num title arches steps issue_json
-    mode="$(sg RUN_MODE)"; num="$(sg ISSUE_NUMBER)"; title="$(sg ISSUE_TITLE)"
+    local S="$_ORCH_SCRIPTS" mode kind num title arches steps issue_json first_step
+    mode="$(sg RUN_MODE)"; kind="$(sg RUN_KIND)"; num="$(sg ISSUE_NUMBER)"; title="$(sg ISSUE_TITLE)"
     arches="$(sg TARGET_ARCHES_JSON)"
     [ "$mode" = "multi" ] && steps="$_PIPELINE_STEPS_MULTI" || steps="$_PIPELINE_STEPS_SINGLE"
+    first_step="analyzer"
+    if [ "$kind" = "review" ]; then steps="$_PIPELINE_STEPS_REVIEW"; first_step="addresser"; fi
 
     issue_json="$(python - "$num" "$title" "$(sg ISSUE_URL)" "$(sg ISSUE_LABELS)" <<'PY'
 import json, sys
@@ -395,13 +665,15 @@ PY
 )"
 
     local prompt
-    if [ "$mode" = "multi" ]; then prompt="Fix multi-arch issue #${num} using $(sg TEST_BACKEND) tests"
+    if [ "$kind" = "review" ]; then
+        prompt="Address review comments on PR #$(sg PR_NUMBER) for issue #${num} using $(sg TEST_BACKEND) tests"
+    elif [ "$mode" = "multi" ]; then prompt="Fix multi-arch issue #${num} using $(sg TEST_BACKEND) tests"
     else prompt="Fix $(sg TARGET_ARCH) issue #${num} using $(sg TEST_BACKEND) tests"; fi
     # rj() prepends `--log-dir "$_L"`, so it must NOT appear in this array.
     local -a common=(
         init --run-id "$(sg RUN_ID)"
         --kernel "issue_${num}" --kernel-type "issue_solver"
-        --start-time "$(sg START_TIME)" --first-step "analyzer"
+        --start-time "$(sg START_TIME)" --first-step "$first_step"
         --prompt "$prompt"
         --batch-id "${CODEGEN_BATCH_ID:-}" --model "${CODEGEN_MODEL:-sonnet}"
         --run-type "${CODEGEN_RUN_TYPE:-manual}"
@@ -409,6 +681,13 @@ PY
         --version "$(sg CODEGEN_VERSION)" --description "#${num}: ${title}"
         --pipeline-steps "$steps" --issue "$issue_json"
     )
+
+    local first_msg="Analyzing issue #${num}: ${title}"
+    local first_msg_multi="Analyzing issue #${num} for ${arches}"
+    if [ "$kind" = "review" ]; then
+        first_msg="Addressing review comments on PR #$(sg PR_NUMBER)"
+        first_msg_multi="$first_msg across ${arches}"
+    fi
 
     if [ "$mode" = "multi" ]; then
         local init_patch
@@ -426,11 +705,22 @@ print(json.dumps({
 PY
 )"
         rj "${common[@]}" --arch "multi" \
-            --first-message "Analyzing issue #${num} for ${arches}" \
+            --first-message "$first_msg_multi" \
             --phases-total "$(sg ARCH_COUNT)" --patch-json "$init_patch" || return $?
     else
         rj "${common[@]}" --arch "$(sg TARGET_ARCH)" \
-            --first-message "Analyzing issue #${num}: ${title}" || return $?
+            --first-message "$first_msg" || return $?
+    fi
+    # The PR being updated + the solve this descends from, for the dashboard.
+    if [ "$kind" = "review" ]; then
+        rj metric --patch-json "$(python - "$(sg PR_NUMBER)" \
+            "$(sg SOURCE_RUN_ID)" "$(sg PR_HEAD_SHA)" <<'PY'
+import json, sys
+pr, src, head = sys.argv[1:4]
+print(json.dumps({"run_kind": "review", "pr_number": int(pr or 0) or None,
+                  "source_run_id": src or None, "pr_head_sha": head or None}))
+PY
+)" || return $?
     fi
     refresh_cost
 }
@@ -776,6 +1066,14 @@ execute_step_perf_feedback() {
     execute_step_feedback "perf" "perf" "$summary" \
         "Recovering perf for issue #${num} (${goal}); attempt $((pr+1))/${mpr}"
 }
+# RUN_KIND=review: the retry goes back to the addresser, not the issue worker.
+execute_step_review_round_feedback() {
+    local _L; _L="$(_LOG)"
+    local step="${1:-tester}" summary="$2" prnum dc mdc
+    prnum="$(sg PR_NUMBER)"; dc="$(sg DEBUG_CYCLES)"; mdc="$(sg MAX_DEBUG_CYCLES)"
+    execute_step_feedback "$step" "$step" "$summary" \
+        "Repairing the review fix on PR #${prnum} (attempt $((dc+1))/${mdc})"
+}
 
 # Counter bumps (called after the retry worker returns).
 execute_step_bump_debug()  { local _L; _L="$(_LOG)"; ss DEBUG_CYCLES  "$(( $(sg DEBUG_CYCLES) + 1 ))" --json; echo "DEBUG_CYCLES=$(sg DEBUG_CYCLES)/$(sg MAX_DEBUG_CYCLES)"; }
@@ -812,6 +1110,12 @@ execute_step_record_review() {
 execute_step_perf_arches() {
     local _L; _L="$(_LOG)"
     local arches be keep; arches="$(sg TARGET_ARCHES_JSON)"; be="$(sg TEST_BACKEND)"
+    # A review round measures perf only when a disposition asked for it.
+    if [ "$(sg RUN_KIND)" = "review" ] && [ "$(sg PERF_REQUESTED)" != "1" ]; then
+        ss PERF_ARCHES ""
+        echo ""
+        return 0
+    fi
     keep="$(python - "$arches" "$be" <<'PY'
 import json, sys
 arches = json.loads(sys.argv[1]); backend = sys.argv[2]
@@ -1146,6 +1450,7 @@ agents = run.get("agents", [])
 for agent, filename in [
     ("analyzer", "agent_issue_analyzer.md"),
     ("arch_lookup", "agent_arch_lookup.md"),
+    ("addresser", "agent_review_addresser.md"),
     ("writer", "agent_issue_worker.md"),
     ("tester", "agent_tester.md"),
     ("metal_test", "agent_metal_tester.md"),
