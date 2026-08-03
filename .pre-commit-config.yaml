@@ -104,6 +104,13 @@ repos:
       types: [file]
       files: ^ttnn/.*/device/.*\.(cpp|hpp)$
       pass_filenames: true
+    - id: detect-override-rebuild
+      name: Detect ProgramDescriptor rebuilds inside override_runtime_arguments
+      entry: python3 scripts/detect_override_rebuild.py
+      language: system
+      types: [file]
+      files: ^ttnn/.*/device/.*\.(cpp|hpp)$
+      pass_filenames: true
 - repo: local
   hooks:
     - id: validate-golden-csv-columns

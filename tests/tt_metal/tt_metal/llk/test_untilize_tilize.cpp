@@ -584,9 +584,9 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     };
 
     auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_tensor_spec(test_config.input_single_tile_size, num_tiles_in), TensorTopology{});
+        *mesh_device, make_flat_tensor_spec(test_config.input_single_tile_size, num_tiles_in));
     auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_tensor_spec(test_config.output_single_tile_size, num_tiles_out), TensorTopology{});
+        *mesh_device, make_flat_tensor_spec(test_config.output_single_tile_size, num_tiles_out));
 
     const experimental::DFBSpecName INP_DATA_DFB{"inp_data_dfb"};
     const experimental::DFBSpecName INP_SCALER_DFB{"inp_scaler_dfb"};
@@ -953,17 +953,26 @@ static void run_quasar_tilize_untilize_test(
     bool dst_full_sync_en,
     bool fp32_dest_acc_en,
     tt::DataFormat input_data_format,
-    tt::DataFormat output_data_format) {
+    tt::DataFormat output_data_format,
+    std::uint32_t num_faces = 4,
+    std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
     IDevice* dev = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    const bool tiny_tile = (num_faces != 4 || face_r_dim != 16);
+
     bool is_8bit_integer = (input_data_format == tt::DataFormat::Int8 || input_data_format == tt::DataFormat::UInt8);
     std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
     std::uint32_t input_single_tile_size = tt::tile_size(input_data_format);
     std::uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    if (tiny_tile) {
+        input_single_tile_size = tt::datum_size(input_data_format) * num_faces * face_r_dim * face_c_dim;
+        output_single_tile_size = tt::datum_size(output_data_format) * num_faces * face_r_dim * face_c_dim;
+    }
     std::uint32_t src_dram_buffer_size = input_single_tile_size * num_tiles;
     std::uint32_t dst_dram_buffer_size = output_single_tile_size * num_tiles;
 
@@ -1002,6 +1011,13 @@ static void run_quasar_tilize_untilize_test(
         .num_entries = dfb_num_entries,
         .data_format_metadata = output_data_format,
     };
+    if (tiny_tile) {
+        const auto fg = tt::tt_metal::FaceGeometry{face_r_dim, num_faces};
+        if (!is_tilize) {
+            input_dfb_spec.unpack_face_geometry_metadata = fg;
+        }
+        output_dfb_spec.unpack_face_geometry_metadata = fg;
+    }
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -1165,6 +1181,10 @@ static void run_quasar_tilize_untilize_test(
     ::unit_tests::compute::GoldenConfig golden_config = {
         .num_tiles_r_dim = static_cast<int>(num_tiles_r),
         .num_tiles_c_dim = static_cast<int>(num_tiles_c),
+        .face_r_dim = static_cast<int>(face_r_dim),
+        .face_c_dim = static_cast<int>(face_c_dim),
+        .num_faces = static_cast<int>(num_faces),
+        .tiny_tile = tiny_tile && !is_tilize,
         .datum_bytes = tt::datum_size(input_data_format)};
     auto golden = is_tilize ? ::unit_tests::compute::gold_standard_tilize(src_vec, golden_config)
                             : ::unit_tests::compute::gold_standard_untilize(src_vec, golden_config);
@@ -1248,6 +1268,54 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
                         input_data_format,
                         fp32_dest_acc_en ? tt::DataFormat::Float32 : input_data_format);
                 }
+            }
+        }
+    }
+}
+
+// Pack Untilize tiny tile (1x32, 2x32) via pack_untilize_block (unpack in the loop).
+// {num_faces, face_r_dim}: 1x32 = {2, 1}, 2x32 = {2, 2}.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTile) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
+    std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
+    for (auto& cfg : test_configs) {
+        for (auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->devices_.at(0),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/false,
+                    tt::DataFormat::Float16_b,
+                    tt::DataFormat::Float16_b,
+                    /*num_faces=*/geo[0],
+                    /*face_r_dim=*/geo[1]);
+            }
+        }
+    }
+}
+
+// Pack Untilize Dst tiny tile (1x32, 2x32): tiles pre-loaded into dest via copy_tile.
+// {num_faces, face_r_dim}: 1x32 = {2, 1}, 2x32 = {2, 2}.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTile) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
+    std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
+    for (auto& cfg : test_configs) {
+        for (auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->devices_.at(0),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE_DST,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/false,
+                    tt::DataFormat::Float16_b,
+                    tt::DataFormat::Float16_b,
+                    /*num_faces=*/geo[0],
+                    /*face_r_dim=*/geo[1]);
             }
         }
     }

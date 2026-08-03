@@ -21,6 +21,6 @@ void copy_to_device_filtered(
     const ttnn::Tensor& host_tensor,
     ttnn::Tensor& device_tensor,
     const tt::tt_metal::CoreRangeSet& logical_core_filter,
-    std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
+    std::optional<QueueId> cq_id = std::nullopt);
 
 }  // namespace ttnn::experimental::core_subset_write

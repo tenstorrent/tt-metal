@@ -137,6 +137,7 @@ void deassert_trisc() {
 }
 
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
+thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
@@ -205,6 +206,13 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
     }
 }
 
+// Wake DM1 to run setup_dfb_remapper in parallel with DM0's ISR setup.
+// DM1 has a dedicated DFB-init-only loop and never runs user kernels.
+// Called before DM0's setup_dfb_implicit_sync so both run concurrently.
+inline void start_dm1_dfb_init() {
+    *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO;
+}
+
 inline void wait_subordinates() {
     WAYPOINT("NTW");
     // Set subordinate_sync->padding to 0 to make checks against subordinate_sync->allDMs correct.
@@ -231,6 +239,11 @@ extern "C" uint32_t _start1() {
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+
+    // Remapper can always stay enabled even if no remapper pairs are configured.
+    // The default mirroring scheme is used if a particular remapper entry's clientR[0] valid bit is not set.
+    g_remapper_configurator.enable_remapper();
+
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
@@ -350,47 +363,16 @@ extern "C" uint32_t _start1() {
                 // prev_noc_mode = noc_mode;
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
-                    (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                    (uint32_t tt_l1_ptr*)(kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
                 uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
-                setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
-
-                // Run the kernel
-                int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
+                // Kick DM1 to run remapper config in parallel with DM0's ISR setup.
+                start_dm1_dfb_init();
                 WAYPOINT("R");
-                if (enables & (1u << index)) {
-                    uintptr_t kernel_lma =
-                        (static_cast<uint32_t>(kernel_config_base) +
-                         launch_msg_address->kernel_config.kernel_text_offset[index]);
-                    // Invalidate the i$ now the kernels have loaded and before running
-                    invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg_address, index);
-                    invalidate_l1_icache();
-                    auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
-                    record_stack_usage(stack_free);
-                } else {
-#if defined(PROFILE_KERNEL)
-                    // This was not initialized in the kernel
-                    // Currently FW does not issue a barrier except when using profiler
-                    // if (noc_mode == DM_DEDICATED_NOC) {
-                    //     noc_local_state_init(noc_index);
-                    // }
-#endif
-                    // DM0 is responsible for issuing any noc cmds needed when initializing remote cbs
-                    // So have DM0 setup remote cb interfaces even when DM0 is not in use
-                    // if (launch_msg_address->kernel_config.enables) {
-                    //     cb_l1_base =
-                    //         (uint32_t tt_l1_ptr*)(kernel_config_base +
-                    //         launch_msg_address->kernel_config.remote_cb_offset);
-                    //     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                    //     experimental::setup_remote_cb_interfaces<true>(
-                    //         cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                    //     barrier_remote_cb_interface_setup(noc_index, end_cb_index);
-                    // }
-                    wait_for_go_message();
-                }
+                setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
                 WAYPOINT("D");
 
                 wait_subordinates();
@@ -398,10 +380,9 @@ extern "C" uint32_t _start1() {
                 trigger_sync_register_init();
 
                 // Need to ensure that Remapper state is cleared for next kernel launch
-                if (g_remapper_configurator.is_remapper_enabled()) {
-                    g_remapper_configurator.clear_all_pairs();
-                    g_remapper_configurator.disable_remapper();
-                }
+                // Remapper initialization by DM1 tracks which pairs were configured. This will clear valid bits for all configured remappings.
+                g_remapper_configurator.clear_clientL_valid_up_to_high_watermark_hw();
+                g_remapper_configurator.reset_pair_high_watermark();
             }
 
             // Signal host/dispatcher completion after the DM0-FW zone above has finalized, so DM0's markers
@@ -446,11 +427,18 @@ extern "C" uint32_t _start1() {
         uintptr_t kernel_lma =
             static_cast<uint32_t>(kernel_config_base) + launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
+        if (hartid == 1) {
+            setup_dfb_remapper(dfb_l1_base, num_local_dfbs);
+            *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_DONE;
+            continue;
+        }
+
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
         overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
