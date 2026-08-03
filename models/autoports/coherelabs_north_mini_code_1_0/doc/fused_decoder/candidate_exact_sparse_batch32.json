@@ -1,0 +1,31 @@
+{
+  "candidate": "exact sparse gate_up and down at serving decode batch 32",
+  "mode": "decode",
+  "batch": 32,
+  "layer": 1,
+  "trace": true,
+  "pcc": 0.99818097,
+  "acceptance_pcc": 0.995,
+  "mean_ms": 13.395,
+  "functional_baseline_mean_ms": 11.122,
+  "selected_packed_all_expert_mean_ms": 8.293310,
+  "gate_up": {
+    "operation": "ttnn.sparse_matmul",
+    "active_experts": 8,
+    "total_experts": 128,
+    "packed_gate_up": true
+  },
+  "down": {
+    "operation": "ttnn.sparse_matmul",
+    "is_input_a_sparse": true,
+    "mask_granularity": "per expert batch",
+    "active_experts": 128,
+    "total_experts": 128
+  },
+  "measurement": {
+    "warmups": 5,
+    "iterations": 20,
+    "command_shape": "fused_decoder_perf.py --mode decode --batch 32 --layer 1 --warmups 5 --iterations 20"
+  },
+  "decision": "rejected: correct but slower than both the functional baseline and packed all-expert candidate"
+}

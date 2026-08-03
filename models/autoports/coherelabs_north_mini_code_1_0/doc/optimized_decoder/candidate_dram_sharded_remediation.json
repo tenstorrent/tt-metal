@@ -1,0 +1,42 @@
+{
+  "candidate": "batch-1 DRAM-width-sharded weights",
+  "first_attempt": {
+    "result": "error",
+    "cause": "L1 output was requested while input remained DRAM interleaved",
+    "action": "reshard the one-tile-height activation to the matching L1 width-sharded memory configuration"
+  },
+  "second_attempt": {
+    "result": "error",
+    "cause": "DRAM output circular-buffer allocation was illegal for this program family",
+    "action": "keep activation and output shards in L1 while keeping only weights DRAM width-sharded"
+  },
+  "validated_dense_sequence_ms": {
+    "legal_dram_sharded": 0.271725,
+    "largest_legal_k_blocks": 0.266238,
+    "coherent_sharded_residual": 0.244340,
+    "sharded_qkv_output_hifi2": 0.220759,
+    "small_k_block_cap_4": 0.233758901595138,
+    "final_topology_bfp8_lofi": 0.1738882507197559,
+    "final_topology_bfp4_lofi": 0.15843544679228216
+  },
+  "correctness": {
+    "final_topology_bfp8_lofi_real_weight_pcc": 0.9992591153469044,
+    "final_topology_bfp4_lofi_synthetic_pcc": 0.9609597107913233,
+    "final_topology_bfp4_lofi_real_weight_prefill_pcc": 0.9666240169779701,
+    "final_topology_bfp4_lofi_real_weight_traced_decode_pcc": 0.9601010388619905
+  },
+  "per_role_final_k_blocks": {
+    "qkv": 8,
+    "o": 16,
+    "gate_up": 8,
+    "down": 12
+  },
+  "core_geometry": "8 cores are fixed by the Blackhole 8-bank one-row DRAM shard grid",
+  "program_family_limit": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig exposes K block, per-core M/N, and activation; it has no output-subblock parameter",
+  "moe_attention_candidate": {
+    "configuration": "actual BFP8 DRAM-sharded QKV/O with selected BFP8 router/experts",
+    "mean_ms": 0.5679614987457171,
+    "selected_unsharded_mean_ms": 0.5510249198414385,
+    "decision": "rejected: 4.5% slower"
+  }
+}

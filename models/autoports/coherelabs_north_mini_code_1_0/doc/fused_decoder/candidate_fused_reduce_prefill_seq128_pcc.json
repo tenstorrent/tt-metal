@@ -1,0 +1,20 @@
+{
+  "candidate": "deepseek_moe_fast_reduce_nc_fused score multiplication plus reduction",
+  "mode": "prefill",
+  "batch": 1,
+  "layer": 1,
+  "sequence": 128,
+  "selected_reference_tokens": [
+    0,
+    63,
+    127
+  ],
+  "pcc": 0.4088181766,
+  "functional_decoder_control_pcc": 0.9876476411,
+  "selected_fused_fallback_pcc": 0.9876476411,
+  "acceptance_pcc": 0.995,
+  "latency_candidate_mean_ms": 9.973846251,
+  "latency_selected_fallback_mean_ms": 10.079501,
+  "command": "pytest -q -s 'models/autoports/coherelabs_north_mini_code_1_0/tests/test_fused_decoder.py::test_fused_nonzero_sparse_prefill[blackhole-1-128-selected_tokens0-mesh_device0]'",
+  "decision": "rejected: faster but materially regresses the identical functional and selected-fallback control on the measured prefill workload"
+}

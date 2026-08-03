@@ -1,0 +1,25 @@
+{
+  "purpose": "completion-audit recheck of the best correct batch-1 sliding-MoE decode candidate",
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "workload": {
+    "mode": "decode",
+    "batch": 1,
+    "layer": 1,
+    "sequence": 1,
+    "warmups": 5,
+    "iterations": 100
+  },
+  "candidates": {
+    "default_matched_l1_chain": {
+      "mean_ms": 0.5507799284532666,
+      "min_ms": 0.547552015632391
+    },
+    "same_policy_without_l1_chain": {
+      "mean_ms": 0.561696381191723,
+      "min_ms": 0.5588330095633864
+    }
+  },
+  "default_speedup_percent": 1.94347927171892,
+  "decision": "retain the default matched L1 chain for layer 1 and layer 4",
+  "note": "The earlier isolated 0.543472 ms result did not reproduce as a stronger configuration under this paired 100-sample comparison."
+}

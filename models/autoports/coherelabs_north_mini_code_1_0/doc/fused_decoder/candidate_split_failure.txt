@@ -1,0 +1,9 @@
+Candidate: ttnn.split(packed_gate_up, 2, dim=-1)
+Shape: dense prefill batch 1, logical sequence 128, packed width 6144
+Architecture: Blackhole p300c
+Result: rejected after device-kernel JIT compile failure
+Diagnostic: single_tile_size_bytes was not declared in this scope
+Adaptation: two exact width slices at 3072
+Adapted result: PCC 0.99971542 at logical sequence 33; final sequence-128
+prefill 0.580181 ms wall / 542 us device, faster than the functional baseline
+of 0.636 ms / 586 us.

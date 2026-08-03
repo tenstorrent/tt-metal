@@ -1,0 +1,383 @@
+2026-07-31 08:00:45.191 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 21 items
+
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_path_source_contract PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_default_policy_selects_measured_optimized_paths PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-0-mesh_device0] 2026-07-31 08:00:46.890 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-31 08:00:46.890 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-31 08:00:46.890 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-31 08:00:46.890 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-31 08:00:46.892 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-31 08:00:46.892 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-31 08:00:46.895 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-31 08:00:46.973 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-31 08:00:46.973 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-31 08:00:46.973 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-07-31 08:00:46.973 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-31 08:00:46.975 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-31 08:00:47.178 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.d59a0000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17551360 B
+--------------------------------------------------------------------------
+2026-07-31 08:00:47.301 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:00:47.301 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:00:47.301 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-31 08:00:47.301 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-31 08:00:47.301 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:47.301 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:47.301 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:47.301 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:47.301 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:47.301 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:47.301 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:47.301 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:47.301 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-31 08:00:47.301 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-31 08:00:47.307 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:47.307 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:47.307 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:47.307 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:47.335 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:00:47.375 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-07-31 08:00:47.954 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=179285299401577 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-31 08:00:47.970 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+real-layer0-prefill: 0.9997715821988136
+real-layer0-traced-decode: 0.9992591153469044
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_exact_sparse_mask_survives_zero_routing_scores_repeated_trace[blackhole-mesh_device0] 2026-07-31 08:00:48.552 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:00:48.552 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:00:48.564 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:48.565 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:48.566 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:48.567 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:48.596 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:00:48.638 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+zero-routing-score-repeated-trace: 1.0
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-1-mesh_device0] 2026-07-31 08:00:56.857 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:00:56.857 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:00:56.868 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:56.869 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:56.870 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:56.871 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:56.899 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:00:56.940 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+dense-prefill-1: 0.9998296272967906
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_trace_replay[blackhole-mesh_device0] 2026-07-31 08:00:57.752 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:00:57.752 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:00:57.764 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:57.765 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:57.766 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:57.767 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:57.795 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:00:57.835 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+dense-traced-decode: 0.9993443595019876
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_cache_determinism[blackhole-mesh_device0] 2026-07-31 08:00:58.678 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:00:58.678 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:00:58.694 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:58.695 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:58.696 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:58.696 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:00:58.724 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:00:58.765 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+batch-two-prefill: 0.9996693530070144
+key-cache-user0-block0: 0.9999045987637342
+value-cache-user0-block0: 0.9999100858729575
+key-cache-user0-block1: 0.9999287039009856
+value-cache-user0-block1: 0.9999331849780907
+key-cache-user1-block0: 0.9999109045056419
+value-cache-user1-block0: 0.9999158187977432
+key-cache-user1-block1: 0.9999211610775977
+value-cache-user1-block1: 0.999928284577174
+decode-key-slot-0: 0.9999234006362313
+decode-value-slot-0: 0.9999279033062356
+decode-key-slot-1: 0.9999298474313016
+decode-value-slot-1: 0.9999318062397232
+decode-key-slot-2: 0.9999168381759129
+decode-value-slot-2: 0.9999304585684996
+decode-key-slot-3: 0.9999198056431312
+decode-value-slot-3: 0.999922611164985
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-0-mesh_device0] 2026-07-31 08:01:00.077 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:00.077 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:00.089 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:00.089 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:00.090 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:00.091 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:00.119 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:00.160 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-1-1025-selected_tokens0-mesh_device0] 2026-07-31 08:01:00.951 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:00.951 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:00.962 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:00.964 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:00.964 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:00.965 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:00.994 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:01.035 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+nonzero-sparse-layer-1-prefill: 0.9996619458892754
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-1-mesh_device0] 2026-07-31 08:01:09.249 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:09.249 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:09.262 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:09.263 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:09.264 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:09.264 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:09.292 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:09.334 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+nonzero-sparse-layer-1-batch-1-dynamic-trace: 0.9998205878184351
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sliding_history[blackhole-mesh_device0] 2026-07-31 08:01:17.516 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:17.516 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:17.529 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:17.530 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:17.531 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:17.532 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:17.560 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:17.601 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+sliding-window-4097: 0.9997699567298607
+sliding-moe-dynamic-trace: 0.9994813421347924
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_real_weight_sliding_moe_decode[blackhole-mesh_device0] 2026-07-31 08:01:27.069 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:27.069 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:27.081 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:27.082 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:27.083 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:27.083 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:27.111 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:27.152 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+real-layer1-selected-experts: [107, 119, 126, 14, 61, 79, 18, 20]
+real-layer1-decode: 0.9997213420656484
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-4-mesh_device0] 2026-07-31 08:01:28.034 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:28.034 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:28.048 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:28.049 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:28.050 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:28.050 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:28.078 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:28.119 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+real-layer4-prefill: 0.99965027162882
+real-layer4-traced-decode: 0.9996039181698199
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-31-mesh_device0] 2026-07-31 08:01:29.588 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:29.588 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:29.599 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:29.600 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:29.601 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:29.602 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:29.630 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:29.671 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+dense-prefill-31: 0.999680815186725
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-1-mesh_device0] 2026-07-31 08:01:30.481 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:30.481 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:30.493 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:30.494 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:30.494 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:30.495 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:30.524 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:30.567 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-4-33-selected_tokens1-mesh_device0] 2026-07-31 08:01:31.718 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:31.718 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:31.730 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:31.732 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:31.733 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:31.734 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:31.761 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:31.803 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+nonzero-sparse-layer-4-prefill: 0.9997088530501494
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-4-mesh_device0] 2026-07-31 08:01:39.986 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:39.986 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:39.998 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:39.999 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:39.999 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:40.000 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:40.028 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:40.069 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+nonzero-sparse-layer-4-batch-1-dynamic-trace: 0.9997997724114763
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-32-mesh_device0] 2026-07-31 08:01:48.226 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:48.226 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:48.238 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:48.239 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:48.239 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:48.240 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:48.268 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:48.884 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=179367551678890 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-31 08:01:48.899 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+dense-prefill-32: 0.9996959449374344
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-4-mesh_device0] 2026-07-31 08:01:49.718 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:49.718 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:49.730 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:49.731 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:49.732 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:49.733 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:49.760 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:49.801 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-33-mesh_device0] 2026-07-31 08:01:50.909 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:50.909 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:50.921 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:50.922 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:50.923 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:50.924 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:50.952 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:50.993 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+dense-prefill-33: 0.9996756670923735
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-65-mesh_device0] 2026-07-31 08:01:51.798 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:01:51.798 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:01:51.810 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:51.811 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:51.812 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:51.813 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-31 08:01:51.841 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:01:51.881 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+dense-prefill-65: 0.999689047779696
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/pytest_results.xml -
+============================== slowest durations ===============================
+9.15s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sliding_history[blackhole-mesh_device0]
+7.89s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_exact_sparse_mask_survives_zero_routing_scores_repeated_trace[blackhole-mesh_device0]
+7.89s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-1-1025-selected_tokens0-mesh_device0]
+7.86s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-1-mesh_device0]
+7.86s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-4-33-selected_tokens1-mesh_device0]
+7.84s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-4-mesh_device0]
+1.24s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-0-mesh_device0]
+1.15s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-4-mesh_device0]
+0.99s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_cache_determinism[blackhole-mesh_device0]
+0.87s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-32-mesh_device0]
+0.83s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-1-mesh_device0]
+0.79s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-4-mesh_device0]
+0.56s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_real_weight_sliding_moe_decode[blackhole-mesh_device0]
+0.52s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_trace_replay[blackhole-mesh_device0]
+0.49s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-32-mesh_device0]
+0.49s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-65-mesh_device0]
+0.49s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-31-mesh_device0]
+0.49s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-1-mesh_device0]
+0.48s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-33-mesh_device0]
+0.47s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-0-mesh_device0]
+0.30s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_exact_sparse_mask_survives_zero_routing_scores_repeated_trace[blackhole-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-1-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-65-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sliding_history[blackhole-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-4-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_real_weight_sliding_moe_decode[blackhole-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-1-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_trace_replay[blackhole-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-1-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-1-1025-selected_tokens0-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_cache_determinism[blackhole-mesh_device0]
+0.29s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-4-33-selected_tokens1-mesh_device0]
+0.28s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-4-mesh_device0]
+0.28s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-4-mesh_device0]
+0.28s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-0-mesh_device0]
+0.28s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-31-mesh_device0]
+0.28s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-33-mesh_device0]
+0.25s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-0-mesh_device0]
+0.18s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_path_source_contract
+0.17s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_default_policy_selects_measured_optimized_paths
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-1-1025-selected_tokens0-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-4-33-selected_tokens1-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-4-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-1-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-32-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_cache_determinism[blackhole-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_trace_replay[blackhole-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-1-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_real_weight_sliding_moe_decode[blackhole-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-0-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-33-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-31-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-65-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-4-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-1-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-4-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sliding_history[blackhole-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-0-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_exact_sparse_mask_survives_zero_routing_scores_repeated_trace[blackhole-mesh_device0]
+
+(4 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_path_source_contract
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_default_policy_selects_measured_optimized_paths
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-0-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_exact_sparse_mask_survives_zero_routing_scores_repeated_trace[blackhole-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-1-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_trace_replay[blackhole-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_cache_determinism[blackhole-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-0-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-1-1025-selected_tokens0-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-1-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sliding_history[blackhole-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_real_weight_sliding_moe_decode[blackhole-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_selected_policy_real_weight_prefill_and_traced_decode[blackhole-4-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-31-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-1-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_prefill[blackhole-4-33-selected_tokens1-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_nonzero_sparse_traced_batch1[blackhole-4-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-32-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_representative_layer_kinds[blackhole-4-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-33-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill[blackhole-65-mesh_device0]
+======================== 21 passed in 66.63s (0:01:06) =========================
+nanobind: leaked 2 instances!
+ - leaked instance 0x734469814468 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x73446903c4c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "get_fabric_node_id"
+ - leaked function "cpu"
+ - leaked function ""
+ - leaked function "buffer_address"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "storage_type"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-31 08:01:54.202 | info     |    BuildKernels | JIT cache stats: 820/820 hits (100.0%) [820 cached, 2525 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-31 08:01:54.202 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-31 08:01:54.216 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-31 08:01:54.216 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-31 08:01:54.705 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-31 08:01:54.705 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-31 08:01:54.705 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

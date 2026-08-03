@@ -1,0 +1,51 @@
+{
+  "diagnostic": "full public layer-1 prefill against all-token synthetic active-expert reference",
+  "sequence": 128,
+  "batch": 1,
+  "acceptance_pcc": 0.995,
+  "controls": {
+    "functional_decoder_pcc": 0.9876476411,
+    "selected_fused_fallback_pcc": 0.9876476411,
+    "classification": "identical below-threshold controls prove this newly added stress is not a fused regression or an established functional acceptance case"
+  },
+  "candidates": [
+    {
+      "name": "one whole-shape fused weighted reduction",
+      "pcc": 0.4088181766,
+      "mean_ms": 9.973846251,
+      "decision": "rejected: material correctness regression versus both controls"
+    },
+    {
+      "name": "four 32-token fused weighted reductions plus concat",
+      "pcc": 0.9876487399,
+      "mean_ms": 10.410248501,
+      "decision": "rejected: control-equivalent but 3.3% slower than selected 10.079501 ms fallback"
+    },
+    {
+      "name": "one-token exact sparse plus 127-token packed hybrid",
+      "pcc": 0.9876813004,
+      "decision": "rejected: does not improve the control enough"
+    },
+    {
+      "name": "four 32-token exact sparse chunks",
+      "pcc": 0.9873369361,
+      "decision": "rejected: worse than the controls"
+    },
+    {
+      "name": "whole 128-token exact sparse",
+      "failure": "256 output blocks exceeded 64 available cores",
+      "decision": "rejected: operator geometry unsupported"
+    },
+    {
+      "name": "HiFi4 FP32-accumulate packed projections",
+      "pcc": 0.9877466552,
+      "decision": "rejected: does not improve the control enough"
+    },
+    {
+      "name": "separate functional gate/up projections and standalone SiLU",
+      "pcc": 0.9876476411,
+      "decision": "control: exactly reproduces unchanged FunctionalDecoder"
+    }
+  ],
+  "final_decision": "retain the faster packed fallback; it exactly preserves the functional control and all established MoE acceptance tests remain above 0.995"
+}

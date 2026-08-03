@@ -1,0 +1,22 @@
+{
+  "candidate": "four independent 32-token deepseek_moe_fast_reduce_nc_fused calls plus concat",
+  "mode": "prefill",
+  "batch": 1,
+  "layer": 1,
+  "sequence": 128,
+  "tile_size": 32,
+  "tile_count": 4,
+  "active_expert_reference_pcc": 0.9876487399,
+  "selected_fallback_active_expert_reference_pcc": 0.9876476411,
+  "functional_decoder_active_expert_reference_pcc": 0.9876476411,
+  "acceptance_pcc": 0.995,
+  "mean_ms": 10.410248501,
+  "selected_fallback_mean_ms": 10.079501,
+  "functional_baseline_mean_ms": 14.908,
+  "measurement": {
+    "warmups": 5,
+    "iterations": 20
+  },
+  "diagnostic_scope": "new all-128-token synthetic stress; not an established functional acceptance case because the unchanged functional decoder itself is below 0.995",
+  "decision": "rejected: slicing restores functional/fallback-equivalent numerics but is 3.3% slower than the selected fallback"
+}

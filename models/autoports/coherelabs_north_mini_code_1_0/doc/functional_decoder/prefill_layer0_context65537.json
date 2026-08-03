@@ -1,0 +1,11 @@
+{
+  "warmed_ms": 2867.3541039970587,
+  "finite": true,
+  "mode": "prefill",
+  "batch": 1,
+  "context": 65537,
+  "layer": 0,
+  "layer_kind": "dense_full_forced_rope",
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "kv_cache_bytes": 134219776
+}

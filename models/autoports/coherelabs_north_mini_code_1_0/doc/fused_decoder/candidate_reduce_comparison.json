@@ -1,0 +1,15 @@
+{
+  "candidate": "explicit fast_reduce_nc replacing sum after score multiply",
+  "mode": "decode",
+  "batch": 32,
+  "layer": 1,
+  "sum_mean_ms": 8.293310,
+  "explicit_fast_reduce_nc_mean_ms": 8.293376,
+  "decision": "rejected: no speedup",
+  "superseded_by": {
+    "candidate": "deepseek_moe_fast_reduce_nc_fused score multiply plus reduction",
+    "pcc": 0.9981931682,
+    "mean_ms": 8.275270,
+    "decision": "retained"
+  }
+}

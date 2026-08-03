@@ -1,0 +1,14 @@
+{
+  "candidate": "paged_fused_update_cache with disjoint value grid",
+  "mode": "decode",
+  "batch": 1,
+  "layer": 0,
+  "before_mean_ms": 0.324608,
+  "after_mean_ms": 0.321190,
+  "final_mean_ms": 0.320013,
+  "pcc": 0.99976456,
+  "initial_failure": "key and value inputs used overlapping core grids",
+  "adaptation": "reshard value onto a disjoint batch-sized core set",
+  "watcher": "clean",
+  "decision": "retained"
+}

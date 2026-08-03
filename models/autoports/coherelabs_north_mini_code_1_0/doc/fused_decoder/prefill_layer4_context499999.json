@@ -1,0 +1,11 @@
+{
+  "single_pass_ms": 173316.14600299508,
+  "finite": true,
+  "mode": "prefill",
+  "batch": 1,
+  "context": 499999,
+  "layer": 4,
+  "layer_kind": "full_no_rope_moe",
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "kv_cache_bytes": 1023997952
+}

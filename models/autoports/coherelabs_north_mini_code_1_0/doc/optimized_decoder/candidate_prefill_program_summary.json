@@ -1,0 +1,42 @@
+{
+  "phase": "batch-1 prefill, logical sequence 128, full MoE layer 4",
+  "baseline_auto_program_mean_ms": 10.061028460040689,
+  "candidates": {
+    "explicit_48_64_cores": {
+      "result": "illegal",
+      "evidence": "compute grid (12,4) exceeds the Blackhole worker grid x=11; with M=4 tiles, legal grid_y divisors are 1,2,4, so a 48-core 2D grid would require x>=12",
+      "artifact": "candidate_prefill_moe_grid_48_64_error.log"
+    },
+    "explicit_24_32_cores_k_block_2": {
+      "result": "latency pass, correctness fail",
+      "mean_ms": 9.741679398575798,
+      "layer1_seq1025_pcc_hifi2": 0.9685410983785117,
+      "threshold": 0.995,
+      "artifacts": [
+        "candidate_prefill_moe_grid_24_32_prefill_layer4.json",
+        "prefill_large_program_correctness_layer1.log"
+      ]
+    },
+    "explicit_24_32_cores_k_block_4": {
+      "result": "latency pass",
+      "mean_ms": 8.546047445270233,
+      "artifact": "prefill_moe_grid_24_32_block4_prefill_layer4.json"
+    },
+    "explicit_24_32_cores_k_block_8": {
+      "result": "selected; latency and correctness pass",
+      "mean_ms": 8.003326848847792,
+      "layer1_seq1025_pcc": 0.9995155108427529,
+      "threshold": 0.995,
+      "artifacts": [
+        "prefill_moe_grid_24_32_block8_prefill_layer4.json",
+        "prefill_block8_correctness_layer1_seq1025.log"
+      ]
+    },
+    "explicit_24_32_cores_k_block_16_12": {
+      "result": "latency pass, slower than block 8",
+      "mean_ms": 8.105062546383124,
+      "artifact": "prefill_moe_grid_24_32_block16_12_prefill_layer4.json"
+    }
+  },
+  "decision": "select legal 24/32-core gate/up/down programs with in0 K block 8"
+}
