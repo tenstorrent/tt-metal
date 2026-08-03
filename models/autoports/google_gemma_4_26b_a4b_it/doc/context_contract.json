@@ -4,7 +4,7 @@
   "hf_advertised_context": 262144,
   "current_supported_context": 262144,
   "capability_reduction": null,
-  "validated_at_utc": "2026-07-28",
+  "validated_at_utc": "2026-08-03",
   "hardware": {
     "architecture": "Blackhole",
     "board": "P300",
@@ -70,6 +70,54 @@
       }
     }
   },
+  "optimized_decoder": {
+    "prefill": {
+      "contract_batches": [
+        1
+      ],
+      "non_aligned_lengths_tested": [
+        31,
+        33,
+        1025
+      ],
+      "expert_weight_dtype": "BFLOAT8_B",
+      "expert_math_fidelity": "LoFi",
+      "expert_up_gate_program": "4_core_K8",
+      "expert_down_program": "8_core_K11"
+    },
+    "decode": {
+      "contract_batches": [
+        1
+      ],
+      "serving_batch": 1,
+      "batch_32_status": "out_of_scope_for_optimized_decoder_stage",
+      "tested_context": 262144,
+      "largest_tested_current_position": 262143,
+      "traced": true,
+      "residual_layout": "L1_WIDTH_SHARDED_8_CORE_WITH_INTERLEAVED_INPUT_NORM",
+      "attention_weight_dtype": "BFLOAT16",
+      "attention_math_fidelity": "HiFi2",
+      "dense_weight_dtype": "BFLOAT16",
+      "dense_math_fidelity": "HiFi4",
+      "expert_weight_dtype": "BFLOAT8_B",
+      "expert_math_fidelity": "LoFi",
+      "kv_cache_dtype": "BFLOAT8_B",
+      "kv_cache_layout": "DRAM_INTERLEAVED",
+      "layer_kinds": {
+        "sliding_attention": {
+          "layer_idx": 0,
+          "context_artifact": "optimized_decoder/advertised_context_decode_sliding_attention.json",
+          "cache_artifact": "optimized_decoder/kv_bfp8_layer0_sliding_attention.json"
+        },
+        "full_attention": {
+          "layer_idx": 5,
+          "context_artifact": "optimized_decoder/advertised_context_decode_full_attention.json",
+          "cache_artifact": "optimized_decoder/kv_bfp8_layer5_full_attention.json"
+        }
+      }
+    },
+    "capability_reduction": null
+  },
   "paged_cache": {
     "sliding_attention": {
       "logical_block_size": 64,
@@ -84,5 +132,5 @@
       "shared_physical_cache_view_also_tested": true
     }
   },
-  "notes": "No context reduction: real-weight whole-layer prefill passed at aligned 262144 and non-aligned 262143 for both layer kinds. Traced batch-1 decode passed at current position 262143 using rolled page tables, nonzero cache baselines, and device-verified distinct history sentinels at logical positions 0, 131071, and 262142. Traced correctness, mutable-buffer replay, and current-source latency passed at serving batch 32."
+  "notes": "No context reduction: real-weight whole-layer prefill passed at aligned 262144 and non-aligned 262143 for both layer kinds. Traced functional batch-1 decode passed at current position 262143 using rolled page tables, nonzero cache baselines, and device-verified distinct history sentinels at logical positions 0, 131071, and 262142. Functional traced correctness, mutable-buffer replay, and current-source latency passed at serving batch 32. The optimized-decoder stage independently preserves the 262144 context at batch 1 and selects BFP8 DRAM-interleaved KV caches; batch 32 is explicitly out of scope and does not gate optimized-decoder completion."
 }

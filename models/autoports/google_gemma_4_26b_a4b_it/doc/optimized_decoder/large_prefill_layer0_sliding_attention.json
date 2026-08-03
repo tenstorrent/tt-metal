@@ -1,0 +1,31 @@
+{
+  "baseline_host_ms_median": 388.9698040438816,
+  "baseline_host_ms_samples": [
+    389.0289469854906,
+    388.8425020268187,
+    388.9281750889495,
+    389.01264499872923,
+    388.9698040438816,
+    389.26841295324266,
+    388.84555804543197
+  ],
+  "candidate_host_ms_median": 389.16922302450985,
+  "candidate_host_ms_samples": [
+    389.2758070724085,
+    389.16922302450985,
+    389.26811201963574,
+    389.1551070846617,
+    389.2900039209053,
+    389.05493600759655,
+    389.0566590707749
+  ],
+  "decision": "reject",
+  "down_config": "grid=8x8, M=4, Kblock=6, per_core_N=11",
+  "gate_up_config": "grid=6x8, M=4, Kblock=11, per_core_N=11",
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "logical_batch": 1,
+  "pcc": 0.9999915717601856,
+  "sequence_length": 1024,
+  "speedup": 0.9994875777198453
+}
