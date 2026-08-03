@@ -64,19 +64,19 @@ class _TtHCABase(LightweightModule):
         return ttnn.from_torch(
             torch_weight,
             device=self.device,
-            dtype=self.dtype,
+            dtype=self.weights_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.memory_config,
             mesh_mapper=mesh_mapper,
         )
 
-    def _from_torch(self, x: torch.Tensor, mesh_mapper=None):
+    def _from_torch(self, x: torch.Tensor, mesh_mapper=None, dtype=None):
         if self.is_mesh and mesh_mapper is None:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
         return ttnn.from_torch(
             x.to(torch.bfloat16),
             device=self.device,
-            dtype=self.dtype,
+            dtype=dtype or self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.memory_config,
             mesh_mapper=mesh_mapper,
@@ -118,10 +118,14 @@ class TtHCACompressor(_TtHCABase):
         tp_axis: int = 1,
         topology=ttnn.Topology.Linear,
         dtype=ttnn.bfloat16,
+        # Matmul weights only. Norms / position_bias / sinks / trans_mat stay bf16 -- they never
+        # enter a matmul, so quantizing them costs accuracy and saves nothing (mirrors mla.py).
+        weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
         self.device = device
         self.dtype = dtype
+        self.weights_dtype = weights_dtype
         self.memory_config = memory_config
         self.head_dim = int(head_dim)
         self.compress_rate = int(compress_rate)
@@ -338,10 +342,14 @@ class TtHCA(_TtHCABase):
         tp_axis: int = 1,
         topology=ttnn.Topology.Linear,
         dtype=ttnn.bfloat16,
+        # Matmul weights only. Norms / position_bias / sinks / trans_mat stay bf16 -- they never
+        # enter a matmul, so quantizing them costs accuracy and saves nothing (mirrors mla.py).
+        weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
         self.device = device
         self.dtype = dtype
+        self.weights_dtype = weights_dtype
         self.memory_config = memory_config
         self.num_heads = int(num_heads)
         self.head_dim = int(head_dim)
@@ -399,7 +407,9 @@ class TtHCA(_TtHCABase):
             o_a_dims = [None, None]
             o_a_dims[self.tp_axis] = 1
             o_a_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=o_a_dims)
-        self.wo_a = self._from_torch(o_a_grouped, mesh_mapper=o_a_mapper)
+        # Goes through _from_torch (not _to_tt_linear_weight) because it is pre-grouped, but it IS a
+        # matmul weight -> same dtype as the rest.
+        self.wo_a = self._from_torch(o_a_grouped, mesh_mapper=o_a_mapper, dtype=self.weights_dtype)
         # o_b_proj contracts over all o_groups*o_lora_rank columns while a chip holds only its own
         # groups' slice -> contraction(row)-parallel, reduce-scattered in _o_proj.
         self.wo_b = self._to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
@@ -424,7 +434,7 @@ class TtHCA(_TtHCABase):
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCA":
         # Forward the mesh/CCL config so the compressor rides the same SP/TP axes as the block.
-        compressor_keys = ("sp_axis", "tp_axis", "topology")
+        compressor_keys = ("sp_axis", "tp_axis", "topology", "dtype", "weights_dtype")
         compressor = TtHCACompressor.from_reference(
             device, reference.compressor, config, **{k: kwargs[k] for k in compressor_keys if k in kwargs}
         )
@@ -685,21 +695,21 @@ class TtHCA(_TtHCABase):
         in_per_group = self.num_heads * self.head_dim // self.o_groups
         groups_local = self.o_groups // self.tp_factor
 
-        # Every regroup here moves along the LAST axis only. The obvious reshape/permute route puts
-        # groups_local (2) or heads (16) on dim -2, which TILE pads to 32 -- [B, S, 2, 4096] holds
-        # 8.4 MB of data in 134 MB of tiles, and the five ops it took cost 2,594 us/chunk.
-        # nlp_concat_heads is the same call MLA makes at mla.py:1016.
-        x = ttnn.experimental.nlp_concat_heads(attn, memory_config=self.memory_config)  # [B, 1, S, heads*hd]
-        # Group g owns heads [g*heads_per_group, ...), i.e. channels [g*in_per_group, ...) -- so the
-        # group split is a last-axis cut on a tile boundary. Group axis must be dim 1 for the batched
-        # matmul, and dim 0 must be 1 for the weight to broadcast.
-        x = ttnn.concat(
-            [
-                ttnn.slice(x, [0, 0, 0, g * in_per_group], [batch, 1, seq_len, (g + 1) * in_per_group])
-                for g in range(groups_local)
-            ],
-            dim=1,
-        )  # [B, groups_local, S, in_per_group]
+        # Regroup with LEADING-axis reshapes only. The obvious reshape/permute route puts groups_local
+        # (2) or heads (16) on dim -2, which TILE pads to 32 -- [B, S, 2, 4096] holds 8.4 MB of data in
+        # 134 MB of tiles, and the five ops it took cost 2,594 us/chunk. Here dims -2/-1 never change,
+        # so the tiling is untouched and both reshapes are metadata-only (~3 us).
+        #
+        # nlp_concat_heads reads dim 0 as batch and dim 1 as heads, so presenting attn as
+        # [groups, heads_per_group, ...] makes it emit one in_per_group-wide row per group in a single
+        # call. That also bounds its L1 circular buffers by in_per_group (a model constant) instead of
+        # heads_local*head_dim (a mesh function): concat-heads CBs are ~2 * width * 32 * 2 B, so the
+        # all-heads form needs 4.2 MB at tp=1 / 2.1 MB at tp=2 against a 1.5 MB budget. MLA calls it on
+        # all heads (mla.py:1016) and gets away with it only because its v_head_dim is 128, not 512.
+        x = ttnn.reshape(attn, [groups_local, attn.shape[1] // groups_local, seq_len, self.head_dim])
+        x = ttnn.experimental.nlp_concat_heads(x, memory_config=self.memory_config)  # [groups, 1, S, in_per_group]
+        # Group axis must be dim 1 for the batched matmul, and dim 0 must be 1 for the weight to broadcast.
+        x = ttnn.reshape(x, [batch, groups_local, seq_len, in_per_group])
 
         grouped = ttnn.linear(x, self.wo_a, memory_config=self.memory_config)  # [B, groups_local, S, o_lora_rank]
         o_lora_rank = grouped.shape[-1]
