@@ -46,44 +46,19 @@ struct DemotedCase {
 
 const std::vector<DemotedCase>& ungeneralized_demoted_cases() {
     static const std::vector<DemotedCase> cases = {
-        // UNGENERALIZED: row path at Wt == 3 (choose_2d_ncol yields 1, so no 2D column split fits),
-        // DRAM placement. The L1 twin is covered by the wt3_l1_source predicate; DRAM at Wt == 3 is
-        // not separable by any mechanism (a near-neighbour DRAM shape at the same Wt == 3 row path
-        // clears the gate in the same family), so these stay enumerated.
-        {{3, 7, 64, 96}, BufferType::DRAM, DataType::BFLOAT16},
-        {{5, 160, 96}, BufferType::DRAM, DataType::BFLOAT16},
         // UNGENERALIZED: row path at Wt == 5. Wt == 5 is prime, so choose_2d_ncol can never find a
         // divisor d >= 2 that fits and these fall to build_row no matter how much grid is free —
         // but Wt == 5 alone is not the condition (other Wt == 5 shapes clear/straddle parity), so
         // this stays enumerated rather than becoming a predicate.
         {{4, 224, 160}, BufferType::DRAM, DataType::BFLOAT16},
         {{4, 224, 160}, BufferType::L1, DataType::BFLOAT16},
-        // Reclassified as port bugs / non-demotions by phase-7 analysis (not code defects here, but
-        // NOT demoted): [9,160,96]|DRAM, [4,12,96,96]|DRAM, [6,224,160]|DRAM, [7,96,160]|L1 all
-        // measured beating native / straddling parity on re-measurement and must stay on codegen —
-        // they are intentionally NOT in this list. [5,8,64,64]|L1 and [6,4,96,64]|L1 (old Wt == 2
-        // ungeneralized entries) are now covered by the generalized wt2_no_row_pipelining predicate
-        // below (buffer_type == L1) and no longer need an enumerated entry.
+        // The former Wt == 3 ungeneralized/L1 entries ({3,7,64,96}, {5,160,96}, and the
+        // wt3_l1_source predicate) are removed: phase-7 root-caused the Wt == 3 row-path loss to a
+        // program-factory defect (write_batch not a multiple of chunk_wt degenerating the
+        // batched-writer pipeline to lockstep, fixed in build_row) rather than a genuine
+        // performance ceiling, so none of that family is demoted anymore.
     };
     return cases;
-}
-
-// Largest column-block count the 2D-column tilize split can use, mirroring
-// _choose_tilize_2d_ncol / uses_2d_column_path in ops/tilize/spec.py (and the transliteration in
-// tilize_codegen_program_factory.cpp): the largest divisor d >= 2 of Wt with total_Ht * d <= cores.
-// 1 means "no 2D column split", i.e. the program factory falls through to build_row.
-uint32_t choose_2d_ncol(uint32_t total_ht, uint32_t wt, uint32_t grid_cores) {
-    if (total_ht >= grid_cores || wt < 2) {
-        return 1;
-    }
-    const uint32_t max_ncol = std::min(grid_cores / total_ht, wt);
-    uint32_t best = 1;
-    for (uint32_t d = 2; d <= max_ncol; ++d) {
-        if (wt % d == 0) {
-            best = d;
-        }
-    }
-    return best;
 }
 
 }  // namespace
@@ -157,30 +132,18 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
         return true;
     }
 
-    // tilize_rm_row_path_wt2_no_row_pipelining: Wt == 2 also forces ncol == 1. At Wt == 2 the row
-    // builder keeps cb_depth == 2, so a core holding two or more tile-rows can prefetch row n+1
-    // while compute drains row n - the only place the generated program has a structural edge over
-    // native, and it only exists once NC*Ht exceeds the core count (grid_cores). Below that there is
-    // nothing to overlap and codegen's fixed per-core setup (TensorAccessor resolution, one read
-    // barrier per tile-row, CB bookkeeping for a write batch of 4 a 2-tile core never fills) is paid
-    // against only 2 tiles of payload. Interleaved L1 makes the transfer itself cheap enough that the
-    // fixed-cost share stays dominant at every NC*Ht, so the L1 arm has no total_ht bound. A 4-byte
-    // dtype (element_size > 2) doubles the bytes per tile-row and reaches DRAM parity one step
-    // earlier than its 2-byte counterparts, so the DRAM/4-byte arm is bounded strictly below
-    // grid_cores rather than sharing the <= 28 (measured small-NC*Ht) bound.
-    constexpr uint32_t kSmallTotalHtBound = 28;
-    if (wt == 2 && (output_buffer_type == BufferType::L1 || total_ht <= kSmallTotalHtBound ||
-                    (input_tensor.element_size() <= 2 && total_ht < grid_cores))) {
-        return true;
-    }
-
-    // tilize_rm_row_path_wt3_l1_source: interleaved-L1 transport makes the row path's per-stick
-    // traffic core-to-core L1 rather than DRAM, which speeds up the part of the kernel both legs
-    // share while codegen's fixed per-core setup is unchanged - enough to cross below parity on the
-    // Wt == 3 row path. Restricted to Wt == 3 falling to the row path, i.e. no divisor d >= 2 of Wt
-    // fits (for Wt == 3: NC*Ht > grid_cores/3), and to interleaved L1: the same shapes with a DRAM
-    // placement cleared the gate, and Wt == 3 with a 2D-column split wins outright.
-    if (wt == 3 && output_buffer_type == BufferType::L1 && choose_2d_ncol(total_ht, wt, grid_cores) == 1) {
+    // tilize_rm_row_path_wt2_one_row_per_core: Wt == 2 also forces ncol == 1 (uses_2d_column_path
+    // short-circuits at Wt <= 2), so build_row is selected for any NC*Ht. When NC*Ht <= grid_cores
+    // every core owns exactly one tile-row (2 tiles): the read/barrier count matches native's
+    // reader_unary_stick_layout_split_rows_multicore exactly, so codegen's heavier per-core setup
+    // (unified-reader named-CT dispatch, TensorAccessor construction, deeper CB plan, a write batch
+    // of 4 a 2-tile core never fills) is paid with no transport advantage to trade against it. Once
+    // NC*Ht exceeds grid_cores a core owns >= 2 tile-rows and codegen's double-buffered CB_IN lets
+    // row n+1 prefetch while compute drains row n - the only structural edge codegen has here - so
+    // DRAM crosses back above parity there. Interleaved L1 keeps the underlying transfer cheap
+    // enough that the fixed per-core cost stays dominant regardless of tile-rows per core, so the
+    // L1 arm has no NC*Ht bound.
+    if (wt == 2 && (total_ht <= grid_cores || output_buffer_type == BufferType::L1)) {
         return true;
     }
 

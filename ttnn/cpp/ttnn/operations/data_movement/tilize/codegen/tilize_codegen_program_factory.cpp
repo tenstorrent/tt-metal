@@ -380,7 +380,17 @@ ProgramDescriptor build_row(
         cb_depth = 1;
     }
     const bool force_single_write = attrs.use_low_perf || (g.total_ht > num_cores) || minimal_work;
-    const uint32_t write_batch = force_single_write ? 1 : kDefaultWriteBatch;
+    uint32_t write_batch = force_single_write ? 1 : kDefaultWriteBatch;
+    // Compute only ever adds pages in whole chunk_wt-sized tilize_block groups, so a batched
+    // writer that needs a non-multiple-of-chunk_wt capacity (required_cb_out rounds up to
+    // align_up(2*write_batch, chunk_wt)) is reserving more than any single compute group can
+    // supply: the packer blocks on the partial group while the writer blocks on the pages only
+    // that group produces, degenerating the pipeline to lockstep instead of overlapping. Clamping
+    // to chunk_wt keeps the required capacity at exactly 2*chunk_wt, reachable one compute group
+    // at a time.
+    if (!force_single_write && align_up(2 * write_batch, chunk_wt) > 2 * chunk_wt) {
+        write_batch = chunk_wt;
+    }
 
     const uint32_t requested_in_depth = cb_depth * chunk_wt;
     uint32_t requested_out_depth = std::max(cb_depth * chunk_wt, required_cb_out(write_batch, chunk_wt));
