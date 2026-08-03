@@ -1,0 +1,26 @@
+{
+  "layer_kind": "dense_full_forced_rope",
+  "layer_idx": 0,
+  "batch": 1,
+  "traced_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense_gate_up": "BFLOAT4_B",
+    "dense_down": "BFLOAT8_B",
+    "decode_expert_gate_up": "BFLOAT8_B",
+    "decode_expert_down": "BFLOAT8_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense_gate_up": "BFLOAT4_B",
+    "dense_down": "BFLOAT8_B",
+    "decode_expert_gate_up": "BFLOAT8_B",
+    "decode_expert_down": "BFLOAT8_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "policy_source": "doc/optimized_decoder/artifacts/final_decode_b1.json effective_configuration.policy, candidate=default",
+  "advisor_commit": "618cd4e75dae69d334bb9d8cdeff314816ccf214",
+  "advisor_pin_expected": "618cd4e75d",
+  "advisor_home": "/home/mvasiljevic/tt-mlir",
+  "capture_template": ".agents/skills/advisor-challenger/scripts/capture_template.py"
+}

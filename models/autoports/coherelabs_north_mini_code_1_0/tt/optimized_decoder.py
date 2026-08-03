@@ -590,6 +590,52 @@ POLICIES["dense_gate_up_g64_sub3"] = dataclass_replace(
     dense_decode_gate_up_out_block_w=3,
     dense_decode_gate_up_subblock_w=3,
 )
+# Advisor-challenger candidates.  All are default-off and preserve the
+# shipped precision/fidelity.  The first uses exactly-dividing output grids
+# for the 96-tile gate/up and 64-tile down projections; the second tests the
+# complete 110-core device grid, above the advisor's unranked 96-core pick.
+POLICIES["advisor_dense_chain_exact"] = dataclass_replace(
+    POLICIES["default"],
+    dense_decode_gate_up_grid=(8, 6),
+    dense_decode_gate_up_in0_block_w=16,
+    dense_decode_gate_up_out_block_w=2,
+    dense_decode_gate_up_subblock_w=2,
+    dense_decode_down_grid=(8, 8),
+    dense_decode_down_in0_block_w=2,
+    dense_decode_down_out_block_w=1,
+    dense_decode_down_subblock_w=1,
+)
+POLICIES["advisor_dense_chain_g110"] = dataclass_replace(
+    POLICIES["default"],
+    dense_decode_gate_up_grid=(11, 10),
+    dense_decode_gate_up_in0_block_w=16,
+    dense_decode_gate_up_out_block_w=1,
+    dense_decode_gate_up_subblock_w=1,
+    dense_decode_down_grid=(11, 10),
+    dense_decode_down_in0_block_w=1,
+    dense_decode_down_out_block_w=1,
+    dense_decode_down_subblock_w=1,
+)
+POLICIES["advisor_dense_chain_ds_exact"] = dataclass_replace(
+    POLICIES["default"],
+    dense_decode_gate_up_grid=(8, 6),
+    dense_decode_gate_up_in0_block_w=16,
+    dense_decode_gate_up_out_block_w=2,
+    dense_decode_gate_up_subblock_w=2,
+    dense_decode_down_dram_sharded=True,
+    dense_decode_down_dram_sharded_batch1=True,
+)
+POLICIES["advisor_dense_chain_ds_down32"] = dataclass_replace(
+    POLICIES["default"],
+    dense_decode_gate_up_grid=(8, 6),
+    dense_decode_gate_up_in0_block_w=16,
+    dense_decode_gate_up_out_block_w=2,
+    dense_decode_gate_up_subblock_w=2,
+    dense_decode_down_dram_sharded=True,
+    dense_decode_down_dram_sharded_batch1=True,
+)
+POLICIES["advisor_drop_attention_reshards"] = dataclass_replace(POLICIES["default"])
+POLICIES["advisor_drop_concat_reshard"] = dataclass_replace(POLICIES["default"])
 # AutoFix controls for the exact real-weight serving-prefill delta.  The
 # first changes only the router's accumulation policy while retaining the
 # selected 1024-token expert matmuls.  The second reproduces the functional
@@ -873,11 +919,14 @@ class OptimizedDecoder(FunctionalDecoder):
         self.dense_decode_gate_up_subblock_w = policy.dense_decode_gate_up_subblock_w
         self.dense_decode_gate_up_interleaved_input = policy.dense_decode_gate_up_interleaved_input
         if self.use_unpacked_dense_decode:
-            self.dense_decode_gate_up_grid = (8, 6)
-            self.dense_decode_gate_up_in0_block_w = 16
-            self.dense_decode_gate_up_out_block_w = 2
-            self.dense_decode_gate_up_subblock_w = 2
-            self.dense_decode_gate_up_interleaved_input = True
+            if candidate.startswith("advisor_dense_chain_"):
+                self.dense_decode_gate_up_interleaved_input = True
+            else:
+                self.dense_decode_gate_up_grid = (8, 6)
+                self.dense_decode_gate_up_in0_block_w = 16
+                self.dense_decode_gate_up_out_block_w = 2
+                self.dense_decode_gate_up_subblock_w = 2
+                self.dense_decode_gate_up_interleaved_input = True
         explicit_geometry_candidates = {
             "expert_bfp8_hifi2_geo_g24_g32",
             "expert_bfp8_hifi2_geo_g16",
@@ -955,6 +1004,11 @@ class OptimizedDecoder(FunctionalDecoder):
         self.dense_decode_down_program_config = None
         self.dense_decode_down_dram_program_config = None
         self.dense_decode_down_input_memory_config = None
+        self.advisor_dense_chain = self.mlp_type == "dense" and candidate.startswith("advisor_dense_chain_")
+        self.advisor_dense_down_input_memory_config = None
+        self.advisor_dense_gate_up_dram_program_config = None
+        self.advisor_dense_gate_up_input_memory_config = None
+        self.advisor_dense_chain_ds = self.mlp_type == "dense" and candidate.startswith("advisor_dense_chain_ds_")
         self.use_dense_decode_down_dram_sharded = (
             self.mlp_type == "dense"
             and policy.dense_decode_down_dram_sharded
@@ -980,17 +1034,53 @@ class OptimizedDecoder(FunctionalDecoder):
                 in0_block_w=policy.dense_decode_down_in0_block_w,
                 out_block_w=policy.dense_decode_down_out_block_w,
                 out_subblock_w=policy.dense_decode_down_subblock_w,
+                fuse_batch=self.advisor_dense_chain,
+            )
+            if self.advisor_dense_chain:
+                down_grid = ttnn.CoreGrid(
+                    x=policy.dense_decode_down_grid[0], y=policy.dense_decode_down_grid[1]
+                )
+                down_shard_width = math.ceil(self.intermediate_size / (down_grid.num_cores * ttnn.TILE_SIZE))
+                self.advisor_dense_down_input_memory_config = ttnn.create_sharded_memory_config(
+                    (ttnn.TILE_SIZE, down_shard_width * ttnn.TILE_SIZE),
+                    down_grid,
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+        if self.advisor_dense_chain_ds:
+            self.advisor_dense_gate_up_dram_program_config = _dram_sharded_decode_program_config(
+                m=ttnn.TILE_SIZE,
+                k=self.hidden_size,
+                n=self.intermediate_size,
+                num_compute_cores=48,
+            )
+            gate_grid = ttnn.CoreGrid(x=8, y=6)
+            gate_shard_width = math.ceil(self.hidden_size / (gate_grid.num_cores * ttnn.TILE_SIZE))
+            self.advisor_dense_gate_up_input_memory_config = ttnn.create_sharded_memory_config(
+                (ttnn.TILE_SIZE, gate_shard_width * ttnn.TILE_SIZE),
+                gate_grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
         if self.use_dense_decode_down_dram_sharded:
+            down_compute_cores = 64 if candidate == "advisor_dense_chain_ds_exact" else 32
             self.dense_decode_down_dram_program_config = _dram_sharded_decode_program_config(
                 m=ttnn.TILE_SIZE,
                 k=self.intermediate_size,
                 n=self.hidden_size,
-                num_compute_cores=32,
+                num_compute_cores=down_compute_cores,
             )
-            dense_down_grid = ttnn.CoreGrid(x=8, y=4)
+            dense_down_grid = ttnn.CoreGrid(
+                x=8, y=8 if candidate == "advisor_dense_chain_ds_exact" else 4
+            )
             self.dense_decode_down_input_memory_config = ttnn.create_sharded_memory_config(
-                (ttnn.TILE_SIZE, self.intermediate_size // dense_down_grid.num_cores),
+                (
+                    ttnn.TILE_SIZE,
+                    math.ceil(self.intermediate_size / (dense_down_grid.num_cores * ttnn.TILE_SIZE))
+                    * ttnn.TILE_SIZE,
+                ),
                 dense_down_grid,
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
@@ -1324,6 +1414,23 @@ class OptimizedDecoder(FunctionalDecoder):
                     mesh_device=mesh_device,
                     dtype=policy.dense_gate_up_dtype,
                 )
+            if candidate.startswith("advisor_dense_chain_ds_"):
+                weights["gate_proj_decode"] = _as_device_tensor(
+                    gate.transpose(-2, -1).to(torch.bfloat16),
+                    mesh_device=mesh_device,
+                    dtype=policy.dense_gate_up_dtype,
+                    memory_config=_dram_sharded_weight_memory_config(
+                        mesh_device, k=hidden_size, n=int(gate.shape[-2])
+                    ),
+                )
+                weights["up_proj_decode"] = _as_device_tensor(
+                    up.transpose(-2, -1).to(torch.bfloat16),
+                    mesh_device=mesh_device,
+                    dtype=policy.dense_gate_up_dtype,
+                    memory_config=_dram_sharded_weight_memory_config(
+                        mesh_device, k=hidden_size, n=int(up.shape[-2])
+                    ),
+                )
             weights["down_proj"] = _as_device_tensor(
                 down.transpose(-2, -1).to(torch.bfloat16),
                 mesh_device=mesh_device,
@@ -1531,8 +1638,9 @@ class OptimizedDecoder(FunctionalDecoder):
             memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         )
         if self.use_rope:
-            position_cos = ttnn.interleaved_to_sharded(position_cos, self.decode_rope_memory_config)
-            position_sin = ttnn.interleaved_to_sharded(position_sin, self.decode_rope_memory_config)
+            if self.candidate != "advisor_drop_attention_reshards":
+                position_cos = ttnn.interleaved_to_sharded(position_cos, self.decode_rope_memory_config)
+                position_sin = ttnn.interleaved_to_sharded(position_sin, self.decode_rope_memory_config)
             query = ttnn.experimental.rotary_embedding_hf(
                 query,
                 position_cos,
@@ -1579,7 +1687,8 @@ class OptimizedDecoder(FunctionalDecoder):
             compute_kernel_config=self.attention_compute_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        attended = ttnn.to_memory_config(attended, self.decode_concat_memory_config)
+        if self.candidate not in ("advisor_drop_attention_reshards", "advisor_drop_concat_reshard"):
+            attended = ttnn.to_memory_config(attended, self.decode_concat_memory_config)
         attended = ttnn.experimental.nlp_concat_heads_decode(
             attended, num_heads=self.num_heads, sub_core_grids=self.decode_sub_core_grids
         )
@@ -1606,15 +1715,23 @@ class OptimizedDecoder(FunctionalDecoder):
         return ttnn.permute(projected, (0, 2, 1, 3))
 
     def _dense_mlp(self, normalized, *, prefill=False):
-        projection_memory = ttnn.DRAM_MEMORY_CONFIG if prefill else ttnn.L1_MEMORY_CONFIG
+        projection_memory = (
+            ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            if not prefill and self.advisor_dense_chain
+            else ttnn.DRAM_MEMORY_CONFIG if prefill else ttnn.L1_MEMORY_CONFIG
+        )
         gate_up_input = normalized
+        if not prefill and self.advisor_dense_chain_ds:
+            gate_up_input = ttnn.to_memory_config(normalized, self.advisor_dense_gate_up_input_memory_config)
         if not prefill and self.dense_decode_gate_up_interleaved_input:
-            gate_up_input = ttnn.sharded_to_interleaved(normalized, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+            if not self.advisor_dense_chain_ds:
+                gate_up_input = ttnn.sharded_to_interleaved(normalized, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
             # The batch-32 packed output does not coexist with the wider
             # matmul circular buffers in L1.  Keep this audit-only retry in
             # DRAM so wider legal K blocks are measured instead of rejected
             # at their first allocation error.
-            projection_memory = ttnn.DRAM_MEMORY_CONFIG
+            if not self.advisor_dense_chain:
+                projection_memory = ttnn.DRAM_MEMORY_CONFIG
         use_packed_dense_mlp = self.policy.packed_dense_mlp and not (not prefill and self.use_unpacked_dense_decode)
         gate_up_compute_config = (
             self.dense_gate_up_compute_config if prefill else self.dense_decode_gate_up_compute_config
@@ -1645,11 +1762,17 @@ class OptimizedDecoder(FunctionalDecoder):
             )
         else:
             gate_up_kwargs = {}
-            if not prefill and self.dense_decode_gate_up_program_config is not None:
+            gate_weight = self.weights["gate_proj"]
+            up_weight = self.weights["up_proj"]
+            if not prefill and self.advisor_dense_chain_ds:
+                gate_weight = self.weights["gate_proj_decode"]
+                up_weight = self.weights["up_proj_decode"]
+                gate_up_kwargs["program_config"] = self.advisor_dense_gate_up_dram_program_config
+            elif not prefill and self.dense_decode_gate_up_program_config is not None:
                 gate_up_kwargs["program_config"] = self.dense_decode_gate_up_program_config
             gate = ttnn.linear(
                 gate_up_input,
-                self.weights["gate_proj"],
+                gate_weight,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=gate_up_compute_config,
                 memory_config=projection_memory,
@@ -1657,7 +1780,7 @@ class OptimizedDecoder(FunctionalDecoder):
             )
             up = ttnn.linear(
                 gate_up_input,
-                self.weights["up_proj"],
+                up_weight,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=gate_up_compute_config,
                 memory_config=projection_memory,
@@ -1668,6 +1791,9 @@ class OptimizedDecoder(FunctionalDecoder):
         down_weight = self.weights["down_proj"]
         down_input = activated
         down_output_memory = ttnn.DRAM_MEMORY_CONFIG
+        if not prefill and self.advisor_dense_chain:
+            down_input = ttnn.to_memory_config(activated, self.advisor_dense_down_input_memory_config)
+            down_output_memory = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         if not prefill and self.dense_decode_down_dram_program_config is not None:
             down_weight = self.weights["down_proj_decode"]
             down_input = ttnn.reshape(activated, (1, 1, self.batch, self.intermediate_size))

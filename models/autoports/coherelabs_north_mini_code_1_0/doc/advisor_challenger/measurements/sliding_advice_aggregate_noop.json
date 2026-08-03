@@ -1,0 +1,35 @@
+{
+  "label": "sliding_advice_aggregate_noop",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.6137924082577229,
+    0.614088773727417,
+    0.613600816577673,
+    0.6138025969266891,
+    0.6135078519582748
+  ],
+  "median_ms": 0.6137924082577229,
+  "noise_floor_ms": 0.0005809217691421509,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one sliding-attention sparse-MoE decoder layer, traced decode replay, batch 1, measured end to end on the host",
+  "measured_at": "2026-08-03T12:40:31+00:00",
+  "shipped_policy": {
+    "candidate": "default"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense_gate_up": "BFLOAT4_B",
+    "dense_down": "BFLOAT8_B",
+    "decode_expert_gate_up": "BFLOAT8_B",
+    "decode_expert_down": "BFLOAT8_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/artifacts/final_decode_b1.json effective_configuration.policy, candidate=default",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

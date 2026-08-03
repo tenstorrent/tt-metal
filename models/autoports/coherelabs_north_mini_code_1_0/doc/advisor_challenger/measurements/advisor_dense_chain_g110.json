@@ -1,0 +1,35 @@
+{
+  "label": "advisor_dense_chain_g110",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.2923586778342724,
+    0.29267070814967155,
+    0.2922026067972183,
+    0.29147641733288765,
+    0.29196053743362427
+  ],
+  "median_ms": 0.2922026067972183,
+  "noise_floor_ms": 0.001194290816783905,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one dense full-attention forced-RoPE decoder layer, traced decode replay, batch 1, measured end to end on the host",
+  "measured_at": "2026-08-03T12:47:23+00:00",
+  "shipped_policy": {
+    "candidate": "default"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense_gate_up": "BFLOAT4_B",
+    "dense_down": "BFLOAT8_B",
+    "decode_expert_gate_up": "BFLOAT8_B",
+    "decode_expert_down": "BFLOAT8_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/artifacts/final_decode_b1.json effective_configuration.policy, candidate=default",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

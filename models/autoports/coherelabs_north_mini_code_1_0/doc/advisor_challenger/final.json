@@ -1,0 +1,81 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "incumbent_ms": 0.6138479523360729,
+  "final_ms": 0.6138479523360729,
+  "repeats_ms": [0.6138958223164082, 0.6138479523360729, 0.6141212582588196, 0.6134126894176006, 0.6131848692893982],
+  "winning_config": {"candidate": "default"},
+  "oracle_passed": true,
+  "oracle": "unchanged frozen incumbent against the existing official real-weight optimized/functional decoder PCC oracle",
+  "oracle_weights": "real",
+  "oracle_note": "No placement change shipped; the frozen incumbent retains its existing official real-weight PCC evidence.",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "capture_batch": 1,
+  "iterations": [
+    {
+      "set": ["dense_full_forced_rope:2", "dense_full_forced_rope:3", "dense_full_forced_rope:b5", "dense_full_forced_rope:b12", "dense_full_forced_rope:b6"],
+      "candidate": "advisor_dense_chain_exact",
+      "measured_ms": 0.23408519104123116,
+      "repeats_ms": [0.2343817614018917, 0.23398200049996376, 0.23408519104123116, 0.23418821394443512, 0.23396559059619904],
+      "incumbent_repeats_ms": [0.20325565710663795, 0.2031690813601017, 0.20333677530288696, 0.20331814885139465, 0.2033127285540104],
+      "verdict": "rejected",
+      "trigger": "reconciliation_dense_full_forced_rope.json complete ranked chain at exact-dividing geometry",
+      "reranked_from": "reconciliation_dense_full_forced_rope.json; all dense variants test the same ranked chain/direction",
+      "oracle_passed": null,
+      "reason": "Every executable candidate repeat is slower than every incumbent repeat; both full DRAM-sharded variants stalled before timing.",
+      "candidate_evidence": [
+        {"candidate": "advisor_dense_chain_g110", "median_ms": 0.2922026067972183, "repeats_ms": [0.2923586778342724, 0.29267070814967155, 0.2922026067972183, 0.29147641733288765, 0.29196053743362427], "note": "110 cores, above advisor's 96-core point"},
+        {"candidate": "dense_down_dram_sharded", "median_ms": 0.20742183551192284, "repeats_ms": [0.20814301446080208, 0.2073470875620842, 0.20665379241108894, 0.20755646750330925, 0.20742183551192284]},
+        {"candidate": "advisor_dense_chain_ds_exact", "verdict": "hard_failure", "note": "64-core down geometry stalled before a timed repeat"},
+        {"candidate": "advisor_dense_chain_ds_down32", "verdict": "hard_failure", "note": "32-core down geometry stalled before a timed repeat"}
+      ]
+    },
+    {
+      "set": ["sliding_rope_moe:b5", "sliding_rope_moe:b12", "sliding_rope_moe:b6"],
+      "combined_with": ["sliding_rope_moe:b5", "sliding_rope_moe:b12", "sliding_rope_moe:b6"],
+      "candidate": "advisor_drop_attention_reshards plus advisor_drop_concat_reshard isolates",
+      "incumbent_repeats_ms": [0.6138958223164082, 0.6138479523360729, 0.6141212582588196, 0.6134126894176006, 0.6131848692893982],
+      "verdict": "rejected",
+      "trigger": "reconciliation_sliding_rope_moe.json feasibility=aggregate_only",
+      "reranked_from": "reconciliation_sliding_rope_moe.json; no topology rewrite occurred",
+      "oracle_passed": null,
+      "reason": "The aggregate rewrite is infeasible: rotary requires sharded cos/sin and concat requires a sharded input. The retained default-topology control repeats overlap the incumbent."
+    },
+    {
+      "set": ["full_no_rope_moe:b8"],
+      "verdict": "not_measurable",
+      "trigger": "reconciliation_full_no_rope_moe.json feasibility=not_measurable",
+      "reranked_from": "reconciliation_full_no_rope_moe.json; screening prohibited by verdict",
+      "ceiling_us": 0.563,
+      "noise_floor_us": 1.263,
+      "arithmetic": "0.563 / 1.263 = 0.45x"
+    }
+  ],
+  "rejected_knobs": [
+    "dense_down_dram_sharded (existing policy remains default-off for batch 1)",
+    "advisor_dense_chain_exact",
+    "advisor_dense_chain_g110",
+    "advisor_dense_chain_ds_exact",
+    "advisor_dense_chain_ds_down32",
+    "advisor_drop_attention_reshards",
+    "advisor_drop_concat_reshard",
+    "full sparse boundary set (not measurable)"
+  ],
+  "advised_boundaries": {
+    "us_advisor_agrees_per_model": 132.628,
+    "note": "Reported only; never screened or attributed."
+  },
+  "model_estimate": {
+    "before_us": 28207.286,
+    "after_us": 28207.286,
+    "band_us": 49.029,
+    "per_kind": {
+      "dense_full_forced_rope": {"before_us": 179.282, "after_us": 179.282, "layers": 1, "band_us": 0.168},
+      "sliding_rope_moe": {"before_us": 21050.208, "after_us": 21050.208, "layers": 36, "band_us": 33.710},
+      "full_no_rope_moe": {"before_us": 6977.796, "after_us": 6977.796, "layers": 12, "band_us": 15.151}
+    },
+    "layer_handoff": {"us_per_model": 39.919, "screened": false},
+    "method": "per-layer measured profile window x layers_of_kind, summed; uncertainty is incumbent repeat spread x layers_of_kind, summed linearly"
+  }
+}
