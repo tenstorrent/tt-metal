@@ -35,7 +35,13 @@ import struct
 import pytest
 import torch
 from helpers.format_config import DataFormat
-from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM
+from helpers.golden_generators import (
+    ELEMENTS_PER_TILE,
+    TILE_DIM,
+    SamplingGolden,
+    get_golden_generator,
+    round_to_dest_width,
+)
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -77,10 +83,6 @@ SAMPLING_OPS = {
     "mul": (True, FIRST_COLUMN_ROWS),
 }
 
-# recip_scalar is the only helper that converts before storing, so it is the only
-# one that rounds rather than truncates on a 16-bit DEST.
-ROUND_TO_NEAREST_OPS = {"recip_scalar"}
-
 # The reciprocal is iterative, so it never compares bit-exactly.
 APPROXIMATE_OPS = {"recip_scalar"}
 RECIP_REL_TOL = 2e-2
@@ -95,37 +97,6 @@ def _f32_bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-def _dest_is_fp32(dest_acc: DestAccumulation) -> bool:
-    return dest_acc == DestAccumulation.Yes
-
-
-def _bf16_truncate(values: torch.Tensor) -> torch.Tensor:
-    """SFPSTORE into a 16-bit DEST truncates; clearing the low 16 bits does the same."""
-    return (
-        (values.to(torch.float32).contiguous().view(torch.int32) & ~0xFFFF)
-        .view(torch.float32)
-        .clone()
-    )
-
-
-def _to_dest(values: torch.Tensor, dest_acc: DestAccumulation) -> torch.Tensor:
-    """The value as it sits in DEST after unpack + datacopy."""
-    if _dest_is_fp32(dest_acc):
-        return values.to(torch.float32)
-    return values.to(torch.bfloat16).to(torch.float32)
-
-
-def _sfpu_store(
-    values: torch.Tensor, op: str, dest_acc: DestAccumulation
-) -> torch.Tensor:
-    """What the kernel's store leaves in DEST."""
-    if _dest_is_fp32(dest_acc):
-        return values.to(torch.float32)  # the whole fp32 LReg lands in DEST
-    if op in ROUND_TO_NEAREST_OPS:
-        return values.to(torch.bfloat16).to(torch.float32)
-    return _bf16_truncate(values)
-
-
 def _rel_tol(op: str, dest_acc: DestAccumulation, out_format: DataFormat) -> float:
     """Zero (bit-exact) unless the packer has to convert an fp32 DEST down to bf16.
 
@@ -133,7 +104,7 @@ def _rel_tol(op: str, dest_acc: DestAccumulation, out_format: DataFormat) -> flo
     bf16 ulp there -- still much tighter than the 5% in helpers/utils.py.
     """
     tol = 0.0
-    if _dest_is_fp32(dest_acc) and out_format != DataFormat.Float32:
+    if dest_acc == DestAccumulation.Yes and out_format != DataFormat.Float32:
         tol = ULP_ALLOWANCE * BF16_ULP_REL
 
     if op in APPROXIMATE_OPS:
@@ -145,29 +116,6 @@ def _matches(got: float, want: float, tol: float) -> bool:
     if tol == 0.0:
         return got == want
     return abs(got - want) <= tol * abs(want) + 1e-6
-
-
-def _apply_op(op: str, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """Scalar/elementwise reference for one sampling op, in fp32."""
-    if op == "recip_scalar":
-        return 1.0 / a
-    if op == "clamp_max_scalar":
-        return torch.minimum(a, torch.full_like(a, CLAMP_MAX))
-    if op == "mul_unary_scalar":
-        return a * MUL_SCALAR
-    if op == "le":
-        return (a <= b).to(torch.float32)
-    if op == "lt":
-        return (a < b).to(torch.float32)
-    if op == "ge":
-        return (a >= b).to(torch.float32)
-    if op == "add":
-        return a + b
-    if op == "sub":
-        return a - b
-    if op == "mul":
-        return a * b
-    raise ValueError(f"unknown sampling op {op}")
 
 
 def _bf16_row_values() -> torch.Tensor:
@@ -311,14 +259,16 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat):
         for t in range(NUM_TILES)
     ]
 
-    # Input at DEST precision, the op in fp32, then the store.
-    in0_ref = _to_dest(in0_tile[:, 0], dest_acc)
-    in1_ref = _to_dest(in1_tile[:, 0], dest_acc)
-    transformed = _sfpu_store(_apply_op(op, in0_ref, in1_ref), op, dest_acc)
+    # Input at DEST precision, then the op and its store.
+    in0_ref = round_to_dest_width(in0_tile[:, 0], dest_acc)
+    in1_ref = round_to_dest_width(in1_tile[:, 0], dest_acc)
+
+    golden_generator = get_golden_generator(SamplingGolden)
+    transformed = golden_generator(op, in0_ref, in1_ref, scalar_bits, dest_acc)
 
     # Tiles the op does not write still hold the datacopied input.
-    in0_dest_tile = _to_dest(in0_tile, dest_acc)
-    in1_dest_tile = _to_dest(in1_tile, dest_acc)
+    in0_dest_tile = round_to_dest_width(in0_tile, dest_acc)
+    in1_dest_tile = round_to_dest_width(in1_tile, dest_acc)
 
     if is_binary:
         # The op only writes tile 2, whose other lanes keep the zero background.

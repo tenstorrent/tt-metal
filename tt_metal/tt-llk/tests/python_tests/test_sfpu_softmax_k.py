@@ -37,20 +37,35 @@ a template, the header does not compile at all until they exist. See the
 #defines them so the file parses, and this sweep stays on the even-k path where
 that branch is dead code. Extend to odd k once the LLK declares them.
 
-dest_acc=Yes is not swept: `_init_softmax_k_` hardcodes the bf16 exp setup and the
-kernel's DEST addressing assumes the 16-bit layout.
+dest_acc=Yes is swept for k=16 only. The kernel compiles for a 32-bit DEST and the
+full-width case is correct there, but every k < 16 returns a softmax taken over all
+16 lanes instead of k -- measured on Blackhole, e.g. k=2 comes back as
+[0, 1/8] x 8 per row (row still sums to 1, but over 16 live lanes rather than 2).
+The padding predication is what breaks: the condition code comes from the
+even-column value and covers the even/odd column PAIR, which only holds while two
+bf16 datums share one 32-bit DEST word. With a 32-bit DEST each datum owns a word,
+the pair relationship is gone, and the lanes meant to be masked stay enabled.
+Float32 input is skipped with dest_acc=No, as elsewhere in the SFPU suites.
 """
 
+import pytest
 import torch
-from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM
+from helpers.format_config import DataFormat
+from helpers.golden_generators import (
+    ELEMENTS_PER_TILE,
+    TILE_DIM,
+    SoftmaxKGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import DestAccumulation, format_dict
-from helpers.param_config import parametrize
+from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import SOFTMAX_K, TILE_COUNT
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
+
+FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
 FACE_DIM = 16
 SOFTMAX_ROWS = 4  # one SFPU row band: DEST rows 0-3
@@ -85,29 +100,27 @@ def _build_input_tile(k: int, torch_format) -> tuple[torch.Tensor, torch.Tensor]
     return tile.to(torch_format), logits
 
 
-def _softmax_golden(tile: torch.Tensor, logits: torch.Tensor, k: int) -> torch.Tensor:
-    """Expected output tile: rows 0-3 replaced by the softmax, everything else as-is."""
-    golden = tile.to(torch.float32).clone()
-    for row in range(SOFTMAX_ROWS):
-        m = logits[row].max()
-        e = torch.exp(logits[row] - m)
-        golden[row, :k] = e / e.sum()
-        golden[row, k:FACE_DIM] = 0.0
-    return golden
-
-
 @parametrize(
-    dest_acc=[DestAccumulation.No],
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     k=EVEN_K,
 )
-def test_sfpu_softmax_k(dest_acc, k):
+def test_sfpu_softmax_k(formats, dest_acc, k):
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    if dest_acc == DestAccumulation.Yes and k < FACE_DIM:
+        # The padding predication only works on a 16-bit DEST -- see module docstring.
+        pytest.skip("k < 16 with a 32-bit dest exponentiates the padding lanes")
+
     torch.manual_seed(0)
 
-    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     torch_format = format_dict[formats.input_format]
 
     input_tile, logits = _build_input_tile(k, torch_format)
-    golden_tile = _softmax_golden(input_tile, logits, k)
+
+    golden_generator = get_golden_generator(SoftmaxKGolden)
+    golden_tile = golden_generator(input_tile, logits, k, SOFTMAX_ROWS, FACE_DIM)
 
     src_A = tilize_block(
         input_tile.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
@@ -134,7 +147,8 @@ def test_sfpu_softmax_k(dest_acc, k):
             tile_count_res=1,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=False,
+        # A 32-bit input goes straight to DEST rather than through srcA.
+        unpack_to_dest=formats.input_format.is_32_bit(),
     )
 
     res_from_L1 = configuration.run().result
