@@ -1308,10 +1308,15 @@ def create_tensor_on_mesh(
             # near-zero-PCC class: lead-models run 30706921019 mesh8x4_col_2d, 8 multiply
             # vectors at PCC 0.0096-0.0152 plus 1 linear at 0.093, every one of them carrying
             # this placement, with 6 "dims must be unique" TT_FATALs in the same log.
+            # REACHABILITY: on a mesh big enough for the traced shape this is NOT reached --
+            # the replicate_with_topology early-return above claims every PlacementShard
+            # placement first. It only runs when the device is too small for the traced mesh,
+            # which is the one case that skips that return. Kept for that case; the gather-side
+            # counterpart in mesh_tensor_to_torch is what fires on a compatible mesh.
             _dup_dim = _same_shard_dim(dims_tuple, torch_tensor.ndim)
             if _dup_dim is not None:
                 logger.info(
-                    f"SWEEPS: placement shards dim {_dup_dim} on BOTH mesh axes "
+                    f"SWEEPS: scatter -- placement shards dim {_dup_dim} on BOTH mesh axes "
                     f"{mesh_shape_tuple}; using a 1D shard over the flattened mesh "
                     f"({mesh_shape_tuple[0] * mesh_shape_tuple[1]} devices)"
                 )
@@ -1784,6 +1789,18 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
             # round trip an identity.
             _dup = _same_shard_dim((d0, d1), per_dev_ndim)
             if _dup is not None:
+                # THIS is the half of the duplicate-dim fix that actually fires. The scatter
+                # side is short-circuited by replicate_with_topology on any mesh big enough for
+                # the traced shape, so a 2D-sharded tensor arrives here with its topology
+                # stamped and the gather is where ConcatMesh2dToTensor would be handed two
+                # entries naming the same dim -> "dims must be unique" -> caught -> wrong data
+                # -> low PCC. Logged because it went unlogged before: 19 FATALs vanished
+                # between runs 30706921019 and 30791207587 with nothing in the log to show why,
+                # which cost a long detour through the (unreachable) scatter-side branch.
+                logger.info(
+                    f"SWEEPS: gather -- placements name dim {_dup} on BOTH mesh axes "
+                    f"{tuple(dist_dims)}; composing with a 1D concat over the flattened mesh"
+                )
                 result = ttnn.to_torch(ttnn_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=_dup))
                 torch_dtype = _get_torch_dtype(ttnn_tensor)
                 return result.to(torch_dtype) if torch_dtype is not None else result
