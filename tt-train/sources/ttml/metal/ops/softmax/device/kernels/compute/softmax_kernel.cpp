@@ -278,7 +278,9 @@ void calculate_sum_exp_x() {
 
     const uint32_t max_value_register = 2U;
     reconfig_data_format(cb_max_value_after_reduction, cb_input);
-    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    reconfig_data_format_srca(cb_max_value_after_reduction);
+    pack_reconfig_data_format(cb_max_value_after_reduction);
+    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
         cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
     for (uint32_t col = 0; col < Wt;) {
@@ -403,7 +405,9 @@ void kernel_main() {
 
             tile_regs_acquire();
             reconfig_data_format(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
-            unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
+            reconfig_data_format_srca(cb_exp_sum_after_reduction);
+            pack_reconfig_data_format(cb_exp_sum_after_reduction);
+            unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction);
             unary_bcast<BroadcastType::COL>(
                 cb_exp_sum_after_reduction, /* tile idx */ 0, /* reg tile idx */ sum_exp_register);
 

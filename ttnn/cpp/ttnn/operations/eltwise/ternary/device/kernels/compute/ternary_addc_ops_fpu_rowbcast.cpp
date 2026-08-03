@@ -56,7 +56,9 @@ void kernel_main() {
 #if BCAST_B
         dfb_in1.wait_front(num_tiles_per_cycle);
         dfb_llk_b.reserve_back(num_tiles_per_cycle);
-        unary_bcast_init<BroadcastType::ROW>(dfb_in1.get_id(), dfb_llk_b.get_id());
+        reconfig_data_format_srca(dfb_in1.get_id());
+        pack_reconfig_data_format(dfb_llk_b.get_id());
+        unary_bcast_init<BroadcastType::ROW>(dfb_in1.get_id());
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in1.get_id(), 0, 0);
         tile_regs_commit();
@@ -71,7 +73,9 @@ void kernel_main() {
 #if BCAST_C
         dfb_in2.wait_front(num_tiles_per_cycle);
         dfb_llk_c.reserve_back(num_tiles_per_cycle);
-        unary_bcast_init<BroadcastType::ROW>(dfb_in2.get_id(), dfb_llk_c.get_id());
+        reconfig_data_format_srca(dfb_in2.get_id());
+        pack_reconfig_data_format(dfb_llk_c.get_id());
+        unary_bcast_init<BroadcastType::ROW>(dfb_in2.get_id());
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in2.get_id(), 0, 0);
         tile_regs_commit();
@@ -86,7 +90,9 @@ void kernel_main() {
 #if BCAST_A
         dfb_in0.wait_front(num_tiles_per_cycle);
         dfb_llk_a.reserve_back(num_tiles_per_cycle);
-        unary_bcast_init<BroadcastType::ROW>(dfb_in0.get_id(), dfb_llk_a.get_id());
+        reconfig_data_format_srca(dfb_in0.get_id());
+        pack_reconfig_data_format(dfb_llk_a.get_id());
+        unary_bcast_init<BroadcastType::ROW>(dfb_in0.get_id());
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in0.get_id(), 0, 0);
         tile_regs_commit();

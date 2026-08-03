@@ -172,6 +172,7 @@ void add_bias_and_addcmul_block(
     // Unpacker waits for intermediate_cb to be ready
     cb_intermediate.wait_front(out_block_num_tiles);
 
+    compute_kernel_hw_startup(ternary_b_cb, intermediate_cb);
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             uint32_t tile_id = m * N_block_tiles + n;
@@ -215,7 +216,8 @@ void add_bias_and_addcmul_block(
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init(intermediate_cb, ternary_b_cb);
 #else
-        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+        reconfig_data_format_srca(ternary_b_cb);
+        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
 #endif  // TERNARY_B_IS_FLOAT32
 
         binop_with_scalar_tile_init();
@@ -231,7 +233,8 @@ void add_bias_and_addcmul_block(
                 mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+                reconfig_data_format_srca(ternary_b_cb);
+                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
 
                 copy_tile_to_dst_init_short(intermediate_cb);

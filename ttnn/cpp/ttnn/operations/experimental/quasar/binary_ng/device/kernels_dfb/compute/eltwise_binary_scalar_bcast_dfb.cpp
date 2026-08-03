@@ -81,7 +81,9 @@ ALWI void process_tile(
     // for llk_post, so this is belt-and-suspenders on the LHS side.)
     pack_init(dfb_llk_post_id);
 #endif
-    unary_bcast_init<BroadcastType::SCALAR>(dfb_bcast_id, dfb_llk_post_id);
+    reconfig_data_format_srca(dfb_bcast_id);
+    pack_reconfig_data_format(dfb_llk_post_id);
+    unary_bcast_init<BroadcastType::SCALAR>(dfb_bcast_id);
 
     tile_regs_acquire();
     unary_bcast<BroadcastType::SCALAR>(dfb_bcast_id, 0, 0);

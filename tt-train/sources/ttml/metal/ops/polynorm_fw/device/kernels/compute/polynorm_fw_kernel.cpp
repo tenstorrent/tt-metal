@@ -198,7 +198,9 @@ void emit_output_for_row() {
             tile_regs_acquire();
 
             // Seed the accumulator with coeff2 (cubic branch) and load x once.
-            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            reconfig_data_format_srca(cb_weighted_coeffs);
+            pack_reconfig_data_format(cb_weighted_coeffs);
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/2U, reg_acc);
             copy_tile_init(cb_input_pass_2);
             copy_tile(cb_input_pass_2, block_idx, reg_x);
@@ -209,7 +211,9 @@ void emit_output_for_row() {
 
             // Horner step 2: acc = coeff1 + x·coeff2; then acc *= x.
             // Re-init bcast because the preceding copy_tile_init changed srcA to cb_input_pass_2.
-            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            reconfig_data_format_srca(cb_weighted_coeffs);
+            pack_reconfig_data_format(cb_weighted_coeffs);
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/1U, reg_tmp);
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
@@ -217,7 +221,9 @@ void emit_output_for_row() {
             mul_binary_tile(reg_acc, reg_x, reg_acc);
 
             // Horner step 3: acc = coeff0 + x·(coeff1 + x·coeff2); then acc *= x.
-            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            reconfig_data_format_srca(cb_weighted_coeffs);
+            pack_reconfig_data_format(cb_weighted_coeffs);
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/0U, reg_tmp);
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);

@@ -484,7 +484,9 @@ void kernel_main() {
         tile_regs_acquire();
         cb_wait_front(cb_rstd_idx, onetile);
         reconfig_data_format(cb_rstd_idx, cb_rstd_idx);
-        unary_bcast_init<BroadcastType::COL>(cb_rstd_idx, cb_rstd_idx);
+        reconfig_data_format_srca(cb_rstd_idx);
+        pack_reconfig_data_format(cb_rstd_idx);
+        unary_bcast_init<BroadcastType::COL>(cb_rstd_idx);
         unary_bcast<BroadcastType::COL>(cb_rstd_idx, /* tile idx */ 0, /* reg tile idx */ 0);
         tile_regs_commit();
         cb_pop_front(cb_rstd_idx, onetile);
@@ -494,7 +496,9 @@ void kernel_main() {
         tile_regs_acquire();
         cb_wait_front(cb_mean_idx, onetile);
         reconfig_data_format(cb_mean_idx, cb_mean_idx);
-        unary_bcast_init<BroadcastType::COL>(cb_mean_idx, cb_mean_idx);
+        reconfig_data_format_srca(cb_mean_idx);
+        pack_reconfig_data_format(cb_mean_idx);
+        unary_bcast_init<BroadcastType::COL>(cb_mean_idx);
         unary_bcast<BroadcastType::COL>(cb_mean_idx, /* tile idx */ 0, /* reg tile idx */ 0);
         tile_regs_commit();
         cb_pop_front(cb_mean_idx, onetile);

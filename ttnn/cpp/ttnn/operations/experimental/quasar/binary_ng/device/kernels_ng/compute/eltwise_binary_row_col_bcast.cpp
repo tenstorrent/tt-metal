@@ -56,7 +56,9 @@ ALWI void process_tile(
         exp_cb_raw_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        unary_bcast_init<BroadcastType::ROW>(cb_raw_other, cb_llk_post);
+        reconfig_data_format_srca(cb_raw_other);
+        pack_reconfig_data_format(cb_llk_post);
+        unary_bcast_init<BroadcastType::ROW>(cb_raw_other);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_raw_other, 0, 0);

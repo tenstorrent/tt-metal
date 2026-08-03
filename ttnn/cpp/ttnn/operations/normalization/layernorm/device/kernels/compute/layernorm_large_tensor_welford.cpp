@@ -487,7 +487,9 @@ void kernel_main() {
         dfb_ex2pe_obj.wait_front(onetile);
         tile_regs_acquire();
         reconfig_data_format_srca(dfb_ex2pe);
-        unary_bcast_init<BroadcastType::COL>(dfb_ex2pe, dfb_ex2pe);
+        reconfig_data_format_srca(dfb_ex2pe);
+        pack_reconfig_data_format(dfb_ex2pe);
+        unary_bcast_init<BroadcastType::COL>(dfb_ex2pe);
         unary_bcast<BroadcastType::COL>(dfb_ex2pe, 0, dst0);
         dfb_ex2pe_obj.pop_front(onetile);
         tile_regs_commit();

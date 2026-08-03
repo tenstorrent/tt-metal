@@ -90,7 +90,9 @@ ALWI void process_tile(
         // packer for llk_post, so this is belt-and-suspenders.)
         pack_init(dfb_llk_post_id);
 #endif
-        unary_bcast_init<BroadcastType::ROW>(dfb_raw_row_id, dfb_llk_post_id);
+        reconfig_data_format_srca(dfb_raw_row_id);
+        pack_reconfig_data_format(dfb_llk_post_id);
+        unary_bcast_init<BroadcastType::ROW>(dfb_raw_row_id);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_raw_row_id, 0, 0);
