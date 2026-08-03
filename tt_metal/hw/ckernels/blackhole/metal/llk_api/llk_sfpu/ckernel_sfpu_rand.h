@@ -14,8 +14,8 @@ namespace ckernel::sfpu {
 
 constexpr std::uint32_t sfpshft_mod1_arg_imm = 1;
 constexpr std::uint32_t sfpshft_mod1_arg_imm_use_vc = sfpshft_mod1_arg_imm | 4;
-constexpr std::uint32_t dense_uniform_exponent_bias = 126;
-constexpr std::uint32_t dense_uniform_exponent_bias_reg = p_sfpu::LREG7;
+constexpr std::uint32_t sfpsetsgn_mod1_arg_imm = 1;
+constexpr std::uint32_t one_over_2_pow_31_bf16 = 0x3000;
 
 template <std::uint32_t DEST>
 inline void rand_prng() {
@@ -48,23 +48,6 @@ inline void make_lane_salt() {
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
 }
 
-template <std::uint32_t VALUE, std::uint32_t EXPONENT>
-inline void uint32_to_dense_uniform_fp32() {
-    // A uniform word has a geometric leading-zero count. Use it as the
-    // binade index and the low 23 bits as the FP32 mantissa. The zero word
-    // maps to the 2^-33 binade, deliberately avoiding subnormals and zero.
-    TTI_SFPLZ(0, VALUE, EXPONENT, 0);
-    TTI_SFPIADD(
-        0,
-        dense_uniform_exponent_bias_reg,
-        EXPONENT,
-        sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-    // The positive bias also supplies a zero sign bit; its temporary exponent
-    // is overwritten by SFPSETEXP.
-    TTI_SFPSETMAN(0, dense_uniform_exponent_bias_reg, VALUE, 0);
-    TTI_SFPSETEXP(0, VALUE, EXPONENT, 0);
-}
-
 inline void mix_uint32_fast() {
     // A shorter bijective ARX permutation. The two modular additions provide
     // the nonlinearity that a pure xorshift lacks, while alternating right
@@ -83,14 +66,16 @@ inline void mix_uint32_fast() {
 
 inline void rand_row() {
     mix_uint32_fast();
+    // SFPCAST converts the low 31 bits as a sign-magnitude integer and rounds
+    // directly to FP32. Clear its arbitrary sign, then normalise by 2^-31.
+    // This gives a correctly rounded 31-bit uniform grid, including both
+    // mantissa parities and the half-width upper-bound rounding basin.
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG6, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    TTI_SFPSETSGN(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpsetsgn_mod1_arg_imm);
+    TTI_SFPMULI(one_over_2_pow_31_bf16, p_sfpu::LREG6, 0);
+    // Advance the PRNG while SFPMULI's result becomes available.
     rand_prng<p_sfpu::LREG5>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
-    uint32_to_dense_uniform_fp32<p_sfpu::LREG0, p_sfpu::LREG6>();
-    // Add a rounding bit. Carry out of an all-ones mantissa naturally
-    // reaches the adjacent binade, giving boundary values half the
-    // rounding basin of interior values.
-    TTI_SFPSHFT((-31) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG4, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG6, 0);
     // SFPMAD has two-cycle latency. Advance the destination counter in its
     // dependency slot, then compensate for that early increment in the store.
@@ -107,7 +92,6 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     // Load from param to lreg2
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, from & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
-    TT_SFPLOADI(dense_uniform_exponent_bias_reg, sfpi::SFPLOADI_MOD0_USHORT, dense_uniform_exponent_bias);
 
     make_lane_salt();
     rand_prng<p_sfpu::LREG5>();
@@ -115,7 +99,7 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
 
     // One row fits in the 32-entry replay buffer. Record and execute it once,
     // then replay it for the remaining rows without scalar loop-control gaps.
-    constexpr std::uint32_t row_instruction_count = 21;
+    constexpr std::uint32_t row_instruction_count = 18;
     TTI_REPLAY(0, row_instruction_count, 1, 1);
     rand_row();
 #pragma GCC unroll 7
