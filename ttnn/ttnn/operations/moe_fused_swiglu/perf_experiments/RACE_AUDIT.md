@@ -72,7 +72,58 @@ first dispatch — which is exactly what the 95 000 green dispatches show.
 
 ---
 
+## 1.2 Re-audit after the rewrite
+
+The rewrite (dead-code deletion, host restructure, shared transport header, N / grid / dtype /
+placement generality) changed how every protocol is SPELLED without intending to change any of
+them. Re-verified on the rewritten op:
+
+| run | grid | shapes | dispatches | seed |
+|---|---|---|---|---|
+| interleave | 11x8 | 24 + zero-count | 1 000 | 1 |
+| soak | 11x8 | 24 + zero-count | 20 000 | 11 |
+| soak | 11x8 | 24 + zero-count | 20 000 | 23 |
+| soak | **11x10** (full grid) | 24 + zero-count | 15 000 | 37 |
+| post-restore re-verify | 11x8 | 24 + zero-count | 5 000 | 99 |
+| | | | **61 000 total** | **0 divergences** |
+
+**The shape set now interleaves the axes the rewrite added**, not just m_eff and format: hidden
+(1024 / 2048), weight dtype (bfp4 / bfp8 / bf16) and placement (preferred shard / interleaved /
+4-tile-row shard). That matters more than the raw count. Weight dtype in particular is not a knob
+here — at some shapes bfp8 and bf16 DROP W_down residency, which changes `cb_w_down`'s slot cycle
+and disables `WD_SPLIT`, so those dispatches exercise a genuinely different protocol interleaved
+with the shipped one.
+
+**The three injected races were re-run against the rewritten kernels and all three still fail the
+harness** (drop the contributor wait; wait for one contributor too few; drop the h VALID wait).
+The reader was restored byte-identical to its backup afterwards — verified with `diff`, zero
+`TEMP-RACE` markers left — and the restored tree re-passes the bitwise gate (11/11), golden
+(45/45) and a 5 000-dispatch soak.
+
+**One protocol change the rewrite DID make**, and it is a narrowing rather than a widening:
+`SCATTER_NOC_SPLIT` is gone and the dual-NoC gather is unconditional. The reader's arrival
+expectation is therefore a fixed `2 * KGROUPS` per M-block instead of a knob-dependent
+`KGROUPS * (1 or 2)`. Control B above is exactly the test for getting that count wrong.
+
+**A race the rewrite FOUND, in code that predates it.** `WD_SPLIT` was gated on
+`depth_wd == hgroups` alone. It also needs residency: residency is what confines every W_down DRAM
+read to `b == 0`, where all HGROUPS slots are free from kernel start and the writer needs no flow
+control. Without it the writer writes slots that are LIVE on `b > 0`. The two conditions coincide
+at 11x8, so this was unreachable on the shipped grid and no amount of stress at 11x8 would have
+found it — it fell out of reading what the geometry produces at 2x2. Both conditions are now
+required. This is the clearest evidence in this document for the limit stated in §5: the stress
+proves the configurations it runs, and nothing else.
+
 ## 2. Inventory — every cross-agent synchronisation object
+
+> **Updated by the rewrite.** The reduce tree and `HSPLIT` are gone, so `SEM_H2_RDY_BASE` and the
+> tree's parent/child edges no longer exist: the op now allocates 11 semaphores (ids 0..10) against
+> the device's 16, where the shipped build previously used 13 and the `HSPLIT` build used all 16.
+> `DEPTH_H` is what scales this, and the descriptor now raises if the count would exceed the limit
+> instead of failing at program build. Every surviving object is still MONOTONE — never reset
+> within a dispatch, always compared with `wait_min` against a running total — and the three
+> spellings of that (`sem_ptr`, `sem_wait_min`, `sem_publish`) now live in one shared header rather
+> than in ~15 hand-written casts.
 
 All are **monotone**: incremented, never decremented, never reset inside a dispatch, and always
 compared with `wait_min` against a running local total. That is what makes them immune to arrival

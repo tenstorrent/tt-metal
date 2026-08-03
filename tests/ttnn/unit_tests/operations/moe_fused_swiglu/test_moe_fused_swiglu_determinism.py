@@ -227,7 +227,7 @@ def defined_region(out, rows):
 # Inputs — byte-identical to the graded perf harness's `_build`, so determinism is
 # certified at the same call site perf is measured at.
 # ---------------------------------------------------------------------------
-def _build(emb, capacity, count, input_format, device):
+def _build(emb, capacity, count, input_format, device, hidden=None, w_dtype=None, wplace="nd_shard"):
     torch.manual_seed(42)
     x = torch.randn((1, 1, capacity, emb), dtype=torch.float32)
     if count < capacity:
@@ -236,21 +236,31 @@ def _build(emb, capacity, count, input_format, device):
     tt_x = ttnn.from_torch(
         x.to(torch.bfloat16), dtype=dt, layout=lay, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    gate_up_mc, down_mc = weight_memory_configs(device, emb, HIDDEN, core_grid=CORE_GRID)
+    hidden = hidden or HIDDEN
+    w_dtype = w_dtype or ttnn.bfloat4_b
+    if wplace == "interleaved":
+        gate_up_mc = down_mc = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        gate_up_mc, down_mc = weight_memory_configs(
+            device, emb, hidden, core_grid=CORE_GRID, shard_height_tiles=4 if wplace == "shard_tall" else 1
+        )
     tt_w = [
         ttnn.from_torch(
             torch.randn(s, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat4_b,
+            dtype=w_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=mc,
         )
-        for s, mc in (((emb, HIDDEN), gate_up_mc), ((emb, HIDDEN), gate_up_mc), ((HIDDEN, emb), down_mc))
+        for s, mc in (((emb, hidden), gate_up_mc), ((emb, hidden), gate_up_mc), ((hidden, emb), down_mc))
     ]
-    # The READER's own predicate, not the memory config we asked for: an interleaved weight is
-    # silently CORRECT and takes the slower uncoalesced stream, which is not what ships.
+    # The READER's own predicate, not the memory config we asked for: an unrecognised placement is
+    # silently CORRECT and takes the slower uncoalesced stream, so this is what says which path ran.
     widths = [nd_shard_n_tiles(w) for w in tt_w]
-    assert all(w > 0 for w in widths), f"asked for the designed ND shard but the reader sees interleaved: {widths}"
+    if wplace == "interleaved":
+        assert all(w == 0 for w in widths), f"asked for interleaved but the reader sees shards: {widths}"
+    else:
+        assert all(w > 0 for w in widths), f"asked for a shard but the reader sees interleaved: {widths}"
 
     counts = torch.zeros(NUM_GLOBAL_EXPERTS, dtype=torch.int32)
     counts[GLOBAL_EXPERT_ID] = count

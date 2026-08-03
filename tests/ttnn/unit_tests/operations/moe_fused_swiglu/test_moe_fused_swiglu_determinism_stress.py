@@ -115,8 +115,18 @@ WARMUP = int(os.environ.get("MOE_STRESS_WARMUP", 0))
 #:   emb     — 6144 and 7168 give different KR_PAD / EC_MAX and a different bank-run shape.
 #:   count 0 — every core does zero M-blocks: no CB traffic, no collective, no semaphore.
 #:
-#: Capacity is mostly 1024 to keep ~14 resident input sets affordable; the two graded focus cells
+#:   hidden  — N moves hn_pad, the chunk count, the all-gather round count and W_down residency.
+#:             1024 keeps residency on at every dtype; 2048 is the graded value.
+#:   wdtype  — the weight tile stride and CB format. bfp8/bf16 also DROP W_down residency at some
+#:             shapes, which changes cb_w_down's slot cycle — a different protocol, not a knob.
+#:   wplace  — shard vs interleaved changes the reader's request pattern, not its ordering, but it
+#:             is the axis most likely to expose a barrier that was accidentally load-bearing.
+#:
+#: Capacity is mostly 1024 to keep the resident input sets affordable; the two graded focus cells
 #: at capacity 5120 are included so the stress covers the exact shapes the perf numbers quote.
+#:
+#: Fields: emb,capacity,count,format[,hidden[,wdtype[,wplace]]] — the tail is optional and
+#: defaults to the shipped 2048 / bfp4 / nd_shard.
 _DEFAULT_SHAPES = (
     "7168,1024,32,bf16_rm;"
     "7168,1024,64,bfp8_tile;"
@@ -131,12 +141,23 @@ _DEFAULT_SHAPES = (
     "6144,1024,256,bf16_rm;"
     "6144,1024,513,bfp8_tile;"
     "7168,5120,256,bf16_rm;"
-    "7168,5120,512,bfp8_tile"
+    "7168,5120,512,bfp8_tile;"
+    # the axes the rewrite added — each interleaved with the rest, not run as its own block
+    "7168,1024,256,bf16_rm,1024;"
+    "7168,1024,257,bfp8_tile,1024;"
+    "6144,1024,255,bf16_rm,1024;"
+    "7168,1024,256,bfp8_tile,1024,bfp8;"
+    "7168,1024,160,bf16_rm,1024,bfp8;"
+    "7168,1024,256,bf16_rm,1024,bf16;"
+    "7168,1024,128,bfp8_tile,1024,bf16;"
+    "7168,1024,256,bf16_rm,2048,bfp4,interleaved;"
+    "7168,1024,513,bfp8_tile,2048,bfp4,interleaved;"
+    "6144,1024,256,bf16_rm,2048,bfp4,shard_tall"
 )
 
 #: Interleaved alongside the compared shapes but never compared (its output rows are all
 #: undefined). It exists to make a no-work dispatch land between two real ones.
-_ZERO_SHAPE = (7168, 1024, 0, "bf16_rm")
+_ZERO_SHAPE = (7168, 1024, 0, "bf16_rm", 2048, "bfp4", "nd_shard")
 
 
 def _shapes():
@@ -146,18 +167,35 @@ def _shapes():
         part = part.strip()
         if not part:
             continue
-        emb, capacity, count, fmt = part.split(",")
-        out.append((int(emb), int(capacity), int(count), fmt.strip()))
+        f = [v.strip() for v in part.split(",")]
+        emb, capacity, count, fmt = f[0], f[1], f[2], f[3]
+        hidden = int(f[4]) if len(f) > 4 else 2048
+        wdtype = f[5] if len(f) > 5 else "bfp4"
+        wplace = f[6] if len(f) > 6 else "nd_shard"
+        out.append((int(emb), int(capacity), int(count), fmt, hidden, wdtype, wplace))
     return out
 
 
 class _Shape:
     """One resident input set plus its reference output and running mismatch marker."""
 
+    _WDTYPES = {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}
+
     def __init__(self, spec, device):
-        self.emb, self.capacity, self.count, self.fmt = spec
-        self.label = f"{self.fmt}_e{self.emb}_c{self.capacity}_n{self.count}"
-        self.x, self.w, self.counts, self.idx = _build(self.emb, self.capacity, self.count, self.fmt, device)
+        self.emb, self.capacity, self.count, self.fmt, self.hidden, self.wdtype, self.wplace = spec
+        self.label = (
+            f"{self.fmt}_e{self.emb}_c{self.capacity}_n{self.count}" f"_h{self.hidden}_{self.wdtype}_{self.wplace}"
+        )
+        self.x, self.w, self.counts, self.idx = _build(
+            self.emb,
+            self.capacity,
+            self.count,
+            self.fmt,
+            device,
+            hidden=self.hidden,
+            w_dtype=self._WDTYPES[self.wdtype],
+            wplace=self.wplace,
+        )
         self.rows = written_rows(self.count)
         self.reference = None
         self.marker = None
