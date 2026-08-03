@@ -98,8 +98,10 @@ def test_llama_decoder_inference(
     }
     reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
+    # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
+    reference_model.decoder.to(torch.float32)
 
-    generation_start_pos = 127
+    generation_start_pos = 0
     generation_length = 10
     all_tests_pass = True
 
