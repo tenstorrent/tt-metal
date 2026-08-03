@@ -895,12 +895,12 @@
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 3900 models/tt_dit/tests/models/ltx/test_pipeline_ltx_one_stage.py::test_pipeline_one_stage -k "4x8sp1tp0nl2_ring_is_fsdp0"
+      python3 -m pytest --timeout 3000 models/tt_dit/tests/models/ltx/test_pipeline_ltx_one_stage.py::test_pipeline_one_stage -k "4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-pro-t2v
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 70
+      timeout: 55
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -936,12 +936,12 @@
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 3900 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
+      python3 -m pytest --timeout 3300 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-pro-i2v
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 70
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
