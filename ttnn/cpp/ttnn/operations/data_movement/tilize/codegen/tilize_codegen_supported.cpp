@@ -47,28 +47,23 @@ struct DemotedCase {
 const std::vector<DemotedCase>& ungeneralized_demoted_cases() {
     static const std::vector<DemotedCase> cases = {
         // UNGENERALIZED: row path at Wt == 3 (choose_2d_ncol yields 1, so no 2D column split fits),
-        // DRAM placement. The L1 twin of each is covered by the wt3_l1_source predicate; no
-        // mechanism was found for the DRAM leg. Their near neighbour [2,12,64,96]|DRAM (also Wt == 3
-        // row path, NC*Ht == 48) clears the gate, so there is no separating condition to generalize.
+        // DRAM placement. The L1 twin is covered by the wt3_l1_source predicate; DRAM at Wt == 3 is
+        // not separable by any mechanism (a near-neighbour DRAM shape at the same Wt == 3 row path
+        // clears the gate in the same family), so these stay enumerated.
         {{3, 7, 64, 96}, BufferType::DRAM, DataType::BFLOAT16},
         {{5, 160, 96}, BufferType::DRAM, DataType::BFLOAT16},
-        {{9, 160, 96}, BufferType::DRAM, DataType::BFLOAT16},
-        {{4, 12, 96, 96}, BufferType::DRAM, DataType::BFLOAT16},
-        // UNGENERALIZED: row path at Wt == 2 with NC*Ht > grid_cores, i.e. outside the
-        // wt2_one_row_per_core boundary (where the CB does pipeline across tile-rows and the
-        // DRAM twins of both shapes measured above parity). No mechanism found.
-        {{5, 8, 64, 64}, BufferType::L1, DataType::BFLOAT16},
-        {{6, 4, 96, 64}, BufferType::L1, DataType::BFLOAT16},
         // UNGENERALIZED: row path at Wt == 5. Wt == 5 is prime, so choose_2d_ncol can never find a
         // divisor d >= 2 that fits and these fall to build_row no matter how much grid is free —
-        // but Wt == 5 alone is not the condition (other Wt == 5 shapes clear the gate), so this
-        // stays enumerated rather than becoming a predicate.
-        {{6, 224, 160}, BufferType::DRAM, DataType::BFLOAT16},
+        // but Wt == 5 alone is not the condition (other Wt == 5 shapes clear/straddle parity), so
+        // this stays enumerated rather than becoming a predicate.
         {{4, 224, 160}, BufferType::DRAM, DataType::BFLOAT16},
         {{4, 224, 160}, BufferType::L1, DataType::BFLOAT16},
-        {{7, 96, 160}, BufferType::L1, DataType::BFLOAT16},
-        // NOTE: [4,12,96,96]|L1 is also on the ledger but needs no entry here — Wt == 3 on the row
-        // path with an L1 placement is exactly the wt3_l1_source predicate below.
+        // Reclassified as port bugs / non-demotions by phase-7 analysis (not code defects here, but
+        // NOT demoted): [9,160,96]|DRAM, [4,12,96,96]|DRAM, [6,224,160]|DRAM, [7,96,160]|L1 all
+        // measured beating native / straddling parity on re-measurement and must stay on codegen —
+        // they are intentionally NOT in this list. [5,8,64,64]|L1 and [6,4,96,64]|L1 (old Wt == 2
+        // ungeneralized entries) are now covered by the generalized wt2_no_row_pipelining predicate
+        // below (buffer_type == L1) and no longer need an enumerated entry.
     };
     return cases;
 }
@@ -162,13 +157,20 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
         return true;
     }
 
-    // tilize_rm_row_path_wt2_one_row_per_core: Wt == 2 also forces ncol == 1. The minimal_work
-    // clamp does not fire (chunk_wt == 2), so cb_depth = 2 and write_batch = 4 are configured, but
-    // with at most one tile-row per core there are only 2 output tiles per core - below the 4-deep
-    // write batch's priming depth, and with no second tile-row for the double-buffered CB to
-    // prefetch. Bounded at NC*Ht <= grid_cores: past that each core owns several tile-rows, the CB
-    // pipelines across them, and the path measures above parity.
-    if (wt == 2 && total_ht <= grid_cores) {
+    // tilize_rm_row_path_wt2_no_row_pipelining: Wt == 2 also forces ncol == 1. At Wt == 2 the row
+    // builder keeps cb_depth == 2, so a core holding two or more tile-rows can prefetch row n+1
+    // while compute drains row n - the only place the generated program has a structural edge over
+    // native, and it only exists once NC*Ht exceeds the core count (grid_cores). Below that there is
+    // nothing to overlap and codegen's fixed per-core setup (TensorAccessor resolution, one read
+    // barrier per tile-row, CB bookkeeping for a write batch of 4 a 2-tile core never fills) is paid
+    // against only 2 tiles of payload. Interleaved L1 makes the transfer itself cheap enough that the
+    // fixed-cost share stays dominant at every NC*Ht, so the L1 arm has no total_ht bound. A 4-byte
+    // dtype (element_size > 2) doubles the bytes per tile-row and reaches DRAM parity one step
+    // earlier than its 2-byte counterparts, so the DRAM/4-byte arm is bounded strictly below
+    // grid_cores rather than sharing the <= 28 (measured small-NC*Ht) bound.
+    constexpr uint32_t kSmallTotalHtBound = 28;
+    if (wt == 2 && (output_buffer_type == BufferType::L1 || total_ht <= kSmallTotalHtBound ||
+                    (input_tensor.element_size() <= 2 && total_ht < grid_cores))) {
         return true;
     }
 
