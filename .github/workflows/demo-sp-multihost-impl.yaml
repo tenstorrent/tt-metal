@@ -225,14 +225,21 @@ jobs:
               echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
             ' || true
 
+          # Logs must land on shared NFS ($PIPELINE_DIR): mpirun --pernode runs on
+          # workers, and upload-artifact only sees the Actions runner filesystem.
           run_cluster_validation() {
-            mpirun --pernode --tag-output \
+            local attempt="$1"
+            mpirun --pernode --tag-output bash -lc "
+              out=\"${PIPELINE_DIR}/cluster_validation_logs/\$(hostname)/attempt_${attempt}\"
+              mkdir -p \"\$out\"
               /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-              --send-traffic \
-              --hard-fail \
-              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-              --num-iterations 5
+                --send-traffic \
+                --hard-fail \
+                --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+                --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+                --num-iterations 5 \
+                --output-path \"\$out\"
+            "
           }
 
           for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
@@ -252,7 +259,7 @@ jobs:
               sleep 5
 
               echo "--- Running cluster validation ---"
-              if run_cluster_validation; then
+              if run_cluster_validation "$attempt"; then
                 validation_success=true
               else
                 echo "WARNING: Validation failed on attempt $attempt"
@@ -308,6 +315,8 @@ jobs:
           eval "$CMD"
 
       # MUST precede teardown: NFS staging stays until workers are reclaimed.
+      # Cluster validation logs are written per-host under
+      # $PIPELINE_DIR/cluster_validation_logs/<hostname>/ (not runner-local /tmp).
       - name: Upload launch + per-rank logs and automapper outputs
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -315,9 +324,7 @@ jobs:
           name: demo-sp-${{ inputs.sp-config }}-${{ strategy.job-index }}-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 14
-          path: |
-            ${{ env.PIPELINE_DIR }}/
-            /tmp/cluster_validation_logs/
+          path: ${{ env.PIPELINE_DIR }}/
 
       - name: Delete test environment
         if: always()
