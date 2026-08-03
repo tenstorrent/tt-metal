@@ -8,21 +8,21 @@ built "the MiniMax-M3 way": reuse the shared DeepSeek EP-MoE dispatch/combine su
 fused `unified_routed_expert_ffn` (SwiGLU-OAI + biases), a block-cyclic KV cache, and a runtime
 that plugs into the model-agnostic `models/demos/common/prefill` engine.
 
-> **"Chunked" is the target architecture, not yet the running behavior.** The KV cache and runtime
-> are chunk-oriented (block-cyclic, chunk-at-a-time), but the multi-chunk *cache-read* path (chunk
-> N attending chunks 0..N-1) lands at P6. P1 through P4 run **single-chunk / one-shot** prefill.
+> **Multi-chunk prefill runs as of this PR (P6).** Chunk N attends the accumulated prefix
+> (chunks 0..N-1) via the ring cache-read over the block-cyclic SP KV cache. Chunk 0 / one-shot uses
+> the AllGather gather-Q stand-in; chunks 1+ use the native ring SDPA (Pavle Josipović's op, #51438).
 
 ## Roadmap
 
-Stacked PRs, bottom-up. **This PR is P4.**
+Stacked PRs, bottom-up. **This PR is P6 (chunked prefill via the ring SDPA).**
 
 - [x] **P1 — package scaffold + attention** (merged): GQA, RoPE (YaRN), attention sinks, and
       per-layer sliding/full alternation; single-Blackhole-card PCC vs a torch reference.
 - [x] **P2 — KV cache + indexed RoPE** (merged): chunked, block-cyclic, SP-sharded KV cache.
-- [x] **P3 — MoE**: `TtGptOssMoE` over the DeepSeek EP submodules (SwiGLU-OAI + biases, no shared expert).
-- [ ] **P4 — model + runtime** *(this PR)*: full model, chunked-prefill runtime, and the `common/prefill` adapter.
+- [x] **P3 — MoE** (merged): `TtGptOssMoE` over the DeepSeek EP submodules (SwiGLU-OAI + biases, no shared expert).
+- [x] **P4 — model + runtime** (merged): full model, chunked-prefill runtime, and the `common/prefill` adapter.
 - [ ] **P5 — galaxy bring-up**: TP=8 / SP=4 / EP=32 on the 4×8 Blackhole Galaxy (gated on galaxy access).
-- [ ] **P6 — ring SDPA**: the sinks + sliding + halo-CCL ring SDPA (Pavle Josipović's op), for scalable SP and multi-chunk long context.
+- [x] **P6 — ring SDPA** *(this PR)*: the sinks + sliding + halo-CCL ring SDPA (Pavle Josipović's op, #51438) — wires chunks 1+ to the ring cache-read for multi-chunk prefill.
 - [ ] **P7 — unification**: hoist the shared prefill scaffolding (attention output-proj/CCL tail, config, `utils/`) into `common/prefill`.
 
 ## Correctness reference
@@ -66,9 +66,10 @@ Per chip, per layer, one prefill chunk (`S_loc = S/SP`):
 - Sinks are stored **pre-divided by `config.scaling`** (the `1/√head_dim` softmax scale, i.e. ×√64),
   so the SDPA kernel's own `×scale` of the sink logit recovers the raw HF value (HF does not scale the sink).
 - Layers alternate `sliding_attention` (window 128) and `full_attention` off `hf_config.layer_types`.
-- **Bring-up (P1 through P4) uses AllGather + normal SDPA** (`ttnn.transformer.scaled_dot_product_attention`
-  with `is_causal`, `sliding_window_size`, `attention_sink`, all supported today). Correct, but it
-  replicates the full K/V per chip so it does not scale to 128k; the scalable ring SDPA swaps in at P6.
+- **Chunk 0 / one-shot uses AllGather + normal SDPA** (`ttnn.transformer.scaled_dot_product_attention`
+  with `is_causal`, `sliding_window_size`, `attention_sink`) — correct, but replicates the full K/V per
+  chip so it does not scale to 128k. **Chunks 1+ use the native ring cache-read** (`tt/attention/dense_sp.py`,
+  Pavle's RingJointSDPA, #51438) over the block-cyclic SP cache — added by this PR.
 
 ## Testing
 
