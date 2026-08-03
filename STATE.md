@@ -603,10 +603,15 @@ The index mapping is verified on host: with pad `p`, the reflect value for `padd
 is `padded[p+1+j]`, so `[0,0,1,2,3,4,5,5] -> [1,0,1,2,3,4,5,4]` exactly. The blend is
 mask-driven so every device runs identical ops.
 
-**Still to do:** thread `parallel_config: VaeHWParallelConfig` + `ccl_manager` through
-`MiniMaxH3CausalConv3d` (external/internal padding split per `LTXCausalConv3d`, halo via
-`neighbor_pad_persistent_buffer` with `padding_mode="replicate"`, then the correction above);
-switch `MiniMaxH3FrameGroupNorm` to the all-gather/norm/re-partition shape from
+`MiniMaxH3CausalConv3d` now takes `parallel_config` + `ccl_manager`: the external/internal
+pad split (halo on a sharded axis, local slice-and-concat on a replicated one, never both),
+a `_halo_pad` that issues one fused `neighbor_pad_persistent_buffer` for both axes with
+`padding_mode="replicate"` and then applies the reflect correction per axis, and the real
+`h_factor`/`w_factor` fed to `get_conv3d_config` so the blocking lookup keys on the sharded
+extent. **Unsharded path verified unregressed: 20/20 conv tests still pass.** The sharded
+path has not run yet -- it needs the encoder wiring below before it can be exercised.
+
+**Still to do:** switch `MiniMaxH3FrameGroupNorm` to the all-gather/norm/re-partition shape from
 `latent_upsampler_ltx.py:46-82`; thread `logical_h`/`logical_w` through the encoder for the
 mesh-factor pad crop; then sweep.
 

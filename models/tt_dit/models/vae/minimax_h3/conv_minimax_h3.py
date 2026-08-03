@@ -8,13 +8,15 @@ Mirrors the reference ``MiniMaxH3VideoCausalConv3d``: spatial padding is **symme
 reflect**, temporal padding is **causal zeros** of ``kernel_t - 1`` frames prepended
 and nothing appended, and the convolution itself carries no padding.
 
-Two things make this simpler than the WAN/LTX conv it is modelled on:
+Runs either unsharded (one 256x256 tile per device, which is what the reference's own
+tiling makes natural) or H/W-sharded via ``VaeHWParallelConfig``. The spatial pad follows
+the axis: a **sharded** axis gets it from a halo exchange, a **replicated** one keeps it as
+a local slice-and-concat, and never both. T is never sharded, so the causal front-pad is
+always a local concat of zeros.
 
-* It runs **unsharded** -- one 256x256 tile lives entirely on one device, because the
-  reference computes every spatial tile independently and only cross-fades the
-  overlaps at the end. So reflect padding is a local slice-and-concat rather than a
-  halo exchange, which matters because ``neighbor_pad_async`` has no ``reflect`` mode.
-* T is never sharded either, so the causal front-pad is a local concat of zeros.
+The halo pads ``replicate`` because ``neighbor_pad_async`` has no ``reflect`` mode. That is
+exact at every interior boundary -- the halo there is the neighbour's real data, so the mode
+never enters -- and :func:`reflect_edge_correction` repairs the two global edges per axis.
 
 ``temporal_taps=1`` selects the keyframe fast path. That is **exact**, not an
 approximation: the causal front-pad is zeros, so a 3-tap temporal conv on a lone
@@ -24,6 +26,7 @@ is sliced to ``weight[:, :, -1:]`` at load time.
 
 from __future__ import annotations
 
+import math
 from typing import Sequence
 
 import torch
@@ -102,11 +105,25 @@ class MiniMaxH3CausalConv3d(Module):
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
+        parallel_config=None,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
 
         if temporal_taps not in (1, 3):
             raise ValueError(f"temporal_taps must be 1 or 3, got {temporal_taps}")
+
+        # H/W sharding: the spatial pad becomes a halo exchange on the sharded axes and stays
+        # a local slice-and-concat on the replicated ones. Same external/internal split as
+        # LTXCausalConv3d, which is the clearer of the two in-tree versions -- it zeroes
+        # `internal` where sharded and `external` where not, so neither is ambiguous.
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
+        self.height_factor = 1 if parallel_config is None else parallel_config.height_parallel.factor
+        self.width_factor = 1 if parallel_config is None else parallel_config.width_parallel.factor
+        self.is_sharded = self.height_factor > 1 or self.width_factor > 1
+        if self.is_sharded and ccl_manager is None:
+            raise ValueError("a sharded parallel_config needs a ccl_manager for the halo exchange")
 
         kernel = list(_ntuple(kernel_size, 3))
         # A k1 conv (nin_shortcut / quant_conv) has no temporal extent to collapse.
@@ -127,8 +144,27 @@ class MiniMaxH3CausalConv3d(Module):
         self.mesh_device = mesh_device
         self.dtype = dtype
 
-        # Causal front-pad, applied locally in forward. Zero once collapsed.
+        # Causal front-pad, applied locally in forward. Zero once collapsed. T is never
+        # sharded, so this stays a local concat of zeros.
         self.time_pad = 0 if self.collapse_temporal else self.kernel_size[0] - 1
+
+        # A sharded axis gets its pad from the halo (external); a replicated one keeps it
+        # local (internal). Never both, or the pad is applied twice.
+        self.external_pad_h = spatial_padding if self.height_factor > 1 else 0
+        self.external_pad_w = spatial_padding if self.width_factor > 1 else 0
+        self.local_pad_h = 0 if self.height_factor > 1 else spatial_padding
+        self.local_pad_w = 0 if self.width_factor > 1 else spatial_padding
+
+        self._edge_masks: dict[int, tuple] = {}
+        if self.is_sharded and spatial_padding > 0:
+            if self.height_factor > 1:
+                self._edge_masks[2] = edge_mask_pair(
+                    mesh_device, self.height_factor, parallel_config.height_parallel.mesh_axis, dtype
+                )
+            if self.width_factor > 1:
+                self._edge_masks[3] = edge_mask_pair(
+                    mesh_device, self.width_factor, parallel_config.width_parallel.mesh_axis, dtype
+                )
 
         self.conv_config = get_conv3d_config(
             self.in_channels,
@@ -136,8 +172,8 @@ class MiniMaxH3CausalConv3d(Module):
             self.kernel_size,
             dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            h_factor=1,
-            w_factor=1,
+            h_factor=self.height_factor,
+            w_factor=self.width_factor,
         )
 
         from models.common.utility_functions import is_blackhole
@@ -193,12 +229,54 @@ class MiniMaxH3CausalConv3d(Module):
         if bias is not None:
             state["bias"] = bias.reshape(1, -1)
 
+    def _halo_pad(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        """Exchange the spatial halo on the sharded axes, then fix the global edges.
+
+        ``neighbor_pad_async`` has no ``reflect`` mode, so this pads ``replicate`` -- exact at
+        every interior boundary, where the halo is the neighbour's real data -- and then
+        :func:`reflect_edge_correction` repairs the two global edges per axis. Both axes go in
+        one fused call when both are sharded, following ``WanCausalConv3d``.
+        """
+        dims, pad_left, pad_right, axes, semaphores, links = [], [], [], [], [], []
+        for dim, pad, factor, factor_config in (
+            (2, self.external_pad_h, self.height_factor, "height_parallel"),
+            (3, self.external_pad_w, self.width_factor, "width_parallel"),
+        ):
+            if pad <= 0 or factor <= 1:
+                continue
+            mesh_axis = getattr(self.parallel_config, factor_config).mesh_axis
+            dims.append(dim)
+            pad_left.append(pad)
+            pad_right.append(pad)
+            axes.append(mesh_axis)
+            semaphores.append(self.ccl_manager.get_np_ping_pong_semaphore(mesh_axis))
+            links.append(max(1, min(math.prod(x_BTHWC.shape[:dim]), self.ccl_manager.num_links)))
+
+        if not dims:
+            return x_BTHWC
+
+        x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+            x_BTHWC,
+            dims=dims,
+            pad_left=pad_left,
+            pad_right=pad_right,
+            padding_mode="replicate",
+            axes=axes,
+            neighbor_sems=semaphores,
+            num_links=links,
+        )
+        for dim, pad in zip(dims, pad_left):
+            x_BTHWC = reflect_edge_correction(x_BTHWC, dim, pad, edge_masks=self._edge_masks.get(dim))
+        return x_BTHWC
+
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         """``x_BTHWC``: ``(B, T, H, W, C)`` ROW_MAJOR, C already tile-aligned."""
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"conv3d needs ROW_MAJOR, got {x_BTHWC.layout}"
 
-        if self.spatial_padding > 0:
-            x_BTHWC = reflect_pad_hw(x_BTHWC, self.spatial_padding, self.spatial_padding)
+        if self.local_pad_h > 0 or self.local_pad_w > 0:
+            x_BTHWC = reflect_pad_hw(x_BTHWC, self.local_pad_h, self.local_pad_w)
+        if self.external_pad_h > 0 or self.external_pad_w > 0:
+            x_BTHWC = self._halo_pad(x_BTHWC)
         if self.time_pad > 0:
             x_BTHWC = causal_pad_t(x_BTHWC, self.time_pad, self.mesh_device)
 
