@@ -199,13 +199,49 @@ number, not just a PCC. Order: correctness first, then profile, then optimize.
   assuming it is free.
 - Report before/after tables in the PR, per the goal's PR requirements.
 
-## 6. Verification workflow
+## 6. Verification workflow — direct bash on the new machine
 
-Device runs go through tt-device-mcp in background (`tt_device_job_run_bg` + poll),
-never blocking-wait — the Galaxy is shared. **Never pipe a device job to `tail -N`**:
-it buffers until exit and the log looks empty. Redirect to a file under
-`/home/kevinmi/`. `tt-smi -glx_reset` has standing permission; `tt-smi -r` is
-forbidden (it dropped all 32 chips off PCIe on CPLD < 1.16).
+**This work moves to a machine where the device is driven straight from bash.** No
+broker, no `tt-device-mcp`, no job queue. Run pytest directly and read the output:
+
+```bash
+cd <workspace>/tt-metal
+./python_env/bin/python -m pytest models/tt_dit/tests/models/minimax_h3/<file> -q --no-header
+```
+
+That is much faster than the queued path this plan was originally written for, so
+prefer many small runs over batching everything into one.
+
+**You have standing permission to reset the device yourself, directly from bash, at
+any point, without asking:**
+
+```bash
+tt-smi -glx_reset
+```
+
+Reset freely — after a hang or timeout, and proactively whenever mesh state is in
+doubt before a measurement. Do not ask first.
+
+`tt-smi -r` remains **forbidden**: on CPLD < 1.16 it dropped all 32 chips off the
+PCIe bus and needed a host reboot. `-glx_reset` only.
+
+Other operational notes that still apply:
+
+- Wrap long device runs in a `timeout` sized to the workload; a timeout is a hang —
+  capture the log, kill the process, `tt-smi -glx_reset`, confirm recovery with a
+  one-device smoke test, record it, resume.
+- **Never pipe a device run to `tail -N`.** It buffers until exit and the log looks
+  empty until then. Redirect to a file and tail the file.
+- Use `./python_env/bin/python`, not bare `python` — the system interpreter cannot
+  import `ttnn`.
+- Put `python_env/bin` on `PATH` before `git commit`, or pre-commit aborts with
+  "`pre-commit` not found". black/isort reformat on the first run and abort the
+  commit; re-add and commit again.
+- Single-device tests take `device_params={}`. Passing `ring_params` asks for a
+  fabric ring with no partner and times out the ethernet handshake before any kernel
+  runs.
+- Export `TT_DIT_CACHE_DIR` before anything that uses `utils/cache.load_model`, or
+  weights re-translate from PyTorch every run.
 
 ## 7. Parked work (done, preserved on `kevinmi/minimax-h3`)
 

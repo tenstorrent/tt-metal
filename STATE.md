@@ -1,10 +1,24 @@
-# MiniMax-H3 FL2VA on BH Galaxy 4x8 — execution state
+# MiniMax-H3 VAEs on BH Galaxy 4x8 — execution state
 
-Plan (source of truth for scope, order, contracts, gates):
-`~/.claude/plans/elegant-wibbling-brooks.md`. Re-read both before every iteration.
+**Scope changed 2026-08-03 to VAE-only.** Video VAE (encode + decode) and audio VAE
+(encode + decode), each with comprehensive unit tests and measured performance. The
+DiT / text-encoder work is parked, green, and preserved — see "Parked work".
 
-Branch: `kevinmi/minimax-h3`, based on `c63d43b89ec`.
-All PRs target `kevinmi/minimax-h3`.
+Plan: `models/tt_dit/models/MiniMaxH3_VAE_PLAN.md` (in-tree copy of
+`~/.claude/plans/elegant-wibbling-brooks.md`). Re-read it and this file every
+iteration.
+
+Branch: **`kevinmi/minimax-h3-vae`, cut from `origin/cglagovich/minimax-h3`**
+(`42ecb2e0339`), which owns the canonical folder structure and the pinned diffusers
+reference. Conform to it; do not invent a layout.
+
+References in priority order: diffusers PR #14355 pinned at
+`abc5e9bf71fd38f53cd471bc3acaa84bc5ecbfdc` (gives `AutoencoderKLMiniMaxH3` and
+`AutoencoderKLMiniMaxH3Audio` as importable reference classes — compare against
+these, not a hand-written port), then sglang PR #33275, then the raw checkpoint
+under `FL2VA/video_vae/source/`.
+
+Tests follow `tests/models/ltx/` and `tests/models/wan2_2/`.
 
 ## Branch base — read before any git operation
 
