@@ -618,12 +618,14 @@ reads kv head *j//4*, so those 4 heads' 3 tokens stack as 12 ROWS against one kv
 attention matmuls go batch-32 → batch-8, and rows inside a 32-row tile are free. Proven equivalent
 on host in fp32 (agrees to 6e-07, pure reduction order) — not an approximation.
 
-**Failed the gate — width-sharded RMSNorm in BLOCK 1.** Same 1.46x, ~5 ms/frame, and every cheap
-signal said yes: 0.9999973 per op, decode PCC unmoved at 0.99991. It still cost **WER 0.88% →
-2.06%**. Over 24 real teacher-forced frames the WORST SAMPLE went 1.06% → 1.95% while PCC stayed
-flat. This is the second instance of the trap `_norm` documents — a ~1e-6 per-op difference
-amplified through 26 layers — and PCC hid it both times. **Gate norm changes on worst-sample and
-WER, never on per-op PCC.** Block 2 keeps it because 3 layers give nothing to amplify.
+**Reverted — width-sharded RMSNorm in BLOCK 1.** Same 1.46x, ~5 ms/frame, and every cheap signal
+said yes: 0.9999973 per op, decode PCC unmoved at 0.99991. But over 24 REAL teacher-forced frames
+the **worst sample went 1.06% → 1.95%** while PCC stayed flat. Teacher-forced matters: both builds
+see identical inputs at every step, so that comparison is deterministic. This is the second
+instance of the trap `_norm` documents — a ~1e-6 per-op difference amplified through 26 layers —
+and per-op PCC hid it both times. Block 2 keeps the sharded norm because 3 layers give nothing to
+amplify. (This entry originally also cited WER 0.88% → 2.06%; see below for why that half of the
+evidence was worthless.)
 
 **Measured, not applied, in rough value order:**
 1. **wqkv + wo → BFP8** (Block 1, ~3.3 ms/frame): wqkv 4.82→2.64 ms per 26, wo 3.36→2.20. Only
@@ -666,6 +668,80 @@ addressed by pointer so a fresh upload is silently ignored, a capture ORDER cons
 two blocks (all warm-ups before either capture, or the second hangs), and a reserved scratch cache
 row so the warm-up and capture writes do not corrupt the prompt. Not re-added. The probes are in
 the session scratchpad if this needs re-running after a big change.
+
+**Matmul fusion: one win, and it CLOSES the matmul side of Block 2.** Following the trace result
+above (device-side per-kernel cost, so make kernels bigger rather than merely fewer), the two pairs
+of Block 2 matmuls that read the same input were merged: `wq`+`wkv`, and `w1`+`w3`. Only the first
+paid. Per-matmul efficiency against the 194 GB/s ceiling explains exactly why:
+
+| matmul | MB/call | us/call | GB/s | % of ceiling |
+|---|---|---|---|---|
+| B1 wqkv (bf16, already fused) | 37.7 | 185 | 204 | 105% |
+| B1 wo (bf16) | 25.2 | 129 | 195 | 100% |
+| B2 wq | 13.4 | 74 | 182 | 94% |
+| **B2 wkv** | **6.7** | **74** | **91** | **47%** |
+| B2 wqkv, fused | 20.1 | 101 | 198 | 102% |
+| B2 w1 | 30.1 | 157 | 192 | 99% |
+
+`wkv` was the ONLY launch-bound weight matmul anywhere in the model — at 2048 wide it cost the same
+74 us as the 4096-wide `wq`, so there is a fixed ~40-50 us per launch and width past ~4096 is
+nearly free. Folding q in with it took the pair from an effective 137 GB/s to 198, worth **0.96
+ms/frame**. It is mathematically the same arithmetic — a linear computes each output column
+independently, and 4096 is tile-aligned so the BFP8 blocks are unchanged — but NOT bit-identical:
+a `[3072,6144]` matmul picks a different internal block decomposition than a 4096 and a 2048
+separately, which reorders the sum over the 3072 inner dim. Same class of difference as the row
+fold. 11 of 15 fixture cases reproduce their frame count exactly and 4 shift, which is the usual
+chaotic-trajectory response to a last-bit change, so it is gated on WER like everything else.
+`w1`+`w3` are 9216 wide each and already at 99% — merging them measured **0.998x**, and
+0.951x once the output split is charged, so they stay separate. Cleared by the gates that resolve
+anything: velocity PCC 0.99998522 (identical to pre-fusion), same 3/74 codes, long-form WER 0.00%,
+15/15 termination. Its single-seed headline WER read 1.76%, which means nothing — see §6.7.
+
+**Every weight matmul in both blocks is now at the DRAM ceiling.** There is no fusion left to do,
+in either block: Block 1's are all 25-38 MB per call and were never launch-bound. Block 2's
+remaining ~13 ms above its weight-read floor is entirely in the NON-matmul ops, and the next real
+attack on it is sdpa (item 2 above), which replaces the inherently batch-8 attention interior — the
+one part the row fold could not flatten, because each batch element needs a different k.
+
+### 6.7 — the WER gate is noisier than the changes it was gating
+
+**Same code. Only the generation seed changed.**
+
+| seed | natural-text WER | long-form (298 w) | short (42 w) |
+|---|---|---|---|
+| 0 | 1.76% | **0.00%** | 14.29% |
+| 1 | 2.06% | **0.00%** | 16.67% |
+| 2 | 0.88% | **0.00%** | 7.14% |
+
+0.88–2.06% is the ENTIRE range seen across every implementation variant in §6.6, endpoints
+included. So **every single-seed WER comparison made during that sweep was uninformative**, and two
+conclusions drawn from it have been corrected above: the row fold "held WER at 0.88%" (luck), and
+the Block 1 sharded norm "cost 0.88% → 2.06%" (also luck — that revert stands on its worst-sample
+measurement, which is deterministic, not on this).
+
+The cause is word counts, not audio. Per case, same code, seeds 0/1/2:
+
+| case | lang | words | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|---|---|
+| 7 | spanish | 6 | 50.0% | 0.0% | 0.0% |
+| 9 | portuguese | 6 | 0.0% | 83.3% | 0.0% |
+| 13 | arabic | 3 | 33.3% | 0.0% | 33.3% |
+| 6 | german | 7 | 28.6% | 28.6% | 28.6% |
+| 0,1,2,3 | english | 298 total | 0.0% | 0.0% | 0.0% |
+
+On a 6-word clip one Whisper disagreement is 17% and three is 50%, so 42 words of short prompts
+swing the 340-word aggregate by more than a point while 298 words of English sit at exactly zero.
+Case 6's 28.6% is the one short-prompt error that is REAL — it reproduces on every seed.
+
+**The gate is now the long-form number**, which `score_quality_set.py` prints separately: 0.00%
+over 298 words, in every run ever measured. Plus 15/15 natural termination and the voice-identity
+check, both of which have also held everywhere.
+
+**For judging a numerical change, prefer the deterministic gates entirely** — teacher-forced PCC
+and worst-sample against the fp32 reference in `tests/tt_gates.py`. They feed both builds identical
+inputs, so no chaotic trajectory is involved. That is what actually caught the Block 1 norm, and
+what correctly cleared the qkv fusion. Use end-to-end WER to catch gross breakage, not to resolve
+a last-bit difference — and if you must, run at least three seeds and compare ranges.
 
 **Checked and ruled out** (so nobody re-runs them):
 - `rms_norm(residual_input_tensor=)` returns only the normed value and discards the sum; a pre-norm
