@@ -485,43 +485,6 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     )
 
 
-# Ceiling on the derived single-element tolerance. A caller asking pcc=0.5 is asking for very
-# little correlation, but 50% relative error on a lone value is not a meaningful check, so the
-# derived tolerance never exceeds this.
-_PCC_FALLBACK_MAX_RTOL = 1e-2
-
-
-def _pcc_fallback_rtol(pcc, rtol, numel):
-    """Relative tolerance for the allclose fallback taken when PCC is undefined.
-
-    ONLY widens for a SINGLE-ELEMENT result, where correlation is mathematically undefined
-    rather than merely degenerate. A constant tensor with many elements keeps the caller's
-    strict rtol: many samples agreeing is real evidence, and loosening there could hide a
-    regression. This scoping matters because only 6 of ~739 comp_pcc callers pass rtol
-    explicitly, so everything else inherits whatever this returns.
-
-    For numel == 1 the fixed rtol=1e-5 has nothing to do with the ``pcc`` the caller asked
-    for. A caller requesting pcc=0.999 wants ~0.1% agreement; 1e-5 demands 0.001%, tighter
-    than the op's own arithmetic delivers. Observed: model_traced `max` with no `dim` (global
-    reduce to a scalar) returned 3.334717 against a torch golden of 3.334923 -- 6.2e-5
-    relative error, BETTER than bfloat16 precision and far inside pcc=0.999. allclose's
-    1e-4 + 1e-5*|b| = 1.33e-4 budget rejected the 2.06e-4 difference and returned
-    float(False) == exactly 0.0. That is the "exactly 0.0 PCC" signature: not a wrong answer,
-    a mismatched yardstick.
-
-    (1 - pcc) is the natural scalar analogue of a correlation threshold, capped by
-    _PCC_FALLBACK_MAX_RTOL. max() with the caller's rtol means this can only ever LOOSEN,
-    never tighten, so nothing that passes today can start failing.
-    """
-    if numel != 1:
-        return rtol
-    try:
-        derived = min(1.0 - float(pcc), _PCC_FALLBACK_MAX_RTOL)
-    except (TypeError, ValueError):
-        return rtol
-    return max(rtol, derived) if derived > 0 else rtol
-
-
 def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)
@@ -542,7 +505,7 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     # within the caller's tolerances.
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
         logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
-        result = torch.allclose(golden, calculated, rtol=_pcc_fallback_rtol(pcc, rtol, golden.numel()), atol=atol)
+        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
         return result, float(result)
 
     golden = torch.squeeze(golden).flatten()
@@ -598,7 +561,7 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     # Fall back to allclose rather than returning a misleading 1.0.
     if math.isnan(cal_pcc):
         logger.warning("PCC is NaN (zero variance / constant tensor). Falling back to allclose check.")
-        result = torch.allclose(golden, calculated, rtol=_pcc_fallback_rtol(pcc, rtol, golden.numel()), atol=atol)
+        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
         return result, float(result)
 
     return cal_pcc >= pcc, cal_pcc

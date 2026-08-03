@@ -338,6 +338,15 @@ def _guarded_close_mesh_device(device, *args, **kwargs):
 # (or nothing is cached), since it just passes through to the original close.
 ttnn.close_mesh_device = _guarded_close_mesh_device
 
+# A single-element result has no variance, so PCC is undefined and comp_pcc falls back to
+# allclose with a fixed rtol unrelated to the requested pcc -- reporting correct scalars as
+# exactly 0.0. Fixed sweep-side rather than in models/common/utility_functions.py, whose
+# comp_pcc has ~739 callers. Installed here because every model_traced module imports this
+# module, so the patch is in place before any comparison runs.
+from .pcc_scalar_patch import install as _install_scalar_pcc_patch  # noqa: E402
+
+_install_scalar_pcc_patch()
+
 
 _orig_set_fabric_config = getattr(ttnn, "set_fabric_config", None)
 
