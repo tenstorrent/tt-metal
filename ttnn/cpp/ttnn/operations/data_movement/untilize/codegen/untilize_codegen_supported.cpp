@@ -4,7 +4,10 @@
 
 #include "untilize_codegen_supported.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::data_movement::untilize_codegen {
@@ -55,6 +58,18 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     constexpr uint32_t kTileSize = 2048;  // bf16/bf8_b only in this scope
     constexpr uint64_t kWideChunkThreshold = 800'000;
 
+    // Mirrors build_column_parallel + plan_cb_depths: that builder's CB plan is sized by the
+    // busiest core's tile count, not by Wt, and plan_cb_depths() TT_FATALs once even the
+    // single-buffer plan (cb_in + cb_out, one slot per tile each) exceeds the L1 budget. Reject
+    // here so "auto" falls back to native instead of aborting inside program creation.
+    auto column_parallel_plan_fits = [&](uint32_t wt) {
+        auto grid = input.device()->compute_with_storage_grid_size();
+        auto split = tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
+        uint32_t max_tiles_per_core =
+            std::max(std::get<4>(split), std::get<3>(split).empty() ? 0u : std::get<5>(split));
+        return 2ull * max_tiles_per_core * kTileSize <= kUsableL1;
+    };
+
     const auto& logical = input.logical_shape();
     const bool tile_aligned =
         logical[-2] % tt::constants::TILE_HEIGHT == 0 && logical[-1] % tt::constants::TILE_WIDTH == 0;
@@ -96,8 +111,18 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     if (total_tile_rows > 1 && 2ull * wt * kTileSize > kWideChunkThreshold) {
         return false;
     }
+    // A single tile-row skips the chunk cascade (build_column_parallel splits Wt across the grid
+    // in one dispatch instead), so it is bounded by that builder's own per-core plan, not by the
+    // whole-row threshold above.
+    if (total_tile_rows == 1 && wt > 1 && !column_parallel_plan_fits(wt)) {
+        return false;
+    }
 
     return true;
+}
+
+bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids) {
+    return use_multicore && !sub_core_grids.has_value();
 }
 
 // Perf-demote ledger: shapes that supported_by_codegen() already accepts (correct under codegen)

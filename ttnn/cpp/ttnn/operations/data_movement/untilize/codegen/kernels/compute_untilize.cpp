@@ -15,7 +15,7 @@
 // ComputeConfigDescriptor.fp32_dest_acc_en.
 #include <cstdint>
 
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/dataflow/circular_buffer.h"
@@ -45,7 +45,7 @@ void kernel_main() {
     CircularBuffer src_cb(src_cb_id);
     CircularBuffer out_cb(out_cb_id);
 
-    unary_op_init_common(src_cb_id, out_cb_id);
+    compute_kernel_hw_startup(src_cb_id, out_cb_id);
     pack_untilize_init<block_ct_dim, full_ct_dim>(src_cb_id, out_cb_id);
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {

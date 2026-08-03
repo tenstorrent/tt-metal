@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_equal
 
 _NATIVE = "native"  # forced-native golden leg
@@ -333,3 +334,51 @@ def test_untilize_codegen_routing(device, shape, kwargs, dtype, layout):
     assert_equal(golden, ttnn.to_torch(out))
     msg = "auto routed an out-of-scope case to codegen (program cache grew); expected native fallback"
     assert device.num_program_cache_entries() == entries_before, msg
+
+
+# Hand-added: execution-control routing. Every codegen factory places work over the full
+# compute-with-storage grid, so a caller that asked for single-core placement or a specific
+# sub-grid must reach native under `auto` -- silently widening the placement would break the
+# resource partitioning the caller asked for.
+_SUB_CORE_GRIDS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6))])
+
+_EXECUTION_CONTROLS = [
+    ({"use_multicore": False}, "use_multicore_false"),
+    ({"sub_core_grids": _SUB_CORE_GRIDS}, "sub_core_grids"),
+]
+
+# The native-golden leg needs native to actually run the control. `ttnn.untilize` with
+# `sub_core_grids` hangs on blackhole for any grid or shape tried, including the range
+# test_to_layout.py::test_to_layout_subcore uses -- the native sub-core-grids factory has no direct
+# test coverage anywhere and its only model caller is wormhole galaxy. Unrelated to routing: it
+# reproduces under implementation="native", which never reaches the codegen gate.
+_NATIVE_GOLDEN_CONTROLS = [
+    pytest.param({"use_multicore": False}, "use_multicore_false"),
+    pytest.param(
+        {"sub_core_grids": _SUB_CORE_GRIDS},
+        "sub_core_grids",
+        marks=skip_for_blackhole("native ttnn.untilize(sub_core_grids=...) hangs on blackhole"),
+    ),
+]
+
+
+@pytest.mark.parametrize("controls,control_id", _NATIVE_GOLDEN_CONTROLS)
+def test_untilize_execution_controls_route_to_native(device, controls, control_id):
+    # In-scope shape/dtype for the codegen gate, so only the execution control can drive the route.
+    x = torch.rand([64, 128], dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, **controls}
+    golden = ttnn.to_torch(ttnn.untilize(xt, **kwargs, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.untilize(xt, **kwargs, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = f"auto routed {control_id} to codegen (program cache grew); codegen cannot honour it"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
+@pytest.mark.parametrize("controls,control_id", _EXECUTION_CONTROLS, ids=[c[1] for c in _EXECUTION_CONTROLS])
+def test_untilize_forced_codegen_rejects_execution_controls(device, controls, control_id, expect_error):
+    x = torch.rand([64, 128], dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "cannot honour"):
+        ttnn.untilize(xt, memory_config=ttnn.DRAM_MEMORY_CONFIG, **controls, implementation="codegen")
