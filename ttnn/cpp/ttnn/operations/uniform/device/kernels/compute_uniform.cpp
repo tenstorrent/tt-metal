@@ -39,7 +39,11 @@ void kernel_main() {
 
     init_sfpu(intermed_cb_id, intermed_cb_id);
 
-    rand_tile_init(seed);
+    // Each core otherwise starts the hardware LFSR from the same state and
+    // emits a duplicate stream. start_id is unique for every participating
+    // core; an odd Weyl multiplier spreads nearby tile offsets over 32 bits.
+    constexpr uint32_t core_seed_multiplier = 0x9E3779B9U;
+    rand_tile_init(seed + start_id * core_seed_multiplier);
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_intermed.reserve_back(1);
 

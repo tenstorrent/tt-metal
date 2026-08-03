@@ -227,7 +227,8 @@ def test_rand_tile_means_have_iid_dispersion(device):
     assert torch.isfinite(data).all()
     assert abs(data.mean().item() - 0.5) < 0.01
 
-    tile_means = data.unfold(0, 32, 32).unfold(1, 32, 32).reshape(-1, 32 * 32).mean(dim=1)
+    tiles = data.unfold(0, 32, 32).unfold(1, 32, 32).reshape(-1, 32 * 32)
+    tile_means = tiles.mean(dim=1)
     observed_std = tile_means.std(unbiased=False).item()
     iid_std = 1.0 / math.sqrt(12 * 32 * 32)
 
@@ -235,6 +236,8 @@ def test_rand_tile_means_have_iid_dispersion(device):
         f"tile-mean std {observed_std:.6f} exceeds three times the IID expectation {iid_std:.6f}; "
         "random elements remain correlated within tiles"
     )
+
+    assert torch.unique(tiles, dim=0).shape[0] == tiles.shape[0], "different cores emitted duplicate RNG streams"
 
 
 @pytest.mark.parametrize("low, high", [(0.0, 5e-7), (2.0, 2.0000005), (-1.0, 0.0)])
