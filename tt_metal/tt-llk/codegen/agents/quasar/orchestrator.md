@@ -179,7 +179,7 @@ execute_step_write_initial_run_json
 
 ## Step 2b: Hide Existing Implementation (blind regeneration)
 
-EXECUTE the following. When `HIDE_EXISTING_KERNEL=true` it git-removes and commits the target op's existing files (metal wrapper + tt-llk lib impl) on the worktree branch, so the analyzer and writer regenerate blind — following their normal git-read policy they find no prior implementation on the branch. No-op when the flag is unset:
+EXECUTE the following. When `HIDE_EXISTING_KERNEL=true` it git-removes and commits every layer of the target op's existing implementation on the worktree branch — the metal LLK-API wrapper, the tt-llk lib impl anywhere under the arch tree (`common/inc/sfpu/`, `common/inc/experimental/`, or any other subfolder), and the compute-level API entry point — so the analyzer and writer regenerate blind: following their normal git-read policy they find no prior implementation on the branch. The writer generates `GENERATED_KERNEL` fresh, exactly as it does when nothing was hidden. Treat every OTHER file named in a `hid:` line — the tt-llk lib implementation and the compute-level API entry point — as out of scope for the rest of the run: write no new version of it and let no agent recreate it. If the step prints a `WARNING:` block, quote it verbatim in your final report and in `execute_step_message` — a hidden header that a retained test still includes fails the compile unfixably. No-op when the flag is unset:
 
 ```bash
 execute_step_hide_existing_kernel
@@ -585,7 +585,8 @@ diffing it) would clobber unrelated upstream edits on re-apply. The worktree
 is dedicated to this single run and was branched from `origin/main`, so
 *every* uncommitted change under `tt_llk_${TARGET_ARCH}/`, `tests/`, and
 `codegen/artifacts/` is, by definition, this run's output. Let git enumerate
-it:
+it — the step excludes the files Step 2b hid and never rewrote, so the patch
+carries no deletion of an implementation this run merely ignored:
 
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
