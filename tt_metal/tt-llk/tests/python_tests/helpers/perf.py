@@ -726,7 +726,8 @@ class PerfConfig(TestConfig):
         )
 
         # Setting header fields that are always there
-        names = list(FORMAT_HEADERS) if self.formats_config else []
+        has_formats = bool(self.formats_config) and bool(self.formats_config[0])
+        names = list(FORMAT_HEADERS) if has_formats else []
         values = (
             [
                 self.formats_config[0].unpack_A_src,
@@ -735,9 +736,12 @@ class PerfConfig(TestConfig):
                 self.formats_config[0].unpack_B_dst,
                 self.formats_config[0].output_format,
             ]
-            if self.formats_config[0]
+            if has_formats
             else []
         )
+        assert len(names) == len(
+            values
+        ), f"perf report header/value drift: {len(names)} names vs {len(values)} values"
 
         names += list(FLAG_HEADERS)
         values += [self.unpack_to_dest, self.dest_acc]

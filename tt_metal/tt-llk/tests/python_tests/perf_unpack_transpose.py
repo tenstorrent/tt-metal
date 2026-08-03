@@ -71,10 +71,6 @@ def test_perf_unpack_transpose(
             TILE_COUNT(tile_count),
             UNPACK_TRANS_FACES(unpack_transpose_faces),
             UNPACK_TRANS_WITHIN_FACE(unpack_transpose_within_face),
-            # Keeps the measured TILE_LOOP window above ~1000 cycles. Zone instrumentation costs a
-            # fixed ~4-6 cycles, which on a 700-cycle window reads as >1% but is irrelevant to any real
-            # op; the delta does not grow with the loop (measured +4 across a 4.8x window sweep), so
-            # this raises measurement resolution rather than hiding cost.
             LOOP_FACTOR(32),
         ],
         variant_stimuli=StimuliConfig(
