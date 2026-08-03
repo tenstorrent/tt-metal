@@ -81,10 +81,11 @@
  *   @warning CACHE-REUSE FOOTGUN: programs are cached and GlobalSemaphores reused, so each side
  *     must @c noc_semaphore_set(sem, 0) to re-arm — a SENDER resets BEFORE its outgoing inc, a
  *     RECEIVER after its wait. Missing reset = first run green, second hangs or corrupts.
- *   @note Each arm_* draws its OWN pooled header (unicast-write, scatter, unicast-inc and
- *     multicast-inc are independent), so any mix of channels may be live at once with no ordering
- *     constraint between them. The pool holds several headers per RISC (8 on Wormhole/Blackhole)
- *     and is reset every kernel launch; a stream arms at most four, well within budget.
+ *   @note Each arm_* draws a FRESH pooled header that the returned channel owns, so any mix of
+ *     channels may be live at once with no ordering constraint, and arming the same type twice
+ *     yields two independent channels. The pool holds several headers per RISC (8 on
+ *     Wormhole/Blackhole) and is reset every kernel launch; a stream that arms each channel once
+ *     uses at most four, well within budget.
  *
  * It WRAPS, and does not reinvent, the existing fragmented fabric layer:
  *   - @c FabricConnectionManager (connection + per-direction @c WorkerToFabricEdmSender)
@@ -272,8 +273,9 @@ FORCE_INLINE ccl_routing_utils::line_unicast_route_info_t unicast_route(uint32_t
 // ============================================================================================
 // Armed channel handles — each is produced by a FabricStream::arm_* call and exposes ONLY the
 // issues for its send type. Holding one is the compile-time proof that arm (and therefore open
-// + route) happened. Each borrows the connection (owned by the FabricStreamSender) and the
-// pooled header (owned by the FabricStream); both outlive every channel by construction.
+// + route) happened. Each borrows the connection (owned by the FabricStreamSender, which outlives
+// it by construction) and OWNS the pooled header its arm_* allocated — no header is shared, so
+// arming the same channel type twice yields two fully independent handles.
 // ============================================================================================
 
 /// Armed unicast-write channel: issue armed-size payload writes, varying only the dst address.
@@ -347,9 +349,10 @@ private:
 };
 
 // ============================================================================================
-// FabricStream — the OPENED egress. Owns the (lazy) pooled headers and the alignment; hands out
-// armed channels. Borrows the connection from the FabricStreamSender that produced it (so the
-// sender must outlive the stream — declare the sender first). RAII-closes on destruction.
+// FabricStream — the OPENED egress. Holds the alignment + the bound route and hands out armed
+// channels; each arm_* draws a fresh pooled header that the returned channel owns. Borrows the
+// connection from the FabricStreamSender that produced it (so the sender must outlive the stream —
+// declare the sender first). RAII-closes on destruction.
 // ============================================================================================
 template <typename ConnT = DirectConn>
 class FabricStream {
@@ -360,14 +363,7 @@ public:
     /// constructs it in place, but provide a move that transfers `closed_` so the moved-from
     /// stream never double-closes the (now transferred) connection.
     FORCE_INLINE FabricStream(FabricStream&& o) :
-        conn_(o.conn_),
-        alignment_(o.alignment_),
-        route_(o.route_),
-        payload_hdr_(o.payload_hdr_),
-        scatter_hdr_(o.scatter_hdr_),
-        sem_hdr_(o.sem_hdr_),
-        mcast_hdr_(o.mcast_hdr_),
-        closed_(o.closed_) {
+        conn_(o.conn_), alignment_(o.alignment_), route_(o.route_), closed_(o.closed_) {
         o.closed_ = true;
     }
     FabricStream& operator=(FabricStream&&) = delete;
@@ -412,13 +408,9 @@ private:
         ConnT* conn, uint32_t alignment, const ccl_routing_utils::line_unicast_route_info_t& route) :
         conn_(conn), alignment_(alignment), route_(route) {}
 
-    ConnT* conn_;                                             // borrowed from the FabricStreamSender
-    uint32_t alignment_;                                      // L1 alignment for on-wire payload sizing
-    ccl_routing_utils::line_unicast_route_info_t route_;      // bound at open(); reused by every unicast arm_*
-    volatile PACKET_HEADER_TYPE* payload_hdr_ = nullptr;      // lazily allocated by arm_unicast_write
-    volatile PACKET_HEADER_TYPE* scatter_hdr_ = nullptr;      // lazily allocated by arm_scatter_write
-    volatile PACKET_HEADER_TYPE* sem_hdr_ = nullptr;          // lazily allocated by arm_inc
-    volatile PACKET_HEADER_TYPE* mcast_hdr_ = nullptr;        // lazily allocated by arm_multicast_inc (independent)
+    ConnT* conn_;                                         // borrowed from the FabricStreamSender
+    uint32_t alignment_;                                  // L1 alignment for on-wire payload sizing
+    ccl_routing_utils::line_unicast_route_info_t route_;  // bound at open(); reused by every unicast arm_*
     bool closed_ = false;
 };
 
@@ -463,6 +455,27 @@ public:
     /// signal() convenience taking a hop distance instead of a route info.
     FORCE_INLINE void signal(uint32_t num_hops, uint64_t remote_sem_noc_addr, uint32_t val = 1) {
         signal(unicast_route(num_hops), remote_sem_noc_addr, val);
+    }
+
+    /// Static one-shot: build the (DirectConn) sender from @c conn_arg_idx (advancing it), send one
+    /// fabric atomic-inc, and tear down — folds construction + open()->arm_inc()->inc()->close() so
+    /// the caller never names an intermediate sender. Use for a pure ready/done handshake.
+    static FORCE_INLINE void signal_once(
+        size_t& conn_arg_idx,
+        bool is_forward,
+        uint32_t alignment,
+        const ccl_routing_utils::line_unicast_route_info_t& route,
+        uint64_t remote_sem_noc_addr,
+        uint32_t val = 1);
+    /// signal_once() convenience taking a hop distance instead of a route info.
+    static FORCE_INLINE void signal_once(
+        size_t& conn_arg_idx,
+        bool is_forward,
+        uint32_t alignment,
+        uint32_t num_hops,
+        uint64_t remote_sem_noc_addr,
+        uint32_t val = 1) {
+        signal_once(conn_arg_idx, is_forward, alignment, unicast_route(num_hops), remote_sem_noc_addr, val);
     }
 
 private:
