@@ -46,19 +46,29 @@ struct DemotedCase {
 
 const std::vector<DemotedCase>& ungeneralized_demoted_cases() {
     static const std::vector<DemotedCase> cases = {
-        // UNGENERALIZED: row path at Wt == 3, DRAM placement. The L1 twin of each is covered by the
-        // wt3_l1_source predicate; no mechanism was found for the DRAM leg of these two shapes.
+        // UNGENERALIZED: row path at Wt == 3 (choose_2d_ncol yields 1, so no 2D column split fits),
+        // DRAM placement. The L1 twin of each is covered by the wt3_l1_source predicate; no
+        // mechanism was found for the DRAM leg. Their near neighbour [2,12,64,96]|DRAM (also Wt == 3
+        // row path, NC*Ht == 48) clears the gate, so there is no separating condition to generalize.
         {{3, 7, 64, 96}, BufferType::DRAM, DataType::BFLOAT16},
         {{5, 160, 96}, BufferType::DRAM, DataType::BFLOAT16},
+        {{9, 160, 96}, BufferType::DRAM, DataType::BFLOAT16},
+        {{4, 12, 96, 96}, BufferType::DRAM, DataType::BFLOAT16},
         // UNGENERALIZED: row path at Wt == 2 with NC*Ht > grid_cores, i.e. outside the
         // wt2_one_row_per_core boundary (where the CB does pipeline across tile-rows and the
         // DRAM twins of both shapes measured above parity). No mechanism found.
         {{5, 8, 64, 64}, BufferType::L1, DataType::BFLOAT16},
         {{6, 4, 96, 64}, BufferType::L1, DataType::BFLOAT16},
-        // UNGENERALIZED: row path at Wt == 5, DRAM placement. Phase 7 reported this as a port "FIX"
-        // at generic/ported = 0.998 — the port reproduces the codegen prototype to within 0.2%,
-        // so the 1.3% native deficit is the prototype's, not a translation defect. No mechanism.
+        // UNGENERALIZED: row path at Wt == 5. Wt == 5 is prime, so choose_2d_ncol can never find a
+        // divisor d >= 2 that fits and these fall to build_row no matter how much grid is free —
+        // but Wt == 5 alone is not the condition (other Wt == 5 shapes clear the gate), so this
+        // stays enumerated rather than becoming a predicate.
         {{6, 224, 160}, BufferType::DRAM, DataType::BFLOAT16},
+        {{4, 224, 160}, BufferType::DRAM, DataType::BFLOAT16},
+        {{4, 224, 160}, BufferType::L1, DataType::BFLOAT16},
+        {{7, 96, 160}, BufferType::L1, DataType::BFLOAT16},
+        // NOTE: [4,12,96,96]|L1 is also on the ledger but needs no entry here — Wt == 3 on the row
+        // path with an L1 placement is exactly the wt3_l1_source predicate below.
     };
     return cases;
 }
