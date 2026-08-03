@@ -41,10 +41,11 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
         // Generate a random word, then avalanche its bits together with the
         // lane salt. This is Thomas Wang's 32-bit integer mix expressed with
         // shifts, additions, and XORs so it is efficient on both architectures.
-        TTI_SFPMOV(0, p_sfpu::LREG5, p_sfpu::LREG0, 0);
-        TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-        TTI_SFPSHFT(15, 0, p_sfpu::LREG0, 1);
-        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPNOT(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+        TTI_SFPSHFT(15, 0, p_sfpu::LREG5, 1);
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
+        // In immediate mode, SFPSHFT2 selects its source with Imm12 & 0xf.
+        // The low nibble of -12 is 4, so this computes LREG5 = LREG4 >> 12.
         TTI_SFPSHFT2((-12) & 0xFFF, 0, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
         TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
         TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
@@ -59,6 +60,7 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
         TTI_SFPSHFT(11, 0, p_sfpu::LREG5, 1);
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+        // The low nibble of -16 is 0, so this computes LREG4 = LREG0 >> 16.
         TTI_SFPSHFT2((-16) & 0xFFF, 0, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
         TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
 
