@@ -85,7 +85,7 @@ READY_RE='tt-exalens ready|\[4B MODE\]'
 QSR_SIM_BACKEND="${QSR_SIM_BACKEND:-emu}"
 EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}}"
 NNG_LOCAL_BASE="5555"                   # local NNG bind (infra-forwarded; fixed)
-DBD_BASE="54910"                        # NNG_SOCKET_ADDR debuda port (fixed)
+DBD_BASE="54910"                        # non-Docker legacy debuda port
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -114,6 +114,36 @@ done
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 _vlog() { [[ "$VERBOSE" == "true" ]] && echo "[run_test] $*" >&2; return 0; }
+
+_resolve_nng_channel() {
+  local callback_host dbd_port
+
+  NNG_LOCAL="${NNG_SOCKET_LOCAL_PORT:-$NNG_LOCAL_BASE}"
+  if [[ -n "${NNG_SOCKET_ADDR:-}" ]]; then
+    NNG_ADDR="$NNG_SOCKET_ADDR"
+    return 0
+  fi
+
+  if [[ -f /.dockerenv ]]; then
+    dbd_port="${P_USER_DBD_PORT:-}"
+    if [[ -z "$dbd_port" ]]; then
+      dbd_port="$(bash -lc 'printf "%s" "${P_USER_DBD_PORT:-}"' 2>/dev/null)"
+    fi
+    if [[ ! "$dbd_port" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: NNG_SOCKET_ADDR is unset and IRD did not provide a valid P_USER_DBD_PORT" >&2
+      return 3
+    fi
+
+    callback_host="$(hostname)"
+    callback_host="${callback_host%%-special-*}"
+    NNG_ADDR="tcp://${callback_host}:${dbd_port}"
+    return 0
+  fi
+
+  # Non-container legacy flow: the host is directly reachable, so retain the
+  # historical fixed debuda port unless the caller supplied an explicit address.
+  NNG_ADDR="tcp://$(hostname):${DBD_BASE}"
+}
 
 # Activate the venv only if it exists (external setup); else use the ambient
 # python (tt-metal Docker image, deps installed system-wide).
@@ -208,12 +238,10 @@ _validate() {
   TRIAGE="${WORKTREE}/.claude/scripts/llk_triage.py"
   RUN_TAG="ttllk_${ARCH}_$$"
 
-  # NNG_SOCKET_ADDR (debuda) is the single infra-forwarded channel — keep the
-  # shell value if set, else derive from the host in the shell's addr or hostname.
-  local host
-  if [[ "${NNG_SOCKET_ADDR:-}" =~ ^tcp://([^:]+): ]]; then host="${BASH_REMATCH[1]}"; else host="$(hostname)"; fi
-  NNG_ADDR="${NNG_SOCKET_ADDR:-tcp://${host}:${DBD_BASE}}"
-  NNG_LOCAL="${NNG_SOCKET_LOCAL_PORT:-$NNG_LOCAL_BASE}"
+  if [[ "$MODE" == "simulator" ]]; then
+    _resolve_nng_channel || exit $?
+    _vlog "NNG callback ${NNG_ADDR} -> local port ${NNG_LOCAL}"
+  fi
 }
 
 # SFPI (the RISC-V toolchain) is mandatory to compile. Fetch it if absent.
