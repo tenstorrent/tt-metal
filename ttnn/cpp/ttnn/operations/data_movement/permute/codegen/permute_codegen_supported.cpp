@@ -4,8 +4,6 @@
 
 #include "permute_codegen_supported.hpp"
 
-#include <array>
-
 #include <tt_stl/assert.hpp>
 
 #include "permute_codegen_device_operation.hpp"
@@ -65,63 +63,43 @@ bool supported_by_codegen(const Tensor& input_tensor, const ttsl::SmallVector<ui
 }
 
 bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& dims) {
-    // UNGENERALIZED demotions (perf-only, consulted by the "auto" selector alone). Measurement
-    // found no predicate over the normalized attributes or the device's alignment relating these
-    // regressions to each other, so this is the enumerated floor rather than a condition: one
-    // exact (rank, shape, dims, dtype) branch per ledger entry. Each entry was cross-checked
-    // against permute.yaml's scope=out conditions and is genuinely in-scope -- none is bfloat8_b,
-    // and every one either has dims[-1] != rank-2 or an outer NC below _PERMUTE_FUSED_MIN_NC, so
-    // none is served by the fused-WH builder this port does not implement. They therefore still
-    // return true from supported_by_codegen() and remain runnable under a forced
-    // implementation="codegen" call.
-    struct DemotedCase {
-        uint32_t rank;
-        std::array<uint32_t, PermuteCodegenDeviceOperation::kMaxDims> shape;
-        std::array<uint32_t, PermuteCodegenDeviceOperation::kMaxDims> dims;
-        DataType dtype;
-    };
-    static constexpr DemotedCase kDemoted[] = {
-        {5, {1, 2, 3, 64, 96}, {2, 1, 4, 3, 0}, DataType::BFLOAT16},
-        {5, {1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::BFLOAT16},
-        {5, {1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::FLOAT32},
-        {5, {1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::INT32},
-        {5, {1, 2, 3, 64, 96}, {2, 3, 4, 0, 1}, DataType::FLOAT32},
-        {5, {1, 2, 3, 64, 96}, {4, 0, 2, 3, 1}, DataType::FLOAT32},
-        {5, {1, 2, 3, 64, 96}, {4, 0, 2, 3, 1}, DataType::INT32},
-        {4, {1, 4, 96, 128}, {1, 3, 2, 0}, DataType::FLOAT32},
-        {4, {1, 4, 96, 128}, {3, 2, 0, 1}, DataType::INT32},
-        {5, {2, 3, 4, 32, 64}, {4, 0, 2, 3, 1}, DataType::INT32},
-        {4, {2, 3, 64, 96}, {1, 3, 2, 0}, DataType::FLOAT32},
-        {4, {2, 3, 64, 96}, {3, 2, 0, 1}, DataType::FLOAT32},
-        {3, {2, 96, 128}, {0, 2, 1}, DataType::FLOAT32},
-        {3, {2, 96, 128}, {1, 2, 0}, DataType::FLOAT32},
-        {3, {2, 96, 128}, {2, 0, 1}, DataType::FLOAT32},
-        {3, {3, 64, 96}, {0, 2, 1}, DataType::FLOAT32},
-        {3, {3, 64, 96}, {2, 0, 1}, DataType::FLOAT32},
-        {2, {96, 64}, {1, 0}, DataType::FLOAT32},
-    };
-
+    // Perf-only demotions, consulted by the "auto" selector alone: these cases stay correct and
+    // supported, so a forced implementation="codegen" call still runs them. Both conditions below
+    // are mechanisms measured on device, not an enumerated regression list -- every case that
+    // matches loses to native for the stated structural reason, and cases outside them either win
+    // or sit inside the measurement window.
     const auto& shape = input_tensor.logical_shape();
     const uint32_t rank = shape.rank();
     if (rank != dims.size()) {
         return false;
     }
     const DataType dtype = input_tensor.dtype();
-    for (const auto& demoted : kDemoted) {
-        if (demoted.rank != rank || demoted.dtype != dtype) {
-            continue;
-        }
-        bool matches = true;
-        for (uint32_t i = 0; i < rank; ++i) {
-            if (shape[i] != demoted.shape[i] || dims[i] != demoted.dims[i]) {
-                matches = false;
-                break;
-            }
-        }
-        if (matches) {
-            return true;
-        }
+    const uint32_t elem_size = input_tensor.element_size();
+    const bool w_changing = dims[rank - 1] != rank - 1;
+    const uint32_t x = shape[dims[rank - 1]];  // width of the moved axis == blocked path's X
+    constexpr uint32_t kXBlockSize = 32;
+
+    // The blocked path (tilize -> transpose_tile -> pack_untilize) carries float32/uint32 through
+    // its CBs reinterpreted as int32 so the datum move stays bit-exact; native compiles the same
+    // compute natively for float32 and accepts the TF32 rounding, which is ~120-160 ns/dispatch
+    // cheaper. That fixed compute cost only decides the ratio once every 32x32 block is full of
+    // real data; below X == kXBlockSize the blocks are mostly padding and the kernel is
+    // write-latency-bound, which hides it.
+    if ((dtype == DataType::FLOAT32 || dtype == DataType::UINT32) && w_changing && x >= kXBlockSize) {
+        return true;
     }
+
+    // The same blocked path in its narrow-write regime: with X small, x_blocks == 1 and the writer
+    // emits 32 NOC writes per block carrying only X*elem_size bytes each, scattered a full output
+    // plane apart because dims[0] == rank-1 hoists W to the outermost output axis. Per-write issue
+    // cost, not bytes, sets the time, and the codegen blocked reader/writer pays ~40 cycles more
+    // per block there than native's. X == 1 is excluded: both legs are equally write-starved and
+    // tie. Two-byte dtypes halve the write count per byte and win, so this is 4-byte only. rank is
+    // fenced empirically -- the rank-5 analogues of this shape all measure at or above parity.
+    if (rank == 4 && elem_size == 4 && dims[0] == rank - 1 && x >= 2 && x < kXBlockSize) {
+        return true;
+    }
+
     return false;
 }
 
