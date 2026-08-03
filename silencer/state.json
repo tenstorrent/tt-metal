@@ -56,18 +56,26 @@
     {
       "branch": "silencer/demote-finalize-dfb-log",
       "pattern": "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {} - info log in finalize_dfbs() firing once per programmable-core-type per program (165x in one job sample)",
-      "status": "pr-just-opened-dispatch-requested",
-      "note": "Demoted log_info->log_debug in tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:1569. Dispatched pr_gate safe-output tool in same turn; that tool's schema (platform only) has no explicit ref/branch input, so as with PR #51849 it is unconfirmed whether the dispatch targets this PR branch or main. Next run: resolve PR number via search_pull_requests, check_runs, and verify which branch the dispatched run actually built."
+      "status": "ci-passed",
+      "note": "PR Gate Status check on run 30770179479 conclusion=success as of 2026-08-03. Awaiting maintainer review/merge.",
+      "number": 51870
     },
     {
       "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning",
       "pattern": "Mismatch between computed/provided mem config warning - 102x repeats, only 2 distinct pairs",
       "status": "pr-just-opened-dispatch-requested",
-      "note": "Dispatched single-card-demo-tests (stable_diffusion) same turn for validation. Next run: resolve PR number via search_pull_requests and check CI status."
+      "note": "PR #51894 open. Cycode security checks passed; awaiting full CI/maintainer review.",
+      "number": 51894
+    },
+    {
+      "branch": "silencer/demote-realtime-profiler-sync-log",
+      "pattern": "[Real-time profiler] Device {} sync complete - info log firing once per device per periodic resync (352x in one job sample)",
+      "status": "pr-just-opened-dispatch-requested",
+      "note": "Demoted log_info->log_debug in tt_metal/distributed/realtime_profiler_manager.cpp:1390 (run_sync()). Dispatched galaxy-sanity safe-output tool in same turn for validation. Next run: resolve PR number via search_pull_requests and check_runs."
     }
   ],
   "backlog_cursor": {
     "next_category": 6,
-    "note": "Histogram from run 30765286317 (galaxy-sanity, jobs 91543540096/91543540098) info/Metal subsystem: 'Fabric initialized on Device' (384x, PR #51849 open), '[Real-time profiler] Device N sync complete' (352x realtime_profiler_manager.cpp:1397, next category-6 candidate - fires once per device per profiler sync, likely demotable), 'Finalize dfb' (165x, this PR). info/BuildKernels: 'Using pre-compiled firmware from' (384x, PR #51794 open). warning/UMD: hwloc_set_area_membind + init_hugepage NUMA warnings (352x each) - tracked upstream tt-umd submodule, out of scope. info/Distributed: 'Using auto discovery to generate mesh graph' + 'Constructing control plane using auto-discovery' (13x each in metal_env.cpp:437,499) - low frequency (13x), likely fires once per process/control-plane-init, probably NOT good demotion candidate (low volume, may be useful one-time startup info) - deprioritize unless frequency grows in future scans."
+    "note": "From histogram of run 30765286317 (galaxy-sanity): remaining candidates - warning/UMD hwloc_set_area_membind + init_hugepage NUMA warnings (352x each) tracked upstream in tt-umd submodule, out of scope. info/Distributed 'Using auto discovery to generate mesh graph' + 'Constructing control plane using auto-discovery' (13x each, metal_env.cpp:437,499) - low frequency, likely one-time startup info, deprioritize unless frequency grows. Need a fresh scan next run to find new top_noise.txt candidates since current histogram is getting exhausted of easy wins."
   }
 }
