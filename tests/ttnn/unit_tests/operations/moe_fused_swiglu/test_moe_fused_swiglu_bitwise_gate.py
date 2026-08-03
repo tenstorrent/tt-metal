@@ -56,12 +56,7 @@ from .test_moe_fused_swiglu_determinism import (
 
 MODE = os.environ.get("MOE_BITWISE_MODE", "check")
 
-DIGEST_PATH = pathlib.Path(
-    os.environ.get(
-        "MOE_BITWISE_FILE",
-        "/tmp/claude-1211409210/-localdev-mstaletovic-2026-07-31-1406-mstaletovic-moe-matmul-codegen-clones-moe-fused-swiglu-run1-tt-metal/ff18cd20-c155-4ef2-acd1-f112dc5735a0/scratchpad/bitwise_digest.json",
-    )
-)
+DIGEST_PATH = pathlib.Path(os.environ.get("MOE_BITWISE_FILE", "generated/moe_fused_swiglu_bitwise_digest.json"))
 
 #: One representative per distinct kernel path x activation layout x M regime, plus the two
 #: shapes whose WRITTEN extent differs from `count` (the non-tile-aligned seam, count == capacity)
