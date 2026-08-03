@@ -140,6 +140,21 @@ bool fabric_set_unicast_route(
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id = MAX_NUM_MESHES);
 
+// Defined in the indexed codec section below; the skip-link worker path delegates to it.
+inline bool fabric_set_indexed_unicast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size);
+
+#if defined(FABRIC_SKIP_LINKS_ENABLED) && !defined(FABRIC_SKIP_LINK_MESH_Y_SIZE)
+// The host emits the shape defines only to worker kernels; the ERISC compile selects the ABI with
+// its own named args and never instantiates the worker flavor, so zeros are sufficient here.
+#define FABRIC_SKIP_LINK_MESH_Y_SIZE 0
+#define FABRIC_SKIP_LINK_MESH_X_SIZE 0
+#endif
+
 template <bool called_from_router = false>
 void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
@@ -166,6 +181,14 @@ void fabric_set_mcast_route(
             return;
         }
     }
+#if defined(FABRIC_SKIP_LINKS_ENABLED)
+    if constexpr (!called_from_router) {
+        // Same-mesh 2D mcast has no indexed encode yet, and the indexed kernel decode would
+        // misread a legacy spine/branch hop program. Remote-mesh carriers already returned above
+        // (that leg is unicast-style and takes the indexed path).
+        ASSERT(false);
+    }
+#endif
 
     // For 2D Mcast, mcast spine runs N/S and branches are E/W
     // If api is called with east and/or west hops != 0, it may be a 2D mcast
@@ -229,6 +252,15 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 template <bool called_from_router, eth_chan_directions my_direction>
 bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
+#if defined(FABRIC_SKIP_LINKS_ENABLED)
+    if constexpr (!called_from_router) {
+        // Workers on skip-link meshes widen the destination's indexed action maps; the mesh shape
+        // comes from the per-kernel FABRIC_SKIP_LINK_MESH_*_SIZE defines. called_from_router (the
+        // edge rewrite path) keeps the legacy hop-program encode below.
+        return fabric_set_indexed_unicast_route(
+            packet_header, dst_dev_id, dst_mesh_id, FABRIC_SKIP_LINK_MESH_Y_SIZE, FABRIC_SKIP_LINK_MESH_X_SIZE);
+    }
+#endif
     if constexpr (!called_from_router) {
         packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
         packet_header->mcast_params_64 = 0;
@@ -416,9 +448,11 @@ inline void fabric_set_indexed_intermesh_landing_route(
 }
 
 // Single-hop poke. Same client contract as the legacy single-hop helpers (dest is exactly
-// one fabric hop away) but destination-indexed: writes real direction bits at this chip's own map
-// slot and LOCAL_DELIVER at the destination slot. Z is allowed when the express topology provides
-// it (the legacy helper ASSERTs against Z because hop programs had no Z command).
+// one fabric hop away) but destination-indexed: writes LOCAL_DELIVER at the destination's map
+// slot on the hop's axis. No source-slot action is written — the source chip never decodes; the
+// worker's choice of which local router to push the packet to is the hop. Z is allowed when the
+// express topology provides it (the legacy helper ASSERTs against Z because hop programs had no
+// Z command).
 inline void fabric_set_indexed_single_hop_unicast_route_from_direction(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions next_hop_direction,
@@ -427,33 +461,31 @@ inline void fabric_set_indexed_single_hop_unicast_route_from_direction(
     uint8_t mesh_y_size,
     uint8_t mesh_x_size) {
     ASSERT(next_hop_direction < eth_chan_directions::COUNT);
-    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     ASSERT(dst_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
     ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
 
-    const uint16_t my_dev = routing_table->my_device_id;
-    const uint32_t my_y = my_dev / mesh_x_size;
-    const uint32_t my_x = my_dev % mesh_x_size;
     const uint32_t dst_y = dst_dev_id / mesh_x_size;
     const uint32_t dst_x = dst_dev_id % mesh_x_size;
 
-    // Clear both axis maps: pool headers are reused, and transit chips read their own slot, so any
-    // stale bit outside the two poked slots would be decoded as a real action (zeroing only the
-    // touched slots is only safe when the maps are known-zero, which callers cannot promise).
+    // Clear both axis maps: pool headers are reused, and a router executes whatever bits it finds
+    // in the slot its facing selects, so a stale bit in an unpoked slot is a silently valid extra
+    // action. A wrong-link arrival or a multi-hop call lands on exactly such an unpoked slot;
+    // zeroed maps fail-stop there instead.
     for (uint32_t i = 0; i < (uint32_t)mesh_y_size + mesh_x_size; ++i) {
         packet_header->route_buffer[i] = 0;
     }
 
+    // The receiving router faces back along the arrival link, so its decode axis matches the hop
+    // axis: N/S/Z hops land on N/S/Z-facing routers (Y byte first), E/W hops on E/W-facing routers
+    // (X byte only).
     switch (next_hop_direction) {
         case eth_chan_directions::NORTH:
         case eth_chan_directions::SOUTH:
         case eth_chan_directions::Z:
-            packet_header->route_buffer[my_y] = IndexedMeshRoutingFields::action_bit(next_hop_direction);
             packet_header->route_buffer[dst_y] = IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
             break;
         case eth_chan_directions::EAST:
         case eth_chan_directions::WEST:
-            packet_header->route_buffer[mesh_y_size + my_x] = IndexedMeshRoutingFields::action_bit(next_hop_direction);
             packet_header->route_buffer[mesh_y_size + dst_x] = IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
             break;
         default: ASSERT(false); break;
