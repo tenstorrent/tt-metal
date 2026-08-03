@@ -299,19 +299,21 @@ execute_step_setup_review_run() {
     # Perf off unless a disposition asks: a baseline measurement doubles wall clock.
     ss PERF_REQUESTED 0 --json
 
-    local imported=0 f
+    local imported=0 f analysis fix_plan
     _disk_guard mkdir -p codegen/artifacts || return $?
-    for f in "$src"/issue_"${num}"_*.md; do
+    analysis="$src/issue_${num}_analysis.md"
+    fix_plan="$src/issue_${num}_fix_plan.md"
+    if [ ! -f "$analysis" ]; then
+        ss OBSTACLE "review round could not import the source run's analysis artifact"
+        execute_step_mark_status failed
+        echo "REJECT: missing issue_${num}_analysis.md in $src — the round has no verification route" >&2
+        return 1
+    fi
+    for f in "$analysis" "$fix_plan"; do
         [ -f "$f" ] || continue
         cp "$f" codegen/artifacts/ 2>/dev/null && imported=$((imported + 1))
         cp "$f" "$_L/" 2>/dev/null || true
     done
-    if [ "$imported" -eq 0 ]; then
-        ss OBSTACLE "review round could not import the source run's analysis artifact"
-        execute_step_mark_status failed
-        echo "REJECT: no issue_${num}_*.md artifacts in $src — the round has no verification route" >&2
-        return 1
-    fi
     # The reviewer agent reads the solve's own review verdict for continuity.
     cp "$src/review_result.json" "$_L/source_review_result.json" 2>/dev/null || true
 
@@ -375,6 +377,9 @@ for entry in entries:
     reply = str(entry.get("reply") or "").strip()
     if cid not in required:
         continue                      # extra ids (summaries, stale threads) are ignored
+    if cid in by_id:
+        problems.append(f"{cid}: duplicate disposition")
+        continue
     if action not in allowed:
         problems.append(f"{cid}: action must be one of {sorted(allowed)} (got {action!r})")
     if not reply:

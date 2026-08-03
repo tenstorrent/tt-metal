@@ -175,6 +175,43 @@ def test_seed_rejects_a_missing_required_input(worktree, source_run, tmp_path, d
     assert "REJECT" in r.stdout + r.stderr
 
 
+def test_setup_review_run_requires_the_analysis_artifact(
+    worktree, source_run, tmp_path
+):
+    """A fix plan alone cannot provide a verification route."""
+    (source_run / "issue_36142_analysis.md").unlink()
+    log_dir = tmp_path / "review_log"
+    log_dir.mkdir()
+    llk = worktree / "tt_metal" / "tt-llk"
+    (llk / ".codegen_run_state.json").write_text(
+        json.dumps(
+            {
+                "LOG_DIR": str(log_dir),
+                "SOURCE_RUN_DIR": str(source_run),
+                "PR_NUMBER": "51772",
+                "PR_HEAD_SHA": "abc",
+                "REVIEW_INPUT": "input.json",
+                "SOURCE_RUN_ID": "source-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (log_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "LOG_DIR": str(log_dir),
+                "WORKTREE_DIR": str(worktree),
+                "SOURCE_RUN_DIR": str(source_run),
+                "ISSUE_NUMBER": "36142",
+            }
+        ),
+        encoding="utf-8",
+    )
+    r = _bash("execute_step_setup_review_run", llk)
+    assert r.returncode != 0
+    assert "missing issue_36142_analysis.md" in r.stdout + r.stderr
+
+
 # ── execute_step_record_review_dispositions ───────────────────────────────────
 def _disposition_case(tmp_path, worktree, threads, actionable=(101, 202)):
     """Write a run state + dispositions file and run the validator."""
@@ -286,6 +323,20 @@ def test_dispositions_ignore_ids_that_are_not_actionable(tmp_path, worktree):
         ],
     )
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_dispositions_reject_duplicate_actionable_ids(tmp_path, worktree):
+    r, _ = _disposition_case(
+        tmp_path,
+        worktree,
+        [
+            {"comment_id": 101, "action": "changed", "reply": "First answer."},
+            {"comment_id": 101, "action": "changed", "reply": "Second answer."},
+            {"comment_id": 202, "action": "no_change", "reply": "Already covered."},
+        ],
+    )
+    assert r.returncode != 0
+    assert "duplicate disposition" in r.stdout + r.stderr
 
 
 if __name__ == "__main__":
