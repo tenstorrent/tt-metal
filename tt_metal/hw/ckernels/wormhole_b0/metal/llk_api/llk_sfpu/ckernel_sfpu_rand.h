@@ -54,28 +54,25 @@ inline void make_lane_salt() {
 
 inline void begin_mix_uint32_fast() {
     // The same bijective ARX permutation used on Blackhole, scheduled around
-    // Wormhole's in-place SFPSHFT semantics. LREG12 and LREG7 hold the shift
-    // counts -18 and -17, respectively, for SFPSHFT2's explicit-source mode.
-    // LREG1 holds x on entry and LREG0 holds the result on exit.
-    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    // SFPSHFT2's independent source and destination registers. LREG4, LREG7,
+    // and LREG12-14 hold -18, -17, 14, -7, and 5, respectively. LREG1 holds x
+    // on entry and LREG0 holds the result on exit.
+    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
 }
 
 inline void finish_mix_uint32_fast() {
-    TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+    TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
 
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-    TTI_SFPSHFT(14, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
-    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
 
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-    TTI_SFPSHFT((-7) & 0xFFF, 0, p_sfpu::LREG4, sfpshft_mod1_arg_imm);
-    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
 
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG1, 0);
-    TTI_SFPSHFT(5, 0, p_sfpu::LREG1, sfpshft_mod1_arg_imm);
-    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
 
-    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
     TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
 }
 
@@ -112,18 +109,23 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
 
     // Keep the shift counts outside the replayed row body. SFPLOADI's SHORT
     // mode sign-extends these values to the per-lane int32 operands expected
-    // by SFPSHFT2_MOD1_SHFT_LREG. LREG12 retains -18 while LREG6 is reused for
-    // each row's converted output.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, (-18) & 0xFFFF);
-    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    // by SFPSHFT2_MOD1_SHFT_LREG. LREG12-14 cost two setup instructions each,
+    // but together remove three instructions from each of the eight rows.
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_SHORT, (-18) & 0xFFFF);
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_SHORT, (-17) & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, 14);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, (-7) & 0xFFFF);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, 5);
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
 
     make_lane_salt();
     rand_prng<p_sfpu::LREG1>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
     begin_mix_uint32_fast();
 
-    constexpr std::uint32_t row_instruction_count = 21;
+    constexpr std::uint32_t row_instruction_count = 18;
     TTI_REPLAY(0, row_instruction_count, 1, 1);
     rand_row();
 #pragma GCC unroll 7
