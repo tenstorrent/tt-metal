@@ -414,7 +414,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     };
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     if (num_mux_cores_per_direction_per_link) {
         uint32_t core_id = 0;
         for (uint32_t link = 0; link < num_links; link++) {
@@ -642,6 +644,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     // Positional args: routing info, TensorAccessorArgs. The V2 fabric mux client needs no worker-side
     // compile-time args (the device-side FabricMuxV2Sender is built entirely from runtime args).
     std::vector<uint32_t> writer_compile_args;
+    writer_compile_args.reserve(
+        unicast_forward_args.size() + mcast_forward_args.size() + unicast_backward_args.size() +
+        mcast_backward_args.size());
 
     writer_compile_args.insert(writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
@@ -1044,8 +1049,11 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     };
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     std::vector<CoreRange> termination_master_core_ranges;
+    termination_master_core_ranges.reserve(num_links * num_directions_per_link);
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
