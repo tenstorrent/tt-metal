@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 // batchnorm_bcast_tiles: For each output tile in [tile_start, freq), computes batch-norm on tiles from cb_other
 // (input) broadcast against cb_bcast (batch mean). First builds 1/sqrt(batch_var + eps) in cb_den, then per tile:
@@ -196,30 +197,37 @@ ALWI uint32_t batchnorm_bcast_tiles(
 }
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t tile_freq = get_arg_val<uint32_t>(1);
-    uint32_t tile_start = get_arg_val<uint32_t>(2);
-    constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t tile_freq = get_arg(args::tile_freq);
+    uint32_t tile_start = get_arg(args::tile_start);
+    constexpr uint32_t weight_has_value = get_arg(args::weight_has_value) == 1;
+    constexpr uint32_t bias_has_value = get_arg(args::bias_has_value) == 1;
 
     if (num_tiles == 0) {
         return;
     }
 
-    constexpr auto dfb_input = get_compile_time_arg_val(2);       // input
-    constexpr auto dfb_batch_mean = get_compile_time_arg_val(3);  // batch_mean
-    constexpr auto dfb_output_0 =
-        get_compile_time_arg_val(4);  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
-    constexpr auto dfb_batch_var = get_compile_time_arg_val(5);      // batch_var
-    constexpr auto dfb_eps = get_compile_time_arg_val(6);            // eps
-    constexpr auto dfb_den = get_compile_time_arg_val(7);            // 1/(sqrt(batch_var + eps))
-    constexpr auto dfb_weight = get_compile_time_arg_val(8);         // weight tensor
-    constexpr auto dfb_tmp_1 = get_compile_time_arg_val(9);          // (input - batch_mean)/(sqrt(batch_var + eps))
-    constexpr auto dfb_bias = get_compile_time_arg_val(10);          // bias tensor
-    constexpr auto dfb_output_final = get_compile_time_arg_val(11);  // writer-facing output CB (BF16 when typecast)
-    constexpr bool needs_output_typecast = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(13);
-    constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(14);
+    constexpr auto dfb_input = dfb::input;            // input
+    constexpr auto dfb_batch_mean = dfb::batch_mean;  // batch_mean
+    constexpr auto dfb_output_0 = dfb::output_0;  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
+    constexpr auto dfb_batch_var = dfb::batch_var;  // batch_var
+    constexpr auto dfb_eps = dfb::eps;              // eps
+    constexpr auto dfb_den = dfb::den;              // 1/(sqrt(batch_var + eps))
+    constexpr auto dfb_weight = dfb::weight;        // weight tensor
+    constexpr auto dfb_tmp_1 = dfb::temp_1;         // (input - batch_mean)/(sqrt(batch_var + eps))
+    constexpr auto dfb_bias = dfb::bias;            // bias tensor
+    // Writer-facing output DFB (the output dtype; BF16 when the typecast is needed). Without a
+    // typecast the host points the writer at the compute-output buffer itself, so this is a handle
+    // alias of dfb_output_0 rather than a separate buffer -- one FIFO under two names. The gate is a
+    // #define because the writer-facing token only exists in the builds where the host binds it.
+#ifdef NEEDS_OUTPUT_TYPECAST
+    constexpr auto dfb_output_final = dfb::output_final;
+#else
+    constexpr auto dfb_output_final = dfb_output_0;
+#endif
+    constexpr bool needs_output_typecast = get_arg(args::needs_output_typecast) == 1;
+    constexpr uint32_t tc_in_fmt = get_arg(args::tc_in_fmt);
+    constexpr uint32_t tc_out_fmt = get_arg(args::tc_out_fmt);
 
     auto dfb_bcast = dfb_batch_mean;
     auto dfb_other = dfb_input;

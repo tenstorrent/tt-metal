@@ -4,10 +4,10 @@
 
 #include "running_statistics_device_operation.hpp"
 
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <bit>
 #include <cmath>
 
@@ -23,19 +23,18 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const ttnn
 }
 
 void populate_runtime_arguments(
-    tt::tt_metal::KernelDescriptor& reader_desc,
-    tt::tt_metal::KernelDescriptor& writer_desc,
-    tt::tt_metal::KernelDescriptor& compute_desc,
+    tt::tt_metal::experimental::KernelRunArgs& reader_run_args,
+    tt::tt_metal::experimental::KernelRunArgs& writer_run_args,
+    tt::tt_metal::experimental::KernelRunArgs& compute_run_args,
     tt::tt_metal::CoreCoord compute_with_storage_grid_size,
     bool any_float32,
     const RunningStatistics::operation_attributes_t& operation_attributes,
     const RunningStatistics::tensor_args_t& tensor_args,
     RunningStatistics::tensor_return_value_t& c) {
+    using tt::tt_metal::experimental::AddRuntimeArgsForNode;
+
     const auto& [batch_mean_tensor, batch_var_tensor, running_mean_tensor, running_var_tensor] = tensor_args;
     const auto momentum = operation_attributes.momentum;
-
-    const bool running_mean_has_value = running_mean_tensor.has_value();
-    const bool running_var_has_value = running_var_tensor.has_value();
 
     const auto [aN, aC, aHt, aWt] = extract_shape_dims(batch_mean_tensor);
     const auto [bN, bC, bHt, bWt] = extract_shape_dims(batch_var_tensor);
@@ -57,9 +56,6 @@ void populate_runtime_arguments(
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
-    constexpr size_t num_reader_args = 11;
-    constexpr size_t num_writer_args = 13;
-    constexpr size_t num_kernel_args = 3;
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
@@ -69,12 +65,30 @@ void populate_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            reader_desc.runtime_args.emplace_back(
-                core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(num_reader_args, 0));
-            writer_desc.runtime_args.emplace_back(
-                core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(num_writer_args, 0));
-            compute_desc.runtime_args.emplace_back(
-                core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(num_kernel_args, 0));
+            // Cores outside both work groups still run the kernels, so every named runtime argument
+            // must be set on them; the compute kernel early-returns on num_tiles == 0.
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"momentum", 0},
+                 {"start_tile_id", 0},
+                 {"num_tiles", 0},
+                 {"HtWt", 0},
+                 {"n_stride", 0},
+                 {"c_stride", 0},
+                 {"N", 0},
+                 {"C", 0}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"start_tile_id", 0},
+                 {"num_tiles", 0},
+                 {"HtWt", 0},
+                 {"n_stride", 0},
+                 {"c_stride", 0},
+                 {"N", 0},
+                 {"C", 0}});
+            AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"num_tiles", 0}});
             continue;
         }
 
@@ -82,49 +96,30 @@ void populate_runtime_arguments(
         const auto scalar = momentum;
         const auto packed_scalar_momentum =
             any_float32 ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
-        reader_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
             core,
-            {packed_scalar_momentum,
-             batch_mean_tensor.buffer(),
-             start_tile_id,
-             num_tiles_per_core,
-             cHtWt,
-             aHt * aWt * aC * static_cast<uint32_t>(aN > 1),
-             aHt * aWt * static_cast<uint32_t>(aC > 1),
-             cN,
-             cC,
-             cHt,
-             cWt});
+            {{"momentum", packed_scalar_momentum},
+             {"start_tile_id", start_tile_id},
+             {"num_tiles", num_tiles_per_core},
+             {"HtWt", cHtWt},
+             {"n_stride", aHt * aWt * aC * static_cast<uint32_t>(aN > 1)},
+             {"c_stride", aHt * aWt * static_cast<uint32_t>(aC > 1)},
+             {"N", cN},
+             {"C", cC}});
 
-        std::variant<uint32_t, tt::tt_metal::Buffer*> running_mean_arg = 0u;
-        if (running_mean_has_value) {
-            running_mean_arg = running_mean_tensor->buffer();
-        }
-        std::variant<uint32_t, tt::tt_metal::Buffer*> running_var_arg = 0u;
-        if (running_var_has_value) {
-            running_var_arg = running_var_tensor->buffer();
-        }
-        writer_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
             core,
-            {batch_var_tensor.buffer(),  //  batch var
-             running_mean_arg,           // old running mean
-             running_var_arg,            // old running var
-             c.buffer(),                 // output
-             start_tile_id,
-             num_tiles_per_core,
-             cHtWt,
-             bHt * bWt * bC * static_cast<uint32_t>(bN > 1),
-             bHt * bWt * static_cast<uint32_t>(bC > 1),
-             cN,
-             cC,
-             cHt,
-             cWt});
+            {{"start_tile_id", start_tile_id},
+             {"num_tiles", num_tiles_per_core},
+             {"HtWt", cHtWt},
+             {"n_stride", bHt * bWt * bC * static_cast<uint32_t>(bN > 1)},
+             {"c_stride", bHt * bWt * static_cast<uint32_t>(bC > 1)},
+             {"N", cN},
+             {"C", cC}});
 
-        auto counter = start_tile_id % cHtWt;
-        auto freq = cHtWt;
-
-        tt::tt_metal::KernelDescriptor::CoreRuntimeArgs compute_runtime_args = {num_tiles_per_core, freq, counter};
-        compute_desc.runtime_args.emplace_back(core, std::move(compute_runtime_args));
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"num_tiles", num_tiles_per_core}});
 
         start_tile_id += num_tiles_per_core;
     }
@@ -134,16 +129,15 @@ void populate_runtime_arguments(
 }  // namespace
 
 namespace ttnn::operations::normalization {
-tt::tt_metal::ProgramDescriptor RunningStatistics::RunningStatisticsProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
 
     const auto& [batch_mean_tensor, batch_var_tensor, running_mean_tensor, running_var_tensor] = tensor_args;
-
-    ProgramDescriptor desc;
 
     auto* device = batch_mean_tensor.device();
 
@@ -184,285 +178,457 @@ tt::tt_metal::ProgramDescriptor RunningStatistics::RunningStatisticsProgramFacto
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
 
-    // Number of tiles to store per input CB (double buffer)
+    // Number of tiles to store per input DFB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
     uint32_t b_num_tiles_per_cb = num_tiles_per_cb;
 
+    // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
+    // Declared function-local: this factory and batch_norm_program_factory.cpp land in the same
+    // unity-build translation unit, so no anonymous-namespace constants are introduced.
+    const DFBSpecName BATCH_MEAN_DFB{"batch_mean"};
+    const DFBSpecName BATCH_VAR_DFB{"batch_var"};
+    const DFBSpecName OUT0_DFB{"out0"};
+    const DFBSpecName OLD_RUNNING_MEAN_DFB{"old_running_mean"};
+    const DFBSpecName OLD_RUNNING_VAR_DFB{"old_running_var"};
+    const DFBSpecName MOMENTUM_DFB{"momentum"};
+    const DFBSpecName ONE_DFB{"one"};
+    const DFBSpecName UPDATED_M_DFB{"updated_m"};
+    const DFBSpecName UPDATED_V_DFB{"updated_v"};
+    const DFBSpecName TMP1_DFB{"tmp1"};
+    const DFBSpecName TMP2_DFB{"tmp2"};
+    const DFBSpecName TMP3_DFB{"tmp3"};
+    const DFBSpecName WRITER_UPDATED_M_DFB{"writer_updated_m"};
+    const DFBSpecName WRITER_UPDATED_V_DFB{"writer_updated_v"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName BATCH_MEAN_TENSOR{"batch_mean"};
+    const TensorParamName BATCH_VAR_TENSOR{"batch_var"};
+    const TensorParamName RUNNING_MEAN_TENSOR{"running_mean"};
+    const TensorParamName RUNNING_VAR_TENSOR{"running_var"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+
+    ProgramSpec spec;
+    spec.name = "running_statistics";
+
+    // ---- Dataflow buffers ----
     // Input buffers
-    uint32_t batch_mean_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_0);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = a_single_tile_size * num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(batch_mean_tensor_cb),
-            .data_format = a_data_format,
-            .page_size = a_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = BATCH_MEAN_DFB,
+        .entry_size = a_single_tile_size,
+        .num_entries = num_tiles_per_cb,
+        .data_format_metadata = a_data_format,
     });  // batch_mean
-    uint32_t batch_var_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_1);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = b_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(batch_var_tensor_cb),
-            .data_format = b_data_format,
-            .page_size = b_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = BATCH_VAR_DFB,
+        .entry_size = b_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = b_data_format,
     });  // batch_var
-    uint32_t output_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_2);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = c_single_tile_size * num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_tensor_cb),
-            .data_format = c_data_format,
-            .page_size = c_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OUT0_DFB,
+        .entry_size = c_single_tile_size,
+        .num_entries = num_tiles_per_cb,
+        .data_format_metadata = c_data_format,
     });  // output
-    uint32_t old_running_mean_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_3);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = d_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(old_running_mean_tensor_cb),
-            .data_format = d_data_format,
-            .page_size = d_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OLD_RUNNING_MEAN_DFB,
+        .entry_size = d_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = d_data_format,
     });  // old running mean
-    uint32_t old_running_var_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_4);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = e_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(old_running_var_tensor_cb),
-            .data_format = e_data_format,
-            .page_size = e_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OLD_RUNNING_VAR_DFB,
+        .entry_size = e_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = e_data_format,
     });  // old running var
-    uint32_t momentum_cb = static_cast<uint32_t>(tt::CBIndex::c_5);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(momentum_cb),
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = MOMENTUM_DFB,
+        .entry_size = interm_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = interm_data_format,
     });  // momentum
-    uint32_t one_cb = static_cast<uint32_t>(tt::CBIndex::c_6);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(one_cb),
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = ONE_DFB,
+        .entry_size = interm_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = interm_data_format,
     });  // to store 1
-    uint32_t updated_m_cb = static_cast<uint32_t>(tt::CBIndex::c_7);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = (needs_mean_typecast ? interm_single_tile_size : d_single_tile_size) * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(updated_m_cb),
-            .data_format = needs_mean_typecast ? interm_data_format : d_data_format,
-            .page_size = needs_mean_typecast ? interm_single_tile_size : d_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = UPDATED_M_DFB,
+        .entry_size = needs_mean_typecast ? interm_single_tile_size : d_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = needs_mean_typecast ? interm_data_format : d_data_format,
     });  // updated running mean (staging when typecast)
-    uint32_t updated_v_cb = static_cast<uint32_t>(tt::CBIndex::c_8);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = (needs_var_typecast ? interm_single_tile_size : e_single_tile_size) * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(updated_v_cb),
-            .data_format = needs_var_typecast ? interm_data_format : e_data_format,
-            .page_size = needs_var_typecast ? interm_single_tile_size : e_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = UPDATED_V_DFB,
+        .entry_size = needs_var_typecast ? interm_single_tile_size : e_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = needs_var_typecast ? interm_data_format : e_data_format,
     });  // updated running var (staging when typecast)
 
-    uint32_t writer_updated_m_cb = updated_m_cb;
-    uint32_t writer_updated_v_cb = updated_v_cb;
+    // The writer drains the writer-facing DFB when a typecast is needed, and the staging DFB itself
+    // otherwise: with no typecast the legacy factory pointed both CB indices at the same buffer, so
+    // the writer's one accessor name resolves here rather than through a kernel-side alias.
+    const DFBSpecName writer_updated_m_dfb = needs_mean_typecast ? WRITER_UPDATED_M_DFB : UPDATED_M_DFB;
+    const DFBSpecName writer_updated_v_dfb = needs_var_typecast ? WRITER_UPDATED_V_DFB : UPDATED_V_DFB;
     if (needs_mean_typecast) {
-        uint32_t wm_cb = static_cast<uint32_t>(tt::CBIndex::c_12);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = d_single_tile_size * b_num_tiles_per_cb,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(wm_cb),
-                .data_format = d_data_format,
-                .page_size = d_single_tile_size,
-            }}},
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WRITER_UPDATED_M_DFB,
+            .entry_size = d_single_tile_size,
+            .num_entries = b_num_tiles_per_cb,
+            .data_format_metadata = d_data_format,
         });
-        writer_updated_m_cb = wm_cb;
     }
     if (needs_var_typecast) {
-        uint32_t wv_cb = static_cast<uint32_t>(tt::CBIndex::c_13);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = e_single_tile_size * b_num_tiles_per_cb,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(wv_cb),
-                .data_format = e_data_format,
-                .page_size = e_single_tile_size,
-            }}},
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WRITER_UPDATED_V_DFB,
+            .entry_size = e_single_tile_size,
+            .num_entries = b_num_tiles_per_cb,
+            .data_format_metadata = e_data_format,
         });
-        writer_updated_v_cb = wv_cb;
     }
 
     // Intermediate buffers required for updation of running stats
-    uint32_t tmp1_cb = static_cast<uint32_t>(tt::CBIndex::c_9);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tmp1_cb),
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = TMP1_DFB,
+        .entry_size = interm_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = interm_data_format,
+    });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = TMP2_DFB,
+        .entry_size = interm_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = interm_data_format,
+    });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = TMP3_DFB,
+        .entry_size = interm_single_tile_size,
+        .num_entries = b_num_tiles_per_cb,
+        .data_format_metadata = interm_data_format,
     });
 
-    uint32_t tmp2_cb = static_cast<uint32_t>(tt::CBIndex::c_10);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tmp2_cb),
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
+    // ---- Tensor parameters (replace the buffer-address RTAs and the TensorAccessorArgs plumbing) ----
+    // The optional running statistics are declared only when present: there is no tensor to supply as
+    // a TensorArgument otherwise, so their kernel-side accessors are #ifdef-gated instead.
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = BATCH_MEAN_TENSOR, .spec = batch_mean_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = BATCH_VAR_TENSOR, .spec = batch_var_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT_TENSOR, .spec = output.tensor_spec()});
+    if (running_mean_has_value) {
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = RUNNING_MEAN_TENSOR, .spec = running_mean_tensor->tensor_spec()});
+    }
+    if (running_var_has_value) {
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = RUNNING_VAR_TENSOR, .spec = running_var_tensor->tensor_spec()});
+    }
+
+    // ---- READER KERNEL ----
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_running_statistics.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = BATCH_MEAN_DFB,
+                    .accessor_name = "src",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = MOMENTUM_DFB,
+                    .accessor_name = "momentum",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                // Filled through fill_cb_with_value, which reserves / fills / pushes internally, so
+                // the reader is a genuine producer even though it builds no DataflowBuffer for it.
+                DFBBinding{
+                    .dfb_spec_name = ONE_DFB,
+                    .accessor_name = "one",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = BATCH_MEAN_TENSOR, .accessor_name = "src"}},
+        .compile_time_args = {{"fill_momentum_fp32", static_cast<uint32_t>(any_float32)}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"momentum", "start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     });
 
-    uint32_t tmp3_cb = static_cast<uint32_t>(tt::CBIndex::c_11);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tmp3_cb),
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
-    });
-
-    std::vector<uint32_t> reader_compile_time_args = {
-        batch_mean_tensor_cb,
-        momentum_cb,
-        one_cb,
+    // ---- WRITER KERNEL ----
+    // The writer is a producer on batch_var / old_running_mean / old_running_var (it reads tensor
+    // memory into them) as well as the consumer of the output and the updated statistics.
+    KernelSpec::CompilerOptions::Defines writer_defines;
+    Group<TensorBinding> writer_tensor_bindings = {
+        TensorBinding{.tensor_parameter_name = BATCH_VAR_TENSOR, .accessor_name = "src"},
+        TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"},
     };
-    tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.buffer()).append_to(reader_compile_time_args);
-    reader_compile_time_args.push_back(static_cast<uint32_t>(any_float32));
+    if (running_mean_has_value) {
+        writer_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = RUNNING_MEAN_TENSOR, .accessor_name = "old_running_mean"});
+        writer_defines.emplace("RUNNING_MEAN_HAS_VALUE", "1");
+    }
+    if (running_var_has_value) {
+        writer_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = RUNNING_VAR_TENSOR, .accessor_name = "old_running_var"});
+        writer_defines.emplace("RUNNING_VAR_HAS_VALUE", "1");
+    }
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(running_mean_has_value),
-        static_cast<uint32_t>(running_var_has_value),
-        batch_var_tensor_cb,
-        output_tensor_cb,
-        old_running_mean_tensor_cb,
-        old_running_var_tensor_cb,
-        writer_updated_m_cb,
-        writer_updated_v_cb,
-    };
-    tt::tt_metal::TensorAccessorArgs(batch_var_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(running_mean_tensor ? running_mean_tensor->buffer() : nullptr)
-        .append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(running_var_tensor ? running_var_tensor->buffer() : nullptr)
-        .append_to(writer_compile_time_args);
-    writer_compile_time_args.push_back(static_cast<uint32_t>(running_stat_data_format == DataFormat::Float32));
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_running_statistics.cpp",
+        .compiler_options = {.defines = std::move(writer_defines)},
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = BATCH_VAR_DFB,
+                    .accessor_name = "src",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OUT0_DFB,
+                    .accessor_name = "dst",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                // Bound unconditionally even when the optional tensor is absent: the legacy host
+                // allocated these buffers in every configuration and the kernel constructs their
+                // DataflowBuffer objects outside the conditional.
+                DFBBinding{
+                    .dfb_spec_name = OLD_RUNNING_MEAN_DFB,
+                    .accessor_name = "old_running_mean",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OLD_RUNNING_VAR_DFB,
+                    .accessor_name = "old_running_var",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = writer_updated_m_dfb,
+                    .accessor_name = "new_mean",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = writer_updated_v_dfb,
+                    .accessor_name = "new_var",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings = std::move(writer_tensor_bindings),
+        .compile_time_args =
+            {{"old_stat_is_fp32", static_cast<uint32_t>(running_stat_data_format == DataFormat::Float32)}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    });
 
-    // READER KERNEL
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_running_statistics.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_device_cores;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    // WRITER KERNEL
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_running_statistics.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_device_cores;
-    writer_desc.compile_time_args = writer_compile_time_args;
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // COMPUTE KERNEL
+    // ---- COMPUTE KERNEL ----
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (fp32_dest_acc_en) {
-        for (const auto cb_index :
-             {batch_mean_tensor_cb,
-              batch_var_tensor_cb,
-              output_tensor_cb,
-              old_running_mean_tensor_cb,
-              old_running_var_tensor_cb,
-              updated_m_cb,
-              updated_v_cb,
-              momentum_cb,
-              one_cb,
-              tmp1_cb,
-              tmp2_cb,
-              tmp3_cb}) {
-            unpack_to_dest_mode[cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        }
+    // tmp1 / tmp2 / tmp3 are packed and immediately re-read by this same kernel, so each is bound as
+    // both PRODUCER and CONSUMER (a self-loop).
+    Group<DFBBinding> compute_dfb_bindings = {
+        DFBBinding{
+            .dfb_spec_name = BATCH_MEAN_DFB,
+            .accessor_name = "batch_mean",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = BATCH_VAR_DFB,
+            .accessor_name = "batch_var",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = OUT0_DFB,
+            .accessor_name = "out0",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = OLD_RUNNING_MEAN_DFB,
+            .accessor_name = "old_running_mean",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = OLD_RUNNING_VAR_DFB,
+            .accessor_name = "old_running_var",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = MOMENTUM_DFB,
+            .accessor_name = "momentum",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = ONE_DFB,
+            .accessor_name = "one",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = UPDATED_M_DFB,
+            .accessor_name = "updated_m",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = UPDATED_V_DFB,
+            .accessor_name = "updated_v",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = TMP1_DFB,
+            .accessor_name = "tmp1",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = TMP1_DFB,
+            .accessor_name = "tmp1",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = TMP2_DFB,
+            .accessor_name = "tmp2",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = TMP2_DFB,
+            .accessor_name = "tmp2",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = TMP3_DFB,
+            .accessor_name = "tmp3",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = TMP3_DFB,
+            .accessor_name = "tmp3",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+    };
+
+    // On the typecast path this kernel re-reads its own FP32 staging buffer to typecast it into the
+    // writer-facing DFB, so the staging DFB becomes a compute self-loop and the writer-facing DFB
+    // appears. The define lets the kernel name the writer-facing token only where it is bound.
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    if (needs_mean_typecast) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = UPDATED_M_DFB,
+            .accessor_name = "updated_m",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WRITER_UPDATED_M_DFB,
+            .accessor_name = "writer_updated_m",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_defines.emplace("MEAN_NEEDS_TYPECAST", "1");
+    }
+    if (needs_var_typecast) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = UPDATED_V_DFB,
+            .accessor_name = "updated_v",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WRITER_UPDATED_V_DFB,
+            .accessor_name = "writer_updated_v",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_defines.emplace("VAR_NEEDS_TYPECAST", "1");
+    }
+
+    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    if (auto* compute_gen1 = std::get_if<ComputeGen1Config>(&compute_hw); compute_gen1 && fp32_dest_acc_en) {
+        // Legacy set unpack_to_dest_mode[cb] = UnpackToDestFp32 on these twelve CBs when fp32
+        // accumulation is on; reindexed onto DFB names and translated to the Metal 2.0 spelling.
+        // The writer-facing DFBs were never in the legacy list and are not added here.
+        compute_gen1->unpack_modes = ComputeUnpackModes{
+            {BATCH_MEAN_DFB, UnpackMode::UnpackToDest},
+            {BATCH_VAR_DFB, UnpackMode::UnpackToDest},
+            {OUT0_DFB, UnpackMode::UnpackToDest},
+            {OLD_RUNNING_MEAN_DFB, UnpackMode::UnpackToDest},
+            {OLD_RUNNING_VAR_DFB, UnpackMode::UnpackToDest},
+            {UPDATED_M_DFB, UnpackMode::UnpackToDest},
+            {UPDATED_V_DFB, UnpackMode::UnpackToDest},
+            {MOMENTUM_DFB, UnpackMode::UnpackToDest},
+            {ONE_DFB, UnpackMode::UnpackToDest},
+            {TMP1_DFB, UnpackMode::UnpackToDest},
+            {TMP2_DFB, UnpackMode::UnpackToDest},
+            {TMP3_DFB, UnpackMode::UnpackToDest},
+        };
     }
 
     auto tc_out_fmt = stat_format_needs_typecast ? static_cast<uint32_t>(running_stat_data_format)
                                                  : static_cast<uint32_t>(DataFormat::Float32);
 
-    std::vector<uint32_t> compute_kernel_args = {
-        static_cast<uint32_t>(running_mean_has_value),
-        static_cast<uint32_t>(running_var_has_value),
-        batch_mean_tensor_cb,
-        batch_var_tensor_cb,
-        output_tensor_cb,
-        old_running_mean_tensor_cb,
-        old_running_var_tensor_cb,
-        updated_m_cb,
-        updated_v_cb,
-        momentum_cb,
-        one_cb,
-        tmp1_cb,
-        tmp2_cb,
-        tmp3_cb,
-        writer_updated_m_cb,
-        writer_updated_v_cb,
-        static_cast<uint32_t>(stat_format_needs_typecast),
-        static_cast<uint32_t>(DataFormat::Float32),
-        tc_out_fmt};
+    // Both compute sources bind this one KernelSpec, so the named compile-time argument set is the
+    // superset the SFPU source reads; the plain source ignores the five it does not read.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = COMPUTE,
+        .source = fmt::format(
+            "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/running_statistics_{}.cpp",
+            (fp32_dest_acc_en || any_float32) ? "sfpu_kernel" : "kernel"),
+        // O3 is the legacy ComputeConfig default; Metal 2.0's CompilerOptions defaults to O2, so the
+        // level has to be stated explicitly to keep the compute kernel where it was.
+        .compiler_options = {.defines = std::move(compute_defines), .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+        .dfb_bindings = std::move(compute_dfb_bindings),
+        .compile_time_args =
+            {
+                {"old_running_mean_has_value", static_cast<uint32_t>(running_mean_has_value)},
+                {"old_running_var_has_value", static_cast<uint32_t>(running_var_has_value)},
+                {"stat_needs_typecast", static_cast<uint32_t>(stat_format_needs_typecast)},
+                {"tc_in_fmt", static_cast<uint32_t>(DataFormat::Float32)},
+                {"tc_out_fmt", tc_out_fmt},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
+        .hw_config = compute_hw,
+    });
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = fmt::format(
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/running_statistics_{}.cpp",
-        (fp32_dest_acc_en || any_float32) ? "sfpu_kernel" : "kernel");
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_device_cores;
-    compute_desc.compile_time_args = compute_kernel_args;
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-        .math_approx_mode = math_approx_mode,
-    };
+    // ---- Work unit (placement) ----
+    // All three legacy KernelDescriptors shared one core_ranges, so one work unit reproduces
+    // placement exactly and satisfies the local-DFB identical-work-unit-membership invariant.
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = all_device_cores,
+    });
+
+    // ---- Runtime arguments per core ----
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
 
     CMAKE_UNIQUE_NAMESPACE::populate_runtime_arguments(
-        reader_desc,
-        writer_desc,
-        compute_desc,
+        reader_run_args,
+        writer_run_args,
+        compute_run_args,
         compute_with_storage_grid_size,
         any_float32,
         operation_attributes,
         tensor_args,
         output);
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
-    return desc;
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.kernel_run_args.push_back(std::move(compute_run_args));
+
+    run_args.tensor_args.emplace(BATCH_MEAN_TENSOR, TensorArgument{batch_mean_tensor.mesh_tensor()});
+    run_args.tensor_args.emplace(BATCH_VAR_TENSOR, TensorArgument{batch_var_tensor.mesh_tensor()});
+    run_args.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output.mesh_tensor()});
+    if (running_mean_has_value) {
+        run_args.tensor_args.emplace(RUNNING_MEAN_TENSOR, TensorArgument{running_mean_tensor->mesh_tensor()});
+    }
+    if (running_var_has_value) {
+        run_args.tensor_args.emplace(RUNNING_VAR_TENSOR, TensorArgument{running_var_tensor->mesh_tensor()});
+    }
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::normalization
