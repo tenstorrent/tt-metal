@@ -257,13 +257,13 @@ def test_rand_all_ones_seed_does_not_lock_prng(device):
     assert torch.unique(data).numel() > 1024
 
 
-def test_rand_fp32_uses_rounding_bit(device):
+def test_rand_fp32_uses_both_mantissa_parities(device):
     data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.float32, seed=1)).float()
     top_binade = data[(data >= 0.5) & (data < 1.0)]
     odd_mantissa_fraction = (top_binade.contiguous().view(torch.int32) & 1).float().mean().item()
 
-    # Using only 23 source bits leaves every other representable FP32 value
-    # absent from [0.5, 1). The extra bit should select both parities evenly.
+    # SFPCAST's round-to-nearest-even conversion uses the discarded source
+    # bits, so both mantissa parities should occur evenly in [0.5, 1).
     assert 0.45 < odd_mantissa_fraction < 0.55
 
 
