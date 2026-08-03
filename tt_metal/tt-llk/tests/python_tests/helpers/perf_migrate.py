@@ -102,7 +102,10 @@ def discover_runs(archive_root, *, pipeline="nightly"):
             continue
         arch_match = _ARCH_RE.search(run_dir.name)
         meta_file = run_dir / "run_meta.json"
-        meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
+        try:
+            meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
+        except (json.JSONDecodeError, OSError):
+            meta = {}  # a broken sidecar falls back to folder-derived defaults
         runs.append(
             MigrationRun(
                 run_id=run_dir.name,

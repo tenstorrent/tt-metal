@@ -287,6 +287,12 @@ def convert_csvs_to_parquet(
     return diagnostics
 
 
+def safe_stem(name) -> str:
+    """A filesystem-safe file stem: anything but [A-Za-z0-9._-] becomes '_', so a
+    hostile test_name (e.g. containing '/') can never escape the output directory."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(name))
+
+
 def parquet_to_csvs(parquet_path, out_dir, *, drop_provenance=True, drop_empty=True):
     """Split a run-level Parquet batch back into per-test CSVs (the reverse of
     convert_csvs_to_parquet). One CSV per test_name, written to out_dir.
@@ -307,7 +313,7 @@ def parquet_to_csvs(parquet_path, out_dir, *, drop_provenance=True, drop_empty=T
             group = group[[c for c in group.columns if c not in provenance_cols]]
         if drop_empty:
             group = group.dropna(axis=1, how="all")
-        path = out_dir / f"{test_name}.csv"
+        path = out_dir / f"{safe_stem(test_name)}.csv"
         group.to_csv(path, index=False)
         written[test_name] = path
     return written
