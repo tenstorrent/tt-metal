@@ -6,15 +6,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
     list(APPEND PERF_MICROBENCH_TESTS_SRCS ${X86_64_ONLY_TESTS})
 endif()
 
-# Test files that only need target_link_libraries(... PRIVATE benchmark::benchmark) with no
-# extra sources/include dirs. Tests requiring additional per-test handling (extra sources,
-# include dirs, or libraries) keep their own dedicated if(STREQUAL) block below.
-set(BENCHMARK_LINKED_TESTS
-    dispatch/test_pgm_dispatch.cpp
-    dispatch/benchmark_rw_buffer.cpp
-    disaggregation/bench_kv_chunk_address_table.cpp
-)
-
 foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
     get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
@@ -27,28 +18,6 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     add_executable(${TEST_TARGET} ${TEST_SRC})
     target_precompile_headers(${TEST_TARGET} REUSE_FROM metal_common_pch)
     target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
-
-    if(${TEST_SRC} IN_LIST BENCHMARK_LINKED_TESTS)
-        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
-    endif()
-    if(${TEST_SRC} STREQUAL "routing/benchmark_fabric_mux_v2_throughput.cpp")
-        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
-        target_sources(${TEST_TARGET} PRIVATE routing/fabric_mux_v2_benchmark_program.cpp)
-    endif()
-    if(${TEST_SRC} STREQUAL "disaggregation/bench_kv_chunk_address_table_serialization.cpp")
-        target_link_libraries(
-            ${TEST_TARGET}
-            PRIVATE
-                benchmark::benchmark
-                protobuf::libprotobuf
-        )
-        target_include_directories(${TEST_TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal)
-        target_sources(
-            ${TEST_TARGET}
-            PRIVATE
-                ${PROJECT_SOURCE_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
-        )
-    endif()
 
     target_include_directories(
         ${TEST_TARGET}
@@ -69,5 +38,30 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
     list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
 endforeach()
+
+# Tests that only need target_link_libraries(... PRIVATE benchmark::benchmark) with no extra
+# sources/include dirs. Declared post-loop (rather than as if(STREQUAL) branches inside the
+# foreach) so linking benchmark::benchmark stays a flat, declarative list instead of imperative
+# per-target branching. Targets needing extra sources/include dirs/libraries are linked
+# individually below since that per-test configuration isn't a good fit for a shared list.
+target_link_libraries(test_pgm_dispatch PRIVATE benchmark::benchmark)
+target_link_libraries(benchmark_rw_buffer PRIVATE benchmark::benchmark)
+target_link_libraries(bench_kv_chunk_address_table PRIVATE benchmark::benchmark)
+
+target_link_libraries(benchmark_fabric_mux_v2_throughput PRIVATE benchmark::benchmark)
+target_sources(benchmark_fabric_mux_v2_throughput PRIVATE routing/fabric_mux_v2_benchmark_program.cpp)
+
+target_link_libraries(
+    bench_kv_chunk_address_table_serialization
+    PRIVATE
+        benchmark::benchmark
+        protobuf::libprotobuf
+)
+target_include_directories(bench_kv_chunk_address_table_serialization PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal)
+target_sources(
+    bench_kv_chunk_address_table_serialization
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
+)
 
 add_custom_target(metal_perf_microbenchmark_tests DEPENDS ${PERF_MICROBENCH_TEST_TARGETS})
