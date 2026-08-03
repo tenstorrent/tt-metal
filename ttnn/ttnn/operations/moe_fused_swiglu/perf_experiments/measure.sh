@@ -3,9 +3,9 @@
 #
 #   perf_experiments/measure.sh "<label>" "<MOE_R2_CASES>"
 #
-# Every MOE_SWIGLU_* knob is inherited from the caller's environment, so an A/B is
+# The harness variables (MOE_GRID, MOE_R2_CASES, ...) are inherited from the caller, so an A/B is
 #
-#   MOE_SWIGLU_GRID=11x8 perf_experiments/measure.sh 88cores "7168,5120,256,bf16_rm"
+#   MOE_GRID=11x8 perf_experiments/measure.sh 88cores "7168,5120,256,bf16_rm"
 #
 # The profiler report root is wherever run_safe_pytest.sh puts it; the newest report dir wins.
 set -u

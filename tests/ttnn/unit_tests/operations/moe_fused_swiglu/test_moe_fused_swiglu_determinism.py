@@ -61,11 +61,25 @@ import torch
 import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
-from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu_program_descriptor as pd
+from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu_geometry as pd
 from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
     nd_shard_n_tiles,
     weight_memory_configs,
 )
+
+
+#: The op's worker grid is a PARAMETER now, not an environment knob. `MOE_GRID=11x8` selects the
+#: 88-core configuration every graded number is quoted at; empty = the device's full grid. It is a
+#: harness variable, passed through as `core_grid=`, so the op itself stays env-free.
+def _core_grid():
+    g = os.environ.get("MOE_GRID", "").strip().lower()
+    if not g:
+        return None
+    x, y = g.split("x")
+    return (int(x), int(y))
+
+
+CORE_GRID = _core_grid()
 
 TILE = 32
 HIDDEN = 2048
@@ -100,28 +114,17 @@ ITERS = int(os.environ.get("MOE_DET_ITERS", 10))
 #: The knobs whose resolved values this test certifies as deterministic. Reported in the pass
 #: line so a green run states WHICH configuration it verified, not just that one existed.
 _REPORTED_KNOBS = (
-    "REDUCE",
-    "SCATTER_NOC",
     "M_BLOCK",
-    "GRID",
-    "WSHARD",
     "W_RESIDENT",
     "WD_RESIDENT",
     "WD_AHEAD",
     "GU_CHUNKS",
-    "HSIG",
-    "HSEND",
-    "HSLOT",
     "HACK_AHEAD",
-    "XSTAGE_FIRST",
-    "XSTAGE_STAGGER",
     "XPRIO",
-    "H_DTYPE",
-    "REDUCE_SLOTS_CAP",
+    "WD_SPLIT",
+    "SCATTER_NOC_SPLIT",
     "DEPTH_X",
     "DEPTH_H",
-    "DEPTH_WD",
-    "WRUN",
     "ABLATE",
 )
 
@@ -143,14 +146,37 @@ def _cases():
 # ---------------------------------------------------------------------------
 # "most optimal" == the shipped defaults. Assert it instead of assuming it.
 # ---------------------------------------------------------------------------
+#: The shipped value of every tuning constant this test certifies as deterministic. The op has no
+#: environment knobs any more, so "shipped" is no longer "an empty environment" — it is these
+#: values, compared against the live module. A source edit or an in-process rebind that moved one
+#: would otherwise silently retarget the test at a configuration nobody ships.
+_SHIPPED = {
+    "M_BLOCK": 8,
+    "DEPTH_X": 2,
+    "DEPTH_H": 3,
+    "DEPTH_OUT": 2,
+    "WD_AHEAD": 1,
+    "W_RESIDENT": True,
+    "WD_RESIDENT": True,
+    "GU_CHUNKS": 3,
+    "XPRIO": True,
+    "HACK_AHEAD": 2,
+    "WD_SPLIT": 3,
+    "SCATTER_NOC_SPLIT": True,
+    "ABLATE": "",
+    "OUT_SUBBLOCK_H_GU": 1,
+    "OUT_SUBBLOCK_H_DN_MAX": 1,
+}
+
+
 def assert_shipped_configuration():
-    overrides = {k: v for k, v in sorted(os.environ.items()) if k.startswith("MOE_SWIGLU_")}
+    overrides = {k: getattr(pd, k) for k, v in _SHIPPED.items() if getattr(pd, k, v) != v}
     if os.environ.get("MOE_PERF_WPLACE", "nd_shard") != "nd_shard":
         overrides["MOE_PERF_WPLACE"] = os.environ["MOE_PERF_WPLACE"]
     if overrides and os.environ.get("MOE_DET_ALLOW_KNOBS") != "1":
         pytest.fail(
-            "this test certifies the SHIPPED configuration, but the environment overrides "
-            f"{overrides}. Unset them, or set MOE_DET_ALLOW_KNOBS=1 to certify a non-default "
+            "this test certifies the SHIPPED configuration, but these differ from it: "
+            f"{overrides}. Restore them, or set MOE_DET_ALLOW_KNOBS=1 to certify a non-default "
             "configuration on purpose."
         )
     return overrides
@@ -212,7 +238,7 @@ def _build(emb, capacity, count, input_format, device):
     tt_x = ttnn.from_torch(
         x.to(torch.bfloat16), dtype=dt, layout=lay, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    gate_up_mc, down_mc = weight_memory_configs(device, emb, HIDDEN)
+    gate_up_mc, down_mc = weight_memory_configs(device, emb, HIDDEN, core_grid=CORE_GRID)
     tt_w = [
         ttnn.from_torch(
             torch.randn(s, dtype=torch.bfloat16),
@@ -292,7 +318,7 @@ def test_determinism(device, case):
     per_iteration_markers = []
 
     for i in range(ITERS):
-        out = moe_fused_swiglu(tt_x, tt_w[0], tt_w[1], tt_w[2], tt_counts, tt_idx, LOCAL_EXPERT_ID)
+        out = moe_fused_swiglu(tt_x, tt_w[0], tt_w[1], tt_w[2], tt_counts, tt_idx, LOCAL_EXPERT_ID, core_grid=CORE_GRID)
         assert list(out.shape) == [1, 1, capacity, emb]
         region = defined_region(out, rows)
 
@@ -340,7 +366,7 @@ def test_determinism_failure_path_is_wired(device):
     merged_marker = None
     per_iteration_markers = []
     for i in range(4):
-        out = moe_fused_swiglu(tt_x, tt_w[0], tt_w[1], tt_w[2], tt_counts, tt_idx, LOCAL_EXPERT_ID)
+        out = moe_fused_swiglu(tt_x, tt_w[0], tt_w[1], tt_w[2], tt_counts, tt_idx, LOCAL_EXPERT_ID, core_grid=CORE_GRID)
         region = defined_region(out, rows)
         if reference is None:
             reference = region

@@ -16,17 +16,17 @@ eval/golden_tests/moe_fused_swiglu/feature_spec.py.
 
 from __future__ import annotations
 
-import os
-
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
-    HIDDEN,
     TILE,
+    WEIGHT_DTYPES,
     create_program_descriptor,
     make_mailbox,
+    weight_memory_configs,
+    worker_grid,
 )
 
 
@@ -41,9 +41,7 @@ def default_compute_kernel_config() -> ttnn.ComputeConfigDescriptor:
     `dst_full_sync_en=False` is load-bearing: the Blackhole fast tilize path requires half sync.
     """
     cfg = ttnn.ComputeConfigDescriptor()
-    # MEASUREMENT OVERRIDE ONLY. The shipped value is LoFi and `PROPERTIES` declares it; this env
-    # knob exists so a fidelity A/B does not need a source edit. It is not a supported input.
-    cfg.math_fidelity = getattr(ttnn.MathFidelity, os.environ.get("MOE_SWIGLU_FIDELITY", "LoFi"))
+    cfg.math_fidelity = ttnn.MathFidelity.LoFi
     cfg.math_approx_mode = True
     cfg.fp32_dest_acc_en = False
     cfg.dst_full_sync_en = False
@@ -87,7 +85,7 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     # The activation's dtype x layout cross, collapsed to the two real combinations.
     "input_format": ["bf16_rm", "bfp8_tile"],
-    "weight_dtype": [ttnn.bfloat4_b],
+    "weight_dtype": list(WEIGHT_DTYPES),
     "emb": [6144, 7168],
     "capacity": [1024, 2048, 5120],
     "fill": ["balanced", "partial", "full", "empty"],
@@ -193,9 +191,10 @@ def validate(
         if value not in SUPPORTED[axis]:
             raise UnsupportedAxisValue(f"moe_fused_swiglu: {axis}={value!r} not in SUPPORTED {SUPPORTED[axis]}")
     for name, w in (("w_up", w_up), ("w_down", w_down)):
-        if w.dtype not in SUPPORTED["weight_dtype"]:
-            raise UnsupportedAxisValue(
-                f"moe_fused_swiglu: weight_dtype={w.dtype!r} ({name}) not in SUPPORTED " f"{SUPPORTED['weight_dtype']}"
+        if w.dtype != w_gate.dtype:
+            raise ValueError(
+                f"moe_fused_swiglu: all three weights must share one dtype (the CB format and the "
+                f"tile stride are one number); got w_gate={w_gate.dtype!r}, {name}={w.dtype!r}"
             )
 
     for exc in EXCLUSIONS:
@@ -219,6 +218,7 @@ def moe_fused_swiglu(
     dtype: ttnn.DataType = None,
     memory_config: ttnn.MemoryConfig = None,
     compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
+    core_grid=None,
 ) -> ttnn.Tensor:
     validate(input_tensor, w_gate, w_up, w_down, counts, global_expert_idx_table, local_expert_id)
 
@@ -227,6 +227,8 @@ def moe_fused_swiglu(
     emb = int(input_tensor.shape[-1])
 
     out_dtype = dtype if dtype is not None else ttnn.bfloat8_b
+    if out_dtype not in (ttnn.bfloat8_b, ttnn.bfloat16):
+        raise ValueError(f"moe_fused_swiglu: output dtype {out_dtype!r} must be bfloat8_b or bfloat16")
     out_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     m_t_max = input_m_tiles if input_m_tiles is not None else capacity // TILE
@@ -241,6 +243,12 @@ def moe_fused_swiglu(
         out_memory_config,
     )
 
+    # Sized over the FULL device grid, not the op's (possibly clamped) core_grid, and that is
+    # load-bearing: the mailbox is an L1-INTERLEAVED buffer, so page i lives in bank i and every
+    # core reads its own page at the shared base address. Allocating only `hgroups * kgroups`
+    # pages leaves the banks past that count with no page, and a worker core mapped to one of them
+    # spins on a magic that is never written. Measured: hangs every dispatch at core_grid=11x8 on
+    # an 11x10 device, with compute stuck in tilize and the writer on SEM_XSTAGED.
     grid = device.compute_with_storage_grid_size()
     mailbox = make_mailbox(device, int(grid.x) * int(grid.y))
 
@@ -256,6 +264,7 @@ def moe_fused_swiglu(
         local_expert_id=local_expert_id,
         input_m_tiles=m_t_max,
         compute_kernel_config=cfg,
+        core_grid=core_grid,
     )
 
     ttnn.generic_op(

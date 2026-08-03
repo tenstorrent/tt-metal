@@ -46,8 +46,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
-#include "moe_fused_swiglu_bank_runs.hpp"  // the ONE definition of the bank-run coalescing
+#include "moe_fused_swiglu_bank_runs.hpp"  // the ONE definition of the weight run coalescing
 #include "moe_fused_swiglu_common.hpp"     // the ONE definition of the mailbox word layout
+#include "moe_fused_swiglu_ct_args.hpp"    // the ONE definition of the compile-time arg order
 
 using namespace dataflow_kernel_lib;
 
@@ -65,92 +66,91 @@ using namespace dataflow_kernel_lib;
 // Compile-time block model. Every trip count and CB increment below is derived
 // from these; none is a literal.
 // ---------------------------------------------------------------------------
-constexpr uint32_t INPUT_FORMAT = get_compile_time_arg_val(0);  // 0 = bf16 RM sticks, 1 = bfp8 tiles
-constexpr uint32_t M_T_MAX = get_compile_time_arg_val(1);
-constexpr uint32_t LOCAL_EXPERT_ID = get_compile_time_arg_val(2);
-constexpr uint32_t EMB_T = get_compile_time_arg_val(3);
-constexpr uint32_t HID_T = get_compile_time_arg_val(4);
-constexpr uint32_t KR_PAD = get_compile_time_arg_val(5);   // K tiles per row-group slot (uniform)
-constexpr uint32_t HN_PAD = get_compile_time_arg_val(6);   // hidden tiles per column-group (uniform)
-constexpr uint32_t EC_MAX = get_compile_time_arg_val(7);   // phase-2 N stride (uniform CB increment)
-constexpr uint32_t M_BLOCK = get_compile_time_arg_val(8);  // token tile-rows per M-block
-constexpr uint32_t HGROUPS = get_compile_time_arg_val(9);
-constexpr uint32_t KGROUPS = get_compile_time_arg_val(10);
-constexpr uint32_t NUM_BANKS = get_compile_time_arg_val(11);
-constexpr uint32_t WRUN = get_compile_time_arg_val(12);  // max bank-contiguous tiles per transaction
-constexpr uint32_t SEM_GO = get_compile_time_arg_val(13);
-constexpr uint32_t SEM_DATA = get_compile_time_arg_val(14);
-// X_PAGE is the ACTIVATION TENSOR's own page (bf16: one full emb stick; bfp8: one tile) — it is
-// what TensorAccessor needs to place a page in a bank. X_SLICE is the cb_x_in page stride, i.e.
-// only this row-group's KR_PAD-tile slice of a stick. The two are NOT the same number.
-constexpr uint32_t X_PAGE = get_compile_time_arg_val(15);
-constexpr uint32_t X_SLICE = get_compile_time_arg_val(16);
-constexpr uint32_t COUNTS_PAGE = get_compile_time_arg_val(17);
-constexpr uint32_t IDX_PAGE = get_compile_time_arg_val(18);
-constexpr uint32_t BFP4_TILE = get_compile_time_arg_val(19);
-constexpr uint32_t BFP8_TILE = get_compile_time_arg_val(20);
-// The h intermediate's tile size. bfp4 h was measured and is a precision failure (pcc=nan on 8 of
-// 9 cells: the packer emits bfp8 into a bfp4 CB), so h is bfp8 like x, the output and the reduce.
+MOE_DECLARE_CT_ENUM(MOE_READER_CT_ARGS);
+
+constexpr uint32_t INPUT_FORMAT = CT(INPUT_FORMAT);  // 0 = bf16 RM sticks, 1 = bfp8 tiles
+constexpr uint32_t M_T_MAX = CT(M_T_MAX);
+constexpr uint32_t LOCAL_EXPERT_ID = CT(LOCAL_EXPERT_ID);
+constexpr uint32_t EMB_T = CT(EMB_T);
+constexpr uint32_t HID_T = CT(HID_T);
+constexpr uint32_t KR_PAD = CT(KR_PAD);  // K tiles per row-group slot (uniform)
+constexpr uint32_t HN_PAD = CT(HN_PAD);  // hidden tiles per column-group (uniform)
+constexpr uint32_t EC_MAX = CT(EC_MAX);  // phase-2 N stride (uniform CB increment)
+constexpr uint32_t M_BLOCK = CT(M_BLOCK);
+constexpr uint32_t HGROUPS = CT(HGROUPS);
+constexpr uint32_t KGROUPS = CT(KGROUPS);
+constexpr uint32_t NUM_CORES = CT(NUM_CORES);
+
+constexpr uint32_t SEM_GO = CT(SEM_GO);
+constexpr uint32_t SEM_DATA = CT(SEM_DATA);
+constexpr uint32_t SEM_HSLICE = CT(SEM_HSLICE);
+constexpr uint32_t SEM_XSTAGED = CT(SEM_XSTAGED);
+constexpr uint32_t SEM_H_RDY_BASE = CT(SEM_H_RDY_BASE);
+constexpr uint32_t SEM_H_FREE = CT(SEM_H_FREE);
+constexpr uint32_t SEM_WDSPLIT = CT(SEM_WDSPLIT);
+
+// X_PAGE is the ACTIVATION TENSOR's own page (bf16: one full emb stick; bfp8: one tile) — what
+// TensorAccessor needs to place a page in a bank. X_SLICE is the cb_x_in page stride, i.e. only
+// this row-group's KR_PAD-tile slice of a stick. Not the same number.
+constexpr uint32_t X_PAGE = CT(X_PAGE);
+constexpr uint32_t X_SLICE = CT(X_SLICE);
+constexpr uint32_t COUNTS_PAGE = CT(COUNTS_PAGE);
+constexpr uint32_t IDX_PAGE = CT(IDX_PAGE);
+constexpr uint32_t W_TILE = CT(W_TILE_BYTES);  // weight tile stride: bfp4 576, bfp8 1088, bf16 2048
+constexpr uint32_t BFP8_TILE = CT(BFP8_TILE);
+// h is bfp8, like x, the output and the reduce operands. bfp4 h was measured and is a precision
+// failure (pcc=nan on 8 of 9 cells: the packer emits bfp8 into a bfp4 CB).
 constexpr uint32_t H_TILE = BFP8_TILE;
+constexpr uint32_t MAILBOX_MAGIC = CT(MAILBOX_MAGIC);
 
-constexpr uint32_t MAX_CHILDREN = get_compile_time_arg_val(21);
-constexpr uint32_t REMAP = get_compile_time_arg_val(22);  // 1 = bank-run remap of the N axis
-constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(23);
-// W_down prefetch depth in phase-2 K-blocks: how many blocks are kept in flight ahead
-// of the round that consumes them. 1 == the per-round read (DRAM-latency bound).
-constexpr uint32_t WD_AHEAD = get_compile_time_arg_val(24);
-// Smallest legal `m_eff` (= the matmul's out_subblock_h rounded up to a power of two). One
-// host-side definition, passed identically to all three kernels — see m_tiles_eff().
-constexpr uint32_t M_EFF_MIN = get_compile_time_arg_val(25);
-// Concurrent child landing slots in cb_reduce_*_in (Refinement 2 lever 1). A parent invites its
-// children in waves of this size instead of one at a time; 1 is the Phase-0 protocol.
-constexpr uint32_t REDUCE_SLOTS = get_compile_time_arg_val(26);
-// REFINEMENT 3 — CROSS-M-BLOCK WEIGHT RESIDENCY. Every weight read below is a pure function of this
-// core's kstart/hstart/jstart with NO M-block index in it, so M-block b > 0 re-reads bytes that are
-// still sitting in the same CB slot. With residency on, the reserve/push handshake is kept EXACTLY
-// as-is (compute's waits and pops are untouched) and only the DRAM read loops are skipped.
-constexpr uint32_t W_RESIDENT = get_compile_time_arg_val(27);   // W_gate (this kernel) + W_up (writer)
-constexpr uint32_t WD_RESIDENT = get_compile_time_arg_val(28);  // the phase-2 W_down K stream
+// W_down blocks kept in flight ahead of the round that consumes them; 1 == the per-round read.
+constexpr uint32_t WD_AHEAD = CT(WD_AHEAD);
+// Smallest legal `m_eff`. One host definition, identical in all three kernels — see m_tiles_eff().
+constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
+// Cross-M-block weight residency: every weight read is a pure function of this core's
+// kstart/hstart/jstart with no M-block index, so b > 0 re-reads bytes still in the CB slot. The
+// reserve/push handshake is untouched; only the DRAM read loops are skipped.
+constexpr uint32_t W_RESIDENT = CT(W_RESIDENT);
+constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
+constexpr uint32_t GU_CHUNKS = CT(GU_CHUNKS);
+constexpr uint32_t XPRIO = CT(XPRIO);
+constexpr uint32_t HACK_AHEAD = CT(HACK_AHEAD);
+constexpr uint32_t DEPTH_H = CT(DEPTH_H);
+constexpr uint32_t WD_SPLIT = CT(WD_SPLIT);
+constexpr uint32_t WG_SHARD_W = CT(WG_SHARD_W);
+constexpr uint32_t WD_SHARD_W = CT(WD_SHARD_W);
+// 1 = the UP half of the gather is issued from HERE (NOC_0) while the writer keeps GATE on NOC_1.
+// Split by payload so each data-movement RISC-V owns ONE CB outright; two RISC-Vs popping one CB
+// corrupts the shared `tiles_acked` word the way two pushers corrupt `tiles_received`.
+constexpr uint32_t SCATTER_NOC_SPLIT = CT(SCATTER_NOC_SPLIT);
+constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in tiles
 
-constexpr uint32_t cb_x_in = get_compile_time_arg_val(29);
-constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(30);
-constexpr uint32_t cb_x_stage = get_compile_time_arg_val(31);
-constexpr uint32_t cb_w_gate = get_compile_time_arg_val(32);
-constexpr uint32_t cb_w_down = get_compile_time_arg_val(33);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(34);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(35);
-constexpr uint32_t cb_h = get_compile_time_arg_val(36);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(37);
-constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(38);
-constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(39);
+constexpr uint32_t cb_x_in = CT(CB_X_IN);
+constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
+constexpr uint32_t cb_x_stage = CT(CB_X_STAGE);
+constexpr uint32_t cb_w_gate = CT(CB_W_GATE);
+constexpr uint32_t cb_w_down = CT(CB_W_DOWN);
+constexpr uint32_t cb_h = CT(CB_H);
+constexpr uint32_t cb_h_local = CT(CB_H_LOCAL);
+constexpr uint32_t cb_idx_scratch = CT(CB_IDX_SCRATCH);
+constexpr uint32_t cb_counts_scratch = CT(CB_COUNTS_SCRATCH);
+constexpr uint32_t cb_gather_gate = CT(CB_GATHER_GATE);
+constexpr uint32_t cb_gather_up = CT(CB_GATHER_UP);
+constexpr uint32_t cb_up_acc = CT(CB_UP_ACC);
 
-// PERF 2 — REDUCE-SCATTER (MOE_SWIGLU_REDUCE=scatter). 1 replaces the tree's parent side with the
-// column's peer invite + gather, and makes the root's cb_h_local a pure LANDING region that the
-// workers tile directly; 0 reproduces the tree byte-for-byte. See the knob in the program descriptor.
-constexpr uint32_t SCATTER = get_compile_time_arg_val(40);
-// 1 = the UP half of the gather is issued from HERE (NOC_0) while the writer keeps the GATE half on
-// NOC_1 — see MOE_SWIGLU_SCATTER_NOC. Split by payload so each data-movement RISC-V owns ONE CB
-// outright (this kernel then pops cb_up_acc and the writer pops cb_gate_acc); two RISC-Vs popping one
-// CB corrupts the shared `tiles_acked` word exactly the way two pushers corrupt `tiles_received`.
-constexpr uint32_t SCATTER_NOC_SPLIT = get_compile_time_arg_val(41);
-constexpr uint32_t GATHER_PAGES = get_compile_time_arg_val(42);  // the WHOLE landing CB, in tiles
-constexpr uint32_t SEM_HSLICE = get_compile_time_arg_val(43);
-constexpr uint32_t cb_gather_gate = get_compile_time_arg_val(44);
-constexpr uint32_t cb_gather_up = get_compile_time_arg_val(45);
-constexpr uint32_t cb_up_acc = get_compile_time_arg_val(46);
-
-constexpr uint32_t CT_XMCAST = 47;
+// The mcast and TensorAccessor blocks follow the scalar block; `CT_COUNT` is its length, so
+// inserting a scalar argument no longer shifts them.
+constexpr uint32_t CT_XMCAST = CT_COUNT;
 constexpr uint32_t CT_HMCAST = CT_XMCAST + 5;
 
 constexpr uint32_t TILE_H = 32;
 constexpr uint32_t BF16_TILE_ROW_BYTES = TILE_H * 2;  // one 32-element tile slice of a bf16 stick
 
-// runtime-arg layout
-constexpr uint32_t RT_CHILDREN = 16;
-// PERF 2 — the whole COLUMN in virtual coordinates, KGROUPS (vx, vy) pairs in ROW order: the invite
-// fan-out and (under SCATTER_NOC_SPLIT) the up-gather destinations. Row `r` is at index `r` on every
-// core in the column, which is what makes "worker r owns tiles [r*sl_a, (r+1)*sl_a)" agree grid-wide.
-constexpr uint32_t RT_PEERS = RT_CHILDREN + 2 * MAX_CHILDREN;
+// Runtime-arg layout. The scalar block, then the whole COLUMN in virtual coordinates as KGROUPS
+// (vx, vy) pairs in ROW order: the invite fan-out and the up-gather destinations. Row `r` is at
+// index `r` on every core in the column, which is what makes "worker r owns tiles
+// [r*sl_a, (r+1)*sl_a)" agree grid-wide.
+constexpr uint32_t RT_PEERS = 14;
 constexpr uint32_t RT_XMCAST = RT_PEERS + 2 * KGROUPS;
 constexpr uint32_t RT_HMCAST = RT_XMCAST + 4 + 2 * HGROUPS;
 
@@ -272,16 +272,17 @@ void kernel_main() {
     const uint32_t hn = get_arg_val<uint32_t>(9);      // real hidden tiles this column owns
     const uint32_t ec = get_arg_val<uint32_t>(10);     // output emb tiles this CORE owns
     const uint32_t jstart = get_arg_val<uint32_t>(11);
-    const uint32_t is_root = get_arg_val<uint32_t>(12);
-    const uint32_t num_children = get_arg_val<uint32_t>(13);
-    const uint32_t my_col = get_arg_val<uint32_t>(14);
-    // PERF 2 — my row in the grid column: which slice of the reduce-scatter I own (0 tiles = an idle
-    // core, which still contributes and still invites).
-    const uint32_t my_row = get_arg_val<uint32_t>(15);
+    const uint32_t my_col = get_arg_val<uint32_t>(12);
+    // My row in the grid column: which slice of the reduce-scatter I own (0 tiles = an idle core,
+    // which still contributes and still invites).
+    const uint32_t my_row = get_arg_val<uint32_t>(13);
+    // Column `x`'s reduce root is row `x % KGROUPS` — the core that injects this column's h into
+    // the phase-2 all-gather. Derived, not passed: one rule, three kernels.
+    const bool is_root = (my_row == my_col % KGROUPS);
 
     const auto x_acc = TensorAccessor(x_args, x_addr, X_PAGE);
-    const auto wg_acc = TensorAccessor(wg_args, w_gate_addr, BFP4_TILE);
-    const auto wd_acc = TensorAccessor(wd_args, w_down_addr, BFP4_TILE);
+    const auto wg_acc = TensorAccessor(wg_args, w_gate_addr, W_TILE);
+    const auto wd_acc = TensorAccessor(wd_args, w_down_addr, W_TILE);
     const auto cnt_acc = TensorAccessor(cnt_args, counts_addr, COUNTS_PAGE);
     const auto idx_acc = TensorAccessor(idx_args, idx_addr, IDX_PAGE);
 
@@ -324,9 +325,7 @@ void kernel_main() {
     // -----------------------------------------------------------------------
     Noc noc;
     auto x_recv = xmc.receiver(noc);
-    auto h_recv = hmc.receiver(noc);
     auto x_send = xmc.sender(noc);
-    auto h_send = hmc.sender(noc);
 
     const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
     volatile tt_l1_ptr uint32_t* sem_data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_data);
@@ -335,12 +334,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_h_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HSLICE)));
     uint32_t h_arrivals = 0;
-    // PERF 4 — monotone ack accounting for the per-slot-flag send (HSLOT). Each core acks each
-    // round's root exactly once per M-block, so a root's cell gains exactly NUM_CORES per M-block
-    // whatever order the acks arrive in. SEM_H_FREE is monotone ACROSS M-blocks, so this
-    // expectation must be too — declared here, outside the M-block loop, not reset per block.
+    // Monotone ack accounting for the per-slot-flag h send. Each core acks each round's root
+    // exactly once per M-block, so a root's cell gains exactly NUM_CORES per M-block whatever
+    // order the acks arrive in. SEM_H_FREE is monotone ACROSS M-blocks, so this must be too.
     uint32_t h_free_expected = 0;
-    (void)h_free_expected;
     // W_down K-blocks this kernel has already PUBLISHED, running across M-blocks so it stays
     // aligned with the writer's equally-monotone completion counter.
     uint32_t wd_done = 0;
@@ -357,7 +354,6 @@ void kernel_main() {
     constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
     constexpr uint32_t WG_CHUNK_TILES = KR_PAD * GU_CHUNK_W;
     constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;  // one child's landing slot
-    constexpr uint32_t REDUCE_CB_TILES = REDUCE_SLOTS * REDUCE_SLOT_TILES;  // the whole CB — see 1c
     constexpr uint32_t X_ROW_BYTES = KR_PAD * BFP8_TILE;
 
     // `count == 0` -> m_blocks == 0 on every core: no CB traffic, no collective round, no
@@ -434,8 +430,8 @@ void kernel_main() {
                         (kstart + k) * HID_T,
                         hstart + h0,
                         hstart + h0 + w,
-                        wg_wp + k * GU_CHUNK_W * BFP4_TILE,
-                        BFP4_TILE);
+                        wg_wp + k * GU_CHUNK_W * W_TILE,
+                        W_TILE);
                 }
             }
 #else
@@ -553,9 +549,9 @@ void kernel_main() {
         // PERF 3 — this core's `x` is off DRAM. Release the writer's W_up stream (XPRIO). A plain
         // volatile store, not a NoC semaphore op: producer and consumer are two RISC-Vs on the SAME
         // core sharing one L1, and this word has exactly one writer. Monotone, so no reset.
-#if XPRIO
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)) = b + 1;
-#endif
+        if constexpr (XPRIO) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)) = b + 1;
+        }
 
         // The staging prologue's barriers are behind us, so this prefetch now has the multicast chain
         // AND the whole gate matmul to land under, instead of standing in front of the stick reads.
@@ -653,8 +649,8 @@ void kernel_main() {
                             (hbase + k) * EMB_T,
                             jstart,
                             jstart + ec,
-                            wp + (r * WD_BLOCK_TILES + k * EC_MAX) * BFP4_TILE,
-                            BFP4_TILE);
+                            wp + (r * WD_BLOCK_TILES + k * EC_MAX) * W_TILE,
+                            W_TILE);
                     }
                 }
 #endif
@@ -663,30 +659,15 @@ void kernel_main() {
         issue_wd_batch();
 
         // -------------------------------------------------------------------
-        // Phase 1c — the cross-column reduce's RECEIVER side. The invite (SEM_GO) is the flow control
-        // that keeps a contributor from overwriting a landing slot compute has not consumed yet, on
-        // both paths; the two differ only in WHO invites WHOM (one parent -> its children, versus
-        // every core -> its whole column).
-        //
-        // THE TREE'S PROTOCOL, REFINEMENT 2 LEVER 1 — the invites go out in WAVES of REDUCE_SLOTS,
-        // not one at a time.
-        // With one slot the parent had to invite child `c`, wait for its ~102 KB, hand it to compute
-        // and only then invite `c + 1`: up to 4 SEQUENTIAL round trips per M-block at the root.
-        // With REDUCE_SLOTS slots, a wave's children all transfer CONCURRENTLY into disjoint slots
-        // (child `c` owns slot `c % REDUCE_SLOTS`, its own runtime arg) and the parent waits once
-        // for the whole wave on the monotone SEM_DATA counter.
-        //
-        // The reserve/push granularity stays the WHOLE CB, which is what preserves the address
-        // proxy this transport is built on: the child unicasts to its OWN
-        // `get_write_ptr(cb_reduce_*_in)` (+ its slot stride) as a stand-in for the parent's, and
-        // that only holds while every push wraps the write pointer back to the CB base — which a
-        // whole-CB push does on every core, whatever its child count. It is also why the m_eff
-        // shrink does not move THIS accounting: a slot stays M_BLOCK*HN_PAD tiles and the child
-        // ships only the m_eff*HN_PAD tiles that carry live tokens (compute drops the tail).
+        // Phase 1c — the cross-column reduce's RECEIVER side. SEM_GO is the invite: the flow
+        // control that keeps a contributor from overwriting a landing slot compute has not
+        // consumed yet. Reserve and push the landing CBs WHOLE, which is what keeps every core's
+        // write pointer at the CB base and lets a contributor use its OWN pointer as the
+        // destination address.
         // -------------------------------------------------------------------
-        // PERF 2 — MY SLICE of this block, from the ONE shared plan (moe_fused_swiglu_common.hpp),
+        // MY SLICE of this block, from the ONE shared plan (moe_fused_swiglu_common.hpp),
         // identical on every core and every RISC-V. `slice_workers` cores own `slice_tiles` each.
-        const uint32_t sl_w = (SCATTER != 0) ? moe_fused_swiglu::slice_workers(h_block_tiles, KGROUPS) : 0;
+        const uint32_t sl_w = moe_fused_swiglu::slice_workers(h_block_tiles, KGROUPS);
         const uint32_t sl_a = (sl_w != 0) ? (h_block_tiles / sl_w) : 0;  // uniform slice size
         const uint32_t slice_tiles = (my_row < sl_w) ? sl_a : 0;         // 0 = an idle core
         MaybeDeviceZoneScope("reader_reduce");
@@ -778,17 +759,17 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("reader_wd_wait");
             noc_async_read_barrier();
-#if WD_SPLIT
-            // ...and NOC_1's half of the SAME blocks (see wd_split_gate).
-            wd_split_gate(wd_done, WD_AHEAD);
-#endif
+            if constexpr (WD_SPLIT) {
+                // ...and NOC_1's half of the SAME blocks (see wd_split_gate).
+                wd_split_gate(wd_done, WD_AHEAD);
+            }
         }
         cb_push_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
         // PERF 2 — on the scatter path this column's h block is ASSEMBLED IN cb_h_local BY THE
         // WORKERS' NoC WRITES, not packed by compute, so the root's handshake is the SEM_HSLICE
         // counter rather than a CB front. `sl_w` slices land per M-block; the counter is monotone and
         // cumulative, like every other semaphore in this op.
-        if (SCATTER && is_root) {
+        if (is_root) {
             h_arrivals += sl_w;
         }
         {
@@ -861,7 +842,6 @@ void kernel_main() {
                     cb_reserve_back(cb_h, ahead * h_block_tiles);
                 }
                 const uint32_t hdst = get_write_ptr(cb_h);
-#if HSEND_WRITER || HSLOT
                 // PERF 3 — DUAL-RISC SPLIT, receive side. The send lives on the writer now, so this
                 // loop only receives. Two steps, and the ORDER of them is the whole protocol:
                 //
@@ -886,7 +866,6 @@ void kernel_main() {
                     noc_semaphore_inc(get_noc_addr(svx, svy, static_cast<uint32_t>(get_semaphore(SEM_H_FREE))), 1);
                     ++next_ack;
                 }
-#endif
                 const bool i_send = (is_root && r == my_col);
                 if (i_send) {
                     // Self-copy cb_h_local -> this round's cb_h slot, so the send below is `src == dst`
@@ -914,108 +893,46 @@ void kernel_main() {
                     // it also publishes the pending W_down block here. One core per round pays this.
                     noc_async_read_barrier();  // the self-copy AND the previous round's W_down block
                     if (wd_pending) {
-#if WD_SPLIT
-                        wd_split_gate(wd_done, 1);
-#endif
+                        if constexpr (WD_SPLIT) {
+                            wd_split_gate(wd_done, 1);
+                        }
                         cb_push_back(cb_w_down, WD_BLOCK_TILES);
                         wd_pending = false;
                     }
-                    if constexpr (SCATTER == 0) {
-                        cb_pop_front(cb_h_local, h_block_tiles);
-                    }
 #ifndef ABLATE_NO_H_XFER  // /perf-measure: drop the h transport, keep cb_h's reserve/push
-#if !HSEND_WRITER
-#if HSLOT
-                    // PERF 4 — PER-SLOT FLAGS. Same linked data+signal multicast as the shared-flag
-                    // path (so still NO acked write barrier -- see moe_fused_swiglu_common.hpp), but
-                    // the VALID cell is this SLOT's, so round r+1's sender is not held behind every
-                    // core clearing round r's. PRE_HANDSHAKE is deliberately OFF: mcast_pipe's
-                    // `wait(ack) ; set(0)` reset is only race-free while the rounds form a chain,
-                    // and HACK_AHEAD's whole purpose is to break that chain, so the ack accounting
-                    // is the MONOTONE `hfree_expected` counter below instead.
+                    // PER-SLOT FLAGS. Linked data+signal multicast, so still NO acked write
+                    // barrier, and the VALID cell is this SLOT's — round r+1's sender is not held
+                    // behind every core clearing round r's. The ack accounting is the MONOTONE
+                    // `h_free_expected` counter, because HACK_AHEAD deliberately breaks the
+                    // round-to-round chain a reset-based handshake would need.
                     if constexpr (hmc.active) {
                         h_free_expected += NUM_CORES;
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                                 static_cast<uint32_t>(get_semaphore(SEM_H_FREE))),
                             h_free_expected);
-                        // PERF 17 (HSPLIT) — the HEAD tiles only; the writer carries the tail on
-                        // NOC_1 and signals it separately. `h_tiles_noc0` is >= 1 by construction
-                        // (the knob is clamped to 7 eighths), which matters because this send's
-                        // LINKED flag is the round's VALID signal. Still `src == dst`, so still
-                        // exclude-source (§4 trap 4). At HSPLIT == 0 it is the whole block.
-#if HPOSTED
+                        // `src == dst`, so exclude-source: a src != dst send is a LOOPBACK
+                        // multicast whose flag reset races this core's own in-flight VALID.
                         h_slot_send_posted((b * HGROUPS + r) % DEPTH_H, hdst, h_block_tiles * H_TILE);
-#else
-                        h_slot_send(noc, (b * HGROUPS + r) % DEPTH_H, hdst, h_block_tiles * H_TILE);
-#endif
                     }
-#else
-                    if constexpr (hmc.active) {
-                        h_send.send(hdst, hdst, h_block_tiles * H_TILE);
-                    }
-#endif
-#else
-                    // PERF 3 — the broadcast to the other 109 cores is the WRITER's job now; this
-                    // core only lands its own copy (the self-copy above). Nothing to do here.
-                    (void)hdst;
-#endif
 #endif
                 } else {
                     // The other 109 cores drain AFTER the multicast, so the previous round's W_down read
                     // had this whole round's grid-wide broadcast to land under — that is the deferral.
 #ifndef ABLATE_NO_H_XFER
-#if !HSEND_WRITER
-#if HSLOT
-                    // PERF 4 — the receive is the whole of `ReceiverPipe::receive` for a Flag signal
-                    // with PRE_HANDSHAKE off: wait for THIS slot's VALID, then put it back. Raw
-                    // rather than a per-slot ReceiverPipe because that class's ctor sets the cell
-                    // INVALID, and constructing one inside the loop would clobber a VALID a sender
-                    // running ahead had already broadcast. The cells need no init here at all: the
-                    // host allocates them at 0 == INVALID, every receive restores INVALID, and a
-                    // sender restores its own after its fence.
+                    // The receive is the whole of `ReceiverPipe::receive` for a Flag signal with
+                    // PRE_HANDSHAKE off: wait for THIS slot's VALID, then put it back. Raw rather
+                    // than a per-slot ReceiverPipe because that class's ctor sets the cell INVALID
+                    // and would clobber a VALID a sender running ahead had already broadcast. The
+                    // cells need no init: the host allocates them at 0 == INVALID, every receive
+                    // restores INVALID, and a sender restores its own after its fence.
                     if constexpr (hmc.active) {
                         volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                             static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + ((b * HGROUPS + r) % DEPTH_H))));
-                        // PERF 15 — the round's h arrival wait, on the SHIPPED (HSLOT) path.
                         MaybeDeviceZoneScope("p2_hwait");
                         noc_semaphore_wait(hf, VALID);
                         noc_semaphore_set(hf, INVALID);
-#if HSPLIT
-                        // ...and the NOC_1 half. The linked-flag guarantee above is PER-NOC: it
-                        // orders the reader's bytes against the reader's flag and says nothing
-                        // about the writer's. Monotone counter, so no reset and no ordering
-                        // requirement between the two signals.
-                        {
-                            const uint32_t s2 = (b * HGROUPS + r) % DEPTH_H;
-                            noc_semaphore_wait_min(
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                    static_cast<uint32_t>(get_semaphore(SEM_H2_RDY_BASE + s2))),
-                                ++h2_exp[s2]);
-                        }
-#endif
                     }
-#else
-                    if constexpr (hmc.active) {
-                        // Round r's sender is column r's root, core (r, r % KGROUPS); the rotating
-                        // sender list is row-major over the rect.
-                        h_recv.receive((r % KGROUPS) * HGROUPS + r);
-                    }
-#endif
-#else
-                    // PERF 3 — wait on THIS SLOT's own monotone arrival counter. `h_exp[]` is this
-                    // core's private expectation: it is bumped only for rounds this core actually
-                    // waits on, which is what keeps a ROOT (which self-copies its own round and is
-                    // excluded from its own multicast, so its counter for that slot is one behind
-                    // everyone else's) consistent with the rest of the grid without a special case.
-                    {
-                        const uint32_t s = r % DEPTH_H;
-                        noc_semaphore_wait_min(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + s))),
-                            ++h_exp[s]);
-                    }
-#endif
 #endif
                     if (wd_pending) {
                         // PERF 15 — the REAL per-round W_down wait. `reader_wd_wait` covers only the
@@ -1023,9 +940,9 @@ void kernel_main() {
                         // for its weights"; this is the other 10, on the 87 non-sending cores.
                         MaybeDeviceZoneScope("p2_wdbar");
                         noc_async_read_barrier();
-#if WD_SPLIT
-                        wd_split_gate(wd_done, 1);
-#endif
+                        if constexpr (WD_SPLIT) {
+                            wd_split_gate(wd_done, 1);
+                        }
                         cb_push_back(cb_w_down, WD_BLOCK_TILES);
                         wd_pending = false;
                     }
@@ -1051,12 +968,7 @@ void kernel_main() {
                         // only the head.
                         for (uint32_t k = 0; k < hn_r - wd_rows_writer(hn_r); ++k) {
                             BRD::read(
-                                wd_acc,
-                                (hbase + k) * EMB_T,
-                                jstart,
-                                jstart + ec,
-                                wp + k * EC_MAX * BFP4_TILE,
-                                BFP4_TILE);
+                                wd_acc, (hbase + k) * EMB_T, jstart, jstart + ec, wp + k * EC_MAX * W_TILE, W_TILE);
                         }
                     }
 #else
@@ -1071,9 +983,9 @@ void kernel_main() {
             // ASSERT-free safety drain for a future WD_AHEAD that changes that arithmetic.
             if (wd_pending) {
                 noc_async_read_barrier();
-#if WD_SPLIT
-                wd_split_gate(wd_done, 1);
-#endif
+                if constexpr (WD_SPLIT) {
+                    wd_split_gate(wd_done, 1);
+                }
                 cb_push_back(cb_w_down, WD_BLOCK_TILES);
             }
         }

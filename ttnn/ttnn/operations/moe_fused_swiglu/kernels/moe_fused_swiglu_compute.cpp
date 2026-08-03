@@ -35,7 +35,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
-#include "moe_fused_swiglu_common.hpp"  // the ONE definition of the mailbox word layout
+#include "moe_fused_swiglu_common.hpp"   // the ONE definition of the mailbox word layout
+#include "moe_fused_swiglu_ct_args.hpp"  // the ONE definition of the compile-time arg order
 
 using namespace compute_kernel_lib;
 
@@ -43,72 +44,54 @@ using namespace compute_kernel_lib;
 // get the profiler through `dataflow_api.h` (it must not see the dataflow API at all), which is
 // exactly why `perf_instrumentation.hpp` exists. 6 records per M-block here.
 
-constexpr uint32_t M_BLOCK = get_compile_time_arg_val(0);
-constexpr uint32_t KR_PAD = get_compile_time_arg_val(1);
-constexpr uint32_t HN_PAD = get_compile_time_arg_val(2);
-constexpr uint32_t EC_MAX = get_compile_time_arg_val(3);  // phase-2 N stride (uniform CB increment)
-constexpr uint32_t HGROUPS = get_compile_time_arg_val(4);
-constexpr uint32_t HID_T = get_compile_time_arg_val(5);
-constexpr uint32_t INPUT_FORMAT = get_compile_time_arg_val(6);
-constexpr uint32_t OUT_SUBBLOCK_H_GU = get_compile_time_arg_val(7);
-constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(8);
-// Smallest legal `m_eff` (= OUT_SUBBLOCK_H_GU rounded up to a power of two, so the gate/up
-// `m_eff / OUT_SUBBLOCK_H_GU` below is always exact). One host-side definition, identical in all
-// three kernels — see m_tiles_eff().
-constexpr uint32_t M_EFF_MIN = get_compile_time_arg_val(9);
-// `down` output sub-block HEIGHT (Refinement 2 lever 3). Separate from the gate/up height because
-// `down`'s width is `ec` (2-3) against a DEST budget of 8, while gate/up's is already HN_PAD = 6.
-// Host-derived as the largest power of two whose sub-block fits DEST; taken as min(.., m_eff) below
-// so it never constrains the runtime M shrink.
-constexpr uint32_t OUT_SUBBLOCK_H_DN = get_compile_time_arg_val(10);
-// Concurrent child landing slots in cb_reduce_*_in (Refinement 2 lever 1). The reduce loop below
-// walks the parent's invite WAVES with exactly this granularity, so it must be the same number the
-// reader uses; 1 is the Phase-0 one-child-at-a-time protocol.
-constexpr uint32_t REDUCE_SLOTS = get_compile_time_arg_val(11);
-// gate/up in1 sub-block WIDTH in hidden tiles (Refinement 2 lever 2). HN_PAD == one sub-block ==
-// the Phase-0 shape; a divisor of it splits the block so a downstream per-sub-block reduce has
-// something to pipeline against. Layout-safe at OUT_SUBBLOCK_H_GU == 1 — SubblockMajor walks
-// in0_subblock outer / in1_subblock inner, so the tile order stays m*HN_PAD + n either way.
-constexpr uint32_t HN_BLOCK = get_compile_time_arg_val(12);
-// PERF 3 — the hidden-axis chunk the gate/up weight stream is published and consumed in. 1 restores
-// the single whole-block matmul per matrix. Host-guaranteed to divide HN_PAD, to be a multiple of
-// HN_BLOCK, and to leave every column group at least one real column per chunk.
+MOE_DECLARE_CT_ENUM(MOE_COMPUTE_CT_ARGS);
+
+constexpr uint32_t M_BLOCK = CT(M_BLOCK);
+constexpr uint32_t KR_PAD = CT(KR_PAD);
+constexpr uint32_t HN_PAD = CT(HN_PAD);
+constexpr uint32_t EC_MAX = CT(EC_MAX);  // phase-2 N stride (uniform CB increment)
+constexpr uint32_t HGROUPS = CT(HGROUPS);
+constexpr uint32_t KGROUPS = CT(KGROUPS);  // column height == contributor count
+constexpr uint32_t HID_T = CT(HID_T);
+constexpr uint32_t INPUT_FORMAT = CT(INPUT_FORMAT);
+constexpr uint32_t OUT_SUBBLOCK_H_GU = CT(OUT_SUBBLOCK_H_GU);
+// `down` output sub-block HEIGHT. Separate from the gate/up height because down's width is `ec`
+// (2-3) against a DEST budget of 8, while gate/up's is already HN_PAD. Host-derived as the largest
+// power of two that fits; taken as min(.., m_eff) below so it never constrains the runtime shrink.
+constexpr uint32_t OUT_SUBBLOCK_H_DN = CT(OUT_SUBBLOCK_H_DN);
+constexpr uint32_t MAILBOX_MAGIC = CT(MAILBOX_MAGIC);
+// Smallest legal `m_eff` (= OUT_SUBBLOCK_H_GU rounded up to a power of two, so `m_eff /
+// OUT_SUBBLOCK_H_GU` is always exact). One host definition, identical in all three kernels.
+constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
+// gate/up in1 sub-block WIDTH in hidden tiles — a sub-division of one chunk.
+constexpr uint32_t HN_BLOCK = CT(HN_BLOCK);
+// The hidden-axis chunk the gate/up weight stream is published and consumed in, so the matmul on
+// chunk c overlaps the DRAM read of c+1. Host-guaranteed to divide HN_PAD.
+constexpr uint32_t GU_CHUNKS = CT(GU_CHUNKS);
 constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
-// PERF 1 — eltwise DEST-window block size. Tiles per `tile_regs_acquire/commit/wait/release` cycle
-// in every eltwise pass below. See ELTWISE_BLK in the program descriptor for the mechanism and the
-// measurement; 1 reproduces the pre-Perf-1 per-tile shape byte-for-byte.
-constexpr uint32_t ELTWISE_BLK = get_compile_time_arg_val(13);
+// Eltwise DEST-window block size: tiles per acquire/commit/wait/release cycle.
+constexpr uint32_t ELTWISE_BLK = CT(ELTWISE_BLK);
+constexpr uint32_t DEST_LIMIT = CT(DEST_LIMIT);
+constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in tiles
 
-constexpr uint32_t cb_x_in = get_compile_time_arg_val(14);
-constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(15);
-constexpr uint32_t cb_x_stage = get_compile_time_arg_val(16);
-constexpr uint32_t cb_w_gate = get_compile_time_arg_val(17);
-constexpr uint32_t cb_w_up = get_compile_time_arg_val(18);
-constexpr uint32_t cb_w_down = get_compile_time_arg_val(19);
-constexpr uint32_t cb_gate_acc = get_compile_time_arg_val(20);
-constexpr uint32_t cb_up_acc = get_compile_time_arg_val(21);
-constexpr uint32_t cb_gate_send = get_compile_time_arg_val(22);
-constexpr uint32_t cb_up_send = get_compile_time_arg_val(23);
-constexpr uint32_t cb_gate_silu = get_compile_time_arg_val(24);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(25);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(26);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(27);
-constexpr uint32_t cb_h = get_compile_time_arg_val(28);
-constexpr uint32_t cb_out_interm = get_compile_time_arg_val(29);
-constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(30);
-
-// PERF 2 — REDUCE-SCATTER WITH A DISTRIBUTED EPILOGUE (MOE_SWIGLU_REDUCE=scatter). 1 selects the
-// scatter path below; 0 reproduces the binary reduce tree byte-for-byte. See the knob in the program
-// descriptor for the measurement (2.80x isolated, ~85 % of it the epilogue) and the predicate.
-constexpr uint32_t SCATTER = get_compile_time_arg_val(31);
-constexpr uint32_t KGROUPS = get_compile_time_arg_val(32);       // column height == contributor count
-constexpr uint32_t GATHER_PAGES = get_compile_time_arg_val(33);  // the WHOLE landing CB, in tiles
-constexpr uint32_t DEST_LIMIT = get_compile_time_arg_val(34);    // DEST_AUTO_LIMIT_TILES
-constexpr uint32_t cb_gather_gate = get_compile_time_arg_val(35);
-constexpr uint32_t cb_gather_up = get_compile_time_arg_val(36);
-constexpr uint32_t cb_slice_gate = get_compile_time_arg_val(37);
-constexpr uint32_t cb_slice_up = get_compile_time_arg_val(38);
-constexpr uint32_t cb_h_slice = get_compile_time_arg_val(39);
+constexpr uint32_t cb_x_in = CT(CB_X_IN);
+constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
+constexpr uint32_t cb_x_stage = CT(CB_X_STAGE);
+constexpr uint32_t cb_w_gate = CT(CB_W_GATE);
+constexpr uint32_t cb_w_up = CT(CB_W_UP);
+constexpr uint32_t cb_w_down = CT(CB_W_DOWN);
+constexpr uint32_t cb_gate_acc = CT(CB_GATE_ACC);
+constexpr uint32_t cb_up_acc = CT(CB_UP_ACC);
+constexpr uint32_t cb_gate_silu = CT(CB_GATE_SILU);
+constexpr uint32_t cb_h_local = CT(CB_H_LOCAL);
+constexpr uint32_t cb_h = CT(CB_H);
+constexpr uint32_t cb_out_interm = CT(CB_OUT_INTERM);
+constexpr uint32_t cb_out_tiles = CT(CB_OUT_TILES);
+constexpr uint32_t cb_gather_gate = CT(CB_GATHER_GATE);
+constexpr uint32_t cb_gather_up = CT(CB_GATHER_UP);
+constexpr uint32_t cb_slice_gate = CT(CB_SLICE_GATE);
+constexpr uint32_t cb_slice_up = CT(CB_SLICE_UP);
+constexpr uint32_t cb_h_slice = CT(CB_H_SLICE);
 
 constexpr uint32_t TILE_H = 32;
 
@@ -252,10 +235,8 @@ void kernel_main() {
     const uint32_t kr = get_arg_val<uint32_t>(1);
     const uint32_t hn = get_arg_val<uint32_t>(2);
     const uint32_t ec = get_arg_val<uint32_t>(3);
-    const uint32_t is_root = get_arg_val<uint32_t>(4);
-    const uint32_t num_children = get_arg_val<uint32_t>(5);
-    const uint32_t my_col = get_arg_val<uint32_t>(6);  // grid column == this core's x-injection slot
-    const uint32_t my_row = get_arg_val<uint32_t>(7);  // row in the column == which scatter slice I own
+    const uint32_t my_col = get_arg_val<uint32_t>(4);  // grid column == this core's x-injection slot
+    const uint32_t my_row = get_arg_val<uint32_t>(5);  // row in the column == which scatter slice I own
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc);
     // SiLU rides the packer thread of the root's final reduce add; the helpers never issue this.
@@ -278,12 +259,9 @@ void kernel_main() {
     CircularBuffer wd_buf(cb_w_down);
     CircularBuffer gate_buf(cb_gate_acc);
     CircularBuffer up_buf(cb_up_acc);
-    CircularBuffer rg_buf(cb_reduce_gate_in);
-    CircularBuffer ru_buf(cb_reduce_up_in);
     CircularBuffer silu_buf(cb_gate_silu);
-    // PERF 2 — the scatter path's landing + slice buffers. A `CircularBuffer` only wraps the index
-    // (no L1 access at construction), so naming both paths' CBs unconditionally is free; the inactive
-    // path's CBs are allocated ONE page each host-side and never touched.
+    // The reduce-scatter's landing + slice buffers. A `CircularBuffer` only wraps the index — no
+    // L1 access at construction.
     CircularBuffer gg_buf(cb_gather_gate);
     CircularBuffer gu_buf(cb_gather_up);
     CircularBuffer sg_buf(cb_slice_gate);
@@ -291,10 +269,9 @@ void kernel_main() {
     CircularBuffer out_interm_buf(cb_out_interm);
     CircularBuffer out_tiles_buf(cb_out_tiles);
 
-    // The reduce CBs are the ONE M-scaled pair that is always pushed WHOLE: the child unicasts to
-    // its own cb_reduce_*_in write pointer (+ its slot stride) as a proxy for the parent's, which
-    // only holds while every push wraps back to the CB base. Live tokens occupy the first
-    // m_eff*HN_PAD tiles of each slot; the reader pushes REDUCE_SLOTS slots per invite WAVE.
+    // One contributor's slot in the landing CBs. Always pushed WHOLE, which is what returns every
+    // core's write pointer to the CB base and lets a contributor use its OWN pointer as the
+    // destination address.
     constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;
 
     const uint32_t hn_last = HID_T - (HGROUPS - 1) * HN_PAD;
@@ -462,8 +439,7 @@ void kernel_main() {
         // every core and every RISC-V, which is what keeps the column's all-to-all deadlock-free.
         // 0 = an idle core: it still CONTRIBUTES its own partial (the dataflow kernels ship it), it
         // just owns no slice to reduce.
-        const uint32_t slice_tiles =
-            (SCATTER != 0) ? moe_fused_swiglu::slice_assigned(gu_block_tiles, KGROUPS, my_row) : 0;
+        const uint32_t slice_tiles = moe_fused_swiglu::slice_assigned(gu_block_tiles, KGROUPS, my_row);
 
         // ---- 3. cross-column reduce + SwiGLU ----
         {

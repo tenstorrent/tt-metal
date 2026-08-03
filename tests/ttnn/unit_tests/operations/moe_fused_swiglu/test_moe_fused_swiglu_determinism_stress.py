@@ -61,6 +61,7 @@ import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
 
+
 from .test_moe_fused_swiglu_determinism import (
     LOCAL_EXPERT_ID,
     _build,
@@ -74,6 +75,20 @@ from .test_moe_fused_swiglu_determinism import (
     resolved_knobs,
     written_rows,
 )
+
+
+#: The op's worker grid is a PARAMETER now, not an environment knob. `MOE_GRID=11x8` selects the
+#: 88-core configuration every graded number is quoted at; empty = the device's full grid. It is a
+#: harness variable, passed through as `core_grid=`, so the op itself stays env-free.
+def _core_grid():
+    g = os.environ.get("MOE_GRID", "").strip().lower()
+    if not g:
+        return None
+    x, y = g.split("x")
+    return (int(x), int(y))
+
+
+CORE_GRID = _core_grid()
 
 #: Total op dispatches across the whole interleave (NOT per shape).
 ITERS = int(os.environ.get("MOE_STRESS_ITERS", 5000))
@@ -150,7 +165,9 @@ class _Shape:
         self.window_start = 0
 
     def run(self, device):
-        out = moe_fused_swiglu(self.x, self.w[0], self.w[1], self.w[2], self.counts, self.idx, LOCAL_EXPERT_ID)
+        out = moe_fused_swiglu(
+            self.x, self.w[0], self.w[1], self.w[2], self.counts, self.idx, LOCAL_EXPERT_ID, core_grid=CORE_GRID
+        )
         assert list(out.shape) == [1, 1, self.capacity, self.emb]
         self.dispatches += 1
         if self.count == 0:
@@ -172,7 +189,9 @@ class _Shape:
 
     def run_discard(self, device):
         """A dispatch whose output is thrown away — warmup only, never compared."""
-        out = moe_fused_swiglu(self.x, self.w[0], self.w[1], self.w[2], self.counts, self.idx, LOCAL_EXPERT_ID)
+        out = moe_fused_swiglu(
+            self.x, self.w[0], self.w[1], self.w[2], self.counts, self.idx, LOCAL_EXPERT_ID, core_grid=CORE_GRID
+        )
         self.dispatches += 1
         ttnn.deallocate(out)
 

@@ -9,6 +9,8 @@ from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu import (
     default_compute_kernel_config,
     moe_fused_swiglu,
     validate,
+    weight_memory_configs,
+    worker_grid,
 )
 
 __all__ = [
@@ -19,4 +21,6 @@ __all__ = [
     "default_compute_kernel_config",
     "moe_fused_swiglu",
     "validate",
+    "weight_memory_configs",
+    "worker_grid",
 ]

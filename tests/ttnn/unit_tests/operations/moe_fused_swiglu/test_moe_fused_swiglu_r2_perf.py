@@ -31,6 +31,20 @@ from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import
     weight_memory_configs,
 )
 
+
+#: The op's worker grid is a PARAMETER now, not an environment knob. `MOE_GRID=11x8` selects the
+#: 88-core configuration every graded number is quoted at; empty = the device's full grid. It is a
+#: harness variable, passed through as `core_grid=`, so the op itself stays env-free.
+def _core_grid():
+    g = os.environ.get("MOE_GRID", "").strip().lower()
+    if not g:
+        return None
+    x, y = g.split("x")
+    return (int(x), int(y))
+
+
+CORE_GRID = _core_grid()
+
 TILE = 32
 HIDDEN = 2048
 BFP4_TILE = 576
@@ -65,7 +79,7 @@ WPLACE = os.environ.get("MOE_PERF_WPLACE", "nd_shard")
 
 def weight_configs(device, emb, hidden, wplace):
     if wplace == "nd_shard":
-        return weight_memory_configs(device, emb, hidden)
+        return weight_memory_configs(device, emb, hidden, core_grid=CORE_GRID)
     if wplace == "interleaved":
         return ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
     raise ValueError(f"unknown MOE_PERF_WPLACE {wplace!r}")
@@ -137,7 +151,7 @@ def _build(emb, capacity, count, input_format, device):
 def test_r2_perf(device, case):
     emb, capacity, count, input_format = case
     tt_x, tt_w, tt_counts, tt_idx = _build(emb, capacity, count, input_format, device)
-    out = moe_fused_swiglu(tt_x, tt_w[0], tt_w[1], tt_w[2], tt_counts, tt_idx, LOCAL_EXPERT_ID)
+    out = moe_fused_swiglu(tt_x, tt_w[0], tt_w[1], tt_w[2], tt_counts, tt_idx, LOCAL_EXPERT_ID, core_grid=CORE_GRID)
     assert list(out.shape) == [1, 1, capacity, emb]
     print(
         f"[r2perf] {input_format} emb={emb} cap={capacity} count={count} wplace={WPLACE} "

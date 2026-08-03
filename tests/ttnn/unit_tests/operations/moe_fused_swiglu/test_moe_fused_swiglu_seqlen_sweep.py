@@ -32,6 +32,20 @@ from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import
     weight_memory_configs,
 )
 
+
+#: The op's worker grid is a PARAMETER now, not an environment knob. `MOE_GRID=11x8` selects the
+#: 88-core configuration every graded number is quoted at; empty = the device's full grid. It is a
+#: harness variable, passed through as `core_grid=`, so the op itself stays env-free.
+def _core_grid():
+    g = os.environ.get("MOE_GRID", "").strip().lower()
+    if not g:
+        return None
+    x, y = g.split("x")
+    return (int(x), int(y))
+
+
+CORE_GRID = _core_grid()
+
 TILE = 32
 HIDDEN = 2048
 BFP4_TILE = 576
@@ -75,8 +89,8 @@ COUNTS = (
 #: `nd_shard_n_tiles` return 0 and the reader emit the uncoalesced one-request-per-tile weight stream;
 #: `nd_shard` = the DRAM ND shard `weight_memory_configs()` asks for, one K-row of a core's N slice per
 #: shard, so the same bytes arrive as one request per K-row. This is the CALLER's choice, not a knob:
-#: the op reads whatever width it is handed. The shard width depends on HGROUPS, so a run at a
-#: non-default `MOE_SWIGLU_GRID` builds different shards — set the grid in the env, not per call.
+#: the op reads whatever width it is handed. The shard width depends on HGROUPS, so `MOE_GRID` is
+#: threaded into BOTH the placement and the op call — a mismatch would silently build wrong shards.
 WPLACES = [p.strip() for p in os.environ.get("MOE_SWEEP_WPLACE", "interleaved").split(",") if p.strip()]
 
 #: Pass the TIGHT `input_m_tiles` bound (ceil(count/32)) rather than defaulting it to capacity//TILE.
@@ -133,7 +147,7 @@ def _build_static(emb, capacity, input_format, wplace, device):
     )
     del x
     if wplace == "nd_shard":
-        gate_up_mc, down_mc = weight_memory_configs(device, emb, HIDDEN)
+        gate_up_mc, down_mc = weight_memory_configs(device, emb, HIDDEN, core_grid=CORE_GRID)
     elif wplace == "interleaved":
         gate_up_mc = down_mc = ttnn.DRAM_MEMORY_CONFIG
     else:
@@ -182,7 +196,15 @@ def test_seqlen_sweep(device, input_format, wplace):
         # device-resident-count contract — and it is the only host-time handle on M the op offers.
         m_t = -(-count // TILE) if TIGHT_MT else None
         out = moe_fused_swiglu(
-            tt_x, tt_w[0], tt_w[1], tt_w[2], tt_counts[count], tt_idx, LOCAL_EXPERT_ID, input_m_tiles=m_t
+            tt_x,
+            tt_w[0],
+            tt_w[1],
+            tt_w[2],
+            tt_counts[count],
+            tt_idx,
+            LOCAL_EXPERT_ID,
+            input_m_tiles=m_t,
+            core_grid=CORE_GRID,
         )
         assert list(out.shape) == [1, 1, CAPACITY, EMB]
         ttnn.deallocate(out)
@@ -190,7 +212,7 @@ def test_seqlen_sweep(device, input_format, wplace):
             {
                 "format": input_format,
                 "wplace": wplace,
-                "grid": os.environ.get("MOE_SWIGLU_GRID", "") or "full",
+                "grid": os.environ.get("MOE_GRID", "") or "full",
                 "emb": EMB,
                 "capacity": CAPACITY,
                 "count": count,

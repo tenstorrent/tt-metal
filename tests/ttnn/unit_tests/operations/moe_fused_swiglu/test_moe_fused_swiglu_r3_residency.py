@@ -49,7 +49,7 @@ import torch
 import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
-from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu_program_descriptor as pd
+from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu_geometry as pd
 
 HIDDEN = 2048
 NUM_GLOBAL_EXPERTS, NUM_LOCAL_EXPERTS, LOCAL_EXPERT_ID, GLOBAL_EXPERT_ID = 256, 8, 3, 137
@@ -75,10 +75,10 @@ SHAPES = [
 RESIDENCY_OFF = [
     (
         "gate_up",
-        {"W_RESIDENT": 0, "DEPTH_X": 1},
+        {"W_RESIDENT": False, "DEPTH_X": 1},
         "re-read W_gate/W_up every M-block (DEPTH_W back to 2, which un-funds the resident-x slot)",
     ),
-    ("w_down", {"WD_RESIDENT": 0}, "re-read the phase-2 W_down K stream every M-block (depth_wd back to 5)"),
+    ("w_down", {"WD_RESIDENT": False}, "re-read the phase-2 W_down K stream every M-block (depth_wd back to 5)"),
 ]
 
 

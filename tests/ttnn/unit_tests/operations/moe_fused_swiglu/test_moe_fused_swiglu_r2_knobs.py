@@ -32,7 +32,7 @@ import torch
 import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
-from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu_program_descriptor as pd
+from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu_geometry as pd
 
 HIDDEN = 2048
 NUM_GLOBAL_EXPERTS, NUM_LOCAL_EXPERTS, LOCAL_EXPERT_ID, GLOBAL_EXPERT_ID = 256, 8, 3, 137
@@ -52,12 +52,10 @@ _FORMATS = {"bf16_rm": (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), "bfp8_tile": (ttn
 # That is a real finding about the budget, not a defect in either lever, so it is recorded here
 # rather than papered over: lever 1 is still fully exercised, just paired with the resident-x slot
 # turned back off. Whoever turns lever 1 for real has to make the same choice.
+# Levers 1 and 2 are GONE, not skipped. Lever 1 (REDUCE_SLOTS_CAP) was the reduce tree's
+# invite-wave depth and went with the tree; lever 2 (HN_BLOCK) sub-divided a gate/up weight chunk,
+# and the chunk width now IS the sub-block width. Neither has a knob left to turn.
 KNOB_SETTINGS = [
-    (
-        {"REDUCE_SLOTS_CAP": 2, "DEPTH_X": 1},
-        "lever 1: wave invites + per-child slot stride in the reduce tree (needs DEPTH_X=1 for L1)",
-    ),
-    ({"HN_BLOCK": 3}, "lever 2: 2 in1 sub-blocks, incl. the ragged column's narrowed last sub-block"),
     ({"OUT_SUBBLOCK_H_DN_MAX": 4}, "lever 3: `down` sub-block height 2 (emb 7168) / 4 (emb 6144)"),
     ({"WD_AHEAD": 2}, "the deferred read barrier's `wd_pending` carried across a round boundary"),
     ({"WD_AHEAD": 3}, "same, two blocks of prefetch depth"),

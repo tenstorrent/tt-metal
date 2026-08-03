@@ -27,7 +27,7 @@ for SPEC in "$@"; do
     LOG="$OUT/log_$LABEL.log"
     MAN="$OUT/man_$LABEL.json"
     # shellcheck disable=SC2086
-    env $ENVS MOE_SWIGLU_GRID=11x8 MOE_SWEEP_COUNTS="$COUNTS" MOE_SWEEP_FORMATS="$FMT" \
+    env $ENVS MOE_GRID=11x8 MOE_SWEEP_COUNTS="$COUNTS" MOE_SWEEP_FORMATS="$FMT" \
         MOE_SWEEP_WPLACE=nd_shard MOE_SWEEP_REPS="$REPS" MOE_SWEEP_WARMUP=2 \
         MOE_SWEEP_EMB=7168 MOE_SWEEP_CAPACITY=5120 MOE_SWEEP_MANIFEST="$MAN" \
         timeout 1200 scripts/run_safe_pytest.sh --profile --no-precompile "$TEST" >"$LOG" 2>&1
