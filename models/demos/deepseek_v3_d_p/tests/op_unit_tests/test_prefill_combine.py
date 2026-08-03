@@ -28,16 +28,16 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import MESH_CONFIG_SPECS, mesh_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
-    create_fabric_router_config,
     extract_mesh_config,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
+    get_max_payload_size,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -66,18 +66,55 @@ def run_combine(
     use_fp8_output,
     is_ci_env,
     is_ci_v2_env,
-    combine_impl="production",
+    is_perf_shape,
+    combine_impl="cmb1",
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
     num_experts_per_tok) shape axis.
 
-    `combine_impl` picks which implementation moves the data: "production" for
-    ttnn.experimental.deepseek_prefill.combine, "fabric2d" for combine_fabric2d. Everything else —
+    `combine_impl` picks which implementation moves the data: "cmb1" for
+    ttnn.experimental.deepseek_prefill.combine, "cmb2" for combine_fabric2d. Everything else —
     input generation, the dispatch that produces the buffer and metadata, the torch reference and the
-    validation — is shared, which is the point: the two are then measured on the same work."""
+    validation — is shared, which is the point: the two are then measured on the same work.
+
+    Two booleans that used to be one. `is_perf_shape` says WHICH CONFIGURATION this is — the large
+    seq / few-experts / low-top-k shape meant for timing, as opposed to the small correctness shape.
+    `run_pcc_check` says whether to CHECK THE OUTPUT. They were the same flag until phase 11, which
+    made "check the output at the perf shape" inexpressible — and that was exactly the combination
+    the 32-chip box needed, since the correctness shape's num_routed_experts // 16 gives zero experts
+    per chip there. The skips below are properties of the configuration, so they key off
+    `is_perf_shape` and are unaffected by turning the check on."""
     num_devices = mesh_device.get_num_devices()
-    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
+
+    # What cmb2 does not cover. Mesh-level limitations are handled by skip marks on the
+    # parametrization (see _cmb2_unsupported_reason); these two are on other axes, so they can only
+    # be decided here. They come FIRST so that a case cmb2 cannot serve is reported with cmb2's own
+    # reason — the shared skips below would otherwise mask it with something true but uninformative
+    # ("fp8 perf test doesn't run PCC" says nothing about why THIS op declined).
+    #
+    # Both limitations have the same root: cmb2 writes one token per page straight out of the fabric
+    # packet and has no untilize stage. TILE breaks one-page-one-token addressing, and fp8 is
+    # produced by the packer DURING untilize, so there is nowhere for it to happen.
+    if combine_impl == "cmb2":
+        if dispatched_buffer_layout != ttnn.ROW_MAJOR_LAYOUT:
+            pytest.skip("combine_fabric2d writes one token per page; TILE layout is not supported")
+        if use_fp8_output:
+            pytest.skip("combine_fabric2d has no untilize stage, which is where fp8 output is produced")
+
+        # The op relies on the fabric carrying token + routing tail in ONE packet, which the cmb2
+        # mesh entries request via device_params. Assert the device actually came up that way rather
+        # than trusting the config went through — a silently-default payload would not fail here, it
+        # would fail much later and much less legibly.
+        fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+        want_payload = emb_dim * 2 + CMB2_ROUTING_TAIL_BYTES
+        assert fabric_payload >= want_payload, (
+            f"fabric max payload is {fabric_payload} B but combine_fabric2d needs {want_payload} "
+            f"({emb_dim * 2} token + {CMB2_ROUTING_TAIL_BYTES} routing tail)"
+        )
+        logger.info(f"combine_fabric2d fabric max payload {fabric_payload} B (needs {want_payload})")
+
+    if num_devices >= 8 and is_perf_shape and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
 
     # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
@@ -86,7 +123,7 @@ def run_combine(
     if use_fp8_output and use_predictable_data:
         pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
 
-    if use_fp8_output and not run_pcc_check:
+    if use_fp8_output and is_perf_shape:
         pytest.skip("fp8 perf test doesn't run PCC")
 
     # The fp8 output path is only wired up in combine_program_factory.cpp inside the
@@ -102,7 +139,7 @@ def run_combine(
         pytest.skip("fp8 combine output requires Blackhole hardware")
 
     # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
-    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+    if (is_ci_env or is_ci_v2_env) and is_perf_shape and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("ROW_MAJOR perf coverage does not run in CI")
 
     # 1-link linear/ring coverage is redundant on BH in CI. `1 in shape` selects the 1D
@@ -111,8 +148,6 @@ def run_combine(
         pytest.skip("1-link linear/ring coverage does not run on BH in CI")
 
     torch.manual_seed(42)
-
-    num_devices = mesh_device.get_num_devices()
 
     # Log fabric config
     logger.debug(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
@@ -147,6 +182,17 @@ def run_combine(
     logger.debug(
         f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
     )
+
+    # More chips than experts: there is nothing for some chips to host, and the expert->chip mapping
+    # in create_dispatch_table divides by experts_per_chip. Without this the run dies with a bare
+    # ZeroDivisionError deep in init_helpers, which is how the 8x4 hole (correctness shape asks for
+    # num_routed_experts // 16 = 16 experts on 32 chips) stayed invisible for so long. The shape is
+    # genuinely unrunnable here, so say so.
+    if experts_per_chip == 0:
+        pytest.skip(
+            f"{num_routed_experts} experts over {num_devices} chips gives 0 experts/chip; "
+            f"this shape needs num_routed_experts >= num_devices"
+        )
 
     # Step 1: Generate initial inputs using torch
     # For 2D mesh, generate different weights per EP rank
@@ -269,7 +315,7 @@ def run_combine(
     # additionally takes expert_offsets, which says where each ORIGIN chip's run starts inside an expert's
     # region. Production rediscovers that per token from the metadata, so it does not need it — see the
     # phase-10 plan for why we do.
-    if combine_impl == "fabric2d":
+    if combine_impl == "cmb2":
         # REPLICATED along the dispatch-group axis, unlike every other EP tensor here: dim 1 is indexed by
         # the token's ORIGIN chip, and a chip needs every origin's boundaries for the experts it hosts, not
         # just its own row. Sharding it the usual way would hand each chip the wrong slice.
@@ -323,7 +369,7 @@ def run_combine(
         )
 
     ttnn.synchronize_device(mesh_device)
-    if combine_impl == "fabric2d":
+    if combine_impl == "cmb2":
         # Bandwidth from the op's own producer telemetry — no profiler run needed. Written to a file rather
         # than the console: there are 128 producer rows, and a console summary is only a lossy copy.
         #
@@ -338,7 +384,7 @@ def run_combine(
         _dump_combine_fabric2d_bwinfo(
             mesh_device,
             num_links,
-            axis=CMBF2D_AXIS,
+            axis=sp_axis,
             expected_workers=num_devices * 2 * num_links,
             min_payload_tokens=token_hops,
             token_size_bytes=emb_dim * 2,
@@ -414,10 +460,15 @@ def run_combine(
 # at several traffic scales; the defaults are the checked-in shape.
 CMB_PERF_SEQ = int(os.environ.get("CMB_PERF_SEQ", "640"))
 CMB_PERF_CAP = int(os.environ.get("CMB_PERF_CAP", "8"))
-# The perf shape ships with run_pcc_check=False, and it is the only shape that fits an 8x4 mesh (the pcc
-# shape's num_routed_experts // 16 gives experts_per_chip = 0 there). So on this hardware correctness has to
-# be switched on deliberately. Run it at a small CMB_PERF_SEQ: the torch reference walks every token.
-CMB_PERF_PCC = int(os.environ.get("CMB_PERF_PCC", "0"))
+# Whether the perf CONFIGURATION checks its output. Defaults ON: the perf shape is the only one that fits an
+# 8x4 mesh (the correctness shape's num_routed_experts // 16 gives experts_per_chip = 0 there), so with it off
+# the production op's output is never checked on a full galaxy at all — which is how a phase-10 alignment bug
+# survived behind a healthy-looking bandwidth number. Set CMB_PERF_PCC=0 to opt out when timing the op.
+#
+# The check itself is cheap next to what the test already does: validate_combine_output is ~69 us/slot
+# (0.7 s at ISL 640, ~2.8 s at 2560) and the torch reference it compares against is built unconditionally,
+# above the early return, whether or not anything looks at it.
+CMB_PERF_PCC = bool(int(os.environ.get("CMB_PERF_PCC", "1")))
 COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, False),
     ("glm_51", GLM51Config, True),
@@ -430,16 +481,24 @@ COMBINE_MODELS = [
 
 
 def combine_shape_params():
-    """Build the per-model (shape, run_pcc_check) parametrization. Non-baseline models carry the
-    extended_model marker on their params so they stay gated exactly as the separate tests were."""
+    """Build the per-model shape parametrization. Non-baseline models carry the extended_model
+    marker on their params so they stay gated exactly as the separate tests were.
+
+    Each param carries BOTH `run_pcc_check` (check the output?) and `is_perf_shape` (which
+    configuration is this?). They are separate because the perf configuration now checks its output
+    by default — see CMB_PERF_PCC. The ids are deliberately unchanged, including `perf_no_pcc`,
+    which now names a configuration rather than a promise about checking: renaming it would break
+    every CI `-k` filter that selects it, for no gain.
+    """
     params = []
     for name, config, extended in COMBINE_MODELS:
         marks = (pytest.mark.extended_model,) if extended else ()
         shapes = [
-            ("pcc", 128, config.NUM_ROUTED_EXPERTS // 16, 4, 4, True),
-            ("perf_no_pcc", CMB_PERF_SEQ, config.NUM_ROUTED_EXPERTS // 4, 2, CMB_PERF_CAP, False),
+            # shape_id, seq, num_experts, topk, capacity, is_perf_shape
+            ("pcc", 128, config.NUM_ROUTED_EXPERTS // 16, 4, 4, False),
+            ("perf_no_pcc", CMB_PERF_SEQ, config.NUM_ROUTED_EXPERTS // 4, 2, CMB_PERF_CAP, True),
         ]
-        for shape_id, seq, num_experts, topk, capacity, run_pcc in shapes:
+        for shape_id, seq, num_experts, topk, capacity, is_perf_shape in shapes:
             params.append(
                 pytest.param(
                     seq,
@@ -447,7 +506,8 @@ def combine_shape_params():
                     num_experts,
                     topk,
                     capacity,
-                    run_pcc,
+                    CMB_PERF_PCC if is_perf_shape else True,
+                    is_perf_shape,
                     marks=marks,
                     id=f"{name}-{shape_id}",
                 )
@@ -455,13 +515,93 @@ def combine_shape_params():
     return params
 
 
+# ---------------------------------------------------------------------------
+# The op flag: which implementation moves the data.
+#
+# It has to live on the MESH axis rather than being its own @parametrize, because the two
+# implementations need different fabric packet sizes and the packet size is a device-wide setting
+# consumed by the mesh_device fixture through device_params. Anything the fixture reads has to be
+# decided before the test body runs.
+#
+# cmb2 keeps the cmb1 id and appends `-cmb2`, so every test id that existed before this flag is
+# byte-for-byte unchanged and existing CI -k filters keep selecting exactly what they selected.
+# ---------------------------------------------------------------------------
+
+# Bytes cmb2 asks the fabric to carry per packet: a token PLUS the 64-byte routing tail it forwards
+# alongside. Derived, never a literal, because emb_dim is on a different parametrize axis than the
+# payload and so cannot inform it — one constant has to cover all seven models. The default payload
+# IS the largest model's token (emb 7168 x 2 = 14336 on Blackhole), so +64 covers every model and
+# stays under Blackhole's 15232 B ceiling ((16384 NoC max - 96 header) floored to Bfp8_b tiles,
+# erisc_datamover_builder.hpp:465-476) while staying 16-byte aligned as the fabric validator requires.
+# On Wormhole the default is 7168, so only emb <= 3552 would fit the tail — out of scope, noted here
+# so it is not rediscovered.
+CMB2_ROUTING_TAIL_BYTES = 64
+
+
+def _cmb2_unsupported_reason(spec):
+    """Why combine_fabric2d cannot run on this mesh config, or None if it can.
+
+    The op moves tokens around a RING on the dispatch axis (mesh dim 0), so it needs that axis
+    closed into a torus by the fabric, and needs at least 3 chips on it — below that "forward to the
+    neighbour" and "deliver to the destination" stop being distinguishable. The extent also has to be
+    even, because the two directions split the ring in half.
+    """
+    rows = spec.shape[0]
+    torus_fabrics = (ttnn.FabricConfig.FABRIC_2D_TORUS_Y, ttnn.FabricConfig.FABRIC_2D_TORUS_XY)
+    if spec.fabric not in torus_fabrics or spec.topo != ttnn.Topology.Ring:
+        return f"combine_fabric2d needs a torus on the dispatch axis; {spec.test_id} is not one"
+    if rows < 3 or rows % 2:
+        return f"combine_fabric2d needs an even dispatch axis of at least 3 chips; {spec.test_id} has {rows}"
+    return None
+
+
+def combine_impl_mesh_configs():
+    """MESH_CONFIG_SPECS crossed with the op flag: a cmb1 entry and a cmb2 twin for each."""
+    params = []
+    for spec in MESH_CONFIG_SPECS:
+        topo_mark = pytest.mark.requires_mesh_topology(mesh_shape=spec.shape, topology=spec.topo_marker)
+        params.append(
+            pytest.param(
+                spec.shape,
+                mesh_device_params(spec, get_max_payload_size()),
+                spec.nlinks,
+                spec.topo,
+                "cmb1",
+                marks=topo_mark,
+                id=spec.test_id,
+            )
+        )
+        # Emit the cmb2 twin even where the op cannot run, and skip it by MARK rather than omitting
+        # it. A skip is visible in the report — "our op does not run on 2x2" is a fact worth showing
+        # rather than an absence to be inferred — and a mark skips before the mesh_device fixture
+        # opens a device, so the visibility costs nothing.
+        unsupported = _cmb2_unsupported_reason(spec)
+        cmb2_marks = [topo_mark] if unsupported is None else [topo_mark, pytest.mark.skip(reason=unsupported)]
+        params.append(
+            pytest.param(
+                spec.shape,
+                mesh_device_params(spec, get_max_payload_size() + CMB2_ROUTING_TAIL_BYTES),
+                spec.nlinks,
+                spec.topo,
+                "cmb2",
+                marks=cmb2_marks,
+                id=f"{spec.test_id}-cmb2",
+            )
+        )
+    return params
+
+
+COMBINE_IMPL_MESH_CONFIGS = combine_impl_mesh_configs()
+
+
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, "
+    "run_pcc_check, is_perf_shape",
     combine_shape_params(),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    ALL_MESH_CONFIGS,
+    "mesh_device, device_params, num_links, topology, combine_impl",
+    COMBINE_IMPL_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
@@ -482,8 +622,10 @@ def test_ttnn_combine(
     topology,
     use_predictable_data,
     run_pcc_check,
+    is_perf_shape,
     dispatched_buffer_layout,
     use_fp8_output,
+    combine_impl,
     is_ci_env,
     is_ci_v2_env,
 ):
@@ -502,24 +644,21 @@ def test_ttnn_combine(
         use_fp8_output,
         is_ci_env,
         is_ci_v2_env,
+        is_perf_shape,
+        combine_impl=combine_impl,
     )
 
 
 # ---------------------------------------------------------------------------
-# CombineFabric2D — isolated fabric-transfer experiment (see cmb-f2d plan).
+# cmb2 (combine_fabric2d) tuning knobs and bandwidth telemetry.
 #
-# The test states what it wants moved as a list of explicit movement descriptors — (src, in_base_token,
-# dst, out_base_token) — hands them to the op along with an input region and a zeroed output region, and
-# afterwards walks the same list to check every movement landed. Nothing about HOW the op moves the data
-# appears here: no producer identity, no core count, no placement, no telemetry. The coupling that used
-# to be implicit (an assumed mapping from a neighbour's input region to this chip's output region) is now
-# exactly the descriptor list, written by the test and read by the op.
+# Everything below serves the cmb2 branch of run_combine. It is not a second test: since phase 11 both
+# implementations run through test_ttnn_combine on the same inputs, the same dispatch, the same torch
+# reference and the same validation, and differ only on the two axes recorded in the run_combine
+# docstring. What remains here is what production has no equivalent of — the op's own producer
+# telemetry, and the env knobs a sweep driver varies one point per pytest invocation.
 #
-# The one hardware assumption is that each device has two distinct neighbours along CMBF2D_AXIS, which is
-# how production boards are wired; cables per neighbour comes from the mesh config's num_links. On
-# differently wired hardware the op rejects the descriptor list rather than silently doing something else.
-#
-# Select the config with: -k 'fabric2d-torus-xy-8x4-2link'
+# Select cmb2 with: -k 'fabric2d-torus-xy-8x4-2link-cmb2'   (drop the suffix for the production op)
 # ---------------------------------------------------------------------------
 CMBF2D_BWINFO_PATH = "generated/cmbf2d/bwinfo.txt"
 
@@ -541,37 +680,12 @@ CMBF2D_ORDER = int(os.environ.get("CMBF2D_ORDER", "1"))
 # Depth of the reader->producer L1 ring, in tokens. Also sets the read batch (half the ring), i.e. how many
 # 14 kB DRAM reads the reader keeps in flight. 0 leaves the op's own default.
 CMBF2D_L1_SLOTS = int(os.environ.get("CMBF2D_L1_SLOTS", "0"))
-# Mesh axis whose neighbours the op talks to. Matches the op's `axis` argument.
-CMBF2D_AXIS = 0
 # Blackhole AICLK the bandwidth numbers assume. Telemetry gives cycle counts; turning those into GB/s
 # needs a clock, and a device running at a different frequency would silently rescale every result. So the
 # clock is ASSERTED rather than trusted: a mismatch fails the test, which is the loudest signal available
 # during development. (Candidate for demotion to a warning before check-in.)
 CMBF2D_EXPECTED_CLOCK_MHZ = 1350
 CMBF2D_CLOCK_TOLERANCE = 0.05
-# Bytes the op asks the fabric to carry per packet: the token PLUS the 64-byte routing tail phase 9 needs
-# to forward alongside it. 14336 + 64 = 14400 = 64 * 225, so a forwarding-buffer page stays DRAM-aligned,
-# and it is comfortably under Blackhole's 15232 B ceiling ((16384 NoC max - 96 header) floored to Bfp8_b
-# tiles, erisc_datamover_builder.hpp:465-476) and 16-byte aligned as the fabric validator requires.
-CMBF2D_PACKET_BYTES = 14336 + 64
-# Raising the fabric payload is a DEVICE-WIDE setting, so CombineFabric2D carries its own mesh config
-# rather than taking one from ALL_MESH_CONFIGS. The op only ever runs on this single config, and this way
-# a bigger packet cannot perturb any other test that shares that list. The id is unchanged, so
-# `-k fabric2d-torus-xy-8x4-2link` still selects it.
-CMBF2D_MESH_CONFIGS = [
-    pytest.param(
-        (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=CMBF2D_PACKET_BYTES),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
-        2,
-        ttnn.Topology.Ring,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-torus-xy-8x4-2link",
-    ),
-]
 
 
 def _cmbf2d_expected_token_hops(
@@ -808,72 +922,3 @@ def _dump_combine_fabric2d_bwinfo(
         f"{clock_mhz / CMBF2D_EXPECTED_CLOCK_MHZ if CMBF2D_EXPECTED_CLOCK_MHZ else 0.0:.3f}"
     )
     return rows, clock_mhz
-
-
-@pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
-    combine_shape_params(),
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    CMBF2D_MESH_CONFIGS,
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_predictable_data", [False], ids=["random"])
-@pytest.mark.parametrize("dispatched_buffer_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
-@pytest.mark.parametrize("use_fp8_output", [False], ids=["bf16_out"])
-def test_combine_fabric2d(
-    mesh_device,
-    device_params,
-    seq_len_per_chip,
-    emb_dim,
-    num_routed_experts,
-    num_experts_per_tok,
-    dispatch_buffer_capacity_factor,
-    num_links,
-    topology,
-    use_predictable_data,
-    run_pcc_check,
-    dispatched_buffer_layout,
-    use_fp8_output,
-    is_ci_env,
-    is_ci_v2_env,
-):
-    """combine_fabric2d on exactly the work test_ttnn_combine gives the production op — same inputs, same
-    dispatch, same torch reference, same validation, via the same run_combine body.
-
-    Two things differ, both deliberate and both device-level rather than test-level:
-      * the mesh config (CMBF2D_MESH_CONFIGS): this op needs the fabric to carry token + 64 B routing tail in
-        one packet, which is a DEVICE-WIDE setting, so it cannot share ALL_MESH_CONFIGS without perturbing
-        every other test there. Normalising the two onto one config is a later phase.
-      * the parameter matrix is narrowed to the one combination this op supports (ROW_MAJOR, bf16): fp8 and
-        TILE both need the untilize stage it does not have.
-    """
-    ttnn.visualize_mesh_device(mesh_device)
-    # The op relies on the fabric carrying token + 64 B routing tail in ONE packet. Assert the device came up
-    # that way rather than trusting the config went through.
-    fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
-    want_payload = emb_dim * 2 + 64
-    assert fabric_payload >= want_payload, (
-        f"fabric max payload is {fabric_payload} B but the op needs {want_payload} "
-        f"({emb_dim * 2} token + 64 routing tail)"
-    )
-    logger.info(f"combine_fabric2d fabric max payload {fabric_payload} B (needs {want_payload})")
-
-    run_combine(
-        mesh_device,
-        seq_len_per_chip,
-        emb_dim,
-        num_routed_experts,
-        num_experts_per_tok,
-        dispatch_buffer_capacity_factor,
-        num_links,
-        topology,
-        use_predictable_data,
-        run_pcc_check or CMB_PERF_PCC,
-        dispatched_buffer_layout,
-        use_fp8_output,
-        is_ci_env,
-        is_ci_v2_env,
-        combine_impl="fabric2d",
-    )
