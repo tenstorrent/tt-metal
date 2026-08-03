@@ -63,7 +63,7 @@ wave-enabled run, but only do that when the user explicitly asks for one.
 From the `tt-llk` root, run:
 
 ```bash
-python codegen/scripts/llk_debug.py --version
+python codegen/scripts/llk_wave_debug.py --version
 ```
 
 The launcher resolves `/proj_sw/user_dev/llk_code_gen` by default. Use
@@ -75,7 +75,7 @@ and continue ordinary log/source diagnosis. Waveform tooling is supplementary â€
 it must never block or change the outcome of the work that invoked it.
 
 `--version` proves only that the private entry point loads. Use
-`python codegen/scripts/llk_debug.py --help` for the current subcommand list
+`python codegen/scripts/llk_wave_debug.py --help` for the current subcommand list
 rather than assuming the set documented here is complete.
 
 ### 2. Run the diagnosis
@@ -83,7 +83,7 @@ rather than assuming the set documented here is complete.
 Write output to a private Weka directory:
 
 ```bash
-python codegen/scripts/llk_debug.py diagnose \
+python codegen/scripts/llk_wave_debug.py diagnose \
   --failure-kind "$FAILURE_KIND" \
   --output-dir "/proj_sw/user_dev/llk_wave_debug_runs/${CASE_NAME}-$(date -u +%Y%m%dT%H%M%SZ)" \
   "$FSDB"

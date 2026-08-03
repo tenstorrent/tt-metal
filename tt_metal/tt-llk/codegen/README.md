@@ -33,7 +33,7 @@ The MCP server is pre-configured in `.mcp.json`.
 ### Deterministic waveform debugging
 
 Runtime failures can be inspected without putting FSDB mechanics into an agent
-prompt. `codegen/scripts/llk_debug.py` is a thin launcher for the implementation
+prompt. `codegen/scripts/llk_wave_debug.py` is a thin launcher for the implementation
 in the private `llk_code_gen` checkout on Weka. RTL paths, architecture profiles,
 detectors, detailed examples, and FSDB-derived artifacts remain private.
 
@@ -45,7 +45,7 @@ The launcher uses `/proj_sw/user_dev/llk_code_gen` by default. Set
 
 ```bash
 LLK_CODEGEN_PRIVATE_ROOT=/path/to/llk_code_gen \
-python codegen/scripts/llk_debug.py --help
+python codegen/scripts/llk_wave_debug.py --help
 ```
 
 For interactive Claude Code use, invoke
