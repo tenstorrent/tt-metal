@@ -182,7 +182,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
 
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
-                     "rmsnorm_pre_allgather_metal2.cpp"
+                     "rmsnorm_pre_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
                      "layernorm_pre_allgather.cpp";
 
