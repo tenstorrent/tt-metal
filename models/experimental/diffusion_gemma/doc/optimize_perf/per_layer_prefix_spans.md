@@ -22,7 +22,7 @@ delta stays attributable.
 `reference/attention_mask.py:11-17` (docstring), `:78-81` (`enforce_sliding_window`), `:158-163`
 (`build_canvas_denoise_mask`), and `tt/denoise_forward.py:153-154`
 (`_sliding_layer_needs_denoise_mask`, whose correct threshold is simply `P >= 1024`).
-`tests/test_real_transformers_parity.py`, which imported the staircase in the first place, now
+`tests/test_reference.py`, which imported the staircase in the first place, now
 asserts it *as encoder behaviour* and points at the decoder pinning test. Per-layer-TYPE reveal
 masks live in the adapter, all of the same `[1,1,C,p_max+C]` shape, so enabling the window changes
 mask CONTENT only and every captured trace stays shape-valid.
@@ -45,7 +45,7 @@ additionally records 130560 → 53760 (2.43x) at p_max 4096.
 
 ## Verified HF reference semantics
 
-Pinned CPU-only, no checkpoint, by `tests/test_hf_sliding_window_reference.py` (4 tests):
+Pinned CPU-only, no checkpoint, by `tests/test_reference.py` (4 tests):
 
 1. A sliding layer's cache retains exactly `sliding_window - 1` = **1023** committed tokens —
    `DynamicSlidingWindowLayer.update` keeps `full_key_states[:, :, -sliding_window + 1:, :]`
@@ -75,7 +75,7 @@ are always attended since `max |i - j| = 255 < 1024`.
 Two regimes: at `P <= 1023` the retention predicate is vacuous and the mask reduces to `r < P`,
 exactly today's reveal predicate (which is why a bitwise gate is legitimate there); at `P >= 1024`
 the mask becomes "drop column 0" independent of `P` and stops changing after the first block. Pinned
-by `tests/test_hf_sliding_window_reference.py::test_tt_window_span_formula_matches_hf_key_set` for
+by `tests/test_reference.py::test_tt_window_span_formula_matches_hf_key_set` for
 `P in {1, W-1, W, W+1, 2W, 5W}`.
 
 `lo` slides with `P` and a slice offset is baked into a captured trace, so the sliding-layer prefix
@@ -129,7 +129,7 @@ identity check therefore deallocated the borrowed KV cache and the next op died 
 
 Fixed by `_is_distinct_buffer` in `tt/diffusion_attention.py`, which compares `buffer_address()` and
 refuses to free when ownership cannot be proven (a leaked conversion is recoverable; freeing the
-model KV cache is not). Regression-tested CPU-only in `tests/test_prefix_buffer_ownership.py`.
+model KV cache is not). Regression-tested CPU-only in `tests/test_prefill.py`.
 **Consequence:** audit every new borrowed tensor for BUFFER owners, not just for explicit
 `deallocate` calls on the object — grep the consumer path for `to_memory_config`, `reshard`, `clone`
 and `slice`. The sibling full-span-`ttnn.slice` aliasing trap is in

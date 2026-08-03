@@ -81,14 +81,14 @@ the `chunked_prefill` driver, so it lives exactly one prefill.
 # env: see plan.md; worktree trap (TT_METAL_HOME vs PYTHONPATH): see ../README.md#device-hygiene
 DG_RUN_DEVICE=1 MESH_DEVICE=P150x4 TT_LOGGER_LEVEL=ERROR ARCH_NAME=blackhole \
 flock /tmp/dg-mesh.lock timeout 900 \
-  python -m pytest models/experimental/diffusion_gemma/tests/test_device_chunked_prefill.py -v -s
+  python -m pytest models/experimental/diffusion_gemma/tests/test_prefill.py -v -s
 # -> 2 passed in 10.94 s
 ```
 
 Exact log lines to look for:
 `[chunked-prefill] SLIDING last-token logits PCC (8x256 vs 1x2048, window 1024): 0.9999728` and
 `[chunked-prefill] last-token logits PCC (2x256 vs 1x512, window 1024): 0.9999766`.
-CPU structural gate: `pytest tests/test_chunked_prefill_math.py` → **5 passed**, device-free,
+CPU structural gate: `pytest tests/test_prefill.py` → **5 passed**, device-free,
 covering block math and page-table slicing against the tt_transformers contract. SHAs for the
 2x256 == 1x512 work: `6181cf1f62c` + `8f840f32ce3`. Device note: the mesh hit the recurring eth core
 29-25 reset timeout on the first device open, at `device.py` setup before any test ran; a fresh
@@ -112,8 +112,8 @@ Both bounds are independent of `prompt_len`, so prompts far past the stock singl
 ## Files, scope, open items
 
 - `tt/chunked_prefill.py` (attention routine + driver + sliding rolling-window buffer),
-  `tests/test_device_chunked_prefill.py` (the two device PCC gates),
-  `tests/test_chunked_prefill_math.py` (CPU structural tests).
+  `tests/test_prefill.py` (the two device PCC gates),
+  `tests/test_prefill.py` (CPU structural tests).
 - **Scope:** single-user `batch_size == 1` prototype; batched chunked prefill needs #47557 + #47488.
 - **PERF CAVEAT (open, quantified):** the square causal SDPA computes `hist_len`
   (`<= sliding_window`) **discarded** history-query rows per chunk — at `chunk_size=256`,

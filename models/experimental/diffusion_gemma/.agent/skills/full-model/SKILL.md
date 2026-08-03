@@ -120,8 +120,8 @@ opt-in candidates.
 Use:
 
 - `models/experimental/diffusion_gemma/tests/test_generate.py`;
-- `models/experimental/diffusion_gemma/tests/test_tt_generate.py`;
-- `models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py`;
+- `models/experimental/diffusion_gemma/tests/test_generate.py`;
+- `models/experimental/diffusion_gemma/tests/test_demo.py`;
 - `models/experimental/diffusion_gemma/demo/replay_hf_tt.py`;
 - the appropriate `doc/<stage>/` directory and `doc/context_contract.json`.
 

@@ -231,7 +231,7 @@ only the response *split* is off.
 | Suite | Result |
 | --- | --- |
 | `tests/test_lane_model_runner.py` + `tests/test_reasoning_parser_registration.py` (plugin, ported) | 15 passed |
-| DG `test_serving_block_contract` / `test_sampling_params` / `test_upfront_capture` / `test_served_gumbel_default` | 61 passed, 4 skipped (device-gated) |
+| DG `test_serving` / `test_sampling` / `test_trace` / `test_sampling` | 61 passed, 4 skipped (device-gated) |
 | `tests/test_dp_modes.py` (plugin, untouched by us) | collection error — Break 3 |
 
 The 12 `test_lane_input_batch` / `test_gemma4_tool_parser` failures are **pre-existing**:

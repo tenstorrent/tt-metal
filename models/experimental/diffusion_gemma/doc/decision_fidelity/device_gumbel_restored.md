@@ -68,10 +68,10 @@ Measured at production geometry (canvas 256, vocab 262144), with the kernel alre
 
 ### The blind spot, the metrics, and the upstream attribution
 
-The only gate on this path, `tests/test_device_canvas_sampling_dist.py`, **cannot see cross-position
+The only gate on this path, `tests/test_sampling.py`, **cannot see cross-position
 correlation**: it averages over a sample axis into per-position marginals, and correlation *between*
 positions leaves every marginal correct. Independence across positions was never tested until
-`tests/test_device_gumbel_position_correlation.py`.
+`tests/test_sampling.py`.
 
 Two metrics, both calibrated against a host torch-Gumbel IID control at the same shape:
 **exact-duplicate rows** (how many of the 256 position rows are byte-identical to another) and
@@ -210,8 +210,8 @@ shape of the histogram.
 (#51080) implements the retention as reveal-mask content per layer type and shipped OFF because it is
 decision-CHANGING above `prompt_len = 1024` and its gate was an agreement run against fp32 HF. The
 collapse histogram is the evidence that gate was waiting for. 95 host tests already covered the mask
-semantics (`test_denoise_sliding_window.py`, `test_hf_sliding_window_reference.py`,
-`test_attention_mask.py`, `test_paged_prefix_reveal_mask.py`).
+semantics (`test_denoise_forward.py`, `test_reference.py`,
+`test_attention.py`, `test_prefill.py`).
 
 ### Gate result (`gate/gpqa_sw_arm.sh`, `DG_DENOISE_SLIDING_WINDOW=1` as the ONLY variable)
 
@@ -362,9 +362,9 @@ the QB2 host CPU in bf16.
 DG_RUN_DEVICE=1 pytest tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py -s
 
 # canvas-position independence of the DG draw, and the production 262144 geometry
-DG_RUN_DEVICE=1 pytest models/experimental/diffusion_gemma/tests/test_device_gumbel_position_correlation.py -s
+DG_RUN_DEVICE=1 pytest models/experimental/diffusion_gemma/tests/test_sampling.py -s
 DG_RUN_DEVICE=1 DG_GUMBEL_CORR_FULL_VOCAB=1 pytest \
-  models/experimental/diffusion_gemma/tests/test_device_gumbel_position_correlation.py -s -k production_vocab
+  models/experimental/diffusion_gemma/tests/test_sampling.py -s -k production_vocab
 
 # which halt gate blocked, per block, on any traced run
 grep DG_TRACE_METRIC <log> | grep upfront_replay   # halt_blocking_gate, halt_entropy_*, halt_mismatch_*

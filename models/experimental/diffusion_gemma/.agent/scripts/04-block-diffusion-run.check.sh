@@ -12,8 +12,8 @@ DG="models/experimental/diffusion_gemma"
 bash "$HERE/check_no_shared_gemma4_edits.sh" || exit $?
 
 # 2) The pinned device-gated RUN regression test must exist.
-if [ ! -f "$DG/tests/test_device_text_demo_run.py" ]; then
-  echo "CRITICAL: missing $DG/tests/test_device_text_demo_run.py (the pinned RUN regression)" >&2
+if [ ! -f "$DG/tests/test_demo.py" ]; then
+  echo "CRITICAL: missing $DG/tests/test_demo.py (the pinned RUN regression)" >&2
   exit 2
 fi
 

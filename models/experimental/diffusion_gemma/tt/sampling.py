@@ -20,7 +20,7 @@ gemma4**, so they are net-new and built here on `ttnn.max/exp/log/div/mul/sum` (
 These let the harness diff entropy *values* and Gumbel-max *argmax agreement*
 device-vs-torch, including under **bfp8** where small-probability drift can flip
 accept/renoise (the whole reason the harness validates decisions, not logits).
-``tests/test_device_entropy_harness.py`` measures both on QB2.
+``tests/test_sampling.py`` measures both on QB2.
 
 Numerical note: entropy is computed as ``H = logsumexp(z) − Σ softmax(z)·z``.
 This is algebraically equivalent to ``−Σ p·log p`` while avoiding ``log(p)``
@@ -337,7 +337,7 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
 
     ``DG_VLLM_GUMBEL_MODE=host`` is the only IID arm today. See
     ``doc/decision_fidelity/gumbel_position_correlation.md`` and the gate
-    ``tests/test_device_gumbel_position_correlation.py``.
+    ``tests/test_sampling.py``.
     """
     seed = _validate_ttnn_rand_seed(seed)
     shape = _validate_gumbel_noise_shape(shape, require_vocab_axis=True)

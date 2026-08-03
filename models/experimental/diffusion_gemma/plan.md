@@ -113,7 +113,7 @@ Sk ∈ {8192, 32768, 33000, 65536, 131072, 262144} and head_dim ∈ {256, 512}; 
 both pass, RoPE caches reach 262144, and integrated tiny-model denoise attention passes at
 `P+C = 33280` and `262144` for both layer types. The work collapsed to re-keying the `prefill.py`
 `long_seq` guard against **K length** instead of Q `seq_len`. Repro (env: see §5):
-`DG_W2B_SDPA_SWEEP=full pytest models/experimental/diffusion_gemma/tests/test_device_long_sdpa_w2b.py -q`
+`DG_W2B_SDPA_SWEEP=full pytest models/experimental/diffusion_gemma/tests/test_attention.py -q`
 (29 passed). It was briefly wired into `tests/pipeline_reorg/blackhole_e2e_tests.yaml` as
 `bh-diffusion-gemma-w2b-full-sweep`, but that entry was **removed on 2026-07-30**: it is an
 out-of-folder change, it needed a `.github/time_budget.yaml` bump that never landed, and it could
@@ -310,7 +310,7 @@ CPU-only reference/parity tests need none of this: `pytest models/experimental/d
 ## 7. Status
 
 Foundation is closed: #47461's exit gate — causal backbone logits PCC vs HF **on the DiffusionGemma
-checkpoint**, measured on QB2 2026-06-24 by `tests/test_device_backbone_pcc.py -k 1x4` — is **0.877**
+checkpoint**, measured on QB2 2026-06-24 by `tests/test_model.py -k 1x4` — is **0.877**
 (5-tok) / **0.847** (24-tok) against the 0.83 baseline, i.e. ≈ the plain-gemma 0.866, so the
 fine-tuned weights add no extra error. The device pieces are validated — KV-phase machine (#47474), bidirectional masked SDPA at
 both ≤32768 and >32768 (#47462), decode-loop control flow (#47463), on-device canvas sampling

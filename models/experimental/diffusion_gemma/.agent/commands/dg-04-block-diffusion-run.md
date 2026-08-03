@@ -6,7 +6,7 @@ Read `models/experimental/diffusion_gemma/.agent/skills/diffusion-gemma/SKILL.md
 
 Goal completion requirements:
 - The RUN is reproducible on QB2: short-prompt and long-prompt (>768 tok, maskless denoise path) multi-block runs each commit ≥2 blocks and detokenize, exiting 0. Grep DG_TEXT_DEMO_SUCCESS / DG_TEXT_DEMO_FAILURE for outcome (the RUN-first denoise path emits expected TT_THROW fallback noise even on success).
-- The pinned device-gated regression `models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py` passes on QB2 for short- and long-prompt variants and asserts parsed `generated_tokens`, `blocks`, `prompt_len`, and `next_pos`.
+- The pinned device-gated regression `models/experimental/diffusion_gemma/tests/test_demo.py` passes on QB2 for short- and long-prompt variants and asserts parsed `generated_tokens`, `blocks`, `prompt_len`, and `next_pos`.
 - Per-block position/RoPE advancement (block N at prompt_len + N·256) and commit-append are exercised across ≥2 blocks. Commit-append uses DiffusionGemma-local code (`tt/commit_decode.py`), and the shared-directory gate passes with the actual `DG_BASE_REF`.
 - Any footprint work needed to fit the real denoise→commit block on the (1,4) mesh is DiffusionGemma-local and gated; the shared backbone is byte-for-byte unchanged. If a fit reduction is required, record the byte calculation / capacity probe and the largest feasible value in doc/context_contract.json.
 - The generation entry validates length/block/canvas/vocab/logits inputs; host-seeded noise + bounded host readback are acceptable for the functional run (production device RNG and intra-block device early-stop may remain deferred, recorded as such).

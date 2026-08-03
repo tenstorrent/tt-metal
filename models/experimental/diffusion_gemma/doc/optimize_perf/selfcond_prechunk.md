@@ -188,7 +188,7 @@ python -u models/experimental/diffusion_gemma/demo/serving_smoke.py --num-blocks
   --canvas-length 256 --max-denoising-steps 48 --max-seq-len 262144 --gumbel-mode chunked \
   --disable-eos-stop --local-files-only --metrics-json selfcond_prechunk_256k_chunked.json
 # device-free gate
-pytest -q models/experimental/diffusion_gemma/tests/test_tt_self_conditioning.py \
+pytest -q models/experimental/diffusion_gemma/tests/test_self_conditioning.py \
   models/experimental/diffusion_gemma/tests/test_denoise_forward.py
 ```
 

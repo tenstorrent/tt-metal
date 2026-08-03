@@ -11,7 +11,7 @@ in that doc's §6 table.
 **DORMANT as of 2026-07-30.** The T6 producer that would supply ``lse_a``/``lse_b`` was reverted
 out of ``ttnn/cpp/`` as an out-of-folder change with no live consumer (recover from
 ``2e18c599bd3``; see ``doc/optimize_perf/return_lse_kernel_plan.md``). This module is unaffected —
-it is pure ttnn, takes its LSE inputs as ordinary tensors, and ``tests/test_attention_merge.py``
+it is pure ttnn, takes its LSE inputs as ordinary tensors, and ``tests/test_attention.py``
 still exercises it against a torch reference. It simply has no on-device producer to pair with
 until that extension is re-landed upstream.
 

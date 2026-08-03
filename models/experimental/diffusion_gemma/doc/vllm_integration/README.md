@@ -367,7 +367,7 @@ python -m models.experimental.diffusion_gemma.demo.serving_smoke \
   --mesh P150x4 --num-layers 1 --max-seq-len 1024 --num-blocks 2 --canvas-length 256 \
   --max-denoising-steps 2 --gumbel-mode argmax --local-files-only \
   --metrics-json doc/vllm_integration/serving_smoke_reduced.json
-DG_RUN_DEVICE=1 python -m pytest models/experimental/diffusion_gemma/tests/test_serving_block_contract.py -q
+DG_RUN_DEVICE=1 python -m pytest models/experimental/diffusion_gemma/tests/test_serving.py -q
 ```
 
 `serving_smoke` baselines (non-256-aligned prompts, `(1,4)` mesh, canvas 256): reduced 1-layer /
@@ -378,7 +378,7 @@ step 11. Artifacts `serving_smoke_{reduced,fulldepth,fulldepth_visible}.json`.
 
 Live suite (QB2, 2026-07-03): 7 real OpenAI requests — 4 `/v1/completions` + 2
 `/v1/chat/completions` + the 2-block serve — with non-256-aligned prompt lengths 6, 5, 25, 31, 21,
-every one HTTP 200; `DG_RUN_DEVICE=1 pytest tests/test_serving_block_contract.py` → 7 passed. The live
+every one HTTP 200; `DG_RUN_DEVICE=1 pytest tests/test_serving.py` → 7 passed. The live
 2-block serve is `prefill block0 32→288 (35 steps, 178.2 s)` then `decode block=1 288→544 (48 steps,
 232.8 s, stop=False)`. Qualitative controls: the visible-dialogue RUN control output
 `你好！I'm doing well, thank you for asking. How can I help you today?` and a live chat request

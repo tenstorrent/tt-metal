@@ -165,7 +165,7 @@ Under `models/experimental/diffusion_gemma/`:
   the RUN-first denoise path emits expected `TT_THROW` fallback noise even on success),
   `demo/replay_hf_tt.py` (HF-vs-TT committed replay harness).
 - `models/experimental/diffusion_gemma/tests/` — device-gated tests (`DG_RUN_DEVICE=1`, checkpoint via `DG_CKPT`). RUN regression:
-  `models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py`. See that directory for KV-phase, bidirectional SDPA, canvas
+  `models/experimental/diffusion_gemma/tests/test_demo.py`. See that directory for KV-phase, bidirectional SDPA, canvas
   sampling, entropy, trajectory PCC, self-conditioning, memory-budget coverage.
 
 ## Issue map / stage ownership (parent #47452, label `DiffusionGemma`)

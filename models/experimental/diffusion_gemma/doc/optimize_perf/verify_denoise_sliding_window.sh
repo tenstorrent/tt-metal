@@ -28,7 +28,7 @@
 #
 # Asserting "bound blocks must differ" would conflate "the mask changed" with "the decisions
 # changed" — a mistake this script made on its first run. The mask change itself is verified
-# directly and host-side in tests/test_denoise_sliding_window.py.
+# directly and host-side in tests/test_denoise_forward.py.
 #
 # To prove the plumbing is live END-TO-END (rather than merely not crashing), set
 # DG_DENOISE_SLIDING_WINDOW_OVERRIDE to something small: at W=128 and P=1056 the window evicts
@@ -113,7 +113,7 @@ WINDOW = int(os.environ.get("DG_DENOISE_SLIDING_WINDOW_OVERRIDE", "") or WINDOW)
 # window evicts only P-(W-1) keys (33 of 1312 attended columns at P=1056, i.e. 2.5%), which is
 # a genuine fidelity difference yet far too small to reliably flip a 262144-way argmax. Asserting
 # "bound blocks must differ" conflates "the mask changed" with "the decisions changed"; the mask
-# change is verified directly (host-side) in tests/test_denoise_sliding_window.py.
+# change is verified directly (host-side) in tests/test_denoise_forward.py.
 ok = True
 bound_differ = []
 if len(sha_off) != len(sha_on):

@@ -8,7 +8,7 @@ description: Add a model to the models CI tier tests.
 Load `diffusion-gemma` first. The representative units are bidirectional SDPA,
 three-phase KV, denoise decisions, and canvas sampling—not autoregressive
 decoder kinds. The device RUN regression is
-`models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py`, and
+`models/experimental/diffusion_gemma/tests/test_demo.py`, and
 QB2 entries belong in `tests/pipeline_reorg/blackhole_e2e_tests.yaml`.
 Preserve checkpoint-optional skips and do not generate/read TTNN cache files in
 CI.

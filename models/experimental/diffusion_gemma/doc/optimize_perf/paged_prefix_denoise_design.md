@@ -62,7 +62,7 @@ implementation; the usable floor is **≥0.992 at production-48 steps** — do n
 ([refuted list](../REFUTED.md)).
 
 **Primitive status — one half survives, the other was reverted.** `tt/attention_merge.py ::
-merge_attention_partials` is DONE and still in the tree (device 3/3, `tests/test_attention_merge.py`),
+merge_attention_partials` is DONE and still in the tree (device 3/3, `tests/test_attention.py`),
 but never wired into `tt/diffusion_attention.py`. Its producer, the `return_lse` SDPA kernel extension,
 **was reverted on 2026-07-30**: it lived in `ttnn/cpp/` with no live consumer, so the no-shared-edits
 rule took it out. It did pass 6/6 on QB2 first (`return_lse=False` byte-identical, LSE ≈
@@ -127,7 +127,7 @@ over-retain on the non-up-front path and traces leak. It must be strictly flag-s
 single-sequence (`prefill_forward` rejects `num_reqs > 1`), so one persistent adapter is compatible;
 concurrent batched serving is #47488 / #47557, out of scope.
 
-**VERIFICATION DESIGN that shipped as `tests/test_upfront_capture.py`:** (1) reuse across prompts,
+**VERIFICATION DESIGN that shipped as `tests/test_trace.py`:** (1) reuse across prompts,
 asserting `capture_events == 1` while A vs B committed outputs DIFFER — proving the new prompt's
 KV/mask flow in rather than a stale replay; (2) bit-exact committed sha256 across up-front,
 per-request and eager; (3) a multi-request A→B→A coherence smoke guarding the "garbled while serving

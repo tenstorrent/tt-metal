@@ -543,7 +543,7 @@ def _norm_compute_kernel_config(device):
     each of the 88 per-core partial sums of squares is rounded to bf16 before the cross-core combine.
     Nothing in DiffusionGemma or gemma4 ever passed a compute_kernel_config to a norm, so every
     denoise norm ran that way. Measured on QB2 at the shipped shape ([1,1,256,2816] bf16), against an
-    fp64 reference over the SAME bf16 inputs (tests/test_device_norm_fullcanvas.py):
+    fp64 reference over the SAME bf16 inputs (tests/test_denoise_forward.py):
 
         bf16 accumulate   rel p50 3.99e-3   p99 1.31e-2   max 2.15e-2   rmse 5.43e-3
         fp32 accumulate   rel p50 1.42e-3   p99 4.38e-3   max 5.76e-3   rmse 1.94e-3   (2.8x better)

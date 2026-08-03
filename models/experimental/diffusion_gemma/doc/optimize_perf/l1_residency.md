@@ -35,7 +35,8 @@ the deleted `bench_norm_fullcanvas.py`, whose PCC column is discredited below; t
 
 ## The numerical delta, and the fp32-accumulation fix
 
-Measured on QB2 at the shipped shape `[1,1,256,2816]` bf16 by `tests/test_device_norm_fullcanvas.py`:
+Measured on QB2 at the shipped shape `[1,1,256,2816]` bf16 (harness deleted 2026-08-02 — it reported
+the deltas rather than gating them, so this table is the record):
 
 | arm | rows differing | elements | rel p99 | rel max | bf16 ULP max |
 |---|---|---|---|---|---|
@@ -45,7 +46,7 @@ Measured on QB2 at the shipped shape `[1,1,256,2816]` bf16 by `tests/test_device
 > **OPEN CONTRADICTION (unexplained):** the per-norm delta is stated as **~2e-6 / PCC 0.999998**
 > (`bench_norm_fullcanvas.py`, deleted 2026-07-30 — it computed PCC as an fp32 dot product over ~720K
 > elements and reported values ABOVE 1.0 in its own table, 1.000015 and 1.000050, so its resolution
-> floor is ~5e-5) and as **5.73 bf16 ULP / rel max 2.24e-2** (`tests/test_device_norm_fullcanvas.py`).
+> floor is ~5e-5) and as **5.73 bf16 ULP / rel max 2.24e-2** (the table above).
 > Four orders of magnitude apart; not explained.
 
 **ROOT CAUSE + FIX.** `ttnn.rms_norm` accepts a `compute_kernel_config` and nothing in DiffusionGemma or
@@ -65,8 +66,8 @@ ms** per 256-row norm (−2.3%, free).
 > fallback, and the flag had exactly one reader. Those three facts cannot all hold; not explained. The
 > most likely scope gap is the input distribution — every rate measurement used benign gaussian inputs
 > and real activations are heavy-tailed, where a sum of squares is outlier-dominated. The production
-> patch is parked at `/home/zni/dg_runs/fp32_norm_production.patch`; measurements in
-> `tests/test_device_norm_fullcanvas.py`.
+> patch is parked at `/home/zni/dg_runs/fp32_norm_production.patch`; the measurements are the table
+> under "The numerical delta" above (their harness was deleted 2026-08-02).
 
 **BUG FIXED 2026-07-30.** `_chunked_norm_forward` tested `with_scale is False` AFTER attempting the
 full-canvas path, so the MoE router's weightless norm was silently re-sharded from 8 cores/`block_w=11`
@@ -119,7 +120,8 @@ ranking metric is the traced Metal capture/replay path plus synchronized per-op 
 (`time.perf_counter` + `ttnn.synchronize_device`); evidence class `hardware-profiler-limited`. The four
 benches this pass named (`bench_moe_l1_residency.py`, `bench_norm_fullcanvas.py`, `bench_moe_l1_e2e.py`,
 `bench_lever_e2e.py`) are all absent from `doc/optimize_perf/`; `bench_norm_fullcanvas.py` was deleted
-2026-07-30 and replaced by `tests/test_device_norm_fullcanvas.py`. Committed mirror:
+2026-07-30, briefly re-expressed as device tests, and those were deleted 2026-08-02 in turn — they
+reported the deltas rather than gating them, so this doc is the record. Committed mirror:
 `l1_residency_summary.json`.
 
 **Historical traced baselines** for reproducing the harness: @48 17.86–18.13 t/s / 14.12–14.34 s block /

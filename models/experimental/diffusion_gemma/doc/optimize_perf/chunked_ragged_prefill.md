@@ -79,7 +79,7 @@ The single-chunk 4096 case is deliberately in the matrix to prove the fast path 
 no-op; 6144 and 8192 prove the tail and the multi-chunk seams. **ENVIRONMENT TRAP:** QB2 needed a
 `tt-smi -r` first — the prior vLLM server had left eth core 29-25 hung, the known recurring reset.
 
-Host coverage is `tests/test_prefill_moe.py`: gating window, coupled router+prefill dispatch
+Host coverage is `tests/test_moe.py`: gating window, coupled router+prefill dispatch
 (S=128/4096 ragged, 16384 dense when OFF, all multi-token chunked when ON), chunk-aligned slice
 boundaries including a 32-row tail, N-way concat on dim 2, single-chunk fast path, parent routing
 freed.

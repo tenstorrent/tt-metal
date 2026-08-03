@@ -15,7 +15,7 @@
   },
 
   "device_gated_test": {
-    "cmd": "DG_RUN_DEVICE=1 DG_CKPT=... pytest models/experimental/diffusion_gemma/tests/test_serving_block_contract.py -q",
+    "cmd": "DG_RUN_DEVICE=1 DG_CKPT=... pytest models/experimental/diffusion_gemma/tests/test_serving.py -q",
     "result": "7 passed in 9.09s",
     "device_case": "test_serving_smoke_emits_blocks_and_advances_position (8.38s): reduced-surface driver, prefill + 2x256-token blocks on device, non-256-aligned prompt, position advancement, per-block metrics — PASS"
   },

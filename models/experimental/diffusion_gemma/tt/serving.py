@@ -20,7 +20,7 @@ its ``prefill_forward`` maps to :meth:`BlockDiffusionServingSession.prefill` plu
 the first :meth:`decode_block`, and each ``decode_forward`` maps to one
 :meth:`decode_block`. Keeping the block-emission state machine here (with no vLLM
 import) means the reduced-surface serving driver
-(``tests/test_serving_block_contract.py`` / ``demo/serving_smoke.py``) can exercise
+(``tests/test_serving.py`` / ``demo/serving_smoke.py``) can exercise
 the exact contract on device wherever ``ttnn`` runs, without the container-gated
 vLLM stack.
 

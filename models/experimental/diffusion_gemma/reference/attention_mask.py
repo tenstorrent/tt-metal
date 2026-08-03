@@ -22,7 +22,7 @@ staircase — this module previously claimed and implemented that, and it was wr
 So sliding-layer denoise visibility = the ``sliding_window - 1`` most recent COMMITTED tokens,
 all-attend, plus the full canvas. It is a per-KEY predicate on the committed prefix, not a
 per-(query, key) distance predicate. Pinned by
-``tests/test_hf_sliding_window_reference.py``.
+``tests/test_reference.py``.
 
 :func:`build_canvas_denoise_mask` returns an all-attend mask by default for
 backwards compatibility and short-prompt tests. Pass ``layer_type="sliding_attention"``

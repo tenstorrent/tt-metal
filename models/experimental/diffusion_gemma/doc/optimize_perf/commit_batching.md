@@ -109,7 +109,7 @@ Upstream follow-ups worth filing: (a) `fill_cache` should `TT_FATAL` on the head
 instead of silently corrupting; (b) gemma4's long non-paged prompt prefill (`nkv=2, S ≥ 8192` at
 `S < max_seq`) can cross the same threshold.
 
-**Device proof that a traced fill is replay-safe** (`tests/test_device_fill_cache_in_trace.py`, 3
+**Device proof that a traced fill is replay-safe** (`tests/test_commit.py`, 3
 passed on P150x4): eager `fill_cache(update_idx=p_max)` writes only the tail with the prefix
 byte-identical; a traced fill + read replayed twice with different canvas contents has each replay
 observe ITS OWN write, prefix intact, replays differing, cache `buffer_address()` stable; and a
@@ -134,7 +134,7 @@ A full-span `ttnn.slice` (no_step, starts 0, ends max) short-circuits to an **AL
 (`slice.cpp` `finalize_into_preallocated(ret_adjustment(input_tensor))`), so deallocating the read
 result frees the **KV cache itself** when a committed block ends exactly at `max_seq`.
 `_read_cache_kv` now `ttnn.clone`s at that boundary, pinned by
-`tests/test_device_commit_kv_write.py::test_cache_read_at_max_seq_does_not_alias_the_cache`. The
+`tests/test_commit.py::test_cache_read_at_max_seq_does_not_alias_the_cache`. The
 sibling `to_memory_config` aliasing trap is documented in
 [per-layer prefix spans](per_layer_prefix_spans.md).
 
@@ -145,7 +145,7 @@ env: see [plan](../../plan.md).
 ```bash
 # Op-level, checkpoint-free, ~4 s — whole-cache bit-identity of the two write mechanisms,
 # plus a torch oracle and the head-boundary spill guard:
-DG_RUN_DEVICE=1 pytest models/experimental/diffusion_gemma/tests/test_device_commit_kv_write.py
+DG_RUN_DEVICE=1 pytest models/experimental/diffusion_gemma/tests/test_commit.py
 
 # Real backbone — batched commit with fill vs with per-position, whole-cache exact:
 DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it \

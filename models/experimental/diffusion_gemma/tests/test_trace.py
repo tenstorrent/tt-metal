@@ -1,7 +1,7 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lifecycle and device-gated coverage for model-startup denoise capture."""
+"""Contracts for the up-front-only denoise trace architecture and its capture lifecycle."""
 
 from __future__ import annotations
 
@@ -15,11 +15,8 @@ import torch
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt import serving
+from models.experimental.diffusion_gemma.tt import traced_denoise as TD
 from models.experimental.diffusion_gemma.tt.denoise_forward import DenoiseLogitsAdapter, MutablePrefixKVReader
-from models.experimental.diffusion_gemma.tt.traced_denoise import (
-    UPFRONT_DENOISE_STEPS,
-    upfront_capture_enabled,
-)
 
 DEVICE_GATED = os.environ.get("DG_RUN_DEVICE", "0") == "1"
 _DG_CKPT_INPUT = Path(
@@ -55,16 +52,352 @@ def _resolve_test_checkpoint(path: Path) -> Path:
 DG_CKPT = str(_resolve_test_checkpoint(_DG_CKPT_INPUT))
 
 
+# --- ttnn fakes for the CPU controller contracts -----------------------------
+
+
+class _FakeTensor:
+    def __init__(self, name, *, deallocate_error=None):
+        self.name = name
+        self.deallocated = False
+        self.deallocate_attempted = False
+        self.deallocate_error = deallocate_error
+
+    def deallocate(self, force):
+        assert force is True
+        assert not self.deallocated, self.name
+        self.deallocate_attempted = True
+        if self.deallocate_error is not None:
+            raise self.deallocate_error
+        self.deallocated = True
+
+
+class _FakeTtnn:
+    TILE_SIZE = 32
+    copies = []
+    executions = []
+    syncs = 0
+    trace_events = []
+    end_error = None
+    release_errors = set()
+
+    @classmethod
+    def reset(cls):
+        cls.copies = []
+        cls.executions = []
+        cls.syncs = 0
+        cls.trace_events = []
+        cls.end_error = None
+        cls.release_errors = set()
+
+    @staticmethod
+    def clone(tensor):
+        return _FakeTensor(f"clone({tensor.name})")
+
+    @classmethod
+    def copy(cls, source, destination):
+        cls.copies.append((source.name, destination.name))
+
+    @classmethod
+    def execute_trace(cls, mesh, trace_id, blocking=False):
+        assert mesh == "mesh"
+        assert blocking is False
+        cls.executions.append(trace_id)
+
+    @classmethod
+    def synchronize_device(cls, mesh):
+        assert mesh == "mesh"
+        cls.syncs += 1
+
+    @classmethod
+    def begin_trace_capture(cls, mesh, cq_id=0):
+        cls.trace_events.append(("begin", mesh, cq_id))
+        return "trace-id"
+
+    @classmethod
+    def end_trace_capture(cls, mesh, trace_id, cq_id=0):
+        cls.trace_events.append(("end", mesh, trace_id, cq_id))
+        if cls.end_error is not None:
+            raise cls.end_error
+
+    @classmethod
+    def release_trace(cls, mesh, trace_id):
+        cls.trace_events.append(("release", mesh, trace_id))
+        if trace_id in cls.release_errors:
+            raise RuntimeError(f"injected release failure {trace_id}")
+
+
+@pytest.fixture
+def fake_ttnn(monkeypatch):
+    """Swap ttnn out under traced_denoise only for the tests that assert on its calls.
+
+    Requested explicitly rather than autouse: the device tests at the bottom of this module
+    drive the real controller, and a module-wide patch would hand them the fake instead.
+    """
+    _FakeTtnn.reset()
+    monkeypatch.setattr(TD, "ttnn", _FakeTtnn)
+    return _FakeTtnn
+
+
+def _config(**overrides):
+    values = {
+        "canvas_length": 32,
+        "max_denoise_steps": TD.UPFRONT_DENOISE_STEPS,
+        "stable_steps_to_halt": 1,
+    }
+    values.update(overrides)
+    return DiffusionConfig(**values)
+
+
+def _controller():
+    return TD.UpfrontTracedDenoiseController("mesh", _config())
+
+
+# --- up-front capture flag ---------------------------------------------------
+
+
 @pytest.mark.parametrize(("value", "expected"), [("0", False), ("1", True), ("true", True), ("off", False)])
 def test_upfront_capture_flag_parses_truthy(monkeypatch, value, expected):
     monkeypatch.setenv("DG_UPFRONT_CAPTURE", value)
-    assert upfront_capture_enabled() is expected
+    assert TD.upfront_capture_enabled() is expected
 
 
 def test_upfront_capture_flag_defaults_on(monkeypatch):
     """Up-front capture is the shipped serving path; DG_UPFRONT_CAPTURE=0 is the opt-out."""
     monkeypatch.delenv("DG_UPFRONT_CAPTURE", raising=False)
-    assert upfront_capture_enabled() is True
+    assert TD.upfront_capture_enabled() is True
+
+
+# --- controller lifecycle ----------------------------------------------------
+
+
+def test_controller_accepts_only_released_48_step_schedule(fake_ttnn, expect_error):
+    controller = _controller()
+    assert controller.config.max_denoise_steps == 48
+
+    with expect_error(ValueError, match="released 48-step schedule"):
+        TD.UpfrontTracedDenoiseController("mesh", _config(max_denoise_steps=47))
+    with expect_error(ValueError, match="stable_steps_to_halt=1"):
+        TD.UpfrontTracedDenoiseController("mesh", _config(stable_steps_to_halt=2))
+
+
+def test_controller_release_is_best_effort_idempotent_and_clears_state(fake_ttnn):
+    controller = _controller()
+    _FakeTtnn.release_errors = {"trace-0"}
+    bad = _FakeTensor("bad-buffer", deallocate_error=RuntimeError("injected buffer failure"))
+    good = _FakeTensor("good-buffer")
+    controller.traces = ["trace-0", "trace-1"]
+    controller.canvas_buf = bad
+    controller.committed_buf = good
+    controller.gumbel_buf = _FakeTensor("gumbel")
+    controller.noise_buf = _FakeTensor("noise")
+    controller.captured = True
+
+    controller.release()
+    controller.release()
+
+    assert ("release", "mesh", "trace-0") in _FakeTtnn.trace_events
+    assert ("release", "mesh", "trace-1") in _FakeTtnn.trace_events
+    assert bad.deallocate_attempted
+    assert good.deallocated
+    assert controller.traces == []
+    assert controller.canvas_buf is None
+    assert controller.committed_buf is None
+    assert controller.gumbel_buf is None
+    assert controller.noise_buf is None
+    assert controller.captured is False
+    assert controller.released is True
+
+
+def test_upfront_block_reuses_the_single_controller_attribute(fake_ttnn, monkeypatch):
+    instances = []
+
+    class _Controller:
+        def __init__(self, mesh, config):
+            self.calls = []
+            instances.append(self)
+
+        def denoise_block(self, logits_fn, init_canvas, config, **kwargs):
+            self.calls.append((logits_fn, init_canvas, config, kwargs))
+            return len(self.calls)
+
+    monkeypatch.setattr(TD, "UpfrontTracedDenoiseController", _Controller)
+    logits_fn = SimpleNamespace(
+        tt_model=SimpleNamespace(mesh_device="mesh"),
+        _upfront_capture_phase=True,
+    )
+    config = _config()
+
+    assert (
+        TD.upfront_traced_denoise_block(
+            logits_fn,
+            "canvas-0",
+            config,
+            gumbel_noise_fn="gumbel",
+            noise_tokens_fn="noise",
+        )
+        == 1
+    )
+    assert (
+        TD.upfront_traced_denoise_block(
+            logits_fn,
+            "canvas-1",
+            config,
+            gumbel_noise_fn="gumbel",
+            noise_tokens_fn="noise",
+        )
+        == 2
+    )
+
+    assert len(instances) == 1
+    assert logits_fn._upfront_traced_denoise_controller is instances[0]
+
+
+def test_upfront_block_rejects_on_demand_capture_outside_startup(fake_ttnn, expect_error):
+    logits_fn = SimpleNamespace(tt_model=SimpleNamespace(mesh_device="mesh"))
+    with expect_error(RuntimeError, match="startup trace warmup"):
+        TD.upfront_traced_denoise_block(
+            logits_fn,
+            "canvas",
+            _config(),
+            gumbel_noise_fn="gumbel",
+            noise_tokens_fn="noise",
+        )
+
+
+# --- trace capture guard -----------------------------------------------------
+
+
+def test_trace_capture_guard_ends_and_releases_aborted_trace(fake_ttnn, expect_error):
+    with expect_error(RuntimeError, match="injected capture failure"):
+        with TD._trace_capture_guard("mesh", cq_id=0):
+            raise RuntimeError("injected capture failure")
+
+    assert _FakeTtnn.trace_events == [
+        ("begin", "mesh", 0),
+        ("end", "mesh", "trace-id", 0),
+        ("release", "mesh", "trace-id"),
+    ]
+
+
+def test_trace_capture_guard_releases_when_finalization_fails(fake_ttnn, expect_error):
+    _FakeTtnn.end_error = RuntimeError("injected end failure")
+
+    with expect_error(RuntimeError, match="injected end failure"):
+        with TD._trace_capture_guard("mesh", cq_id=0):
+            pass
+
+    assert _FakeTtnn.trace_events[-1] == ("release", "mesh", "trace-id")
+
+
+# --- materialized noise buffers ----------------------------------------------
+
+
+def test_materialized_gumbel_uses_stable_buffer_and_consumes_sources(fake_ttnn):
+    controller = _controller()
+    first = _FakeTensor("gumbel-0")
+    controller._initialize_gumbel(lambda step: first)
+
+    assert controller.gumbel_buf.name == "clone(gumbel-0)"
+    assert first.deallocated
+
+    fresh = _FakeTensor("gumbel-7")
+    assert controller._refresh_gumbel(lambda step: fresh, 7) is controller.gumbel_buf
+    assert _FakeTtnn.copies == [("gumbel-7", "clone(gumbel-0)")]
+    assert fresh.deallocated
+
+
+@pytest.mark.parametrize("value", [None, object()])
+def test_materialized_gumbel_rejects_non_tensor_descriptors(fake_ttnn, value, expect_error):
+    controller = _controller()
+    with expect_error(ValueError, match="requires materialized host noise"):
+        controller._initialize_gumbel(lambda step: value)
+
+
+def test_materialized_renoise_uses_one_stable_buffer_and_consumes_only_requested_steps(fake_ttnn):
+    controller = _controller()
+    first = _FakeTensor("noise-0")
+    controller._initialize_noise(lambda step: first)
+    assert controller.noise_buf.name == "clone(noise-0)"
+    assert first.deallocated
+
+    fresh = _FakeTensor("noise-7")
+    assert controller._refresh_noise(lambda step: fresh, 7) is controller.noise_buf
+    assert _FakeTtnn.copies == [("noise-7", "clone(noise-0)")]
+    assert fresh.deallocated
+
+
+# --- trace replay ------------------------------------------------------------
+
+
+def test_replay_reuses_reveal_buffers_and_stops_on_materialized_halt(fake_ttnn, monkeypatch):
+    controller = _controller()
+    controller.captured = True
+    controller.reveal_pmax = 1024
+    controller._last_prompt_len = 32
+    controller.traces = [f"trace-{step}" for step in range(48)]
+    controller.canvas_buf = _FakeTensor("canvas-buf")
+    controller.committed_buf = _FakeTensor("committed-buf")
+    controller.gumbel_buf = _FakeTensor("gumbel-buf")
+    controller.noise_buf = _FakeTensor("noise-buf")
+    controller.halt_bufs = SimpleNamespace()
+
+    events = []
+    monkeypatch.setattr(
+        controller,
+        "_refresh_noise",
+        lambda fn, step: events.append(("noise", step)),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_refresh_gumbel",
+        lambda fn, step: events.append(("gumbel", step)),
+    )
+    monkeypatch.setattr(TD, "_ids_to_torch", lambda tensor: torch.tensor([[19]], dtype=torch.long))
+    halt_values = iter([(1.0, 1.0), (0.1, 0.0)])
+    monkeypatch.setattr(TD, "read_halt_scalars", lambda buffers: next(halt_values))
+    monkeypatch.setattr(
+        TD,
+        "eval_halt",
+        lambda mean, mismatch, step, **kwargs: step == 1,
+    )
+
+    adapter = SimpleNamespace(
+        prompt_len=64,
+        q_rope_offset=64,
+        update_canvas_rope_buffers=lambda start: events.append(("rope", start)),
+        update_reveal_mask_buffer=lambda prompt: events.append(("reveal", prompt)),
+        reset_signal_buffer=lambda: events.append("signal-reset"),
+    )
+    init_canvas = _FakeTensor("init-canvas")
+
+    trajectory = controller.denoise_block(
+        adapter,
+        init_canvas,
+        controller.config,
+        gumbel_noise_fn=lambda step: _FakeTensor(f"unused-gumbel-{step}"),
+        noise_tokens_fn=lambda step: _FakeTensor(f"unused-noise-{step}"),
+    )
+
+    assert trajectory.num_steps == 2
+    assert trajectory.halted is True
+    assert torch.equal(trajectory.committed, torch.tensor([[19]]))
+    assert _FakeTtnn.executions == ["trace-0", "trace-1"]
+    assert controller.capture_events == 0
+    assert controller.traces_captured == 0
+    assert controller.adapter_rebinds == 1
+    assert ("reveal", 64) in events
+    assert [event for event in events if isinstance(event, tuple) and event[0] == "gumbel"] == [
+        ("gumbel", 0),
+        ("gumbel", 1),
+    ]
+    assert [event for event in events if isinstance(event, tuple) and event[0] == "noise"] == [
+        ("noise", 0),
+        ("noise", 1),
+    ]
+    assert init_canvas.deallocated
+
+
+# --- fixed reveal span -------------------------------------------------------
 
 
 def test_mutable_prefix_reader_request_reset_can_shrink_only_with_fixed_span(expect_error):
@@ -82,6 +415,31 @@ def test_mutable_prefix_reader_request_reset_can_shrink_only_with_fixed_span(exp
     reader.read_span = None
     with expect_error(RuntimeError, match="fixed reveal-mask read span"):
         reader.reset_prompt_len(32)
+
+
+def test_traced_denoise_reveal_pmax_default_registration(monkeypatch, expect_error):
+    """The registered derived span satisfies the controller without DG_DENOISE_REVEAL_PMAX."""
+    monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX", raising=False)
+    monkeypatch.setattr(TD, "_DEFAULT_REVEAL_PMAX", None, raising=False)
+    with expect_error(RuntimeError, match="explicit bounded DG_DENOISE_REVEAL_PMAX"):
+        TD._resolve_reveal_pmax(object())
+
+    TD.set_default_reveal_pmax(4096)
+    try:
+        assert TD._resolve_reveal_pmax(object()) == 4096
+        # An explicit env value still wins.
+        monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "1024")
+        assert TD._resolve_reveal_pmax(object()) == 1024
+        # Registered garbage is rejected by the same validation as the env value.
+        monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX")
+        TD.set_default_reveal_pmax(1000)
+        with expect_error(RuntimeError, match="positive 32-token multiple"):
+            TD._resolve_reveal_pmax(object())
+    finally:
+        TD.set_default_reveal_pmax(None)
+
+
+# --- adapter rebind ----------------------------------------------------------
 
 
 def test_adapter_rebind_refreshes_reader_mask_and_rope_in_place():
@@ -121,6 +479,9 @@ def test_adapter_rebind_rejects_adapter_without_persistent_reveal(expect_error):
     adapter.use_reveal_mask = False
     with expect_error(RuntimeError, match="reveal"):
         adapter.rebind_prompt(32)
+
+
+# --- serving session persistent adapter --------------------------------------
 
 
 def test_session_reset_detaches_borrowed_persistent_adapter_without_releasing_it():
@@ -177,6 +538,9 @@ def test_session_prefill_rebinds_injected_adapter_instead_of_building(monkeypatc
     assert session._logits_fn is adapter
 
 
+# --- vLLM startup contract ---------------------------------------------------
+
+
 def _set_valid_upfront_env(monkeypatch):
     monkeypatch.setenv("DG_UPFRONT_CAPTURE", "1")
     monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "1024")
@@ -193,7 +557,7 @@ def test_vllm_upfront_configuration_accepts_only_released_contract(monkeypatch, 
     assert (
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
-            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            max_denoise_steps=TD.UPFRONT_DENOISE_STEPS,
             gumbel_mode="device",
         )
         == 1024
@@ -253,7 +617,7 @@ def test_vllm_upfront_pmax_derives_from_max_model_len(monkeypatch, expect_error)
     assert (
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
-            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            max_denoise_steps=TD.UPFRONT_DENOISE_STEPS,
             gumbel_mode="device",
             max_model_len=4096,
         )
@@ -265,7 +629,7 @@ def test_vllm_upfront_pmax_derives_from_max_model_len(monkeypatch, expect_error)
     assert (
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
-            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            max_denoise_steps=TD.UPFRONT_DENOISE_STEPS,
             gumbel_mode="device",
             max_model_len=4090,
         )
@@ -276,7 +640,7 @@ def test_vllm_upfront_pmax_derives_from_max_model_len(monkeypatch, expect_error)
     assert (
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
-            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            max_denoise_steps=TD.UPFRONT_DENOISE_STEPS,
             gumbel_mode="device",
             max_model_len=4096,
         )
@@ -287,34 +651,13 @@ def test_vllm_upfront_pmax_derives_from_max_model_len(monkeypatch, expect_error)
     with expect_error(RuntimeError, match="cannot fit the startup prompt and one canvas"):
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
-            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            max_denoise_steps=TD.UPFRONT_DENOISE_STEPS,
             gumbel_mode="device",
             max_model_len=128,
         )
 
 
-def test_traced_denoise_reveal_pmax_default_registration(monkeypatch, expect_error):
-    """The registered derived span satisfies the controller without DG_DENOISE_REVEAL_PMAX."""
-    from models.experimental.diffusion_gemma.tt import traced_denoise as TD
-
-    monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX", raising=False)
-    monkeypatch.setattr(TD, "_DEFAULT_REVEAL_PMAX", None, raising=False)
-    with expect_error(RuntimeError, match="explicit bounded DG_DENOISE_REVEAL_PMAX"):
-        TD._resolve_reveal_pmax(object())
-
-    TD.set_default_reveal_pmax(4096)
-    try:
-        assert TD._resolve_reveal_pmax(object()) == 4096
-        # An explicit env value still wins.
-        monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "1024")
-        assert TD._resolve_reveal_pmax(object()) == 1024
-        # Registered garbage is rejected by the same validation as the env value.
-        monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX")
-        TD.set_default_reveal_pmax(1000)
-        with expect_error(RuntimeError, match="positive 32-token multiple"):
-            TD._resolve_reveal_pmax(object())
-    finally:
-        TD.set_default_reveal_pmax(None)
+# --- vLLM warmup phases ------------------------------------------------------
 
 
 def test_vllm_warmup_captures_48_traces_and_detaches_persistent_adapter(monkeypatch):
@@ -400,34 +743,34 @@ def test_vllm_upfront_warmup_defers_capture_until_trace_phase():
     assert wrapper._persistent_adapter is None
 
 
-def test_vllm_upfront_compile_phase_warms_configured_prefill_lengths(monkeypatch):
+def test_vllm_upfront_warmup_always_includes_one_tile(monkeypatch):
+    """32 is warmed whether or not it was listed.
+
+    The capture phase prefills a single BOS token, so the 32-aligned program is compiled on every
+    startup anyway. Omitting it from the whitelist is what let a 21-token request reach the
+    rejection path at all.
+    """
     pytest.importorskip("vllm")
+    import ttnn
+
     from models.experimental.diffusion_gemma.tt import generator_vllm
 
+    compiled = []
+    monkeypatch.setattr(generator_vllm, "prefill_prompt_tokens", lambda model, toks: compiled.append(toks.shape[1]))
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *_a, **_k: None)
+    monkeypatch.setenv("DG_UPFRONT_PREFILL_WARMUP_LENS", "128,160")
+
     wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
-    wrapper.data_parallel = 1
-    wrapper.model = [SimpleNamespace(mesh_device=None)]
     wrapper._upfront = True
-    wrapper._upfront_pmax = 1024
-    wrapper._persistent_adapter = None
     wrapper.canvas_length = 256
-    monkeypatch.setenv("DG_UPFRONT_PREFILL_WARMUP_LENS", "192,160,192")
-    warmed = []
-    monkeypatch.setattr(
-        generator_vllm,
-        "prefill_prompt_tokens",
-        lambda model, tokens: warmed.append(tuple(tokens.shape)),
-    )
-    monkeypatch.setattr(generator_vllm.ttnn, "synchronize_device", lambda mesh: None)
+    wrapper._upfront_pmax = 4096
+    wrapper.model = [SimpleNamespace(mesh_device=object())]
 
-    wrapper.warmup_model_prefill(None, False, True)
+    wrapper.warmup_model_prefill(None, enable_trace=False, can_sample_on_device=False)
 
-    assert wrapper._upfront_compile_phase_seen is True
-    # Duplicates collapse, and one tile is always present on top of whatever was configured -- the
-    # capture phase compiles a 32-aligned prefill anyway (see
-    # test_vllm_upfront_warmup_always_includes_one_tile).
-    assert wrapper._upfront_prefill_warmup_lens == frozenset({32, 160, 192})
-    assert warmed == [(1, 32), (1, 160), (1, 192)]
+    assert ttnn.TILE_SIZE in wrapper._upfront_prefill_warmup_lens
+    assert wrapper._upfront_prefill_warmup_lens == frozenset({32, 128, 160})
+    assert sorted(compiled) == [32, 128, 160], "every warmed length must actually be compiled"
 
 
 def test_vllm_upfront_trace_phase_rejects_missing_prefill_warmups(expect_error):
@@ -443,6 +786,9 @@ def test_vllm_upfront_trace_phase_rejects_missing_prefill_warmups(expect_error):
 
     with expect_error(RuntimeError, match="requires a compile-only warmup"):
         wrapper.warmup_model_prefill(None, True, True)
+
+
+# --- vLLM unwarmed-length rejection ------------------------------------------
 
 
 class _RejectSession:
@@ -539,34 +885,7 @@ def test_vllm_upfront_prefill_strict_mode_still_raises(expect_error, monkeypatch
     assert sessions[0].reset_calls == 1, "even the fatal path must free its session"
 
 
-def test_vllm_upfront_warmup_always_includes_one_tile(monkeypatch):
-    """32 is warmed whether or not it was listed.
-
-    The capture phase prefills a single BOS token, so the 32-aligned program is compiled on every
-    startup anyway. Omitting it from the whitelist is what let a 21-token request reach the
-    rejection path at all.
-    """
-    pytest.importorskip("vllm")
-    import ttnn
-
-    from models.experimental.diffusion_gemma.tt import generator_vllm
-
-    compiled = []
-    monkeypatch.setattr(generator_vllm, "prefill_prompt_tokens", lambda model, toks: compiled.append(toks.shape[1]))
-    monkeypatch.setattr(ttnn, "synchronize_device", lambda *_a, **_k: None)
-    monkeypatch.setenv("DG_UPFRONT_PREFILL_WARMUP_LENS", "128,160")
-
-    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
-    wrapper._upfront = True
-    wrapper.canvas_length = 256
-    wrapper._upfront_pmax = 4096
-    wrapper.model = [SimpleNamespace(mesh_device=object())]
-
-    wrapper.warmup_model_prefill(None, enable_trace=False, can_sample_on_device=False)
-
-    assert ttnn.TILE_SIZE in wrapper._upfront_prefill_warmup_lens
-    assert wrapper._upfront_prefill_warmup_lens == frozenset({32, 128, 160})
-    assert sorted(compiled) == [32, 128, 160], "every warmed length must actually be compiled"
+# --- vLLM teardown -----------------------------------------------------------
 
 
 def test_vllm_destructor_releases_persistent_controller_then_adapter_exactly_once():
@@ -590,6 +909,9 @@ def test_vllm_destructor_releases_persistent_controller_then_adapter_exactly_onc
     assert events == ["trace_release", "adapter_reset"]
     assert wrapper._persistent_adapter is None
     assert not hasattr(adapter, "_upfront_traced_denoise_controller")
+
+
+# --- device: startup capture replayed across requests ------------------------
 
 
 @pytest.fixture(scope="module")
@@ -678,7 +1000,7 @@ def _persistent_controller(wrapper):
     controller = wrapper._persistent_adapter._upfront_traced_denoise_controller
     stats = controller.stats()
     assert stats["capture_events"] == 1
-    assert stats["traces_captured"] == UPFRONT_DENOISE_STEPS
+    assert stats["traces_captured"] == TD.UPFRONT_DENOISE_STEPS
     return controller
 
 

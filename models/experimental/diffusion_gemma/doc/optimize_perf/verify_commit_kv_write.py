@@ -14,7 +14,7 @@ cache two ways:
 
 The write span is tile-aligned by construction (``start_pos % 32 == 0``,
 ``canvas_len = 256``), so FILL is a pure tile copy and the two must agree **bit-for-bit**.
-``tests/test_device_commit_kv_write.py`` proves that at the op level on raw tensors; this
+``tests/test_commit.py`` proves that at the op level on raw tensors; this
 proves it on the real DiffusionGemma-26B-A4B backbone, through the full commit, and
 measures the commit-step speedup.
 

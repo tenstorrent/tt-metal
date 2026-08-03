@@ -140,7 +140,7 @@ Run the block-contract tests:
 
 ```bash
 DG_RUN_DEVICE=1 python -m pytest \
-  models/experimental/diffusion_gemma/tests/test_serving_block_contract.py -q
+  models/experimental/diffusion_gemma/tests/test_serving.py -q
 ```
 
 For a real server, use the project-matching tenstorrent/vllm environment and:

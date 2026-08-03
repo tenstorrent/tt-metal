@@ -9,7 +9,7 @@ Slightly over the 60-line target: the three probe traps and the repro command ar
 ## Measured on QB2 (2026-06-24, `ttnn.get_memory_view(mesh_device, BufferType.DRAM)`)
 
 `P150x4`, (1,4) mesh, TP=4, **bf16 weights**, KV allocated eagerly at build so the weights+KV budget
-is captured without a prefill (`tests/test_qb2_memory_budget.py`).
+is captured without a prefill (`tests/test_config.py`).
 
 | quantity | GiB/chip | note |
 |---|---:|---|

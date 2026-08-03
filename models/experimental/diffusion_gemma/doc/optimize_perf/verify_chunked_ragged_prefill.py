@@ -7,7 +7,7 @@ Extends the ragged-vs-dense proof past the single-call ceiling: for each long pr
 the shared DENSE 128-expert prefill and the CHUNKED ragged prefill over identical token IDs, and
 requires the final logits AND the whole KV cache to be elementwise identical (max_abs == 0). This is
 the device half of the ``DG_PREFILL_RAGGED_LONG`` extension; the host half (dispatch/gating and the
-chunk-loop plumbing) is covered device-free in ``tests/test_prefill_moe.py``.
+chunk-loop plumbing) is covered device-free in ``tests/test_moe.py``.
 
 Baseline  = shared dense prefill  (DG_PREFILL_MOE_RAGGED=0).
 Candidate = chunked ragged prefill (DG_PREFILL_MOE_RAGGED=1, DG_PREFILL_RAGGED_LONG=1).

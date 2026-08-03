@@ -62,7 +62,7 @@ Traced was **within ~3% of eager**, so that path was **op-cost bound, not dispat
 
 - `run_fixed_denoise_steps` replays with committed argmax **100.00% identical** to eager under device
   canvas feedback with no host readback (`TRACE_SAFE_OK`).
-- `tests/test_device_entropy_accept.py` + `tests/test_tt_sampling.py` = **18 passed** with
+- `tests/test_sampling.py` + `tests/test_sampling.py` = **18 passed** with
   `DG_RUN_DEVICE=1` on QB2.
 - Isolation gate: `git diff aff8f2105d3..HEAD -- models/demos/gemma4/` is empty — only
   `models/experimental/diffusion_gemma` changed.
@@ -75,7 +75,7 @@ additional MoE/terminal env exports that have since been deleted and are now ine
 
 ```
 # CPU
-pytest -q tests/test_upfront_capture.py tests/test_serving_block_contract.py -k 'not test_device'
+pytest -q tests/test_trace.py tests/test_serving.py -k 'not test_device'
 # -> 23 passed, 1 skipped, 4 deselected
 
 # NOTE (2026-07-30): all three commands were repaired. Their old test names no longer exist -- the
@@ -87,20 +87,20 @@ pytest -q tests/test_upfront_capture.py tests/test_serving_block_contract.py -k 
 # device mechanics gate: one 48-trace capture reused across two different prompt lengths
 DG_RUN_DEVICE=1 DG_TRACE_REGION_SIZE=1073741824 DG_DENOISE_REVEAL_PMAX=1024 \
 DG_UPFRONT_NUM_LAYERS=full pytest --timeout=600 -q \
-  tests/test_upfront_capture.py::test_device_startup_capture_reuses_one_48_trace_set
+  tests/test_trace.py::test_device_startup_capture_reuses_one_48_trace_set
 # -> historical: 1 passed in 29.48s
 
 # stale-cross-request-state gate: two sequential requests must match eager with no recapture
 DG_RUN_DEVICE=1 DG_TRACE_REGION_SIZE=10737418240 DG_DENOISE_REVEAL_PMAX=1024 \
 DG_UPFRONT_NUM_LAYERS=full pytest --timeout=900 -q \
-  tests/test_upfront_capture.py::test_device_two_sequential_requests_match_eager_without_recapture
+  tests/test_trace.py::test_device_two_sequential_requests_match_eager_without_recapture
 # -> historical: 1 passed in 154.02s; 48 traces captured once, four blocks replayed, 192 trace
 #    executions, no recapture
 
 # eager baseline control: up-front must match eager on tokens, realized K and halt
 DG_RUN_DEVICE=1 DG_TRACE_REGION_SIZE=10737418240 \
 DG_DENOISE_REVEAL_PMAX=1024 DG_UPFRONT_NUM_LAYERS=full pytest --timeout=900 -q \
-  tests/test_upfront_capture.py::test_device_upfront_matches_eager_tokens_realized_k_and_halt
+  tests/test_trace.py::test_device_upfront_matches_eager_tokens_realized_k_and_halt
 # -> historical: 1 passed in 90.68s
 ```
 

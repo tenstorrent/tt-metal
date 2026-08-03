@@ -50,7 +50,7 @@ DONE since this plan was written: the `get_kv_cache_spec` TP=4 degenerate head c
 **VERIFIED CORRECTION:** that `2//4 = 0` degeneracy was on the FULL-attention
 `num_global_key_value_heads=2`, not `num_key_value_heads=8` (a healthy `8//4=2`).
 `tt/generator_vllm.py` now emits `FullAttentionSpec` with `full_kv_heads_per_dev` and
-`tests/test_vllm_live_context_sweep.py` asserts `num_kv_heads == 1` on the full-attention layer. NOT
+`tests/test_serving.py` asserts `num_kv_heads == 1` on the full-attention layer. NOT
 done and NOT started: the stateless `prefill_one_chunk()` refactor of `tt/chunked_prefill.py` — no
 such function exists.
 

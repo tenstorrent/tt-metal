@@ -169,7 +169,7 @@ would have demanded roughly 12 GiB.
 
 ## `ttnn.topk` width cliff
 
-Measured on QB2 and reproducing exactly (`tests/test_device_topk_width_cliff.py`, 7 passed): index
+Measured on QB2 and reproducing exactly (`tests/test_sampling.py`, 7 passed): index
 agreement versus torch is **0.129 at shard width 16384, 0.129 at 32768, 1.000 at 49152, 1.000 at 65536**.
 V=262144 over tp=8 is exactly 32768, so a Galaxy 4x8 bring-up lands on the cliff; at tp=4 (what we serve)
 the width is 65536 and `argmax_last_dim` is exact. `ttnn.max` stayed finite and correct at every width,

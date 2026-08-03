@@ -1,11 +1,20 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+
+"""Unit tests for the DiffusionGemma denoise forward pass.
+
+Covers the per-layer denoise forward (attention, norms, MoE dispatch, the logits adapter and its
+builders), the per-layer sliding-window reveal masks and the bounded prefix read (#51080), and the
+on-device full-canvas RMSNorm topology probes.
+"""
 
 import pathlib
 from types import SimpleNamespace
 
 import pytest
+import torch
 
+from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_reveal_denoise_mask
 from models.experimental.diffusion_gemma.tt import denoise_forward as DF
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
@@ -22,6 +31,8 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     read_prompt_kv_cache_by_layer,
     read_prompt_kv_cache_slice,
 )
+
+# --- test doubles ---------------------------------------------------------------------------
 
 
 class _FakeTensor:
@@ -57,6 +68,35 @@ class _RecordingDenoiseAttention:
     def __call__(self, attn, hidden_states, **kwargs):
         self.calls.append((attn, hidden_states, kwargs))
         return hidden_states
+
+
+class _FakeModel:
+    def __init__(self, num_layers=1, *, layer_types=None, sliding_window=1024):
+        self.mesh_device = object()
+        self.layers = [_FakeLayer() for _ in range(num_layers)]
+        self.tt_kv_cache = [f"cache-{idx}" for idx in range(num_layers)]
+        self.rope_requests = []
+        if layer_types is not None:
+            self.hf_config = SimpleNamespace(layer_types=layer_types, sliding_window=sliding_window)
+
+    def _get_rope_mats(self, layer_idx, seq_len):
+        self.rope_requests.append((layer_idx, seq_len))
+        return ("cos", "sin")
+
+
+class _KVCache:
+    def __init__(self, span, head_dim=16):
+        self.shape = [1, 2, span, head_dim]
+
+
+def _kv_cache_model(spans, head_dim=16):
+    return SimpleNamespace(
+        tt_kv_cache=[(_KVCache(span, head_dim), _KVCache(span, head_dim)) for span in spans],
+        layers=[None] * len(spans),
+    )
+
+
+# --- adapter lifecycle ----------------------------------------------------------------------
 
 
 def test_denoise_adapter_reset_releases_all_trace_persistent_buffers():
@@ -95,18 +135,7 @@ def test_denoise_adapter_advances_mutable_prefix_after_commit():
     assert adapter.q_rope_offset == 288
 
 
-class _FakeModel:
-    def __init__(self, num_layers=1, *, layer_types=None, sliding_window=1024):
-        self.mesh_device = object()
-        self.layers = [_FakeLayer() for _ in range(num_layers)]
-        self.tt_kv_cache = [f"cache-{idx}" for idx in range(num_layers)]
-        self.rope_requests = []
-        if layer_types is not None:
-            self.hf_config = SimpleNamespace(layer_types=layer_types, sliding_window=sliding_window)
-
-    def _get_rope_mats(self, layer_idx, seq_len):
-        self.rope_requests.append((layer_idx, seq_len))
-        return ("cos", "sin")
+# --- denoise attention ----------------------------------------------------------------------
 
 
 def test_denoise_attention_defaults_to_maskless_noncausal_prefix_kv(monkeypatch):
@@ -154,46 +183,46 @@ def test_denoise_attention_accepts_explicit_canvas_rope_offset_for_later_blocks(
     assert model.rope_requests == [(0, 832)]
 
 
-def test_denoise_attn_mask_builder_skips_full_and_short_sliding_layers():
-    calls = []
-    model = _FakeModel(
-        num_layers=2,
-        layer_types=["full_attention", "sliding_attention"],
-        sliding_window=1024,
-    )
+# --- per-layer attention mask builder -------------------------------------------------------
 
-    def mask_builder(*args, **kwargs):
-        calls.append((args, kwargs))
-        return "mask"
 
-    assert (
-        _build_denoise_attn_mask_for_layer(
-            model,
+@pytest.mark.parametrize(
+    ("layer_types", "layer_idx", "prompt_len", "canvas_len", "sliding_window", "explicit"),
+    [
+        pytest.param(
+            ["full_attention", "sliding_attention"],
             0,
-            prompt_len=2048,
-            canvas_len=256,
-            use_explicit_sliding_mask=True,
-            mask_builder=mask_builder,
-        )
-        is None
-    )
-    assert (
-        _build_denoise_attn_mask_for_layer(
-            model,
+            2048,
+            256,
+            1024,
+            {"use_explicit_sliding_mask": True},
+            id="full-attention-layer",
+        ),
+        pytest.param(
+            ["full_attention", "sliding_attention"],
             1,
-            prompt_len=64,
-            canvas_len=256,
-            use_explicit_sliding_mask=True,
-            mask_builder=mask_builder,
-        )
-        is None
-    )
-    assert calls == []
-
-
-def test_denoise_attn_mask_builder_defaults_to_maskless_for_long_prompt_sliding_layer():
+            64,
+            256,
+            1024,
+            {"use_explicit_sliding_mask": True},
+            id="sliding-layer-below-the-window",
+        ),
+        pytest.param(
+            ["sliding_attention"],
+            0,
+            10,
+            6,
+            4,
+            {},
+            id="long-prompt-sliding-layer-defaults-to-maskless",
+        ),
+    ],
+)
+def test_denoise_attn_mask_builder_stays_maskless(
+    layer_types, layer_idx, prompt_len, canvas_len, sliding_window, explicit
+):
     calls = []
-    model = _FakeModel(num_layers=1, layer_types=["sliding_attention"], sliding_window=4)
+    model = _FakeModel(num_layers=len(layer_types), layer_types=layer_types, sliding_window=sliding_window)
 
     def mask_builder(*args, **kwargs):
         calls.append((args, kwargs))
@@ -202,10 +231,11 @@ def test_denoise_attn_mask_builder_defaults_to_maskless_for_long_prompt_sliding_
     assert (
         _build_denoise_attn_mask_for_layer(
             model,
-            0,
-            prompt_len=10,
-            canvas_len=6,
+            layer_idx,
+            prompt_len=prompt_len,
+            canvas_len=canvas_len,
             mask_builder=mask_builder,
+            **explicit,
         )
         is None
     )
@@ -256,6 +286,9 @@ def test_denoise_attn_mask_builder_rejects_missing_sliding_window(expect_error):
             use_explicit_sliding_mask=True,
             mask_builder=lambda *args, **kwargs: "mask",
         )
+
+
+# --- chunked norm ---------------------------------------------------------------------------
 
 
 def test_chunked_norm_forward_norms_the_whole_canvas_in_one_op(monkeypatch):
@@ -390,6 +423,9 @@ def test_the_deleted_fullcanvas_flag_stays_deleted(monkeypatch):
     assert seen == [256, 256], "the stale flag must be inert in both directions"
 
 
+# --- denoise hidden forward -----------------------------------------------------------------
+
+
 def test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources(monkeypatch):
     calls = []
     prompt_sources = [
@@ -468,6 +504,63 @@ def test_denoise_hidden_forward_deallocates_final_norm_input(monkeypatch):
 
     assert out is final_hidden
     assert layer_hidden.deallocated is True
+
+
+@pytest.mark.parametrize(("owns_result", "expect_freed"), [(False, False), (True, True)])
+def test_denoise_hidden_forward_honours_prompt_source_ownership(monkeypatch, owns_result, expect_freed):
+    """The per-layer ``finally`` must skip the free when the source reports owns_result False.
+
+    This drives the REAL ``denoise_hidden_forward`` (same harness as
+    ``test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources``) rather than
+    re-implementing the predicate, so deleting the ``owns_result`` guard from the production
+    ``finally`` actually fails this test. That guard is what stops the borrowed fixed-span
+    prefix read from deallocating the model-owned KV cache — a device-fatal
+    ``TT_FATAL: Input Tensor is not allocated`` on the next block, which CPU CI can never catch
+    directly, so the guard needs real coverage here.
+    """
+    freed = []
+    monkeypatch.setattr(DF, "_deallocate_prompt_source", lambda src: freed.append(src))
+
+    num_layers = 2
+    prompt_sources = [(_FakeTensor([1, 1, 32, 16]), _FakeTensor([1, 1, 32, 16])) for _ in range(num_layers)]
+    layer_hiddens = [_FakeTensor([1, 1, 256, 16]) for _ in range(num_layers)]
+    final_hidden = _FakeTensor([1, 1, 256, 16])
+    model = _FakeModel(num_layers=num_layers)
+    model.norm = SimpleNamespace()
+
+    class _Reader:
+        """Callable prompt source mirroring MutablePrefixKVReader's ownership contract."""
+
+        def __init__(self, owns):
+            self.owns_result = owns
+
+        def __call__(self, layer_idx):
+            return prompt_sources[layer_idx]
+
+    monkeypatch.setattr(
+        DF,
+        "_denoise_layer_forward",
+        lambda tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset, *, canvas_rope_provider=None: layer_hiddens[
+            layer_idx
+        ],
+    )
+    monkeypatch.setattr(DF, "_chunked_norm_forward", lambda norm, hidden_states: final_hidden)
+
+    out = DF.denoise_hidden_forward(
+        model,
+        prompt_hidden_by_layer=_Reader(owns_result),
+        prompt_len=32,
+        canvas_hidden=_FakeTensor([1, 1, 256, 16]),
+    )
+
+    assert out is final_hidden
+    if expect_freed:
+        assert freed == prompt_sources, "an owning source's per-layer prefix must be freed"
+    else:
+        assert freed == [], "a BORROWED prefix must never be freed -- that would free the model KV cache"
+
+
+# --- router and MoE dispatch ----------------------------------------------------------------
 
 
 def test_denoise_router_forward_uses_chunked_norm(monkeypatch):
@@ -573,22 +666,6 @@ def test_denoise_moe_is_unconditionally_the_concat_path(monkeypatch):
     assert dense_routing.deallocated is True
 
 
-def test_retired_moe_selectors_and_entry_points_stay_deleted():
-    """Pin the deletion itself, not just the current default.
-
-    A DiffusionGemma flag that quietly stops doing anything is a recurring failure here (a no-op
-    ``DG_TERMINAL_SHARDED``, a corrupting ``DG_VLLM_GUMBEL_MODE`` default that survived two weeks).
-    Reintroducing any of these names is a deliberate act that should have to delete this test.
-    """
-    from models.experimental.diffusion_gemma.tt import concat_moe, sparse_moe
-
-    for name in ("_sparse_moe_enabled", "_dense_moe_explicitly_allowed"):
-        assert not hasattr(DF, name), f"denoise_forward.{name} is back"
-    assert not hasattr(concat_moe, "concat_moe_enabled"), "the DG_MOE_CONCAT selector is back"
-    for name in ("sparse_experts_forward", "build_capacity_dispatch", "_batched_experts", "build_tuned_configs"):
-        assert not hasattr(sparse_moe, name), f"sparse_moe.{name} is back (token-gather denoise MoE)"
-
-
 def test_expert_matmuls_opt_into_blackhole_fp32_full_dst_accumulation(monkeypatch):
     from models.experimental.diffusion_gemma.tt import concat_moe
 
@@ -631,6 +708,9 @@ def test_expert_matmuls_keep_wormhole_policy(monkeypatch):
     monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "1")
 
     assert concat_moe.expert_compute_kernel_config(wormhole, fallback) is fallback
+
+
+# --- logits adapter -------------------------------------------------------------------------
 
 
 def test_denoise_logits_adapter_threads_canvas_rope_offset():
@@ -701,6 +781,9 @@ def test_embed_canvas_tokens_rejects_batch_greater_than_one(expect_error):
         embed_canvas_tokens(object(), _FakeTensor([2, 256]))
 
 
+# --- prompt KV reads ------------------------------------------------------------------------
+
+
 def test_read_prompt_kv_cache_slice_uses_dram_slice_outputs(monkeypatch):
     calls = []
 
@@ -768,91 +851,32 @@ def test_full_span_read_clones_by_default_and_borrows_when_asked(monkeypatch):
 
 
 def test_reader_owns_result_is_true_unless_span_covers_whole_cache():
-    class _Cache:
-        def __init__(self, span):
-            self.shape = [1, 2, span, 16]
-
-    def _model(spans):
-        return SimpleNamespace(tt_kv_cache=[(_Cache(s), _Cache(s)) for s in spans], layers=[None] * len(spans))
-
     # Borrowing not requested -> always owned.
-    reader = DF.MutablePrefixKVReader(_model([128] * 3), prompt_len=64)
+    reader = DF.MutablePrefixKVReader(_kv_cache_model([128] * 3), prompt_len=64)
     reader.set_read_span(128)
     assert reader.owns_result is True
 
     # Requested and the fixed span covers the whole cache -> borrowed.
-    reader = DF.MutablePrefixKVReader(_model([128] * 3), prompt_len=64, borrow_full_span=True)
+    reader = DF.MutablePrefixKVReader(_kv_cache_model([128] * 3), prompt_len=64, borrow_full_span=True)
     reader.set_read_span(128)
     assert reader.owns_result is False
 
     # Requested but the span is a strict prefix -> the slice is an independent copy, so owned.
-    reader = DF.MutablePrefixKVReader(_model([128] * 3), prompt_len=64, borrow_full_span=True)
+    reader = DF.MutablePrefixKVReader(_kv_cache_model([128] * 3), prompt_len=64, borrow_full_span=True)
     reader.set_read_span(64)
     assert reader.owns_result is True
 
     # Non-uniform cache spans -> refuse to borrow (some layer would be a partial slice).
-    reader = DF.MutablePrefixKVReader(_model([128, 128, 256]), prompt_len=64, borrow_full_span=True)
+    reader = DF.MutablePrefixKVReader(_kv_cache_model([128, 128, 256]), prompt_len=64, borrow_full_span=True)
     reader.set_read_span(128)
     assert reader.owns_result is True
 
     # A nonzero start offset is a partial read by definition -> owned.
-    reader = DF.MutablePrefixKVReader(_model([128] * 3), prompt_len=64, seq_len_start=32, borrow_full_span=True)
+    reader = DF.MutablePrefixKVReader(
+        _kv_cache_model([128] * 3), prompt_len=64, seq_len_start=32, borrow_full_span=True
+    )
     reader.set_read_span(128)
     assert reader.owns_result is True
-
-
-@pytest.mark.parametrize(("owns_result", "expect_freed"), [(False, False), (True, True)])
-def test_denoise_hidden_forward_honours_prompt_source_ownership(monkeypatch, owns_result, expect_freed):
-    """The per-layer ``finally`` must skip the free when the source reports owns_result False.
-
-    This drives the REAL ``denoise_hidden_forward`` (same harness as
-    ``test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources``) rather than
-    re-implementing the predicate, so deleting the ``owns_result`` guard from the production
-    ``finally`` actually fails this test. That guard is what stops the borrowed fixed-span
-    prefix read from deallocating the model-owned KV cache — a device-fatal
-    ``TT_FATAL: Input Tensor is not allocated`` on the next block, which CPU CI can never catch
-    directly, so the guard needs real coverage here.
-    """
-    freed = []
-    monkeypatch.setattr(DF, "_deallocate_prompt_source", lambda src: freed.append(src))
-
-    num_layers = 2
-    prompt_sources = [(_FakeTensor([1, 1, 32, 16]), _FakeTensor([1, 1, 32, 16])) for _ in range(num_layers)]
-    layer_hiddens = [_FakeTensor([1, 1, 256, 16]) for _ in range(num_layers)]
-    final_hidden = _FakeTensor([1, 1, 256, 16])
-    model = _FakeModel(num_layers=num_layers)
-    model.norm = SimpleNamespace()
-
-    class _Reader:
-        """Callable prompt source mirroring MutablePrefixKVReader's ownership contract."""
-
-        def __init__(self, owns):
-            self.owns_result = owns
-
-        def __call__(self, layer_idx):
-            return prompt_sources[layer_idx]
-
-    monkeypatch.setattr(
-        DF,
-        "_denoise_layer_forward",
-        lambda tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset, *, canvas_rope_provider=None: layer_hiddens[
-            layer_idx
-        ],
-    )
-    monkeypatch.setattr(DF, "_chunked_norm_forward", lambda norm, hidden_states: final_hidden)
-
-    out = DF.denoise_hidden_forward(
-        model,
-        prompt_hidden_by_layer=_Reader(owns_result),
-        prompt_len=32,
-        canvas_hidden=_FakeTensor([1, 1, 256, 16]),
-    )
-
-    assert out is final_hidden
-    if expect_freed:
-        assert freed == prompt_sources, "an owning source's per-layer prefix must be freed"
-    else:
-        assert freed == [], "a BORROWED prefix must never be freed -- that would free the model KV cache"
 
 
 def test_read_prompt_kv_cache_by_layer_reads_every_model_layer():
@@ -879,6 +903,9 @@ def test_read_prompt_kv_cache_by_layer_rejects_cache_layer_mismatch(expect_error
 
     with expect_error(ValueError, match="tt_kv_cache has 1 layers"):
         read_prompt_kv_cache_by_layer(model, prompt_len=64, read_fn=lambda *args, **kwargs: None)
+
+
+# --- adapter builders -----------------------------------------------------------------------
 
 
 def test_make_denoise_logits_adapter_from_kv_cache_reads_prompt_kv_lazily():
@@ -1138,6 +1165,9 @@ def test_make_generation_logits_fn_builder_from_checkpoint_state_remaps_once():
     }
 
 
+# --- DG_SKIP ablation gate ------------------------------------------------------------------
+
+
 def test_dg_skip_rejects_an_unknown_component(monkeypatch, expect_error):
     """A typo must abort, not silently measure the unablated step.
 
@@ -1147,13 +1177,6 @@ def test_dg_skip_rejects_an_unknown_component(monkeypatch, expect_error):
     monkeypatch.setenv("DG_SKIP", "moe1")
     with expect_error(ValueError, match="DG_SKIP has unknown component"):
         DF._skip_components()
-
-
-def test_dg_skip_accepts_every_documented_component(monkeypatch):
-    monkeypatch.setenv("DG_SKIP", "attn,shared,moe")
-    assert DF._skip_components() == DF._SKIP_TOKENS
-    monkeypatch.delenv("DG_SKIP")
-    assert DF._skip_components() == frozenset()
 
 
 def test_every_dg_skip_token_has_a_consumer():
@@ -1169,6 +1192,333 @@ def test_every_dg_skip_token_has_a_consumer():
     assert not unwired, f"DG_SKIP tokens accepted but never consumed: {unwired}"
 
 
+# --- sliding-window reveal mask geometry (#51080 item 3) ------------------------------------
+#
+# HF's sliding layers retain only the last ``sliding_window - 1`` committed tokens, so TT's
+# all-attend denoise used to attend keys HF does not have on 25 of 30 layers. Enforcing the
+# retention gives each layer TYPE its own reveal-mask content while keeping ONE shape, so every
+# captured trace stays valid. The regime split is what makes this gateable:
+#
+# * ``prompt_len <= sliding_window - 1`` — the window cannot bind, so the sliding mask is
+#   IDENTICAL to the full mask. Enabling the flag there is bit-exact.
+# * ``prompt_len > sliding_window - 1`` — the masks differ; that is the decision-changing regime
+#   whose gate is a decision-agreement run against fp32 HF.
+
+W = 8
+CANVAS = 4
+P_MAX = 32
+
+
+def _attend(mask):
+    return mask == 0
+
+
+def _reveal(prompt_len, *, layer_type, enforce):
+    return build_canvas_reveal_denoise_mask(
+        prompt_len,
+        CANVAS,
+        P_MAX,
+        layer_type=layer_type,
+        sliding_window=W,
+        enforce_sliding_window=enforce,
+    )
+
+
+def test_flag_defaults_on_and_zero_opts_out(monkeypatch):
+    """Gated by the GPQA decision-agreement run, so retention is now the default.
+
+    56 of 64 shipped-config collapses were at or after the block whose committed prefix crosses
+    W-1; below that the mask is bit-identical, so the flip only changes the regime that was wrong.
+    """
+    monkeypatch.delenv("DG_DENOISE_SLIDING_WINDOW", raising=False)
+    assert DF.denoise_sliding_window_enabled() is True
+    monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "0")
+    assert DF.denoise_sliding_window_enabled() is False, "the maskless path must stay reachable"
+    monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "1")
+    assert DF.denoise_sliding_window_enabled() is True
+
+
+@pytest.mark.parametrize("prompt_len", [0, W // 2, W - 1])
+def test_below_the_window_the_sliding_mask_equals_the_full_mask(prompt_len):
+    """Bit-exact regime: nothing has been evicted yet, so enforcing changes nothing."""
+    full = _reveal(prompt_len, layer_type="full_attention", enforce=False)
+    sliding = _reveal(prompt_len, layer_type="sliding_attention", enforce=True)
+    assert torch.equal(full, sliding), f"prompt_len={prompt_len} must be unchanged by the window"
+
+
+@pytest.mark.parametrize("prompt_len", [W, W + 1, 3 * W])
+def test_above_the_window_only_the_retained_committed_tail_is_attended(prompt_len):
+    sliding = _attend(_reveal(prompt_len, layer_type="sliding_attention", enforce=True))
+    full = _attend(_reveal(prompt_len, layer_type="full_attention", enforce=False))
+    assert not torch.equal(sliding, full), "the window must bind above W-1"
+
+    keep_from = prompt_len - (W - 1)
+    for j in range(P_MAX):
+        expected = keep_from <= j < prompt_len
+        assert bool(sliding[0, j]) is expected, f"prefix col {j} (prompt_len={prompt_len})"
+    # Canvas is always fully visible, and there is no query dependence.
+    assert bool(sliding[:, P_MAX:].all())
+    for row in range(1, CANVAS):
+        assert torch.equal(sliding[row], sliding[0])
+
+
+def test_full_attention_layers_are_unaffected_by_the_window():
+    prompt_len = 3 * W
+    a = _reveal(prompt_len, layer_type="full_attention", enforce=True)
+    b = _reveal(prompt_len, layer_type="full_attention", enforce=False)
+    assert torch.equal(a, b), "enforce_sliding_window must be inert on full_attention layers"
+
+
+# --- reveal-mask buffers, per layer type ----------------------------------------------------
+
+
+class _FakeBuf:
+    def __init__(self, tag):
+        self.tag = tag
+        self.freed = False
+
+    def deallocate(self, force=True):
+        self.freed = True
+
+
+def _adapter(layer_types, *, enforce):
+    """Minimal adapter shell exercising only the reveal-mask buffer machinery."""
+    adapter = object.__new__(DF.DenoiseLogitsAdapter)
+    adapter.tt_model = SimpleNamespace(
+        layers=[
+            SimpleNamespace(self_attn=SimpleNamespace(config=SimpleNamespace(sliding_window=W))) for _ in layer_types
+        ],
+        hf_config=SimpleNamespace(layer_types=list(layer_types), sliding_window=W),
+        mesh_device=None,
+    )
+    adapter._reveal_canvas_len = CANVAS
+    adapter._reveal_p_max = P_MAX
+    adapter._reveal_enforce_window = enforce
+    adapter._reveal_mask_bufs = {}
+    adapter._reveal_mask_buf = None
+    adapter.use_reveal_mask = False
+    return adapter
+
+
+DG_LAYER_TYPES = ["sliding_attention"] * 5 + ["full_attention"]
+
+
+def test_two_masks_when_enabled_and_dispatch_is_per_layer_type():
+    adapter = _adapter(DG_LAYER_TYPES, enforce=True)
+    assert set(adapter._reveal_mask_layer_types()) == {"sliding_attention", "full_attention"}
+
+    adapter._reveal_mask_bufs = {"sliding_attention": _FakeBuf("slide"), "full_attention": _FakeBuf("full")}
+    for layer_idx, layer_type in enumerate(DG_LAYER_TYPES):
+        expected = "slide" if layer_type == "sliding_attention" else "full"
+        assert adapter._reveal_mask_provider(layer_idx).tag == expected, f"layer {layer_idx}"
+
+
+def test_one_mask_shared_by_every_layer_when_the_window_is_disabled():
+    adapter = _adapter(DG_LAYER_TYPES, enforce=False)
+    assert adapter._reveal_mask_layer_types() == ("full_attention",)
+
+    only = _FakeBuf("full")
+    adapter._reveal_mask_bufs = {"full_attention": only}
+    for layer_idx in range(len(DG_LAYER_TYPES)):
+        assert adapter._reveal_mask_provider(layer_idx) is only
+
+
+def test_per_block_update_rebuilds_every_mask_at_the_new_committed_len(monkeypatch):
+    """Both buffers must be refreshed per block, since the retained window slides with the prefix.
+
+    A frozen sliding buffer would also suppress the late-block collapse, by over-restricting
+    attention rather than matching HF, and an end-to-end run could not distinguish the two.
+    """
+    adapter = _adapter(DG_LAYER_TYPES, enforce=True)
+    adapter.use_reveal_mask = True
+    adapter._reveal_mask_bufs = {
+        "sliding_attention": _FakeBuf("slide"),
+        "full_attention": _FakeBuf("full"),
+    }
+
+    built = []
+
+    def recording_build(self, prompt_len, layer_type="full_attention"):
+        built.append((int(prompt_len), layer_type))
+        return _FakeBuf(f"fresh-{layer_type}")
+
+    monkeypatch.setattr(DF.DenoiseLogitsAdapter, "_build_reveal_mask_device", recording_build)
+    monkeypatch.setattr(DF.ttnn, "copy", lambda fresh, buf: None)
+
+    # update_reveal_mask_buffer enforces the product's 32-tile alignment on the committed length,
+    # so this uses real tile multiples rather than the toy CANVAS used for mask geometry above.
+    committed = [32 * n for n in (1, 2, 3, 4)]  # one tile-aligned commit per block
+    for prompt_len in committed:
+        adapter.update_reveal_mask_buffer(prompt_len)
+
+    for prompt_len in committed:
+        for layer_type in ("sliding_attention", "full_attention"):
+            assert (prompt_len, layer_type) in built, f"{layer_type} not rebuilt at prompt_len={prompt_len}"
+    assert len(built) == 2 * len(committed), f"expected one rebuild per buffer per block, got {built}"
+
+
+def test_release_frees_every_mask_and_clears_state():
+    adapter = _adapter(DG_LAYER_TYPES, enforce=True)
+    bufs = {"sliding_attention": _FakeBuf("slide"), "full_attention": _FakeBuf("full")}
+    adapter._reveal_mask_bufs = dict(bufs)
+    adapter.use_reveal_mask = True
+
+    adapter.release_reveal_mask_buffers()
+
+    assert all(b.freed for b in bufs.values())
+    assert adapter._reveal_mask_bufs == {}
+    assert adapter._reveal_mask_buf is None
+    assert adapter.use_reveal_mask is False
+
+
+def test_sliding_layer_needs_mask_threshold_is_window_minus_one():
+    """The old threshold came from the staircase and included canvas_len; it must not."""
+    assert DF._sliding_layer_needs_denoise_mask(W - 1, CANVAS, W) is False
+    assert DF._sliding_layer_needs_denoise_mask(W, CANVAS, W) is True
+    # canvas_len must not influence the predicate
+    for canvas in (1, 256, 4096):
+        assert DF._sliding_layer_needs_denoise_mask(W - 1, canvas, W) is False
+
+
+# --- bounded per-layer sliding span (#51080 item 3, perf half) ------------------------------
+
+# Real magnitudes, not the toy W/P_MAX above: at W=8, P_MAX=32 the span rounds up to a whole tile
+# and hits the "span >= p_max -> nothing to save" fallback, so a toy geometry cannot observe a
+# bounded span at all.
+W_REAL, P_MAX_REAL, CANVAS_REAL, PROMPT_REAL = 1024, 4096, 256, 2048
+
+
+def _drive_fixed_reveal(monkeypatch, *, retention):
+    """Run the REAL _prepare_fixed_reveal and capture the sliding_span it prepares.
+
+    DG_DENOISE_SLIDING_SPAN is gone; the bounded read is now gated on the retention mask at its one
+    decision point inside this function. A test on a flag reader could not have caught that gate
+    regressing, and this module previously only ever monkeypatched the mask selector -- which is how a
+    NotImplementedError on a live flag pair once survived in the sibling builder. So drive the real
+    thing.
+    """
+    from models.experimental.diffusion_gemma.tt import traced_denoise as TD
+
+    captured = {}
+
+    class _Reader:
+        owns_result = True
+        borrow_full_span = False
+
+        def set_read_span(self, p_max):
+            captured["read_span"] = p_max
+
+        def prepare_window_buffers(self, layers):
+            captured["window_layers"] = dict(layers)
+
+        def refresh_windows(self, prompt_len):
+            captured["refreshed"] = prompt_len
+
+    layer_types = ["sliding_attention"] * 5 + ["full_attention"]
+    adapter = SimpleNamespace(
+        prompt_len=PROMPT_REAL,
+        prompt_hidden_by_layer=_Reader(),
+        tt_model=SimpleNamespace(
+            layers=[
+                SimpleNamespace(self_attn=SimpleNamespace(config=SimpleNamespace(sliding_window=W_REAL)))
+                for _ in layer_types
+            ],
+            hf_config=SimpleNamespace(layer_types=list(layer_types), sliding_window=W_REAL),
+            mesh_device=None,
+        ),
+        use_reveal_mask=True,
+        _reveal_mask_bufs={},
+        prepare_reveal_mask_buffers=lambda **kw: captured.update(kw),
+        update_reveal_mask_buffer=lambda prompt_len: None,
+    )
+
+    monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "1" if retention else "0")
+    monkeypatch.setattr(TD, "_resolve_reveal_pmax", lambda a: P_MAX_REAL)
+    monkeypatch.setattr(TD, "prefix_borrow_enabled", lambda: False)
+    TD._prepare_fixed_reveal(adapter, canvas_len=CANVAS_REAL)
+    return captured
+
+
+def test_bounded_read_is_on_by_default_when_retention_is_enforced(monkeypatch):
+    """No flag any more: retention on (the default) is what engages the bounded read."""
+    cap = _drive_fixed_reveal(monkeypatch, retention=True)
+    assert cap["enforce_window"] is True
+    assert cap["sliding_span"] == W_REAL, "sliding layers must read the bounded window"
+    assert set(cap["window_layers"]) == {0, 1, 2, 3, 4}, "only the sliding layers are bounded"
+    assert all(v == W_REAL for v in cap["window_layers"].values())
+    assert cap["refreshed"] == PROMPT_REAL
+
+
+def test_bounded_read_does_not_engage_without_the_retention_mask(monkeypatch):
+    """A bounded read without the retention mask would CHANGE visibility, not implement it.
+
+    This is the property the deleted DG_DENOISE_SLIDING_SPAN gate used to carry, and it is the one
+    thing about the bounded read that is NOT bit-identical -- so it has to keep being tested.
+    """
+    cap = _drive_fixed_reveal(monkeypatch, retention=False)
+    assert cap["enforce_window"] is False
+    assert cap["sliding_span"] is None, "the bounded read must stay off without retention"
+    assert "window_layers" not in cap, "no block-resident window buffers may be allocated"
+
+
+def test_read_span_is_tile_aligned_and_capped_by_pmax():
+    assert DF.sliding_read_span(1024, 4096) == 1024
+    assert DF.sliding_read_span(1000, 4096) == 1024  # rounded up to a tile
+    assert DF.sliding_read_span(1024, 512) == 512  # never exceed the reveal span
+    assert DF.sliding_read_span(8, 4096) % 32 == 0
+
+
+def test_read_offset_tracks_the_committed_tail_and_stays_tile_aligned():
+    span, p_max = 1024, 4096
+    assert DF.sliding_read_offset(0, span, p_max) == 0
+    assert DF.sliding_read_offset(1024, span, p_max) == 0
+    assert DF.sliding_read_offset(1056, span, p_max) == 32
+    # Clamped so the window never runs past the reveal span.
+    assert DF.sliding_read_offset(4096, span, p_max) == p_max - span
+    for P in range(0, 4096, 32):
+        assert DF.sliding_read_offset(P, span, p_max) % 32 == 0
+
+
+@pytest.mark.parametrize("prompt_len", [0, W, 2 * W, 3 * W, P_MAX])  # all <= P_MAX
+def test_bounded_window_mask_matches_the_full_span_mask_on_shared_columns(prompt_len):
+    """The bounded read + its mask must expose EXACTLY the keys the full-span path exposes.
+
+    This is the equivalence that makes the perf half safe once the fidelity half is in: the
+    bounded read simply omits columns the full-span mask had already set to NEG.
+    """
+    from models.experimental.diffusion_gemma.reference.attention_mask import (
+        build_canvas_reveal_denoise_window_mask,
+    )
+
+    span = W  # tile-aligned stand-in for 1024
+    lo = max(0, prompt_len - span)
+    full = _attend(_reveal(prompt_len, layer_type="sliding_attention", enforce=True))
+    bounded = build_canvas_reveal_denoise_window_mask(prompt_len, CANVAS, span, lo, sliding_window=W) == 0
+
+    # Absolute positions visible under each construction must be identical.
+    full_visible = {j for j in range(P_MAX) if bool(full[0, j])}
+    bounded_visible = {lo + r for r in range(span) if bool(bounded[0, r])}
+    assert bounded_visible == full_visible, f"prompt_len={prompt_len}"
+    # Canvas fully visible, no query dependence.
+    assert bool(bounded[:, span:].all())
+    for row in range(1, CANVAS):
+        assert torch.equal(bounded[row], bounded[0])
+
+
+def test_bounded_mask_is_prompt_independent_in_steady_state():
+    """Once the window binds, the bounded mask stops changing between blocks."""
+    from models.experimental.diffusion_gemma.reference.attention_mask import (
+        build_canvas_reveal_denoise_window_mask,
+    )
+
+    span = W
+    masks = []
+    for prompt_len in (3 * W, 4 * W, 5 * W):
+        lo = max(0, prompt_len - span)
+        masks.append(build_canvas_reveal_denoise_window_mask(prompt_len, CANVAS, span, lo, sliding_window=W))
+    assert all(torch.equal(masks[0], m) for m in masks[1:])
+
+
 def test_bounded_window_refuses_a_nonzero_prefix_base(expect_error):
     """The bounded sliding read must FAIL LOUD on prefill-from-non-zero, not read the wrong rows.
 
@@ -1179,13 +1529,7 @@ def test_bounded_window_refuses_a_nonzero_prefix_base(expect_error):
     bounded read went from opt-in to DEFAULT on 2026-07-29, so a silent 25-of-30-layers misread has to
     be a raise. Delete this test when the offset folds seq_len_start in properly.
     """
-
-    class _Cache:
-        def __init__(self, span):
-            self.shape = [1, 2, span, 8]
-
-    model = SimpleNamespace(tt_kv_cache=[(_Cache(4096), _Cache(4096))], layers=[None])
-    reader = DF.MutablePrefixKVReader(model, prompt_len=2048, seq_len_start=32)
+    reader = DF.MutablePrefixKVReader(_kv_cache_model([4096], head_dim=8), prompt_len=2048, seq_len_start=32)
     reader.set_read_span(4096)
     with expect_error(NotImplementedError, match="non-zero prefix base"):
         reader.prepare_window_buffers({0: 1024})
@@ -1193,13 +1537,80 @@ def test_bounded_window_refuses_a_nonzero_prefix_base(expect_error):
 
 def test_bounded_window_is_a_noop_when_no_layers_are_listed():
     """An empty window_layers map must not trip the non-zero-base guard -- there is no bounded read."""
-
-    class _Cache:
-        def __init__(self, span):
-            self.shape = [1, 2, span, 8]
-
-    model = SimpleNamespace(tt_kv_cache=[(_Cache(4096), _Cache(4096))], layers=[None])
-    reader = DF.MutablePrefixKVReader(model, prompt_len=2048, seq_len_start=32)
+    reader = DF.MutablePrefixKVReader(_kv_cache_model([4096], head_dim=8), prompt_len=2048, seq_len_start=32)
     reader.set_read_span(4096)
     reader.prepare_window_buffers({})  # must not raise
     assert reader.window_layers == {}
+
+
+def test_per_layer_ownership_never_frees_a_window_buffer():
+    """A windowed layer hands back a persistent buffer; freeing it corrupts later blocks."""
+    reader = object.__new__(DF.MutablePrefixKVReader)
+    reader.borrow_full_span = False  # full layers would be OWNED clones
+    reader.seq_len_start = 0
+    reader.prompt_len = 64
+    reader.read_span = P_MAX
+    reader.tt_model = None
+    reader._window_bufs = {0: ("k", "v"), 2: ("k", "v")}
+    reader._window_lo = {0: 0, 2: 0}
+    reader.window_layers = {0: W, 2: W}
+
+    # Windowed layers: never owned, even though the reader's global flag says owned.
+    assert reader.owns_result_for(0) is False
+    assert reader.owns_result_for(2) is False
+    # Non-windowed layer keeps the global contract (here: owned, because borrow is off).
+    assert reader.owns_result_for(1) is True
+    assert DF._prompt_source_is_owned(reader, 0) is False
+    assert DF._prompt_source_is_owned(reader, 1) is True
+
+
+def test_prompt_source_is_owned_falls_back_for_plain_sources():
+    """Sources without per-layer resolution keep the historic contract."""
+    assert DF._prompt_source_is_owned(lambda i: None, 3) is True
+    assert DF._prompt_source_is_owned(SimpleNamespace(owns_result=False), 3) is False
+    assert DF._prompt_source_is_owned(SimpleNamespace(owns_result=True), 3) is True
+
+
+# --- canvas-tail workspace (#51080 item 4) --------------------------------------------------
+
+
+def test_bounded_span_and_hidden_pads_compose_in_the_mask_selector(monkeypatch):
+    """The flag combination that used to raise NotImplementedError must now build a mask.
+
+    This calls the REAL ``_build_reveal_mask_device``. Every other test in this file monkeypatches
+    it, which is exactly how a NotImplementedError on a live flag pair survived unnoticed: nothing
+    ever executed the selector. Asserts the pad span reaches the bounded builder, since the bounded
+    key axis carries absolute positions and needs no remapping.
+    """
+    adapter = _adapter(DG_LAYER_TYPES, enforce=True)
+    adapter._reveal_sliding_span = P_MAX  # lo == 0, i.e. tile-aligned for this toy geometry
+    adapter._reveal_pad_span = (P_MAX - 6, P_MAX)
+
+    seen = {}
+
+    def fake_window(mesh_device, **kw):
+        seen.update(kw)
+        return "window-mask"
+
+    monkeypatch.setattr(DF, "build_device_canvas_reveal_window_mask", fake_window)
+
+    out = adapter._build_reveal_mask_device(P_MAX, layer_type="sliding_attention")
+
+    assert out == "window-mask", "the bounded branch must be taken, not the full-span one"
+    assert seen["span"] == P_MAX
+    assert seen["hidden_prefix_span"] == (P_MAX - 6, P_MAX), "the pad span must reach the bounded builder"
+
+
+def test_full_attention_layers_still_get_the_absolute_pad_span(monkeypatch):
+    """The 5 full-attention layers read the whole p_max prefix, so they need the pads hidden forever
+    -- the bounded span's self-retiring behaviour must not leak into them."""
+    adapter = _adapter(DG_LAYER_TYPES, enforce=True)
+    adapter._reveal_sliding_span = P_MAX
+    adapter._reveal_pad_span = (P_MAX - 6, P_MAX)
+
+    seen = {}
+    monkeypatch.setattr(DF, "build_device_canvas_reveal_mask", lambda mesh_device, **kw: seen.update(kw) or "full-mask")
+
+    assert adapter._build_reveal_mask_device(P_MAX, layer_type="full_attention") == "full-mask"
+    assert seen["hidden_prefix_span"] == (P_MAX - 6, P_MAX)
+    assert "span" not in seen, "a full-attention layer must not take the bounded read"

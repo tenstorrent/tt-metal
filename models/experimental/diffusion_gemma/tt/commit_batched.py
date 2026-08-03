@@ -83,7 +83,7 @@ NEG = -1.0e9
 #   "position" — the legacy per-position write: 256 x (2 slice + 2 reshard + 2
 #                ``paged_update_cache``) = ~1536 tiny dispatches/layer. Device-proven,
 #                kept as the reference the "fill" path is verified bit-identical
-#                against (``tests/test_device_commit_kv_write.py``) and as the
+#                against (``tests/test_commit.py``) and as the
 #                automatic fallback when a "fill" precondition does not hold.
 _KV_WRITE_FILL = "fill"
 _KV_WRITE_POSITION = "position"
@@ -295,7 +295,7 @@ def _write_canvas_kv_contiguous(
     compute kernel) — it writes exactly the ``[start_pos, start_pos+C)`` tile-rows of each
     kv head and touches neither the frozen prefix nor the tail. Device-verified
     bit-identical to the per-position path over the whole cache
-    (``tests/test_device_commit_kv_write.py``): 2 ops/layer instead of ~1536, 9.59 ms →
+    (``tests/test_commit.py``): 2 ops/layer instead of ~1536, 9.59 ms →
     0.012 ms per layer-write at the 26B-A4B geometry. Falls back to ``"position"`` (with a
     warning) if any precondition fails — see :func:`_fill_write_unsupported_reason`.
 

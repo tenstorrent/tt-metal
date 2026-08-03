@@ -9,7 +9,7 @@ disable-model-invocation: true
 ## DiffusionGemma note
 
 Load `diffusion-gemma` first.
-- For DiffusionGemma the public contracts are `models/experimental/diffusion_gemma/tt/generate.py`, `tt/generator_vllm.py`, and the denoise loop. Acceptance includes `models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py` and block-serving tests, not autoregressive readiness.
+- For DiffusionGemma the public contracts are `models/experimental/diffusion_gemma/tt/generate.py`, `tt/generator_vllm.py`, and the denoise loop. Acceptance includes `models/experimental/diffusion_gemma/tests/test_demo.py` and block-serving tests, not autoregressive readiness.
 - NEVER flag or apply refactors that touch `models/demos/gemma4/` or other shared dirs; all DiffusionGemma code stays under `models/experimental/diffusion_gemma/`.
 
 Start by reading all of the code you were asked to review to understand its structure.

@@ -137,6 +137,6 @@ Earlier revisions of this file claimed the default was `off` and separately `war
 
 Unit coverage: `tests/test_degeneracy.py` pins the five real terminal-padding `(content_len,
 top_frac)` tuples, the mixed-stop-id tail, both still-degenerate collapses and the no-stop-ids
-fallback; `tests/test_serving_block_contract.py` pins that an empty stop policy still leaves the
+fallback; `tests/test_serving.py` pins that an empty stop policy still leaves the
 guard a stop set — the exact composition that caused the 07-28 defect;
-`tests/test_degeneracy_retry.py` covers the retry policy.
+`tests/test_degeneracy.py` covers the retry policy.

@@ -101,7 +101,7 @@ existing indices stay stable; and `ttnn::prim::sdpa` keeps returning element `[0
 `l = logaddexp(l1, l2)`; `o = o1·exp(l1−l) + o2·exp(l2−l)`, asserted against a full-KV
 `out_full`/`lse_full`. This is the equivalence test in the T6 unit test and the identity implemented
 by `tt/attention_merge.py::merge_attention_partials` (task T7, device-verified,
-`tests/test_attention_merge.py` 3/3).
+`tests/test_attention.py` 3/3).
 
 ## Reproduction (after re-landing the extension)
 
