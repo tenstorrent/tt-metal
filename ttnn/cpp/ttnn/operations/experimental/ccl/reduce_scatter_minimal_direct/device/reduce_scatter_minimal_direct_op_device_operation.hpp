@@ -21,7 +21,7 @@ struct ReduceScatterMinimalDirectDeviceOperation {
     using tensor_args_t = ReduceScatterMinimalDirectInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<ReduceScatterMinimalDirectMeshWorkloadFactory>;
+    using program_factory_t = std::variant<ReduceScatterMinimalDirectProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);

@@ -200,7 +200,7 @@ ReduceScatterMinimalDirectDeviceOperation::create_output_tensors(
 
 ReduceScatterMinimalDirectDeviceOperation::program_factory_t
 ReduceScatterMinimalDirectDeviceOperation::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-    return program_factory_t{ReduceScatterMinimalDirectMeshWorkloadFactory{}};
+    return program_factory_t{ReduceScatterMinimalDirectProgramFactory{}};
 }
 
 std::uint64_t ReduceScatterMinimalDirectDeviceOperation::compute_program_hash(
