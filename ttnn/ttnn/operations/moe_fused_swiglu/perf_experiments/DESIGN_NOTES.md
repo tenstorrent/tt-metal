@@ -332,6 +332,48 @@ actually helps — more grid COLUMNS, not fewer, which is the opposite of the in
 Non-rectangular and non-origin grids are not expressible: `core_grid` is an (x, y) extent and every
 collective's multicast rectangle derives from a single `CoreRange` at (0, 0).
 
+## 8d. Weight dtype
+
+All three weights share one dtype; the stride and the CB format are one number taken from
+`w_gate.dtype`, so a mixed set is rejected rather than half-supported.
+
+**Accuracy, at emb 7168 / N 1024 / count 256, against an fp32 reference:**
+
+| dtype | tile | op PCC | that format's own floor |
+|---|---|---|---|
+| bfp4_b | 576 B | 0.979354 | 0.979839 |
+| bfp8_b | 1088 B | 0.999439 | 0.999973 |
+| bf16 | 2048 B | 0.999473 | 1.000058 |
+
+Each is gated against its OWN quantized floor, not a fixed number, and the floors are asserted to
+be ORDERED. That ordering is the check that catches a weight CB left on the wrong format: a bf16
+run that quantized to bfp4 somewhere still clears a fixed 0.975 gate, but it cannot land on the
+bf16 floor.
+
+**Perf, 11x8, bf16_rm, emb 7168 / N 1024, median of 3, us:**
+
+| dtype | 128 | 256 | 512 | vs bfp4 |
+|---|---|---|---|---|
+| bfp4_b | 60.79 | 93.34 | 167.91 | — |
+| bfp8_b | 75.94 | 102.33 | 178.73 | 1.11x |
+| bf16 | 123.08 | 147.46 | 222.69 | 1.53x |
+
+Sub-proportional to the bytes (bfp8 is 1.89x bfp4's bytes for 1.11x the time, bf16 3.56x for
+1.53x), because the activation stream and the fixed per-round rendezvous do not scale with the
+weight format. The gap widens at LOW count, where the weight stream is the larger share.
+
+**L1 is what bounds this, not correctness.** Weight CBs are resident, so a wider dtype costs
+proportionally, and W_down residency is given up first. At 11x8:
+
+| | bfp4 | bfp8 | bf16 |
+|---|---|---|---|
+| emb 7168, N 1024 | fits, resident | fits, resident | fits, NOT resident |
+| emb 7168, N 2048 | fits, resident | does not fit | does not fit |
+| emb 6144, N 2048 | fits, resident | fits, NOT resident | does not fit |
+
+So bf16 weights at the graded shape are not available on this device, and the op says so with the
+computed numbers.
+
 ## 9. Still open
 
 **Count 512.** After the round-17 wins there is no knob-turn left at 512 (`WD_SPLIT` 4 -> 200.05,
