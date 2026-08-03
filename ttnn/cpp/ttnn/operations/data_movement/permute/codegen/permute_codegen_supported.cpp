@@ -100,6 +100,15 @@ bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& d
         return true;
     }
 
+    // The degenerate end of the same regime, dtype-independent: X == 1 leaves one real datum per
+    // 32x32 block, so the whole dispatch is per-write issue cost, and W landing at output position
+    // rank-2 makes those writes contiguous-strided rather than plane-scattered -- exactly the shape
+    // native's writer handles with less per-row overhead. W anywhere else, or X >= 2, measures on
+    // the winning side.
+    if (w_changing && dims[rank - 2] == rank - 1 && x == 1) {
+        return true;
+    }
+
     return false;
 }
 
