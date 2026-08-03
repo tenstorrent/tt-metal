@@ -76,12 +76,17 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             ReduceOpDim::H);
     }
 
-    // H-axis split: partition the reduction axis into `num_h_slices` contiguous tile ranges so the
-    // op can use NC*Wt*num_h_slices cores instead of NC*Wt. Each slice reduces `slice_Ht` tiles
-    // (compile-time uniform; the last slice's overhang past Ht_rm is identity-padded to 0 by the
-    // reader). Clamped to Ht_rm so slices are never empty. 1 = normal H-reduce (output H=1).
+    // H-axis split geometry: every slice reduces a uniform `slice_Ht` tiles, the last one's overhang
+    // past Ht_rm identity-padded by the reader. Clamped to Ht_rm so no slice is empty.
     const uint32_t num_h_slices = rm_path ? std::min(std::max(operation_attributes.num_h_slices, 1u), plan.Ht_rm) : 1;
     const uint32_t slice_Ht = rm_path ? tt::div_up(plan.Ht_rm, num_h_slices) : 0;
+    // compute_output_specs sizes the output's H from the unclamped attribute, so the clamp above must
+    // be a no-op; the host already bounds num_h_slices by Ht_rm.
+    TT_FATAL(
+        !rm_path || operation_attributes.num_h_slices <= plan.Ht_rm,
+        "Reduce H (dense RM): num_h_slices {} exceeds Ht_rm {}; the output spec and the kernels would disagree",
+        operation_attributes.num_h_slices,
+        plan.Ht_rm);
 
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
@@ -90,14 +95,13 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduction via SFPU mul_unary_tile inside the compute kernel.
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
 
-    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate mean opt-in.
+    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate sum/mean opt-in.
     const bool is_sfpu_reduce =
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    // Each (nc, slice, wt) triple is one output tile column of the (N, C, num_h_slices, W) result.
-    // num_h_slices == 1 (all non-split paths) reduces this to the classic NC*Wt.
+    // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.
     auto num_cols = NC * num_h_slices * Wt;
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
@@ -362,12 +366,15 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     if (use_post_mul) {
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
-    // Accurate fp32 mean: route Float32 SUM through the SFPU (needs 32-bit DEST)
+    // Accurate fp32: route Float32 SUM through the SFPU (needs 32-bit DEST)
     const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
-    // RM reduce packs into a dst-format CB; when that differs from the input format (e.g. bf16 input
-    // reduced into an FP32 partial for the H-axis-split stage 1) the packer must be reconfigured too.
+    // A bf16 input packed into an FP32 partial needs the packer reconfigured, not just the unpacker.
     if (rm_path && dst_cb_data_format != src0_cb_data_format) {
         reduce_defines["REDUCE_RM_MIXED_FORMAT"] = "1";
+    }
+    // Write the compute-packed tiles whole instead of extracting their reduced row into RM pages.
+    if (rm_path && output.layout() == Layout::TILE) {
+        reduce_defines["REDUCE_RM_TILE_OUTPUT"] = "1";
     }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
@@ -428,7 +435,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     writer_desc.config = WriterConfigDescriptor{};
 
     if (rm_path) {
-        std::vector<uint32_t> writer_compile_time_args = build_rm_writer_ct_args(plan, output, ReduceOpDim::H);
+        // One writer for both layouts; tile_output picks whole-tile pages over (nc, slice) RM pages.
+        std::vector<uint32_t> writer_compile_time_args = build_rm_writer_ct_args(
+            plan, output, ReduceOpDim::H, operation_attributes.output_layout == Layout::TILE, num_h_slices);
 
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -459,8 +468,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduce.cpp / reduce_h_neg.cpp expect {Ht, Wt, NC, post_mul_bits}.
     std::vector<uint32_t> compute_kernel_args_group_1;
     if (rm_path) {
-        // Per-slice tile count: the compute kernel reduces `slice_Ht` tiles per output (its H loop
-        // bound). Equals plan.Ht_rm when num_h_slices == 1, so the non-split path is unchanged.
+        // The compute kernel's H loop bound is per-slice: slice_Ht == plan.Ht_rm when unsplit.
         compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, slice_Ht, post_mul_scaler_bits, fp32_sfpu_reduce);
     } else {
         compute_kernel_args_group_1 = {

@@ -123,11 +123,16 @@ std::vector<uint32_t> build_rm_reader_ct_args(
 }
 
 std::vector<uint32_t> build_rm_writer_ct_args(
-    const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim) {
+    const RmPlan& plan,
+    const tt::tt_metal::MeshTensor& dst,
+    tt::tt_metal::ReduceOpDim dim,
+    bool tile_output,
+    uint32_t num_h_slices) {
     // Slot 0 (datum_bytes) is shared. The writer's REDUCE_COL (H) branch additionally consumes
-    // Wt, W_logical, and wt_tiles_per_chunk at slots 1-3; the W path omits them, so the dst
-    // TensorAccessor args follow at slot 1 (W) or slot 4 (H). The kernel is templated on REDUCE_DIM
-    // so the unused slots are genuinely dropped.
+    // Wt, W_logical and wt_tiles_per_chunk at slots 1-3, plus tile_output / num_h_slices /
+    // out_tile_rows at slots 4-6; the W path omits them all, so the dst TensorAccessor args follow
+    // at slot 1 (W) or slot 7 (H). The kernel is templated on REDUCE_DIM so the unused slots are
+    // genuinely dropped.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
     std::vector<uint32_t> args = {
         plan.dst_datum_size,
@@ -136,6 +141,9 @@ std::vector<uint32_t> build_rm_writer_ct_args(
         args.push_back(plan.Wt);
         args.push_back(plan.W_logical);
         args.push_back(plan.wt_tiles_per_chunk);
+        args.push_back(tile_output ? 1u : 0u);
+        args.push_back(num_h_slices);
+        args.push_back(tt::div_up(num_h_slices, plan.rm_rows_per_tile));
     }
     tt::tt_metal::TensorAccessorArgs(dst).append_to(args);
     return args;

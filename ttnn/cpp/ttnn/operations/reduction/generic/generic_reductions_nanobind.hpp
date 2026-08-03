@@ -27,9 +27,10 @@ inline std::string get_generic_reduction_doc(
                 * - INT32
                   - TILE)doc"
                                             : "";
-    // Only ttnn.mean exposes fast_and_approximate_mode.
+    // Both kwargs are sum/mean-only, so one flag gates both doc entries.
     const char* fast_approx_kwarg = has_fast_approximate_mode ? R"doc(
-            fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.)doc"
+            fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.
+            output_layout (ttnn.Layout, optional): layout of the output tensor. Defaults to `None`, which keeps the layout the chosen path produces naturally (see the Note below). `ttnn.TILE_LAYOUT` or `ttnn.ROW_MAJOR_LAYOUT` is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. `ttnn.ROW_MAJOR_LAYOUT` is rejected for block-float results (BFLOAT8_B, BFLOAT4_B), which only exist in TILE layout; typecast explicitly if a row-major result is needed.)doc"
                                                               : "";
     return fmt::format(
         R"doc(
@@ -118,9 +119,7 @@ Tensor generic_reduction_with_deprecated_correction(
         sub_core_grids);
 }
 
-// sum and mean expose an extra 'fast_and_approximate_mode' opt-in that min/max do not, so they need a
-// wrapper with the trailing accurate flag instead of the shared generic_reduction_with_deprecated_correction<>.
-// Same deprecated-correction handling; Func is &ttnn::sum or &ttnn::mean (identical signatures).
+// Same wrapper for sum/mean, which take two extra trailing args. Func is &ttnn::sum or &ttnn::mean.
 template <auto Func>
 Tensor generic_reduction_fast_mode_with_deprecated_correction(
     const Tensor& input_tensor,
@@ -131,7 +130,8 @@ Tensor generic_reduction_fast_mode_with_deprecated_correction(
     float scalar,
     std::optional<bool> correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<Layout>& output_layout) {
     if (correction.has_value()) {
         nb::gil_scoped_acquire acquire;
         PyErr_WarnEx(
@@ -148,7 +148,8 @@ Tensor generic_reduction_fast_mode_with_deprecated_correction(
         scalar,
         correction.value_or(true),
         sub_core_grids,
-        fast_and_approximate_mode);
+        fast_and_approximate_mode,
+        output_layout);
 }
 
 inline void bind_generic_reductions(nb::module_& mod) {
@@ -167,9 +168,8 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("scalar") = 1.0f,
         nb::arg("correction") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
-        // fast_and_approximate_mode=false (default) selects the accurate fp32 SFPU reduce; true selects the FPU. No
-        // effect for non-fp32.
-        nb::arg("fast_and_approximate_mode") = false);
+        nb::arg("fast_and_approximate_mode") = false,
+        nb::arg("output_layout") = nb::none());
 
     const auto mean_doc =
         get_generic_reduction_doc("mean", "ttnn.mean", /*int32_supported=*/false, /*has_fast_approximate_mode=*/true);
@@ -188,7 +188,8 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("sub_core_grids") = nb::none(),
         // fast_and_approximate_mode=false (default) selects the accurate fp32 SFPU reduce; true selects the FPU. No
         // effect for non-fp32.
-        nb::arg("fast_and_approximate_mode") = false);
+        nb::arg("fast_and_approximate_mode") = false,
+        nb::arg("output_layout") = nb::none());
 
     const auto max_doc = get_generic_reduction_doc("max", "ttnn.max", /*int32_supported=*/true);
     ttnn::bind_function<"max">(
