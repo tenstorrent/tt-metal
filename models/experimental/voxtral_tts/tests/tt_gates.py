@@ -54,7 +54,6 @@ def fixture_embeds(case_idx, w):
     REAL PROMPTS ARE NOT OPTIONAL for an accuracy number (STATUS.md trap #12): random embeddings
     are off-manifold and reported PCC 0.892 where these give 0.9994 on the same weights.
     """
-    import json
     import os
 
     from models.experimental.voxtral_tts.reference import voxtral_pipeline_ref as pref
@@ -90,8 +89,6 @@ def gate_prefill26(dev, ref, cases, n_layers=N_LAYERS):
     Reports the LAST position separately because that is the only one Block 2 consumes; the
     all-positions number is there to catch a bug that only touches part of the sequence.
     """
-    import time
-
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc
 
     print(f"  loading fp32 reference weights (~13 GB) -- shared with the device upload")
@@ -128,7 +125,6 @@ def gate_decode(dev, ref, cases, n_steps=8, n_layers=N_LAYERS):
     (the same trap `ttnn_voxtral_pipeline.compare_codes` documents).
     """
     import os
-    import time
 
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc
 
@@ -268,7 +264,6 @@ def gate_flow():
 
 
 def gate_codec():
-    import time
 
     from models.experimental.voxtral_tts.reference import voxtral_codec_ref as ref
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc

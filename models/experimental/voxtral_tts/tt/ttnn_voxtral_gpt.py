@@ -189,8 +189,8 @@ def rope_tables(seq_len, offset=0, head_dim=HEAD_DIM, theta=ROPE_THETA):
 class TtVoxtralGPT:
     """Block 1 on device. prefill(embeds) -> hidden; step(embed) -> hidden, sharing a KV cache."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE, weight_dtype=None,
-                 n_layers=N_LAYERS, state=None, max_seq_len=2048):
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, n_layers=N_LAYERS, state=None,
+                 max_seq_len=2048):
         """`state` takes an already-loaded `load_backbone_state` dict. Pass it when the caller
         also needs the fp32 reference weights: that dict is ~13 GB, and loading it twice is the
         difference between comfortable and swapping.
@@ -199,19 +199,17 @@ class TtVoxtralGPT:
         2048. Pass 0 to skip it (prefill-only harnesses; `step` then raises).
         """
         self.device = device
-        self.dtype = dtype
+        self.dtype = DTYPE
         self.n_layers = n_layers
         self.max_seq_len = max_seq_len
         self.pos = 0
-        self._dec_trace = None      # (tid, x_in, cos_in, sin_in, mask_in, pos_t, out, L, host)
-        self._warm = None           # persistent trace inputs, allocated by warmup_decode
-        wd = weight_dtype or WEIGHT_DTYPE or dtype
+        wd = WEIGHT_DTYPE
         w = state if state is not None else load_backbone_state(ckpt_path)
 
         up = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT,
                                          device=device)
         ffd = FF_WEIGHT_DTYPE or wd                         # FF1_FF3 may differ; see WEIGHT_DTYPE
-        vec = lambda t: up(t.reshape(1, 1, -1), dtype)      # norm gammas: no bandwidth, keep bf16
+        vec = lambda t: up(t.reshape(1, 1, -1), DTYPE)      # norm gammas: no bandwidth, keep bf16
         lin = lambda t, d=None: up(t.t(), d or wd)          # torch [out,in] -> ttnn wants [in,out]
 
         self.norm = vec(w["norm"])
@@ -236,7 +234,7 @@ class TtVoxtralGPT:
         # Allocated once and written in place, so a generation never reallocates. Zero-init is not
         # relied on for correctness -- `step` masks everything above self.pos.
         z = torch.zeros(1, N_KV_HEADS, max_seq_len, HEAD_DIM)
-        self.caches = [(up(z, dtype), up(z, dtype)) for _ in range(n_layers)] if max_seq_len else []
+        self.caches = [(up(z, DTYPE), up(z, DTYPE)) for _ in range(n_layers)] if max_seq_len else []
 
     def reset(self):
         """Start a new utterance. The cache needs no clearing: every position is written before it
