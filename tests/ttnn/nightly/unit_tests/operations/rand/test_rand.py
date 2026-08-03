@@ -22,6 +22,31 @@ def get_types_from_binding_framework():
 DEFAULT_SHAPE = (32, 32)
 SHAPES = [tuple([32] * i) for i in range(6)]
 ALL_TYPES = get_types_from_binding_framework()
+EXPECTED_DTYPE_LAYOUT_FAILURES = {
+    (ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT): "block-float dtypes require tile layout",
+    (ttnn.bfloat4_b, ttnn.ROW_MAJOR_LAYOUT): "block-float dtypes require tile layout",
+    (ttnn.bfloat4_b, ttnn.TILE_LAYOUT): "the continuous-uniform check does not model BFLOAT4_B quantisation",
+    (ttnn.uint8, ttnn.ROW_MAJOR_LAYOUT): "ttnn.rand does not support UINT8",
+    (ttnn.uint8, ttnn.TILE_LAYOUT): "ttnn.rand does not support UINT8",
+    (
+        ttnn.fp8_e4m3,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ): "ttnn.rand typecasts before converting to FP8_E4M3's required row-major layout",
+    (ttnn.fp8_e4m3, ttnn.TILE_LAYOUT): "FP8_E4M3 requires row-major layout",
+}
+DTYPE_LAYOUT_CASES = [
+    (
+        pytest.param(
+            dtype,
+            layout,
+            marks=pytest.mark.xfail(reason=EXPECTED_DTYPE_LAYOUT_FAILURES[(dtype, layout)], strict=True),
+        )
+        if (dtype, layout) in EXPECTED_DTYPE_LAYOUT_FAILURES
+        else pytest.param(dtype, layout)
+    )
+    for layout in (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT)
+    for dtype in ALL_TYPES
+]
 
 
 def is_ttnn_float_type(tt_dtype) -> bool:
@@ -81,9 +106,7 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
     return False
 
 
-@pytest.mark.xfail(reason="BFLOAT4_B/UINT8 and `uint32/int32/BFLOAT8_B` for row major layout are not supported.")
-@pytest.mark.parametrize("dtype", ALL_TYPES)
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES)
 def test_tensor_dtype_and_value_range(device, dtype, layout):
     shape = (1024, 1024)
     if is_ttnn_float_type(dtype):
