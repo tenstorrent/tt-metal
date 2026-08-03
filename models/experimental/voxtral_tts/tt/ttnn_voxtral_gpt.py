@@ -36,6 +36,24 @@ DECODE IS BOUND BY WEIGHT BYTES, so the weight dtype is the speed. The six linea
 after the Block 2 work, so there is no layout trick left in them. Everything else in the step is
 overhead to be removed, and BFP8 halves the floor itself.
 
+WHERE THE TIME GOES, per decode frame, steady state on one N150 (measure with
+scratch probe_perf.py; the numbers below are case 2, 448 frames):
+
+    six linears, weight streaming     ~23.6 ms   AT THE CEILING -- 194 GB/s, and a plain
+                                                 interleaved matmul cannot do better here.
+                                                 Tuned matmul program configs are SLOWER
+                                                 (169 vs 193 GB/s on wq). Only fewer BYTES help.
+    rms_norm x2                         6.0 ms   fp32 accumulation is load-bearing; the cheap
+                                                 variant is 2.4x faster and drops model PCC to
+                                                 0.992. Closed.
+    everything else                    ~5.3 ms   qkv heads, rope, cache write, sdpa_decode,
+                                                 reshapes, residual adds
+    ------------------------------------------
+    Block 1 total                      34.9 ms   (Block 2 is 42.5, so Block 2 is the larger half)
+
+So the only remaining lever on Block 1 is WEIGHT BYTES, and that is capped by the hang: BFP8 on
+FF1_FF3 is safe, adding FF2 reintroduces it (see WEIGHT_DTYPE). Everything else is small change.
+
 TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 
 1. ROPE, AND WE PERMUTE THE WEIGHTS TO AVOID THE HARD VERSION. The checkpoint is Mistral-native, so
@@ -294,6 +312,9 @@ class TtVoxtralGPT:
                 got = tuple(L[k].shape)[-2:]
                 assert got == e, f"layer {i} {k}: expected {e}, got {got}"
 
+    # ----------------------------------------------------------------------------
+    # SHARED PRIMITIVES -- used by both prefill and decode
+    # ----------------------------------------------------------------------------
     def _rope(self, x, cos, sin):
         """Half-split RoPE on [1, heads, S, head_dim]: x*cos + rotate_half(x)*sin.
 
@@ -316,6 +337,10 @@ class TtVoxtralGPT:
         return ttnn.rms_norm(x, weight=gamma, epsilon=NORM_EPS,
                              compute_kernel_config=COMPUTE_CONFIG)
 
+    # ----------------------------------------------------------------------------
+    # PREFILL PATH -- whole prompt at once, fills the KV cache
+    # Runs once per utterance (~1 s), so it is not where the frame budget goes.
+    # ----------------------------------------------------------------------------
     def _qkv(self, x, w, S, cos, sin):
         """Pre-norm + fused QKV + RoPE. -> (q,k,v) as [1, heads, S, head_dim], v un-rotated."""
         h = self._norm(x, w["an"])
@@ -384,6 +409,10 @@ class TtVoxtralGPT:
         a = self._attend(qh, kh, vh, S, mask)
         return self._mlp(ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG)), w)
 
+    # ----------------------------------------------------------------------------
+    # DECODE PATH -- one frame at a time; THIS is the hot loop
+    # Two interiors: _layer_step_native (default, ttnn decode-native ops) and _layer_step (hand-rolled reference).
+    # ----------------------------------------------------------------------------
     def _pos_tensor(self, pos, pos_t):
         """The write/read position as a DEVICE tensor. Under trace it is the persistent buffer the
         capture bound; eager makes one per step."""
@@ -523,9 +552,9 @@ class TtVoxtralGPT:
         all Block 2 ever sees, and `ttnn_voxtral_backbone` exposes the same name."""
         return self.prefill(embeds, last_only=True)
 
-    # ----------------------------------------------------------------------------------
-    # Device trace of the decode step. See USE_TRACE.
-    # ----------------------------------------------------------------------------------
+    # ----------------------------------------------------------------------------
+    # DEVICE TRACE of the decode step -- correct, OFF by default (see USE_TRACE)
+    # ----------------------------------------------------------------------------
     def _decode_graph(self, x, cos, sin, mask, L, pos_t):
         """The captured region: 26 layers + final norm, reading ONLY device tensors.
 
@@ -675,6 +704,9 @@ class TtVoxtralGPT:
         return ttnn.to_torch(x).float().reshape(1, 1, DIM)
 
 
+# --------------------------------------------------------------------------------
+# GATES -- each increment of this port had to pass one before the next started.
+# --------------------------------------------------------------------------------
 def fixture_embeds(case_idx, w):
     """Fixture case -> real prompt embeds [1,P,3072], exactly as the pipeline builds them.
 

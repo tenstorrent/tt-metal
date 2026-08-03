@@ -31,6 +31,26 @@ Neither of the two things that look like the bottleneck is one: 4x less arithmet
 and host dispatch is a flat ~6.5 ms. Full measurements and the rejected alternatives -- sdpa, bfp4,
 lower fidelity -- are in STATUS.md's Block 2 section. Read it before optimizing here.
 
+WHERE THE TIME GOES, per frame, steady state on one N150 (Block 2 is 42.5 ms of a 77.6 ms frame,
+so it is now the LARGER half and the natural next target):
+
+    _solve -- 7 Euler steps          ~35 ms    7 SEQUENTIAL velocity evaluations. Each is a
+                                               3-layer transformer over 3 tokens, batch-2 CFG
+                                               folded to 6 rows, so every matmul does 32 tile
+                                               rows of work for 6 useful ones.
+    semantic_code                      3.1 ms  [B,8320] masked argmax, host
+    host tail (FSQ quantise etc)       0.7 ms
+    ------------------------------------------
+    Block 2 total                     42.5 ms
+
+The structural problem is the SEQUENCE: 7 steps that each depend on the previous, so none of the
+usual batching tricks apply within a frame. What HAS been tried and rejected: lower math fidelity
+(HiFi2/LoFi save ~4 ms and cost 10-20x the integer-code errors -- see COMPUTE_CONFIG), and a
+device trace (correct, bit-identical, but ~6 ms/frame SLOWER on this part -- see USE_TRACE).
+BFP8 weights ARE now on and were worth 1.23x. An untried idea worth a look: the 3-token sequence
+wastes 26 of 32 tile rows, and STATUS.md notes CONCURRENT REQUESTS could fill them -- throughput,
+not latency.
+
 HOST vs DEVICE. The whole Euler solve -- the 3-layer transformer, the CFG combine and the state
 update -- runs on device, with nothing left in the loop that a trace could not capture. Two things
 stay on host, deliberately, and both are once per frame rather than once per step:
