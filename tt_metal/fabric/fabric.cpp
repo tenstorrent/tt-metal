@@ -283,6 +283,7 @@ std::vector<eth_chan_directions> get_neighbor_eth_directions(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     std::vector<eth_chan_directions> directions;
+    directions.reserve(FabricContext::routing_directions.size());
     for (const auto& direction : FabricContext::routing_directions) {
         auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
         if (std::find(neighbors.begin(), neighbors.end(), dst_fabric_node_id.chip_id) != neighbors.end()) {
@@ -308,6 +309,7 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     std::vector<FabricNodeId> dst_nodes;
+    dst_nodes.reserve(attempted_directionss.size());
     std::unordered_set<RoutingDirection> used_directions;
     for (auto dir : attempted_directionss) {
         auto routing_direction = control_plane.eth_direction_to_routing_direction(dir);
@@ -657,6 +659,7 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<std::pair<std::string, std::string>> defines;
+    defines.reserve(2);
     switch (api_type) {
         case tt::tt_fabric::FabricApiType::Linear: defines.push_back({"API_TYPE_Linear", "1"}); break;
         case tt::tt_fabric::FabricApiType::Mesh: defines.push_back({"API_TYPE_Mesh", "1"}); break;
@@ -696,6 +699,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
+    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];

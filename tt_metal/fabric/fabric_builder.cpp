@@ -145,6 +145,7 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
         const auto& chans_dir2 = channels_by_direction_.at(dir2);
         uint32_t num_links = std::min(chans_dir1.size(), chans_dir2.size());
 
+        pairs.reserve(pairs.size() + num_links);
         for (uint32_t link = 0; link < num_links; link++) {
             pairs.push_back(RouterConnectionPair{
                 .chan1 = chans_dir1[link],
