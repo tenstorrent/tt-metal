@@ -12,8 +12,8 @@ Paste the block below as the first message in a fresh session on the new machine
 > transformer and text encoder are explicitly out of scope.
 >
 > The work lives on branch **`kevinmi/minimax-h3-vae`** in `tenstorrent/tt-metal`.
-> Check it out before anything else, and commit and push there — never to `main` or
-> another branch:
+> **It is not in your local clone — fetch it first**, then check it out. Commit and
+> push there only, never to `main` or another branch:
 >
 > ```bash
 > git fetch origin kevinmi/minimax-h3-vae
@@ -21,7 +21,23 @@ Paste the block below as the first message in a fresh session on the new machine
 > ```
 >
 > It is based on `origin/cglagovich/minimax-h3` (`42ecb2e0339`), which owns the
-> canonical folder structure. Any PR targets `kevinmi/minimax-h3-vae`.
+> canonical folder structure — fetch that too if you need to diff against it. Any PR
+> targets `kevinmi/minimax-h3-vae`.
+>
+> **Use the `gh` CLI for everything GitHub-side** — PRs, issues, reading the
+> reference PRs (`gh pr view`, `gh pr diff`, `gh api`). Do not scrape the web UI.
+>
+> **The weights are already on this machine at `/data/cglavioch/minmax-h3`** — do not
+> re-download the 135 GiB. If that exact path is not there, glob for it before
+> downloading anything:
+>
+> ```bash
+> ls /data/*/minmax-h3 /data/*/minimax-h3 2>/dev/null
+> ```
+>
+> (The path was given from memory and its spelling differs from the branch owner's
+> `cglagovich`, so it may be slightly off.) You need only `FL2VA/video_vae` and
+> `FL2VA/audio_vae` for VAE work.
 >
 > Start by reading, in this order:
 >
@@ -93,15 +109,29 @@ python -c "import ttnn; print('ttnn still ok')"
   models/tt_dit/tests/models/minimax_h3/test_vae_encoder_minimax_h3.py -q --no-header
 ```
 
-The weights are ~135 GiB under `FL2VA/`; if the new machine has no copy:
+## Weights
+
+**Already on the machine at `/data/cglavioch/minmax-h3`.** Do not re-download the
+135 GiB. Verify and point the tests at it:
 
 ```bash
-hf download MiniMaxAI/MiniMax-H3 --include "FL2VA/*"
+ls /data/cglavioch/minmax-h3
+# if absent, the spelling may be off -- glob before downloading anything
+ls -d /data/*/min*max-h3 2>/dev/null
 ```
 
-Only `FL2VA/video_vae` (9.8 G) and `FL2VA/audio_vae` (578 M) are needed for VAE
-work — skip the 62 G transformer and 63 G text encoder unless the parked DiT work
-resumes.
+VAE work needs only `FL2VA/video_vae` (9.8 G) and `FL2VA/audio_vae` (578 M). The
+62 G transformer and 63 G text encoder are for the parked DiT work.
+
+The `source/` subdirectory is the one that matters: `FL2VA/video_vae/config.json`
+hides the real architecture behind `source_path`, and
+`FL2VA/video_vae/source/config.json` is the authority (see the plan's §1).
+
+Only as a last resort, if no local copy exists:
+
+```bash
+hf download MiniMaxAI/MiniMax-H3 --include "FL2VA/video_vae/*" "FL2VA/audio_vae/*"
+```
 
 ## Traps already paid for
 
