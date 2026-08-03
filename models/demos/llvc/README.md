@@ -105,6 +105,36 @@ Follow the [TT-NN model bring-up report](https://github.com/tenstorrent/tt-metal
   -c "pytest models/demos/llvc/tests/perf/test_perf.py::TestLLVCPerformance::test_summary"
 ```
 
+## Evaluation (quality + performance metrics)
+
+`eval/evaluate.py` produces the standard voice-conversion evidence in one run:
+decoder throughput, token-level accuracy vs the PyTorch reference, and — when the
+optional models are installed — content preservation (WER), speaker similarity,
+and objective audio quality (DNSMOS).
+
+```bash
+python models/demos/llvc/eval/evaluate.py \
+  --config experiments/llvc/config.json \
+  --checkpoint llvc_models/models/checkpoints/llvc/G_500000.pth \
+  --input test_wavs \
+  --target-ref target_speaker_samples \
+  --out-dir llvc_eval_out --chunk-factor 2
+```
+
+It writes `eval_report.json` + `eval_report.md` (a table ready to paste into a PR)
+and the converted wavs into `--out-dir`.
+
+| Metric | How it's computed | Needs |
+|---|---|---|
+| Decoder throughput (latent frames/s) | `sample_rate / (L · RTF)` vs the `sample_rate / L` real-time rate | always (pure torch) |
+| Token-level accuracy vs reference | per-frame PCC (hop = `L`) of non-streaming TTNN vs the PyTorch reference, plus % of frames > 0.9 | always (pure torch) |
+| Content preservation (WER) | Whisper transcribes source vs converted; `jiwer` WER between them | `openai-whisper`, `jiwer` |
+| Speaker similarity | cosine similarity of converted vs target-speaker embeddings | `resemblyzer`, `--target-ref` |
+| Audio quality (DNSMOS) | non-intrusive MOS of the converted speech | `torchmetrics[audio]`, `onnxruntime`, `librosa` |
+
+The three external-model metrics are imported lazily; if a dependency is missing
+the harness logs a skip line and still reports the pure-torch metrics.
+
 ## Targets and measured results (N300, `wormhole_b0`)
 
 | Metric | Target | Measured (full-size, `chunk_factor=2`) | Where checked |
