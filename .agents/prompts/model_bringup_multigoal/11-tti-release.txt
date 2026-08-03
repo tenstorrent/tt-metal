@@ -14,7 +14,7 @@ Goal completion requirements:
 - If TTI sends a valid prompt length that is not divisible by an internal prefill chunk/page/tile/trace size, the autoport must handle it. Do not waive the failure or align the benchmark; fix the model/generator/adapter path.
 - Use the reservation container for `tt-smi` health/reset and autoport vLLM serving. Use the physical loudbox host only for Docker fallback or host-level recovery. Use the checkout's own `run.py --help`, matching release tag/image, and required CLI spelling.
 - Before full release, run a tiny no-Docker TTI smoke against the autoport server: health check, one OpenAI-compatible request, then one small TTI benchmark with `disable_trace_capture=true`.
-- At least the TTI nightly-equivalent Stage 10 release configuration passes. Unrestricted full-set release readiness is preferred when practical but is not required for Stage 10 completion.
+- At least the TTI nightly-equivalent Stage 11 release configuration passes. Unrestricted full-set release readiness is preferred when practical but is not required for Stage 11 completion.
 - Run the TTI release workflow for the no-Docker autoport spec after the smoke passes, without printing tokens or copying secrets, caches, weights, Docker layers, persistent TT caches, or large raw eval dumps.
 - Recover ARC/ERISC/remote-Ethernet/reset failures before stopping; use $autofix for release test/spec/API/eval/benchmark harness failures, not pure infra failures.
 - Copy the final release report and small JSON/CSV/log artifacts to models/autoports/<model>/doc/tti_release/.

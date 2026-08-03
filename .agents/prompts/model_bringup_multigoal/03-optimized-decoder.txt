@@ -1,13 +1,13 @@
-/goal Use $optimize and $tt-device-usage for the HF_MODEL functional decoder in the current tt-metal checkout.
+/goal Use $optimize and $tt-device-usage for the HF_MODEL fused decoder in the current tt-metal checkout.
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
-This goal creates the optimized-decoder state for the repo-local TTNN autoport pipeline. Start from the completed functional decoder and work only on models/autoports/<model>/tt/optimized_decoder.py plus its tests and docs; do not begin multichip-decoder, full-model, or vLLM work in this goal.
+This goal creates the optimized-decoder state for the repo-local TTNN autoport pipeline. Start from the completed fused decoder and work only on models/autoports/<model>/tt/optimized_decoder.py plus its tests and docs; do not begin multichip-decoder, full-model, or vLLM work in this goal.
 
 Goal completion requirements:
 - models/autoports/<model>/tt/optimized_decoder.py exists and the delivered tests exercise the optimized path, not a functional fallback.
-- The optimized decoder preserves the functional decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
-- The optimized decoder preserves the context contract from functional decoder. If optimization changes memory layout, sharding, or KV-cache dtype enough to change capacity, update doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
+- The optimized decoder preserves the fused decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
+- The optimized decoder preserves the context contract from fused decoder. If optimization changes memory layout, sharding, or KV-cache dtype enough to change capacity, update doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
 - The optimized decoder preserves support for valid non-aligned logical sequence lengths; internal padding/chunking is fine, public `seq_len % chunk_size == 0` restrictions are not.
 - Prefill and decode PCC remain at the functional acceptance bar for every meaningful layer kind, with any material delta explained.
 - Warmed prefill and traced warmed decode latency are reported before and after optimization.

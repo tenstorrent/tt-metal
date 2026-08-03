@@ -221,7 +221,7 @@ sample counts, and their generation limits. Record the estimate in
 
 If the unrestricted eval suite would take a prohibitively long time for the
 experiment or available reservation window, it is acceptable to use TTI's CI
-configuration for Stage 10:
+configuration for Stage 11:
 
 ```bash
 python3 run.py \
@@ -248,7 +248,7 @@ in `RUN_NOTES.md`. Label every resulting accuracy number as a CI-subset result;
 never present it as full-set accuracy or compare it directly with a full-set
 release threshold without that qualification.
 
-A justified, successfully completed `ci-nightly` release may satisfy Stage 10,
+A justified, successfully completed `ci-nightly` release may satisfy Stage 11,
 but it establishes CI-subset readiness rather than unrestricted full-set
 release readiness.
 
