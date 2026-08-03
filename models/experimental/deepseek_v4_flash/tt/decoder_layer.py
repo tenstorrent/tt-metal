@@ -81,7 +81,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             weight_dtype=weight_dtype,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
-            weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm")
+            weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True
         )
         self.post_attention_layernorm = DeepSeekV4RMSNorm(
             weights["post_attention_layernorm.weight"], eps, device, cache.file("post_attention_layernorm")
