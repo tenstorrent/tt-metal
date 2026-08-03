@@ -216,6 +216,9 @@ public:
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
 
     // Returns the devices in the mesh in row-major order.
+    [[deprecated(
+        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
+        "03-09-2026.")]]
     std::vector<IDevice*> get_devices() const;
     [[deprecated(
         "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
