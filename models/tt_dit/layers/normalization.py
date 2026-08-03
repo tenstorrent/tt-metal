@@ -203,6 +203,7 @@ class DistributedRMSNorm(Module):
         trans_mat=None,
         dtype=None,
         dynamic_weight=None,
+        dynamic_bias=None,
         per_head_norm=False,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
@@ -229,6 +230,15 @@ class DistributedRMSNorm(Module):
         if dynamic_weight is not None:
             weight = dynamic_weight if weight is None else ttnn.multiply(weight, dynamic_weight)
         weight_key = tuple(weight.shape) if weight is not None else None
+
+        # dynamic_bias is the additive half of an adaLN modulation (the `shift`), folded into the same
+        # fused op as the scale so the caller needs no separate elementwise add. The device op accepts
+        # a per-token bias of shape [.., N, H] alongside a per-token weight; it requires a weight
+        # whenever a bias is given. Unlike the weight it does not reach create_stats_buffer, because
+        # only the weight can change the stats scratch geometry -- hence it is absent from the cache key.
+        if dynamic_bias is not None and weight is None:
+            msg = "dynamic_bias requires a weight: pass dynamic_weight or build the norm with affine=True"
+            raise ValueError(msg)
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).
@@ -265,6 +275,7 @@ class DistributedRMSNorm(Module):
             num_heads_per_device=num_heads_per_device,
             per_head_norm=per_head_norm,
             weight=weight,
+            bias=dynamic_bias,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             transformation_mat=trans_mat,
