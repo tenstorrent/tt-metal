@@ -63,3 +63,58 @@ def test_repeat_interleave_codegen_routing(device, shape, kwargs, dtype, layout)
     assert_equal(golden, ttnn.to_torch(out))
     msg = "auto routed an out-of-scope case to codegen (program cache grew); expected native fallback"
     assert device.num_program_cache_entries() == entries_before, msg
+
+
+# --- hand-added regressions (not emitted by phase 8) ---
+
+_CODEGEN = "codegen"
+
+_SUPPORTED = [
+    ([2, 3, 32, 64], {"repeats": 2, "dim": 1}, ttnn.TILE_LAYOUT),
+    ([2, 3, 32, 64], {"repeats": 2, "dim": 1}, ttnn.ROW_MAJOR_LAYOUT),
+]
+_SUPPORTED_IDS = [
+    "[2, 3, 32, 64]|dim=1&repeats=2|tile",
+    "[2, 3, 32, 64]|dim=1&repeats=2|row_major",
+]
+
+
+@pytest.mark.parametrize("dtype", _DTYPES, ids=_DTYPE_IDS)
+@pytest.mark.parametrize("shape,kwargs,layout", _SUPPORTED, ids=_SUPPORTED_IDS)
+def test_repeat_interleave_codegen_program_cache_hit(device, shape, kwargs, dtype, layout):
+    """A second dispatch of the same spec must reuse the cached program with the new buffers.
+
+    The descriptor factory hands raw Buffer*s to emplace_runtime_args, so a cache hit relies on
+    the framework re-resolving those bindings; a stale binding would read or write the first
+    invocation's allocation.
+    """
+    x = _make_input(shape, dtype)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
+    golden = ttnn.to_torch(ttnn.repeat_interleave(xt, **kwargs, implementation=_NATIVE))
+
+    first = ttnn.repeat_interleave(xt, **kwargs, implementation=_CODEGEN)
+    assert_equal(golden, ttnn.to_torch(first))
+    entries_after_miss = device.num_program_cache_entries()
+
+    # A distinct input allocation with the same spec: same program hash, different Buffer*.
+    yt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
+    second_golden = ttnn.to_torch(ttnn.repeat_interleave(yt, **kwargs, implementation=_NATIVE))
+    second = ttnn.repeat_interleave(yt, **kwargs, implementation=_CODEGEN)
+    assert_equal(second_golden, ttnn.to_torch(second))
+    assert device.num_program_cache_entries() == entries_after_miss, "second codegen dispatch missed the program cache"
+
+
+def test_repeat_interleave_codegen_wide_stick_falls_back(device):
+    """A row-major stick too wide for the codegen CB must route to native, not fail to build.
+
+    supported_by_codegen() accepts any non-last dim, but an RM CB slot is a whole stick in L1.
+    """
+    shape, kwargs = [2, 262144], {"repeats": 2, "dim": 0}
+    x = _make_input(shape, ttnn.float32)
+    xt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    golden = ttnn.to_torch(ttnn.repeat_interleave(xt, **kwargs, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.repeat_interleave(xt, **kwargs, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = "auto routed a stick too wide for the codegen CB to codegen; expected native fallback"
+    assert device.num_program_cache_entries() == entries_before, msg

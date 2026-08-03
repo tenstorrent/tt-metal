@@ -5,6 +5,9 @@
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_supported.hpp"
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -14,7 +17,28 @@ uint32_t normalize_dim(int32_t dim, uint32_t ndim) {
     return static_cast<uint32_t>(dim >= 0 ? dim : dim + static_cast<int32_t>(ndim));
 }
 
+// ops/repeat_interleave/builder.py::_page_alignment.
+uint32_t page_alignment(const MemoryConfig& memory_config) {
+    using tt::tt_metal::BufferType;
+    return memory_config.buffer_type() == BufferType::L1 ? tt::tt_metal::hal::get_l1_alignment()
+                                                         : tt::tt_metal::hal::get_dram_alignment();
+}
+
 }  // namespace
+
+RmCbBudget rm_cb_budget(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    const auto& shape = input.logical_shape();
+    const uint32_t stick_size = shape[shape.rank() - 1] * input.element_size();
+    const MemoryConfig& out_config = output_mem_config.value_or(input.memory_config());
+    const uint32_t slot_stride = std::max(
+        tt::round_up(stick_size, page_alignment(input.memory_config())),
+        tt::round_up(stick_size, page_alignment(out_config)));
+
+    auto* device = input.device();
+    const uint32_t l1_capacity =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    return {slot_stride, slot_stride == 0 ? 0 : l1_capacity / slot_stride};
+}
 
 bool supported_by_codegen(
     const Tensor& input, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
@@ -80,7 +104,11 @@ bool supported_by_codegen(
         // This predicate mirrors that stale ledger, not device capability, per
         // repeat_interleave.yaml's dim == ndim - 1 out-of-scope case; the program factory does
         // not wire that kernel because supported_by_codegen() never lets it be reached.
-        return nd != ndim - 1;
+        if (nd == ndim - 1) {
+            return false;
+        }
+        // Nothing above bounds the stick width, but an RM CB slot is a whole stick in L1.
+        return rm_cb_budget(input, output_mem_config).max_slots >= kRmCbMinSlots;
     }
 
     return false;

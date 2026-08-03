@@ -146,14 +146,11 @@ PageMap rm_page_map(const Tensor& input, uint32_t rep_dim, uint32_t num_repeats)
     return {lower_pages, dim_pages[rep_dim], total_src_pages * num_repeats, shape[ndim - 1] * input.element_size()};
 }
 
-// operation_attributes_t.rep_dim's storage convention; recovered by
-// repeat_interleave_codegen_device_operation.cpp and the codegen program factory.
-constexpr uint32_t kRepDimPadRank = 4;
-
 Tensor repeat_interleave_codegen_dispatch(
     const Tensor& input, uint32_t repeats, uint32_t normalized_dim, const MemoryConfig& mem_config) {
     const uint32_t ndim = input.logical_shape().rank();
-    const uint32_t padded_dim = normalized_dim + (kRepDimPadRank - ndim);
+    // Sole writer of operation_attributes_t.rep_dim; the inverse is ttnn::prim::recover_rep_dim.
+    const uint32_t padded_dim = normalized_dim + (ttnn::prim::kRepDimPadRank - ndim);
     const PageMap page_map = input.layout() == Layout::TILE ? tile_page_map(input, normalized_dim, repeats)
                                                             : rm_page_map(input, normalized_dim, repeats);
     return ttnn::prim::repeat_interleave_codegen(

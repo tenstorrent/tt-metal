@@ -19,6 +19,21 @@ namespace ttnn::operations::data_movement {
 bool supported_by_codegen(
     const Tensor& input, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config);
 
+// A ROW_MAJOR codegen CB slot holds one whole stick, so its byte size scales with the input's
+// last dim -- unlike the TILE path, whose slot is always one tile. Shared by supported_by_codegen()
+// (which rejects a stick too wide for the smallest viable CB) and the program factory (which
+// shrinks its read/write batch to whatever per-core L1 admits); the two must agree or the gate
+// would claim a config the factory cannot instantiate.
+struct RmCbBudget {
+    uint32_t slot_stride;  // bytes per CB slot
+    uint32_t max_slots;    // slots that fit in per-core L1
+};
+RmCbBudget rm_cb_budget(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+
+// The RM writer waits on the previous batch plus the current one, so one in-flight page per side
+// is the floor below which the kernels deadlock.
+inline constexpr uint32_t kRmCbMinSlots = 2;
+
 // Perf-only: enumerated cases that supported_by_codegen() accepts but that measured worse than
 // the native prim on device. Consulted ONLY by the free function's `auto` branch -- never by
 // validate -- so a forced implementation="codegen" call still runs these.

@@ -12,6 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_supported.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::prim {
@@ -166,14 +167,27 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         "repeat_interleave codegen: RM within-stick (last-dim) replication is not wired in this "
         "program factory; supported_by_codegen() must reject it before create_descriptor runs");
 
-    const uint32_t in_align = page_alignment(input.memory_config());
-    const uint32_t out_align = page_alignment(output.memory_config());
-    const uint32_t slot_stride = std::max(
-        align_up(operation_attributes.stick_size, in_align), align_up(operation_attributes.stick_size, out_align));
+    // An RM slot is a whole stick, so kReadBatch/kWriteBatch worth of them is not guaranteed to
+    // fit: shrink the batch (and with it the CB depth) to what per-core L1 admits. The gate
+    // rejects anything below kRmCbMinSlots, so the loop always terminates with batch >= 1.
+    const auto cb_budget = ttnn::operations::data_movement::rm_cb_budget(input, output.memory_config());
+    const uint32_t slot_stride = cb_budget.slot_stride;
+    TT_FATAL(
+        cb_budget.max_slots >= ttnn::operations::data_movement::kRmCbMinSlots,
+        "repeat_interleave codegen: a {} B row-major stick needs {} CB slots' worth of per-core L1 "
+        "but only {} fit; supported_by_codegen() must reject this config",
+        operation_attributes.stick_size,
+        ttnn::operations::data_movement::kRmCbMinSlots,
+        cb_budget.max_slots);
+    uint32_t batch = kReadBatch;
+    while (2 * batch > cb_budget.max_slots) {
+        batch /= 2;
+    }
+    const uint32_t cb_depth = 2 * batch;
 
     constexpr uint32_t cb_id = CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = kCbDepth * slot_stride,
+        .total_size = cb_depth * slot_stride,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = cb_id,
@@ -192,7 +206,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     reader_desc.compile_time_args.push_back(operation_attributes.num_repeats);
     reader_desc.compile_time_args.push_back(operation_attributes.lower_pages);
     reader_desc.compile_time_args.push_back(operation_attributes.rep_dim_pages);
-    reader_desc.compile_time_args.push_back(kReadBatch);
+    reader_desc.compile_time_args.push_back(batch);
     reader_desc.config = ReaderConfigDescriptor{};
 
     const uint32_t out_page_size = static_cast<uint32_t>(out_buffer->aligned_page_size());
@@ -201,7 +215,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = {cb_id, operation_attributes.stick_size, out_page_size, slot_stride};
     TensorAccessorArgs(*out_buffer).append_to(writer_desc.compile_time_args);
-    writer_desc.compile_time_args.push_back(kWriteBatch);
+    writer_desc.compile_time_args.push_back(batch);
     writer_desc.config = WriterConfigDescriptor{};
 
     for (const auto& work : layout) {
