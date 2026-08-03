@@ -46,9 +46,10 @@ def test_block1_weight_precision_is_mixed():
     assert gpt.FF2_WEIGHT_DTYPE is None, "FF2 in BFP8 reintroduces the hang"
 
 
-def test_block1_decode_native_is_on():
-    """34.9 ms/frame vs 41.5 hand-rolled, for decode PCC 0.99990 vs 0.99991."""
-    assert gpt.DECODE_NATIVE is True
+def test_block1_decode_native_is_off():
+    """OFF: 6.6 ms/frame faster, but it drove fixture case 4 into a repetition loop (78/8/183/123
+    frames across seeds vs 45/8/39/69 hand-rolled). Re-measure if case 4 is ever fixed."""
+    assert gpt.DECODE_NATIVE is False, "amplifies case 4 into a repetition loop"
 
 
 def test_block2_weights_are_bfp8_but_fidelity_stays_high():
