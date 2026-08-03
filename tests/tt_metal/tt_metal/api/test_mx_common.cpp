@@ -20,9 +20,6 @@ using tt::tt_metal::mx::convert_to_mxfp_elem_bits;
 using tt::tt_metal::mx::FormatParams;
 using tt::tt_metal::mx::InfNanRepresentation;
 
-// Mirrors of the per-format descriptors in mxfp4.cpp / mxfp6.cpp / mxfp8.cpp,
-// which live in anonymous namespaces and so cannot be included here. Keep in
-// sync with those definitions.
 constexpr FormatParams kMxFp4Params = {
     .elem_exp_bits = 2,
     .elem_man_bits = 1,
