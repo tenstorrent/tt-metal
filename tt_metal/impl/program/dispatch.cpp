@@ -1117,6 +1117,11 @@ public:
                 const auto& ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
             // This API extracts all the pairs of noc multicast encodings given a set of core ranges
             std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
+            size_t num_cores = 0;
+            for (const CoreRange& core_range : ranges) {
+                num_cores += core_range.size();
+            }
+            dst_noc_unicast_info.reserve(num_cores);
             for (const CoreRange& core_range : ranges) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -1809,6 +1814,7 @@ public:
             auto& cmd_data = batched_cmd_data[i];
             size_t last_end = cmd_data.front().start;
             std::vector<ttsl::Span<const uint8_t>> batched_data;
+            batched_data.reserve(cmd_data.size() * 2);
             for (const Transfer& transfer : cmd_data) {
                 if (last_end != transfer.start) {
                     TT_ASSERT(transfer.start - last_end <= fill_data.size());
@@ -3024,6 +3030,7 @@ TraceNode create_trace_node(
     }
 
     std::vector<std::vector<uint32_t>> all_cb_configs_payloads;
+    all_cb_configs_payloads.reserve(cached_program_command_sequence.circular_buffers_on_core_ranges.size());
     const auto& hal = MetalContext::instance().hal();
     uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -3060,6 +3067,7 @@ TraceNode create_trace_node(
 
     std::vector<std::vector<uint8_t>> all_dfb_configs_payloads;
     if (!hal.has_tile_counter_registers()) {
+        all_dfb_configs_payloads.reserve(cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
         for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
             std::vector<uint8_t> dfb_config_payload(
                 max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), 0);
@@ -3351,6 +3359,13 @@ void set_core_go_message_mapping_on_device(
     uint32_t max_prefetch_command_size =
         MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
     uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
+
+    size_t num_core_ranges = 0;
+    for (const auto& [core_range_set, go_msg_offset] : core_go_message_mapping) {
+        num_core_ranges += core_range_set.ranges().size();
+    }
+    data.reserve(num_core_ranges);
+    sub_cmds.reserve(num_core_ranges);
 
     for (const auto& [core_range_set, go_msg_offset] : core_go_message_mapping) {
         for (const auto& core_range : core_range_set.ranges()) {
