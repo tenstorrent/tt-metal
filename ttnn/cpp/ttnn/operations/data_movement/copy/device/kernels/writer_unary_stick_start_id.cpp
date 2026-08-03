@@ -25,13 +25,15 @@ void kernel_main() {
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_sticks;
     for (uint32_t i = start_id; i != end_id; --i) {
-        for (uint32_t k = num_shards - 1; k >= 0; k--) {
+        for (uint32_t k = num_shards; k > 0; --k) {
+            uint32_t shard_idx = k - 1;
 #else
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
         for (uint32_t k = 0; k < num_shards; k++) {
+            uint32_t shard_idx = k;
 #endif
-            uint32_t stick_index = i * num_shards + k;
+            uint32_t stick_index = i * num_shards + shard_idx;
             dfb_out0.wait_front(1);
             noc.async_write(dfb_out0, s0, stick_size, {.offset_bytes = 0}, {.page_id = stick_index, .offset_bytes = 0});
             noc.async_write_barrier();
