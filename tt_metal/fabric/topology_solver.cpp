@@ -20,6 +20,7 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
 
     // Collect all mesh and switch instances (same order as MeshGraph: meshes then switches)
     std::vector<GlobalNodeId> mesh_and_switch_instances;
+    mesh_and_switch_instances.reserve(mgd.all_meshes().size() + mgd.all_switches().size());
     for (GlobalNodeId id : mgd.all_meshes()) {
         mesh_and_switch_instances.push_back(id);
     }
@@ -99,6 +100,7 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
             if (neighbor_chip_id == fabric_node_id.chip_id) {
                 continue;
             }
+            adjacents.reserve(adjacents.size() + edge.connected_chip_ids.size());
             for (size_t i = 0; i < edge.connected_chip_ids.size(); ++i) {
                 adjacents.push_back(FabricNodeId(mesh_id, neighbor_chip_id));
             }
@@ -136,9 +138,11 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_phy
     for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
         auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
                                        const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
+            const auto neighbors = physical_system_descriptor.get_asic_neighbors(asic_id);
             std::vector<tt::tt_metal::AsicID> adjacents;
+            adjacents.reserve(neighbors.size());
 
-            for (const auto& neighbor : physical_system_descriptor.get_asic_neighbors(asic_id)) {
+            for (const auto& neighbor : neighbors) {
                 // Skip self-connections
                 if (neighbor == asic_id) {
                     continue;
