@@ -317,15 +317,27 @@ def get_or_create_bspm_expert_tp8(
             keep_packed_data=is_disk_cache,
         )
 
-    ct = cache.get_or_create(
+    if is_disk_cache and packed_artifact_id is not None and packed_fp is not None:
+        # Skip the source-weight store. Once packed artifacts exist the warm lookup above
+        # returns before this point, so ``_store_compressed``'s tiles.bin is written on every
+        # cold expert and then never read: it doubles the cold time (~259 ms of the ~508 ms)
+        # and the on-disk footprint (8.26 MB/expert/projection twice over). An already-present
+        # source entry is still honoured so caches built before this change keep their benefit.
+        source_entry = cache._lookup_compressed(compute_artifact_id(fingerprint))
+        if isinstance(source_entry, PresentCacheEntry):
+            inputs = cache._load_compressed(source_entry.paths.object_dir, target)
+        else:
+            tensors = raw_tensors() if callable(raw_tensors) else raw_tensors
+            inputs = _preprocess_and_slice(tensors)[target.name]
+        ct = _reconstruct(inputs, device)
+        artifacts = ct.extract_packed_artifacts(drop=True)
+        cache._store_sram_compressed(packed_artifact_id, packed_fp, artifacts)
+        return ct
+
+    return cache.get_or_create(
         fingerprint,
         device,
         preprocess=_preprocess_and_slice,
         raw_tensors=raw_tensors,
         reconstruct=_reconstruct,
     )
-
-    if is_disk_cache and packed_artifact_id is not None and packed_fp is not None:
-        artifacts = ct.extract_packed_artifacts(drop=True)
-        cache._store_sram_compressed(packed_artifact_id, packed_fp, artifacts)
-    return ct
