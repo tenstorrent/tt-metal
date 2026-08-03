@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <type_traits>
+
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -60,6 +63,73 @@ FORCE_INLINE void prepare_zero_tile() {
     dfb.reserve_back(1);
     zero_tile(dfb);
     dfb.push_back(1);
+}
+
+/**
+ * @brief Alignment-aware byte-range fill for L1 memory.
+ *
+ * Writes 4 bytes at a time over the 4-byte-aligned interior, then uses
+ * element-sized stores for any unaligned head/tail bytes to avoid RV32IM
+ * alignment faults (e.g. when padding a row whose byte offset is not 4-byte
+ * aligned).
+ *
+ * @tparam val_size  Element size in bytes: 1 (FP8), 2 (BF16/FP16), or 4 (FP32).
+ * @param start_addr  Start L1 byte address of the region to fill.
+ * @param n_bytes     Number of bytes to fill (not element count).
+ * @param val         Fill value; pass the element encoding in the low bits
+ *                    (e.g. a bfloat16 bit pattern in bits [15:0]).
+ *                    For val_size < 4 the value is replicated into a uint32_t
+ *                    for the bulk writes.
+ */
+template <uint32_t val_size>
+FORCE_INLINE void fill_l1_range(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
+    static_assert(
+        val_size == sizeof(uint8_t) || val_size == sizeof(uint16_t) || val_size == sizeof(uint32_t),
+        "Unsupported val_size: must be 1, 2, or 4");
+    using IntType = std::conditional_t<
+        (val_size == sizeof(uint8_t)),
+        uint8_t,
+        std::conditional_t<(val_size == sizeof(uint16_t)), uint16_t, uint32_t>>;
+
+    const uint32_t end_addr = start_addr + n_bytes;
+    const uint32_t aligned_start = (start_addr + 0x3) & 0xFFFFFFFC;
+    const uint32_t start_addr_4B = aligned_start < end_addr ? aligned_start : end_addr;
+    const uint32_t aligned_end = end_addr & 0xFFFFFFFC;
+    const uint32_t end_addr_4B = aligned_end > start_addr_4B ? aligned_end : start_addr_4B;
+
+    uint32_t val_4B = val;
+    if constexpr (val_size == sizeof(uint8_t)) {
+        const uint8_t byte_val = static_cast<uint8_t>(val);
+        val_4B =
+            (uint32_t(byte_val) << 24) | (uint32_t(byte_val) << 16) | (uint32_t(byte_val) << 8) | uint32_t(byte_val);
+    } else if constexpr (val_size == sizeof(uint16_t)) {
+        const uint16_t short_val = static_cast<uint16_t>(val);
+        val_4B = (uint32_t(short_val) << 16) | uint32_t(short_val);
+    }
+
+    // Bulk 4-byte-aligned writes.
+    {
+        auto* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_addr_4B);
+        auto* e = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(end_addr_4B);
+        for (; p < e; ++p) {
+            *p = val_4B;
+        }
+    }
+
+    // Element-sized stores for unaligned head and tail.
+    if constexpr (val_size < sizeof(uint32_t)) {
+        const IntType val_ = static_cast<IntType>(val);
+        auto* head = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
+        auto* head_end = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
+        for (; head < head_end; ++head) {
+            *head = val_;
+        }
+        auto* tail = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr_4B);
+        auto* tail_end = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr);
+        for (; tail < tail_end; ++tail) {
+            *tail = val_;
+        }
+    }
 }
 
 }  // namespace dataflow_kernel_lib

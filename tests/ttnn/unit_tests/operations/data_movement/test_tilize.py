@@ -11,7 +11,7 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole, skip_for_wormhole_b0
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
@@ -1143,7 +1143,7 @@ def test_tilize_retile_dtype_conversion(
     device, tensor_shape, input_tile_shape, output_tile_shape, in_dtype, out_dtype, min_pcc
 ):
     """Retile into a different tile shape AND dtype: exercises the pack_reconfig_data_format
-    that was missing before tilize_init in the retile compute kernel (issue #51215 bug 1)."""
+    that was missing before tilize_init in the retile compute kernel."""
     torch.manual_seed(42)
     torch_dtype = torch.float32 if in_dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
@@ -1157,11 +1157,16 @@ def test_tilize_retile_dtype_conversion(
     )
     tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(output_tile_shape)), dtype=out_dtype)
 
-    assert tt_output.layout == ttnn.TILE_LAYOUT
-    assert tt_output.dtype == out_dtype
+    assert tt_output.layout == ttnn.TILE_LAYOUT, f"Expected TILE_LAYOUT, got {tt_output.layout}"
+    assert tt_output.dtype == out_dtype, f"Expected dtype {out_dtype}, got {tt_output.dtype}"
 
-    torch_output = ttnn.to_torch(tt_output).to(torch.float32)
-    assert_with_pcc(torch_input.to(torch.float32), torch_output, min_pcc)
+    torch_output = ttnn.to_torch(tt_output)
+    if out_dtype == ttnn.bfloat16:
+        # fp32 → bfloat16 is a pure truncation: bit-exact comparison catches any
+        # dest-format misconfiguration that PCC 0.9999 could silently absorb.
+        assert_with_ulp(torch_input.to(torch.bfloat16), torch_output, ulp_threshold=0)
+    else:
+        assert_with_pcc(torch_input.to(torch.float32), torch_output.to(torch.float32), min_pcc)
 
 
 #   Blackhole LLK (_llk_unpack_tilize_init_): uint8 datums produced a
