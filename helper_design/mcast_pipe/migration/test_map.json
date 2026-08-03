@@ -1,9 +1,9 @@
 {
   "_comment": "Current production-kernel v9 port map. Inventory definitions below are the durable meaning of each inventory label. Execution results and JIT evidence are maintained in the per-kernel migration logs and report.md.",
   "helper_version": 9,
-  "baseline": "54d8dfb7bef78ff7f3f8060e85aeac1371c86347",
+  "baseline": "4a1d6a97ca9bd4efabd0ad6115fcb30538851c90",
   "machine": "single-chip Blackhole p100a",
-  "updated": "2026-07-30",
+  "updated": "2026-08-03",
   "mapping_rules": [
     "Run one compile-focused parameter before the complete mapped inventory.",
     "A passing operation test counts as kernel coverage only when JIT evidence identifies the named kernel path.",
@@ -545,5 +545,6 @@
       "coverage": "audited",
       "result": "not migrated; paired receiver initialization gap"
     }
-  ]
+  ],
+  "baseline_note": "Refreshed by apply-dm-helper verify-only pass 2026-08-03 (was 54d8dfb7bef78ff7f3f8060e85aeac1371c86347 / 2026-07-30). The map itself is API-independent and was reused as-is; only the baseline ref + date moved. MM-IN1-ALL reproduced 302 passed / 188 expected skips / 490 selected on this baseline, single-chip Blackhole p100a."
 }

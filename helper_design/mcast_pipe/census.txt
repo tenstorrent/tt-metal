@@ -68,7 +68,6 @@ models/demos/deepseek_v3_b1/unified_kernels/dataflow_utils.hpp — role: n/a | t
 models/demos/deepseek_v3_b1/unified_kernels/flash_mla.hpp — role: sender | tag: refactor | k-chunk data+flag, mixed counter/flag
 models/demos/deepseek_v3_b1/unified_kernels/kv_cache_update.hpp — role: sender | tag: clean | preprogram-state mcast
 models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp — role: sender | tag: clean | flag-only loop barrier
-ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp — role: hybrid | tag: refactor | data + COUNTER inc_multicast + wait_min
 ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp — role: hybrid | tag: refactor | data + COUNTER inc_multicast
 ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm1.cpp — role: sender | tag: refactor | one_packet mcast collector→7 cores
 ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_sender_reader.cpp — role: sender | tag: clean | INCLUDE_SRC loopback + barrier

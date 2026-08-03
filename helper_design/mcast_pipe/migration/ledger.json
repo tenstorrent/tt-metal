@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 75b977e1a04ee7a14df5d8039393c7844f33fdae, fixed-line migration at code commit 261e322ed2284175e3b4b7b80f98e947b569fe10, matmul in1 multicast migration at code commit 2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd, and GroupNorm v2 migration at code commit 0a796a025c9dc678387e2a7fa52518c898737dc9. Remaining kernel status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
+  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line migration at code commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, matmul in1 multicast migration at code commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, and GroupNorm v2 migration at code commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0. Remaining kernel status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -17,7 +17,7 @@
       "migration_unit": "conv2d-weights-single-sender-rect",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "75b977e1a04ee7a14df5d8039393c7844f33fdae",
+      "commit": "991b5b6b6386a90726d15007002fe1f5a77d8487",
       "validation_set": [
         "build_metal.sh: passed",
         "exact CONV-HEIGHT compile-focused --dev node: passed; sender JIT 7585446677319138702, receiver JIT 15099792235267128693",
@@ -44,7 +44,7 @@
       "migration_unit": "conv2d-weights-fixed-line",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "261e322ed2284175e3b4b7b80f98e947b569fe10",
+      "commit": "51dfb1f1ed61045ed10dc679269960b6d2ccac9e",
       "validation_set": [
         "build_metal.sh: passed",
         "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
@@ -71,20 +71,27 @@
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
+      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
         "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
         "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
         "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "medium",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-03",
       "flags": [
         "tier:3",
         "fully-end-to-end",
         "legacy-runtime-coverage-gap"
-      ]
+      ],
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
     {
       "id": "matmul-in1-mcast:reuse-2d:descriptor",
@@ -97,20 +104,27 @@
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
+      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
         "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
         "MM-IN1-ALL/MM-IN1-RECEIVER-2D: 302 passed, 188 expected skips, 490 selected",
         "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
         "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-03",
       "flags": [
         "tier:3",
         "fully-end-to-end"
-      ]
+      ],
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
     {
       "id": "matmul-in1-mcast:reuse-1d:mcast-in1:legacy",
@@ -123,20 +137,27 @@
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
+      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
         "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
         "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
         "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "medium",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-03",
       "flags": [
         "tier:3",
         "fully-end-to-end",
         "legacy-runtime-coverage-gap"
-      ]
+      ],
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
     {
       "id": "matmul-in1-mcast:reuse-1d:mcast-in1:descriptor",
@@ -149,20 +170,27 @@
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
+      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
         "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
         "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
         "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
         "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-03",
       "flags": [
         "tier:3",
         "fully-end-to-end"
-      ]
+      ],
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
     {
       "id": "groupnorm-v2:sharded:legacy:mcast",
@@ -175,7 +203,7 @@
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "0a796a025c9dc678387e2a7fa52518c898737dc9",
+      "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
       "validation_set": [
         "build_metal.sh: passed",
         "exact legacy 8x4 --dev node: passed; sender JIT 665208170585676730, receiver JIT 4997071892188578060",
@@ -202,7 +230,7 @@
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "0a796a025c9dc678387e2a7fa52518c898737dc9",
+      "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
       "validation_set": [
         "build_metal.sh: passed",
         "GN-SHARDED-PARAMETERIZED legacy: 108 passed, 2 expected skips",
@@ -232,7 +260,7 @@
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "0a796a025c9dc678387e2a7fa52518c898737dc9",
+      "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
       "validation_set": [
         "build_metal.sh: passed",
         "exact Welford 8x4 --dev node: passed; sender JIT 12485185751240554029, receiver JIT 14565098489008052769",
@@ -259,7 +287,7 @@
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "0a796a025c9dc678387e2a7fa52518c898737dc9",
+      "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
       "validation_set": [
         "build_metal.sh: passed",
         "GN-SHARDED-PARAMETERIZED Welford: 108 passed, 2 expected skips",
@@ -329,20 +357,27 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
+      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
         "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
         "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
         "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
         "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
         "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
-      "census_note": "V9 kernel and host wire migrated; explicit active receiver acknowledgement count handles rectangles containing inactive cores.",
+      "last_verified": "2026-08-03",
+      "census_note": "V9 kernel and host wire migrated; explicit active receiver acknowledgement count handles rectangles containing inactive cores. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
       "flags": [],
-      "migration_unit": "matmul-in1-mcast-padding-host"
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
@@ -351,20 +386,27 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
+      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
         "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
         "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
         "MM-IN1-ALL/MM-IN1-RECEIVER-2D: 302 passed, 188 expected skips, 490 selected",
         "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
         "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
-      "census_note": "V9 kernel and host wire migrated; all in1 and optional bias multicast semaphore operations are pipe-owned.",
+      "last_verified": "2026-08-03",
+      "census_note": "V9 kernel and host wire migrated; all in1 and optional bias multicast semaphore operations are pipe-owned. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
       "flags": [],
-      "migration_unit": "matmul-in1-mcast-padding-host"
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
@@ -514,7 +556,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "75b977e1a04ee7a14df5d8039393c7844f33fdae",
+      "commit": "991b5b6b6386a90726d15007002fe1f5a77d8487",
       "validation_set": [
         "build_metal.sh: passed",
         "exact CONV-HEIGHT compile-focused --dev node: passed; JIT 7585446677319138702",
@@ -539,7 +581,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "75b977e1a04ee7a14df5d8039393c7844f33fdae",
+      "commit": "991b5b6b6386a90726d15007002fe1f5a77d8487",
       "validation_set": [
         "build_metal.sh: passed",
         "exact CONV-HEIGHT compile-focused --dev node: passed; JIT 15099792235267128693",
@@ -564,7 +606,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "261e322ed2284175e3b4b7b80f98e947b569fe10",
+      "commit": "51dfb1f1ed61045ed10dc679269960b6d2ccac9e",
       "validation_set": [
         "build_metal.sh: passed",
         "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
@@ -589,7 +631,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "261e322ed2284175e3b4b7b80f98e947b569fe10",
+      "commit": "51dfb1f1ed61045ed10dc679269960b6d2ccac9e",
       "validation_set": [
         "build_metal.sh: passed",
         "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
@@ -716,7 +758,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "fad21b929d1ce1da74b3647dce90382cc8e738cc",
+      "commit": "59e75d6fc3a9264ba96bb43416e103811ba194e4",
       "validation_set": [
         "GN legacy inventory: 108 passed, 2 expected skips",
         "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
@@ -737,7 +779,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "ab73b1f5c73f447380790377944bd92d7ee6bad2",
+      "commit": "acd84d7f3fc30f9744101883b3ada5a5dc8da652",
       "validation_set": [
         "GN legacy inventory: 124 passed, 8 expected skips"
       ],
@@ -814,7 +856,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "fad21b929d1ce1da74b3647dce90382cc8e738cc",
+      "commit": "59e75d6fc3a9264ba96bb43416e103811ba194e4",
       "validation_set": [
         "GN Welford inventory: 108 passed, 2 expected skips",
         "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
@@ -853,7 +895,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "ab73b1f5c73f447380790377944bd92d7ee6bad2",
+      "commit": "acd84d7f3fc30f9744101883b3ada5a5dc8da652",
       "validation_set": [
         "GN Welford inventory: 116 passed, 8 expected skips"
       ],
@@ -1082,7 +1124,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast) | DEFER-DESIGN-GAP: FLAG-ONLY broadcast of arbitrary monotone value start_sem.set(k+1)+set_multicast with worker wait(k+1) exact — no set_multicast(value) verb (Flag=fixed VALID, Counter=inc+1/wait_min). Plus 2-rect INCLUDE+EXCLUDE in one send and simultaneous monotone start / reset done counters. Needs helper change (out of scope).",
+      "census_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast) | DEFER-DESIGN-GAP: FLAG-ONLY broadcast of arbitrary monotone value start_sem.set(k+1)+set_multicast with worker wait(k+1) exact \u2014 no set_multicast(value) verb (Flag=fixed VALID, Counter=inc+1/wait_min). Plus 2-rect INCLUDE+EXCLUDE in one send and simultaneous monotone start / reset done counters. Needs helper change (out of scope).",
       "flags": [
         "tier:2b",
         "design-gap"
@@ -1277,24 +1319,6 @@
       "coverage_confidence": "high",
       "last_verified": "2026-06-20",
       "census_note": "DEFER-COVERAGE: loop-barrier mcast only driven by requires_grid_size(101) tests; this WH n150 has 64 cores. Was stale-v4 Pipe<> (9f47f2dbcad); RESTORED to raw working code (compile-clean). Remigrate+verify on a >=101-core machine.",
-      "flags": [
-        "coverage-gap"
-      ]
-    },
-    {
-      "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp",
-      "op_family": "ccl / deepseek / examples",
-      "role": "hybrid",
-      "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
-      "validation_set": [
-        "min mesh 2x2 - multi-device"
-      ],
-      "coverage_confidence": "none",
-      "last_verified": null,
-      "census_note": "data + COUNTER inc_multicast + wait_min | DEFER-COVERAGE: min mesh 2x2 - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1984,6 +2008,44 @@
       "added_by_reconcile": "2026-06-27"
     }
   ],
-  "reconciled": "2026-07-30",
-  "current_api_version": 9
+  "reconciled": "2026-08-03",
+  "current_api_version": 9,
+  "baseline_ref": "origin/llk_helper_library @ 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90",
+  "reconcile_history": [
+    {
+      "date": "2026-08-03",
+      "report": "migration/reconcile_2026-08-03.md",
+      "base_from": "54d8dfb7bef (llk_helper_library, divergent line)",
+      "base_to": "4a1d6a97ca9 (llk_helper_library)",
+      "prerebase_branch": "backup/mcast-migration-prerebase-20260803",
+      "api_version": "9 (unchanged \u2014 tree moved, helper API did not)",
+      "buckets": {
+        "unchanged": 89,
+        "added": 0,
+        "removed": 1,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 2
+      },
+      "removed_entries": [
+        {
+          "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp",
+          "prior_status": "deferred",
+          "prior_tag": "refactor",
+          "reason": "deleted upstream by af00262e51d (#48694); rename ruled out \u2014 successors carry no intra-chip mcast (unicast fan-out + fabric mcast only). Its census note was already stale at the old base. F2-counter coverage retained by reader_combine.cpp + 5 others."
+        }
+      ],
+      "needs_recheck": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "matmul-in1-mcast:reuse-1d:mcast-in1:descriptor",
+        "matmul-in1-mcast:reuse-1d:mcast-in1:legacy",
+        "matmul-in1-mcast:reuse-2d:descriptor",
+        "matmul-in1-mcast:reuse-2d:legacy"
+      ],
+      "commit_hashes_remapped": 20,
+      "recall_sweep": "123 hits on the primitive_contracts recognition family; 71 census; 52 non-census, ALL pre-existing at the old base => 0 rebase-introduced call sites. Scope exclusions: 8 substrate/impl headers, 40 tests/tt_metal test kernels (not an op-family per intent.md), 2 host factories (host_bindings scope), 2 conv_reader_common.hpp (declaration-only: McastRect + McastDst alias).",
+      "needs_recheck_outcome": "CLEARED 2026-08-03 by apply-dm-helper --mode=halt verify-only at eb05b3929a3: MM-IN1-ALL 302 passed / 188 expected skips / 490 selected (exact baseline match), McastHostFixture 19 passed, test_mcast_pipe.py 68 passed, exact --dev 2D compile node PASSED. No rewrite performed. Pre-existing legacy-runtime-coverage-gap on the two legacy bindings is UNCHANGED (legacy constructors have build coverage only)."
+    }
+  ]
 }

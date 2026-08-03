@@ -1,12 +1,19 @@
 # deepseek_prefill dispatch/combine readers — annotation
 
 Files (fabric CCL ops; the local rectangle mcast leg is IN SCOPE):
-- `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp`
-- `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp` — LIVE
+- ~~`.../dispatch/device/kernels/dataflow/reader_dispatch.cpp`~~ — **RETIRED, reconcile 2026-08-03**
 
-Both have only 3 fabric refs (the cross-chip leg is elsewhere); the mcast here is a **sender→idle-cores intra-chip rectangle block**.
+Only 3 fabric refs (the cross-chip leg is elsewhere); the mcast here is a **sender→idle-cores intra-chip rectangle block**.
 
-## reader_dispatch.cpp — BLOCK lines 164–268 (IS_TILE_LAYOUT)
+> **reader_dispatch.cpp is gone** — deleted upstream by `af00262e51d` (#48694, dispatch row-major
+> refactor) and dropped from the census on 2026-08-03. Not a rename: the successors
+> (`reader_worker_dispatch.cpp`, `writer_sender_dispatch.cpp`) carry no intra-chip rectangle mcast —
+> a per-worker **unicast** `noc_semaphore_inc` fan-out plus a **fabric** multicast (oos) replaced it.
+> The block below is retained as design evidence only; the F2-counter exemplar and every HOLE flag
+> still hold via `reader_combine.cpp` (line 256) and 5 other census entries.
+
+## reader_dispatch.cpp — BLOCK lines 164–268 (IS_TILE_LAYOUT) — RETIRED, historical
 SENDER:
 | step | lines | call |
 |------|-------|------|

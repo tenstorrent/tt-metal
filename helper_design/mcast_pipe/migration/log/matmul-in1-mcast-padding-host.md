@@ -4,8 +4,55 @@
 - Helper API: `MCAST_PIPE_API_VERSION=9`
 - Bindings: all four `matmul-in1-mcast` legacy/descriptor 1D/2D bindings
 - Status: migrated, fully end-to-end
-- Code commit: `2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd`
-- Verified: 2026-07-30
+- Code commit: `aeeb28ff007807c71b1f60842cca85e5c41efa7f`
+  (post-rebase equivalent of `2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd`, identical patch-id;
+  remapped by reconcile 2026-08-03)
+- Verified: **2026-08-03** (re-verified at tree state `eb05b3929a3`; first verified 2026-07-30)
+
+## Verify-only re-run — 2026-08-03 (`apply-dm-helper --mode=halt`)
+
+`reconcile_2026-08-03.md` flagged all six rows of this unit `needs_recheck`: the two factories were
+churned upstream (`54d8dfb7bef`→`4a1d6a97ca9`, +203/−13 and +93/−4, touching
+`mm_in1_sender_writer_args`), then reworked again by `c946da17d29` + `eb05b3929a3`, which postdate the
+ledger's last update `62f82dd4a64`. **No rewrite was performed** — this was a verify-only pass.
+
+Static pre-check (from the reconcile): both kernel files byte-identical to the pre-rebase verified
+state; the `McastArgs` wire confirmed intact on both factories (sender CT idx 10–14 with next = 15 =
+`KtNt`, sender RT idx 2–5, receiver CT idx 4–8, receiver RT idx 0–3, `MCAST_ARGS` set at `2d:618` /
+`1d:1512`, `SKIP_MCAST` coexistence coherent).
+
+- `./build_metal.sh`: passed — **already current**; `_ttnn.so` (13:57) postdated both churned
+  factories (13:47, 13:48) and its mtime did not change, so nothing needed recompiling.
+- Exact compile-focused 2D node under `scripts/run_safe_pytest.sh --dev`: **PASSED**, no watcher or
+  assert trips —
+  `test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1]`
+  - Device-verified that **both** kernels ran: JIT-built at 14:36:22 under the **new** cache root
+    `tt-metal-cache12312614508320308860` — sender `6509650342639884602`, receiver
+    `4791675444625965894` + `5078604005037224472`.
+  - The 2026-07-30 hashes (`4616781822959825899` / `4167676435791909128`) live under the old root
+    `tt-metal-cache15548382223525479139`. Hashes are **not comparable across the rebase** — the cache
+    root and the CT args both moved — so equality is not the check; a green run of both kernels is.
+- `MM-IN1-ALL`, re-run in 4 chunks (halt mode, `-x` per chunk, `--precompile` for the cold cache):
+
+  | chunk | selection | result |
+  |---|---|---|
+  | A | `test_matmul_2d_multiple_output_blocks_per_core` (128) | 56 passed, 72 skipped |
+  | B | `test_matmul_2d_tiny_tile` (96) | 46 passed, 50 skipped |
+  | C | `test_matmul_1d_tiny_tile` (96) | 46 passed, 50 skipped |
+  | D | remaining 16 test functions (170) | 154 passed, 16 skipped |
+  | **total** | **490 selected** | **302 passed, 188 expected skips** |
+
+  Chunked because the cache root changed and everything compiled cold; the reconstructed `-k`
+  selection was confirmed against collection to select exactly 490, matching the recorded baseline.
+- `McastHostFixture.*`: 19 passed.
+- `test_mcast_pipe.py`: 68 passed.
+
+**Result: PASS — `needs_recheck` cleared on all 6 rows** (2 kernels + 4 host bindings),
+`last_verified` = 2026-08-03, `verified_at_commit` = `eb05b3929a3`. `commit` deliberately still points
+at the migration commit `aeeb28ff007` (its documented role is the revert/bisect anchor).
+
+The coverage gap below is **unchanged** by this pass — it is a property of who calls the legacy
+constructors, not of the rebase.
 
 ## Atomic scope
 
