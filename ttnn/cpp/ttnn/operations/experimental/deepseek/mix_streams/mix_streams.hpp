@@ -19,12 +19,15 @@ namespace ttnn::experimental::deepseek::mix_streams {
 //
 //     out        = sublayer_out broadcast over the stream axis            [1, T, hc, D]
 //     placement  = post[..,None] * out                                    [1, T, hc, D]
-//     mixed      = matmul(comb^T, streams)   (transpose_a=True)           [1, T, hc, D]
+//     mixed      = matmul(comb^T, streams)                                [1, T, hc, D]
 //     new_streams = placement + mixed   reshaped back to [B, S, hc, D]
 //
-// where ``T == B*S`` and the ``comb`` transpose is folded into the matmul
-// (``transpose_a=True``) to drop a separate transpose device op. The matmul
-// runs at HiFi4 with fp32 destination accumulation, matching the
+// where ``T == B*S``. When ``streams`` is WIDTH_SHARDED along D the matmul uses
+// ``MatmulMultiCoreReuseMultiCast1DProgramConfig(gather_in0=True)`` so the
+// width-sharded residual stays in L1 (``comb`` is transposed and resharded to
+// the same grid; gather_in0 does not support ``transpose_a``). The interleaved
+// path still folds the transpose into the matmul via ``transpose_a=True``.
+// The matmul runs at HiFi4 with fp32 destination accumulation, matching the
 // ``_HIFI4`` config used by the eager Python path.
 //
 // Args:
