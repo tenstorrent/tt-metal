@@ -159,10 +159,22 @@ SDPA = set(filter(None, os.environ.get("VOXTRAL_SDPA", "").split(",")))
 # frame count went 78/8/183/123 against 45/8/39/69 hand-rolled -- worse in 3 of 4, for one word
 # of reference text.
 #
-# Note what that also says about case 4 generally: it is UNSTABLE on our Block 1 either way
-# (8-183 frames for one word, against a steady 9 from tt_transformers), so this is not purely a
-# decode-native defect -- it is an existing weakness that decode-native amplifies. Fixing case 4
-# is the open quality item; if it is fixed, re-measure this path, because 6.6 ms/frame is real.
+# BUT READ THIS BEFORE TRUSTING THAT REASONING. Case 4 turns out to be unstable in EVERY
+# implementation, including the fp32 CPU reference, which has no device and no precision loss:
+#
+#     fp32 CPU reference                      81 /  8 / 57
+#     tt_transformers + bf16 flow (baseline)   9 /  8 / 72 / 88 / 55 / 118
+#     tt_transformers + bfp8 flow             28 /  8 / 159 / 129
+#     ours mixed/bfp8 (shipped)               45 /  8 / 39 / 69
+#     ours bf16/bf16                         108 /  8 / 34 / 54
+#     ours decode-native                      78 /  8 / 183 / 123
+#
+# 9 frames is the right answer and the baseline's famous "9" was seed 0 only. So case 4 measures
+# the MODEL on a one-word prompt with 74 tokens of voice conditioning, not the port -- and it
+# cannot discriminate between implementations. Turning this path off on the strength of it was a
+# weak call: on the other 14 cases the two configurations are statistically indistinguishable.
+# Left OFF because it has not been re-gated on a case-4-excluded run, not because it is known bad.
+# That re-gate is the cheap next experiment, and 6.6 ms/frame is waiting behind it.
 DECODE_NATIVE = os.environ.get("VOXTRAL_GPT_DECODE_NATIVE", "0") == "1"
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
 _QKV_SHARD = ttnn.create_sharded_memory_config(
