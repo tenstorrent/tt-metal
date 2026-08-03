@@ -68,6 +68,9 @@ inline uint64_t wall_clock() {
 }
 
 void kernel_main() {
+    // End-to-end kernel zone; see producer_combine_fabric2d.cpp for what CMB_E2E means and why the
+    // name is shared across both combine implementations. No-op unless the device profiler is on.
+    DeviceZoneScopedN("CMB_E2E");
     constexpr uint32_t num_l1_slots = get_compile_time_arg_val(0);
     constexpr uint32_t token_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t slot_tail_bytes = get_compile_time_arg_val(2);
