@@ -1,0 +1,260 @@
+# Gemma4 context-parallel prefill on Blackhole Galaxy
+
+**Date:** 2026-08-03
+**Status:** Design approved, not yet implemented
+**Scope:** Prefill only. Decode is disaggregated and runs outside this path.
+
+## Goal
+
+Speed up Gemma4-31B prefill on a 32-chip Blackhole Galaxy by adding a second
+parallelism axis. Today the model uses tensor parallelism only. This design adds
+context parallelism (CP) across a second mesh axis so the token dimension is
+split as well, targeting a 256k maximum context prefilled in 4k chunks.
+
+## Background: why the obvious options don't apply
+
+Three findings constrain the design. Each was verified against the code or the
+hardware rather than assumed.
+
+**TP=32 hangs, for an unrelated reason.** `ttnn.all_gather` silently falls back
+to `composite_all_gather` when a row-major input page is not 64 B aligned
+(`ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp`), and that composite
+path — `ttnn::all_broadcast` + `concat` — deadlocks at 32 devices. With
+`hidden_size = 5376`, the per-device shard at TP=32 is 168, giving a 336 B
+row-major page; 336 = 5x64 + 16, so it is unaligned. TP=4 (1344 -> 2688 B) and
+TP=8 (672 -> 1344 B) are both aligned, which is why 1x4 works. This is a
+separate bug with a separate ~2-line fix (convert to `TILE_LAYOUT` before the
+gather in `Gemma4Model.embed_tokens`); it is **out of scope here**, but it is why
+TP=8 needs no workaround.
+
+**gpt_oss's sequence parallelism is not portable.** All of it —
+`_reshard_for_sequence_parallel`, `apply_sequence_parallel_allgather` — lives
+inside `models/demos/gpt_oss/tt/experts/prefill.py`. Gemma4-31B is dense
+(`enable_moe_block = False`, `num_experts = None`), and
+`models/demos/gemma4/tt/layer.py` gates `MoEBlock` on that flag, so 31B never
+enters the experts path. There is no dense-model SP in gpt_oss to copy. The
+*pattern* (reduce-scatter -> pointwise compute -> all-gather) still transfers;
+the code does not.
+
+**Memory sets the CP degree.** CP replicates weights and KV cache across the CP
+axis while TP shards them, so CP degree trades directly against per-device
+memory. At 256k the KV cache makes this binding. The KV cache is head-sharded by
+TP (`num_local_kv_heads = num_key_value_heads // tp`, 16 KV heads total), and the
+full-context KV cache is ~108 GiB in bf8. Blackhole has 8 DRAM banks of
+4,278,190,080 B, about 34 GB per device.
+
+| config | weights/dev | KV cache/dev @256k | total | fits ~34 GB |
+| --- | --- | --- | --- | --- |
+| TP=32, CP=1 | ~1.9 GB | 108 GiB x 1/16 = 6.8 GiB | ~8.7 GiB | yes, easily |
+| **TP=8, CP=4** | ~7.8 GB | 108 GiB x 2/16 = 13.5 GiB | **~21 GiB** | yes, ~13 GB spare |
+| TP=4, CP=8 | ~15.5 GB | 108 GiB x 4/16 = 27 GiB | ~42 GiB | **no, OOM** |
+
+TP=4 x CP=8 is therefore infeasible at 256k. **TP=8 x CP=4 is the target.**
+
+## Target configuration
+
+Mesh **`(4, 8)`**: TP=8 on axis 1, CP=4 on axis 0.
+
+`MeshConfig` needs no functional change. Its prefill default is already
+`ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)`, which on a `(4,8)` mesh
+yields `tp=8, sp=4`, and `sp_axis = 0` follows from `tp_axis = 1`. The existing
+field name `sp` is kept — it matches gpt_oss and costs no churn — and documented
+as the context-parallel degree.
+
+Use `(4,8)` rather than `(8,4)` with `tp_axis=0`. Keeping TP on axis 1 preserves
+the existing "column axis is TP" assumptions, which are hardcoded in several
+places: `tt/attention/kv_cache.py` computes `tp = mesh_device.shape[1]`,
+`tt/rms_norm.py` sizes a buffer with `mesh_shape[1]`, and `tt/model.py` sets
+`sampling_all_gather_axis = 1`. Choosing `tp_axis=0` would require auditing all
+of them; `(4,8)` keeps them correct for free.
+
+Two consequences:
+
+- **Weight cache becomes `_tp8_`.** Needs one cold-cache run with
+  `GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1` (~39 GB). The harness's `_require_cache`
+  already skips cleanly with an actionable message when it is missing.
+- **Fabric needs 2D routing**, since collectives now run on both axes. Start
+  with `FABRIC_2D`.
+
+## Data flow
+
+The sequence is sharded on entry and stays sharded. Each rank owns
+`T = chunk / cp` tokens — 1024 of a 4096-token chunk at CP=4.
+
+Sharding happens at input staging, not via a collective: stage token IDs and
+`position_idx` with a mesh mapper that shards the sequence dimension across
+axis 0 and replicates across axis 1. gpt_oss uses a `reduce_scatter`-and-rescale
+trick only because its inputs arrive already replicated; here staging is under
+our control, so the scatter is free.
+
+**Local, no communication** (all pointwise along sequence): token embed lookup,
+all four layernorms, residual adds, QKV projection, O projection, `SharedMLP`
+gate/up/down, final norm, lm_head.
+
+**Unchanged**: the existing TP all-reduces on axis 1 (attention O-proj, MLP
+down-proj). `ccl_allreduce` already targets `tp_axis`, so these need no edit.
+
+**New**, one collective per layer on axis 0, only in attention. Sliding and full
+layers differ; see below.
+
+The KV cache needs no shape change. It is built with `ReplicateTensorToMesh` and
+a per-device shape of `num_local_kv_heads`, so replication across the CP axis is
+already the desired behaviour — and it is why full-attention layers can read
+history locally instead of over fabric.
+
+For CP rank 0, the sliding tail comes from the *previous 4k chunk*, which is
+exactly today's in-memory `sliding_tail_in`. Ranks 1-3 get theirs over fabric.
+Same code path, different source.
+
+## Sliding-window layers (50 of 60)
+
+These are fully CP-parallel with no complications.
+
+A sliding query attends the preceding W tokens regardless of absolute position,
+so the mask is position-*relative*. `chunked_prefill_sdpa_sliding` takes no
+position offset for exactly that reason: it builds a square `[tail | chunk]`
+slice and masks relative to the slice. Every CP rank therefore runs an
+identically-shaped, identically-masked problem.
+
+RoPE is the only consumer of absolute positions, and it applies them through
+`ttnn.embedding(position_idx, cos_2d)` — a tensor lookup — so `position_idx`
+shards per-rank for free.
+
+### Halo generalization
+
+The halo must cover W = 1024 tokens. One neighbour is correct only at chunk 4096:
+
+| chunk (CP=4) | tokens/rank | halo ranks needed | path taken |
+| --- | --- | --- | --- |
+| 4096 | 1024 | 1 | halo |
+| 2048 | 512 | 2 | halo |
+| 1024 | 256 | 4 | all-gather |
+| 512 | 128 | 8 | all-gather |
+
+A one-neighbour design would be wrong for three of the four chunk sizes the
+harness parametrizes. The rule:
+
+```
+T = chunk // cp
+halo_ranks = ceil(W / T)
+if halo_ranks >= cp - 1:
+    all-gather K/V across the CP axis     # degenerate; cheaper than a multi-hop halo
+else:
+    fetch trailing K/V from halo_ranks preceding neighbours
+```
+
+Communication volume is small. The halo is W tokens x `num_local_kv_heads` (2 at
+TP=8) x `head_dim` x 2 (K and V), about 1 MB per device per layer in bf8, so
+~50 MB per 4k chunk across all sliding layers. The design is compute-bound.
+
+## Full-attention layers (10 of 60): approach A1
+
+These cannot be CP-parallelized without solving a scalar-argument problem.
+`chunked_prefill_sdpa` takes `base_offset` as a **Python scalar** — the absolute
+position of `tt_q`'s first row, used to build the causal mask. Under CP, rank
+*r*'s Q begins at `chunk_offset + r*T`, which differs per rank, and a ttnn
+program dispatches mesh-wide with one set of scalars.
+
+**A1, chosen:** all-gather Q/K/V across the CP axis for these layers, run SDPA
+with a uniform `base_offset` on every rank, then slice this rank's rows locally.
+One collective, no scatter, and the MLP stays sharded because the attention
+output is sliced back to T rows locally.
+
+This forfeits parallelism on the 10 full-attention layers, which is the dominant
+cost at long context. The trade was made deliberately for implementation safety;
+see Expected performance.
+
+The alternative (**A2**, deferred) is to dispatch these layers once per CP row on
+a `1x8` submesh, each with its own `base_offset`. `create_submesh` exists and is
+used in `models/tt_dit/`. It is deferred because trace-capture behaviour across
+submeshes is unverified and host dispatch cost multiplies by CP.
+
+## Expected performance
+
+Rough FLOP shares per 4k chunk at the 256k tail. Order-of-magnitude estimates,
+to be replaced by profiling.
+
+| work | ~FLOPs | CP-parallel under A1 |
+| --- | --- | --- |
+| full-attention scores (10 layers, 256k history) | ~7e14 | no |
+| MLP (60 layers) | ~1.7e14 | yes |
+| QKV/O projections (60 layers) | ~6.5e13 | yes |
+| sliding scores (50 layers) | ~2e13 | yes |
+
+Amdahl on those shares gives **~1.24x at the 256k tail** and **~1.4x averaged**
+over a full 256k prefill, where history averages 128k. For comparison,
+parallelizing full attention as well (A2) would approach 4x.
+
+This modest ceiling is a known and accepted property of A1. If measured gains
+fall short of ~1.4x, the right response is to profile before adding complexity,
+and A2 is the identified next step rather than incremental tuning of A1.
+
+## Components
+
+| file | change |
+| --- | --- |
+| `models/demos/gemma4/config.py` | no functional change; document `sp` as CP degree; validate `chunk % (cp*32) == 0` |
+| `models/demos/gemma4/tt/ccl.py` | add `ccl_cp_allgather(tensor, dim)` and `ccl_cp_halo(tensor, halo_ranks)` on `sp_axis` |
+| `models/demos/gemma4/tt/attention/prefill.py` | bulk of the work: K/V all-gather + halo for sliding; Q/K/V gather + local row slice for full |
+| `models/demos/gemma4/tt/attention/kv_cache.py` | no shape change; assert CP-axis replication is intended |
+| `models/demos/gemma4/tt/model.py` | stage tokens and `position_idx` sharded on `sp_axis`; gather logits only as tests require |
+| `models/demos/gemma4/demo/text_demo_prefill.py` | `GALAXY_MESH = (4, 8)`, `FABRIC_2D`, cache key `_tp8` |
+| `models/demos/gemma4/tests/test_factory.py` | add `(4,8)` with 2D fabric config |
+
+## Testing and acceptance
+
+`models/demos/gemma4/demo/text_demo_prefill.py` already compares against
+HuggingFace by PCC, so acceptance is mostly reuse.
+
+- **`test_prefill_layer` is the gate.** It already parametrizes `sliding` and
+  `global`, covering both CP paths independently. Must meet PCC at CP=4 for both.
+- **All four chunk sizes must pass**, not only 4096. 4096 is the 1:1 halo case;
+  2048 exercises the 2-rank halo and 1024/512 the all-gather fallback. A
+  one-neighbour bug would hide here.
+- **CP=1 regression.** On a `(1,8)` mesh every new path must short-circuit and
+  results must be identical to current behaviour. Cheapest guard against
+  breaking the working configuration.
+- `test_prefill_layers` (60 layers + final norm) and `test_prefill_full`
+  (embed -> layers -> norm -> lm_head -> softcap).
+
+Sequencing: implement the all-gather path first — it is correct for every chunk
+size and both layer types — reach PCC green everywhere, then add the halo as an
+optimization and re-verify. This also means A1's full-attention path and the
+sliding fallback share one primitive.
+
+## Error handling
+
+- `cp == 1`: every new path short-circuits, preserving current behaviour exactly.
+- `chunk % (cp * 32) != 0`: fail at config time, reporting the computed values,
+  rather than failing mid-graph.
+- `tokens_per_rank < 32`: explicit failure (sub-tile shard is not representable).
+- Sliding layer with `sliding_window is None`: fail rather than silently attend
+  the whole sequence.
+
+## To verify during bring-up
+
+These are assumptions the design rests on that have not been tested:
+
+1. Which physical axis each logical axis of `(4,8)` lands on. The physical system
+   mesh is 8x4, so `(4,8)` relies on the rotation path in
+   `tt_metal/distributed/system_mesh.cpp`. This determines per-axis link
+   bandwidth.
+2. Whether `FABRIC_2D` is correct versus a torus variant
+   (`FABRIC_2D_TORUS_X/Y/XY`), which the other 8x4 Galaxy models in this repo use.
+3. That a `(4,8)` mesh opens at all on this system, and that CP-axis collectives
+   on `sp_axis = 0` behave under trace capture.
+
+## Out of scope
+
+- **Decode.** Disaggregated, runs outside this path.
+- **The TP=32 alignment fix.** Separate bug, separate change; TP=8 does not need
+  it.
+- **A2 submesh dispatch and ring attention.** Identified follow-ups, deferred.
+- **Expert parallelism.** 31B is dense; `ep` stays 1.
+
+## Operational note
+
+A device hang wedges ethernet cores. Reset with
+`python_env/bin/tt-smi -r` before the next run, or subsequent failures present as
+misleading `Timed out while waiting for active ethernet core` errors rather than
+the real behaviour.
