@@ -179,7 +179,7 @@ source-bound provenance are retained.
   health checks, source gates, and full default suite.
 - [x] Independent `$stage-review` clean pass recorded after two blocking review
   rounds were fixed and rereviewed.
-- [ ] Stage-owned changes committed locally and SHA recorded; never push.
+- [x] Stage-owned changes committed locally and SHA recorded; never push.
 
 ## Limitations
 
@@ -195,8 +195,8 @@ source-bound provenance are retained.
 
 ## Commits
 
-Stage implementation SHA: pending final review and local commit. No push will
-be performed.
+Stage implementation SHA: `33d5cfc4853` (`Optimize Gemma-4 26B decoder`).
+No push was performed.
 
 The first commit attempt intentionally produced no commit because hooks
 formatted/import-cleaned the Python source and normalized captured text. All
