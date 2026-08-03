@@ -22,37 +22,41 @@ WHAT MAKES THIS BLOCK UNUSUAL:
     device trace; it was correct and bit-identical but ~6 ms/frame SLOWER on this N150, so the
     capture machinery was removed rather than left as a dormant second path.
 
-THIS BLOCK IS THE LARGER HALF OF THE FRAME, measured: 42.5 ms against Block 1's 34.9 ms for a
-whole 3.4B decode step. Parameter count says the opposite (390M against 3.4B) and parameter count
-is the wrong proxy -- Block 1's step is a few big matmuls at the DRAM ceiling, whereas this is 7
-sequential passes over a 3-token sequence.
+IT IS NOT WEIGHT-READ BOUND. It WAS, which is why the CFG batch fold in `_trunk` was worth 2.23x
+(a batched matmul re-reads the whole weight per batch element, so batch-2 doubled every read; 6
+rows still fit one 32-row tile, so folding is free). But do the arithmetic on where it stands now:
+the velocity net is 349M params (3 layers x 116.4M) at BFP8, so 7 steps stream ~2.6 GB, and at the
+194 GB/s Block 1 demonstrably reaches that is a 13.4 ms floor. The solve measured 35 ms -- 74 GB/s,
+38% of the ceiling.
 
-IT IS WEIGHT-READ BOUND, and the fix was structural. A batched matmul re-reads the whole weight per
-batch element, so CFG's batch-2 forward was doubling every weight read; `_trunk` therefore folds the
-batch into ROWS, which is free because 6 rows still fit one 32-row tile. Worth 2.23x, bit-identical.
-Neither of the two things that look like the bottleneck is one: 4x less arithmetic (LoFi) buys 2.7%,
-and host dispatch is a flat ~6.5 ms. Full measurements and the rejected alternatives -- sdpa, bfp4,
-lower fidelity -- are in STATUS.md's Block 2 section. Read it before optimizing here.
+THE GAP IS OP COUNT, not bytes. A step is ~88 ops and only 18 of them carry weights; the rest are
+reshapes, transposes, softmaxes, slices and typecasts on tiny tensors, each paying a fixed latency.
+That diagnosis is what the two most recent wins came from, and both removed OPS rather than bytes:
+the GQA row fold in `_block` (1.40x) and the width-sharded RMSNorm (below). Anything proposed here
+should be judged on ops removed first.
 
-WHERE THE TIME GOES, per frame, steady state on one N150 (Block 2 is 42.5 ms of a 77.6 ms frame,
-so it is now the LARGER half and the natural next target):
+WHERE THE TIME GOES, per frame, steady state on one N150 (~31 ms of a ~66 ms frame -- Block 1's
+34.8 ms is the larger half again):
 
-    _solve -- 7 Euler steps          ~35 ms    7 SEQUENTIAL velocity evaluations. Each is a
-                                               3-layer transformer over 3 tokens, batch-2 CFG
-                                               folded to 6 rows, so every matmul does 32 tile
-                                               rows of work for 6 useful ones.
-    semantic_code                      3.1 ms  [B,8320] masked argmax, host
+    _solve -- 7 Euler steps          ~27 ms    7 SEQUENTIAL velocity evaluations, each a 3-layer
+                                               transformer over 3 tokens, CFG batch-2 folded to 6
+                                               rows. Floor is 13.4 ms (2.6 GB at 194 GB/s), so
+                                               there is still ~2x of pure op overhead in here.
+    semantic_code                      3.0 ms  [B,8320] masked argmax -- on HOST, and it is a real
+                                               CPU matmul. ign/voxtral_opt does this on device;
+                                               that is the next obvious ~3 ms.
     host tail (FSQ quantise etc)       0.7 ms
     ------------------------------------------
-    Block 2 total                     42.5 ms
+    Block 2 total                     ~31 ms   (was 42.5 before the row fold + sharded norm)
 
 The structural problem is the SEQUENCE: 7 steps that each depend on the previous, so none of the
 usual batching tricks apply within a frame. What HAS been tried and rejected: lower math fidelity
-(HiFi2/LoFi save ~4 ms and cost 10-20x the integer-code errors -- see COMPUTE_CONFIG), and a
-a device trace (correct and bit-identical, but ~6 ms/frame SLOWER here -- removed).
-BFP8 weights ARE now on and were worth 1.23x. An untried idea worth a look: the 3-token sequence
-wastes 26 of 32 tile rows, and STATUS.md notes CONCURRENT REQUESTS could fill them -- throughput,
-not latency.
+(HiFi2/LoFi save ~4 ms and cost 10-20x the integer-code errors -- see COMPUTE_CONFIG), and a device
+trace (correct and bit-identical, but ~6 ms/frame SLOWER -- removed). BFP8 weights ARE on and were
+worth 1.23x. Two ideas still open: sdpa for the attention interior measures 1.65x against the row
+fold's 1.40x but costs accuracy (STATUS.md), and the 3-token sequence wastes 26 of 32 tile rows, so
+CONCURRENT REQUESTS could fill them -- throughput, not latency. Note the trace verdict predates the
+op removals above, so it is worth re-measuring: less device work means a larger dispatch share.
 
 HOST vs DEVICE. The whole Euler solve -- the 3-layer transformer, the CFG combine and the state
 update -- runs on device, with nothing left in the loop that a trace could not capture. Two things
@@ -90,6 +94,8 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 CFG_ALPHA = 1.2
 N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
+# Query heads per KV head (GQA 32/8). See the row fold in _block.
+REP = FM_N_HEADS // FM_N_KV_HEADS
 
 # Math fidelity for the VELOCITY NETWORK. HiFi4 + fp32 destination accumulation is the most
 # expensive setting available and it STAYS: lowering it is a bad trade at this block's shapes.
@@ -120,6 +126,22 @@ DTYPE = ttnn.bfloat16
 # STATUS.md, which compared bfp8 WITHOUT the batch fold against bf16 WITH it; measured on top of
 # the fold, bfp8 wins.
 WEIGHT_DTYPE = ttnn.bfloat8_b
+
+# RMSNORM, WIDTH-SHARDED. Same finding as Block 1's _NORM_SHARD, and it matters more here: 7 norms
+# per Euler step x 7 steps = 49 calls per frame. Interleaved, each costs ~115 us on a [1,6,3072]
+# tensor -- latency, not arithmetic, since one core reduces the row with a DRAM round trip either
+# side. Spread over 8 cores the norm+linear pair measures 1.46x (5.32 vs 7.78 ms per 26).
+#
+# fp32 accumulation is UNCHANGED, so this is not the rejected "lower the fidelity" trade above.
+# The row count is pinned by the program config, which is fine: every norm in the solve sees the
+# same [1, B*3, 3072], tile-padded to 32 rows.
+_NORM_GRID_X = 8
+_NORM_SHARD = ttnn.create_sharded_memory_config(
+    shape=(1, 1, 32, FM_INPUT_DIM), core_grid=ttnn.CoreGrid(y=1, x=_NORM_GRID_X),
+    strategy=ttnn.ShardStrategy.WIDTH)
+_NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(_NORM_GRID_X, 1), subblock_w=4, block_h=1,
+    block_w=FM_INPUT_DIM // _NORM_GRID_X // 32, inplace=False)
 
 
 class TtVoxtralFlow:
@@ -165,10 +187,18 @@ class TtVoxtralFlow:
     # ----------------------------------------------------------------------------------
     # One bidirectional block over the 3-token sequence
     # ----------------------------------------------------------------------------------
+    def _norm(self, x, gamma):
+        """RMSNorm, width-sharded -- see _NORM_SHARD. Both memory_config moves are required: the
+        op will not write interleaved from a sharded input, and handing the sharded result to the
+        next matmul directly measured slower than converting back."""
+        h = ttnn.rms_norm(ttnn.to_memory_config(x, _NORM_SHARD), weight=gamma, epsilon=FM_NORM_EPS,
+                          compute_kernel_config=COMPUTE_CONFIG, program_config=_NORM_PRG,
+                          memory_config=_NORM_SHARD)
+        return ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
+
     def _block(self, x, w, B):
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
-        h = ttnn.rms_norm(x, weight=w["an"], epsilon=FM_NORM_EPS,
-                          compute_kernel_config=COMPUTE_CONFIG)
+        h = self._norm(x, w["an"])
         # k and v share one weight and one matmul; nlp_create_qkv_heads then splits them AND builds
         # the head layout in a single op -- 3 linears + 6 reshape/permutes become 2 linears + 1 op.
         q = ttnn.linear(h, w["wq"], compute_kernel_config=COMPUTE_CONFIG)
@@ -178,21 +208,32 @@ class TtVoxtralFlow:
             ttnn.reshape(kv, [B, 1, 3, 2 * FM_N_KV_HEADS * FM_HEAD_DIM]),
             num_heads=FM_N_HEADS, num_kv_heads=FM_N_KV_HEADS,
             transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # GQA by hand: repeat k/v to the query head count. NO mask and NO RoPE -- bidirectional by
-        # design. ttnn's sdpa would fuse these 7 ops into 1, but was measured and rejected on
-        # accuracy (STATUS.md); note its is_causal defaults to True, which here is silently wrong.
-        rep = FM_N_HEADS // FM_N_KV_HEADS
-        kr = ttnn.repeat_interleave(kh, rep, dim=1)
-        vr = ttnn.repeat_interleave(vh, rep, dim=1)
-        s = ttnn.matmul(qh, ttnn.transpose(kr, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
+        # GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the CFG fold above, and worth 1.40x
+        # on this block. Mathematically the same attention: on device it gives the same velocity
+        # PCC and the same 3-of-74 code diff, and in fp32 on host the two agree to 6e-07, which is
+        # reduction order, not a different computation. Query head j reads kv head j//4, so reshaping
+        # q from [B,32,3,d] to [B,8,12,d] stacks those 4 heads' 3 tokens as 12 ROWS against a
+        # single kv head. Heads are contiguous in dim 1, so the grouping lands exactly on the GQA
+        # mapping and the inverse reshape puts them back. Equivalent because a row of the score
+        # matrix only ever interacts with itself: softmax is over the last dim (the 3 keys).
+        #
+        # The win is the same one the CFG fold gets: `repeat_interleave` made the two attention
+        # matmuls BATCH-32, and a batched matmul costs per batch element. This makes them batch-8
+        # with 12 rows each, and rows inside a 32-row tile are free. It also deletes the two
+        # repeat_interleave ops, which were materialising k/v 4x.
+        #
+        # NO mask and NO RoPE here -- bidirectional by design. sdpa would fuse the interior into
+        # ONE op and measures faster still (1.65x), but it costs accuracy; see STATUS.md §7.
+        s = ttnn.matmul(ttnn.reshape(qh, [B, FM_N_KV_HEADS, REP * 3, FM_HEAD_DIM]),
+                        ttnn.transpose(kh, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
         s = ttnn.multiply(s, SCALE)
         a = ttnn.softmax(s, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
-        a = ttnn.matmul(a, vr, compute_kernel_config=COMPUTE_CONFIG)
+        a = ttnn.matmul(a, vh, compute_kernel_config=COMPUTE_CONFIG)
         # back to folded rows so wo and the MLP get the single-weight-read layout too
+        a = ttnn.reshape(a, [B, FM_N_HEADS, 3, FM_HEAD_DIM])
         a = ttnn.reshape(ttnn.permute(a, (0, 2, 1, 3)), [1, B * 3, FM_N_HEADS * FM_HEAD_DIM])
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
-        h = ttnn.rms_norm(x, weight=w["fn"], epsilon=FM_NORM_EPS,
-                          compute_kernel_config=COMPUTE_CONFIG)
+        h = self._norm(x, w["fn"])
         g = ttnn.silu(ttnn.linear(h, w["w1"], compute_kernel_config=COMPUTE_CONFIG))
         u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG))
         return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG))
@@ -213,8 +254,7 @@ class TtVoxtralFlow:
         seq = ttnn.reshape(seq, [1, B * 3, FM_INPUT_DIM])
         for w in self.layers:
             seq = self._block(seq, w, B)
-        seq = ttnn.rms_norm(seq, weight=self.norm, epsilon=FM_NORM_EPS,
-                            compute_kernel_config=COMPUTE_CONFIG)
+        seq = self._norm(seq, self.norm)
         seq = ttnn.reshape(seq, [B, 3, FM_INPUT_DIM])
         pos0 = ttnn.slice(seq, [0, 0, 0], [B, 1, FM_INPUT_DIM])
         return ttnn.linear(pos0, self.proj["acoustic_codebook_output"],
