@@ -84,15 +84,17 @@ inline void calculate_lgamma_stirling_fp32(
         // Polynomial bridge for small range inputs (z near 0.625, 1, or 2)
 
         v_if(z < 0.75f) {
-            // Taylor expansion around z=0.625, covers z in [0.5, 0.75)
+            // Taylor expansion around z=0.625, covers z in [0.5, 0.75), accurate to < 10 ULP
             constexpr float s0 = 0.36082950f;
             constexpr float s1 = -1.45270876f;
             constexpr float s2 = 1.70059159f;
             constexpr float s3 = -1.47809690f;
             constexpr float s4 = 1.68212021f;
             constexpr float s5 = -2.11689171f;
+            constexpr float s6 = 2.80586323f;
+            constexpr float s7 = -3.83975483f;
             sfpi::vFloat d0 = z - 0.625f;
-            res = PolynomialEvaluator::eval(d0, s0, s1, s2, s3, s4, s5);
+            res = PolynomialEvaluator::eval(d0, s0, s1, s2, s3, s4, s5, s6, s7);
         }
         v_elseif(abs_range1 < 0.25f) {
             // Taylor Expansion around z=1 (d = z - 1.0)

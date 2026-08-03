@@ -102,9 +102,10 @@ def run(
         order = torch.argsort(flat_input)
         sorted_output = flat_output[order]
         diffs = sorted_output[1:] - sorted_output[:-1]
-        is_monotonic = bool(torch.all(diffs <= 1e-3))
+        is_monotonic = bool(torch.all(diffs <= 1e-4))
 
-        is_close = bool(torch.allclose(flat_golden, flat_output, atol=1e-3, rtol=1e-3))
+        # kernel's normal error here is ~5.3e-5, so tighter tolerance would fail for no reason
+        is_close = bool(torch.allclose(flat_golden, flat_output, atol=1e-4, rtol=1e-4))
 
         if not is_monotonic or not is_close:
             message = f"boundary regression check failed: is_monotonic={is_monotonic}, is_close={is_close}"
