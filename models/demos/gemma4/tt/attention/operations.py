@@ -17,8 +17,10 @@ Handles:
 
 import os
 
+import torch
+
 import ttnn
-from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.demos.gemma4.tt.ccl import ccl_allreduce, cp_degree
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
 
 from .weights import AttentionWeights
@@ -217,6 +219,45 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b):
         cos_b = ttnn.repeat(cos_b, ttnn.Shape([1, 1, heads, 1]))
         sin_b = ttnn.repeat(sin_b, ttnn.Shape([1, 1, heads, 1]))
     return ttnn.add(ttnn.mul(tensor, cos_b), ttnn.mul(_rotate_half(tensor), sin_b))
+
+
+def build_cp_prefill_mask(mesh_device, mesh_config, local_seq_len, sliding_window, dtype=ttnn.bfloat16):
+    """Additive SDPA mask for context-parallel prefill, sharded across the CP axis.
+
+    Each rank ends up holding ``[1, 1, local_seq_len, global_seq_len]`` — the rows
+    for query positions ``[r*local, (r+1)*local)`` against every key. Sharding the
+    query rows is what carries each rank's absolute offset as *data*: the SDPA op
+    takes its position offset as a Python scalar, and a scalar cannot differ per
+    device inside one mesh-wide program.
+
+    Causality and the sliding-window band both have to live in here, because the op
+    rejects ``attn_mask`` alongside ``is_causal`` and alongside
+    ``sliding_window_size``. Semantics match ``build_hf_prefill_mask`` in
+    ``tests/test_factory.py`` so the TT and HF reference masks cannot drift.
+
+    Broadcast over batch and heads (both dims are 1), which the op allows.
+    """
+    cp = cp_degree(mesh_config)
+    global_seq_len = local_seq_len * cp
+    idx = torch.arange(global_seq_len)
+    # Causal: key j after query i. Window: key j older than i - W + 1.
+    disallowed = idx.unsqueeze(0) > idx.unsqueeze(1)
+    if sliding_window is not None and sliding_window > 0:
+        disallowed |= idx.unsqueeze(0) < (idx.unsqueeze(1) - sliding_window + 1)
+    # A large finite sentinel rather than -inf: exp() underflows to zero either
+    # way, while -inf can turn into NaN inside the kernel's masked accumulate.
+    mask = torch.zeros(1, 1, global_seq_len, global_seq_len)
+    mask.masked_fill_(disallowed.unsqueeze(0).unsqueeze(0), -1e9)
+    # dims=(axis0, axis1): shard query rows along the CP axis, replicate across TP.
+    shard_dims = (-2, None) if mesh_config.sp_axis == 0 else (None, -2)
+    return ttnn.from_torch(
+        mask,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims),
+    )
 
 
 def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None):
