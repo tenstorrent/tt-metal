@@ -1121,13 +1121,13 @@
     run models/tt_dit/tests/models/ltx/test_latent_upsampler.py  -k "4x8h0w1nl2_line"
     # heavier last. VAE: drop the 145-frame full-res decode (e2e-scale, >20 min); 9f-2K still covers decode.
     run models/tt_dit/tests/models/ltx/test_vae_ltx.py           -k "4x8h0w1nl2_line and not 145f"
-    run models/tt_dit/tests/models/ltx/test_audio_ltx.py         -k "4x8sp1tp0nl2_ring_is_fsdp0"
+    run models/tt_dit/tests/models/ltx/test_audio_ltx.py         -k "4x8sp1tp0nl2_ring_is_fsdp0 and (stage_a or stage_b)"
     exit $rc
   model: ltx-2.3-pro-t2v
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 150
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

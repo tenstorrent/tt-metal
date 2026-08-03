@@ -803,7 +803,7 @@ def test_stage_b_vocoder(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = _audio_parallel_config(mesh_shape)
-    ccl = CCLManager(mesh_device, num_links=num_links, topology=topology) if pc is not None else None
+    ccl = CCLManager(mesh_device, num_links=num_links, topology=ttnn.Topology.Linear) if pc is not None else None
 
     torch_voc = _build_torch_stage_b(seed=42)
     tt_voc = _build_tt_stage_b(mesh_device, parallel_config=pc, ccl_manager=ccl)
@@ -855,7 +855,7 @@ def test_stage_c_vocoder_with_bwe(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = _audio_parallel_config(mesh_shape)
-    ccl = CCLManager(mesh_device, num_links=num_links, topology=topology) if pc is not None else None
+    ccl = CCLManager(mesh_device, num_links=num_links, topology=ttnn.Topology.Linear) if pc is not None else None
 
     torch_full = _build_torch_stage_c(seed=42)
     tt_full = _build_tt_stage_c(mesh_device, parallel_config=pc, ccl_manager=ccl)

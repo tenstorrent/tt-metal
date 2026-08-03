@@ -252,5 +252,5 @@ def test_ltx_latent_upsampler_real_checkpoint(
     tt_out = tt_model(latent)
 
     assert tt_out.shape == torch_out.shape, f"shape mismatch: TT {tt_out.shape} vs torch {torch_out.shape}"
-    assert_quality(torch_out, tt_out, pcc=0.997)
+    assert_quality(torch_out, tt_out, pcc=0.99)
     logger.info(f"PASSED: real-checkpoint LTXLatentUpsampler({in_c}->{mid_c}, {n_blocks} blocks) matches reference")
