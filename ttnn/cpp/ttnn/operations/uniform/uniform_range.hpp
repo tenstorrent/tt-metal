@@ -61,9 +61,9 @@ inline float bfloat16_predecessor(float value) {
 inline OutputRange make_output_range(float from, float to, DataType output_dtype) {
     OutputRange range;
     if (output_dtype == DataType::BFLOAT16) {
-        // The writer converts FP32 to BF16 by dropping the low 16 bits. Restrict
-        // the generated interval to exact BF16 endpoints so that conversion
-        // cannot cross either requested bound.
+        // The packer converts the FP32 destination to BF16 in hardware. Restrict
+        // the generated interval to exact BF16 endpoints so that rounding cannot
+        // cross either requested bound.
         range.lower_bound = bfloat16_ceil(from);
         range.upper_bound = bfloat16_predecessor(to);
     } else {
