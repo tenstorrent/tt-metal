@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /* generalized_moe_gate LLK test. GATE mirrors the call sequence in
-   api/compute/experimental/generalized_moe_gate.h; MOVE and RUN drive one LLK over a DEST image the
-   test writes itself, so a single op's contract can be checked without the rest of the gate. */
+   api/compute/experimental/generalized_moe_gate.h; BINARY drives its FPU front-end alone; MOVE and
+   RUN work on a DEST image the test writes itself, one FPU MOP or SFPU op at a time or as the
+   multi-block combine tail, so a contract can be checked without standing up the rest of the gate. */
 
 #include <cstdint>
 
@@ -20,7 +21,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr int MODE_GATE   = 0; // Full gate, grouped or ungrouped.
 constexpr int MODE_BINARY = 1; // The FPU binary front-end on its own.
 constexpr int MODE_MOVE   = 2; // One transpose-dest / copy4rows MOP on a known DEST image.
-constexpr int MODE_RUN    = 3; // One SFPU run merge/relocate on a known DEST image.
+constexpr int MODE_RUN    = 3; // SFPU run merges and placements on a known DEST image.
 
 constexpr int MOVE_STEP0     = 0;
 constexpr int MOVE_STEP1     = 1;
@@ -28,13 +29,20 @@ constexpr int MOVE_STEP1_HI  = 2;
 constexpr int MOVE_STEP2     = 3;
 constexpr int MOVE_COPY4ROWS = 4;
 
-constexpr int RUN_MERGE4_TOP8   = 0;
-constexpr int RUN_COPY_TOPK_RUN = 1;
-constexpr int RUN_PLACE_FIELD   = 2;
-constexpr int RUN_MERGE16       = 3;
+constexpr int RUN_MERGE4_TOP8       = 0;
+constexpr int RUN_COPY_TOPK_RUN     = 1;
+constexpr int RUN_PLACE_FIELD       = 2;
+constexpr int RUN_MERGE16           = 3;
+constexpr int RUN_COMBINE           = 4; // Combine tail, arriving run placed from intermediate.
+constexpr int RUN_COMBINE_RELOCATED = 5; // Combine tail, arriving run relocated within DEST.
 
 // buffer_A is the DEST image, buffer_B the binary's SrcB operand; every mode packs all four back out.
 constexpr std::uint32_t NUM_DEST_TILES = 4;
+
+// One DEST tile per region, in the order the SFPU's scores/indices/bias/interm offsets walk them.
+constexpr std::uint32_t SCORES_TILE = 0;
+constexpr std::uint32_t IDS_TILE    = 1;
+constexpr std::uint32_t KEYS_TILE   = 2;
 
 // The id tile is uint16 both in L1 and in DEST, so it is unpacked under its own format.
 constexpr std::uint32_t ID_FORMAT = ckernel::to_underlying(DataFormat::UInt16);
@@ -58,13 +66,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (GMG_MODE == MODE_GATE || GMG_MODE == MODE_BINARY)
     {
         // GATE uses the raw tile for the ids, mirroring the op's copy_tile before
-        // generalized_moe_gate_init; BINARY seeds the score region with it so RELOAD has a known
-        // SrcA to read back.
+        // generalized_moe_gate_init. BINARY takes two: buffer_A[1] seeds the score region so RELOAD
+        // has a known SrcA to read back, buffer_A[2] the key region so ACC_TO_DEST accumulates onto
+        // something the test picked rather than onto whatever DEST held.
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
             ID_FORMAT, ID_FORMAT, params.TILE_SIZE_UNPACK_A);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, ID_FORMAT, ID_FORMAT);
         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[1]), ID_FORMAT, ID_FORMAT);
+        if constexpr (GMG_MODE == MODE_BINARY)
+        {
+            _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[2]), ID_FORMAT, ID_FORMAT);
+        }
 
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
             formats.unpack_A_src, formats.unpack_A_dst, params.TILE_SIZE_UNPACK_A);
@@ -73,8 +86,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        // MOVE and RUN start from a DEST image the test builds, so every tile comes in raw under
-        // the uint16 config.
+        // RUN starts from a DEST image the test builds, so every tile comes in raw under the
+        // uint16 config.
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
             ID_FORMAT, ID_FORMAT, params.TILE_SIZE_UNPACK_A);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -238,8 +251,30 @@ static inline void run_placement()
         GMG_SFPU_CALL(
             generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, GMG_FIELD, GMG_FROM_LO, GMG_FROM_HI, GMG_TO_LO, GMG_TO_HI));
     }
+    else if constexpr (GMG_SUB_OP == RUN_MERGE16)
+    {
+        GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
+    }
+    else if constexpr (GMG_SUB_OP == RUN_COMBINE_RELOCATED)
+    {
+        // The same combine, but the arriving run is already in DEST at {8,10} and reaches the merge
+        // slot by relocation instead. Whether a relocated run is still a run the merge accepts is
+        // the run format's contract, and copy_topk_run's own test only checks that cells moved.
+        GMG_SFPU_CALL(generalized_moe_gate_copy_topk_run, (APPROX_MODE, is_fp32_dest_acc_en, 8, 10, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
+    }
     else
     {
+        // The multi-block combine tail. One block's run is already resident at {0,2}; the other
+        // arrives one field at a time through the intermediate region, then the two merge.
+        //
+        // The placement lands at {4,6} and the merge reads {0,2}+{4,6} because merge16 hardcodes
+        // those four offsets, so neither is a free parameter. The three source pairs are spread
+        // over the intermediate region only because a test kernel cannot re-unpack between fields
+        // the way the op's copy_tile does; place_field's own test sweeps the source offsets.
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 0, 0, 2, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 1, 4, 6, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 2, 8, 10, 4, 6));
         GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
     }
 }
@@ -254,11 +289,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_wait_for_dest_available_<dest_sync>();
 
     {
-        // The id tile (GATE), the score-region seed (BINARY) and the whole DEST image (MOVE, RUN)
-        // all arrive as raw uint16 datacopies.
-        constexpr std::uint32_t first_tile = (GMG_MODE == MODE_GATE) ? 1 : 0;
-        constexpr std::uint32_t last_tile  = (GMG_MODE == MODE_GATE || GMG_MODE == MODE_BINARY) ? first_tile + 1 : NUM_DEST_TILES;
-
         _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* to_from_int8 */>(ID_FORMAT);
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
             DataCopyType::A2D,
@@ -266,10 +296,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
             BroadcastType::NONE,
             false /* is_int_fpu_en */,
             PackMode::Default>(params.num_faces, ID_FORMAT);
-        for (std::uint32_t tile = first_tile; tile < last_tile; ++tile)
+
+        const auto copy_to_dest_tile = [](const std::uint32_t tile)
         {
             _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 tile, ID_FORMAT, ID_FORMAT);
+        };
+
+        // Each datacopy consumes one unpacked operand, so these have to match the unpacker's order:
+        // the id tile (GATE), the score then key regions (BINARY), the whole image (MOVE, RUN).
+        if constexpr (GMG_MODE == MODE_GATE)
+        {
+            copy_to_dest_tile(IDS_TILE);
+        }
+        else if constexpr (GMG_MODE == MODE_BINARY)
+        {
+            copy_to_dest_tile(SCORES_TILE); // RELOAD's SrcA
+            copy_to_dest_tile(KEYS_TILE);   // ACC_TO_DEST's accumulator base
+        }
+        else
+        {
+            for (std::uint32_t tile = 0; tile < NUM_DEST_TILES; ++tile)
+            {
+                copy_to_dest_tile(tile);
+            }
         }
         _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* to_from_int8 */>(formats.math);
     }
