@@ -35,7 +35,7 @@ on:
       hang-detection-timeout:
         required: false
         type: number
-        default: 60
+        default: 10
         description: "Seconds without dispatch progress before tt-triage fires on the hung rank(s). 0 or less disables hang detection (the runtime treats any non-positive duration as no timeout)."
 
 permissions:
