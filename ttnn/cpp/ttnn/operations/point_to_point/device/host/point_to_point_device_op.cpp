@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_helpers_dataflow_host.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/global_semaphore.hpp"
 
@@ -14,89 +15,6 @@
 
 using namespace tt::tt_metal;
 namespace ttnn::operations::point_to_point {
-
-namespace detail {
-
-AlignedPacketDims compute_aligned_packet_dims(
-    const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment) {
-    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-
-    const uint32_t max_packet_size_bytes =
-        dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
-
-    const uint32_t aligned_page_size_bytes = tt::round_up(page_size_bytes, alignment);
-
-    uint32_t num_page_segments, max_num_pages_per_packet, packet_size_bytes, total_packets;
-    if (aligned_page_size_bytes <= max_packet_size_bytes) {
-        num_page_segments = 1;
-        max_num_pages_per_packet = std::min(max_packet_size_bytes / aligned_page_size_bytes, num_pages);
-        packet_size_bytes = aligned_page_size_bytes * max_num_pages_per_packet;
-        total_packets = tt::div_up(num_pages, max_num_pages_per_packet);
-    } else {
-        max_num_pages_per_packet = 1;
-        num_page_segments = tt::div_up(aligned_page_size_bytes, max_packet_size_bytes);
-        packet_size_bytes = max_packet_size_bytes;
-        total_packets = num_page_segments * num_pages;
-    }
-
-    return {packet_size_bytes, max_num_pages_per_packet, num_page_segments, total_packets};
-}
-
-auto fabric_1d_routing_vector(const MeshCoordinate& sender_coord, const MeshCoordinate& receiver_coord) {
-    // transmit along row
-    if (sender_coord[0] == receiver_coord[0]) {
-        constexpr auto dim = 1;
-        const int hops = receiver_coord[dim] - sender_coord[dim];
-        bool is_fwd = (hops > 0);
-
-        return std::make_tuple(std::abs(hops), is_fwd, dim);
-    }
-    // transmit along col
-    if (sender_coord[1] == receiver_coord[1]) {
-        constexpr auto dim = 0;
-        const int hops = receiver_coord[dim] - sender_coord[dim];
-        bool is_fwd = (hops > 0);
-
-        return std::make_tuple(std::abs(hops), is_fwd, dim);
-    }
-    TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", sender_coord, receiver_coord);
-    return std::make_tuple(0, false, 0);
-}
-
-Fabric1DRoute fabric_1d_routing(
-    const MeshDevice* mesh_device,
-    const MeshCoordinate& sender_coord,
-    const MeshCoordinate& receiver_coord,
-    const ::ttnn::ccl::Topology topology) {
-    const auto& mesh_shape = mesh_device->get_view().shape();
-
-    // sign indicates direction, however fabrics' forward/backward concept is reversed
-    const auto [line_hops, line_is_forward, dim] = fabric_1d_routing_vector(sender_coord, receiver_coord);
-
-    TT_FATAL(line_hops != 0, "Should not be send/receiving to the same device");
-
-    auto get_neighbor_id = [&sender_coord, &mesh_device, &mesh_shape, dim](
-                               bool is_forward, MeshCoordinate::BoundaryMode boundary_mode) {
-        const auto neighbor_coord = sender_coord.get_neighbor(mesh_shape, (is_forward ? 1 : -1), dim, boundary_mode);
-
-        TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", sender_coord);
-        return mesh_device->get_fabric_node_id(*neighbor_coord);
-    };
-
-    if (topology == ::ttnn::ccl::Topology::Ring) {
-        int ring_hops = line_hops + ((line_hops < 0 ? -1 : 1) * mesh_shape[dim]);
-
-        if (std::abs(ring_hops) < std::abs(line_hops)) {
-            bool ring_is_forward = (ring_hops > 0);
-
-            const auto next_fabric_id = get_neighbor_id(ring_is_forward, MeshCoordinate::BoundaryMode::WRAP);
-            return {std::abs(ring_hops), !ring_is_forward, next_fabric_id};
-        }
-    }
-    const auto next_fabric_id = get_neighbor_id(line_is_forward, MeshCoordinate::BoundaryMode::NONE);
-    return {line_hops, !line_is_forward, next_fabric_id};
-}
-}  // namespace detail
 
 void PointToPointOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -150,7 +68,7 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
     const uint32_t input_num_pages = data_movement::get_num_pages(tensor_args.input_tensor);
 
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
-        detail::compute_aligned_packet_dims(
+        ::ttnn::ccl::dataflow::ccl_packet_dims(
             input_tensor.dtype(),
             final_output_spec.compute_page_size_bytes(),
             input_num_pages,
@@ -193,12 +111,9 @@ tt::tt_metal::WorkloadDescriptor PointToPointOp::SendReceive::create_workload_de
     // The semaphore's device-side allocation must outlive every program that
     // references its absolute address — park it in WorkloadDescriptor.semaphores
     // so the framework keeps it alive for the cached workload's lifetime.
-    auto sd_id = mesh_device->get_sub_device_ids().at(0);
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in p2p op");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
-    log_debug(tt::LogOp, "Synchronize devices in p2p op done");
+    // Allocate the shared GlobalSemaphore and run the cache-miss cross-device Synchronize
+    // barrier (helper owns both); the caller parks it in WorkloadDescriptor::semaphores below.
+    auto semaphore = ::ttnn::ccl::dataflow::make_ccl_semaphore(mesh_device, 0);
 
     const auto& send_coord = operation_attributes.send_coord;
     const auto& receive_coord = operation_attributes.receive_coord;
