@@ -1,5 +1,5 @@
 ---
-description: std::vector allocation hygiene for C++ - reserve capacity before accumulating, hoist scratch buffers out of loops, and move vectors instead of copying them out
+description: std::vector allocation hygiene for C++ - reserve capacity before accumulating, hoist scratch buffers out of loops, and prefer moving vectors over copying them out
 globs: **/*.cpp,**/*.hpp,**/*.cc,**/*.h,**/*.cxx
 alwaysApply: false
 ---
@@ -66,10 +66,11 @@ Do not hoist when the vector is moved out of the loop body (stored into a contai
 returned, captured). Moving from it leaves it empty with no guaranteed capacity, so the
 reuse never happens and the hoisted declaration only widens the variable's scope.
 
-## 3. Move vectors out, never copy
+## 3. Prefer moving over copying
 
 When a vector crosses a boundary - returned, or placed into a struct, pair, tuple,
 optional, variant, or another container - transfer ownership instead of copying the buffer.
+Copy only when the source vector must remain valid after the call.
 
 ```cpp
 // BAD - deep-copies the whole buffer
