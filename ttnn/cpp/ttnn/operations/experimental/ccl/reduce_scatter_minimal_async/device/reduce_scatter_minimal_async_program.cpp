@@ -375,6 +375,54 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     bool fuse_op = fused_op_signaler.has_value();
 
+    // Tensor Info
+    const auto& input_tensor_shape = input_tensor.padded_shape();
+    TT_FATAL(
+        !(input_tensor_shape[-2] % tt::constants::TILE_HEIGHT),
+        "Input tensor height ({}) must be divisible by tile height ({}).",
+        input_tensor_shape[-2],
+        tt::constants::TILE_HEIGHT);
+    TT_FATAL(
+        !(input_tensor_shape[-1] % tt::constants::TILE_WIDTH),
+        "Input tensor width ({}) must be divisible by tile width ({}).",
+        input_tensor_shape[-1],
+        tt::constants::TILE_WIDTH);
+
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        (input_tensor_shape.rank() == 2)
+            ? ttnn::experimental::ccl::reduce_scatter_map_2d_to_4d(dim)
+            : ttnn::experimental::ccl::reduce_scatter_map_nd_to_4d(input_tensor_shape, dim);
+    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
+
+    uint32_t slice_B = input_tensor_B;
+    uint32_t slice_C = input_tensor_C;
+    uint32_t slice_Ht = input_tensor_Ht;
+    uint32_t slice_Wt = input_tensor_Wt;
+    if (normalized_dim == 0) {
+        slice_B /= ring_size;
+    } else if (normalized_dim == 1) {
+        slice_C /= ring_size;
+    } else if (normalized_dim == 2) {
+        slice_Ht /= ring_size;
+    } else if (normalized_dim == 3) {
+        slice_Wt /= ring_size;
+    } else {
+        TT_FATAL(
+            false, "reduce_scatter_minimal_async ring implementation only supports scattering on dim 0, 1, 2, or 3");
+    }
+
+    TT_FATAL(
+        !(fuse_op && normalized_dim == 0),
+        "reduce_scatter_minimal_async ring implementation can't be fused with matmul when scattering on dim 0");
+
+    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
+    const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
+    const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
+    const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
+    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
+
     // op hyperparams
     // Get worker cores
     // 2 senders per direction (2: forward, backward) per link (num_links)
@@ -392,6 +440,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             ring_size,
             num_directions_per_link,
             num_mux_cores_per_direction_per_link));
+    // Never allocate more workers than there are pages to hand out; an empty-range worker deadlocks
+    // the per-batch barrier below.
+    num_workers_per_direction = ttnn::experimental::ccl::reduce_scatter_clamp_workers_to_available_pages(
+        num_workers_per_direction, num_links, normalized_dim == 0 ? output_batch_num_pages : output_channel_num_pages);
     if (num_workers_per_direction == 1) {
         num_mux_cores_per_direction_per_link = 0;
     }
@@ -445,54 +497,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
-
-    // Tensor Info
-    const auto& input_tensor_shape = input_tensor.padded_shape();
-    TT_FATAL(
-        !(input_tensor_shape[-2] % tt::constants::TILE_HEIGHT),
-        "Input tensor height ({}) must be divisible by tile height ({}).",
-        input_tensor_shape[-2],
-        tt::constants::TILE_HEIGHT);
-    TT_FATAL(
-        !(input_tensor_shape[-1] % tt::constants::TILE_WIDTH),
-        "Input tensor width ({}) must be divisible by tile width ({}).",
-        input_tensor_shape[-1],
-        tt::constants::TILE_WIDTH);
-
-    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
-        (input_tensor_shape.rank() == 2)
-            ? ttnn::experimental::ccl::reduce_scatter_map_2d_to_4d(dim)
-            : ttnn::experimental::ccl::reduce_scatter_map_nd_to_4d(input_tensor_shape, dim);
-    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-
-    uint32_t slice_B = input_tensor_B;
-    uint32_t slice_C = input_tensor_C;
-    uint32_t slice_Ht = input_tensor_Ht;
-    uint32_t slice_Wt = input_tensor_Wt;
-    if (normalized_dim == 0) {
-        slice_B /= ring_size;
-    } else if (normalized_dim == 1) {
-        slice_C /= ring_size;
-    } else if (normalized_dim == 2) {
-        slice_Ht /= ring_size;
-    } else if (normalized_dim == 3) {
-        slice_Wt /= ring_size;
-    } else {
-        TT_FATAL(
-            false, "reduce_scatter_minimal_async ring implementation only supports scattering on dim 0, 1, 2, or 3");
-    }
-
-    TT_FATAL(
-        !(fuse_op && normalized_dim == 0),
-        "reduce_scatter_minimal_async ring implementation can't be fused with matmul when scattering on dim 0");
-
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
-    const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
-    const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
-    const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
-    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
     // Extract compute kernel config parameters
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
@@ -1077,6 +1081,56 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
 
+    bool fuse_op = fused_op_signaler.has_value();
+
+    // Tensor Info
+    const auto& input_tensor_shape = input_tensor.padded_shape();
+    TT_FATAL(
+        !(input_tensor_shape[-2] % tt::constants::TILE_HEIGHT),
+        "Input tensor height ({}) must be divisible by tile height ({}).",
+        input_tensor_shape[-2],
+        tt::constants::TILE_HEIGHT);
+    TT_FATAL(
+        !(input_tensor_shape[-1] % tt::constants::TILE_WIDTH),
+        "Input tensor width ({}) must be divisible by tile width ({}).",
+        input_tensor_shape[-1],
+        tt::constants::TILE_WIDTH);
+
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        (input_tensor_shape.rank() == 2)
+            ? ttnn::experimental::ccl::reduce_scatter_map_2d_to_4d(dim)
+            : ttnn::experimental::ccl::reduce_scatter_map_nd_to_4d(input_tensor_shape, dim);
+    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
+
+    uint32_t slice_B = input_tensor_B;
+    uint32_t slice_C = input_tensor_C;
+    uint32_t slice_Ht = input_tensor_Ht;
+    uint32_t slice_Wt = input_tensor_Wt;
+    if (normalized_dim == 0) {
+        slice_B /= ring_size;
+    } else if (normalized_dim == 1) {
+        slice_C /= ring_size;
+    } else if (normalized_dim == 2) {
+        slice_Ht /= ring_size;
+    } else if (normalized_dim == 3) {
+        slice_Wt /= ring_size;
+    } else {
+        TT_FATAL(
+            false, "reduce_scatter_minimal_async line implementation only supports scattering on dim 0, 1, 2, or 3");
+    }
+
+    TT_FATAL(
+        !(fuse_op && normalized_dim == 0),
+        "reduce_scatter_minimal_async line implementation can't be fused with matmul when scattering on dim 0");
+
+    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
+    const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
+    const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
+    const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
+    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
+
     // op hyperparams
     // Get worker cores
     // 2 senders (reader + core + writer) per direction (forward, backward) per link
@@ -1093,6 +1147,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             ring_size,
             num_directions_per_link,
             num_mux_cores_per_direction_per_link));
+    // Never allocate more workers than there are pages to hand out; an empty-range worker moves no
+    // data and only adds synchronization overhead.
+    num_workers_per_direction = ttnn::experimental::ccl::reduce_scatter_clamp_workers_to_available_pages(
+        num_workers_per_direction, num_links, normalized_dim == 0 ? output_batch_num_pages : output_channel_num_pages);
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
@@ -1102,8 +1160,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         sender_device_coord,
         is_first_chip,
         is_last_chip);
-
-    bool fuse_op = fused_op_signaler.has_value();
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
@@ -1200,54 +1256,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{compute_output_cb_index, df}})
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
-
-    // Tensor Info
-    const auto& input_tensor_shape = input_tensor.padded_shape();
-    TT_FATAL(
-        !(input_tensor_shape[-2] % tt::constants::TILE_HEIGHT),
-        "Input tensor height ({}) must be divisible by tile height ({}).",
-        input_tensor_shape[-2],
-        tt::constants::TILE_HEIGHT);
-    TT_FATAL(
-        !(input_tensor_shape[-1] % tt::constants::TILE_WIDTH),
-        "Input tensor width ({}) must be divisible by tile width ({}).",
-        input_tensor_shape[-1],
-        tt::constants::TILE_WIDTH);
-
-    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
-        (input_tensor_shape.rank() == 2)
-            ? ttnn::experimental::ccl::reduce_scatter_map_2d_to_4d(dim)
-            : ttnn::experimental::ccl::reduce_scatter_map_nd_to_4d(input_tensor_shape, dim);
-    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-
-    uint32_t slice_B = input_tensor_B;
-    uint32_t slice_C = input_tensor_C;
-    uint32_t slice_Ht = input_tensor_Ht;
-    uint32_t slice_Wt = input_tensor_Wt;
-    if (normalized_dim == 0) {
-        slice_B /= ring_size;
-    } else if (normalized_dim == 1) {
-        slice_C /= ring_size;
-    } else if (normalized_dim == 2) {
-        slice_Ht /= ring_size;
-    } else if (normalized_dim == 3) {
-        slice_Wt /= ring_size;
-    } else {
-        TT_FATAL(
-            false, "reduce_scatter_minimal_async line implementation only supports scattering on dim 0, 1, 2, or 3");
-    }
-
-    TT_FATAL(
-        !(fuse_op && normalized_dim == 0),
-        "reduce_scatter_minimal_async line implementation can't be fused with matmul when scattering on dim 0");
-
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
-    const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
-    const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
-    const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
-    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
     bool input_is_sharded = input_tensor.is_sharded();
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();

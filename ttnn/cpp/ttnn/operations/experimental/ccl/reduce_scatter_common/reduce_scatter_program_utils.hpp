@@ -128,6 +128,11 @@ std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn:
 // Maps a 2D tensor dim to the canonical 4D representation (normalized_dim=2 or 3, C=1, B=1).
 std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_2d_to_4d(uint32_t dim);
 
+// Caps the per-direction worker count so that every worker is assigned at least one page.
+// Workers assigned no pages result in a hang.
+uint32_t reduce_scatter_clamp_workers_to_available_pages(
+    uint32_t num_workers_per_direction, uint32_t num_links, uint32_t pages_to_distribute);
+
 // Computes per-worker tile read start/end offsets for the scatter dimension.
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offsets(
     uint32_t worker_id,
