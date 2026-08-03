@@ -129,6 +129,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         "supports_prefix_caching": True,
     }
 
+    def _any_trace_captured(self):
+        """True once any trace has been captured, i.e. once allocations are no longer unconditionally safe.
+
+        Used to decide whether a prefill call may still arm capture deferral: the point of deferring is to
+        keep every compile pass and every persistent allocation ahead of the first capture, which is only
+        achievable while nothing has been captured yet.
+        """
+        return any(
+            any(store.values())
+            for store in (
+                self.trace_id_prefill,
+                self.trace_id_prefill_sampling,
+                self.trace_id_post_prefill,
+                self.trace_ids_decode,
+            )
+        )
+
     def _get_sampling_contract(self, model_id: int):
         sampling_module = getattr(self.model[model_id], "sampling", None)
         sampling_dp = getattr(self.model[model_id], "sampling_dp", 1)
@@ -202,23 +219,36 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 kv_cache=kv_cache, page_table=page_table, can_sample_on_device=can_sample_on_device
             )
 
-    def finalize_deferred_traces(self, kv_cache, page_table, can_sample_on_device):
+    def finalize_deferred_traces(self, kv_cache, page_table, can_sample_on_device, prefill_samples_on_device=None):
         """Prepare the remaining traces and capture everything that is pending.
 
         Called once the prefill that triggered warmup has finished, so every prefill trace variant that run
         actually uses -- including the batched-prefill one, which warmup cannot know about -- has already
         been prepared. Everything below still runs before the first capture, so once this returns nothing
         allocates outside a capture window.
+
+        ``can_sample_on_device`` is decode's sampling mode (it keys the decode trace).
+        ``prefill_samples_on_device`` is prefill's, which keys the post-prefill trace -- the two differ when
+        a caller samples on device during decode but reads logits back on host during prefill (GPT-OSS).
+        Capturing the post-prefill tail in the mode prefill does not use would leave a trace nothing replays.
+        Defaults to ``can_sample_on_device`` for callers that do not distinguish them.
         """
         if not self._defer_trace_recording:
             return
+        if prefill_samples_on_device is None:
+            prefill_samples_on_device = can_sample_on_device
         try:
             # One post-prefill trace per model, shaped from any prepared prefill variant's body output.
             for prepared in self._pending_prefill_traces.values():
                 model_id = prepared["model_id"]
                 if model_id in self._pending_post_prefill_traces:
                     continue
-                sampling_enabled = can_sample_on_device and getattr(self.model[model_id], "sampling", None)
+                # Tracing the tail needs a slice that can write into a pre-allocated buffer; without it the
+                # replay would allocate its own input every call, which is the very thing being avoided.
+                # Models that do not implement it keep the eager tail (and its allocations).
+                if getattr(self.model[model_id], "slice_last_token_block", None) is None:
+                    continue
+                sampling_enabled = prefill_samples_on_device and getattr(self.model[model_id], "sampling", None)
                 self._pending_post_prefill_traces[model_id] = self._prepare_post_prefill_trace(
                     model_id, prepared, bool(sampling_enabled)
                 )
@@ -226,15 +256,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Decode last, so its compile pass and its capture stay adjacent: capturing a program the
             # cache has not seen fails outright, and the sampling configuration must not drift in between.
             #
-            # Only when this runs straight after warmup. Reached from the batched path -- i.e. after the
-            # caller's own prefill -- the model's sampling state has been reconfigured per prefill user, and
-            # compiling decode against it fails ("Batch size 1 must be equal to max_batch_size"). There the
-            # decode trace stays lazy, exactly as before this change.
-            self._pending_decode_trace = self._prepare_decode_trace_for_warmup(
-                kv_cache=kv_cache,
-                page_table=page_table,
-                on_device_sampling=can_sample_on_device,
-            )
+            # Unless it was already prepared up front. The no-warmup path does that deliberately, because
+            # there the flush happens after a real prefill and the decode compile pass would write mock K/V
+            # over it (see _prefill_forward_text_impl).
+            if self._pending_decode_trace is None:
+                self._pending_decode_trace = self._prepare_decode_trace_for_warmup(
+                    kv_cache=kv_cache,
+                    page_table=page_table,
+                    on_device_sampling=can_sample_on_device,
+                )
         finally:
             self._defer_trace_recording = False
 
@@ -368,6 +398,42 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             for i in range(len(self.model)):
                 self.model[i].switch_mode(Mode.PREFILL)
 
+    def _will_row_shard_prefill(self, tokens, sampling_params):
+        """Whether this prefill will be dispatched to the model's row-sharded batched path.
+
+        Single source of truth for that decision -- both the dispatch itself and the choice of where to
+        hoist decode trace preparation depend on it, and they must not drift apart.
+
+        Only used when device sampling is active (sampling_params is not None) and the prompt uses the
+        harmony chat template (first token is <|start|>=200006). Host sampling needs the single-user
+        prefill path that returns full logits per user.
+        """
+        is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
+        return bool(
+            getattr(self.model[0], "users_row_sharded", False)
+            and tokens.shape[0] > 1
+            and sampling_params is not None
+            and is_harmony
+        )
+
+    def _stage_prealloc_decode_inputs(self, page_table):
+        """Allocate decode's persistent trace inputs now, for _prepare_decode_trace_text to pick up later.
+
+        Split out from full decode trace preparation because it allocates without compiling anything --
+        the only part of decode setup the row-sharded batched path tolerates ahead of its own capture.
+        """
+        if self._prealloc_decode_inputs is None:
+            self._prealloc_decode_inputs = self._prealloc_decode_trace_inputs(page_table)
+
+    def _prepare_decode_trace_once(self, kv_cache, page_table, on_device_sampling):
+        """Prepare the decode trace unless it is already prepared. Safe to call from either hoist point."""
+        if self._pending_decode_trace is None:
+            self._pending_decode_trace = self._prepare_decode_trace_for_warmup(
+                kv_cache=kv_cache,
+                page_table=page_table,
+                on_device_sampling=on_device_sampling,
+            )
+
     def _prealloc_decode_trace_inputs(self, page_table):
         """Allocate just the decode trace's input tensors, before anything has been captured.
 
@@ -400,8 +466,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         Traced as one unit, the same way the batched path already traces norm + LM head + sampling in
         _capture_trace_prefill_sampling.
+
+        Not every model splits the head off the body: GPT-OSS applies norm + LM head inside its own
+        ``ttnn_prefill_forward``, so its body output is already logits and there is no head to re-apply.
         """
-        return self._post_prefill_tail(model_id, self.model[model_id]._apply_norm_and_lm_head(x), sampling_enabled)
+        apply_head = getattr(self.model[model_id], "_apply_norm_and_lm_head", None)
+        logits = apply_head(x) if apply_head is not None else x
+        return self._post_prefill_tail(model_id, logits, sampling_enabled)
 
     def _post_prefill_tail(self, model_id, logits, sampling_enabled):
         """The part of the post-prefill body that runs on already-computed logits."""
@@ -729,6 +800,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         assert (
             self.data_parallel == 1
         ), "Row-sharded batched prefill requires data_parallel=1 (model handles DP internally)"
+        before_capture = None
+        if enable_trace and self._prealloc_decode_inputs is None and not self._any_trace_captured():
+            # Allocate decode's persistent trace inputs in the one window this path leaves: after its own
+            # trace inputs are staged, before its capture. These are the buffers that matter -- they are
+            # refreshed in place for the entire decode loop, so allocating them later (with the prefill
+            # trace live) leaves them sitting in that trace's scratch, to be overwritten on every replay.
+            # The transient buffers of decode's compile pass are not hoisted with them: compiling decode
+            # here makes the capture below deadlock, so that pass stays in the decode loop. Its allocations
+            # are freed before anything replays, which is why they are the tolerable half of this.
+            before_capture = lambda: self._stage_prealloc_decode_inputs(page_table)  # noqa: E731
         return self.model[0].row_sharded_batched_prefill(
             tokens,
             page_table,
@@ -744,6 +825,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 "outputs": self.trace_output_prefill,
             },
             empty_slots=empty_slots,
+            before_capture=before_capture,
         )
 
     def _easy_trace_prefill(
@@ -924,12 +1006,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         on_device_sampling_requested = sampling_params is not None
 
         # we need this here because of tt-metal tests
+        on_device_sampling_enabled = (
+            getattr(self.model[0], "_supports_on_device_sampling", False)
+            and getattr(self.model[0], "sampling", None) is not None
+        )
         if warmup_prefill:
-            on_device_sampling_enabled = (
-                getattr(self.model[0], "_supports_on_device_sampling", False)
-                and getattr(self.model[0], "sampling", None) is not None
-            )
-
             # Warmup leaves trace recording deferred; the wrapper flushes once this call's own prefill has
             # prepared any variant warmup could not know about (batched prefill).
             #
@@ -947,6 +1028,43 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
                 page_table=page_table,
+            )
+        elif (
+            enable_trace
+            and self._deferred_finalize_args is None
+            and not self._any_trace_captured()
+            # The row-sharded batched path cannot take the full treatment: once a decode program has been
+            # compiled, that path's MoE dispatch can no longer be trace-captured (the capture deadlocks),
+            # and compiling decode before any prefill deadlocks in the MoE combine instead. Its decode
+            # trace therefore still compiles late, in the decode loop. What it does get is its persistent
+            # trace inputs allocated ahead of every capture -- see _row_sharded_batched_prefill.
+            and not self._will_row_shard_prefill(tokens, sampling_params)
+        ):
+            # Models that skip prefill warmup (GPT-OSS sets warmup_prefill=False everywhere) would otherwise
+            # capture their prefill trace part way through this call and then compile the whole decode graph
+            # -- plus its long-lived trace inputs and its sampling state -- with that trace already live.
+            # Arm the same deferral warmup uses, so this call only *prepares*; the wrapper flushes once
+            # everything is prepared. Only on the first such call: once anything is captured, the ordering
+            # is already fixed and re-arming would defer a capture that later calls expect to exist.
+            self._deferred_finalize_args = {
+                "kv_cache": kv_cache,
+                "page_table": page_table,
+                "can_sample_on_device": on_device_sampling_enabled,
+                # This caller's prefill samples on device only if it actually asked to. GPT-OSS's batch-1
+                # demo reads prefill logits back on host while decoding with device sampling, so the two
+                # modes genuinely differ here.
+                "prefill_samples_on_device": on_device_sampling_requested and on_device_sampling_enabled,
+            }
+            self._defer_trace_recording = True
+            # Prepare decode here, before this call's prefill fills the KV cache, rather than at the flush.
+            # The decode compile pass is a real decode step at position 0 with mock inputs, so it writes
+            # mock K/V into position 0 of every user's cache. Running it first means the prefill that
+            # follows overwrites that -- which is exactly the ordering warmup gets for free by running
+            # before any real prefill. Deferred until the flush it would instead corrupt the prefilled KV.
+            self._prepare_decode_trace_once(
+                kv_cache=kv_cache,
+                page_table=page_table,
+                on_device_sampling=on_device_sampling_enabled,
             )
 
         batch_size, batch_seq_len = tokens.shape
@@ -988,18 +1106,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
         ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
-        # Only used when device sampling is active (sampling_params is not None)
-        # and the prompt uses the harmony chat template (first token is <|start|>=200006).
-        # Host sampling (sampling_params=None) needs the single-user prefill path
-        # that returns full logits per user.
-        model_0 = self.model[0]
-        is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
-        if (
-            getattr(model_0, "users_row_sharded", False)
-            and batch_size > 1
-            and sampling_params is not None
-            and is_harmony
-        ):
+        # See _will_row_shard_prefill for when this path is taken.
+        if self._will_row_shard_prefill(tokens, sampling_params):
             return self._row_sharded_batched_prefill(
                 tokens,
                 page_table,

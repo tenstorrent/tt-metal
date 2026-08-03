@@ -209,6 +209,14 @@ class Generator(WarmupForwardMixin):
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
         self._decode_inputs_need_reset = False
+        # Trace capture ordering: while this is set, prepared traces are stashed instead of captured, so
+        # that every compile pass and every persistent trace-input allocation happens before the first
+        # capture. A trace's buffer addresses are invisible to the allocator once captured, so anything
+        # allocated afterwards can land in its scratch and be overwritten on replay. Warmup sweeps many
+        # sequence lengths, batch sizes and prefix-caching variants, so capturing as it goes leaves every
+        # later variant's compile pass allocating behind a growing pile of live traces.
+        self._defer_trace_recording = False
+        self._pending_prefill_traces = {}
 
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
@@ -245,6 +253,12 @@ class Generator(WarmupForwardMixin):
         # Avoids an infinite loop
         self.already_warmed_up_prefill = True
         self.warming_up_prefill = True
+
+        # Defer every capture until the whole sweep has compiled. Warmup walks ~8 sequence lengths x 2
+        # batch sizes plus the prefix-caching variants, and capturing as it goes leaves each later
+        # variant's compile pass -- and the prefetcher setup between them -- allocating behind a growing
+        # pile of live traces, where those buffers can be overwritten on replay.
+        self._defer_trace_recording = enable_trace
 
         # Llama70b always supports on-device sampling from metal
         on_device_sampling_enabled = True
@@ -350,6 +364,17 @@ class Generator(WarmupForwardMixin):
                 tt_out_logits_all_users,
                 start_pos=[num_cached],
             )
+
+        # Every prefill variant has now compiled and staged its buffers, and nothing is captured yet.
+        # Capture them all, back to back, with no allocation in between.
+        #
+        # The decode trace is deliberately not hoisted here. Its input layout depends on the caller's
+        # is_cur_pos_sharded / is_page_table_sharded, which warmup cannot see -- the trace is keyed only on
+        # on_device_logits, so preparing it against the wrong layout would bind the capture to buffers the
+        # real decode never writes. It therefore still compiles in the decode loop, behind these traces.
+        if self._defer_trace_recording:
+            self._defer_trace_recording = False
+            self._record_pending_traces()
 
         # trace_id_prefill dict check
         logger.info("Prefill warmup completed")
@@ -1025,16 +1050,27 @@ class Generator(WarmupForwardMixin):
             last_token_idx_relative = last_token_idx - num_cached_tokens if use_prefix_caching else last_token_idx
 
         if self.trace_id_prefill[trace_key] is None:
+            # Repeat warmup calls for one variant (the sampling-parameter sweep hits each seq len several
+            # times) must not prepare it twice -- that would redo the compile pass and reallocate the trace
+            # inputs. Re-run the body over the inputs already staged for this key instead.
+            already_pending = self._pending_prefill_traces.get(trace_key)
+            if already_pending is not None:
+                return self._rerun_prefill_body(already_pending)
+
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 tokens,
                 last_token_idx_relative,
+                user_id,
+                trace_key,
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 kv_cache=kv_cache,
-                user_id=user_id,
                 batch_size=batch_size,
                 start_pos=chunk_start_idx,
             )
+            if trace_id is None:
+                # Deferred: the compile pass already produced this call's result, so hand it back directly.
+                return tt_out_trace
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
@@ -1058,6 +1094,7 @@ class Generator(WarmupForwardMixin):
         tokens,
         last_token_idx,
         user_id,
+        trace_key,
         page_table=None,
         chunk_page_table=None,  # For prefix caching
         kv_cache=None,
@@ -1067,6 +1104,10 @@ class Generator(WarmupForwardMixin):
         """
         Captures a trace for the prefill_forward method with prefix caching support.
         Uses full rot mats + chunk_start_idx device tensor; slicing inside the trace.
+
+        Splits into a preparation phase (compile pass + trace input allocation) and a recording phase
+        (:meth:`_record_trace_prefill`). While ``_defer_trace_recording`` is set this returns after the
+        preparation phase, so that every variant compiles and allocates before anything is captured.
         """
         # Get host tensors (tokens, user_id, page_table, chunk_page_table, chunk_start_idx, column_mask)
         host_inputs = self.model.prepare_prefill_inputs_host(
@@ -1133,6 +1174,7 @@ class Generator(WarmupForwardMixin):
         )
         ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Compiling Model")
+        compile_output = tt_out_trace
 
         # Trace capture run
         device_inputs = copy_host_to_device(
@@ -1147,6 +1189,73 @@ class Generator(WarmupForwardMixin):
             mesh_device=self.mesh_device,
         )
         # Update column_mask reference to the trace-capture buffer (trace reads from this buffer on replay)
+        self._set_prefill_column_mask(device_inputs[5])
+
+        # Everything above only compiles and allocates; everything below captures. While recording is
+        # deferred, stop here and hand the caller the compile pass' own output -- capturing now would put a
+        # trace on device before the remaining warmup variants (and the decode trace) have compiled, and
+        # every one of those allocations would then land in this trace's scratch. See prefill_warmup.
+        if self._defer_trace_recording:
+            self._pending_prefill_traces[trace_key] = {
+                "full_rot_mats": full_rot_mats,
+                "device_inputs": device_inputs,
+                "kv_cache": kv_cache,
+                "last_token_idx": last_token_idx,
+                "start_pos": start_pos,
+                "batch_size": batch_size,
+            }
+            return None, compile_output, *device_inputs
+
+        return self._record_trace_prefill(trace_key)
+
+    def _rerun_prefill_body(self, prepared):
+        """Re-run a prepared variant's prefill body over its already-staged inputs.
+
+        Used while recording is deferred, when a warmup call needs an output but the trace it would replay
+        has not been captured yet. Allocating a fresh output is safe here: nothing is captured during the
+        preparation phase.
+        """
+        self._set_prefill_column_mask(prepared["device_inputs"][5])
+        transformed_inputs = self.model.transform_prefill_inputs_device(*prepared["device_inputs"])
+        return self.model.ttnn_prefill_forward(
+            x=transformed_inputs[0],
+            user_id=transformed_inputs[1],
+            page_table=transformed_inputs[2],
+            chunk_page_table=transformed_inputs[3],
+            chunk_start_idx=transformed_inputs[4],
+            start_pos=prepared["start_pos"],
+            kv_cache=prepared["kv_cache"],
+            get_last_token=prepared["last_token_idx"],
+            rot_mats=prepared["full_rot_mats"],
+            batch_size=prepared["batch_size"],
+        )
+
+    def _record_pending_traces(self):
+        """Capture every trace prepared while recording was deferred.
+
+        Runs back to back with no allocation in between: each capture binds only to buffers allocated
+        during the preparation phase, before any trace existed.
+        """
+        for trace_key in list(self._pending_prefill_traces):
+            trace_id, tt_out_trace, *device_inputs = self._record_trace_prefill(trace_key)
+            self.trace_id_prefill[trace_key] = trace_id
+            self.trace_inputs_prefill[trace_key] = device_inputs
+            self.trace_output_prefill[trace_key] = tt_out_trace
+
+    def _record_trace_prefill(self, trace_key):
+        """Phase 2 of prefill trace setup: capture over the buffers _capture_trace_prefill already staged.
+
+        Allocation-free outside the capture window by construction -- it binds only to tensors that were
+        allocated while nothing was captured.
+        """
+        prepared = self._pending_prefill_traces.pop(trace_key)
+        full_rot_mats = prepared["full_rot_mats"]
+        device_inputs = prepared["device_inputs"]
+        kv_cache = prepared["kv_cache"]
+        last_token_idx = prepared["last_token_idx"]
+        start_pos = prepared["start_pos"]
+        batch_size = prepared["batch_size"]
+        # The trace replays out of this buffer, so re-point the column mask at it before capturing.
         self._set_prefill_column_mask(device_inputs[5])
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
@@ -1439,6 +1548,31 @@ class Generator(WarmupForwardMixin):
         tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
         )
+
+        # Split so that the compile pass and these long-lived trace inputs are separable from the capture.
+        # They are not hoisted ahead of the prefill captures today -- see prefill_warmup for why the decode
+        # trace cannot be prepared there -- but keeping the phases apart is what makes that possible.
+        return self._record_trace_text(
+            {
+                "tokens_tt": tokens_tt,
+                "current_pos_tt": current_pos_tt,
+                "rope_idxs_tt": rope_idxs_tt,
+                "page_table_tt": page_table_tt,
+                "kv_cache": kv_cache,
+                "is_cur_pos_sharded": is_cur_pos_sharded,
+                "on_device_logits": on_device_logits,
+            }
+        )
+
+    def _record_trace_text(self, prepared):
+        """Phase 2 of decode trace setup: capture over the buffers the compile phase already staged."""
+        tokens_tt = prepared["tokens_tt"]
+        current_pos_tt = prepared["current_pos_tt"]
+        rope_idxs_tt = prepared["rope_idxs_tt"]
+        page_table_tt = prepared["page_table_tt"]
+        kv_cache = prepared["kv_cache"]
+        is_cur_pos_sharded = prepared["is_cur_pos_sharded"]
+        on_device_logits = prepared["on_device_logits"]
 
         # Save the buffer addresses for preallocated tensors
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
