@@ -232,7 +232,9 @@ def attention_forward(
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
         tt_sdpa_out_full.deallocate(True)
-        tt_sdpa_out = ttnn.multiply(tt_sdpa_out, 1.0 / sp)
+        tt_sdpa_out_scaled = ttnn.multiply(tt_sdpa_out, 1.0 / sp)
+        ttnn.deallocate(tt_sdpa_out)  # free the reduce-scatter output (leaked otherwise across 36 layers)
+        tt_sdpa_out = tt_sdpa_out_scaled
     elif cached_len > 0:
         # Chunked cache-read (current chunk attends the accumulated prefix) is not implemented yet.
         # The KV-cache STORAGE + write is done and validated (test_kv_cache_vs_ref); reading it back

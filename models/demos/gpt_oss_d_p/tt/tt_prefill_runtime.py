@@ -55,6 +55,10 @@ class TtPrefillRuntimeConfig:
     # When True the runtime allocates + owns its KV cache (self.kv_cache) — the standalone galaxy
     # harness path. The adapter/engine path sets this False and passes the engine-owned KvCaches in.
     owns_kv_cache: bool = True
+    # Pipeline-parallel rank flags the common prefill runner reads off runtime.config
+    # (single-rank standalone/harness => both True).
+    is_first_rank: bool = True
+    is_last_rank: bool = True
 
     @property
     def sp_factor(self) -> int:
@@ -192,6 +196,7 @@ class TtPrefillRuntime:
         actual_end: int,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
+        request_id: int = -1,  # accepted for the common-runner contract; single-request prefill ignores it
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache (self-owned or the engine's
         ``kv_caches``). Returns None (skip_lm_head) — the populated cache is the output.

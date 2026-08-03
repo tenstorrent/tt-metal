@@ -16,6 +16,7 @@ imported lazily inside the methods so ``import ...adapters.gpt_oss`` stays cheap
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +26,17 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
+
+
+@dataclass
+class GptOssKvCaches(KvCaches):
+    """Concrete KvCaches for GPT-OSS: a list holding the single GptOssKVCache (k+v struct),
+    indexable so the runtime's _resolve_kv pulls the cache back via [0] (engine treats it opaquely)."""
+
+    caches: list
+
+    def __getitem__(self, idx):
+        return self.caches[idx]
 
 
 class GptOssPrefillAdapter(PrefillModelAdapter):
@@ -90,7 +102,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         needed)."""
         from models.demos.gpt_oss_d_p.tt.attention import allocate_kv_cache
 
-        return KvCaches(
+        return GptOssKvCaches(
             [
                 allocate_kv_cache(
                     mesh_device,
@@ -119,13 +131,18 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             tp_axis=params.tp_axis,
             weight_cache_path=params.weight_cache_path,
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
+            is_first_rank=params.is_first_rank,
+            is_last_rank=params.is_last_rank,
         )
         # TODO(P5, engine integration): this builds with state_dict={}, i.e. it relies on a
         # pre-populated TTNN weight cache (tilized weights + the MLP expert-bias sidecar) and does
         # NOT fall back to loading real bf16 weights when the cache is incomplete, unlike
         # minimax_m3's build_runtime (ModelArgs.load_state_dict). The validated path today is the
         # standalone galaxy harness (tests/galaxy_prefill_kv_pcc.py), which loads real weights. Wire
-        # the bf16 fallback here when the common/prefill engine path is brought up on galaxy.
+        # the bf16 fallback here when the common/prefill engine path is brought up on galaxy. Also
+        # P5: the runner's request-mode H2D supplies SP-sharded uint32 token IDs to prefill_chunk,
+        # which today expects embedded activations (make_chunk_input / trace mode); the request path
+        # needs an in-runtime embed. The validated harness path uses trace mode, so it is unaffected.
         return TtPrefillRuntime(
             mesh_device=mesh_device,
             hf_config=hf_config,

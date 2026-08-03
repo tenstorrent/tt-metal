@@ -192,6 +192,12 @@ def main():
         # --- accuracy: per-layer KV PCC vs golden (K permuted HF->Meta over head_dim; V raw) ---
         min_pcc = runtime.kv_cache_pcc_check(slot_id=0, n_chunks=n_chunks, trace_dir=golden_dir)
         print(f"[prefill-pcc] min KV PCC across {num_layers} layers = {min_pcc:.5f}", flush=True)
+        # Gate on a PCC floor when GPT_OSS_KV_PCC_MIN is set (CI / regression); unset during bring-up
+        # so the harness just reports the number. A failing gate exits non-zero.
+        _pcc_min = os.environ.get("GPT_OSS_KV_PCC_MIN")
+        if _pcc_min is not None and min_pcc < float(_pcc_min):
+            print(f"[prefill-pcc] FAIL: min KV PCC {min_pcc:.5f} < GPT_OSS_KV_PCC_MIN={_pcc_min}", flush=True)
+            return 1
         print("[prefill-pcc] DONE", flush=True)
     finally:
         ttnn.close_mesh_device(mesh)

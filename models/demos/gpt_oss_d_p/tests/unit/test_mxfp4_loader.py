@@ -94,7 +94,7 @@ def test_load_state_dict_dequantizes_mxfp4_experts(tmp_path):
 
     try:
         sd = ModelArgs.load_state_dict(ckpt, convert_to_meta_format=False)
-    except Exception as e:  # MXFP4 dequant-on-load path unavailable on this host
+    except (ImportError, ModuleNotFoundError) as e:  # genuinely unavailable host dep, not a loader bug
         pytest.skip(f"MXFP4 dequant-on-load unavailable here: {e}")
 
     # The regression: no packed tensors may leak through -- the loader must dequantize.
