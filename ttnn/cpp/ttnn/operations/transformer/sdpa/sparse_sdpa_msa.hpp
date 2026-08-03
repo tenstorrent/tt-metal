@@ -30,6 +30,10 @@ namespace ttnn::transformer {
 // `cluster_axis` derives the per-device start under sequence parallelism (chunk_start = chunk_start_idx + rank*S).
 // Causal masking requires bf16 q: with fp8 q the mask is numerically wrong (fp8-specific;
 // root cause not identified), so fp8 q with `chunk_start_idx` asserts.
+// `block_cyclic_sp_axis`/`block_cyclic_chunk_local` (set together): the K/V cache is striped block-cyclic across
+// SP (chunked prefill, post-AllGather); the gather kernels remap logical block ids to physical in-kernel instead
+// of the caller reordering to natural order. sp is read from the mesh on that axis; chunk_local is the per-shard
+// chunk length (= chunk_size_global / sp), which must equal q_isl or tp*q_isl.
 ttnn::Tensor sparse_sdpa_msa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -40,6 +44,8 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt);
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
 
 }  // namespace ttnn::transformer

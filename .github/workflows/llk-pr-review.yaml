@@ -36,7 +36,7 @@ concurrency:
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 60          # the command fans out subagents; this bounds it
+    timeout-minutes: 80          # the command fans out subagents; this bounds it
     permissions:
       contents: read             # read the checkout
       pull-requests: write       # post inline review comments
@@ -116,12 +116,32 @@ jobs:
             echo "documented convention, regardless of file path or which CLAUDE.md applies."
             echo "Apply it to ALL files in this PR, including those under tt_metal/hw/."
             echo
+            # === HUMAN-PINNED RULES — ABSOLUTE HIGHEST PRIORITY ===
+            pinned="$src/pinned-rules.md"
+            if [ -e "$pinned" ]; then
+              echo "# ------------------------------------------------------------"
+              echo "# HUMAN-PINNED REVIEW RULES — ABSOLUTE HIGHEST PRIORITY"
+              echo "# ------------------------------------------------------------"
+              echo
+              echo "Treat each pinned rule as a"
+              echo "MANDATORY check: for every rule, actively hunt the PR (the diff AND the"
+              echo "surrounding/cross-file code) for violations and flag EVERY instance you"
+              echo "find, in the normal reviewer voice. A pinned rule is a documented team"
+              echo "convention, so a violation is always a citeable finding worth surfacing —"
+              echo "do NOT skip, soften, downgrade, or silently drop a pinned-rule finding."
+              echo
+              cat "$pinned"
+              echo
+            fi
+
             echo "# ------------------------------------------------------------"
             echo "# LLK REVIEW KNOWLEDGE (authoritative)"
             echo "# ------------------------------------------------------------"
             echo
             for f in "$src"/*.md; do
               [ -e "$f" ] || continue
+              # pinned-rules.md is injected above with elevated priority; don't repeat it.
+              case "$(basename "$f")" in pinned-rules.md) continue ;; esac
               echo "# === $(basename "$f") ==="
               cat "$f"
               echo
@@ -129,7 +149,17 @@ jobs:
           } > "$out"
           echo "Assembled $(wc -l < "$out") lines into $out"
 
-      # 4. Run the review: the code-review plugin command against the PR, posting
+      # 4. Join the tailnet ephemerally via OIDC so egress routes through the
+      #    on-prem connectors with a stable, allowlistable exit IP. Vars are set
+      #    by IT onboarding; scoped to an exact repo:branch pair.
+      - name: Tailscale
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4.1.2
+        with:
+          oauth-client-id: ${{ vars.TS_GHA_PUBLIC_INTERNET_CLIENT_ID }}
+          audience: ${{ vars.TS_GHA_PUBLIC_INTERNET_AUDIENCE }}
+          tags: tag:tt-github-actions-public-internet-outbound
+
+      # 5. Run the review: the code-review plugin command against the PR, posting
       #    findings inline via --comment, with the LLK MCP servers and knowledge.
       - name: Run /code-review
         uses: anthropics/claude-code-action@v1
@@ -156,7 +186,12 @@ jobs:
           # comment MCP tool the command posts with, plus gh for diff/view.
           claude_args: |
             --effort ${{ github.event.inputs.effort || 'max' }}
-            --allowedTools "Task,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
+            --allowedTools "Task,Read,Grep,Glob,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(tail:*),Bash(sed:*),Bash(awk:*),Bash(cat:*),Bash(ls:*),Bash(wc:*),Bash(nl:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tree:*),Bash(basename:*),Bash(dirname:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
             --max-turns 100
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
+
+      # 6. Remove the ephemeral tailnet node immediately, even on failure.
+      - name: Tailscale cleanup
+        if: always()
+        run: sudo tailscale logout

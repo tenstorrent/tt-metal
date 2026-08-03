@@ -26,6 +26,7 @@ add_subdirectory(ccl/moe_gpt)
 
 # metalium-developers-mmfusedreduce
 add_subdirectory(matmul)
+add_subdirectory(matmul_decode)
 add_subdirectory(quasar)
 add_subdirectory(reduction)
 
@@ -82,6 +83,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::Matmul
+        TTNN::Ops::Experimental::MatmulDecode
         TTNN::Ops::Experimental::Quasar
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::IndexerScore
@@ -129,6 +131,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CCL>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEGPT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Matmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::MatmulDecode>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Quasar>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reduction>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>

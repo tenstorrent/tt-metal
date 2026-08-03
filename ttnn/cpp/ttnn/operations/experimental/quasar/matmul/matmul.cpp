@@ -11,6 +11,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/experimental/quasar/binary/binary.hpp"  // quasar DFB add for post-process bias
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"  // ttnn::typecast (addmm dtype-match, port of c3da306a7dd)
 #include "ttnn/operations/creation/creation.hpp"
@@ -109,6 +110,23 @@ static bool get_post_process_bias(
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
     if (bias.has_value()) {
+        // Quasar: the fused matmul+bias path was historically avoided (bmm_large..._fused_bias TILE_COUNTERS
+        // fault). But (a) the post-process add is a BROADCAST ([M,N]+[1,N]) and Quasar has NO broadcast/repeat
+        // DFB op -> it lowers to a legacy DataMovementKernel and CRASHES; and (b) the mcast_1d m2 factory now
+        // wires FUSE_BIAS with the in1/bias DM reader carrying disable_dfb_implicit_sync_for_all (the known
+        // TILE_COUNTERS fix), so the fault comment is stale for that path. So FUSE the bias into the 1D-mcast
+        // matmul when the bias is tile-aligned; only fall back to post-process (which itself only works for a
+        // no-broadcast sharded add on Quasar) for other configs.
+        if (input_tensor_a_adjusted.device()->arch() == tt::ARCH::QUASAR) {
+            const auto& q_tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
+            const uint32_t q_tile_height = transpose_a ? q_tile_shape[1] : q_tile_shape[0];
+            const bool bias_tile_aligned = bias.value().padded_shape()[-2] == q_tile_height;
+            const bool is_1d_mcast =
+                program_config.has_value() &&
+                std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value());
+            // fuse (post_process=false) for the wired 1D-mcast + tile-aligned bias; else post-process
+            return !(is_1d_mcast && bias_tile_aligned);
+        }
         // Fused matmul+bias does not support batched weights; apply bias via add().
         if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {
             return true;
@@ -266,12 +284,24 @@ static ttnn::Tensor bound_matmul(
 
     // Apply bias as post-processing if needed
     if (post_process_bias) {
-        output_tensor = ttnn::add(
-            output_tensor,
-            bias.value(),
-            /*output_dtype=*/std::nullopt,
-            output_tensor.memory_config(),
-            optional_output_tensor);
+        if (input_tensor_a_adjusted.device()->arch() == tt::ARCH::QUASAR) {
+            // Standard ttnn::add lowers to a legacy DataMovementKernel, which Quasar rejects
+            // ("DataMovementKernel is not supported on Quasar"). Route through the experimental quasar
+            // binary add (Metal-2.0 DFB / QuasarDataMovementKernel path) instead.
+            output_tensor = ttnn::operations::experimental::quasar::binary::add(
+                output_tensor,
+                bias.value(),
+                /*output_dtype=*/std::nullopt,
+                output_tensor.memory_config(),
+                optional_output_tensor);
+        } else {
+            output_tensor = ttnn::add(
+                output_tensor,
+                bias.value(),
+                /*output_dtype=*/std::nullopt,
+                output_tensor.memory_config(),
+                optional_output_tensor);
+        }
     }
 
     const auto& matmul_shape = utilities::compute_matmul_output_shape(

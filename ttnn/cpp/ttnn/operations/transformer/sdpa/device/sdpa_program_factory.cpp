@@ -107,6 +107,27 @@ bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPA
     return true;
 }
 
+// Effective (num_kv_heads_k, num_kv_heads_v, block_size) for an HMA-shared paged buffer.
+// Apply PagedCacheGeometryOverride only when !use_mla: MLA never passes overrides (validated
+// upstream), and applying num_kv_heads to V under MLA would skip the elems/block check.
+struct EffectiveKvGeometry {
+    uint32_t nkh = 0;
+    uint32_t nvh = 0;
+    uint32_t block_size = 0;
+};
+
+EffectiveKvGeometry resolve_effective_kv_geometry(
+    const ttnn::operations::transformer::PagedCacheGeometryOverride& geo,
+    bool use_mla,
+    uint32_t k_num_heads,
+    uint32_t v_num_heads,
+    uint32_t k_block_size) {
+    if (use_mla || !geo.active()) {
+        return {k_num_heads, v_num_heads, k_block_size};
+    }
+    return {geo.num_kv_heads, geo.num_kv_heads, geo.block_size};
+}
+
 // Chunked prefill parameters collected from page table layout.
 struct ChunkedParams {
     uint32_t chunked_q_chunk_offset = 0;
@@ -147,6 +168,10 @@ ChunkedParams compute_chunked_params(
             "page table page size in bytes must be a multiple of 32 due to address alignment");
     }
     return p;
+}
+
+tt::DataFormat fp32_dest_intermediate_dataformat(bool fp32_dest_acc_en) {
+    return fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 }
 
 }  // namespace
@@ -196,8 +221,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto& k_shape = input_tensor_k.logical_shape();
     const auto& v_shape = input_tensor_v.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
-    const uint32_t NKH = k_shape[1];
-    const uint32_t NVH = v_shape[1];
+    // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride): when
+    // the paged K/V cache was allocated for a different layer's view, the reader must address it
+    // with this call's num_kv_heads / block_size (Q already drives head_dim via DHt) rather than
+    // the cache's declared shape. Unset ⇒ the cache's own num_kv_heads / block_size. The reader
+    // computes physical tile ids manually from these as compile-time args
+    // (dataflow_common.hpp virtual_seq_tile_id_to_physical_tile_id).
+    const auto kv_geo = resolve_effective_kv_geometry(
+        operation_attributes.paged_cache_geometry, use_mla, k_shape[1], v_shape[1], k_shape[2]);
+    const uint32_t NKH = kv_geo.nkh;
+    const uint32_t NVH = kv_geo.nvh;
+    const uint32_t effective_kv_block_size = kv_geo.block_size;
 
     // In flash mla prefill, we have to support the case where NKH != NVH
     // We are calling op with the following shapes:
@@ -213,7 +247,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // For flexible chunked: max prefix length = page_table num_pages * block_size (from K/V layout).
     uint32_t max_prefix_tokens_flexible = 0;
     if (is_chunked && flexible_chunked) {
-        const uint32_t block_size_for_sk = k_shape[2];
+        const uint32_t block_size_for_sk = effective_kv_block_size;
         const uint32_t max_blocks = page_table.value().padded_shape()[1];
         max_prefix_tokens_flexible = max_blocks * block_size_for_sk;
     }
@@ -288,7 +322,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
     const auto chunked = compute_chunked_params(
-        is_chunked, is_chunked_legacy, flexible_chunked, chunk_start_idx, page_table, k_shape[2], q_chunk_size);
+        is_chunked,
+        is_chunked_legacy,
+        flexible_chunked,
+        chunk_start_idx,
+        page_table,
+        effective_kv_block_size,
+        q_chunk_size);
     const uint32_t chunked_q_chunk_offset = chunked.chunked_q_chunk_offset;
     const uint32_t block_size = chunked.block_size;
     const uint32_t block_size_t = chunked.block_size_t;
@@ -654,12 +694,16 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df =
+        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
+    tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+    tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
     // both must share the same data format for the unpack config to be correct.
-    TT_ASSERT(im_df == stats_df, "SDPA fused SALAD correction requires out and sum CBs to share data format");
+    TT_ASSERT(
+        !use_streaming_compute || sum_df == im_df,
+        "SDPA fused SALAD correction requires out and sum CBs to share data format");
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -668,6 +712,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
+    uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
+    uint32_t sum_tile_size = tt::tile_size(sum_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -677,6 +723,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
+    log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
+    log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
 
     sdpa_cb::CBIds cb_ids;
     uint32_t next_cb_index = 0;
@@ -754,13 +802,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
     }
 
-    cb_ids.qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
+    cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
+    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 

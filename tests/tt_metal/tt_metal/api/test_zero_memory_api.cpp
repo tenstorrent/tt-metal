@@ -101,8 +101,7 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     tt_metal::detail::WriteToDeviceL1(dev, node, flag_addr, flag_init);
 
     // DRAM tensor: 0xFF everywhere, so a no-op kernel can't pass the post-zero check.
-    auto tensor = MeshTensor::allocate_on_device(
-        mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages), TensorTopology{});
+    auto tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
     detail::WriteToBuffer(*tensor.mesh_buffer().get_reference_buffer(), stamped);
 
@@ -222,8 +221,7 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiBatchedL1) {
     std::vector<uint32_t> flag_init{0xBAADF00Du};
     tt_metal::detail::WriteToDeviceL1(dev, node, flag_addr, flag_init);
 
-    auto tensor = MeshTensor::allocate_on_device(
-        mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages), TensorTopology{});
+    auto tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
     detail::WriteToBuffer(*tensor.mesh_buffer().get_reference_buffer(), stamped);
 

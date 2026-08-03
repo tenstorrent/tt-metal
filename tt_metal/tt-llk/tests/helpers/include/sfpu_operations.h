@@ -33,6 +33,12 @@
 #include "llk_sfpu/ckernel_sfpu_bitwise_not.h"
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
+// Metal comparison-to-zero / unary-int-compare kernels (calculate_comp,
+// calculate_comp_int, calculate_comp_uint16, calculate_eqz_uint32,
+// calculate_nez_uint32, calculate_comp_unary_int + their *_init). Distinct from
+// the tt-llk sfpu/ckernel_sfpu_comp.h (_calculate_zero_comp_ etc.) included
+// below; the two share no symbol names so both can coexist.
+#include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"
@@ -52,6 +58,7 @@
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
 #include "llk_sfpu/ckernel_sfpu_mul_int32.h"
+#include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
@@ -66,6 +73,7 @@
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
+#include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
 // This header expects a DST_ACCUM_MODE macro; scope it to the include so it
 // doesn't clash with the DST_ACCUM_MODE template param used below.
@@ -107,7 +115,6 @@
 #include "sfpu/ckernel_sfpu_hardtanh.h"
 #include "sfpu/ckernel_sfpu_isinf_isnan.h"
 #include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 #include "sfpu/ckernel_sfpu_silu.h"
@@ -118,6 +125,17 @@
 // Test-only SFPU loop/adapter wrappers (calculate_sqrt_custom, calculate_expm1_cw,
 // calculate_mask_binary) used by the dispatch below.
 #include "sfpu_test_helpers.h"
+
+namespace ckernel::sfpu
+{
+
+template <bool APPROXIMATION_MODE, bool IS_FP32_DEST_ACC_EN, int ITERATIONS, bool CLAMP_NEGATIVE, std::uint32_t EXP_BASE_SCALE_FACTOR>
+inline __attribute__((always_inline)) void calculate_exponential_const_scale()
+{
+    calculate_exponential<APPROXIMATION_MODE, IS_FP32_DEST_ACC_EN, true /* SCALE_EN */, ITERATIONS, CLAMP_NEGATIVE>(EXP_BASE_SCALE_FACTOR);
+}
+
+} // namespace ckernel::sfpu
 
 namespace test_utils
 {
@@ -396,6 +414,13 @@ template <
     DataFormat TYPECAST_OUT = DataFormat::Invalid>
 void call_unary_sfpu_operation_init()
 {
+    // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). In metal this is hoisted into the
+    // full-init entry points (compute_kernel_hw_startup / init_sfpu / unary_op_init_common); this standalone
+    // LLK harness bypasses those, so it must run the once-init itself. Ops migrated to the self-contained
+    // per-op init (SFPU_UNARY_INIT_SC*) rely on this running first; unmigrated ops still carry the invariant
+    // inside their _llk_math_eltwise_unary_sfpu_init_ but re-running it here is harmless (idempotent).
+    llk_math_sfpu_init_once();
+
     if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(init_inverse_hyperbolic<APPROX_MODE, is_fp32_dest_acc_en>);
@@ -408,12 +433,39 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(cosine_init<APPROX_MODE>);
     }
+    else if constexpr (OPERATION == SfpuType::tan)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(tangent_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::atan)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(atan_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
+    else if constexpr (OPERATION == SfpuType::asin || OPERATION == SfpuType::acos)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::sinh)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(sinh_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
+    else if constexpr (OPERATION == SfpuType::cosh)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(cosh_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(exp2_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
+    }
+    else if constexpr (OPERATION == SfpuType::exp_with_base)
+    {
+        // "exp with base b" = b^x = exp(x * ln b); implemented as the SCALE_EN path
+        // of calculate_exponential (multiplies the input by a bf16 scale before exp).
+        // Init is identical to exponential; the scale is applied in the calculate call.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::erfinv)
@@ -477,6 +529,22 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_init<false>);
     }
+    else if constexpr (OPERATION == SfpuType::unary_max_int32)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_int32_init<true /* IS_MAX_OP */, false /* IS_UNSIGNED */>);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min_int32)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_int32_init<false /* IS_MAX_OP */, false /* IS_UNSIGNED */>);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max_uint32)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_int32_init<true /* IS_MAX_OP */, true /* IS_UNSIGNED */>);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min_uint32)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_int32_init<false /* IS_MAX_OP */, true /* IS_UNSIGNED */>);
+    }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(polygamma_init<APPROX_MODE, is_fp32_dest_acc_en>);
@@ -505,6 +573,17 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
+    else if constexpr (OPERATION == SfpuType::gelu_appx)
+    {
+        // gelu_appx is the LUT branch of calculate_gelu; its init must load the
+        // piecewise-linear LReg table, which only gelu_init<APPROXIMATION_MODE=true>
+        // does — so force the approx init regardless of the harness APPROX_MODE.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_init<true, is_fp32_dest_acc_en>);
+    }
+    else if constexpr (OPERATION == SfpuType::gelu_derivative)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_derivative_polynomial_init<APPROX_MODE>);
+    }
     else if constexpr (OPERATION == SfpuType::softsign)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(init_softsign<APPROX_MODE>);
@@ -518,6 +597,10 @@ void call_unary_sfpu_operation_init()
         llk_math_eltwise_unary_sfpu_init<OPERATION>(hardsigmoid_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_log_<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::log_with_base)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_log_<APPROX_MODE>);
     }
@@ -559,6 +642,39 @@ void call_unary_sfpu_operation_init()
     {
         // Typecast selects its concrete init from the (IN, OUT) format pair.
         call_unary_typecast_operation_init<TYPECAST_IN, TYPECAST_OUT, APPROX_MODE>();
+    }
+    else if constexpr (
+        OPERATION == SfpuType::floor || OPERATION == SfpuType::ceil || OPERATION == SfpuType::trunc || OPERATION == SfpuType::frac ||
+        OPERATION == SfpuType::round || OPERATION == SfpuType::add1 || OPERATION == SfpuType::silu || OPERATION == SfpuType::relu_max ||
+        OPERATION == SfpuType::relu_min || OPERATION == SfpuType::lrelu || OPERATION == SfpuType::hardtanh || OPERATION == SfpuType::clamp ||
+        OPERATION == SfpuType::identity || OPERATION == SfpuType::cast_fp32_to_fp16a || OPERATION == SfpuType::tanh_derivative ||
+        OPERATION == SfpuType::sqrt_custom || OPERATION == SfpuType::rsqrt_compat || OPERATION == SfpuType::expm1_cw)
+    {
+        // These ops execute via self-contained tt-llk primitives that need only the generic per-op init (SFPU config
+        // reg + ADDR_MOD_7 from llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
+        // the bare `unused` init. The reason each op is safe to route this way varies:
+        //   - floor/ceil/trunc/frac/round/relu_max/relu_min: their production/metal <op>_init()
+        //     (rounding_op_tile_init, relu_max_tile_init, relu_min_tile_init) genuinely reduces to
+        //     math::reset_counters, so the bare init here matches production behavior.
+        //   - add1/identity/cast_fp32_to_fp16a/tanh_derivative/sqrt_custom/rsqrt_compat/expm1_cw: the
+        //     OPERATION-keyed bare init has no delegate branch.
+        //   - lrelu/hardtanh/clamp: no linkable definition in this test build, since only the
+        //     tt-llk common (not the metal llk_api) header is included.
+        //   - silu: production silu_tile_init is NOT trivial (it wires sfpu::silu_init -> sigmoid_init<false>()),
+        //     but this harness uses the self-contained legacy _calculate_silu_ (piecewise-linear, no LUT/
+        //     reciprocal), which needs no op-specific init.
+        llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
+    }
+    else if constexpr (
+        OPERATION == SfpuType::equal_zero || OPERATION == SfpuType::not_equal_zero || OPERATION == SfpuType::less_than_zero ||
+        OPERATION == SfpuType::greater_than_zero || OPERATION == SfpuType::less_than_equal_zero || OPERATION == SfpuType::greater_than_equal_zero)
+    {
+        // Comparison-to-zero ops pair the generic per-op init with the matching metal
+        // *_init from llk_sfpu/ckernel_sfpu_comp.h, mirroring production SFPU_UNARY_INIT
+        // (eqz_tile_init -> equal_zero_init, etc.). All six of those *_init are byte-identical
+        // (program ADDR_MOD_6 + reset the dest RWC counter), so one representative init covers
+        // the whole group; OPERATION is still forwarded so the per-op init tag stays correct.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::equal_zero_init);
     }
     else
     {
@@ -605,6 +721,16 @@ template <
     DataFormat TYPECAST_OUT = DataFormat::Invalid>
 void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None)
 {
+    // Fixed dispatch constants shared with the golden (golden_generators.py:
+    // _int_maxmin_scalar / _int_shift_amount). The two sides must move together, so
+    // keep them named on both to avoid a silent golden desync.
+    constexpr std::uint32_t MAXMIN_SCALAR = 1000u;
+    constexpr std::uint32_t SHIFT_AMOUNT  = 3u;
+    // Integer scalar that unary_eq/unary_ne (Int32) compare against via metal
+    // calculate_comp_unary_int. Shared with the golden (golden_generators.py:
+    // _unary_comp_int_scalar); the two sides must move together.
+    constexpr int UNARY_COMP_INT_SCALAR = 5;
+
     if constexpr (OPERATION == SfpuType::abs)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_abs_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, ITERATIONS);
@@ -649,6 +775,30 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cosine, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
+    else if constexpr (OPERATION == SfpuType::tan)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tangent, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::atan)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_atan, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::asin)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_asin, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::acos)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_acos, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::sinh)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sinh, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::cosh)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cosh, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
     else if constexpr (OPERATION == SfpuType::elu)
     {
         SFPU_UNARY_CALL(
@@ -688,6 +838,23 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             dst_index,
             vector_mode,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+    }
+    // exp_with_base = b^x = exp(x * ln b): the only op that drives calculate_exponential
+    // with SCALE_EN=true. The bf16 scale 0x3F00 == 0.5 selects base b = e^0.5, so the
+    // golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding error is added.
+    //
+    // The bf16-accurate path (_sfpu_exp_21f_bf16_tti_) lowers the scale via TTI_SFPMULI,
+    // whose immediate operand must be a compile-time constant. Pass the scale through the
+    // test-only adapter's template arguments so SFPU_UNARY_CALL preserves that constness.
+    else if constexpr (OPERATION == SfpuType::exp_with_base)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_exponential_const_scale,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, CLAMP_NEGATIVE, 0x3F00u /* bf16(0.5) exp base scale */),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::fill)
     {
@@ -733,6 +900,17 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
+    else if constexpr (OPERATION == SfpuType::gelu_appx)
+    {
+        // Directly exercise the LUT approximation kernel (the APPROXIMATION_MODE=true
+        // branch of calculate_gelu). Requires the LReg table loaded by gelu_init<true>.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_appx, (ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::gelu_derivative)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_derivative_polynomial, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
     else if constexpr (OPERATION == SfpuType::gelu_tanh)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh, (is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
@@ -753,6 +931,18 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             vector_mode,
             ITERATIONS,
             0u /* log_base_scale_factor */);
+    }
+    else if constexpr (OPERATION == SfpuType::log_with_base)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_log_,
+            (APPROX_MODE, true, ITERATIONS),
+            dst_index,
+            vector_mode,
+            ITERATIONS,
+            0x3DC5u /* 1/ln(2) in fp16a -> log2(x) */);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
     {
@@ -794,6 +984,10 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::floor)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_floor_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::round)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_round_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0 /* decimals */);
     }
     else if constexpr (OPERATION == SfpuType::ceil)
     {
@@ -1022,8 +1216,41 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         OPERATION == SfpuType::equal_zero || OPERATION == SfpuType::not_equal_zero || OPERATION == SfpuType::less_than_zero ||
         OPERATION == SfpuType::greater_than_zero || OPERATION == SfpuType::less_than_equal_zero || OPERATION == SfpuType::greater_than_equal_zero)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_zero_comp_, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode, 0u /* exponent_size_8 */);
+        // Comparison-to-zero. The production comp.h API selects a format-specific
+        // metal kernel by the input data type (eqz_tile / eqz_tile_int32 /
+        // eqz_tile_uint16 / eqz_tile_uint32 ...); mirror that dispatch here so the
+        // tt-llk harness exercises the same metal functions in
+        // llk_sfpu/ckernel_sfpu_comp.h. The input format arrives as the runtime
+        // math_format (see the fill/add_int branches for the same pattern).
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode);
+        }
+        else if (math_format == ckernel::to_underlying(DataFormat::UInt16))
+        {
+            // uint16 comparison is only defined for eqz/nez (metal static_asserts this).
+            if constexpr (OPERATION == SfpuType::equal_zero || OPERATION == SfpuType::not_equal_zero)
+            {
+                SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_uint16, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode);
+            }
+        }
+        else if (math_format == ckernel::to_underlying(DataFormat::UInt32))
+        {
+            // uint32 comparison is only defined for eqz/nez (dedicated metal kernels).
+            if constexpr (OPERATION == SfpuType::equal_zero)
+            {
+                SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_eqz_uint32, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+            }
+            else if constexpr (OPERATION == SfpuType::not_equal_zero)
+            {
+                SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_nez_uint32, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+            }
+        }
+        else
+        {
+            // Float (bf16 / fp32 / bfp8) comparison-to-zero: NaN-aware metal calculate_comp.
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (
         OPERATION == SfpuType::isinf || OPERATION == SfpuType::isposinf || OPERATION == SfpuType::isneginf || OPERATION == SfpuType::isnan ||
@@ -1115,33 +1342,61 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::fmod)
     {
-        // calculate_fmod takes (value, recip); the bodies read vConstFloatPrgm0/1 set by init,
-        // so the runtime args are inert but the signature still requires them. Mirror init.
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_fmod,
-            (APPROX_MODE, ITERATIONS),
-            dst_index,
-            vector_mode,
-            0x40000000u /* value = 2.0f */,
-            0x3f000000u /* recip = 0.5f */);
+        // calculate_fmod() takes no runtime args: it reads vConstFloatPrgm0/1 programmed by
+        // init_fmod() (see call_unary_sfpu_operation_init above), so no value/recip is passed.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fmod, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::remainder)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_remainder,
-            (APPROX_MODE, ITERATIONS),
-            dst_index,
-            vector_mode,
-            0x40000000u /* value = 2.0f */,
-            0x3f000000u /* recip = 0.5f */);
+        // Unlike calculate_fmod, calculate_remainder() takes no runtime args: it reads vConstFloatPrgm0/1 programmed
+        // by init_remainder() (see call_unary_sfpu_operation_init above), so the call must not pass value/recip.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::unary_gt)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_gt, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_ne)
+    {
+        // Int32 input compares against the integer scalar via metal calculate_comp_unary_int
+        // (== production unary_ne_tile_int32); float input keeps the fp32 0.5 threshold path.
+        // UNARY_COMP_INT_SCALAR is shared with the golden (golden_generators.py:
+        // _unary_comp_int_scalar) — keep the two in sync.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_comp_unary_int,
+                (APPROX_MODE, SfpuType::unary_ne, ITERATIONS),
+                dst_index,
+                vector_mode,
+                UNARY_COMP_INT_SCALAR);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ne, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        }
+    }
+    else if constexpr (OPERATION == SfpuType::unary_eq)
+    {
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_comp_unary_int,
+                (APPROX_MODE, SfpuType::unary_eq, ITERATIONS),
+                dst_index,
+                vector_mode,
+                UNARY_COMP_INT_SCALAR);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_eq, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        }
     }
     else if constexpr (OPERATION == SfpuType::unary_lt)
     {
@@ -1163,6 +1418,67 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min, (false, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0u /* value = 0.0f */);
+    }
+    // Integer unary max/min against a fixed scalar (1000). IS_UNSIGNED selects the
+    // uint32 vs int32 SFPSWAP handling. The golden compares against the same 1000.
+    else if constexpr (OPERATION == SfpuType::unary_max_int32)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_unary_max_min_int32,
+            (true /* IS_MAX_OP */, false /* IS_UNSIGNED */, APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            MAXMIN_SCALAR);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min_int32)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_unary_max_min_int32,
+            (false /* IS_MAX_OP */, false /* IS_UNSIGNED */, APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            MAXMIN_SCALAR);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max_uint32)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_unary_max_min_int32,
+            (true /* IS_MAX_OP */, true /* IS_UNSIGNED */, APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            MAXMIN_SCALAR);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min_uint32)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_unary_max_min_int32,
+            (false /* IS_MAX_OP */, true /* IS_UNSIGNED */, APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            MAXMIN_SCALAR);
+    }
+    // Unary shift by a fixed immediate (SHIFT_AMOUNT bits). Integer-only kernels run
+    // exclusively on the Int32 path here: the only wiring (test_eltwise_unary_sfpu_int)
+    // drives shifts as Int32, and the golden (_left_shift/_right_shift) does unbounded
+    // Python integer shifts with no 16-bit masking. UInt16/UInt32 shift branches were
+    // dropped as dead+untested; re-add them together with a masked golden if needed.
+    else if constexpr (OPERATION == SfpuType::left_shift)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX_MODE, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, SHIFT_AMOUNT);
+    }
+    else if constexpr (OPERATION == SfpuType::right_shift)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX_MODE, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, SHIFT_AMOUNT);
     }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
@@ -1344,6 +1660,47 @@ void call_binary_sfpu_operation_init()
         // addrmod through SfpuType::mul_int32; the init loads the 11-bit chunk masks
         // and the 2**23 fp32-to-int bias constants into vConst registers.
         SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROXIMATION_MODE));
+    }
+    // Integer relational eq/ne: no extra init function, just the eq_int/ne_int addrmod.
+    else if constexpr (BINOP == BinaryOp::EQ_INT)
+    {
+        SFPU_BINARY_INIT(eq_int);
+    }
+    else if constexpr (BINOP == BinaryOp::NE_INT)
+    {
+        SFPU_BINARY_INIT(ne_int);
+    }
+    // Integer max/min: binary_max_min_int32_init programs the SFPLOADMACRO templates
+    // and is keyed on the matching {max,min}_{int32,uint32} SfpuType addrmod allow-list.
+    else if constexpr (BINOP == BinaryOp::MAX_INT32)
+    {
+        SFPU_BINARY_INIT_FN(max_int32, binary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UNSIGNED */));
+    }
+    else if constexpr (BINOP == BinaryOp::MIN_INT32)
+    {
+        SFPU_BINARY_INIT_FN(min_int32, binary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UNSIGNED */));
+    }
+    else if constexpr (BINOP == BinaryOp::MAX_UINT32)
+    {
+        SFPU_BINARY_INIT_FN(max_uint32, binary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UNSIGNED */));
+    }
+    else if constexpr (BINOP == BinaryOp::MIN_UINT32)
+    {
+        SFPU_BINARY_INIT_FN(min_uint32, binary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UNSIGNED */));
+    }
+    // Integer remainder / fmod: init loads the reciprocal-polynomial constants used by
+    // the internal 32-bit remainder kernel (shared uint path).
+    else if constexpr (BINOP == BinaryOp::REMAINDER_INT32)
+    {
+        SFPU_BINARY_INIT_FN(remainder_int32, remainder_int32_init, (APPROXIMATION_MODE));
+    }
+    else if constexpr (BINOP == BinaryOp::REMAINDER_UINT32)
+    {
+        SFPU_BINARY_INIT_FN(remainder_uint32, remainder_uint32_init, (APPROXIMATION_MODE));
+    }
+    else if constexpr (BINOP == BinaryOp::FMOD_INT32)
+    {
+        SFPU_BINARY_INIT_FN(fmod_int32, fmod_int32_init, (APPROXIMATION_MODE));
     }
     else
     {
@@ -1725,6 +2082,74 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_logsigmoid,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    // Integer relational eq/ne: XOR-based exact compare over Int32 dest bits.
+    else if constexpr (BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT)
+    {
+        constexpr SfpuType comp_type = (BINOP == BinaryOp::EQ_INT) ? SfpuType::eq : SfpuType::ne;
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_eq_int,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, comp_type, DataFormat::Int32),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    // Integer max/min via SFPSWAP. IS_UNSIGNED selects int32 vs uint32 handling; the
+    // sign-magnitude dest only round-trips non-negative results, so the tests keep
+    // operands non-negative.
+    else if constexpr (BINOP == BinaryOp::MAX_INT32 || BINOP == BinaryOp::MIN_INT32 || BINOP == BinaryOp::MAX_UINT32 || BINOP == BinaryOp::MIN_UINT32)
+    {
+        constexpr bool IS_MAX      = (BINOP == BinaryOp::MAX_INT32 || BINOP == BinaryOp::MAX_UINT32);
+        constexpr bool IS_UNSIGNED = (BINOP == BinaryOp::MAX_UINT32 || BINOP == BinaryOp::MIN_UINT32);
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_max_min_int32,
+            (IS_MAX, IS_UNSIGNED, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REMAINDER_INT32)
+    {
+        // int32 remainder r = a - b * trunc(a/b) with sign following the dividend a.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_remainder_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REMAINDER_UINT32)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_remainder_uint32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::FMOD_INT32)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_fmod_int32,
             (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
             dst_index_in0,
             dst_index_in1,

@@ -74,7 +74,7 @@ struct BufferDistributionSpecInputs {
 };
 
 struct MeshBufferAllocationExpected {
-    std::vector<CoreCoord> cores;
+    std::vector<tt::tt_metal::CoreCoord> cores;
     size_t num_cores;
     size_t num_dev_pages;
     size_t aligned_size;

@@ -35,7 +35,7 @@ struct DropoutParams {
 // tensor_args must stay a plain reflectable aggregate: the device-operation framework walks it
 // structurally to discover the Tensor leaves (output-spec counting, buffer extraction). Compile-time
 // attributes here would both be ambiguous against the Reflectable visitor and hide the Tensors, so
-// the input is hashed in full via its TensorSpec (correct and stricter than the old volume-only
+// the input is hashed in full via its tt::tt_metal::TensorSpec (correct and stricter than the old volume-only
 // hash; the seed is still excluded via DropoutParams + get_dynamic_runtime_args).
 struct DropoutInputs {
     const Tensor& input;

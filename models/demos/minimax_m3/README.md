@@ -59,6 +59,8 @@ PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=5120 PREFILL_TRACE_DIR=/path/to/golden/long
 
 Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](tests/unit/); golden generation is in [`scripts/`](scripts/).
 
+Multi-galaxy pipeline-parallel prefill (2 / 4 galaxies) — running, KV-cache accuracy, and throughput/overlap measurement — is documented in [`docs/PIPELINE_PREFILL_TESTING.md`](docs/PIPELINE_PREFILL_TESTING.md).
+
 ## Layout
 
 ```
@@ -67,6 +69,7 @@ tt/moe/   EP MoE (TtMiniMaxMoE + fused swigluoai routed expert), activation
 tt/               dense_mlp, layer, model, rms_norm, topk, mlp, weight_cache, tt_prefill_runtime
 reference/        torch reference model + sparse GQA prefill
 scripts/          golden KV-cache generation + verification
+docs/             multi-galaxy pipeline-parallel prefill running & testing
 configs/MiniMax-M3/config.json    dims only (modeling code loaded from the checkpoint via HF_MODEL)
 tests/unit/       module-by-module PCC tests
 tests/            galaxy harnesses (prefill KV-cache PCC, first-token, smoke)

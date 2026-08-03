@@ -24,8 +24,7 @@ static constexpr const char* COMPUTE_KERNEL_PATH =
 
 namespace {
 
-// Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit) so
-// both derive the identical core list and group membership.
+// Work split used by create_descriptor to derive the core list and group membership.
 struct AdamwWorkSplit {
     uint32_t num_cores = 0;
     uint32_t num_cores_y = 0;
@@ -348,40 +347,17 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> MorehAdamWDeviceOperation::get_dynamic_runtime_args(
+void MorehAdamWDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Kernel layout from create_descriptor: reader=0, writer=1, compute(group_1)=2, compute(group_2)=3.
-    // The reader bakes lr (arg 5) and the step-derived beta1/beta2 exponents (args 10/11) and step
-    // (arg 12); each compute kernel bakes step (arg 0). lr/step are excluded from the hash, so these
-    // must be re-applied on every cache hit. beta1/beta2/eps/weight_decay are hashed (static).
-    constexpr uint32_t kReaderKernelIdx = 0;
-    constexpr uint32_t kComputeGroup1KernelIdx = 2;
-    constexpr uint32_t kComputeGroup2KernelIdx = 3;
-
-    const uint32_t step = operation_attributes.step;
-    const float beta1_exponent = std::pow(operation_attributes.beta1, step);
-    const float beta2_exponent = std::pow(operation_attributes.beta2, step);
-    const uint32_t f2u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
-    const uint32_t f2u_beta1_exponent = std::bit_cast<uint32_t>(beta1_exponent);
-    const uint32_t f2u_beta2_exponent = std::bit_cast<uint32_t>(beta2_exponent);
-
-    const auto ws = compute_adamw_work_split(tensor_args.param_in);
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(static_cast<size_t>(ws.num_cores) * 5);
-    for (uint32_t i = 0; i < ws.num_cores; ++i) {
-        const CoreCoord core = {i / ws.num_cores_y, i % ws.num_cores_y};
-        dynamic_args.push_back({kReaderKernelIdx, core, 5, f2u_lr});
-        dynamic_args.push_back({kReaderKernelIdx, core, 10, f2u_beta1_exponent});
-        dynamic_args.push_back({kReaderKernelIdx, core, 11, f2u_beta2_exponent});
-        dynamic_args.push_back({kReaderKernelIdx, core, 12, step});
-        const uint32_t compute_idx = ws.core_group_1.contains(core) ? kComputeGroup1KernelIdx : kComputeGroup2KernelIdx;
-        dynamic_args.push_back({compute_idx, core, 0, step});
-    }
-    return dynamic_args;
+    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its per-core
+    // args + tensor-backed CB/buffer addresses to the cached program. No rebuild; supersedes
+    // get_dynamic/resolve_bindings.
+    auto desc = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::moreh::moreh_adamw

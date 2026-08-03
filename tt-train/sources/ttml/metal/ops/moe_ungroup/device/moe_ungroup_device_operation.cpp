@@ -17,7 +17,7 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     auto check =
         [](const ttnn::Tensor& t, const char* name, tt::tt_metal::Layout layout, tt::tt_metal::DataType dtype) {
-            TT_FATAL(t.storage_type() == tt::tt_metal::StorageType::DEVICE, "moe_ungroup: {} must be on device", name);
+            TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "moe_ungroup: {} must be on device", name);
             TT_FATAL(t.buffer() != nullptr, "moe_ungroup: {} buffer is null", name);
             TT_FATAL(
                 t.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
@@ -85,10 +85,10 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
 
 spec_return_value_t MoeUngroupDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    auto dram = ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
+    auto dram = ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
 
     // ungrouped: [D, B, S, H]  ROW_MAJOR  bf16
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape{attrs.d, attrs.b, attrs.s, attrs.h},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::ROW_MAJOR, dram));
 }
@@ -97,7 +97,7 @@ tensor_return_value_t MoeUngroupDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     auto spec = compute_output_specs(attrs, args);
     auto* device = args.expert_out.device();
-    return create_device_tensor(spec, device);
+    return ttnn::create_device_tensor(spec, device);
 }
 
 ttsl::hash::hash_t MoeUngroupDeviceOperation::compute_program_hash(

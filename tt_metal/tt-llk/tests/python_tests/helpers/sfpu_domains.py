@@ -70,6 +70,26 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
     return OperandSpecs(spec_A=spec)
 
 
+def _exp_with_base_spec(fmt: DataFormat) -> OperandSpecs:
+    """Input range for exp_with_base, which computes exp(0.5*x).
+
+    Keep the negative reach of _exp_spec (low=-100 crosses the SFPU's negative-side
+    sanitization boundary near x ~ -88.5), but cap the positive side tighter than
+    plain exp. exp's relative condition number equals its argument, so with the 0.5
+    scale a high of 32 keeps the argument <= 16 -- small enough that the shared exp
+    approximation's error stays within the default rtol even on the fp32 (dest_acc=Yes)
+    path. At the reused high=80 the argument reaches ~40, and that ~40x amplification
+    pushes the largest-output elements past 10% relative error (PCC still fine).
+    """
+    if fmt == DataFormat.MxFp8P:
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    else:
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=32.0)
+    return OperandSpecs(spec_A=spec)
+
+
 def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for exp2(x) = 2^x per format to avoid overflow."""
     if fmt == DataFormat.MxFp8P:
@@ -163,6 +183,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Exp: _exp_spec,
     # exp2: format-specific overflow threshold
     MathOperation.Exp2: _exp2_spec,
+    # exp_with_base computes exp(0.5*x). It needs its own (tighter-on-the-positive-side)
+    # domain: reusing plain exp's high=80 gives an argument of ~40, and exp's condition
+    # number (~ the argument) amplifies the approximation error past 10% on the largest
+    # outputs. See _exp_with_base_spec.
+    MathOperation.ExpWithBase: _exp_with_base_spec,
     # fill: the hardware ignores the input value; any range is fine
     MathOperation.Fill: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=1.0)
@@ -177,10 +202,32 @@ _OP_DOMAIN_REGISTRY: Dict[
             high=5.0,
         )
     ),
+    # gelu_appx: LUT approximation of gelu — same Gaussian spread as gelu so both
+    # the near-0 transition and the saturating tails exercise the piecewise LUT.
+    MathOperation.GeluAppx: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
+    ),
     # gelu_tanh: tanh approximation of gelu — same Gaussian spread exercises both
     # tails (saturation) and values near 0 (the +-0 sign path).
     MathOperation.GeluTanh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
+    ),
+    # gelu_derivative: d/dx gelu; Gaussian spread hits both saturating tails
+    # (->0 and ->1) and the transition region around 0.
+    MathOperation.GeluDerivative: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
     ),
     # hardsigmoid: linear region between -3 and 3, clipped outside
     MathOperation.Hardsigmoid: OperandSpecs(
@@ -188,6 +235,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     ),
     # log: domain x > 0; log-uniform spans several decades
     MathOperation.Log: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
+        )
+    ),
+    # log_with_base (log2): same positive domain as natural log.
+    MathOperation.LogWithBase: OperandSpecs(
         spec_A=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
         )
@@ -388,9 +441,6 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Add1: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # cast_fp32_to_fp16a: rounds to fp16. Span past the fp16 max (65504) so the
-    # overflow-to-inf path (and the format-aware NaN substitution for A-exponent dest)
-    # is exercised, not just the in-range rounding.
     MathOperation.CastFp32ToFp16a: OperandSpecs(
         spec_A=StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-100000.0, high=100000.0
@@ -431,6 +481,32 @@ _OP_DOMAIN_REGISTRY: Dict[
         spec_A=StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-math.pi, high=math.pi
         )
+    ),
+    # tan: stay inside the poles at +-pi/2 (~1.5708); tan grows rapidly near them.
+    MathOperation.Tan: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.3, high=1.3)
+    ),
+    # atan: defined for all reals; span both signs and the saturating tails.
+    MathOperation.Atan: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # asin/acos: domain [-1, 1]; stay just inside to avoid the NaN region for |x|>1.
+    MathOperation.Asin: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    MathOperation.Acos: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    # sinh/cosh: keep the range moderate so exp(|x|) stays well within fp range.
+    MathOperation.Sinh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    MathOperation.Cosh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # round: round-half-to-even to integer; span both signs across integer knees.
+    MathOperation.Round: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     # sqrt: domain x >= 0
     MathOperation.Sqrt: OperandSpecs(

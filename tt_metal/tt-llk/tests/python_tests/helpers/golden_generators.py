@@ -63,27 +63,29 @@ MAX_TILES_32_BIT_DEST = 4
 golden_registry = {}
 
 
-# Hardware always flushes subnormals to zero (FTZ).  Centralised here so that
-# every golden's __call__ funnels through the same pass — covers BFP/MX paths
-# (where near-zero values arise from BFP scale arithmetic with very small
-# shared exponents) and plain FP paths (where it's the only FTZ).
-#
-# The smallest meaningful BFP value has shared_exp=2, giving ~2.35e-38, so a
-# threshold of 1e-37 is just above the largest value the hardware flushes.
-_FTZ_THRESHOLD = 1e-37
+# Flush-to-zero (FTZ): values below a threshold get snapped to 0, matching what
+# the hardware keeps as nonzero. bf16/fp32 flush subnormals, so they flush below
+# their smallest normal; fp16 keeps subnormals, so it flushes below its smallest
+# subnormal (i.e. effectively nothing). Other formats (BFP/MX) use 1e-37.
+_FTZ_THRESHOLD = {
+    DataFormat.Float32: float(torch.finfo(torch.float32).tiny),  # 2^-126 ~ 1.18e-38
+    DataFormat.Float16_b: float(torch.finfo(torch.bfloat16).tiny),  # 2^-126 ~ 1.18e-38
+    DataFormat.Float16: 2.0**-24,  # smallest fp16 subnormal ~ 5.96e-8
+}
 
 
 def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
-    """Flush sub-FTZ values in *result* to zero, matching hardware FTZ.
+    """Flush subnormal-magnitude values in *result* to zero, matching hardware FTZ.
 
-    No-op for integer formats — they have no subnormals and the float32
-    round-trip would silently lose precision for large values.
+    The threshold is format-specific (see _FTZ_THRESHOLD above). Integer formats
+    have no subnormals, so they are returned unchanged.
     """
     if data_format.is_integer():
         return result
+    threshold = _FTZ_THRESHOLD.get(data_format, 1e-37)
     result_f32 = result.float()
     return torch.where(
-        result_f32.abs() < _FTZ_THRESHOLD,
+        result_f32.abs() < threshold,
         torch.zeros_like(result_f32),
         result_f32,
     ).to(result.dtype)
@@ -2177,8 +2179,19 @@ class UnarySFPUGolden:
             MathOperation.Ceil: self._ceil,
             MathOperation.Trunc: self._trunc,
             MathOperation.Frac: self._frac,
+            MathOperation.Round: self._round,
+            MathOperation.Tan: self._tan,
+            MathOperation.Atan: self._atan,
+            MathOperation.Asin: self._asin,
+            MathOperation.Acos: self._acos,
+            MathOperation.Sinh: self._sinh,
+            MathOperation.Cosh: self._cosh,
             MathOperation.Gelu: self._gelu,
+            MathOperation.GeluAppx: self._gelu,
             MathOperation.GeluTanh: self._gelu_tanh,
+            MathOperation.GeluDerivative: self._gelu_derivative,
+            MathOperation.LogWithBase: self._log_with_base,
+            MathOperation.ExpWithBase: self._exp_with_base,
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
             MathOperation.Fill: self._fill,
@@ -2214,6 +2227,8 @@ class UnarySFPUGolden:
             MathOperation.UnaryLt: self._unary_lt,
             MathOperation.UnaryGe: self._unary_ge,
             MathOperation.UnaryLe: self._unary_le,
+            MathOperation.UnaryNe: self._unary_ne,
+            MathOperation.UnaryEq: self._unary_eq,
             MathOperation.UnaryMax: self._unary_max,
             MathOperation.UnaryMin: self._unary_min,
             MathOperation.Polygamma: self._polygamma,
@@ -2233,7 +2248,29 @@ class UnarySFPUGolden:
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Typecast: self._typecast,
+            # Integer unary ops (routed through the integer path in __call__).
+            MathOperation.LeftShift: self._left_shift,
+            MathOperation.RightShift: self._right_shift,
+            MathOperation.UnaryMaxInt32: self._unary_max_int32,
+            MathOperation.UnaryMinInt32: self._unary_min_int32,
+            MathOperation.UnaryMaxUint32: self._unary_max_int32,
+            MathOperation.UnaryMinUint32: self._unary_min_int32,
         }
+        # Elementwise integer unary ops that use the dedicated exact-int path in
+        # __call__. Only these ops are routed there; other integer-capable ops
+        # (e.g. ReduceColumn/ReduceRow, Typecast) keep their own layout handling.
+        self._integer_unary_ops = {
+            MathOperation.LeftShift,
+            MathOperation.RightShift,
+            MathOperation.UnaryMaxInt32,
+            MathOperation.UnaryMinInt32,
+            MathOperation.UnaryMaxUint32,
+            MathOperation.UnaryMinUint32,
+        }
+        # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
+        # bits, integer unary max/min against the scalar 1000.
+        self._int_shift_amount = 3
+        self._int_maxmin_scalar = 1000
         self.data_format = None
         self.dest_acc = DestAccumulation.No
 
@@ -2256,6 +2293,17 @@ class UnarySFPUGolden:
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
+
+        # Elementwise integer unary ops run on a dedicated exact-int path: tilize ->
+        # per-element op -> untilize, staying in the integer dtype (no float dst
+        # coercion / FTZ). Gated on the op set so integer-capable non-elementwise ops
+        # (ReduceColumn/ReduceRow, Typecast) keep their own layout handling below.
+        if (
+            operation in self._integer_unary_ops
+            and input_format is not None
+            and input_format.is_integer()
+        ):
+            return self._call_integer(operation, operand1, input_format, dimensions)
 
         # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
         if input_format == DataFormat.Bfp2_b:
@@ -2329,10 +2377,20 @@ class UnarySFPUGolden:
             if data_format in (DataFormat.Bfp4_b, DataFormat.Bfp2_b)
             else format_dict[dst_format]
         )
+        op_tensor = torch.tensor(op_res, dtype=torch.float32)
+        if dst_format == DataFormat.Float16:
+            # SFPU arithmetic flushes A-exponent results below the FP16 minimum
+            # normal before storing them to Dest/SrcS. Apply this before the
+            # FP16 cast so a subnormal does not round up to the minimum normal.
+            op_tensor = torch.where(
+                op_tensor.abs() < torch.finfo(torch.float16).tiny,
+                torch.zeros_like(op_tensor),
+                op_tensor,
+            )
         result[
             ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
             + TILE_SIZE * iterations
-        ] = torch.tensor(op_res, dtype=op_dtype)
+        ] = op_tensor.to(op_dtype)
 
         if not skip_tilize:
             result = untilize_block(result, input_format, dimensions).flatten()
@@ -2375,7 +2433,10 @@ class UnarySFPUGolden:
             result = converter(tilized, dimensions)
 
         if data_format.is_mx_format():
-            result = quantize_mx_tensor_chunked(result.to(torch.bfloat16), data_format)
+            # Quantize from the actual Dest/packer source precision. Casting to
+            # BF16 here incorrectly models Float16 and FP32 Dest values as
+            # Float16 -> BF16 -> MX or Float32 -> BF16 -> MX.
+            result = quantize_mx_tensor_chunked(result, data_format)
 
         # depending on `data_format`, `inf` values may get converted when unpacked to L1.
         # Cast to the target data_format dtype before replacing inf so that
@@ -2456,20 +2517,28 @@ class UnarySFPUGolden:
         return 1.0 if x == 0 else 0.0
 
     def _cast_fp32_to_fp16a(self, x):
-        # cast_fp32_to_fp16a rounds the value to IEEE half-precision (fp16a,
-        # 10-bit mantissa) and writes it back. Mirror the HW round-to-nearest
-        # by round-tripping through torch.float16. Values outside the fp16
-        # range (|x| > 65504) overflow to +/-inf, then follow the format-aware
-        # NaN rule for A-exponent dest.
-        result = (
-            torch.tensor(x, dtype=torch.float32)
-            .to(torch.float16)
-            .to(torch.float32)
-            .item()
-        )
-        if math.isinf(result) and not self.data_format.is_exponent_B():
-            return math.nan
-        return result
+        # cast_fp32_to_fp16a lowers to sfpi::convert<vFloat16a>, which rounds each
+        # lane to the fp16a *mantissa* (10 fraction bits, round-to-nearest-even)
+        # while the value stays in the fp32-range SFPU LREG. It only reduces
+        # mantissa precision; it does NOT clamp the exponent to the fp16 range, so
+        # magnitudes above the fp16 max (65504) are preserved (rounded), not
+        # overflowed to +/-inf. Model that by rounding the fp32 bit pattern's
+        # 23-bit mantissa down to 10 bits (drop 13) with round-half-to-even,
+        # keeping the exponent intact.
+        bits = struct.unpack("<I", struct.pack("<f", x))[0]
+        exponent = (bits >> 23) & 0xFF
+        if exponent == 0xFF:
+            # Non-finite input (inf/nan): pass the bit pattern through unchanged.
+            return struct.unpack("<f", struct.pack("<I", bits))[0]
+        drop = 13
+        lower_mask = (1 << drop) - 1
+        halfway = 1 << (drop - 1)
+        remainder = bits & lower_mask
+        truncated = bits & ~lower_mask
+        # Round-half-to-even: up on >halfway, or ==halfway with an odd kept LSB.
+        if remainder > halfway or (remainder == halfway and (truncated >> drop) & 1):
+            truncated += 1 << drop  # carry may ripple into the exponent (correct)
+        return struct.unpack("<f", struct.pack("<I", truncated & 0xFFFFFFFF))[0]
 
     # Comparison-to-zero ops. The Quasar kernel builds the strict comparisons from
     # SFPSETCC sign + magnitude tests (ltz = negative AND nonzero, gtz = positive AND
@@ -2515,6 +2584,15 @@ class UnarySFPUGolden:
     def _log(self, x):
         return self._torch_unary(x, torch.log)
 
+    # log_with_base dispatches _calculate_log_ with base_scale = fp16a bits of
+    # 1/ln(2) (0x3DC5). sFloat16a rounds it to the fp16 value below, so the golden
+    # multiplies ln(x) by that exact rounded scale (=> log2(x) modulo the kernel's
+    # own ln approximation, which is within the same tolerance as plain log).
+    _LOG_WITH_BASE_SCALE = 1.4423828125  # fp16(1/ln 2)
+
+    def _log_with_base(self, x):
+        return self._torch_unary(x, lambda t: torch.log(t) * self._LOG_WITH_BASE_SCALE)
+
     def _log1p(self, x):
         return self._torch_unary(x, torch.log1p)
 
@@ -2553,6 +2631,31 @@ class UnarySFPUGolden:
     def _frac(self, x):
         # Fractional part with sign of x: frac(x) = x - trunc(x)
         return (x - math.trunc(x)) if math.isfinite(x) else x
+
+    def _round(self, x):
+        # decimals=0, round-half-to-even (matches the kernel's _round_even_ and
+        # torch.round / Python's banker's rounding).
+        return float(round(x)) if math.isfinite(x) else x
+
+    def _tan(self, x):
+        return math.tan(x)
+
+    def _atan(self, x):
+        return math.atan(x)
+
+    def _asin(self, x):
+        # Domain restricted to [-1, 1] by the stimuli spec.
+        return math.asin(x)
+
+    def _acos(self, x):
+        # Domain restricted to [-1, 1] by the stimuli spec.
+        return math.acos(x)
+
+    def _sinh(self, x):
+        return math.sinh(x)
+
+    def _cosh(self, x):
+        return math.cosh(x)
 
     def _square(self, x):
         if not math.isfinite(x * x):
@@ -2654,6 +2757,50 @@ class UnarySFPUGolden:
         )
         return torch.exp2(input_tensor).item()
 
+    def _exp_with_base(self, x):
+        # Matches the dispatch: calculate_exponential with SCALE_EN and a bf16
+        # scale of 0.5, i.e. exp(0.5 * x). 0.5 is exact in bf16, so the only error
+        # versus this golden is the shared exp approximation itself.
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.exp(0.5 * input_tensor).item()
+
+    def _call_integer(self, operation, operand1, input_format, dimensions):
+        """Exact integer golden: tilize -> elementwise op -> untilize, in int dtype.
+
+        tilize/untilize is a pure permutation and cancels for elementwise ops, but is
+        kept to mirror the float/binary golden layout handling exactly.
+        """
+        torch_dtype = format_dict[input_format]
+        tensor = (
+            operand1 if isinstance(operand1, torch.Tensor) else torch.tensor(operand1)
+        )
+        tensor = tensor.to(torch_dtype).flatten()
+        tilized = tilize_block(tensor, dimensions, input_format).flatten()
+        op = self.ops[operation]
+        op_res = [int(op(int(x))) for x in tilized.tolist()]
+        result = torch.tensor(op_res, dtype=torch_dtype)
+        result = untilize_block(result, input_format, dimensions).flatten()
+        return result
+
+    def _left_shift(self, x):
+        # Matches calculate_left_shift with a fixed shift of 3; stimuli are bounded so
+        # the result never leaves the positive int32 range (no overflow/wrap).
+        return int(x) << self._int_shift_amount
+
+    def _right_shift(self, x):
+        # Arithmetic right shift by 3; Python >> on ints is arithmetic (sign-propagating).
+        return int(x) >> self._int_shift_amount
+
+    def _unary_max_int32(self, x):
+        return max(int(x), self._int_maxmin_scalar)
+
+    def _unary_min_int32(self, x):
+        return min(int(x), self._int_maxmin_scalar)
+
     def _neg(self, x):
         return -x
 
@@ -2680,6 +2827,14 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.nn.functional.gelu(input_tensor, approximate="tanh").item()
+
+    def _gelu_derivative(self, x):
+        # d/dx [x * Phi(x)] = Phi(x) + x * phi(x), with the erf-based standard
+        # normal CDF/PDF (matches the kernel's exact-gelu derivative, not the
+        # tanh approximation): Phi(x) = 0.5*(1+erf(x/sqrt2)), phi(x) = N(0,1) pdf.
+        phi = math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+        cdf = 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+        return cdf + x * phi
 
     def _fill(self, x, const_value=5):
         input_tensor = (
@@ -2850,6 +3005,12 @@ class UnarySFPUGolden:
 
     def _unary_le(self, x):
         return 1.0 if x <= self._UNARY_COMP_THRESHOLD else 0.0
+
+    def _unary_ne(self, x):
+        return 1.0 if x != self._UNARY_COMP_THRESHOLD else 0.0
+
+    def _unary_eq(self, x):
+        return 1.0 if x == self._UNARY_COMP_THRESHOLD else 0.0
 
     def _unary_max(self, x):
         return max(x, self._UNARY_MAX_MIN_VALUE)
@@ -3276,6 +3437,16 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
                 MathOperation.SfpuLogsigmoid: self._logsigmoid,
+                # Integer / format-typed binary SFPU ops.
+                MathOperation.SfpuEqInt: self._eq_int,
+                MathOperation.SfpuNeInt: self._ne_int,
+                MathOperation.SfpuMaxInt32: self._max,
+                MathOperation.SfpuMinInt32: self._min,
+                MathOperation.SfpuMaxUint32: self._max,
+                MathOperation.SfpuMinUint32: self._min,
+                MathOperation.SfpuRemainderInt32: self._remainder_int,
+                MathOperation.SfpuRemainderUint32: self._remainder_int,
+                MathOperation.SfpuFmodInt32: self._fmod_int,
             }
         )
 
@@ -3519,6 +3690,23 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # (src1) and x=t2 (src2). Evaluated in fp32 to mirror the SFPU minimax path;
         # the kernel is an approximation, so the match relies on the PCC tolerance.
         return torch.atan2(t1.to(torch.float32), t2.to(torch.float32))
+
+    def _eq_int(self, t1, t2):
+        # Integer equality, exact 0/1 (calculate_binary_eq_int over Int32 dest bits).
+        return int(int(t1) == int(t2))
+
+    def _ne_int(self, t1, t2):
+        return int(int(t1) != int(t2))
+
+    def _remainder_int(self, t1, t2):
+        # Integer remainder. Stimuli are non-negative with divisor >= 1, so the result is
+        # convention-agnostic (trunc/floor/unsigned all agree) and equals Python's a % b.
+        return int(int(t1) % int(t2))
+
+    def _fmod_int(self, t1, t2):
+        # int32 fmod (sign follows dividend). Non-negative stimuli make it equal to a % b,
+        # matching the internal unsigned-remainder kernel.
+        return int(int(t1) % int(t2))
 
     def _mul_int32(self, t1, t2):
         # int32 multiply, low 32 bits. The kernel stores two's-complement bits via
@@ -3881,6 +4069,15 @@ class ReduceGapoolGolden(FidelityMasking):
         if tile_shape is None:
             tile_shape = construct_tile_shape()
 
+        # Integer reduce (e.g. Int8 -> Int32) is exact-integer accumulation.
+        # Int8 reduce is LoFi-only: there is no mantissa multi-pass, so fidelity
+        # masking does not apply, and the gapool matmul is an exact integer sum.
+        # Full 32x32 tiles only
+        if input_format is not None and input_format.is_integer():
+            return self._reduce_integer(
+                operand1, operand2, data_format, reduce_dim, tile_cnt, input_format
+            )
+
         # Quantize MX format inputs to match hardware behavior
         if input_format is not None and input_format.is_mx_format():
             operand1 = quantize_mx_tensor_chunked(operand1, input_format)
@@ -4082,6 +4279,75 @@ class ReduceGapoolGolden(FidelityMasking):
 
         return result
 
+    def _reduce_integer(
+        self, operand1, operand2, data_format, reduce_dim, tile_cnt, input_format
+    ):
+        return torch.cat(
+            [
+                self._process_tile_integer(
+                    operand1, operand2, data_format, reduce_dim, tile, input_format
+                )
+                for tile in range(tile_cnt)
+            ]
+        )
+
+    def _process_tile_integer(
+        self, operand1, operand2, data_format, reduce_dim, tile_idx, input_format
+    ):
+        tile_start = tile_idx * ELEMENTS_PER_TILE
+        src_a = to_tensor(
+            operand1[tile_start : tile_start + ELEMENTS_PER_TILE], input_format
+        ).to(torch.int64)
+        src_b = to_tensor(operand2[:ELEMENTS_PER_FACE], input_format).to(torch.int64)
+
+        # Row reduce: transpose within each face of SrcA (models unpacker behavior)
+        if reduce_dim == ReduceDimension.Row:
+            src_a = (
+                src_a.view(FACES_PER_TILE, FACE_DIM, FACE_DIM).transpose(1, 2).flatten()
+            )
+
+        face_results = self._compute_gapool_integer(src_a, src_b)
+        return self._accumulate_gapool_results_integer(
+            face_results, src_b, data_format, reduce_dim
+        )
+
+    def _compute_gapool_integer(self, src_a, src_b, num_faces=FACES_PER_TILE):
+        """Exact integer D = srcB @ srcA per face (single LoFi pass)."""
+        a_faces = src_a.view(num_faces, FACE_DIM, FACE_DIM)
+        b_face = src_b.view(1, FACE_DIM, FACE_DIM)
+        return torch.matmul(b_face, a_faces).view(num_faces, -1)
+
+    def _accumulate_gapool_results_integer(
+        self, face_results, src_b, data_format, reduce_dim
+    ):
+        """Place pooled integer results in the output tile"""
+        torch_format = format_dict[data_format]
+        face_shape = (FACE_DIM, FACE_DIM)
+        f0, f1, f2, f3 = face_results
+        result = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.int64)
+
+        if reduce_dim == ReduceDimension.Column:
+            # Sum left faces (f0+f2) → face0 row 0, right faces (f1+f3) → face1 row 0
+            result[:FACE_DIM] = (f0 + f2)[:FACE_DIM]
+            result[ELEMENTS_PER_FACE : ELEMENTS_PER_FACE + FACE_DIM] = (f1 + f3)[
+                :FACE_DIM
+            ]
+
+        elif reduce_dim == ReduceDimension.Row:
+            # Sum top faces (f0+f1) → face0 col 0, bottom faces (f2+f3) → face2 col 0
+            result[0:ELEMENTS_PER_FACE:FACE_DIM] = (f0 + f1)[:FACE_DIM]
+            result[2 * ELEMENTS_PER_FACE : 3 * ELEMENTS_PER_FACE : FACE_DIM] = (
+                f2 + f3
+            )[:FACE_DIM]
+
+        elif reduce_dim == ReduceDimension.Scalar:
+            # Sum all faces, transpose, pool again to get single scalar
+            all_faces = (f0 + f1 + f2 + f3).view(face_shape).T.flatten()
+            pool_result = self._compute_gapool_integer(all_faces, src_b, num_faces=1)
+            result[0] = pool_result[0][0]
+
+        return saturate_integer(result, data_format, torch_format)
+
 
 @register_golden
 class UntilizeGolden:
@@ -4091,13 +4357,19 @@ class UntilizeGolden:
         data_format,
         dimensions=[32, 32],
         input_format: Optional[DataFormat] = None,
+        tile_dimensions=None,
     ):
         from helpers.tilize_untilize import untilize_block
 
-        operand = quantize_input_to_unpack_format(operand, input_format)
+        operand = quantize_input_to_unpack_format(
+            operand, input_format, all_mx_formats=True
+        )
 
         result = untilize_block(
-            operand, stimuli_format=data_format, dimensions=dimensions
+            operand,
+            stimuli_format=data_format,
+            dimensions=dimensions,
+            tile_dimensions=tile_dimensions,
         )
         result = result.flatten()
 
@@ -4106,20 +4378,31 @@ class UntilizeGolden:
 
 @register_golden
 class TilizeGolden:
-    def __call__(self, operand, dimensions, data_format, num_faces=4):
+    def __call__(
+        self, operand, dimensions, data_format, num_faces=4, tile_dimensions=None
+    ):
         from helpers.llk_params import format_dict
+        from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
         from helpers.tilize_untilize import tilize_block
 
         # Validate the number of faces
         if not (1 <= num_faces <= 4):
             raise ValueError(f"`num_faces` must be between 1 and 4, got {num_faces}")
 
-        # Always do full tilization first
-        result = tilize_block(operand, dimensions, data_format)
+        # Always do full tilization first. When tile_dimensions is provided, tilize_block
+        # derives the face layout (face_r_dim / num_faces) from the tile geometry.
+        result = tilize_block(
+            operand, dimensions, data_format, tile_dimensions=tile_dimensions
+        )
         torch_format = format_dict[data_format]
 
-        # Then select the appropriate number of faces from the tilized result
-        if num_faces < FACES_PER_TILE:
+        # Legacy partial-face selection only applies to standard 32x32 tiles; tiny-tile
+        # layouts already carry the correct face count from tile_dimensions.
+        is_standard_tile = tile_dimensions is None or tuple(tile_dimensions) == (
+            DEFAULT_TILE_R_DIM,
+            DEFAULT_TILE_C_DIM,
+        )
+        if is_standard_tile and num_faces < FACES_PER_TILE:
             elements_per_tile_needed = num_faces * ELEMENTS_PER_FACE
             tile_cnt = result.numel() // ELEMENTS_PER_TILE
             result = result.reshape(tile_cnt, ELEMENTS_PER_TILE)[

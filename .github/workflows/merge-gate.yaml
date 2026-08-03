@@ -89,7 +89,7 @@ jobs:
 
   find-changes:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
@@ -102,6 +102,8 @@ jobs:
       llk-blackhole-changed: ${{ steps.find-changes.outputs.llk-blackhole-changed }}
       llk-common-changed: ${{ steps.find-changes.outputs.llk-common-changed }}
       llk-sfpi-changed: ${{ steps.find-changes.outputs.llk-sfpi-changed }}
+      llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
+      llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
@@ -133,7 +135,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
-      build-wheel: true
+      build-inplace-wheel: true
       platform: "Ubuntu 22.04"
       enable-lto: false
       skip-tt-train: false
@@ -145,6 +147,7 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
+      checkout-filter: tree:0
 
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
@@ -173,6 +176,7 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
+      checkout-filter: tree:0
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||
@@ -201,6 +205,7 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
+      checkout-filter: tree:0
 
   build-sweeps:
     if: ${{ github.ref_name == 'main' ||
@@ -385,7 +390,7 @@ jobs:
   # test list: train_merge_gate_tests.yaml
   # ===========================================================================
 
-  train-smoke-tests:
+  train-merge-gate-tests:
     needs: [build, find-changes]
     if: ${{ github.event_name == 'workflow_dispatch' ||
             github.ref_name == 'main' ||
@@ -453,6 +458,33 @@ jobs:
   # SKU coverage is narrowed via sku-allowlist from find-changes. L2 nightly uses
   # tests/pipeline_reorg/llk_unit_tests.yaml. merge_group prio routing is via
   # prepare_test_matrix --event + sku_config merge_queue_sku.
+  resolve-docker-pull-refs-llk:
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    needs: [check-harbor, docker-images]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      llk-ci-docker-image: ${{ needs.docker-images.outputs.llk-ci-tag }}
+
+  llk-build-quasar-perf:
+    name: Build Quasar Perf
+    needs: [docker-images, resolve-docker-pull-refs-llk, find-changes]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-quasar-changed == 'true' ||
+         needs.find-changes.outputs.llk-common-changed == 'true' ||
+         needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changes.outputs.llk-perf-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true')
+      }}
+    uses: ./.github/workflows/build-quasar-perf.yml
+    with:
+      docker_image: ${{ needs.resolve-docker-pull-refs-llk.outputs.llk-ci-docker-image }}
+      runs_on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      timeout_minutes: 15
+
   llk-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes]
     if: ${{
@@ -515,14 +547,15 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-smoke-tests, scaleout-unit-tests, llk-unit-tests]
-    runs-on: ubuntu-latest
+
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests]
+    runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-smoke-tests, scaleout-unit-tests, llk-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

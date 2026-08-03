@@ -19,10 +19,29 @@ from .format_config import FormatConfig
 from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from .logger import logger
 from .metrics import compute_metrics, export_counters, export_metrics, print_metrics
+from .perf_schema import (
+    FLAG_HEADERS,
+    FORMAT_HEADERS,
+    LOOP_FACTOR_COLUMN,
+    MARKER,
+    MEAN,
+    STD,
+    TEXT_SIZE_PREFIX,
+    TILE_CNT_COLUMN,
+    PerfSchemaError,
+    stat_prefix,
+    text_size_column,
+)
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
 from .test_config import BuildMode, ProfilerBuild, TestConfig
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+
+# Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
+# match the marker values the kernels record; a mismatch silently empties the
+# TILE_LOOP mask in _postprocess_tile_loop (no KeyError raised).
+INIT_MARKER = "INIT"
+TILE_LOOP_MARKER = "TILE_LOOP"
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -34,7 +53,7 @@ def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     (get_zone_id allocates sequential IDs on first encounter).
     """
     _ = elf_dir
-    return ["INIT", "TILE_LOOP"]  # Counter zone 0 = INIT, zone 1 = TILE_LOOP
+    return [INIT_MARKER, TILE_LOOP_MARKER]  # zone 0 = INIT, zone 1 = TILE_LOOP
 
 
 # All perf run types in canonical order. Tests that exercise the full pipeline
@@ -64,24 +83,28 @@ def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
 
-    mask = frame["marker"] == "TILE_LOOP"
+    mask = frame[MARKER] == TILE_LOOP_MARKER
 
     if not mask.any():
         return frame
 
     # Ensure columns exist and default missing values only for masked rows
-    for col in ["loop_factor", "tile_cnt"]:
+    for col in [LOOP_FACTOR_COLUMN, TILE_CNT_COLUMN]:
         if col not in frame.columns:
-            col_idx = frame.columns.get_loc("marker")
+            col_idx = frame.columns.get_loc(MARKER)
             frame.insert(col_idx, col, 1)
         frame[col] = frame[col].fillna(1)
 
     # Compute divisor as Series aligned with masked rows
-    divisor = frame.loc[mask, "loop_factor"] * frame.loc[mask, "tile_cnt"]
+    divisor = frame.loc[mask, LOOP_FACTOR_COLUMN] * frame.loc[mask, TILE_CNT_COLUMN]
 
-    # Select only mean/std columns
-    mean_columns = [c for c in frame.columns if c.startswith("mean(")]
-    std_columns = [c for c in frame.columns if c.startswith("std(")]
+    # Select only the un-prefixed wall-clock mean/std columns. The startswith is
+    # prefix-anchored on purpose: run-type-prefixed metric columns from
+    # export_metrics (e.g. "L1_TO_L1_mean(fpu_utilization_pct)") are bounded
+    # percentages that must NOT be divided by loop_factor*tile_cnt — they escape
+    # only because metric_column puts the run type first.
+    mean_columns = [c for c in frame.columns if c.startswith(stat_prefix(MEAN))]
+    std_columns = [c for c in frame.columns if c.startswith(stat_prefix(STD))]
 
     # Apply division
     for cols in (mean_columns, std_columns):
@@ -89,15 +112,6 @@ def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
             frame.loc[mask, cols] = frame.loc[mask, cols].div(divisor, axis=0)
 
     return frame
-
-
-class PerfSchemaError(AssertionError):
-    """
-    Raised when a single perf report (one CSV) accumulates more than one column
-    schema. Stacking rows with different column sets NaN-fills the gaps, producing
-    a ragged, schema-contaminated artifact that breaks strict-JSON dashboards and
-    the compare feature. We fail loud so the contaminated CSV is never shipped.
-    """
 
 
 class PerfReport:
@@ -133,9 +147,9 @@ class PerfReport:
         if sig in self._schema_registry:
             return
         # Identify a frame by its sweep-parameter columns (everything before the
-        # "marker" column) so the error can point the author at the offending test.
-        if "marker" in frame.columns:
-            sweep_cols = list(frame.columns[: frame.columns.get_loc("marker")])
+        # marker column) so the error can point the author at the offending test.
+        if MARKER in frame.columns:
+            sweep_cols = list(frame.columns[: frame.columns.get_loc(MARKER)])
         else:
             sweep_cols = list(frame.columns)
         sample = frame.iloc[0][sweep_cols].to_dict() if sweep_cols else {}
@@ -219,7 +233,7 @@ class PerfReport:
 
     def marker(self, marker: str) -> "PerfReport":
         """Filter: Marker"""
-        return self.filter("marker", marker)
+        return self.filter(MARKER, marker)
 
     def post_process(self):
         frame = pd.concat(self._frames, ignore_index=True)
@@ -327,11 +341,11 @@ def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
     record a parameter that actually changes the kernel, so it should not pass
     silently.
     """
-    if frame.empty or "marker" not in frame.columns:
+    if frame.empty or MARKER not in frame.columns:
         return frame
 
     try:
-        marker_pos = frame.columns.get_loc("marker")
+        marker_pos = frame.columns.get_loc(MARKER)
         key_cols = list(frame.columns[: marker_pos + 1])
         value_cols = [c for c in frame.columns if c not in key_cols]
 
@@ -707,28 +721,27 @@ class PerfConfig(TestConfig):
         # validate="1:1" catches duplicate markers within each run type
         run_results = reduce(
             lambda left, right: pd.merge(
-                left, right, on="marker", how="outer", validate="1:1"
+                left, right, on=MARKER, how="outer", validate="1:1"
             ),
             results,
         )
 
         # Setting header fields that are always there
-        names = (
-            ["formats.input_A", "formats.input_B", "formats.output"]
-            if self.formats_config
-            else []
-        )
+        names = list(FORMAT_HEADERS) if self.formats_config else []
         values = (
             [
                 self.formats_config[0].unpack_A_src,
                 self.formats_config[0].unpack_B_src,
+                self.formats_config[0].unpack_A_dst,
+                self.formats_config[0].unpack_B_dst,
                 self.formats_config[0].output_format,
+                self.formats_config[0].sfpu_math,
             ]
             if self.formats_config[0]
             else []
         )
 
-        names += ["unpack_to_dest", "dest_acc"]
+        names += list(FLAG_HEADERS)
         values += [self.unpack_to_dest, self.dest_acc]
 
         for param in self.passed_templates + self.passed_runtimes:
@@ -738,14 +751,14 @@ class PerfConfig(TestConfig):
                     values.append(value)
 
         for run_type, size in code_sizes.items():
-            names.append(f"TEXT_SIZE({run_type.name})")
+            names.append(text_size_column(run_type.name))
             values.append(size)
 
         sweep = pd.DataFrame([values], columns=names)
         combined = sweep.merge(run_results, how="cross")
 
-        text_size_cols = [c for c in combined.columns if c.startswith("TEXT_SIZE(")]
-        other_cols = [c for c in combined.columns if not c.startswith("TEXT_SIZE(")]
+        text_size_cols = [c for c in combined.columns if c.startswith(TEXT_SIZE_PREFIX)]
+        other_cols = [c for c in combined.columns if not c.startswith(TEXT_SIZE_PREFIX)]
         combined = combined[other_cols + text_size_cols]
 
         perf_report.append(combined, label=self.test_name)
@@ -754,9 +767,29 @@ class PerfConfig(TestConfig):
         if counter_results_list and PerfConfig.COUNTER_REPORT is not None:
             counter_run_results = reduce(
                 lambda left, right: pd.merge(
-                    left, right, on="marker", how="outer", validate="1:1"
+                    left, right, on=MARKER, how="outer", validate="1:1"
                 ),
                 counter_results_list,
             )
             counter_combined = sweep.merge(counter_run_results, how="cross")
             PerfConfig.COUNTER_REPORT.append(counter_combined, label=self.test_name)
+
+
+def create_test_or_perf_config(
+    *, is_perf: bool, run_types: list[PerfRunType], test_config_kwargs: dict
+) -> TestConfig:
+    """Create the common functional or performance configuration.
+
+    The configuration is returned without running it so callers can apply
+    operation-specific format adjustments before execution.
+    """
+    if is_perf:
+        return PerfConfig(run_types=list(run_types), **test_config_kwargs)
+
+    return TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        }
+    )

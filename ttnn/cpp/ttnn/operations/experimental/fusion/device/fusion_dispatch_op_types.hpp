@@ -12,7 +12,7 @@ namespace ttnn::operations::experimental::fusion {
 
 using fusion_dispatch_operation_attributes_t = tt::tt_metal::experimental::MeshProgramDescriptor;
 using fusion_dispatch_tensor_return_value_t = Tensor;
-using fusion_dispatch_spec_return_value_t = TensorSpec;
+using fusion_dispatch_spec_return_value_t = tt::tt_metal::TensorSpec;
 
 struct fusion_dispatch_tensor_args_t {
     const std::vector<Tensor>& io_tensors;

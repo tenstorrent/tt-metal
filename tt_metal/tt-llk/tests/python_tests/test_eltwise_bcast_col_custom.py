@@ -16,11 +16,16 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
+    DestSync,
     MathFidelity,
     MathOperation,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -29,7 +34,9 @@ from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
     MATH_FIDELITY,
     MATH_OP,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TemplateParameter,
@@ -73,7 +80,9 @@ _TILE_ROWS = [32, 16]
     ],
     broadcast_type=[BroadcastType.Column],
     tile_rows=_TILE_ROWS,
-    input_width=list(range(32, 257, 32)),
+    # Widths up to 256 fit a single dest section; 1024 (32 tiles) spans multiple
+    # sections, exercising destination bank switching in the custom pipeline.
+    input_width=list(range(32, 257, 32)) + [1024],
 )
 def test_eltwise_bcast_col_custom(
     cpp_source,
@@ -168,6 +177,10 @@ def test_eltwise_bcast_col_custom(
         mathop, src_A, src_B_golden_expanded, formats.output_format, math_fidelity
     )
 
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions_A, tile_dimensions=tile_dims
+    )
+
     configuration = TestConfig(
         cpp_source,
         formats,
@@ -187,6 +200,8 @@ def test_eltwise_bcast_col_custom(
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces, num_faces, num_faces),
             TEST_FACE_DIMS(face_r_dim),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
         variant_stimuli=StimuliConfig(
             src_A_tilized,
