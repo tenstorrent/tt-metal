@@ -60,7 +60,13 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::dist
 
     distributed_host_buffer.emplace_shards(
         coords,
-        [&](const auto&) { return tt::tt_metal::tensor_impl::allocate_host_buffer(tensor_spec); },
+        [&](const auto&) {
+            auto shard = HostTensor::allocate_for_overwrite(tensor_spec)
+                             .buffer()
+                             .get_shard(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+            TT_FATAL(shard.has_value(), "HostTensor::allocate_for_overwrite must produce a shard at (0, 0)");
+            return std::move(*shard);
+        },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     // TODO (#25340): Implement correct logic and add test for this

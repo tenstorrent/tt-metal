@@ -181,7 +181,11 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
-    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
+    // TODO(#38947): tile parameter should be removed.
+    TT_FATAL(
+        !tile.has_value() || *tile == Tile{},
+        "Configuring borrowed data with a custom tile configuration is not supported.");
+    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin));
     return Tensor(std::move(host_tensor));
 }
 

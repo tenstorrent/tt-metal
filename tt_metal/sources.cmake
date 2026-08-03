@@ -99,8 +99,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/byte_based_tensor_transfers.hpp
     api/tt-metalium/experimental/tensor_apis_with_pad_values.hpp
     api/tt-metalium/experimental/tensor_host_pad_apis.hpp
+    api/tt-metalium/experimental/tensor_serialization_support.hpp
     api/tt-metalium/experimental/tensor/host_tensor.hpp
-    api/tt-metalium/experimental/tensor/impl/tensor_impl.hpp
     api/tt-metalium/experimental/tensor/mesh_tensor.hpp
     api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
     api/tt-metalium/experimental/tensor/spec/layout/layout.hpp

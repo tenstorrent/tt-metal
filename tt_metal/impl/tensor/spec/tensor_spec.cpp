@@ -6,6 +6,7 @@
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/experimental/tensor_serialization_support.hpp>
 
 #include "layout/page_config_impl.hpp"
 #include "layout/tensor_layout_impl.hpp"
@@ -296,7 +297,7 @@ MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
         nd_shard_spec.shard_distribution_strategy = ShardDistributionStrategy::GRID_2D;
     }
 
-    auto result = MemoryConfig::create_with_prepopulated_shard_specs(
+    auto result = create_memory_config_with_prepopulated_shard_specs(
         mem_config.memory_layout(),
         mem_config.buffer_type(),
         mem_config.shard_spec(),
@@ -378,7 +379,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     }
 
     if (shard_kind != TensorMemoryLayout::BLOCK_SHARDED) {
-        return MemoryConfig::create_with_prepopulated_shard_specs(
+        return create_memory_config_with_prepopulated_shard_specs(
             shard_kind,
             mem_config.buffer_type(),
             std::move(shard_spec),
@@ -404,7 +405,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    return MemoryConfig::create_with_prepopulated_shard_specs(
+    return create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::BLOCK_SHARDED,
         mem_config.buffer_type(),
         std::move(shard_spec),

@@ -16,6 +16,19 @@ import ttnn
 from conftest import requires_hybrid_allocator
 
 
+def _per_core_addr(tensor, core):
+    """Per-core L1 address of ``core`` on the tensor's own device.
+
+    Per-core allocation gives a different address per (device, core), so the query needs a
+    device.  Every tensor passed here is single-device -- a plain device, or one narrowed out
+    of a mesh with ``get_device_tensors`` -- so its one coordinate is the device to ask.  The
+    unpacking enforces that: a mesh tensor raises here instead of silently reporting whichever
+    device happens to come first.
+    """
+    (coord,) = tensor.device_coords()
+    return tensor.experimental_per_core_buffer_address(coord, core)
+
+
 class PerCoreMemMap:
     """Track expected per-core allocator addresses for test validation.
 
@@ -103,8 +116,8 @@ def test_per_core_tensors_get_same_address(device):
 
     # Per-bank allocators are independent — both cores can get the same address
     # With lockstep, t1 would get a different address since t0 consumed it
-    addr0 = t0.experimental_per_core_buffer_address(core0)
-    addr1 = t1.experimental_per_core_buffer_address(core1)
+    addr0 = _per_core_addr(t0, core0)
+    addr1 = _per_core_addr(t1, core1)
     assert addr0 == addr1, f"Expected same address on different cores (per-bank allocators), got {addr0} vs {addr1}"
 
 
@@ -162,14 +175,14 @@ def test_per_core_sharded_dealloc_realloc(device):
 
     # First allocation
     t1 = ttnn.from_torch(data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config)
-    addrs1 = [t1.experimental_per_core_buffer_address(c) for c in cores]
+    addrs1 = [_per_core_addr(t1, c) for c in cores]
 
     # Deallocate
     del t1
 
     # Second allocation — should reuse the same per-core space
     t2 = ttnn.from_torch(data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config)
-    addrs2 = [t2.experimental_per_core_buffer_address(c) for c in cores]
+    addrs2 = [_per_core_addr(t2, c) for c in cores]
 
     assert (
         addrs1 == addrs2
@@ -220,9 +233,9 @@ def test_per_core_tetris_allocation(device):
         if action == "alloc":
             t = _create_single_core_tensor(device, cores[core_idx], size)
             if mem is None:
-                mem = PerCoreMemMap(t.experimental_per_core_buffer_address(cores[core_idx]), size)
+                mem = PerCoreMemMap(_per_core_addr(t, cores[core_idx]), size)
             mem.alloc(label, core_idx, size)
-            actual[label] = t.experimental_per_core_buffer_address(cores[core_idx])
+            actual[label] = _per_core_addr(t, cores[core_idx])
             tensors[label] = t
         elif action == "free":
             freed_addr = mem.expected[label]
@@ -280,7 +293,7 @@ def test_per_core_and_lockstep_coexist(device):
         label = f"pc_c{i}_{size}"
         t = _create_single_core_tensor(device, cores[i], size)
         tensors[label] = t
-        allocs.append((label, t.experimental_per_core_buffer_address(cores[i]), size, "per_core"))
+        allocs.append((label, _per_core_addr(t, cores[i]), size, "per_core"))
 
     # Round 2: lockstep allocations on same cores
     ls_sizes = [1024, 2048, 512, 1024]
@@ -295,7 +308,7 @@ def test_per_core_and_lockstep_coexist(device):
         label = f"pc2_c{i}_{size}"
         t = _create_single_core_tensor(device, cores[i], size)
         tensors[label] = t
-        allocs.append((label, t.experimental_per_core_buffer_address(cores[i]), size, "per_core"))
+        allocs.append((label, _per_core_addr(t, cores[i]), size, "per_core"))
 
     # Round 4: free some per-core, allocate lockstep in the freed cores
     del tensors["pc_c0_2048"]
@@ -315,7 +328,7 @@ def test_per_core_and_lockstep_coexist(device):
         label = f"pc_after_free_c{i+2}_{size}"
         t = _create_single_core_tensor(device, cores[i + 2], size)
         tensors[label] = t
-        allocs.append((label, t.experimental_per_core_buffer_address(cores[i + 2]), size, "per_core"))
+        allocs.append((label, _per_core_addr(t, cores[i + 2]), size, "per_core"))
 
     # Validate: no per-core allocation overlaps with any lockstep allocation on the same core
     # (Per-core allocs on different cores CAN share addresses — that's the point)
@@ -368,7 +381,7 @@ def test_all_cores_lockstep_then_per_core_then_reverse(device):
     # Validate: no overlaps between lockstep and per-core on same core
     for i in range(num_cores):
         ls_addr = lockstep_tensors[i].buffer_address()
-        pc_addr = per_core_tensors[i].experimental_per_core_buffer_address(cores[i])
+        pc_addr = _per_core_addr(per_core_tensors[i], cores[i])
         assert not _addr_ranges_overlap(
             ls_addr, shard_bytes, pc_addr, shard_bytes
         ), f"Phase 1 overlap on core {i}: lockstep={ls_addr:#x} per_core={pc_addr:#x}"
@@ -392,7 +405,7 @@ def test_all_cores_lockstep_then_per_core_then_reverse(device):
     # Validate: no overlaps
     for i in range(num_cores):
         ls_addr = lockstep_tensors[i].buffer_address()
-        pc_addr = per_core_tensors[i].experimental_per_core_buffer_address(cores[i])
+        pc_addr = _per_core_addr(per_core_tensors[i], cores[i])
         assert not _addr_ranges_overlap(ls_addr, shard_bytes, pc_addr, pc_sizes[i]), (
             f"Phase 2 overlap on core {i}: lockstep={ls_addr:#x}+{shard_bytes} " f"per_core={pc_addr:#x}+{pc_sizes[i]}"
         )
@@ -449,7 +462,7 @@ def test_triangle_allocation_then_uniform_sharded(device):
     # Verify: per-core addresses form an inverse triangle
     # Core at flat index 0 consumed least → highest address
     # Core at flat index N-1 consumed most → lowest address
-    addrs = [sharded_tensor.experimental_per_core_buffer_address(c) for c in cores]
+    addrs = [_per_core_addr(sharded_tensor, c) for c in cores]
     for i in range(num_cores - 1):
         assert addrs[i] > addrs[i + 1], (
             f"Expected inverse triangle: core {i} ({cores[i].x},{cores[i].y}) addr={addrs[i]:#x} "
