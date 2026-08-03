@@ -160,6 +160,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_name(cons
     if (name_it != resolved_groupings_cache_.end()) {
         std::vector<GroupingInfo> result;
         for (const auto& [type, groupings] : name_it->second) {
+            result.reserve(result.size() + groupings.size());
             result.insert(result.end(), groupings.begin(), groupings.end());
         }
         return result;
@@ -172,6 +173,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_type(cons
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         auto type_it = type_map.find(grouping_type);
         if (type_it != type_map.end()) {
+            result.reserve(result.size() + type_it->second.size());
             result.insert(result.end(), type_it->second.begin(), type_it->second.end());
         }
     }
@@ -182,6 +184,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_all_groupings() const 
     std::vector<GroupingInfo> result;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         for (const auto& [type, groupings] : type_map) {
+            result.reserve(result.size() + groupings.size());
             for (const auto& grouping : groupings) {
                 result.push_back(grouping);
             }
@@ -192,6 +195,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_all_groupings() const 
 
 std::vector<std::string> PhysicalGroupingDescriptor::get_all_grouping_names() const {
     std::vector<std::string> names;
+    names.reserve(proto_->groupings().size());
     for (const auto& grouping : proto_->groupings()) {
         names.push_back(PhysicalGroupingDescriptor::get_grouping_name(grouping));
     }
@@ -384,6 +388,7 @@ void PhysicalGroupingDescriptor::populate() {
     }
 
     std::vector<std::string> processed;
+    processed.reserve(dependencies.size());
     while (!to_process.empty()) {
         std::string current = to_process.front();
         to_process.pop();

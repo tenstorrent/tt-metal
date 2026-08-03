@@ -392,7 +392,9 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
 
     // Collect instance IDs and build items list
     std::vector<uint32_t> instance_ids;
+    instance_ids.reserve(grouping.instances().size());
     std::vector<uint32_t> asic_locations;  // For tray groupings, use ASIC locations as node IDs
+    asic_locations.reserve(grouping.instances().size());
     bool has_asic_locations = false;
 
     for (const auto& instance : grouping.instances()) {
@@ -572,6 +574,7 @@ struct FlattenedMesh {
             if (is_on_requested_edge) {
                 // Recursively get edge from this sub-mesh and append
                 const auto sub_edge = sub_meshes[item_idx].get_edge(dir);
+                edge_nodes.reserve(edge_nodes.size() + sub_edge.size());
                 edge_nodes.insert(edge_nodes.end(), sub_edge.begin(), sub_edge.end());
             }
         }
@@ -936,6 +939,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
     auto name_it = cache.find(item.grouping_name);
     if (name_it != cache.end()) {
         for (const auto& [type, groupings] : name_it->second) {
+            possible_groupings.reserve(possible_groupings.size() + groupings.size());
             possible_groupings.insert(possible_groupings.end(), groupings.begin(), groupings.end());
         }
     }
@@ -944,6 +948,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         for (const auto& [name, type_map] : cache) {
             auto type_it = type_map.find(item.grouping_name);
             if (type_it != type_map.end()) {
+                possible_groupings.reserve(possible_groupings.size() + type_it->second.size());
                 possible_groupings.insert(possible_groupings.end(), type_it->second.begin(), type_it->second.end());
             }
         }
@@ -967,6 +972,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
             std::vector<FlattenedMesh> sub_results = build_flattened_meshes_for_item(
                 sub_grouping.items[0], next_global_id, cache, desc, physical_system_descriptor, new_path);
             // PSD validation is done at the top level only, not at intermediate levels
+            all_results.reserve(all_results.size() + sub_results.size());
             for (FlattenedMesh& m : sub_results) {
                 all_results.push_back(std::move(m));
             }
@@ -1154,7 +1160,9 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 
         FlattenedMesh joined_mesh = make_joined_flattened_mesh(std::move(chosen), instance_tile_layout_dims);
 
-        for (auto& variant : flattened_mesh_to_topology_variants(grouping, joined_mesh)) {
+        auto variants = flattened_mesh_to_topology_variants(grouping, joined_mesh);
+        result.reserve(result.size() + variants.size());
+        for (auto& variant : variants) {
             if (physical_system_descriptor != nullptr && !can_map_to_psd(variant, *physical_system_descriptor)) {
                 continue;
             }

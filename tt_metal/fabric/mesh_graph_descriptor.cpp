@@ -1764,6 +1764,7 @@ std::vector<AsicPosition> expand_physical_asic_positions(
             asic_locs = std::move(loc_result.ids);
         }
 
+        positions.reserve(positions.size() + trays.size() * asic_locs.size());
         for (uint32_t tray : trays) {
             for (uint32_t loc : asic_locs) {
                 if (seen.insert({tray, loc}).second) {
