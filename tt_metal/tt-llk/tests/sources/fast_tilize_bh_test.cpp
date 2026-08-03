@@ -12,12 +12,8 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "params.h"
-#include "profiler.h"
-
-#ifndef PERF_RUN_TYPE
-#define PERF_RUN_TYPE PerfRunType::L1_TO_L1
-#endif
 #include "perf.h"
+#include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -188,12 +184,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Each unit produces 4 dvalids regardless of unit_dim
-            return _perf_unpack_loop_set_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_unpack_loop_set_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -286,11 +281,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
-            return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            return _perf_math_loop_clear_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_math_loop_clear_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -395,7 +389,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZONE_SCOPED("TILE_LOOP")
             if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
             {
-                return;
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
@@ -404,7 +397,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_packer_wait_for_math_done_();
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
-                return;
             }
             else
             {
@@ -425,9 +417,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             prev_udim = udim;
                         }
 
-                        _llk_packer_wait_for_math_done_();
+                        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                        {
+                            _llk_packer_wait_for_math_done_();
+                        }
                         _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
-                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                        {
+                            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        }
                     }
 
                     _llk_pack_fast_tilize_row_end_();
