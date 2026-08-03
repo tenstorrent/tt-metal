@@ -276,6 +276,7 @@ _COMMON_ENV = {
 
 @_GALAXY_GATE
 @pytest.mark.requires_mesh_topology(mesh_shape=(ROWS, COLS), topology=f"mesh-{ROWS}x{COLS}")
+@pytest.mark.timeout(0)  # disable pytest-timeout (pytest.ini 300s default); internal timeout_s= bounds each step
 def test_T1_standalone_pcc_via_engine():
     """T1 — Standalone KV PCC through the common engine matches the standalone harness (~≥0.99).
     Regression here → gap 3 (weights)."""
@@ -287,6 +288,7 @@ def test_T1_standalone_pcc_via_engine():
 
 @_GALAXY_GATE
 @pytest.mark.requires_mesh_topology(mesh_shape=(ROWS, COLS), topology=f"mesh-{ROWS}x{COLS}")
+@pytest.mark.timeout(0)  # disable pytest-timeout (pytest.ini 300s default); internal timeout_s= bounds each step
 def test_T2_multi_chunk_pcc_via_engine():
     """T2 — Multi-chunk (cached_len>0, SP ring cache-read) under engine control. Same PCC bar."""
     _required_env()
@@ -301,6 +303,7 @@ def test_T2_multi_chunk_pcc_via_engine():
 
 @_GALAXY_GATE
 @pytest.mark.requires_mesh_topology(mesh_shape=(ROWS, COLS), topology=f"mesh-{ROWS}x{COLS}")
+@pytest.mark.timeout(0)  # disable pytest-timeout (pytest.ini 300s default); internal timeout_s= bounds each step
 def test_T3_request_mode_with_producer():
     """T3 — Request mode + producer over the H2D socket. 11 chunks, no shape/dtype error inside
     prefill_chunk. Failure on chunk 0 → gap 2 (input path)."""
@@ -329,6 +332,7 @@ def test_T3_request_mode_with_producer():
 
 @_GALAXY_GATE
 @pytest.mark.requires_mesh_topology(mesh_shape=(ROWS, COLS), topology=f"mesh-{ROWS}x{COLS}")
+@pytest.mark.timeout(0)  # disable pytest-timeout (pytest.ini 300s default); internal timeout_s= bounds each step
 def test_T4_layer_ack_completions():
     """T4 — LayerAck emission verified by scheduler_standins.CompletionCheckConsumer.
     Fails today: runtime has no set_layer_ack_channel (gap 1) so PREFILL_ENABLE_LAYER_ACK=1 errors
@@ -365,6 +369,7 @@ def test_T4_layer_ack_completions():
 
 @_GALAXY_GATE
 @pytest.mark.requires_mesh_topology(mesh_shape=(ROWS, COLS), topology=f"mesh-{ROWS}x{COLS}")
+@pytest.mark.timeout(0)  # disable pytest-timeout (pytest.ini 300s default); internal timeout_s= bounds each step
 def test_T5_multi_user():
     """T5 — Producer alternates slot_ids across chunks; per-user cache-slot indexing works under real
     scheduling (harness only exercises slot_id=0). Runs on top of the T4 setup."""
