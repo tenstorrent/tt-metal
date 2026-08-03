@@ -136,6 +136,28 @@ def _guard_chunk(request, chunk):
         pytest.skip(f"chunk={chunk} > --max-prefill={max_prefill}")
 
 
+def _guard_no_context_parallel(mesh_device, test_name):
+    """Skip whole-model tests on a context-parallel mesh.
+
+    Context parallelism is currently wired for ``test_prefill_layer`` only, which
+    stages its hidden states already sharded along the CP axis. The whole-model
+    entry points stage a *replicated* sequence and embed on device, so each rank
+    would hold all ``chunk`` tokens; the attention CP path would then build a mask
+    and gather K/V spanning ``cp * chunk`` positions and silently compute nonsense.
+    Skip loudly instead of reporting a wrong number.
+    """
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    cp = cp_degree(_mesh_config(mesh_device))
+    if cp > 1:
+        pytest.skip(
+            f"{test_name} is not context-parallel yet (mesh {tuple(mesh_device.shape)} gives CP={cp}). "
+            f"CP is wired for test_prefill_layer only. Re-run with GEMMA4_PREFILL_MESH=1x32 for the "
+            f"whole-model graph, or extend CP to the model path (sharded token staging, CP-aware "
+            f"embed/lm_head, and a CP gather for the readback)."
+        )
+
+
 # ── Weight loading from the tensor cache ──────────────────────────────────────
 
 
@@ -454,10 +476,18 @@ def test_prefill_layer(mesh_device, layer_type, chunk, traced, reset_seeds, requ
     ``precision_overrides.json`` — while the HF reference gets the same weights at
     bf16 in an fp32 module, so the PCC gap is the deployed quantization error.
 
-    PCC thresholds come from ``pcc_thresholds.json``; there is no ``1x32`` entry
-    yet, so this falls back to the table's documented 0.99 "unmeasured" default.
-    Record the measured values under ``gemma-4-31B-it`` / ``1x32`` after a run
-    rather than guessing them.
+    PCC thresholds come from ``pcc_thresholds.json``; there is no ``4x8`` or
+    ``1x32`` entry yet, so this falls back to the table's documented 0.99
+    "unmeasured" default.
+
+    Measured on a BH Galaxy at ``4x8`` (TP=8 x CP=4), 31B, eager and traced
+    identical in every case:
+
+        sliding: 0.99940 (512), 0.99933 (1024), 0.99932 (2048), 0.99931 (4096)
+        global:  0.99986 (512), 0.99986 (1024), 0.99986 (2048), 0.99985 (4096)
+
+    Left at the 0.99 default deliberately — every case clears it by ~4e-3, and
+    pinning thresholds to measured values invites flakiness on run-to-run drift.
     """
     _guard_chunk(request, chunk)
 
@@ -644,6 +674,7 @@ def test_prefill_layers(mesh_device, chunk, traced, reset_seeds, request):
     timings so eager and traced are directly comparable at the same chunk size.
     """
     _guard_chunk(request, chunk)
+    _guard_no_context_parallel(mesh_device, "test_prefill_layers")
 
     model_path = _model_path()
     model_args, model, kv_cache, page_table_tt = _build_prefill_model(mesh_device, model_path, chunk)
@@ -701,6 +732,7 @@ def test_prefill_full(mesh_device, chunk, traced, reset_seeds, request):
     the reported numbers stay comparable.
     """
     _guard_chunk(request, chunk)
+    _guard_no_context_parallel(mesh_device, "test_prefill_full")
 
     model_path = _model_path()
     model_args, model, kv_cache, page_table_tt = _build_prefill_model(mesh_device, model_path, chunk)
