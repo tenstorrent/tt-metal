@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_helpers_dataflow_host.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -30,7 +31,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
 
     // figure out packets
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
-        detail::compute_aligned_packet_dims(
+        ::ttnn::ccl::dataflow::ccl_packet_dims(
             output_tensor.dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
     // distribute work
     const CoreCoord use_cores = {1, 1};
@@ -44,23 +45,12 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
 
     tt::DataFormat inter_dataformat = tt::tt_metal::datatype_to_dataformat_converter(intermediate_tensor.dtype());
 
-    // CB for packet headers
-    constexpr auto packet_header_cb_id = tt::CBIndex::c_0;
-    constexpr auto buffering_factor = 2;  // this is in other fabric kernels
-    constexpr auto num_packet_headers_storable = 2;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(packet_header_cb_id),
-            .data_format = tt::DataFormat::RawUInt32,
-            .page_size = packet_header_size_bytes,
-        }}},
-    });
+    // Packet headers are drawn from the fabric-L1 PacketHeaderPool by the kernel-side
+    // FabricStreamSender (HeaderPolicy is gone — Pool is the idiomatic default), so no
+    // packet-header CB is allocated here.
 
     // Scratch CB for loading up pages that are collected into packets
-    constexpr auto packet_cb_id = tt::CBIndex::c_1;
+    constexpr auto packet_cb_id = tt::CBIndex::c_0;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = packet_size_bytes,
         .core_ranges = all_cores,
@@ -72,7 +62,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     });
 
     // CB for sender reader->writer kernels
-    constexpr auto receiver_cb_id = tt::CBIndex::c_2;
+    constexpr auto receiver_cb_id = tt::CBIndex::c_1;
     const uint32_t cb_num_pages = 3 * num_pages_per_packet;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = cb_num_pages * output_page_size_bytes,
@@ -87,9 +77,9 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     const auto& topology = operation_attributes.topology;
     const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
     const auto [num_hops, sender_is_forward, next_fabric_id] =
-        detail::fabric_1d_routing(mesh_device, receive_coord, send_coord, topology);
+        ::ttnn::ccl::dataflow::ccl_dm_route(mesh_device, receive_coord, send_coord, topology);
 
-    std::vector<uint32_t> reader_ct_args = {packet_header_cb_id, packet_cb_id, receiver_cb_id, l1_alignment};
+    std::vector<uint32_t> reader_ct_args = {packet_cb_id, receiver_cb_id, l1_alignment};
     tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(reader_ct_args);
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
@@ -147,18 +137,12 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
             output_page_size_bytes,
             num_page_segments,
             semaphore.address(),
-            num_hops,
-            sender_is_forward};
+            num_hops};
 
-        if (sender_is_forward) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args);
-        }
-        reader_runtime_args.emplace_back(!sender_is_forward);
-        if (!sender_is_forward) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args);
-        }
+        // Appends [has_forward(=sender_is_forward)][fwd conn args][has_backward][bwd conn args]
+        // starting at index 9 — the layout the kernel's FabricStreamSender consumes.
+        ::ttnn::ccl::dataflow::append_ccl_fabric_rt_args(
+            this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args, sender_is_forward);
 
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args_builder;
         reader_rt_args_builder.reserve(reader_runtime_args.size());
