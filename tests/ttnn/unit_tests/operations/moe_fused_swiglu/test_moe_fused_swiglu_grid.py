@@ -93,7 +93,12 @@ def test_grid(device, hgroups, kgroups, hidden, why):
 
 
 def test_grid_too_small_reports_l1(device, expect_error):
-    """A grid that cannot hold the working set must REFUSE, with the numbers, not hang."""
+    """A grid that cannot hold the working set must REFUSE, with the numbers, not hang.
+
+    Which limit it hits first depends on the shape. At 4x2 the `down` sub-block (ec_max = emb
+    tiles / cores) busts the DEST budget before L1 does, so both refusals are accepted here — what
+    is being pinned is that the op says WHICH resource ran out and by how much, not which one.
+    """
     emb, hidden, capacity, count = 6144, 2048, 1024, 256
     torch.manual_seed(0)
     dev = lambda t, d, l: ttnn.from_torch(t, dtype=d, layout=l, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -107,7 +112,7 @@ def test_grid_too_small_reports_l1(device, expect_error):
     idx = torch.zeros(NUM_LOCAL_EXPERTS, dtype=torch.int32)
     idx[LOCAL_EXPERT_ID] = GLOBAL_EXPERT_ID
 
-    with expect_error(RuntimeError, r"(?i)L1 per core"):
+    with expect_error((RuntimeError, ValueError), r"(?i)L1 per core|DEST budget"):
         moe_fused_swiglu(
             tt_x,
             tt_w[0],

@@ -45,6 +45,9 @@ constexpr uint32_t SEM_WDSPLIT = CT(SEM_WDSPLIT);
 
 constexpr uint32_t W_TILE = CT(W_TILE_BYTES);  // weight tile stride: bfp4 576, bfp8 1088, bf16 2048
 constexpr uint32_t BFP8_TILE = CT(BFP8_TILE);
+// The OUTPUT tile size, which is NOT BFP8_TILE once the caller passes `dtype=`: a bf16 output
+// tile is 2048 B, and striding the write-back by 1088 would emit partial pages from wrong offsets.
+constexpr uint32_t OUT_TILE = CT(OUT_TILE_BYTES);
 constexpr uint32_t H_TILE = BFP8_TILE;  // h is bfp8; see the reader
 constexpr uint32_t MAILBOX_MAGIC = CT(MAILBOX_MAGIC);
 constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
@@ -86,10 +89,9 @@ using BR = moe_fused_swiglu::WeightRuns<>;
 // pre-WSHARD path). The OUTPUT write-back keeps `BR`: the output is always DRAM interleaved.
 using BRG = moe_fused_swiglu::WeightRuns<WG_SHARD_W>;
 
-// PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off (see the reader's note
-// and the durability contract in `perf_instrumentation.hpp`). 5 records per M-block on either path:
-// `tree` = out_drain, wup, reduce_child, out_issue; `scatter` = out_drain, wup, scatter, hslice,
-// out_issue. Names of surviving stages are UNCHANGED so round-1 and round-2 numbers stay comparable.
+// PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off. 5 records per
+// M-block: out_drain, wup, wd_issue, scatter, hslice, out_issue. Names are stable across rounds so
+// old and new numbers stay comparable; give any new fast path its own zone.
 
 void kernel_main() {
     const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
@@ -113,7 +115,7 @@ void kernel_main() {
     constexpr uint32_t RT_PEERS = 13;  // KGROUPS (vx, vy) pairs — the whole column, in row order
 
     const auto wu_acc = TensorAccessor(wu_args, w_up_addr, W_TILE);
-    const auto out_acc = TensorAccessor(out_args, out_addr, BFP8_TILE);
+    const auto out_acc = TensorAccessor(out_args, out_addr, OUT_TILE);
     const auto wd_acc = TensorAccessor(wd_args, wd_addr, W_TILE);
     // THE ADDRESS DERIVATION, and why it needs no CB state. This RISC-V never pushes cb_w_down
     // (the reader is its single producer), so its local `cb_interface` copy never advances and
@@ -303,7 +305,7 @@ void kernel_main() {
                     if (row >= m_t) {
                         break;  // rows past ceil_tile(count) are never written
                     }
-                    BR::write(out_acc, row * EMB_T, jstart, jstart + ec, rp + t * EC_MAX * BFP8_TILE, BFP8_TILE);
+                    BR::write(out_acc, row * EMB_T, jstart, jstart + ec, rp + t * EC_MAX * OUT_TILE, OUT_TILE);
                 }
             }
 #endif

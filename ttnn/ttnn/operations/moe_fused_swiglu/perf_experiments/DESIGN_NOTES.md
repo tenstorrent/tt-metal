@@ -23,7 +23,7 @@ of that axis leaves every core holding a partial `[count, emb]` output.
 Instead of splitting it, the design **rotates the axis between the two phases** and pays with an
 all-gather of `h`:
 
-| | payload moved across cores | at count 256, M_BLOCK 16 |
+| | payload moved across cores | at count 256, M_BLOCK 16 (the figure this table was computed at; the op ships M_BLOCK 8) |
 |---|---|---|
 | all-gather `h` (chosen) | `M_t x HID_T` tiles, once, bfp8, multicast | 8x64 = 512 tiles = 0.56 MB |
 | reduce `[M_t, EMB_T]` partials KGROUPS-deep | `M_t x EMB_T` tiles per level | 8x224 = 1792 tiles = 1.95 MB **per level** |
@@ -390,6 +390,44 @@ proportionally, and W_down residency is given up first. At 11x8:
 
 So bf16 weights at the graded shape are not available on this device, and the op says so with the
 computed numbers.
+
+## 8e. External review (codex), and what it found
+
+The rewritten op was reviewed by an independent agent with no history in this codebase, pointed at
+the code and told to prioritise races in the shared-header extraction, N/grid generality holes,
+and readability. It found **no race introduced by the extraction** — it traced `scatter_leg`'s
+source/destination offsets, the write-pointer proxy, the barrier ordering and the mailbox fence
+and confirmed each is preserved. It found five other defects, all real, all now fixed:
+
+1. **W_down's non-resident fallback never reached the kernels** (high). The geometry can turn
+   residency off and shrink `depth_wd`, but the descriptor emitted the module-level `WD_RESIDENT`
+   constant instead of the resolved `blk.wd_resident`. The kernels therefore still skipped every
+   W_down read after M-block 0 while the shrunk CB no longer held block r in slot r. Reproduced:
+   at emb 6144 / N 2048 / bfp8 weights / count 1024, **M-block 1 came back at PCC −0.0002** —
+   completely wrong, silently. There is now a test at exactly that shape, and it fails without the
+   fix. This is the same class as the `wd_split` bug in §8c and the same lesson: the shipped
+   configuration never exercises the fallback, so no amount of stress at 11x8 finds it.
+2. **The bf16 output path wrote bfp8-sized pages** (high). `dtype=bfloat16` is accepted and the CB
+   was sized correctly, but the writer's accessor and its write stride were both hardcoded to
+   `BFP8_TILE`. `OUT_TILE_BYTES` is now a compile-time arg.
+3. **`min()` of two gate/up shard widths can invent boundaries** (high). If the two tensors are
+   sharded differently and the larger width is not a multiple of the smaller, the synthetic
+   boundary does not subdivide the real one and a run crosses a real shard edge as though it were
+   contiguous. The widths must now AGREE, or the op takes the uncoalesced stream.
+4. **The `down` DEST budget was only checked above height 1** (medium). `ec_max` is the sub-block
+   WIDTH and grows as the grid narrows, so a narrow grid busts the budget at height 1 — which the
+   loop never tested. Now an explicit refusal.
+5. **Weights were not required to be TILE_LAYOUT** (medium). The kernels address them as tile
+   pages at a `W_TILE` stride, so a row-major weight would have been read as tiles.
+
+It also caught two documentation errors, one of which matters: this file and two code comments
+claimed "every semaphore is monotone". That is false — the h all-gather's per-slot VALID cells are
+set and cleared every round. They are a Flag signal whose safety comes from the linked-VC ordering
+and one cell per slot (§3), not from monotonicity. Corrected in all four places.
+
+The review is the strongest argument in this document for reading the geometry off the shipped
+grid: three of the five defects are invisible at 11x8 / N 2048 / bfp4 and were found by asking
+what the code produces elsewhere.
 
 ## 9. Still open
 

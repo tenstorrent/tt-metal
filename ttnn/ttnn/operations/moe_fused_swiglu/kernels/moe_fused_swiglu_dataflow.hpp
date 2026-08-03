@@ -24,8 +24,11 @@
 namespace moe_fused_swiglu {
 
 // ---------------------------------------------------------------------------
-// Semaphores. Every one in this op is MONOTONE: never reset within a dispatch, always compared
-// with a running total. These three spellings are the whole protocol surface.
+// Semaphores. All but one are MONOTONE: never reset within a dispatch, always compared with a
+// running total, which is what makes them race-free across M-blocks. THE EXCEPTION is the h
+// all-gather's per-slot VALID cells (SEM_H_RDY_BASE + s), which are deliberately set and cleared
+// each round — that is a Flag signal, not a counter, and its safety comes from the linked-VC
+// ordering plus one cell per slot. These three spellings cover the monotone ones.
 // ---------------------------------------------------------------------------
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem_ptr(uint32_t id) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(id)));

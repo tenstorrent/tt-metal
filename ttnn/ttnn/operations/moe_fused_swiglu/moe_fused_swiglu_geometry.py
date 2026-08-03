@@ -104,8 +104,10 @@ CB_H_LOCAL = 18  # column root: this column's assembled h block, awaiting its al
 CB_OUT_INTERM = 19  # phase-2 packer-L1 accumulation region
 
 # --------------------------------------------------------------------------------------------
-# Semaphores. Every one is MONOTONE — never reset within a dispatch, always compared with
-# wait_min against a running total. See RACE_AUDIT.md.
+# Semaphores. All but one are MONOTONE — never reset within a dispatch, always compared with
+# wait_min against a running total. The exception is SEM_H_RDY_BASE + s: those are the h
+# all-gather's per-slot VALID FLAGS, set by the sender and cleared by each receiver every round.
+# See RACE_AUDIT.md §2.
 # --------------------------------------------------------------------------------------------
 SEM_X_BASE = 0  # x row multicast (data_ready, consumer_ready)
 SEM_H_BASE = 2  # h all-gather   (data_ready, consumer_ready)
@@ -272,6 +274,14 @@ class Blocking:
 
         # `down` sub-block height: largest power of two still inside DEST, capped by the knob and
         # by M_BLOCK. Power of two so min(h, m_eff) divides m_eff for every runtime m_eff.
+        # Height 1 must be checked too, not just whether 2 fits: `ec_max` is the sub-block WIDTH
+        # and grows as the grid narrows, so a narrow enough grid busts the budget at height 1.
+        if self.ec_max > DEST_AUTO_LIMIT_TILES:
+            raise ValueError(
+                f"moe_fused_swiglu: the `down` sub-block is {self.ec_max} tiles wide (ec_max, = "
+                f"emb tiles / {self.num_cores} cores) against a DEST budget of "
+                f"{DEST_AUTO_LIMIT_TILES}. This grid is too small for emb {self.emb}; use more cores."
+            )
         h = 1
         while h * 2 <= min(OUT_SUBBLOCK_H_DN_MAX, M_BLOCK) and h * 2 * self.ec_max <= DEST_AUTO_LIMIT_TILES:
             h *= 2

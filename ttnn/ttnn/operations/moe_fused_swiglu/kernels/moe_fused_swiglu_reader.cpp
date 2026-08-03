@@ -644,7 +644,7 @@ void kernel_main() {
                     }
 #endif
                 } else {
-                    // The other 109 cores drain AFTER the multicast, so the previous round's W_down read
+                    // Every core but this round's sender drains AFTER the multicast, so the W_down read
                     // had this whole round's grid-wide broadcast to land under — that is the deferral.
 #ifndef ABLATE_NO_H_XFER
                     // The whole of `ReceiverPipe::receive` for a Flag signal with PRE_HANDSHAKE
@@ -662,7 +662,7 @@ void kernel_main() {
                     if (wd_pending) {
                         // PERF 15 — the REAL per-round W_down wait. `reader_wd_wait` covers only the
                         // WD_AHEAD=1 prologue block (1 of 11) and I misread it as "down never waits
-                        // for its weights"; this is the other 10, on the 87 non-sending cores.
+                        // for its weights"; this is every other round, on the non-sending cores.
                         MaybeDeviceZoneScope("p2_wdbar");
                         noc_async_read_barrier();
                         if constexpr (WD_SPLIT) {

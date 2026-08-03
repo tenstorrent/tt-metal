@@ -109,6 +109,7 @@ KERNEL_CT_ORDER = {
         "SEM_WDSPLIT",
         "W_TILE_BYTES",
         "BFP8_TILE",
+        "OUT_TILE_BYTES",
         "MAILBOX_MAGIC",
         "M_EFF_MIN",
         "W_RESIDENT",
@@ -401,7 +402,12 @@ def create_program_descriptor(
     # gate/up resolve to ONE width: the reader and the writer read the same [k, n] slice of two
     # identically-shaped tensors, and a disagreement would give the up matmul a different
     # coalescing from the gate's.
-    wg_shard_w = min(nd_shard_n_tiles(w_gate), nd_shard_n_tiles(w_up))
+    # ONE width for gate/up, and they must AGREE. Taking min() of two different widths invents
+    # shard boundaries that do not subdivide the real ones — with widths 5 and 4, a run over
+    # [4, 6) would cross the width-5 tensor's real boundary at 5 and be issued as one transaction
+    # across two banks. Disagreement falls back to the uncoalesced stream, which is always correct.
+    _wg, _wu = nd_shard_n_tiles(w_gate), nd_shard_n_tiles(w_up)
+    wg_shard_w = _wg if _wg == _wu else 0
     wd_shard_w = nd_shard_n_tiles(w_down)
 
     # ---- collectives ------------------------------------------------------------------------
@@ -467,7 +473,10 @@ def create_program_descriptor(
         "MAILBOX_MAGIC": MAILBOX_MAGIC,
         "M_EFF_MIN": blk.m_eff_min,
         "W_RESIDENT": int(geo.W_RESIDENT),
-        "WD_RESIDENT": int(geo.WD_RESIDENT),
+        # blk.wd_resident, NOT the module default: the budget can turn residency OFF and shrink
+        # depth_wd, and a kernel still told "resident" would skip every W_down read after M-block 0
+        # while the shrunk CB no longer holds block r in slot r — stale weights, silently.
+        "WD_RESIDENT": int(blk.wd_resident),
         "GU_CHUNKS": blk.gu_chunks,
         "XPRIO": int(geo.XPRIO),
         "WD_SPLIT": blk.wd_split,
@@ -476,6 +485,7 @@ def create_program_descriptor(
         "GATHER_PAGES": blk.gather_pages,
         "W_TILE_BYTES": w_tile,
         "BFP8_TILE": bfp8_tile,
+        "OUT_TILE_BYTES": out_tile,
         "SEM_GO": geo.SEM_GO,
         "SEM_DATA": geo.SEM_DATA,
         "SEM_HSLICE": geo.SEM_HSLICE,

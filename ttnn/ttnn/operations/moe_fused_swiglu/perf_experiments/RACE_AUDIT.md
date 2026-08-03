@@ -116,14 +116,19 @@ proves the configurations it runs, and nothing else.
 
 ## 2. Inventory — every cross-agent synchronisation object
 
-> **Updated by the rewrite.** The reduce tree and `HSPLIT` are gone, so `SEM_H2_RDY_BASE` and the
-> tree's parent/child edges no longer exist: the op now allocates 11 semaphores (ids 0..10) against
-> the device's 16, where the shipped build previously used 13 and the `HSPLIT` build used all 16.
-> `DEPTH_H` is what scales this, and the descriptor now raises if the count would exceed the limit
-> instead of failing at program build. Every surviving object is still MONOTONE — never reset
-> within a dispatch, always compared with `wait_min` against a running total — and the three
-> spellings of that (`sem_ptr`, `sem_wait_min`, `sem_publish`) now live in one shared header rather
-> than in ~15 hand-written casts.
+> **Updated by the rewrite.** `HSPLIT` is gone, so `SEM_H2_RDY_BASE` no longer exists: the op
+> allocates **13 semaphores, ids 0..12** (`SEM_COUNT` in the geometry module) against the device's
+> 16, where the `HSPLIT` build used all 16. `DEPTH_H` is what scales this, and the descriptor now
+> raises if the count would exceed the limit instead of failing at program build.
+>
+> **Correction to an overstatement this document previously made**, and which the rewrite copied
+> into two comments: "every semaphore is monotone" is not true. All of them are EXCEPT the h
+> all-gather's per-slot VALID cells (`SEM_H_RDY_BASE + s`), which are set by the sender and cleared
+> by every receiver each round — a Flag signal, not a counter. Its safety argument is different and
+> is given in §3.2: the flag rides the same NOC_CMD_VC_LINKED chain as the payload so it cannot
+> overtake it, and one cell per slot is what stops round r+1 from waiting on round r's reset. The
+> monotone spellings (`sem_ptr`, `sem_wait_min`, `sem_publish`) now live in one shared header
+> rather than in ~15 hand-written casts.
 
 All are **monotone**: incremented, never decremented, never reset inside a dispatch, and always
 compared with `wait_min` against a running local total. That is what makes them immune to arrival

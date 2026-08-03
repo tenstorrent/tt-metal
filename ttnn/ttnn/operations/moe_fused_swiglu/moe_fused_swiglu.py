@@ -3,7 +3,7 @@
 
 """moe_fused_swiglu — one MoE routed-expert block as ONE device program.
 
-    h   = SiLU(x @ W_gate) * (x @ W_up)      # [count, 2048]  INTERNAL, never reaches DRAM
+    h   = SiLU(x @ W_gate) * (x @ W_up)      # [count, hidden]  INTERNAL, never reaches DRAM
     out = h @ W_down                          # [capacity, emb]
 
 `count` is DEVICE-resident: the kernels read `counts[idx[local_expert_id]]` themselves; there is
@@ -139,6 +139,10 @@ def validate(
     for name, w in (("w_gate", w_gate), ("w_up", w_up), ("w_down", w_down)):
         if len(w.shape) != 2:
             raise ValueError(f"moe_fused_swiglu: {name} must have rank 2, got rank {len(w.shape)}")
+        # The kernels address weights as a 2-D array of TILE pages at a W_TILE stride; a row-major
+        # weight would be read as tiles and silently give wrong numbers.
+        if w.layout != ttnn.TILE_LAYOUT:
+            raise ValueError(f"moe_fused_swiglu: {name} must be TILE_LAYOUT, got {w.layout}")
 
     emb = int(input_tensor.shape[-1])
     if int(w_gate.shape[-2]) != emb:

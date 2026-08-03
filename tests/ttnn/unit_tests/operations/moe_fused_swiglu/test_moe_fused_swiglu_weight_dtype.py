@@ -134,3 +134,50 @@ def test_bf16_weights_report_l1_at_the_graded_shape(device, expect_error):
     blk = geo.Blocking(11, 8, 7168, 2048, 32, w_tile=ttnn.tile_size(ttnn.bfloat16), x_stick=28 * 64)
     assert blk.l1_bytes(True) > geo.L1_CB_BUDGET - geo.L1_CB_RESERVE, "expected bf16 not to fit here"
     assert not blk.wd_resident, "residency should already have been given up before refusing"
+
+
+def test_non_resident_wdown_over_multiple_m_blocks(device):
+    """The W_down fallback path, at a count that spans MORE THAN ONE M-block.
+
+    When L1 cannot hold the whole phase-2 K stream the op drops W_down residency and shrinks
+    `depth_wd`. That changes the CB's slot cycle: block r no longer lives permanently in slot r, so
+    every M-block must RE-READ its weights. A kernel still told "resident" would skip those reads
+    after M-block 0 and matmul against whatever the shrunk CB happens to hold.
+
+    This is invisible at one M-block — the first block reads everything either way — so the shape
+    here is chosen to span four (count 1024 at M_BLOCK 8 = 32 tile-rows), and the dtype is chosen
+    so the fallback actually fires.
+    """
+    emb, hidden, capacity, count = 6144, 2048, 1024, 1024
+    blk = geo.Blocking(11, 8, emb, hidden, capacity // TILE, w_tile=ttnn.tile_size(ttnn.bfloat8_b), x_stick=24 * 64)
+    assert not blk.wd_resident, "this shape was chosen because residency should FALL BACK here"
+    assert blk.max_m_blocks > 1, "and because it spans more than one M-block"
+
+    torch.manual_seed(7)
+    x = torch.randn((1, 1, capacity, emb), dtype=torch.bfloat16)
+    wg, wu = (torch.randn((emb, hidden), dtype=torch.bfloat16) for _ in range(2))
+    wd = torch.randn((hidden, emb), dtype=torch.bfloat16)
+    d = lambda t, dt, l: ttnn.from_torch(t, dtype=dt, layout=l, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    counts = torch.zeros(NUM_GLOBAL_EXPERTS, dtype=torch.int32)
+    counts[GLOBAL_EXPERT_ID] = count
+    idx = torch.zeros(NUM_LOCAL_EXPERTS, dtype=torch.int32)
+    idx[LOCAL_EXPERT_ID] = GLOBAL_EXPERT_ID
+
+    out = moe_fused_swiglu(
+        d(x, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        *[d(w, ttnn.bfloat8_b, ttnn.TILE_LAYOUT) for w in (wg, wu, wd)],
+        d(counts, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        d(idx, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        LOCAL_EXPERT_ID,
+        core_grid=(11, 8),
+    )
+    got = ttnn.to_torch(out)[0, 0, :count]
+    ref = _swiglu(x, wg, wu, wd, count)
+
+    # Per M-BLOCK, not overall: a stale-weight bug hits blocks 1..n and a whole-tensor PCC would
+    # be dragged up by block 0 being correct.
+    for b in range(count // (8 * TILE)):
+        lo, hi = b * 8 * TILE, (b + 1) * 8 * TILE
+        pcc = _pcc(got[lo:hi], ref[lo:hi])
+        assert pcc >= 0.99, f"M-block {b} (rows {lo}:{hi}) pcc {pcc:.6f} — stale W_down after block 0?"
+    print(f"[wdtype] non-resident W_down over {count // (8 * TILE)} M-blocks: every block correct")
