@@ -178,21 +178,38 @@ arithmetic and no power-of-two bank count.
 ## 6. Weight placement
 
 The op reads whatever placement it is handed. `nd_shard_n_tiles()` is the ONE place it learns the
-layout; everything downstream is a run length.
+layout; everything downstream is a run length. An unrecognised placement is SILENTLY CORRECT and
+just slower, which is why every harness asserts the READER's own predicate rather than the memory
+config it asked for — a detection bug otherwise shows up as a number attributed to the wrong path.
 
-**The preferred shard is one tile-row tall, and that is measured.** A core pinned to a single DRAM
-bank saturates near 30 GB/s; the same bytes with the bank rotating across K reach ~370 GB/s. Height
-1 rotates banks every K-row.
+**Re-measured after round 17** (11x8, bf16_rm, emb 7168, capacity 5120, median of 3, us):
 
-**Interleaved vs ND-sharded, measured at 88 cores, 7 reps, bf16_rm:** interleaved
-102.51 / 135.37 / 241.49 against ND-sharded 91.34 / 130.67 / 229.58 — up to 11 %. Note this
-predates the round-17 wins and is due a re-measurement.
+| placement | 128 | 256 | 512 | sum | vs preferred |
+|---|---|---|---|---|---|
+| preferred shard (N slice, 1 tile-row) | 84.87 | 122.18 | 213.71 | 420.76 | — |
+| same N slice, 4 tile-rows tall | 84.77 | 120.07 | 212.48 | 417.32 | −0.8 % (in band) |
+| interleaved (one transaction per tile) | 97.50 | 128.62 | 218.58 | 444.69 | **+5.7 %** |
 
-A placement that fails to apply is **silently correct and slower**, which is why the perf harness
-asserts against the reader's own predicate (`nd_shard_n_tiles`) rather than against the memory
-config it asked for.
+Two things fall out, one of which contradicts what this file used to say.
 
----
+**The RUN LENGTH is what matters.** Interleaved costs +14.9 % at count 128, +5.3 % at 256, +2.3 %
+at 512 — largest where the weight stream is the biggest share of the op, which is the expected
+shape. The standing "up to 11 %" figure predated round 17 and is superseded by these.
+
+**The one-tile-row HEIGHT does not.** This file previously justified height 1 as a measured
+constraint — a core pinned to one DRAM bank saturating near 30 GB/s against ~370 GB/s with the
+bank rotating across K. At four tile-rows the op is within the noise band of height 1. So the
+height claim does not reproduce at this op's request pattern, and height 1 is now a DEFAULT rather
+than a requirement. Any height is correct and, on this evidence, about as fast.
+
+That is also the check the generalized detection needed: a non-preferred but coalescible shard has
+to EARN the fast path, not merely be tolerated. `[6, 6, 3]` at height 4 confirms it does.
+
+**A harness trap worth recording.** The first run of this A/B produced three identical numbers,
+because `KNOB_WPLACE` was set in the child environment while the script expanded it in its own
+shell — all three arms silently ran the default. The self-verifying print (`reader shard widths`)
+is what caught it. A placement A/B with no such print cannot distinguish "no difference" from
+"the same configuration measured three times".
 
 ## 7. Compute
 

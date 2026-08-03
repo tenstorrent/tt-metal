@@ -154,6 +154,11 @@ def _build_static(emb, capacity, input_format, wplace, device):
     del x
     if wplace == "nd_shard":
         gate_up_mc, down_mc = weight_memory_configs(device, emb, HIDDEN, core_grid=CORE_GRID)
+    elif wplace == "shard_tall":
+        # A NON-PREFERRED but still coalescible shard: same N extent, four tile-rows tall. Every
+        # K-row read is still one transaction (consecutive n stay contiguous at any height), so
+        # this isolates the bank-rotation half of the placement from the request-size half.
+        gate_up_mc, down_mc = weight_memory_configs(device, emb, HIDDEN, core_grid=CORE_GRID, shard_height_tiles=4)
     elif wplace == "interleaved":
         gate_up_mc = down_mc = ttnn.DRAM_MEMORY_CONFIG
     else:
@@ -172,7 +177,7 @@ def _build_static(emb, capacity, input_format, wplace, device):
     # silently CORRECT (just uncoalesced), so a config that failed to shard would produce a plausible
     # number attributed to the wrong path. `nd_shard_n_tiles` is the exact predicate the reader uses.
     widths = [nd_shard_n_tiles(w) for w in tt_w]
-    if wplace == "nd_shard":
+    if wplace.startswith("shard") or wplace == "nd_shard":
         assert all(w > 0 for w in widths), f"asked for nd_shard but reader sees interleaved: {widths}"
     else:
         assert all(w == 0 for w in widths), f"asked for interleaved but reader sees shards: {widths}"
