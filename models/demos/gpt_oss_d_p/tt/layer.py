@@ -25,7 +25,6 @@ def _delta_stats(tag, layer_idx, t):
     that sublayer's output (the fingerprint of the per-layer logic error hitting V harder than K)."""
     try:
         import torch  # noqa
-
         from loguru import logger
 
         d0 = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
@@ -37,6 +36,7 @@ def _delta_stats(tag, layer_idx, t):
         from loguru import logger
 
         logger.warning(f"[delta-probe] failed at L{layer_idx} {tag}: {e}")
+
 
 from .attention import Attention, AttentionConfig, ProgramConfig
 from .mlp import MLP
