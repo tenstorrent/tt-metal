@@ -389,7 +389,6 @@ class HunyuanTtMoEParallel(LightweightModule):
         offsets, counts, region_offsets, _ = m["routing_setup"](
             ttnn_top_k_experts_indices=idx2,
             num_routed_experts=self.num_experts,
-            seq_len_per_chip=spc,
             num_experts_per_tok=self.moe_topk,
         )
 
