@@ -2,7 +2,7 @@
 
 Scope: the TILE binary op in `ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/` — tensor-tensor
 `SubtileBroadcastType::NONE`, the single-operand subtile broadcast types (`SCALAR_A/B`, `ROW_A/B`,
-`COL_A/B`), the mixed type `ROW_B_COL_A` (§6), and tensor-scalar (§7). "Gap" = works on Wormhole but does
+`COL_A/B`), both mixed types (`ROW_B_COL_A`, `ROW_A_COL_B`) (§6), and tensor-scalar (§7). "Gap" = works on Wormhole but does
 **not** (yet) work / is not validated on **Quasar**. Branch `dchen/next_bcast_quasar`.
 
 This is the **op-author's view** (gate / structural / arch / test-coverage). For **which LLK primitive
@@ -52,10 +52,9 @@ tensor-tensor · add/subtract (FPU) + multiply/divide/maximum/minimum (SFPU) · 
 broadcast operand (NoC-read path) **and** mixed a/b/out layouts, i.e. full per-operand layout
 independence · lhs/rhs/post activation fusion with `relu`/`gelu`/`tanh`/`sigmoid` (see §6).
 
-**Subtile broadcast (mixed):** `ROW_B_COL_A` — same dtype/op/layout/fusion envelope as the single-operand
-types, realized as a HYBRID (compute `unary_bcast<ROW>` for the ROW operand, reader software-fill for the
-COL operand). Its mirror `ROW_A_COL_B` is **carved out** — gate-rejected over an intermittent sim-only
-race, not an LLK gap (see §6).
+**Subtile broadcast (mixed):** `ROW_B_COL_A` **and** `ROW_A_COL_B` — same dtype/op/layout/fusion envelope as
+the single-operand types, realized as a HYBRID (compute `unary_bcast<ROW>` for the ROW operand, reader
+software-fill for the COL operand). Both orientations run on the DFB path (see §6).
 
 **Tensor-scalar:** bf16 and fp32 · TILE · add/subtract (FPU for bf16, SFPU for fp32) + multiply/divide
 (SFPU) · a writer-fills-`in1`-once mechanism (the writer produces the RHS input DFB and fills it with the
@@ -71,7 +70,6 @@ Quasar** column is the key per-request signal: *capable* = Quasar LLK could do i
 
 | Config | LLK on Quasar | Class |
 |---|---|---|
-| **Mixed subtile broadcast, `ROW_A_COL_B` only** (`ROW_B_COL_A` ships on the DFB path — §6) | **capable** — same ROW/COL primitives `ROW_B_COL_A` uses | **sim bug** — gate rejects over an intermittent craq-sim race (`llk_post`-as-srcA), not an LLK/op gap; WH via descriptor (§6) |
 | Tensor-scalar, int32 (`add(t_int32, 5)`) | **capable** in isolation (int32 add/mul compile, matrix `✓`) but the DFB *compute* path returns wrong results for int32 — see §7 | **bug** — the `is_scalar` branch deliberately excludes every int32 op, not a plain LLK/gate gap |
 | where / select (ternary) | **capable** — `where` bridge is `✓` in the matrix | **B** — gate rejects ternary |
 | Row-major (non-TILE) in/out | needs op dataflow work | op (gate + RM kernels), not a pure LLK gap |
@@ -153,15 +151,15 @@ stride path) · interleaved program-cache-hit. (Uneven height/block shards ARE c
 
 ## 6. Subtile broadcast (`unary_bcast`) — validated on Quasar
 
-Single-operand subtile broadcast (`SCALAR_A/B`, `ROW_A/B`, `COL_A/B`) **and** the mixed type `ROW_B_COL_A`
-are wired through the DFB factory and sim-certified **through the op itself**
+Single-operand subtile broadcast (`SCALAR_A/B`, `ROW_A/B`, `COL_A/B`) **and** both mixed types
+(`ROW_B_COL_A`, `ROW_A_COL_B`) are wired through the DFB factory and sim-certified **through the op itself**
 (`test_binary_ng_bcast.py`), not just the standalone LLK test — see
 `qualification/QUASAR_LLK_GAPS.md` Table 3 for the primitive-level (`unary_bcast`) status.
 
 - **Mechanism (single-operand):** `unary_bcast<BroadcastType::{ROW,COL,SCALAR}>` all lower to the MOVB2D
   srcB→dest datacopy, differentiated only by broadcast constants (`dst_lo`/`bcast0`/`srcb_col_inc`); there
   is no `ELWADD` on the `unary_bcast` path.
-- **Mechanism (mixed `ROW_B_COL_A`):** a HYBRID, deliberately NOT a third `unary_bcast` pass. The ROW
+- **Mechanism (mixed, both directions):** a HYBRID, deliberately NOT a third `unary_bcast` pass. The ROW
   operand goes through compute `unary_bcast<ROW>`; the COL operand is software-filled by the reader
   (`FILL_TILE_WITH_FIRST_COLUMN`, `reader_row_col_mixed_bcast_dfb.cpp`), delivered once per tile-row and
   reused across the row — a reader/compute load-balance that keeps compute at 2 LLK passes. The reader fill
@@ -178,21 +176,17 @@ are wired through the DFB factory and sim-certified **through the op itself**
   independence.
 - **Activation fusion:** lhs/rhs/post × `relu`/`gelu`/`tanh`/`sigmoid` compose with broadcast (`relu` uses
   the SFPU post chain; the PACK_RELU fast path is disabled under subtile broadcast).
-- **Validation:** 112 broadcast cases green on the QSR sim (`test_binary_ng_bcast.py`); 88 no-bcast
-  regression cases green (`test_binary_ng_no_bcast.py`).
+- **Validation:** 130 broadcast cases green on the QSR sim, 0 skipped (`test_binary_ng_bcast.py`); 88
+  no-bcast regression cases green (`test_binary_ng_no_bcast.py`).
 - **Two facts that make this work:** the `bcast.h` Quasar `unary_bcast` branch does not reference
   `DataFormat::UInt32` (Quasar has no uint32 device format — its 32-bit formats are `Float32`/`Int32`; the
   enum slot WH/BH use for `UInt32` is `MxFp4_2x_B` on Quasar) · the Quasar bcast compute inserts
   `pack_init` under `#ifdef ARCH_QUASAR` after `pack_reconfig_data_format`, which is gasket-only on Quasar
   (§4).
+- **Both mixed directions ship on the DFB path.** `ROW_A_COL_B` and `ROW_B_COL_A` use the same primitives and
+  the same hybrid kernel pair, differing only in which operand the `unary_bcast<ROW>` result (`llk_post`)
+  feeds — the binary `srcA` for `ROW_A_COL_B`, `srcB` for `ROW_B_COL_A`.
 - **Still deferred:**
-  - Mixed subtile type `ROW_A_COL_B` — the ONE mixed direction still gate-rejected (no Quasar path; WH runs
-    via descriptor) → §1. Not an LLK or op gap: it uses exactly the primitives `ROW_B_COL_A` ships with, but
-    is INTERMITTENTLY wrong on the current craq-sim (~1 of 5 ops per run reads srcA = 0, PCC ~0.73). The
-    difference is which operand the `unary_bcast<ROW>` result (`llk_post`) feeds: srcA (`c_5`) for
-    `ROW_A_COL_B`, srcB (`c_6`) for `ROW_B_COL_A` — and only the srcA form races. Routed to the descriptor
-    for a loud "unsupported" over a silent-intermittent wrong answer; remove the carve-out once the sim/LLK
-    race is fixed (craq-sim #205).
   - Tensor-scalar (`add(t, 5.0)`) is a separate, now-supported path (§7) — a scalar operand is always
     `SubtileBroadcastType::NONE`, so it never engages subtile broadcast and has no interaction with this
     section.
@@ -277,11 +271,7 @@ tensor and a scalar never subtile-broadcasts (`SubtileBroadcastType::NONE` alway
    unary clamp path (`UnaryOpType::MAXIMUM`/`MINIMUM`), not `invoke_binary_ng`, so they never reach this
    factory and hard-throw on Quasar (`DataMovementKernel` not supported); reroute to
    `invoke_binary_ng(BinaryOpType::MAXIMUM/MINIMUM)`.
-4. **Un-carve `ROW_A_COL_B`** (§1, §6) — the last mixed-broadcast direction without a Quasar path (WH runs
-   it via the descriptor). Blocked on the craq-sim `llk_post`-as-srcA race (#205), not on op or LLK work:
-   its mirror `ROW_B_COL_A` already ships on the DFB path with the same primitives. Drop the gate's
-   `ROW_A_COL_B` `return false` once the sim fix lands.
-5. **Gate hygiene** (§2, §6) — optionally reject Quasar-unsupported formats/ops with a clear message;
+4. **Gate hygiene** (§2, §6) — optionally reject Quasar-unsupported formats/ops with a clear message;
    applies under broadcast too, not just the no-broadcast slice.
 
 ## Systemic lesson

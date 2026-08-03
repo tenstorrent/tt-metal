@@ -2462,10 +2462,10 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     return out;
 }
 
-// Create map of local accessor name -> logical DFB id
-tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
+// Create map of accessor name -> logical DFB id
+tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
-    tt::tt_metal::DataflowBufferLocalAccessorHandleMap out;
+    tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
         const uint32_t id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
@@ -2480,10 +2480,10 @@ tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccess
     return out;
 }
 
-// Create map of local accessor name -> logical Semaphore id
-tt::tt_metal::SemaphoreLocalAccessorHandleMap MakeSemaphoreLocalAccessorHandles(
+// Create map of accessor name -> logical Semaphore id
+tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const KernelSpec& kernel_spec, const SemaphoreNameToIdMap& semaphore_name_to_id) {
-    tt::tt_metal::SemaphoreLocalAccessorHandleMap out;
+    tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
         const uint32_t id = semaphore_name_to_id.at(semaphore_binding.semaphore_spec_name);
@@ -2765,7 +2765,6 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (gen2.sfpu_precision_mode == Precision::Approximate),
         .enable_2x_src_format = gen2.enable_2x_src_register,
-        .unpack_to_dest_en = gen2.unpack_to_dest_en,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -2999,11 +2998,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
-        // Make the local accessor name -> DFB ID map for this kernel
-        const tt::tt_metal::DataflowBufferLocalAccessorHandleMap dfb_handles =
-            MakeDataflowBufferLocalAccessorHandles(kernel_spec, dfb_name_to_id);
-        const tt::tt_metal::SemaphoreLocalAccessorHandleMap semaphore_handles =
-            MakeSemaphoreLocalAccessorHandles(kernel_spec, semaphore_name_to_id);
+        // Make the accessor name -> DFB ID map for this kernel
+        const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
+            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_id);
+        const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
+            MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
