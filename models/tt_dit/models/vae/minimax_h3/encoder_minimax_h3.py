@@ -44,7 +44,7 @@ import torch
 
 import ttnn
 
-from ....layers.module import Module, ModuleList
+from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import GroupNorm3D
 from .conv_minimax_h3 import MiniMaxH3CausalConv3d, reflect_pad_bottom_right
 
@@ -125,6 +125,115 @@ class MiniMaxH3FrameGroupNorm(GroupNorm3D):
             inplace=False,
             use_welford=self.use_welford,
         )
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.reshape(out, (B, T, H, W, C))
+
+
+class MiniMaxH3DistributedFrameGroupNorm(Module):
+    """Per-frame GroupNorm whose spatial extent is sharded across a mesh axis.
+
+    Drop-in for :class:`MiniMaxH3FrameGroupNorm` -- same ``(1, T, H, W, C)`` in and out,
+    with ``H`` the **local** height -- for the H/W-parallel encoder.
+
+    Neither existing primitive can do this job:
+
+    * ``ttnn.group_norm`` (what :class:`MiniMaxH3FrameGroupNorm` uses) has no notion of the
+      mesh, so a sharded ``H`` gives each device a statistic over its own strip only.
+    * ``ttnn.experimental.dit_fused_distributed_groupnorm`` hard-rejects ``N > 1``, and
+      here ``N`` is ``T`` (17/9/5) because the statistic is per frame. It also takes a
+      single ``cluster_axis``, so it cannot reduce over both mesh axes.
+
+    So the statistics are computed directly: per ``(frame, group)`` local sums, an
+    all-reduce of **only those** -- ``T x 32`` scalars, against a full-activation gather --
+    then an elementwise normalise. Channel-to-group contraction is a matmul with a 0/1
+    matrix, and its transpose spreads the result back over channels.
+
+    Two passes, mean then *centred* variance, rather than one pass on ``E[x^2] - E[x]^2``:
+    the group means here are not near zero, and that is the cancellation
+    :class:`GroupNorm3D` uses Welford to avoid.
+
+    Runs in the activation dtype, so unlike the local path it is **not** forced to bf16 --
+    ``ttnn.group_norm`` is bf16-only, which STATE.md records as the encoder's precision
+    floor. Here fp32 activations stay fp32.
+    """
+
+    def __init__(
+        self,
+        num_channels: int,
+        *,
+        num_frames: int,
+        local_height: int,
+        width: int,
+        spatial_factor: int,
+        cluster_axis: int,
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager,
+    ) -> None:
+        super().__init__()
+        assert num_channels % MINIMAX_H3_VAE_NUM_GROUPS == 0
+        self.num_channels = num_channels
+        self.num_groups = MINIMAX_H3_VAE_NUM_GROUPS
+        self.eps = MINIMAX_H3_VAE_NORM_EPS
+        self.num_frames = num_frames
+        self.local_height = local_height
+        self.width = width
+        self.spatial_factor = spatial_factor
+        self.cluster_axis = cluster_axis
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+
+        # The divisor is the GLOBAL element count per (frame, group): the whole point is
+        # that a device normalises by more elements than it holds.
+        self.elements_per_group = (num_channels // self.num_groups) * local_height * spatial_factor * width
+
+        self.weight = Parameter(total_shape=[1, 1, 1, num_channels], device=mesh_device)
+        self.bias = Parameter(total_shape=[1, 1, 1, num_channels], device=mesh_device)
+        self.to_groups = Parameter(total_shape=[1, 1, num_channels, self.num_groups], device=mesh_device)
+        self.from_groups = Parameter(total_shape=[1, 1, self.num_groups, num_channels], device=mesh_device)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        state["weight"] = state["weight"].reshape(1, 1, 1, self.num_channels)
+        state["bias"] = state["bias"].reshape(1, 1, 1, self.num_channels)
+        per_group = self.num_channels // self.num_groups
+        selector = torch.zeros(self.num_channels, self.num_groups)
+        for group in range(self.num_groups):
+            selector[group * per_group : (group + 1) * per_group, group] = 1.0
+        state["to_groups"] = selector.reshape(1, 1, self.num_channels, self.num_groups)
+        state["from_groups"] = selector.t().contiguous().reshape(1, 1, self.num_groups, self.num_channels)
+
+    def _group_sums(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
+        """``(T,1,HW_local,C)`` -> global per-``(frame, group)`` sums, shaped ``(T,1,1,G)``."""
+        channel_sums = ttnn.sum(x_flat, dim=2, keepdim=True)
+        group_sums = ttnn.matmul(channel_sums, self.to_groups.data)
+        # tt_dit exposes no all-reduce (not one call anywhere in the tree), so gather on the
+        # singleton dim and sum locally. At T x 32 scalars the distinction is immaterial.
+        gathered = self.ccl_manager.all_gather(group_sums, dim=1, mesh_axis=self.cluster_axis, use_hyperparams=False)
+        return ttnn.sum(gathered, dim=1, keepdim=True)
+
+    def _spread(self, per_group: ttnn.Tensor) -> ttnn.Tensor:
+        """``(T,1,1,G)`` -> ``(T,1,1,C)``, each channel taking its own group's value."""
+        return ttnn.matmul(per_group, self.from_groups.data)
+
+    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        B, T, H, W, C = x_BTHWC.shape
+        assert B == 1, f"one unit per device, got B={B}"
+        assert (T, H, W) == (
+            self.num_frames,
+            self.local_height,
+            self.width,
+        ), f"norm built for local (T,H,W)=({self.num_frames},{self.local_height},{self.width}), got ({T},{H},{W})"
+
+        x = ttnn.reshape(x_BTHWC, (T, 1, H * W, C))
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+        scale = 1.0 / self.elements_per_group
+        mean = self._spread(ttnn.multiply(self._group_sums(x), scale))
+        centred = ttnn.subtract(x, mean)
+        variance = self._spread(ttnn.multiply(self._group_sums(ttnn.multiply(centred, centred)), scale))
+        normed = ttnn.multiply(centred, ttnn.rsqrt(ttnn.add(variance, self.eps)))
+        out = ttnn.add(ttnn.multiply(normed, self.weight.data), self.bias.data)
+
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.reshape(out, (B, T, H, W, C))
 

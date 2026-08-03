@@ -109,15 +109,19 @@ def _random_encoder_state(config: dict) -> dict:
     return dict(module.state_dict())
 
 
-def _random_decoder_state(config: dict) -> dict:
-    """Likewise for the 36-layer decoder: 2.4 B random parameters beat a 10.4 GB read."""
+def _random_decoder_state(config: dict, *, num_layers: int | None = None) -> dict:
+    """Likewise for the 36-layer decoder: 2.4 B random parameters beat a 10.4 GB read.
+
+    ``num_layers`` overrides the config depth, for gates that only need the ops exercised
+    rather than the full 2.4 B parameters materialised.
+    """
     cls = _reference_class("MiniMaxH3VideoViTDecoder3d")
     module = cls(
         in_channels=config["latent_channels"],
         out_channels=config["out_channels"],
         patch_size=16,
         patch_size_t=4,
-        num_layers=config["decoder_num_layers"],
+        num_layers=config["decoder_num_layers"] if num_layers is None else num_layers,
         num_attention_heads=config["decoder_num_attention_heads"],
         attention_head_dim=config["decoder_attention_head_dim"],
         num_register_tokens=config["decoder_num_register_tokens"],

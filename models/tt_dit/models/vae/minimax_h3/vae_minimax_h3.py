@@ -94,6 +94,12 @@ class MiniMaxH3VaeConfig:
         return cls(**{k: v for k, v in cfg.items() if not k.startswith("_")})
 
 
+# How many mesh-sized waves of decoded tiles to hold on the host before stitching. Keeps
+# every wave full while bounding peak host memory: a decoded tile is 22 MB, so this caps
+# the in-flight set at a few GB regardless of video length or resolution.
+_DECODE_WAVES_IN_FLIGHT = 4
+
+
 def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tuple[list[int], list[int], list[int]]:
     """Lay ``tile_size``-wide tiles over ``length``, latent-aligned (reference ``_split_tiles``).
 
@@ -247,16 +253,59 @@ class MiniMaxH3Vae(Module):
         return self._encoders[key]
 
     def _run_encoder(self, tile_BCTHW: torch.Tensor, temporal_taps: int) -> torch.Tensor:
-        _, _, num_frames, height, width = tile_BCTHW.shape
-        encoder = self._encoder_for(num_frames, height, width, temporal_taps)
+        return self._run_encoder_units([tile_BCTHW], temporal_taps)[0]
 
-        x = tile_BCTHW.permute(0, 2, 3, 4, 1).contiguous()
-        if x.shape[-1] < encoder.conv_in.in_channels:
-            x = torch.nn.functional.pad(x, (0, encoder.conv_in.in_channels - x.shape[-1]))
-        x_device = ttnn.from_torch(x, dtype=self.dtype, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
-        out = ttnn.to_torch(encoder(x_device)).float()
+    def _run_encoder_units(self, units: list[torch.Tensor], temporal_taps: int) -> list[torch.Tensor]:
+        """Encode independent ``(clip, tile)`` units, one per device, in mesh-sized waves.
+
+        Every unit is the same shape and fully independent of the others -- that is what
+        the reference's spatial tiling buys -- and the encoder contains no CCL, so handing
+        each device a different unit and running one program is exact SPMD. Gated bit-exact
+        against the replicated result in ``test_vae_data_parallel_minimax_h3.py``.
+
+        The last wave is padded by repeating a unit rather than shrinking the program: the
+        conv3d blockings and the GroupNorm core grid are chosen per shape at construction,
+        so a short final wave would build a second set of them.
+        """
+        if not units:
+            return []
+        # A wave is one program, so a differently-shaped unit would be silently mis-stacked.
+        odd = [tuple(u.shape) for u in units if u.shape != units[0].shape]
+        assert not odd, f"units must share a shape; {units[0].shape} vs {odd[0]}"
+        _, _, num_frames, height, width = units[0].shape
+        encoder = self._encoder_for(num_frames, height, width, temporal_taps)
+        in_channels = encoder.conv_in.in_channels
         moments = 2 * self.config.latent_channels
-        return out[..., :moments].permute(0, 4, 1, 2, 3).contiguous()
+        wave_size = self.mesh_device.get_num_devices()
+
+        def prepare(unit: torch.Tensor) -> torch.Tensor:
+            x = unit.permute(0, 2, 3, 4, 1).contiguous()
+            if x.shape[-1] < in_channels:
+                x = torch.nn.functional.pad(x, (0, in_channels - x.shape[-1]))
+            return x
+
+        results: list[torch.Tensor] = []
+        for start in range(0, len(units), wave_size):
+            # Prepared per wave, not up front: `units` are cheap views into the source video,
+            # but permute().contiguous() materialises 13.4 MB each, so preparing all of them
+            # would cost 19 GB of host memory at 1440P/10s. Outputs are latents and tiny.
+            wave = [prepare(unit) for unit in units[start : start + wave_size]]
+            count = len(wave)
+            padded = wave + [wave[-1]] * (wave_size - count)
+            x_device = ttnn.from_torch(
+                torch.cat(padded, dim=0),
+                dtype=self.dtype,
+                device=self.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            )
+            out = ttnn.to_torch(
+                encoder(x_device),
+                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+            ).float()
+            for index in range(count):
+                results.append(out[index : index + 1, ..., :moments].permute(0, 4, 1, 2, 3).contiguous())
+        return results
 
     def encode_clip(self, x_BCTHW: torch.Tensor, *, temporal_taps: int | None = None) -> torch.Tensor:
         """Encode one temporal clip, spatially tiled -- the reference ``_encode_clip``.
@@ -270,18 +319,33 @@ class MiniMaxH3Vae(Module):
         if not self.use_tiling:
             return self._run_encoder(x_BCTHW, temporal_taps)
 
+        units = self._clip_tiles(x_BCTHW)
+        encoded = self._run_encoder_units(units, temporal_taps)
+        return self._stitch_clip(encoded, x_BCTHW.shape[-2], x_BCTHW.shape[-1])
+
+    def _tile_grid(self, height: int, width: int):
         ratio = self.config.spatial_compression_ratio
-        height, width = x_BCTHW.shape[-2], x_BCTHW.shape[-1]
-        y_starts, y_lengths, y_overlaps = split_tiles(height, self.tile_size, self.tile_overlap, ratio)
-        x_starts, x_lengths, x_overlaps = split_tiles(width, self.tile_size, self.tile_overlap, ratio)
+        return (
+            split_tiles(height, self.tile_size, self.tile_overlap, ratio),
+            split_tiles(width, self.tile_size, self.tile_overlap, ratio),
+        )
 
-        rows = []
-        for y, y_length in zip(y_starts, y_lengths):
-            row = []
-            for x, x_length in zip(x_starts, x_lengths):
-                row.append(self._run_encoder(x_BCTHW[..., y : y + y_length, x : x + x_length], temporal_taps))
-            rows.append(row)
+    def _clip_tiles(self, x_BCTHW: torch.Tensor) -> list[torch.Tensor]:
+        """One clip's spatial tile crops, row-major -- the reference ``_split_tiles`` order."""
+        (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._tile_grid(x_BCTHW.shape[-2], x_BCTHW.shape[-1])
+        return [
+            x_BCTHW[..., y : y + y_length, x : x + x_length]
+            for y, y_length in zip(y_starts, y_lengths)
+            for x, x_length in zip(x_starts, x_lengths)
+        ]
 
+    def _stitch_clip(self, encoded: list[torch.Tensor], height: int, width: int) -> torch.Tensor:
+        """Re-grid a row-major list of encoded tiles and cross-fade the overlaps."""
+        (_, y_lengths, y_overlaps), (_, x_lengths, x_overlaps) = self._tile_grid(height, width)
+        columns = len(x_lengths)
+        assert len(encoded) == len(y_lengths) * columns, f"{len(encoded)} tiles for a {len(y_lengths)}x{columns} grid"
+        rows = [encoded[i * columns : (i + 1) * columns] for i in range(len(y_lengths))]
+        ratio = self.config.spatial_compression_ratio
         return stitch_tiles(rows, [o // ratio for o in y_overlaps], [o // ratio for o in x_overlaps])
 
     def encode(self, x_BCTHW: torch.Tensor) -> torch.Tensor:
@@ -289,6 +353,11 @@ class MiniMaxH3Vae(Module):
 
         Mirrors the reference ``_encode``: the final frame is repeated to reach a whole
         number of clips, and the trailing ``token_drop`` latent frames are then removed.
+
+        Every ``(clip, tile)`` pair is an independent work unit, so they are collected
+        across **all** clips and handed to the mesh together. Batching per clip instead
+        would leave the wave ragged -- 768P is a 4x7 grid, so 28 units against 32 devices
+        would waste an eighth of the mesh on every clip.
         """
         clip_length = self.config.clip_length
         num_frames = x_BCTHW.shape[2]
@@ -296,13 +365,22 @@ class MiniMaxH3Vae(Module):
             pad = x_BCTHW[:, :, -1:].repeat(1, 1, (-num_frames) % clip_length, 1, 1)
             x_BCTHW = torch.cat([x_BCTHW, pad], dim=2)
 
-        moments = torch.cat(
-            [
-                self.encode_clip(x_BCTHW[:, :, i * clip_length : (i + 1) * clip_length], temporal_taps=3)
-                for i in range(x_BCTHW.shape[2] // clip_length)
-            ],
-            dim=2,
-        )
+        height, width = x_BCTHW.shape[-2], x_BCTHW.shape[-1]
+        clips = [x_BCTHW[:, :, i * clip_length : (i + 1) * clip_length] for i in range(x_BCTHW.shape[2] // clip_length)]
+        if not self.use_tiling:
+            moments = torch.cat(self._run_encoder_units(clips, 3), dim=2)
+        else:
+            per_clip = [self._clip_tiles(clip) for clip in clips]
+            tiles_per_clip = len(per_clip[0])
+            flat = [unit for clip_units in per_clip for unit in clip_units]
+            encoded = self._run_encoder_units(flat, 3)
+            moments = torch.cat(
+                [
+                    self._stitch_clip(encoded[i * tiles_per_clip : (i + 1) * tiles_per_clip], height, width)
+                    for i in range(len(clips))
+                ],
+                dim=2,
+            )
         if self.config.token_drop > 0:
             moments = moments[:, :, : -self.config.token_drop]
         return moments
@@ -358,23 +436,56 @@ class MiniMaxH3Vae(Module):
         return self._decoders[key]
 
     def _run_decoder(self, latent_BCTHW: torch.Tensor) -> torch.Tensor:
+        return self._run_decoder_units([latent_BCTHW])[0]
+
+    def _run_decoder_units(self, units: list[torch.Tensor]) -> list[torch.Tensor]:
+        """Decode independent ``(chunk, tile)`` units, one per device, in mesh-sized waves.
+
+        Same argument as :meth:`_run_encoder_units`: the reference decodes each spatial
+        tile of each temporal chunk on its own and only cross-fades afterwards, and the ViT
+        decoder holds no CCL, so one device per unit is exact SPMD. The temporal blend in
+        :meth:`decode` still runs in order on the host -- it is the *decodes* that are
+        independent, not the stitching.
+        """
         from .decoder_minimax_h3 import unpatchify
 
-        _, _, num_frames, height, width = latent_BCTHW.shape
+        if not units:
+            return []
+        odd = [tuple(u.shape) for u in units if u.shape != units[0].shape]
+        assert not odd, f"units must share a shape; {units[0].shape} vs {odd[0]}"
+        _, _, num_frames, height, width = units[0].shape
         decoder = self._decoder_for(num_frames, height, width)
-        tokens = latent_BCTHW.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1)
-        out = ttnn.to_torch(
-            decoder(ttnn.from_torch(tokens, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT))
-        ).float()
-        return unpatchify(
-            out,
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            out_channels=self.config.out_channels,
-            patch_size=self.config.spatial_compression_ratio,
-            patch_size_t=self.config.temporal_compression_ratio,
-        )
+        wave_size = self.mesh_device.get_num_devices()
+
+        results: list[torch.Tensor] = []
+        for start in range(0, len(units), wave_size):
+            wave = [
+                unit.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1)
+                for unit in units[start : start + wave_size]
+            ]
+            count = len(wave)
+            padded = wave + [wave[-1]] * (wave_size - count)
+            tokens = ttnn.from_torch(
+                torch.cat(padded, dim=0),
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            )
+            out = ttnn.to_torch(decoder(tokens), mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
+            for index in range(count):
+                results.append(
+                    unpatchify(
+                        out[index : index + 1],
+                        num_frames=num_frames,
+                        height=height,
+                        width=width,
+                        out_channels=self.config.out_channels,
+                        patch_size=self.config.spatial_compression_ratio,
+                        patch_size_t=self.config.temporal_compression_ratio,
+                    )
+                )
+        return results
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
         """Decode one temporal clip, spatially tiled -- the reference ``_decode_clip``.
@@ -385,20 +496,34 @@ class MiniMaxH3Vae(Module):
         if not self.use_tiling:
             return self._run_decoder(z_BCTHW)
 
-        ratio = self.config.spatial_compression_ratio
-        height, width = z_BCTHW.shape[-2] * ratio, z_BCTHW.shape[-1] * ratio
-        y_starts, y_lengths, y_overlaps = split_tiles(height, self.tile_size, self.tile_overlap, ratio)
-        x_starts, x_lengths, x_overlaps = split_tiles(width, self.tile_size, self.tile_overlap, ratio)
+        units = self._latent_tiles(z_BCTHW)
+        return self._stitch_decoded(self._run_decoder_units(units), z_BCTHW.shape[-2], z_BCTHW.shape[-1])
 
-        rows = []
-        for y, y_length in zip(y_starts, y_lengths):
-            row = []
-            for x, x_length in zip(x_starts, x_lengths):
-                tile = z_BCTHW[
-                    ..., y // ratio : y // ratio + y_length // ratio, x // ratio : x // ratio + x_length // ratio
-                ]
-                row.append(self._run_decoder(tile))
-            rows.append(row)
+    def _decode_tile_grid(self, latent_height: int, latent_width: int):
+        """Tiles are laid out in *pixel* space, then mapped back onto the latent grid."""
+        ratio = self.config.spatial_compression_ratio
+        return (
+            split_tiles(latent_height * ratio, self.tile_size, self.tile_overlap, ratio),
+            split_tiles(latent_width * ratio, self.tile_size, self.tile_overlap, ratio),
+        )
+
+    def _latent_tiles(self, z_BCTHW: torch.Tensor) -> list[torch.Tensor]:
+        ratio = self.config.spatial_compression_ratio
+        (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._decode_tile_grid(
+            z_BCTHW.shape[-2], z_BCTHW.shape[-1]
+        )
+        return [
+            z_BCTHW[..., y // ratio : y // ratio + y_length // ratio, x // ratio : x // ratio + x_length // ratio]
+            for y, y_length in zip(y_starts, y_lengths)
+            for x, x_length in zip(x_starts, x_lengths)
+        ]
+
+    def _stitch_decoded(self, decoded: list[torch.Tensor], latent_height: int, latent_width: int) -> torch.Tensor:
+        """Re-grid decoded tiles. The blend extents are pixel-space here, not divided down."""
+        (_, y_lengths, y_overlaps), (_, x_lengths, x_overlaps) = self._decode_tile_grid(latent_height, latent_width)
+        columns = len(x_lengths)
+        assert len(decoded) == len(y_lengths) * columns, f"{len(decoded)} tiles for a {len(y_lengths)}x{columns} grid"
+        rows = [decoded[i * columns : (i + 1) * columns] for i in range(len(y_lengths))]
         return stitch_tiles(rows, y_overlaps, x_overlaps)
 
     def decode(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
@@ -420,10 +545,38 @@ class MiniMaxH3Vae(Module):
         if pad_tokens > 0:
             z_BCTHW = torch.cat([z_BCTHW, z_BCTHW[:, :, -1:].repeat(1, 1, pad_tokens, 1, 1)], dim=2)
 
+        # Every (chunk, tile) decode is independent -- only the temporal cross-fade below is
+        # ordered -- so all of them go to the mesh in one batch. Per-chunk batching would
+        # offer 28 units against 32 devices at 768P and idle an eighth of the mesh.
+        chunk_latents = [
+            z_BCTHW[:, :, i * chunk_size : i * chunk_size + chunk_size + config.token_overlap]
+            for i in range(num_chunks)
+        ]
+        if self.use_tiling and chunk_latents:
+            latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
+            tiles_per_chunk = len(self._latent_tiles(chunk_latents[0]))
+            wave_size = self.mesh_device.get_num_devices()
+            # Decoded tiles are 22 MB each, so decoding all 308 units of a 768P/5s video
+            # before stitching any of them would hold 6.8 GB (and ~29 GB at 1440P/10s).
+            # Group chunks into a few waves' worth, stitch, release. Groups are whole chunks
+            # so a group never straddles a stitch boundary.
+            chunks_per_group = max(1, -(-_DECODE_WAVES_IN_FLIGHT * wave_size // tiles_per_chunk))
+            clips = []
+            for group_start in range(0, num_chunks, chunks_per_group):
+                group = chunk_latents[group_start : group_start + chunks_per_group]
+                flat = self._run_decoder_units([unit for latents in group for unit in self._latent_tiles(latents)])
+                clips.extend(
+                    self._stitch_decoded(
+                        flat[i * tiles_per_chunk : (i + 1) * tiles_per_chunk], latent_height, latent_width
+                    )
+                    for i in range(len(group))
+                )
+        else:
+            clips = self._run_decoder_units(chunk_latents) if chunk_latents else []
+
         decoded, overlap = [], None
         for i in range(num_chunks):
-            start = i * chunk_size
-            clip = self.decode_clip(z_BCTHW[:, :, start : start + chunk_size + config.token_overlap])
+            clip = clips[i]
             for j in range(int(config.token_drop > 0) + 1):
                 frame_start = j * chunk_num_frames
                 chunk = clip[:, :, frame_start : frame_start + chunk_num_frames][:, :, config.frame_pre_padding :]

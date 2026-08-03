@@ -759,3 +759,165 @@ be reconsidered before anything is built on it.
 Environment prerequisites for this machine are in "Branch base" above. Gate 0 is:
 `ttnn` plus both H3 reference classes importing in one interpreter, and the
 host-only suite green.
+
+---
+
+## Amendment 33 (2026-08-03) — the DP-over-work-units probe passed, bit-exact
+
+The probe demanded at the end of amendment 17 (and never run until now) is green.
+`models/tt_dit/tests/models/minimax_h3/test_vae_data_parallel_minimax_h3.py`, 4x8 mesh,
+32 **distinct** random `(1,17,256,256,32)` units, one per device, weights replicated:
+
+| check | result |
+|---|---|
+| per-device shard shape | `(1, 17, 256, 256, 32)` |
+| max abs spread across the 32 replicas | `0.0` |
+| DP vs replicated, units 0 / 7 / 31 | max abs diff `0.0`, PCC `100.0000 %` |
+
+Two things this settles:
+
+1. **The encoder is pure SPMD.** No op in the stack assumes a replicated input; a unit's
+   result does not depend on what the other 31 devices hold. The gate is reference-free
+   on purpose -- it re-runs selected units *replicated* and requires the answer to be
+   unchanged -- so it isolates independence from parity, which is already gated per-unit
+   against diffusers in `test_vae_encoder_minimax_h3.py`.
+2. **`ttnn.ShardTensorToMesh(dim=0)` hands each device the LOCAL shape**, not the global
+   32-unit one. That is load-bearing and now asserted in the test: conv3d blockings and
+   the `GroupNorm3D` core grid are both chosen from `x.shape` at construction, so a
+   global shape would have sized every kernel for 32x the work.
+
+Wired into `MiniMaxH3Vae` as `_run_encoder_units`, which runs units in mesh-sized waves.
+`encode` now collects `(clip, tile)` units across **all** clips before batching: 768P is
+a 4x7 grid, so batching per clip would leave 28 units against 32 devices and waste an
+eighth of the mesh on every clip. The final short wave is padded by repeating a unit
+rather than shrinking the program, because a shorter wave is a different shape and would
+build a second set of blockings and grids.
+
+Projection at 768P/5s: 336 units / 32 devices = 11 waves. Against the amendment-32
+baseline of 3.544 s per tile, **793.8 s -> ~40 s**, and the 32-unit wave measured about
+the same wall clock as a single-unit run.
+
+## Amendment 34 (2026-08-03) — the cherry-picked fused distributed GroupNorm cannot serve H3
+
+`828d9e6ebbf` was cherry-picked (as `a4e6530e96e`) to supply the cross-device spatial
+statistic that H/W sharding needs. Gated at the encoder's real norm sites in
+`test_vae_distributed_norm_minimax_h3.py`, it fails hard:
+
+```
+TT_FATAL: v1 supports batch N==1 only (shape [N, 1, H*W, C]); got N=5.
+          GroupNorm stats must not fold across batch.
+```
+
+This is **not a removable guard**. `dit_fused_distributed_groupnorm_device_operation.cpp:36-42`:
+"v1 folds the spatial extent as `physical_volume()/C`, which spans all batches -- that is
+the wrong statistic for N>1 ... per-batch looping is deferred to a later version."
+
+H3's norm is **per-frame** (T folded into the batch axis, amendment 21), so `N = T` is
+17, 9 or 5 at every site -- never 1. Using v1 as written would mean one invocation per
+frame: 17 fabric all-gathers at the shallow sites, times 13 norm sites, per work unit.
+
+Second, independent limitation: the op takes a single `cluster_axis`, so it cannot reduce
+over both mesh axes. **2D H/W sharding is out of its reach regardless of the batch fix.**
+
+The cherry-pick is kept (it is additive, and a later version may lift the restriction),
+but the H/W path needs its own norm. See amendment 35.
+
+## Amendment 35 (2026-08-03) — H/W design: self-computed distributed statistics
+
+Superseding both the fused op (amendment 34) and the earlier all-gather/norm/re-partition
+shape from `latent_upsampler_ltx.py:46-82`: compute the statistics directly.
+
+Per `(frame, group)` local sums, all-reduce **only those** -- `T x 32` scalars, against
+the fused op's full-activation gather (36 MB bf16 at the widest site) -- then normalise
+elementwise. Two passes, mean then *centred* variance, to avoid the `E[x^2] - E[x]^2`
+cancellation that is why `GroupNorm3D` uses Welford.
+
+No batch restriction, and the all-reduce can span **both** mesh axes, so this is what
+makes true 2D H/W sharding possible. Primitives are probed independently in
+`test_vae_norm_primitives_minimax_h3.py` (spatial reduce; channel<->group contraction as
+a 0/1 matmul; `(T,1,1,C)` broadcast against `(T,1,HW,C)`; small-tensor all-reduce), which
+then assembles them and compares against `torch.nn.GroupNorm`.
+
+**Standing caveat on H/W in this encoder, to be settled by measurement, not argument.**
+Spatial resolution collapses 256 -> 128 -> 64 -> 32 -> 16 across the six blocks, so
+sharding one axis by 8 gives 32, 16, 8, 4, 2 rows per device. With a halo of 1 each side
+the deepest blocks compute 4 rows to keep 2 -- 100 % overhead exactly where channels are
+widest (C=1024). H/W buys per-clip *latency* and fills the ragged last wave (336 units is
+10.5 waves); DP alone already fills the mesh on throughput. The A/B of DP-32 vs
+spatial-8 x DP-4 vs spatial-4 x DP-8 is what fixes the per-device shape, and the
+`_FP32_BLOCKINGS` sweep comes after that, since blockings are keyed on shape.
+
+## Amendment 36 (2026-08-03) — correction: H/W-sharded GroupNorm already exists in-tree
+
+Amendment 35 said the H/W path needs a new norm. That was wrong, and the reason it was
+wrong is worth recording: I grepped `models/tt_dit/models/vae/` and concluded no VAE does
+distributed GroupNorm. The LTX **upsampler** lives at
+`models/tt_dit/models/upsampler/latent_upsampler_ltx.py`, outside that directory, and
+`_gn_hw_sharded` (:44-81) is precisely H/W-sharded per-batch GroupNorm.
+
+```
+x = _all_gather_hw(x, pc, ccl)          # gather H on its axis, then W on its axis
+if cropped: x = x[:, :, :lh, :lw, :]    # drop mesh-factor pad BEFORE the statistic
+x = gn(x)                               # GroupNorm3D over the full logical extent
+... re-zero-pad ... _mesh_partition_hw(x, pc)
+```
+
+It takes a **`GroupNorm3D`**, and `MiniMaxH3FrameGroupNorm` already subclasses that. So
+H3 reuses it directly: norms stay built at the **global** H/W (unchanged from today),
+convs are built at the **local** H/W (already done, commit `44f1eb6c402`), and each site
+gathers, norms, and re-partitions.
+
+It also already solves two things that would have cost a debugging cycle each:
+
+* **It crops the mesh-factor padding before computing the statistic.** That is exactly the
+  bug `vae_mochi.py:270-273` still carries as a live TODO ("those zeros participate in
+  GroupNorm's mean/variance calculation ... the absolute result is wrong", masked there
+  because it corrupts both topologies equally so cross-topology PCC stays clean).
+* **`mesh_partition` must run in ROW_MAJOR**: a sub-tile-wide W shard cannot be sliced out
+  of a tilized tensor, so tilize-then-partition fails.
+
+For comparison, the reason LTX's *VAE* has no such helper is that its VAE has no spatial
+GroupNorm at all -- `vae_ltx.py:353-368` uses **RMSNorm over channels** (and `norm3`,
+nominally `GroupNorm(1)`, is applied as `ttnn.layer_norm` at :426). Last-dim-only norms are
+shard-local by construction. H3's `GroupNorm(32)` pools over `C_group x H x W`, so it
+cannot borrow that.
+
+**H3 never takes the crop branch.** Its extents are dyadic (256/128/64/32/16), so at
+spatial factor 2, 4 and 8 every one of the eight norm sites divides exactly AND every
+local `H*W` is a multiple of 32 -- no mesh padding, no tilize zero-padding, no masking.
+Factor 16 breaks tile alignment at two sites (local H = 1), so 8 is the practical ceiling.
+
+Revised order: wire the H/W encoder on `_gn_hw_sharded` first, because it is proven.
+`MiniMaxH3DistributedFrameGroupNorm` (amendment 35, written and in
+`encoder_minimax_h3.py`) is retained as an **optimization**: it moves `T x 32` scalars per
+site instead of gathering the whole activation (36 MB bf16 at the widest site, 8 sites per
+unit), and it keeps fp32 where `ttnn.group_norm` forces bf16. Adopt it only if the gathers
+show up in a measurement.
+
+## Amendment 37 (2026-08-03) — decoder DP is bit-exact too; both halves now data-parallel
+
+`test_vae_data_parallel_minimax_h3.py::test_decoder_data_parallel_independence`, 4x8, 32
+distinct random token units, 2-layer decoder (independence is a property of the program;
+two layers exercise fused qkv, the RoPE lane permute, SDPA, swiglu, LayerScale and the
+residual chain at a eighteenth of the 4.51 GiB weight cost):
+
+| unit | replica spread | DP vs replicated | PCC |
+|---|---|---|---|
+| 0 | `0.0` | `0.0` | `100.0000 %` |
+| 7 | `0.0` | `0.0` | `100.0000 %` |
+| 31 | `0.0` | `0.0` | `100.0000 %` |
+
+`decode` now batches `(chunk, tile)` units across chunks, same as `encode` does across
+clips. The temporal cross-fade still runs in order on the host -- it is the *decodes* that
+are independent, not the stitching.
+
+Host memory is bounded deliberately. Encode prepares units **per wave** rather than up
+front (`permute().contiguous()` materialises 13.4 MB per unit, so preparing all of them
+costs 19 GB at 1440P/10s, while the source slices themselves are free views). Decode groups
+chunks into `_DECODE_WAVES_IN_FLIGHT = 4` waves' worth before stitching, because a decoded
+tile is 22 MB and holding all 308 units of a 768P/5s video would be 6.8 GB (~29 GB at
+1440P/10s). Groups are whole chunks, so a group never straddles a stitch boundary.
+
+Full visual suite re-run green after both refactors: **9 passed**, encoder PCC 99.9829 -
+99.9883 %, decoder 99.9977 - 99.9979 %. Note the suite is `SINGLE_DEVICE`, so it gates the
+tiling/stitch *order* refactor; DP-at-32 is gated separately by the two independence tests.
