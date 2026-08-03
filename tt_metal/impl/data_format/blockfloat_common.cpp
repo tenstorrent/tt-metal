@@ -414,7 +414,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
 
                         uint8_t exp = get_max_exp(single_row, is_exp_a);
 
-                        // check if it satifies the 16B alignment
+                        // check if it satisfies the 16B alignment
                         if (exponent_padding) {
                             exponents_with_padding.push_back(exp);
                         } else {
@@ -477,7 +477,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
 
     log_info(
         tt::LogAlways,
-        "Converting to BFloat8 {} tiles with {} threads ({} tiles/thread)",
+        "Converting {} block-float tiles with {} threads ({} tiles/thread)",
         num_tiles,
         num_threads,
         num_tiles / num_threads);
