@@ -282,6 +282,8 @@ _INT_UNARY_OPS = [
     MathOperation.UnaryMinInt32,
     MathOperation.UnaryMaxUint32,
     MathOperation.UnaryMinUint32,
+    MathOperation.Neg,
+    MathOperation.Fill,
 ]
 
 # Ops whose kernel interprets DST as unsigned; run them under UInt32.
@@ -305,11 +307,15 @@ def _int_unary_stimuli_spec(mathop):
 
 @parametrize(
     mathop=_INT_UNARY_OPS,
+    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
+    fast_mode=[FastMode.No, FastMode.Yes],
     dest_acc=[DestAccumulation.Yes],
     input_dimensions=[[64, 64]],
 )
 def test_eltwise_unary_sfpu_int(
     mathop: MathOperation,
+    approx_mode: ApproximationMode,
+    fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
@@ -322,9 +328,9 @@ def test_eltwise_unary_sfpu_int(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
         dest_acc,
-        ApproximationMode.No,
+        approx_mode,
         mathop,
-        FastMode.No,
+        fast_mode,
         input_dimensions,
         spec_A=_int_unary_stimuli_spec(mathop),
     )

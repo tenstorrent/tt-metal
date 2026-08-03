@@ -2321,6 +2321,8 @@ class UnarySFPUGolden:
         if input_format.is_mx_format():
             # MX in L1 always unpacks to Float16_b even if dest_acc=Yes.
             dst_format = DataFormat.Float16_b
+        elif input_format == DataFormat.Int32:
+            dst_format = DataFormat.Int32
         elif self.dest_acc == DestAccumulation.Yes:
             dst_format = DataFormat.Float32
         elif DataFormat.Float16 in (input_format, data_format):
@@ -2411,6 +2413,8 @@ class UnarySFPUGolden:
             case (DataFormat.Float32, DataFormat.Float16):
                 pass
             case (DataFormat.Float32, DataFormat.Float32):
+                pass
+            case (DataFormat.Int32, DataFormat.Int32):
                 pass
             # otherwise, nans are converted to `inf` or a special value
             case _:
