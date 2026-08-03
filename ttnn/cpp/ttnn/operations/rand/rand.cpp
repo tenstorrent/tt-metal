@@ -64,7 +64,9 @@ Tensor rand(
     float to,
     uint32_t seed,
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
-    TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
+    TT_FATAL(
+        dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16,
+        "ttnn.rand supports only FLOAT32 and BFLOAT16 output dtypes");
     TT_FATAL(from < to, "Rand: `from` argument must be < `to` argument");
 
     ttnn::Shape device_shape = shape;

@@ -60,15 +60,19 @@ inline float bfloat16_predecessor(float value) {
 
 inline OutputRange make_output_range(float from, float to, DataType output_dtype) {
     OutputRange range;
-    if (output_dtype == DataType::BFLOAT16) {
-        // The packer converts the FP32 destination to BF16 in hardware. Restrict
-        // the generated interval to exact BF16 endpoints so that rounding cannot
-        // cross either requested bound.
-        range.lower_bound = bfloat16_ceil(from);
-        range.upper_bound = bfloat16_predecessor(to);
-    } else {
-        range.lower_bound = from;
-        range.upper_bound = std::nextafter(to, -std::numeric_limits<float>::infinity());
+    switch (output_dtype) {
+        case DataType::BFLOAT16:
+            // The packer converts the FP32 destination to BF16 in hardware. Restrict
+            // the generated interval to exact BF16 endpoints so that rounding cannot
+            // cross either requested bound.
+            range.lower_bound = bfloat16_ceil(from);
+            range.upper_bound = bfloat16_predecessor(to);
+            break;
+        case DataType::FLOAT32:
+            range.lower_bound = from;
+            range.upper_bound = std::nextafter(to, -std::numeric_limits<float>::infinity());
+            break;
+        default: TT_THROW("Uniform range calculation supports only FLOAT32 and BFLOAT16 output dtypes");
     }
 
     TT_FATAL(

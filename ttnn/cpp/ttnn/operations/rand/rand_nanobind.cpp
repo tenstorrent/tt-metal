@@ -21,11 +21,11 @@ void bind_rand_operation(nb::module_& mod) {
         Generates a tensor with the given shape, filled with random values from a uniform distribution.
         based on the specified data type:
 
-        - DataType.float32 / bfloat16 / bfloat4_b / bfloat8_b:
+        - DataType.float32 / bfloat16:
             Floating-point values in range [0.0, 1.0)
 
-        - Integer data types:
-            Not supported for uniform random generation.
+        - Other data types:
+            Not supported.
 
         Args:
             shape (list[int]) - a list of integers defining the shape of the output tensor.

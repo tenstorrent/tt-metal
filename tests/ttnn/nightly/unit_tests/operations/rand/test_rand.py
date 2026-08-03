@@ -22,42 +22,11 @@ def get_types_from_binding_framework():
 DEFAULT_SHAPE = (32, 32)
 SHAPES = [tuple([32] * i) for i in range(6)]
 ALL_TYPES = get_types_from_binding_framework()
-EXPECTED_DTYPE_LAYOUT_FAILURES = {
-    (ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT): "block-float dtypes require tile layout",
-    (ttnn.bfloat4_b, ttnn.ROW_MAJOR_LAYOUT): "block-float dtypes require tile layout",
-    (ttnn.bfloat4_b, ttnn.TILE_LAYOUT): "the continuous-uniform check does not model BFLOAT4_B quantisation",
-    (ttnn.uint8, ttnn.ROW_MAJOR_LAYOUT): "ttnn.rand does not support UINT8",
-    (ttnn.uint8, ttnn.TILE_LAYOUT): "ttnn.rand does not support UINT8",
-    (
-        ttnn.fp8_e4m3,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ): "ttnn.rand typecasts before converting to FP8_E4M3's required row-major layout",
-    (ttnn.fp8_e4m3, ttnn.TILE_LAYOUT): "FP8_E4M3 requires row-major layout",
-}
-DTYPE_LAYOUT_CASES = [
-    (
-        pytest.param(
-            dtype,
-            layout,
-            marks=pytest.mark.xfail(reason=EXPECTED_DTYPE_LAYOUT_FAILURES[(dtype, layout)], strict=True),
-        )
-        if (dtype, layout) in EXPECTED_DTYPE_LAYOUT_FAILURES
-        else pytest.param(dtype, layout)
-    )
-    for layout in (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT)
-    for dtype in ALL_TYPES
-]
+SUPPORTED_DTYPES = (ttnn.bfloat16, ttnn.float32)
+UNSUPPORTED_DTYPES = tuple(dtype for dtype in ALL_TYPES if dtype not in SUPPORTED_DTYPES)
 
 
-def is_ttnn_float_type(tt_dtype) -> bool:
-    match tt_dtype:
-        case ttnn.bfloat16 | ttnn.float32 | ttnn.bfloat8_b | ttnn.bfloat4_b:
-            return True
-        case _:
-            return False
-
-
-def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
+def check_uniform_distribution(data, value_range=(0, 1)):
     n = data.numel()
 
     if n < 1000:
@@ -67,14 +36,7 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
             return False
 
     start_value, end_value = value_range
-    if is_discrete:
-        min_val, max_val = start_value, end_value
-    else:
-        min_val, max_val = torch.aminmax(data)
-        min_val = min_val.item()
-        max_val = max_val.item()
-
-    if min_val == max_val:
+    if torch.any(data < start_value) or torch.any(data >= end_value):
         return False
 
     # torch ops don't support integer data types, convert to list
@@ -85,16 +47,13 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
     sample_variance = sum([(x - sample_mean) ** 2 for x in data]) / n
     sample_std_dev = math.sqrt(sample_variance)
 
-    # Calculate theoretical statistics
-    if is_discrete:
-        theoretical_mean = (start_value + end_value) / 2
-        N = end_value - start_value + 1
-        theoretical_std_dev = math.sqrt((N**2 - 1) / 12)
-    else:
-        theoretical_mean = (min_val + max_val) / 2
-        theoretical_std_dev = (max_val - min_val) / math.sqrt(12)
+    # Calculate theoretical statistics from the requested half-open interval,
+    # not from the observed extrema.
+    theoretical_mean = (start_value + end_value) / 2
+    theoretical_std_dev = (end_value - start_value) / math.sqrt(12)
 
-    mean_diff = abs(sample_mean - theoretical_mean) / theoretical_mean * 100 if theoretical_mean != 0 else 0
+    mean_scale = abs(theoretical_mean) if theoretical_mean != 0 else end_value - start_value
+    mean_diff = abs(sample_mean - theoretical_mean) / mean_scale * 100
     std_dev_diff = (
         abs(sample_std_dev - theoretical_std_dev) / theoretical_std_dev * 100 if theoretical_std_dev != 0 else 0
     )
@@ -106,21 +65,13 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
     return False
 
 
-@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES)
+@pytest.mark.parametrize("dtype", SUPPORTED_DTYPES)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_tensor_dtype_and_value_range(device, dtype, layout):
     shape = (1024, 1024)
-    if is_ttnn_float_type(dtype):
-        tensor = ttnn.rand(shape, dtype=dtype, device=device, layout=layout)
-        low = 0
-        high = 1
-    elif dtype == ttnn.int32:
-        low = -100
-        high = 100
-        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device, layout=layout)
-    else:
-        low = 0
-        high = 100
-        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device, layout=layout)
+    low = 0
+    high = 1
+    tensor = ttnn.rand(shape, dtype=dtype, device=device, layout=layout)
 
     assert tensor.layout == layout
     assert tensor.dtype == dtype
@@ -130,8 +81,14 @@ def test_tensor_dtype_and_value_range(device, dtype, layout):
 
     assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
     assert check_uniform_distribution(
-        torch_tensor, value_range=(low, high), is_discrete=not is_ttnn_float_type(dtype)
+        torch_tensor, value_range=(low, high)
     ), "The distribution of random values is not uniform!"
+
+
+@pytest.mark.parametrize("dtype", UNSUPPORTED_DTYPES)
+def test_rand_rejects_unsupported_dtype(device, dtype, expect_error):
+    with expect_error(RuntimeError, "supports only FLOAT32 and BFLOAT16"):
+        ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device)
 
 
 def test_rand_defaults(device):
@@ -188,7 +145,7 @@ def test_rand_different_from_to_values(device):
     for torch_tensor, value_range in ((data_1, (low_1, high_1)), (data_2, (low_2, high_2))):
         assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
         assert check_uniform_distribution(
-            torch_tensor, value_range=value_range, is_discrete=False
+            torch_tensor, value_range=value_range
         ), "The distribution of random values is not uniform!"
 
     device.disable_and_clear_program_cache()
