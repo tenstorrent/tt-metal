@@ -155,6 +155,17 @@
         "test_mcast_pipe.py::test_f3_degenerate"
       ],
       "coverage": "helper-wire coverage only; no mapped device operation test reaches the GroupNorm v2 sender-only binding"
+    },
+    {
+      "id": "sort:single-row-multi-core:control",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/data_movement/sort/device/sort_program_factory.cpp",
+      "dispatch": "single-row multicore DRAM route selected when Wt exceeds total_cores * 128",
+      "migration_unit": "sort-single-row-control",
+      "inventory": [
+        "SORT-SINGLE-ROW-CONTROL"
+      ],
+      "coverage": "complete with exact fresh-cache coordinator, reader, and writer JIT evidence"
     }
   ],
   "inventory_definitions": {
@@ -320,6 +331,15 @@
         "test_topk_bfloat8_with_inf: W=16384,k=32"
       ],
       "excluded": "test_topk_large_2d_shapes and dtype-error tests do not launch the tracked multicore kernels."
+    },
+    "SORT-SINGLE-ROW-CONTROL": {
+      "path": "tests/ttnn/unit_tests/operations/data_movement/test_sort.py",
+      "compile_focused": "test_sort_long_tensor[shape=[1, 524288]-dim=-1-descending=False] under --dev from a fresh isolated JIT cache; coordinator, reader, and writer artifacts required",
+      "tests": [
+        "test_sort_long_tensor: complete inventory",
+        "test_sort_multi_row_multi_core_no_deadlock: descending False and True"
+      ],
+      "result": "7 long-tensor cases passed; 2 Ht=2 deadlock cases passed"
     }
   },
   "additional_candidate_routes": [
@@ -352,11 +372,6 @@
       "candidate": "reader_argmax_interleaved_multicore.cpp",
       "confidence": "discovery-only",
       "route": "tests/ttnn/unit_tests/operations/reduction/test_argmax.py; shape [64,128], dim=-1, use_multicore=True"
-    },
-    {
-      "candidate": "sort coordinator/reader/writer_single_row_multi_core.cpp",
-      "confidence": "discovery-only",
-      "route": "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor; shape [1,524288], then confirm all three JIT paths"
     },
     {
       "candidate": "move_interleaved_with_overlap.cpp and move_stick_layout_interleaved_with_overlap.cpp",

@@ -1,32 +1,27 @@
-# coordinator_single_row_multi_core.cpp — DEFERRED (design-gap)
+# coordinator_single_row_multi_core.cpp — MIGRATED API v9
 
-Tier 3. Status: deferred. No code change (no migration attempted on device).
+Tier 5 atomic unit: `sort-single-row-control`. Code: `7337302b564`.
 
-## Role
-Sort coordinator = STAR sender over `coordinator_to_cores_sem` (FLAG-ONLY, no data
-mcast). Per Ht row: a START broadcast then a per-substage broadcast; workers ack via
-`cores_to_coordinator_sem`.
+## Migrated role
 
-## Why deferred (three independent helper design gaps)
-1. **Runtime recipient count.** The mcast recipient count `number_of_dest` is a runtime
-   arg (`get_arg_val<uint32_t>(6)` = `core_range.num_cores()`). v7 `SenderPipe`'s
-   `NUM_ACTIVE_RECEIVER_CORES` is a compile-time template param. Same gap as
-   gn_v2 / welford / conv3d / flash_mla.
-2. **Split mcast-dest vs ack count.** The START phase mcasts `number_of_dest` and waits
-   `cores_to_coordinator.wait(number_of_dest)`; the per-substage phase mcasts
-   `number_of_dest` but waits `cores_to_coordinator.wait(Wt/2)` (`number_of_confirmations`),
-   which is NOT the recipient count. v7 `PRE_HANDSHAKE` ties the consumer-ready wait to
-   `NUM_ACTIVE_RECEIVER_CORES`; it cannot serve two different wait counts. Same gap class
-   as in0_sender_dram_sharded.
-3. **Runtime sem ids.** Both sem ids arrive as runtime args (`get_arg_val(4)`/`(5)`) and
-   the kernel builds `Semaphore<>(runtime_arg)`. v7 takes `DATA_READY_SEM_ID` /
-   `CONSUMER_READY_SEM_ID` as compile-time template params. Same gap as
-   group_attn_matmul. (Host-side the ids are constants 0/1, but moving them to
-   compile-time args is a host change requiring a rebuild, out of this kernel-only tier —
-   and gaps #1/#2 block migration regardless.)
+The coordinator is the sender face of a no-handshake Counter control Pipe over the dense full worker
+grid. `McastArgs` decodes the host `Mcast2D` wire and `send_signal()` publishes row-start and
+substage-start events. Counter staging preserves back-to-back events without requiring worker ACKs.
 
-The flag is also inverted-polarity (coordinator's cell stays host-init 0 and is broadcast
-as `0`=GO; workers wait(0)), opposite to the helper's VALID(1)-ready convention — a
-re-wire, not the binding blocker.
+The reader-ready and writer-done counters remain explicit operation-owned semaphores. They are two
+independent return channels with different phase counts, not one Pipe handshake. The former runtime
+recipient-count and semaphore-ID blockers were stale ABI observations: this factory route activates
+the full grid, helper semaphore ID 0 is constexpr, and `Mcast2D` derives the EXCLUDE-source fan-out.
 
-Helper untouched (per conventions). Lines removed: 0.
+Runtime args fell from 11 to 7. The host owns the multicast rectangle and sender-coordinate wire.
+
+## Validation
+
+- `./build_metal.sh`: passed.
+- Exact `test_sort_long_tensor[shape=[1, 524288]-dim=-1-descending=False]` under `--dev` from a fresh
+  isolated JIT cache: passed; coordinator, reader, and writer artifacts confirmed.
+- `test_sort_multi_row_multi_core_no_deadlock`: 2 passed (`descending=False/True`, `Ht=2`).
+- Complete `test_sort_long_tensor`: 7 passed.
+- Complete `test_mcast_pipe.py`: 72 passed, including four control-only Counter cells.
+
+Helper API remains v9.

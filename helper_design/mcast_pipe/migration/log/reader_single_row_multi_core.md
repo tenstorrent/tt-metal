@@ -1,22 +1,24 @@
-# reader_single_row_multi_core.cpp — DEFERRED (design-gap)
+# reader_single_row_multi_core.cpp — MIGRATED API v9
 
-Tier 3. Status: deferred. No code change.
+Tier 5 atomic unit: `sort-single-row-control`. Code: `7337302b564`.
 
-## Role
-Sort worker RECEIVER half of the coordinator STAR. Per Ht/substage: `up()` the
-`cores_to_coordinator_sem` (atomic-barrier inc) to ack, then `wait(0)` on the inverted
-`coordinator_to_cores_sem` GO flag, then `set(VALID)` to reset.
+## Migrated role
 
-## Why deferred
-- **Pairs with the coordinator**, which itself defers (runtime recipient count + split
-  mcast/ack count). A receiver migration in isolation is meaningless if the sender stays
-  raw.
-- **Runtime sem ids.** Sem ids are runtime args (`get_arg_val(4)`/`(5)`), kernel builds
-  `Semaphore<>(runtime_arg)`; v7 `ReceiverPipe` takes `DATA_READY_SEM_ID` /
-  `CONSUMER_READY_SEM_ID` as compile-time template params. Runtime sem id inexpressible
-  (same gap as group_attn_matmul).
-- **Inverted flag polarity.** Worker waits for `0` and resets to `VALID(1)`; helper
-  `receive_signal()` waits `VALID(1)` and clears to `INVALID(0)`. Re-wirable in principle
-  but moot given the sender's binding gaps.
+The reader is the receiver face of the coordinator's no-handshake Counter control Pipe.
+`McastArgs` decodes the shared `Mcast2D` wire and `receive_signal()` replaces the old inverted level
+doorbell. The reader's row-ready `Semaphore::up` remains explicit operation protocol and uses the
+helper wire's sender-coordinate escape hatch.
 
-Helper untouched. Lines removed: 0.
+The helper owns semaphore ID 0; ready ID 1 is constexpr and op-owned. The old runtime semaphore IDs
+and level reset are removed. The six-word runtime block is retained but now consists of two buffer
+words plus four helper sender-coordinate words.
+
+## Validation
+
+- Host build passed.
+- Exact fresh-cache `--dev` long-tensor node passed with this reader JIT artifact confirmed.
+- Ht=2 deadlock regression: 2 passed.
+- Full long-tensor inventory: 7 passed.
+- Helper suite: 72 passed.
+
+Helper API remains v9.

@@ -12,9 +12,9 @@ Verdict legend: **clean** = drops onto Pipe with no caller-side residue; **refac
 | move/`move_interleaved_with_overlap.cpp` | sem-flag mcast (3 rects) | NO (single shot) | **refactor(med)** | SENDER+RECEIVER barrier handshake. Multi-rectangle dest set + dual-use L1 word (counter & flag). Legacy API. |
 | move/`move_stick_layout_interleaved_with_overlap.cpp` | sem-flag mcast (3 rects) | NO (single shot) | **refactor(med)** | Structural twin of the above; same block, RM data movement. Migrate together. |
 | move/`reader_unary_local_l1_copy_backwards.cpp` | none | — | **defer-raw** | No mcast, no handshake. Not in scope. |
-| sort/`coordinator_single_row_multi_core.cpp` | sem-flag mcast (1 rect) | YES (Ht × substages) | **refactor(med), v9 candidate** | Coordinator SENDER. Model only the phase broadcast as `Mcast2D` + Counter `send_signal()`; keep the row-ready and per-substage-done exact-count waits/reset as two op-owned semaphores. Host CT/RT packing and signal staging change; no helper API change identified. |
-| sort/`reader_single_row_multi_core.cpp` | none (consumes mcast) | YES | **refactor(med), v9 candidate** | Worker RECEIVER. Counter `receive_signal()` replaces the inverted level flag; the row-ready `up` remains op-owned. Pairs atomically with coordinator/factory. |
-| sort/`writer_single_row_multi_core.cpp` | none | YES | **refactor(low), helper-neutral companion** | Confirmation-emit only (atomic inc) on the now-distinct `done` semaphore. No Pipe face is required, but it stays in the atomic protocol/test unit. Re-audit its census disposition at apply intake rather than claiming a helper migration. |
+| sort/`coordinator_single_row_multi_core.cpp` | helper Counter signal (1 rect) | YES (Ht × substages) | **migrated v9** | Coordinator SENDER. `Mcast2D` + Counter `send_signal()` owns only the phase broadcast; row-ready and per-substage-done exact-count waits/reset remain two op-owned semaphores. Code `7337302b564`. |
+| sort/`reader_single_row_multi_core.cpp` | helper Counter signal receiver | YES | **migrated v9** | Worker RECEIVER. Counter `receive_signal()` replaces the inverted level flag; row-ready `up` remains op-owned. Code `7337302b564`. |
+| sort/`writer_single_row_multi_core.cpp` | none | YES | **defer, helper-neutral companion** | Confirmation-emit only (atomic inc) on the distinct `done` semaphore. It received coupled dead-ABI cleanup but has no Pipe face and is not counted as migrated. |
 | sort/`cross_core_data_exchange_common.hpp` | none (peer-to-peer unicast) | YES | **defer-raw** | All-to-all peer exchange via unicast inc/wait; NO multicast. Incidental, not the block. |
 | sort/`reader_cross_core_data_exchange.cpp` | none | — | **defer-raw** | Uses the peer-exchange helper above; no mcast. |
 | sort/`writer_cross_core_data_exchange.cpp` | none | — | **defer-raw** | Plain write barriers; no mcast. |
@@ -56,15 +56,14 @@ Verdict legend: **clean** = drops onto Pipe with no caller-side residue; **refac
 - **Why this is not a new helper feature:** runtime rectangle/fan-out, adopted sem IDs, a no-handshake
   control-only channel, and Counter staging already exist. The changing ready/done counts describe the
   surrounding sort protocol, not the multicast channel itself.
-- **Residual proof gap:** the helper device suite exercises Counter data sends but has no focused
-  control-only Counter `send_signal`/`receive_signal` case. Add that focused coverage at Step G before
-  production migration; API v9 need not bump for a test-only addition.
+- **Coverage closed:** Step G added four control-only Counter `send_signal`/`receive_signal` cases
+  (1×2/1×8, 2/32 back-to-back signals); the complete helper suite passes 72/72.
 - **Migration unit:** coordinator + reader + writer + `sort_program_factory.cpp`. The writer is a
   helper-neutral protocol companion. Apply must decide its ledger disposition explicitly rather than
   marking a file that never references the helper as migrated.
-- **Mapped validation:** use one exact `test_sort_long_tensor` compile case first, then
-  `test_sort_multi_row_multi_core_no_deadlock` (`Ht=2`, both descending values) and confirm all three
-  JIT kernel paths. Current `test_map.json` is discovery-only, so Phase 1 still owes device verification.
+- **Mapped validation complete:** exact fresh-cache `test_sort_long_tensor` under `--dev` confirmed
+  all three JIT artifacts; `test_sort_multi_row_multi_core_no_deadlock` passed both `Ht=2`
+  descending values; the complete `test_sort_long_tensor` inventory passed 7/7.
 - **Recall sweep:** the whole sort kernel directory contains no additional multicast emitter; only the
   coordinator calls `set_multicast`. Reader and writer remain in the census solely as tightly-paired
   protocol halves. No new spelling or census path was found.

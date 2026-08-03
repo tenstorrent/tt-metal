@@ -1,8 +1,44 @@
 # mcast_pipe API v9 host-integration tiers — 2026-07-30
 
-Entry mode: re-entry. The ten production kernels are current at API v9, but
-the paired host-helper rollout is incomplete: ten required factory bindings
-are pending and no kernel is fully end-to-end current.
+## Re-entry — sort single-row control channel (2026-08-03)
+
+Mode: `halt`, approved through the remaining checkpoints. This re-entry adds one Tier-5 atomic unit
+after the four completed host-integration tiers; it does not reopen their historical `run-all` mode.
+
+Unit: `sort-single-row-control`
+
+Binding: `sort:single-row-multi-core:control`
+
+Atomic scope:
+
+- coordinator and reader kernels become the two faces of one no-handshake Counter control Pipe;
+- `sort_program_factory.cpp` owns one `Mcast2D` wire over the full worker grid plus coordinator;
+- the reader-ready and writer-done counters stay explicit operation protocol;
+- the writer remains helper-neutral, but its obsolete control-doorbell runtime word is removed in the
+  same host/kernel ABI change;
+- all three kernel ledger rows and the new host-binding row move together.
+
+Gate-0 evidence: the unchanged exact
+`test_sort_long_tensor[shape=[1, 524288]-dim=-1-descending=False]` case passed under `--dev` from an
+isolated JIT cache, which contained `coordinator_single_row_multi_core`,
+`reader_single_row_multi_core`, and `writer_single_row_multi_core` artifacts. Step-G helper intake is
+72/72, including four control-only Counter cells at 1×2/1×8 and 2/32 back-to-back signals.
+
+Validation: rebuild host code, run the same exact compile-focused node from a fresh isolated cache,
+then run both `test_sort_multi_row_multi_core_no_deadlock` descending values. Re-run the complete
+helper suite after production integration.
+
+Risk: the host helper derives the multicast fan-out from a rectangle. This factory is selected only
+when `Wt` exceeds the hybrid path's `total_cores * 128` capacity, which forces the full worker set;
+the rectangle is therefore dense and its EXCLUDE-source fan-out equals `core_range.num_cores()`.
+
+Outcome: **migrated at API v9** in `7337302b564`. Host build passed; exact fresh-cache `--dev` route
+passed with all three JIT artifacts; Ht=2 deadlock pair passed 2/2; full long-tensor inventory passed
+7/7; post-integration helper suite passed 72/72. Writer remains helper-neutral in the ledger.
+
+Historical initial entry state: the first ten production kernels were current at API v9 while their
+paired host-helper rollout was still incomplete. Tiers 1–4 subsequently completed; Tier 5 above is
+the 2026-08-03 sort re-entry.
 
 Mode: `run-all`. A failing unit is restored and quarantined without stopping
 the remaining units.
@@ -21,8 +57,8 @@ All participating kernels reuse device-verified operation inventories from
 - GroupNorm v2: `GN-SHARDED-PARAMETERIZED`, separately covering legacy and
   Welford sender/receiver paths plus fixed/default-routing nodes.
 
-The helper intake is green: 68/68 `test_mcast_pipe.py` cases and 19/19
-`McastHostFixture` cases passed on 2026-07-30.
+The helper intake is green: 72/72 `test_mcast_pipe.py` cases passed on 2026-08-03; the prior
+`McastHostFixture` inventory remains 19/19 from 2026-07-30.
 
 ## Tier 1 — Conv2d single-sender rectangle
 
@@ -143,6 +179,6 @@ belongs back in `tune-dm-helper`.
 
 ## Existing deferred kernel backlog
 
-The 82 kernel-deferred ledger rows remain outside this host-only invocation.
-This run neither reopens their kernel migrations nor changes the helper API
-version.
+The remaining deferred kernel rows stay outside their completed atomic units. This sort re-entry
+changed two kernel rows from pending to migrated, retained its helper-neutral writer as deferred,
+and did not change the helper API version.

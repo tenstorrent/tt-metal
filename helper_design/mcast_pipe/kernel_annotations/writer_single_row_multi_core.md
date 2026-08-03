@@ -51,6 +51,8 @@ API v9 therefore needs no new method for this file. Keep the `Semaphore::up` and
 
 ## Verdict
 
-**defer/raw as a standalone Pipe candidate; low-cost companion refactor in the sort atomic migration unit.**
+**defer/raw as a standalone Pipe candidate; helper-neutral companion cleanup completed in
+`7337302b564`.**
 
-This file is not evidence of a helper design gap. It should remain on the object semaphore API, with only the coupled semaphore-ABI cleanup applied when the coordinator and reader move to API v9.
+This file is not evidence of a helper design gap. It remains on the object semaphore API; only the
+coupled semaphore-ABI cleanup was applied when coordinator and reader moved to API v9.

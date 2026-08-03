@@ -2,10 +2,10 @@
 
 Source of truth: `ledger.json`. Test inventories are in `test_map.json`;
 failure isolation and JIT evidence are in the per-kernel migration logs.
-Reconcile history is in `reconcile_<date>.md` (latest: `reconcile_2026-08-03.md`).
+Reconcile history is in `reconcile_<date>.md` (latest: `reconcile_2026-08-03-sort.md`).
 
-Current baseline: `origin/llk_helper_library` @ `4a1d6a97ca9`, HEAD 17 commits
-ahead. The pre-rebase branch is preserved at
+Current baseline: `origin/llk_helper_library` @ `4a1d6a97ca9`; sort code commit
+`7337302b564` is 20 commits ahead. The pre-rebase branch is preserved at
 `backup/mcast-migration-prerebase-20260803`; every commit hash recorded in this
 ledger was remapped from that line to its post-rebase equivalent on 2026-08-03.
 
@@ -17,9 +17,8 @@ senders, producing the current 22-row production candidate set.
 ## Host-helper re-entry state
 
 The paired `mcast_host` helper and `McastArgs` decoder are materialized and
-their intake tests are green. Phase 1 found ten required bindings. Both Conv2d
-weights units, the four-binding matmul in1 unit, and the four-binding GroupNorm
-v2 unit are now fully current at API v9:
+their intake tests are green. Eleven required bindings across five units are
+now fully current at API v9:
 
 | Unit | Required bindings | Status | Kernel rows | Validation |
 |---|---:|---|---:|---|
@@ -27,6 +26,7 @@ v2 unit are now fully current at API v9:
 | `conv2d-weights-fixed-line` | 1 | fully end-to-end migrated @ v9 | 2 | `CONV-BLOCK`: 49 passed, 16 expected skips; shared DRAM: 14 passed |
 | `matmul-in1-mcast-padding-host` | 4 | fully end-to-end migrated @ v9 — **re-verified 2026-08-03** | 2 | `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected (exact baseline match, re-run at `eb05b3929a3`) |
 | `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v9 | 4 | legacy: 108 passed, 2 expected skips; Welford: 108 passed, 2 expected skips; fixed/default: 19 passed, 6 expected skips; v2 sender-only bindings lack op-level runtime coverage |
+| `sort-single-row-control` | 1 | fully end-to-end migrated @ v9 | 2 migrated + 1 helper-neutral | exact fresh-cache JIT path; long tensor 7/7; Ht=2 2/2; helper 72/72 |
 
 The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
 order and risk gates are in `tiers.md`. Until a unit's required bindings are
@@ -35,7 +35,8 @@ end-to-end current. The completed Conv2d units use code commits
 `991b5b6b6386a90726d15007002fe1f5a77d8487` and
 `51dfb1f1ed61045ed10dc679269960b6d2ccac9e`; matmul in1 uses
 `aeeb28ff007807c71b1f60842cca85e5c41efa7f`; GroupNorm v2 uses
-`bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0`.
+`bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0`; sort uses
+`7337302b5649b7cd169764cd95c0b0343e88950d`.
 
 ## `needs_recheck` — CLOSED 2026-08-03 (0 open)
 
@@ -50,7 +51,7 @@ The 6 rows raised by `reconcile_2026-08-03.md` were cleared by an
 Each row's `commit` still points at its migration commit (`aeeb28ff007`) — that field's role is the
 revert/bisect anchor; "last verified at" is `verified_at_commit`.
 
-## Current migrations under API v9 (10)
+## Current migrations under API v9 (12)
 
 | Area | Role | Kernel | Validation |
 |---|---|---|---|
@@ -64,9 +65,14 @@ revert/bisect anchor; "last verified at" is `verified_at_commit`.
 | normalization | sender | `reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; legacy inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
 | normalization | receiver | `welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; Welford inventory: 108 passed, 2 expected skips; exact JIT evidence |
 | normalization | sender | `welford_reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; Welford inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
+| sort | sender | `coordinator_single_row_multi_core.cpp` | fully end-to-end @ v9; Counter `send_signal`; exact fresh-cache JIT; long tensor 7/7; Ht=2 2/2 |
+| sort | receiver | `reader_single_row_multi_core.cpp` | fully end-to-end @ v9; Counter `receive_signal`; exact fresh-cache JIT; long tensor 7/7; Ht=2 2/2 |
 
-All ten kernel files are byte-identical to the pre-rebase verified state and all
-ten still include `mcast_pipe.hpp` + `McastArgs` — the rebase clobbered nothing.
+The original ten kernel files remain byte-identical to the pre-rebase verified state and retain
+`mcast_pipe.hpp` + `McastArgs`. The two new sort faces were added atomically in `7337302b564`.
+
+The paired `writer_single_row_multi_core.cpp` is deliberately not in this table: it has no Pipe
+face. It remains a deferred/helper-neutral ledger row after coupled runtime-ABI cleanup.
 
 ## Deferred or rolled back (12)
 
@@ -89,15 +95,15 @@ The census now contains 91 entries (92 before the 2026-08-03 reconcile; the
 deepseek_prefill `reader_dispatch.cpp` row was deleted after the kernel was
 removed upstream by `af00262e51d`):
 
-- 10 current production migrations at API v9, **0 carrying `needs_recheck`**;
-- all 10 required host bindings current across 4 atomic units, **0 carrying
+- 12 current production migrations at API v9, **0 carrying `needs_recheck`**;
+- all 11 required host bindings current across 5 atomic units, **0 carrying
   `needs_recheck`**;
 - 12 production candidates deferred with `v9-port-blocked` and a concrete
   design-gap flag;
-- 69 pre-existing deferred candidates from the July census;
+- 67 other deferred candidates, including the helper-neutral sort writer;
 - 0 kernel rows pending and 0 quarantined.
 
 The dated v8 reconcile reports and per-kernel logs are retained as historical
-evidence. `reconcile_2026-08-03.md`, this ledger, and `ledger.json` are
+evidence. `reconcile_2026-08-03-sort.md`, this ledger, and `ledger.json` are
 authoritative for the current branch; `reconcile_2026-07-29.md` and earlier are
 historical.

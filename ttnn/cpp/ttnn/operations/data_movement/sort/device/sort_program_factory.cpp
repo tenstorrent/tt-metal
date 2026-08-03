@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 
 #include <bit>
 #include <cmath>
@@ -1179,7 +1180,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
         });
     }
 
-    // Semaphores.  The cores->coordinator channel uses two separate semaphores so a fast
+    // Semaphores.  The coordinator->workers control channel uses a monotone, no-handshake
+    // Counter wire.  The cores->coordinator channel uses two separate semaphores so a fast
     // reader's next-row readiness increment can never be miscounted as a sub-stage
     // confirmation: on one shared counter it could overshoot the coordinator's exact-match
     // wait and deadlock the op at Ht >= 2.  Readiness -> ready sem; per-pair confirmations
@@ -1187,12 +1189,17 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     constexpr uint32_t coordinator_to_cores_semaphore_id = 0;
     constexpr uint32_t cores_to_coordinator_ready_semaphore_id = 1;
     constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = coordinator_to_cores_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_core_set,
-        .initial_value = 0,
-    });
+    const ttnn::kernel_lib::host::Mcast2D coordinator_to_workers_mcast(
+        device,
+        all_core_set,
+        coordinator_core,
+        ttnn::kernel_lib::host::McastConfig{
+            .handshake = false,
+            .data_ready = ttnn::kernel_lib::host::DataReadyMode::Counter,
+            .base_sem_id = coordinator_to_cores_semaphore_id});
+    for (const auto& semaphore : coordinator_to_workers_mcast.owned_semaphores()) {
+        desc.semaphores.push_back(semaphore);
+    }
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = cores_to_coordinator_ready_semaphore_id,
         .core_type = tt::CoreType::WORKER,
@@ -1210,9 +1217,6 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     // Kernels
     // -----------------------------------------------------------------------
     const auto coordinator_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
-    const auto start_core_logical = core_range.ranges()[0].start_coord;
-    const auto start_core_physical_coord = device->worker_core_from_logical_core(start_core_logical);
-    const auto end_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
 
     std::vector<uint32_t> coordinator_compile_time_args = {
         total_work_units,
@@ -1233,6 +1237,11 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     coordinator_compile_time_args.push_back(W_tile_bytes);
     coordinator_compile_time_args.push_back(W_index_bytes);
     coordinator_compile_time_args.push_back(tile_width);
+    const auto coordinator_mcast_compile_time_args = coordinator_to_workers_mcast.compile_time_args();
+    coordinator_compile_time_args.insert(
+        coordinator_compile_time_args.end(),
+        coordinator_mcast_compile_time_args.begin(),
+        coordinator_mcast_compile_time_args.end());
 
     KernelDescriptor coordinator_desc;
     coordinator_desc.kernel_source =
@@ -1241,19 +1250,12 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     coordinator_desc.core_ranges = CoreRangeSet(CoreRange(coordinator_core));
     coordinator_desc.compile_time_args = std::move(coordinator_compile_time_args);
     coordinator_desc.config = ReaderConfigDescriptor{};
-    coordinator_desc.emplace_runtime_args(
-        coordinator_core,
-        {static_cast<uint32_t>(start_core_physical_coord.x),
-         static_cast<uint32_t>(start_core_physical_coord.y),
-         static_cast<uint32_t>(end_core_physical_coord.x),
-         static_cast<uint32_t>(end_core_physical_coord.y),
-         coordinator_to_cores_semaphore_id,
-         cores_to_coordinator_ready_semaphore_id,
-         cores_to_coordinator_done_semaphore_id,
-         static_cast<uint32_t>(core_range.num_cores()),
-         input_buffer,
-         value_buffer,
-         index_buffer});
+    KernelDescriptor::RTArgList coordinator_runtime_args;
+    coordinator_runtime_args.push_back(input_buffer);
+    coordinator_runtime_args.push_back(value_buffer);
+    coordinator_runtime_args.push_back(index_buffer);
+    coordinator_runtime_args.append(coordinator_to_workers_mcast.runtime_args(coordinator_core));
+    coordinator_desc.emplace_runtime_args(coordinator_core, coordinator_runtime_args);
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_index,
@@ -1273,6 +1275,9 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     reader_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_input_index_cb_index));
     reader_compile_time_args.push_back(W_tile_bytes);
     reader_compile_time_args.push_back(W_index_bytes);
+    const auto reader_mcast_compile_time_args = coordinator_to_workers_mcast.compile_time_args();
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(), reader_mcast_compile_time_args.begin(), reader_mcast_compile_time_args.end());
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -1313,22 +1318,17 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     // are emplaced separately above on the coordinator kernel.
     for (const auto& cr : core_range.ranges()) {
         for (const auto& core : cr) {
-            reader_desc.emplace_runtime_args(
-                core,
-                {value_buffer,
-                 index_buffer,
-                 static_cast<uint32_t>(coordinator_core_physical_coord.x),
-                 static_cast<uint32_t>(coordinator_core_physical_coord.y),
-                 coordinator_to_cores_semaphore_id,
-                 cores_to_coordinator_ready_semaphore_id});
+            KernelDescriptor::RTArgList reader_runtime_args;
+            reader_runtime_args.push_back(value_buffer);
+            reader_runtime_args.push_back(index_buffer);
+            reader_runtime_args.append(coordinator_to_workers_mcast.runtime_args(core));
+            reader_desc.emplace_runtime_args(core, reader_runtime_args);
             writer_desc.emplace_runtime_args(
                 core,
                 {value_buffer,
                  index_buffer,
                  static_cast<uint32_t>(coordinator_core_physical_coord.x),
-                 static_cast<uint32_t>(coordinator_core_physical_coord.y),
-                 coordinator_to_cores_semaphore_id,
-                 cores_to_coordinator_done_semaphore_id});
+                 static_cast<uint32_t>(coordinator_core_physical_coord.y)});
         }
     }
 

@@ -61,8 +61,8 @@ The runtime semaphore-ID blocker is stale. `sort_program_factory.cpp` declares t
 
 ## Verdict
 
-**refactor (medium), migratable with API v9 as the coordinator's paired receiver; no helper redesign required.**
+**migrated with API v9 in `7337302b564` as the coordinator's paired receiver.**
 
-The work is a monotone-control and argument-ABI refactor plus substitution of the existing control receive verb. It should be migrated atomically with the coordinator protocol, not in isolation.
+The monotone-control and argument-ABI refactor was migrated atomically with the coordinator.
 
-Validation gap to close before apply: there is no focused multi-iteration control-only Counter device test for `send_signal()`/`receive_signal()` in `test_mcast_pipe.py`; current Counter device coverage is data-bearing.
+Validation closed: focused control-only Counter coverage and all mapped sort inventories pass.

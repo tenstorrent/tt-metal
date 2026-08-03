@@ -6,6 +6,24 @@ feedback round lands.
 
 ---
 
+## Round 14 — sort control-channel migration (2026-08-03)
+
+- **Trigger:** upstream split sort's single return semaphore into independent reader-ready and
+  writer-done counters, invalidating the historical design-gap classification.
+- **API:** remains `MCAST_PIPE_API_VERSION 9`. The recurring coordinator→workers phase event maps to
+  existing no-handshake Counter `send_signal()` / `receive_signal()`; the two return counters remain
+  explicit operation protocol.
+- **Coverage:** added four control-only Counter cases spanning 1×2/1×8 rectangles and 2/32
+  back-to-back signals. Complete helper suite passed 72/72 before and after integration.
+- **Rollout:** coordinator and reader migrated through a host `Mcast2D` wire in `7337302b564`.
+  Writer received coupled dead-runtime-argument cleanup but remains helper-neutral in the ledger.
+- **Validation:** host build passed; exact fresh-cache `--dev` long-tensor case passed with all three
+  JIT artifacts; Ht=2 deadlock pair passed 2/2; full long-tensor inventory passed 7/7.
+- **Reconcile:** all 91 ledger paths exist, no raw primitive callsite was introduced, and totals are
+  12 migrated kernels / 11 migrated host bindings / 79 deferred kernels.
+
+---
+
 ## Round 13 — ACKed sender loopback and post-allgather rollback (2026-07-30)
 
 - **Trigger:** review found that the flag receiver's wait proves arrival only
