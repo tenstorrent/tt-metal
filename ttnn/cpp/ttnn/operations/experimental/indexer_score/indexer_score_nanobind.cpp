@@ -92,6 +92,13 @@ void bind_indexer_score(nb::module_& mod) {
                 linearization over all devices (linear-approximate under a mid-slab
                 start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
                 2D geometry (see seq_shard_axes above).
+            block_cyclic_tp_sharded: optional bool (default False). GLM-5.2 KV dedup: the K cache is
+                striped block-cyclic across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord),
+                gathered TP-inner then SP-outer into that order. ONLY the invP key remap switches to the
+                finer pair (stripe count sp*tp, per-stripe chunk block_cyclic_chunk_local/tp); the global
+                chunk and the causal geometry stay on (sp, block_cyclic_chunk_local), since KV dedup does
+                not change how the QUERIES are sharded. Needs block_cyclic_chunk_local divisible by tp
+                with a tile-aligned quotient. False = SP-only striping (TP-replicated cache).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -107,7 +114,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("block_cyclic_tp_sharded") = false);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,

@@ -117,6 +117,22 @@ struct operation_attributes_t {
     // K), which selects the classic program factory and stays byte-identical.
     std::optional<FusedRingConfig> fused_ring{std::nullopt};
     bool has_fused_ring() const { return fused_ring.has_value(); }
+    // GLM-5.2 KV dedup: the KEY cache may be striped FINER than the query sharding. The queries are still
+    // sharded over the sp-device SP ring in chunk_local slabs (that is what block_cyclic above describes, and
+    // what the causal geometry must use), but each SP chip's slab is split `key_stripe_split` ways across the
+    // TP axis so no two chips store the same KV. After the TP-inner + SP-outer gather the buffer is striped
+    // over sp*key_stripe_split chips in chunk_local/key_stripe_split blocks -- so ONLY the invP key remap uses
+    // the finer pair. Keeping the two decoupled is the point: bumping block_cyclic itself to {sp*tp,
+    // chunk_local/tp} would also corrupt device_causal_geometry, whose device_index is the SP-ring rank (not
+    // the linear sp*tp rank). 1 = key striping matches the query sharding (everything pre-GLM-5.2).
+    // HASHED (it bakes the reader's invP divisors) -- see key_stripes()/key_stripe_chunk().
+    uint32_t key_stripe_split{1};
+    // The (stripes, per-stripe chunk) pair the reader's invP remap decodes with. Their product is the global
+    // chunk (sp*chunk_local) either way, so the gathered buffer's total extent is unchanged.
+    uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
+    uint32_t key_stripe_chunk() const {
+        return block_cyclic.has_value() ? block_cyclic->chunk_local / key_stripe_split : 0;
+    }
 };
 
 struct tensor_args_t {

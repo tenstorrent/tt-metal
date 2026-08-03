@@ -272,6 +272,7 @@ class TtIndexer:
         slot_num: int = 1,
         layer_num: int = 1,
         first_layer_idx: int | None = None,
+        tp_shard_kv: bool = False,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -290,6 +291,9 @@ class TtIndexer:
         mesh_shape = list(mesh_device.shape)
         self.sp_factor = mesh_shape[sp_axis]
         self.tp_factor = mesh_shape[tp_axis]
+        # GLM-5.2 KV dedup: index key cache sharded across SP×TP (not TP-replicated). Adds a TP-inner
+        # all-gather leg in _gather_index_kbuf and passes tp_axis to the write. Single-chunk path only.
+        self.tp_shard_kv = tp_shard_kv
         self.default_compute_kernel_config = default_compute_kernel_config
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
         self.weight_cache_path = weight_cache_path
@@ -568,6 +572,47 @@ class TtIndexer:
         holds one slot per FULL layer, so the caller's per-layer KVPE slot does not address it; every
         entry point has to translate, not just forward()."""
         return self._index_layer_idx if self._is_index_compact else cache_layer_idx
+    def _gather_index_kbuf(self, index_kbuf: ttnn.Tensor, cache_batch_idx: int) -> ttnn.Tensor:
+        """Read the block-cyclic ND-sharded key cache back to a replicated full-T [1,1,T,D_idx]
+        (block-cyclic order preserved, bf16 TILE) for indexer_score_dsa's block-cyclic reader — the
+        analogue of ttMLA._gather_kvpe_prefix, and it uses the same fix.
+
+        SLOT SELECT BEFORE THE GATHER: index_kbuf is user-major [num_users*layer_num, 1, T, D_idx]
+        (same layout as the MLA KVPE cache). Slice the active (user, layer) slot out of dim 0 FIRST, then
+        SP all-gather only that single [1,1,T,D_idx] slot — NOT the whole B-slot cache. Gathering all
+        slots materializes a full-T copy of every user/layer (OOMs at high num_layers, exactly like the
+        MLA kvpe gather did). The gathered kv is then batch-1, so indexer_score needs NO cache_batch_idx
+        (the op requires kB==1 when cache_batch_idx is unset). The unwritten suffix is never scored
+        (future positions are causally masked).
+
+        PERF TODO: this SP all-gather is currently a blocking barrier — it materializes the whole full-T
+        key cache before indexer_score_dsa runs. It should instead be FUSED INTO the score op (ring-joint
+        style, like ring_mla / ring-joint SDPA fuse the KV all-gather with the attention compute): pipeline
+        the per-slab gather with the score matmul so each SP key slab is gathered and scored as it arrives,
+        overlapping the CCL with the op's own compute instead of paying a full gather up front. Op-level
+        change (ring indexer_score), not a host-side reorder."""
+        cache_i = ttnn.to_memory_config(index_kbuf, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
+        if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (single-slot cache → skip)
+            sel = ttnn.slice(
+                cache_i,
+                [cache_batch_idx, 0, 0, 0],
+                [cache_batch_idx + 1, 1, cache_i.shape[2], cache_i.shape[3]],
+            )
+            ttnn.deallocate(cache_i)
+            cache_i = sel
+        # GLM-5.2 KV dedup: an SP×TP-sharded index cache holds only 1/tp of each SP row's slab, so
+        # reconstruct with a TP-inner gather (concat a row's tp sub-shards) BEFORE the SP-outer gather.
+        # The index cache is bfp8 TILE, so this TP all-gather takes the native path (no RM composite
+        # deadlock). TP-inner + SP-outer yields the LINEAR chip-major buffer (any slab count), which
+        # indexer_score_dsa decodes with an sp*tp stripe count (block_cyclic_tp_sharded=True).
+        if self.tp_shard_kv and self.tp_factor > 1:
+            tp_full = self._tp_all_gather(cache_i, dim=2)  # [1,1,T/sp,D_idx] per SP row
+            ttnn.deallocate(cache_i)
+            cache_i = tp_full
+        full = self._sp_all_gather(cache_i, dim=2)  # [1,1,T,D_idx] replicated, block-cyclic
+        if self.sp_factor > 1:
+            ttnn.deallocate(cache_i)
+        return full
 
     def write_k(
         self,
@@ -634,6 +679,7 @@ class TtIndexer:
             kv_actual_global=start_pos,
             cluster_axis=self.sp_axis,
             valid_global=actual_end,
+            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # GLM-5.2 KV dedup: write only this chip's 1/tp window
         )
         ttnn.deallocate(k)
 
@@ -798,7 +844,13 @@ class TtIndexer:
             seq_subshard_axis=self.tp_axis if tpsp else None,
             cache_batch_idx=cache_batch_idx,
             block_cyclic_sp_axis=self.sp_axis,
-            block_cyclic_chunk_local=seq_len,
+            block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
+            # GLM-5.2 KV dedup: index cache striped over sp*tp (linear chip), gathered TP-inner+SP-outer by
+            # _gather_index_kbuf into a stripe-major buffer, so the invP key remap must decode sp*tp stripes
+            # of seq_len/tp. The op keeps that DECOUPLED from the causal geometry (which stays on {sp,
+            # seq_len} — the query sharding is untouched by KV dedup); folding the two would offset every
+            # device's causal diagonal by the wrong rank. See key_stripe_split in indexer_score.
+            block_cyclic_tp_sharded=self.tp_shard_kv,
             kv_len=valid_pos,
         )
         if host_start is not None:
