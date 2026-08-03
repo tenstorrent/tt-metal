@@ -1,9 +1,9 @@
 # Annotation — `activation_reader_width_sharded.cpp`
 
-> Current v9 status (2026-07-30): **blocked and exactly at
-> `llk_helper_library`**. The prior migrated attempt failed 25 numeric cases.
-> ACKed sender loopback is now available, but this kernel has not been
-> re-ported or rerun against its complete inventory.
+> API-v9 outcome (2026-08-03): **migrated** in `fe866a1d0c4`. The current
+> ACK-fenced rotating loopback resolved the prior attempt's 25 numeric failures.
+> The complete mapped inventory passed: 48 feature cases, 16 legitimate skips,
+> and one DRAM-config case, with fresh JIT evidence for this kernel.
 
 Path: `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/`
 Role: **reader, HYBRID (sender + receiver + loopback)** — width-sharded activation mcast, round-robin.
@@ -11,7 +11,11 @@ Substrate: new object API.
 
 ---
 
-## Variant signature
+## Pre-migration variant signature
+
+The primitive-level description and line references below preserve the audited raw protocol that
+the migration replaced. The current kernel expresses this block through `McastArgs` sender and
+receiver faces.
 
 | Fork | Value | Lines |
 |---|---|---|
@@ -72,3 +76,27 @@ Substrate: new object API.
 ## Unclassifiable / HOLE
 - None. Every primitive call maps to a protocol step. The F2-MIXED counter/flag split is a deliberate
   design choice, not a hole — flagged above for the `Pipe` canonicalization decision.
+
+## API-v9 formulation (2026-08-03)
+
+- Host `Mcast2D`: full reader bounding rectangle, `rotating_sender=true`, Flag staging, handshake
+  enabled, adopted sem IDs `[data_ready=receiver_sem, consumer_ready=sender_sem]`, and
+  `num_active=max(input_cores,output_cores)-1`.
+- Kernel `McastArgs<..., SPAN=num_input_cores>` consumes the full rectangle and only the sender
+  coordinate prefix used by the actual round-robin loop. Extra host-emitted coordinates for
+  output-only/noop rectangle cores are inert.
+- `SenderPipe::send()` preserves INCLUDE-source data+flag delivery and the divergent ACK subset.
+  Its rotating-sender path resets the local flag only after ACKed loopback completion.
+- `ReceiverPipe::receive(round)` replaces the lookup-table ACK + flag wait/reset sequence.
+
+## Migration outcome
+
+- Host: rotating, handshaked Flag `Mcast2D` over the full reader rectangle, adopting the existing
+  data-ready and consumer-ready semaphore IDs and carrying the smaller active ACK count separately.
+- Kernel: `McastArgs<12, 3, num_input_cores>`, `SenderPipe::send()`, and
+  `ReceiverPipe::receive(round)` replace the raw CT/RT wire and primitive sequence.
+- Validation: build passed; exact fresh-cache `--dev` case passed at PCC `0.999956503`; full
+  `CONV-WIDTH` feature inventory passed 48 with 16 expected skips; DRAM-config passed at PCC
+  `0.998234911`; helper suite passed 72/72.
+
+Verdict: **migrated, fully end-to-end at API v9; no helper change or API bump required.**

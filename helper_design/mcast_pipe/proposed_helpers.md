@@ -2,6 +2,13 @@ DERIVED FROM: current mcast_pipe API v9, api_feasibility.md, style_bakeoff.md, c
 
 # Step F — Helper Proposal: `Pipe` (`mcast_pipe`)
 
+> **Step-F re-entry (2026-08-03) — width-sharded Conv migrated at API v9.** The applied port uses the
+> existing host `Mcast2D` rotating full-rectangle wire with a divergent active ACK count. Kernel
+> `McastArgs` builds the rotating sender and receiver faces; no helper implementation or caller-facing
+> contract changes. The atomic unit is the activation reader plus
+> `conv2d_op_width_sharded_program_factory.cpp`. It migrated in `fe866a1d0c4`; the complete
+> `CONV-WIDTH` inventory and the 72-case helper suite passed.
+
 > **Step-F re-entry (2026-08-03) — sort-single-row is migrated at API v9.** The current
 > helper already expresses the coordinator→workers control channel as a no-handshake Counter
 > `SenderPipe::send_signal()` / `ReceiverPipe::receive_signal()` pair, materialized through one

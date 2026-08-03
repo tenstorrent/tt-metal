@@ -1,5 +1,36 @@
 # mcast_pipe API v9 host-integration tiers — 2026-07-30
 
+## Re-entry — Conv2D width-sharded activation (2026-08-03)
+
+Mode: `run-all`. Selected unit: `conv2d-activation-width-sharded` (Tier 6, refactor-medium).
+
+Binding: `activation-mcast:conv2d-width-sharded:rotating-rect`
+
+Atomic scope:
+
+- `activation_reader_width_sharded.cpp` sender and receiver faces;
+- `conv2d_op_width_sharded_program_factory.cpp` host wire and CT/RT packing;
+- kernel and host-binding ledger rows.
+
+API-v9 formulation: one rotating, handshaked Flag `Mcast2D` over the dense reader bounding rectangle,
+with adopted existing semaphores and `num_active=max(input_cores,output_cores)-1`. The host emits the
+full rectangle's sender list; the kernel consumes the first `num_input_cores` coordinates used by the
+actual round-robin loop. No helper change or API bump.
+
+Gate evidence: helper 72/72. Unchanged exact BF16/BF16, filter-3, tile-output case passed under
+`--dev` at PCC 0.9999565 from an isolated cache, with `activation_reader_width_sharded` confirmed.
+
+Validation: rebuild host code, rerun that exact node from a fresh isolated cache, then run all 64
+`test_conv_features` width-sharded selections (historical expected result: 48 pass / 16 legitimate
+row-major+bfloat8 skips), followed by the mapped width-sharded DRAM-config route.
+
+Rollback: run-all restores kernel, factory, and ledger together and records quarantine on any failure.
+
+Outcome: **migrated at API v9** in `fe866a1d0c4`. Build passed; the exact fresh-cache `--dev` case
+passed at PCC 0.999956503; all 48 runnable feature cases passed with 16 legitimate skips; the mapped
+DRAM-config route passed at PCC 0.998234911; post-integration helper coverage passed 72/72. No
+rollback or quarantine was needed.
+
 ## Re-entry — sort single-row control channel (2026-08-03)
 
 Mode: `halt`, approved through the remaining checkpoints. This re-entry adds one Tier-5 atomic unit

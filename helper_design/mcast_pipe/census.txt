@@ -23,7 +23,7 @@ ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_m
 ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp — role: receiver | tag: clean
 ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp — role: sender | tag: clean
 ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp — role: receiver | tag: clean
-ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp — role: hybrid | tag: refactor | INCLUDE_SRC loopback + barrier; mixed R→S counter / S→R flag
+ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp — role: hybrid | tag: refactor | MIGRATED API v9: rotating INCLUDE_SRC loopback + divergent ACK subset; ACK-fenced loopback verified across CONV-WIDTH 2026-08-03
 ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp — role: hybrid | tag: refactor | all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE
 ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp — role: hybrid | tag: refactor | 3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope
 

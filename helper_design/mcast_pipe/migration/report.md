@@ -1,35 +1,35 @@
-# mcast_pipe rollout report — API v9, sort re-entry 2026-08-03
+# mcast_pipe rollout report — API v9, width-sharded Conv re-entry 2026-08-03
 
 ## Run header
 
 - Helper: `mcast_pipe`, `MCAST_PIPE_API_VERSION=9` (unchanged)
 - Entry mode: **re-entry**
-- Invocation mode: **`halt`**
-- Baseline: `origin/llk_helper_library` at `4a1d6a97ca9` (code HEAD 20 commits ahead, at `7337302b564`)
+- Invocation mode: **`run-all`**
+- Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`
 - Branch: `sjovic/mcast-migration`; pre-rebase branch preserved at
   `backup/mcast-migration-prerebase-20260803`
-- Re-entry worklist: one Tier-5 unit, `sort-single-row-control`, containing two Pipe faces, one
-  helper-neutral writer companion, and one host binding.
+- Re-entry worklist: one Tier-6 unit, `conv2d-activation-width-sharded`, containing one hybrid
+  rotating sender/receiver kernel and one host binding.
 - Device: single-chip Blackhole p100a (`bh-41-special-sjovic-for-reservation-53855`) — matches the
   `test_map.json` baseline machine
 - Test runner: `scripts/run_safe_pytest.sh`
 
-Production code commit `7337302b564` replaces the sort coordinator→workers inverted level
-doorbell with the existing no-handshake Counter signal Pipe. The independent reader-ready and
-writer-done counters remain operation-owned; writer is therefore not counted as a helper migration.
+Production code commit `fe866a1d0c4c32b78aae8a76e875c0da109f51c8` replaces the width-sharded
+Conv2D activation kernel's hand-packed rotating multicast wire with the existing API-v9 host
+`Mcast2D` plus kernel `McastArgs` sender/receiver faces. No helper change or API bump was required.
 
 ## Rollout state at v9
 
 | State | Count |
 |---|---:|
-| kernel-current | 12 |
-| host-binding-current | 11 |
-| fully end-to-end current | 11 bindings / 12 kernels |
+| kernel-current | 13 |
+| host-binding-current | 12 |
+| fully end-to-end current | 12 bindings / 13 kernels |
 | host-pending | 0 |
 | kernel-pending | 0 |
 | quarantined | 0 |
 | **open `needs_recheck`** | **0** (was 6 at the start of this run) |
-| deferred | 79 kernels / 0 host bindings |
+| deferred | 78 kernels / 0 host bindings |
 
 The fleet is **fully current at v9**: nothing stale, nothing pending, no advisory flags open.
 The helper-neutral sort writer remains one of the deferred rows because it has no Pipe face.
@@ -37,13 +37,30 @@ The helper-neutral sort writer remains one of the deferred rows because it has n
 Deferred first dropped 82 → 81 because `reconcile_2026-08-03.md` removed the deepseek_prefill
 `reader_dispatch.cpp` row after the kernel was deleted upstream by `af00262e51d` (#48694). Its
 F2-counter coverage is retained by `reader_combine.cpp` and 5 other census entries.
-It then dropped 81 → 79 when the sort coordinator and reader migrated.
+It then dropped 81 → 79 when the sort coordinator and reader migrated, and 79 → 78 when the
+width-sharded Conv2D activation kernel migrated.
 
 "Fully end to end" remains channel-specific: e.g. height-sharded Conv2D has a weights-multicast
-binding but reads activations locally. Block- and width-sharded Conv2D activation multicast stay in
-the deferred kernel census.
+binding but reads activations locally. Block-sharded Conv2D activation multicast stays in the
+deferred kernel census.
 
-## This run — sort migration results
+## This run — width-sharded Conv2D activation result
+
+| Unit | Rows | Kind | Result |
+|---|---:|---|---|
+| `conv2d-activation-width-sharded` | 1 hybrid kernel + 1 host binding | Tier-6 migration | **PASS** |
+
+- `./build_metal.sh`: passed.
+- Exact BF16/BF16 filter-3 TILE-output node under `--dev` from a fresh isolated cache: passed at
+  PCC `0.999956503`; the activation-reader JIT artifact was confirmed.
+- Complete width-sharded feature inventory: 48 passed, 16 legitimate row-major+bfloat8 skips.
+- Width-sharded DRAM-config route: 1 passed at PCC `0.998234911`; current activation-reader JIT path
+  confirmed.
+- Post-integration helper suite: 72/72 passed.
+- The current ACK-fenced real-loopback completion behavior resolves the earlier v9 port's 25
+  numerical regressions; no partial migration or quarantine remains.
+
+## Prior same-day sort migration results
 
 | Unit | Rows | Kind | Result |
 |---|---:|---|---|
@@ -115,9 +132,10 @@ commit (`aeeb28ff007`) — its documented role is the revert/bisect anchor, not 
 | 3 — `matmul-in1-mcast-padding-host` | 4 | 0 | 0 | +196 / −70 |
 | 4 — `groupnorm-sharded-v2-mcast-host` | 4 | 0 | 0 | +168 / −376 |
 | 5 — `sort-single-row-control` | 1 | 0 | 0 | +57 / −79 |
-| Total | 11 | 0 | 0 | +509 / −672 |
+| 6 — `conv2d-activation-width-sharded` | 1 | 0 | 0 | +48 / −150 |
+| Total | 12 | 0 | 0 | +557 / −822 |
 
-Net reduction of 163 production lines. No in-context performance run was requested, so no performance
+Net reduction of 265 production lines. No in-context performance run was requested, so no performance
 delta is claimed.
 
 | Kernel | Status | Validation | File deletions |
@@ -134,6 +152,7 @@ delta is claimed.
 | GroupNorm v2 Welford receiver | migrated, fully end-to-end | exact JIT; parameterized 108/2 skips | 20 |
 | Sort single-row coordinator | migrated, fully end-to-end | exact fresh-cache JIT; long 7/7; Ht=2 2/2 | 43 |
 | Sort single-row reader | migrated, fully end-to-end | exact fresh-cache JIT; long 7/7; Ht=2 2/2 | 21 |
+| Conv2D width-sharded activation | migrated, fully end-to-end | exact fresh-cache JIT; features 48/16 skips; DRAM 1/1 | 150 |
 
 Conv2D and GroupNorm rows were **not** in this run's scope — their factories are byte-identical to the
 pre-rebase verified state, so they needed no recheck. Their evidence dates from 2026-07-30.
@@ -154,10 +173,9 @@ rebase, so the verify-only pass neither widened nor narrowed them:
 
 ## Deferred kernel work
 
-The 79 deferred kernel rows remain outside this rollout. Principal production blockers:
+The 78 deferred kernel rows remain outside this rollout. Principal production blockers:
 
 - matmul in0 control channels needing typed/custom control values or independent data/signal loopback;
-- width-sharded Conv2D activation multicast (prior port failed 25 numerical cases; baseline restored);
 - block-sharded Conv2D activation multicast, whose producer-overlapped chunked send the current helper
   cannot express;
 - LayerNorm channels needing acknowledged signal-only, mixed-mode streaming, or explicit
@@ -182,7 +200,8 @@ confirmed by patch-id).
 | Conv2D fixed-line weights | `51dfb1f1ed61045ed10dc679269960b6d2ccac9e` | `5320c2d69bd` | `261e322ed22` |
 | Matmul in1 | `aeeb28ff007807c71b1f60842cca85e5c41efa7f` | `53724c12419` | `2d0280d3dac` |
 | GroupNorm v2 | `bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0` | `49e559dcb55` | `0a796a025c9` |
-| Sort single-row control | `7337302b5649b7cd169764cd95c0b0343e88950d` | this ledger/report follow-up | n/a |
+| Sort single-row control | `7337302b5649b7cd169764cd95c0b0343e88950d` | `8479210e61e` | n/a |
+| Conv2D width-sharded activation | `fe866a1d0c4c32b78aae8a76e875c0da109f51c8` | `30927931918` | historical v8 only |
 
 Two on-branch commit *messages* still cite pre-rebase hashes (`baa86dc7116` "…for 75b977e1a04",
 `5320c2d69bd` "…for 261e322ed22") — history is immutable; this table is the key.

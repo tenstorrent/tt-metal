@@ -1,76 +1,69 @@
-# activation_reader_width_sharded.cpp — MIGRATED v8 DUAL-PIPE (2026-06-20)
+# activation_reader_width_sharded.cpp — MIGRATED API v9 (2026-08-03)
 
-> Historical v8 log. Current v9 status: **blocked and restored to baseline**;
-> the prior v9 port failed 25 numeric cases. The helper now ACKs real loopback
-> copies, but this kernel has not been re-ported or rerun against its complete
-> inventory.
+- Unit: `conv2d-activation-width-sharded` (Tier 6, `run-all`).
+- Kernel role: hybrid rotating sender/receiver.
+- Factory: `conv2d_op_width_sharded_program_factory.cpp`.
+- Production commit: `fe866a1d0c4c32b78aae8a76e875c0da109f51c8`.
+- Final status: **migrated**, fully end-to-end at `MCAST_PIPE_API_VERSION=9`.
 
-- Group: G3 conv (WS round-robin self-mcast). Role: **hybrid** (SenderPipe + ReceiverPipe).
-- FINAL: status=migrated, migrated_api_version=8, role=hybrid.
-- Validation: full WS matrix `test_conv_features -k WIDTH_SHARDED` = **48 passed / 16 legit RM+bf8 skips / 0 fail**.
-  Smoke (bf16/bf16, filter=3, fp32_accum=False, packer_l1_acc=True) under `--dev`: PASS, PCC 0.9999565, no hang.
-  JIT-verified: `grep -rl activation_reader_width_sharded generated/` hit (watcher kernel_names + kernel_elf_paths).
+## API-v9 formulation
 
-## What changed (v7 sender-only + raw receiver  ->  v8 dual-pipe)
+The factory retains its two existing semaphore descriptors and adopts them in helper order
+`[data_ready=act_mcast_receiver_semaphore, consumer_ready=act_mcast_sender_semaphore]`. One host
+`Mcast2D` describes the dense reader bounding rectangle with a rotating sender, handshaked Flag
+signalling, the activation NoC, and the divergent active ACK count
+`max(input_num_cores, output_num_cores)-1`.
 
-This was the v8-unblocked NET-NEW upgrade. The prior committed form (v7, commit b9e23dafb11) used
-`SenderPipe<..., num_reader_cores-1, PRE_HANDSHAKE=false>` for the broadcast face only, and a RAW receiver
-(`act_mcast_receiver_sem.wait(VALID)` + raw `act_mcast_sender_sem` fan-in counter / `up`). It used the pipe
-"partially" — sender face only. v8 lets the divergent counts coexist, so both faces now use the helper.
+The factory appends the five-word helper CT block after the operation's first 12 CT words and appends
+the rotating RT block after the existing `(core_x, core_y, full_grid_x)` prefix. The old explicit
+semaphore/rectangle CT block and separable physical-X/physical-Y lookup arrays are gone. The helper
+emits all full-rectangle sender coordinates; `McastArgs<12, 3, num_input_cores>` consumes the prefix
+used by the operation's actual round-robin loop.
 
-### Final SenderPipe spelling (built once before the round-robin loop)
-```cpp
-dataflow_kernel_lib::SenderPipe<
-    noc_index,
-    get_compile_time_arg_val(13),     // DATA_READY_SEM_ID  = act_mcast_receiver_sem (VALID/INVALID flag)
-    /*PRE_HANDSHAKE=*/true,
-    get_compile_time_arg_val(12)>     // CONSUMER_READY_SEM_ID = act_mcast_sender_sem (fan-in counter)
-    act_send_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect<>{
-            mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end},
-        /*consumer_ack_count=*/num_mcast_cores - 1);
-```
-`send(tilized_in0_cb.get_read_ptr(), act_cb.get_write_ptr(), act_mcast_sender_size_bytes)` (INCLUDE_SRC
-loopback inferred: in-rect && src!=dst). The raw `act_mcast_sender_sem.wait_min(num_mcast_cores-1)` + `set(0)`
-ack-wait is now FOLDED into `send()`'s PRE_HANDSHAKE path. The raw pre-loop `act_mcast_receiver_sem.set(VALID)`
-is GONE (the ctor owns it; `send()` re-asserts VALID per call — the M12b fix).
+The kernel constructs both faces after the inactive-core return. Its sender branch is one
+`send(src, dst, size)` call and its receiver branch is `receive(round)`. This removes the raw
+multicast endpoint/destination, `wait_min`/reset/up/wait semaphore sequence, explicit signal
+multicast, endpoint lookup, and write barrier. Skip-mcast remains compile-time guarded as before.
 
-### Final ReceiverPipe spelling (built per round inside the loop, in the receiver branch)
-```cpp
-dataflow_kernel_lib::ReceiverPipe<
-    get_compile_time_arg_val(13),     // DATA_READY_SEM_ID
-    /*PRE_HANDSHAKE=*/true,
-    get_compile_time_arg_val(12)>     // CONSUMER_READY_SEM_ID
-    act_recv_pipe(noc);
-act_recv_pipe.receive(sender_x, sender_y);   // sender coords from x/y lookup tables
-```
-`.receive()` folds BOTH the raw fan-in ack (`act_mcast_sender_sem.up(noc, sender_x, sender_y, 1)`) AND the
-raw `act_mcast_receiver_sem.wait(VALID)`. The raw top-of-round `act_mcast_receiver_sem.set(INVALID)` is KEPT
-right before constructing the ReceiverPipe — it also clears the stale VALID this core's own sender round left
-behind (harmlessly redundant with the ctor's own set(INVALID)).
+The load-config CT offsets moved by one word because the five-word helper block replaces the old
+six-word semaphore-plus-rectangle block. No helper implementation or API version changed.
 
-## The consumer_ack_count divergence (THE reason v8 unblocked this kernel)
-The mcast fan-out is derived from the rect's `area()` = `num_reader_cores` (the broadcast lands on every reader
-core). But only `num_mcast_cores - 1` cores actually ack (`num_mcast_cores = max(num_input_cores, num_output_cores)`;
-the round-robin loop runs over `num_input_cores` and the sender doesn't ack itself). At v7 the SenderPipe could
-express only ONE count for both the fan-out and the ack-wait (the dropped 3rd template param), so the divergent
-case had no correct spelling -> the original hang. v8's runtime `consumer_ack_count` ctor arg decouples them:
-fan-out stays rect-derived (`num_reader_cores`), ack-wait is the explicit `num_mcast_cores - 1`.
+## Required semantics and the resolved historical failure
 
-## Why the quarantine-era hang does NOT recur (the clear-after-wait hazard)
-ReceiverPipe uses **clear-after-wait** (H11): the receive cell ends INVALID. A ctor-once-VALID sender would go
-stale across rotating rounds and hang (the block_sharded failure). Round 9's M12b fix — `send()` re-asserts the
-source cell VALID every call — removes this: when this core becomes the sender, its `send()` refreshes VALID
-before broadcasting, so the stale INVALID its own receive rounds left behind never reaches the receivers. Proven
-on device here (stable across the full WS matrix + the `--dev` watcher smoke, no hang).
+The geometric data fan-out is the full reader rectangle, while only active cores ACK. The helper
+therefore derives the multicast count from rectangle area and carries the smaller ACK count
+separately. Every input core takes one sender turn and receives the other turns over the same Flag
+cell, including a real INCLUDE-source data loopback on its sender turn.
 
-## Diff
-Replaced the v7 sender-only block + raw receiver branch (raw `wait_min`/`set(0)`/`up`/`wait(VALID)` plus the
-3rd-template-param v7 SenderPipe) with the v8 dual-pipe form above. Net lines removed (raw primitives): ~6.
+The prior API-v9 attempt produced 25 numerical failures and was restored. It predated the current
+rotating `SenderPipe` completion rule: a real loopback is now ACK-fenced before `send()` returns, and
+the sender then resets its local Flag cell for its next receiver turn. The complete width-sharded
+inventory now proves that this was the missing completion invariant rather than an operation-level
+API gap.
 
-## Best sibling reference
-`ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp`
-(commit 5a9d07277df) — the rotating-role self-mcast that uses BOTH faces; copied its spelling/discipline. Its
-factory makes fan-out == ack (dense, no explicit count); conv-WS is the divergent sibling that needs the explicit
-`consumer_ack_count`.
+## Validation
+
+- `./build_metal.sh`: passed.
+- Exact BF16/BF16, filter-3, TILE-output, `packer_l1_acc=True`, `fp32_accum=False` node under
+  `--dev` from fresh isolated `TT_METAL_CACHE`: passed, PCC `0.999956503`; the cache contains
+  `activation_reader_width_sharded`.
+- Complete `test_conv_features and WIDTH_SHARDED`: **48 passed / 16 legitimate row-major+bfloat8
+  skips / 0 failed**.
+- `test_conv_dram_config and WIDTH_SHARDED`: **1 passed**, PCC `0.998234911`; current JIT cache path
+  `built/tt-metal-cache828016524674873717/kernels/activation_reader_width_sharded` was refreshed by
+  the route.
+- Post-integration `test_mcast_pipe.py`: **72 passed**.
+
+Production diff: **+48 / -150**, a net reduction of **102 lines** across the kernel and factory.
+
+## Historical v8 context
+
+The successful 2026-06-20 v8 port first demonstrated that both sender and receiver faces fit the
+helper when fan-out and ACK count are represented separately. It used direct `SenderPipe` and
+`ReceiverPipe` construction while retaining the operation's X/Y sender lookup wire. The later v9
+host-helper port made that full host/device wire helper-owned, but its first attempt lacked the
+loopback completion guarantee and was quarantined after the 25 numerical regressions above.
+
+The current migration preserves the useful v8 insight—full rectangle fan-out plus the smaller
+active ACK count—while replacing its hand-packed device-only integration with `Mcast2D` and
+`McastArgs` end to end.

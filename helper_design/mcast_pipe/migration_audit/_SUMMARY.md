@@ -75,6 +75,17 @@ block inventory; this is the **pre-migration blocker view**.
 - Host build, exact fresh-cache `--dev` path, Ht=2 deadlock pair, and full 7-case long-tensor
   inventory all passed. Census and ledger now record the completed two-kernel migration.
 
+## Width-sharded Conv apply/reconcile outcome (2026-08-03)
+
+- The production activation reader and its width-sharded factory migrated atomically at API v9 in
+  `fe866a1d0c4`; no helper change, style bake-off, API bump, or quarantine was required.
+- Exact fresh-cache BF16/BF16 filter-3 coverage passed under `--dev` at PCC 0.999956503 with the
+  intended JIT path confirmed. The complete feature inventory passed 48 cases with 16 legitimate
+  skips; the DRAM-config route passed at PCC 0.998234911.
+- The result confirms that ACK-fenced real-loopback completion was the missing invariant behind the
+  prior attempt's 25 numerical failures. The current fleet is 13 migrated kernels and 12 migrated
+  host bindings, with 78 deferred and nothing pending or quarantined.
+
 ## Clean set (the easy wins that prove the API)
 Canonical two-sided P1/C1 pairs: matmul in0/in1 sender+receiver (4), conv weights sender+receiver
 (4), ln_post_allgather sender+receiver (2), topk receiver + sampling + kv_cache + rms_sender +
