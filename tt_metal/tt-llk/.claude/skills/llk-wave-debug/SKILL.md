@@ -13,8 +13,8 @@ running the deterministic diagnosis.
 ## Usage
 
 ```text
-/llk-wave-debug /path/to/failure.fsdb failure=hang
-/llk-wave-debug diagnose waves from the latest Quasar CodeGen failure
+/llk-wave-debug /proj_sw/user_dev/me/run/failure.fsdb failure=hang
+/llk-wave-debug failure=mismatch          (reads $LLK_DEBUG_FSDB, else asks)
 ```
 
 ## Scope
@@ -29,8 +29,9 @@ device-ready marker, or confirmed environment failures.
 
 ## Inputs
 
-- Obtain the failing `.fsdb` path from the user, `LLK_DEBUG_FSDB`, or the
-  applicable tester `run.log`.
+- Obtain the failing `.fsdb` path from the user or `LLK_DEBUG_FSDB`. There is no
+  automatic discovery — do not go hunting through test logs for one, because a
+  `run_test.sh` log will never name an FSDB (see below).
 - Classify the observed failure as `hang`, `timeout`, `mismatch`, or `unknown`.
 - Identify the **core under test**. Diagnosis defaults to scope
   `gen_y[1].gen_x[0]`; a failure on any other core needs an explicit `--scope`
@@ -187,7 +188,7 @@ repository; do not extend this skill with signal paths.
 | `SSH FSDB command failed` | Host unreachable or toolchain missing there | Verify the host; check `command.stderr.log` |
 | Command killed with no output on a large FSDB | `--backend-timeout` default is 120 s; cataloguing millions of vars over SSH exceeds it | Raise `--backend-timeout` (600–1200 s for a ~100 MB FSDB) and run it in the background |
 | `inconclusive` with a mostly-idle trace | `--quiescent` (default `1us`) ≥ capture length, so quiescence detectors cannot fire | Re-run with `--quiescent` below the capture length — see step 3 |
-| `FSDB does not exist or is not readable` | Local mode, but the FSDB is on the sim host | Set `LLK_DEBUG_HOST`/`SSH_MACHINE_NAME` |
+| `ssh ... failed with exit code 10: *WARN* This file(...) does not exist.` | Path wrong, or right but on a different host than the backend is reading | Check the path on the backend host, not locally |
 
 ## Report
 
