@@ -766,7 +766,7 @@ _FABRIC_INFRA_SIGNATURES = (
     # of them identically and they were booked as FAIL_ASSERT_EXCEPTION -- 65 phantom test
     # failures for one broken runner. Nothing was tested, so this is NOT_RUN + abort.
     "devices are available in the system mesh",
-    "system_mesh.cpp",
+    "requested_size <= system_size",
     # The fabric routers never reached the synced state, so the control plane never came up and
     # no kernel ran. Seen on lead-models run 30696173498 job mesh4x4_col_2d_conv2d (a HEALTHY
     # 32-chip runner, topology OK):
@@ -782,7 +782,10 @@ _FABRIC_INFRA_SIGNATURES = (
     # box is a genuine fabric bring-up defect, not just a bad runner. Classifying it here stops
     # the phantom test failures; it does NOT make the underlying timeout acceptable and it is
     # being raised with the fabric owners separately.
-    "fabric_firmware_initializer.cpp",
+    #
+    # Keyed on the sync message itself, NOT on "fabric_firmware_initializer.cpp": that file
+    # raises for other conditions too, and a filename-only signature would reclassify any of
+    # them as a sticky infra abort (same trap as topology_mapper.cpp above).
     "fabric router sync",
 )
 

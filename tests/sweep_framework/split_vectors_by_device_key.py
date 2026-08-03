@@ -34,9 +34,9 @@ bounded by VECTOR COUNT, not module count, which is what actually caps a job's r
 Writes one directory per batch plus a batch manifest for the CI matrix to consume.
 """
 
-import ast
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -70,6 +70,13 @@ def _max_vectors_per_job() -> int:
     return int((USABLE_BUDGET_MINUTES - DEVICE_OPEN_MINUTES) * 60 / SECONDS_PER_VECTOR)
 
 
+# A serialized mesh shape: '[4, 8]', '(4, 8)', '4x8' or bare '4, 8'. Matched with an explicit
+# pattern rather than handed to ast.literal_eval -- these strings come out of vector JSON
+# produced by the tracer, and a literal evaluator accepts arbitrarily large/nested literals
+# from that input (CWE-400). Two bounded integers is the entire grammar we need.
+_PAIR_RE = re.compile(r"^\s*[\[(]?\s*(\d{1,4})\s*[,x]\s*(\d{1,4})\s*[\])]?\s*$")
+
+
 def _parse_pair(value):
     """Parse a mesh shape that may be a list, tuple, or the string '[4, 8]'."""
     if isinstance(value, (list, tuple)) and len(value) >= 2:
@@ -78,12 +85,9 @@ def _parse_pair(value):
         except (TypeError, ValueError):
             return None
     if isinstance(value, str):
-        try:
-            parsed = ast.literal_eval(value)
-        except (ValueError, SyntaxError):
-            return None
-        if isinstance(parsed, (list, tuple)) and len(parsed) >= 2:
-            return (int(parsed[0]), int(parsed[1]))
+        match = _PAIR_RE.match(value)
+        if match:
+            return (int(match.group(1)), int(match.group(2)))
     return None
 
 
@@ -175,7 +179,15 @@ def group_vectors(src_dir: Path, manifest=None):
             continue
         try:
             data = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            # A file the manifest DECLARED is not optional. Skipping it would drop vectors the
+            # generation step asked for, and because the matrix planner and the writer both
+            # call this function they would agree on the reduced set -- so the loss would show
+            # up nowhere and the run would report success over a silently smaller suite. Only
+            # directory-scan mode (no manifest) stays best-effort, where a stray unparseable
+            # file is genuinely not ours to run.
+            if declared is not None:
+                raise RuntimeError(f"generation manifest declares {path.name} but it could not be read: {e}") from e
             continue
         for suite, vectors in data.items():
             if not isinstance(vectors, dict):

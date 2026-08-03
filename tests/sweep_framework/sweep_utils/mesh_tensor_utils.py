@@ -447,9 +447,23 @@ def _open_mesh_carving_submesh(*args, **kwargs):
         logger.warning(f"SWEEPS: submesh carve of {submesh_shape} from {full} failed ({e}); opening directly")
         if parent is not None:
             try:
-                _orig_close_mesh_device(parent)
+                parent.quiesce_devices()
             except Exception:
-                logger.exception("SWEEPS: failed to close the parent mesh after a failed carve")
+                logger.exception("SWEEPS: quiesce_devices before closing the parent mesh after a failed carve failed")
+            try:
+                _orig_close_mesh_device(parent)
+            except Exception as close_error:
+                # The fallback below would open a SECOND mesh alongside a parent that is still
+                # live, which is exactly the state _guarded_open_mesh_device exists to prevent
+                # (invalid context_id / "binary not found" / event-order fatals on Galaxy, and
+                # a box left wedged for every job after this one). A carve error is recoverable;
+                # two live meshes are not. Surface it instead -- sweeps_runner classifies a
+                # mesh-open failure as infra, so the vector is reported honestly and the box
+                # survives.
+                raise RuntimeError(
+                    f"submesh carve of {submesh_shape} from {full} failed ({e}) AND the parent mesh "
+                    f"could not be closed ({close_error}); refusing to open a second mesh over a live one"
+                ) from close_error
         return _orig_open_mesh_device(*args, **kwargs)
 
     _SUBMESH_PARENTS[id(submesh)] = (submesh, parent)
