@@ -53,6 +53,12 @@ enum class RoutingDirection {
     NONE = 6,  // No direction, means that destination is not reachable
 };
 
+// The axis a protected ring family runs along. X is the E/W dimension, Y the N/S one.
+enum class RoutingDimension : std::uint8_t {
+    X = 0,
+    Y = 1,
+};
+
 struct RouterEdge {
     // TODO: change this to be port_id_t
     RoutingDirection port_direction;  // Assume all ports in one direction connect to the same chip
