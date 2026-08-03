@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "datasets/in_memory_dataset.hpp"
