@@ -17,12 +17,6 @@
  * Header-only (all functions `inline`): the only consumer today is a program factory
  * that already pulls these dependencies; splitting into a compiled .cpp + CMake
  * target is trivial later if the inline footprint grows.
- *
- * Design + per-op mapping live in the ccl_helpers_dataflow.hpp banner (vetted-in-header,
- * no standalone design doc). The bodies of ccl_packet_dims and ccl_dm_route are the
- * proven point_to_point detail::compute_aligned_packet_dims / detail::fabric_1d_routing,
- * moved here so a single documented surface owns them (incl. the bf16 bit_floor and the
- * forward/backward sign-reversal footguns).
  */
 
 #include <bit>
@@ -69,7 +63,6 @@ struct PacketDims {
  * Owns the bfloat16 std::bit_floor special case and the two regimes:
  *   - aligned page <= max packet: pack N pages per packet;
  *   - aligned page  > max packet: split each page into segments.
- * (Moved verbatim from point_to_point detail::compute_aligned_packet_dims.)
  */
 inline PacketDims ccl_packet_dims(DataType dtype, uint32_t page_size_bytes, uint32_t num_pages, uint32_t alignment) {
     const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -131,8 +124,7 @@ inline auto fabric_1d_routing_vector(const MeshCoordinate& sender_coord, const M
  *
  * Owns the forward/backward SIGN REVERSAL ("fabrics' forward/backward concept is
  * reversed" — returns the negated is_forward) and the ring-vs-line shorter-path
- * choice with WRAP/NONE boundary mode. (Moved from point_to_point
- * detail::fabric_1d_routing.)
+ * choice with WRAP/NONE boundary mode.
  */
 inline DmRoute ccl_dm_route(
     const MeshDevice* mesh_device,
@@ -181,9 +173,8 @@ inline DmRoute ccl_dm_route(
  *   ring-route abstraction @c ttnn::ccl::get_forward_backward_line_{unicast,mcast}_configuration —
  *   a CCL host helper must not duplicate that route math. For the 1-D point_to_point
  *   single-route case use @c ccl_dm_route above instead; the bidirectional ring case
- *   (all_gather) is topology-specific and, unlike the kernel side
- *   (@c FabricStreamSender::set_route_unicast / @c set_route_multicast), does not unify
- *   with it host-side — hence two route surfaces, one packing contract.
+ *   (all_gather) is topology-specific and does not unify with it host-side — hence two
+ *   route surfaces, one packing contract.
  */
 // @c UnicastArgs / @c MulticastArgs are the route-arg containers from
 // ttnn::ccl::get_forward_backward_line_{unicast,mcast}_configuration (today std::array<uint32_t,2>
@@ -214,7 +205,7 @@ inline void append_ccl_line_route_ct_args(
  *   [has_forward][<forward conn args> if fwd][has_backward][<backward conn args> if bwd]
  * The kernel records that start index as conn_arg_idx; for a unidirectional sender the
  * has_forward flag also equals the send direction, so the kernel can peek it for
- * `is_forward`. This is point_to_point's send_program_factory.cpp:167-175 dance as one call.
+ * `is_forward`.
  */
 inline void append_ccl_fabric_rt_args(
     const FabricNodeId& src_fabric_node_id,
@@ -244,8 +235,7 @@ inline void append_ccl_fabric_rt_args(
  * @brief Allocate a GlobalSemaphore on the mesh's worker cores and run the cache-miss
  *        cross-device Synchronize barrier. Returns the semaphore; the CALLER must keep
  *        it alive for the cached workload's lifetime (point_to_point parks it in
- *        WorkloadDescriptor::semaphores). (Moved from point_to_point
- *        create_workload_descriptor.)
+ *        WorkloadDescriptor::semaphores).
  */
 inline GlobalSemaphore make_ccl_semaphore(MeshDevice* mesh_device, uint32_t initial_value = 0) {
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
