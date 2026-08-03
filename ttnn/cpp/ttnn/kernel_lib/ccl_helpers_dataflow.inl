@@ -27,7 +27,7 @@ inline constexpr auto kFusedIssueMask = UnicastFusedAtomicIncUpdateMask::WriteDs
 
 /// Mirror one payload to the SAME logical destination on the local chip. The fabric carries a
 /// noc0-encoded address; a local write needs it re-encoded for this chip's NoC, which is the
-/// decompose-then-safe_get_noc_addr dance every reduction writer previously open-coded.
+/// decompose-then-safe_get_noc_addr dance.
 FORCE_INLINE void write_local_mirror(uint64_t noc0_dst_noc_addr, uint32_t src_l1_addr, uint32_t payload_size_bytes) {
     const auto [dst_noc_xy, dst_addr] = get_noc_address_components(noc0_dst_noc_addr);
     noc_async_write(src_l1_addr, safe_get_noc_addr(dst_noc_xy.x, dst_noc_xy.y, dst_addr), payload_size_bytes);
