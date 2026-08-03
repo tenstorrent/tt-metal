@@ -12,6 +12,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.ccl import ccl_cp_allgather
 
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
@@ -88,6 +89,7 @@ def _prefill_forward_single(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    cp_attn_mask=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
 
@@ -237,7 +239,38 @@ def _prefill_forward_single(
     long_seq = seq_len >= PREFILL_SDPA_MAX_SEQ
     sliding_window = config.sliding_window if config.is_sliding else None
     sliding_tail_out = None
-    if sliding_chunked:
+    # Context parallel: this rank owns seq_len of the chunk's (seq_len * cp) tokens.
+    # Q stays sharded, K/V are gathered to the whole chunk, and the causal (+window)
+    # mask arrives as a CP-sharded tensor so each rank's absolute query offset is
+    # carried as DATA. That matters because the SDPA op takes its position offset as
+    # a Python scalar, which cannot vary per device within one mesh-wide program.
+    use_cp_attention = cp_attn_mask is not None and not sliding_chunked and not need_cross_chunk
+    if use_cp_attention:
+        # dim 2 is the sequence axis of [1, num_kv_heads, seq, head_dim].
+        tt_k = ccl_cp_allgather(tt_k, mesh_config, ccl_manager, dim=2)
+        tt_v = ccl_cp_allgather(tt_v, mesh_config, ccl_manager, dim=2)
+        cp_ckc = ttnn.init_device_compute_kernel_config(
+            tt_q.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        # is_causal and sliding_window_size are both rejected alongside attn_mask;
+        # the mask has causality and the window baked in. Size the program config
+        # from the (smaller) local Q length so q_chunk <= Q.seq; chunk sizes and
+        # both sequence lengths are powers of two, so it still divides K.seq.
+        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=False,
+            attn_mask=cp_attn_mask,
+            scale=1.0,
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+            compute_kernel_config=cp_ckc,
+        )
+    elif sliding_chunked:
         # Generator-level chunked prefill, sliding-window layer. The chunked
         # paged SDPA op has no window mask, so attend a SQUARE [tail | chunk]
         # slice: prepend the previous chunk's last ``sliding_window`` K/V tokens
@@ -391,6 +424,7 @@ def prefill_forward(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    cp_attn_mask=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -429,6 +463,7 @@ def prefill_forward(
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
             sliding_tail_in=sliding_tail_in,
+            cp_attn_mask=cp_attn_mask,
         )
 
     tp = mesh_config.tp if mesh_config else 1
