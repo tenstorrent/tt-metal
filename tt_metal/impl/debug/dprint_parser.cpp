@@ -298,7 +298,9 @@ template <uint8_t PointerSize>
 std::pair<std::vector<std::string>, std::vector<typename DevicePrintParserImpl<PointerSize>::FormatPlaceholderInfo>>
 DevicePrintParserImpl<PointerSize>::parse_format_string(std::string_view format_str) {
     std::vector<std::string> plain_text_parts;
+    plain_text_parts.reserve(format_str.size() + 1);
     std::vector<FormatPlaceholderInfo> placeholders;
+    placeholders.reserve(format_str.size());
     fmt::memory_buffer current_text;
     for (size_t i = 0; i < format_str.size(); i++) {
         if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {

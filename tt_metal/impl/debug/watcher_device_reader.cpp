@@ -1093,6 +1093,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
 void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
     auto debug_waypoint = mbox_data_.watcher().debug_waypoint();
     std::vector<std::string> risc_status;
+    risc_status.reserve(debug_waypoint.size());
 
     for (auto cpu : debug_waypoint) {
         auto& status = risc_status.emplace_back();
