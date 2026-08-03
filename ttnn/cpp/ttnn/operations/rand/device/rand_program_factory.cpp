@@ -11,7 +11,6 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "rand_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/uniform/device/uniform_range.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::rand {
@@ -186,16 +185,14 @@ ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes
-                                   // generated number out of range [from, to)
+                                   // generated number outside the inclusive bounds
         .dst_full_sync_en = false,
         .math_approx_mode = true,
     };
     compute_desc.runtime_args.reserve(num_cores_total);
 
-    const auto output_range = ttnn::operations::uniform::detail::make_output_range(
-        operation_attributes.from, operation_attributes.to, output_dtype);
-    const uint32_t lower_bound_bits = std::bit_cast<uint32_t>(output_range.lower_bound);
-    const uint32_t upper_bound_bits = std::bit_cast<uint32_t>(output_range.upper_bound);
+    const uint32_t lower_bound_bits = std::bit_cast<uint32_t>(operation_attributes.lower_bound);
+    const uint32_t upper_bound_bits = std::bit_cast<uint32_t>(operation_attributes.upper_bound);
 
     const auto layout = rand_core_layout(ws);
     for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
@@ -226,16 +223,14 @@ void RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     // Re-derive every per-dispatch arg on each cache hit from the same builder create_descriptor uses:
-    // compute's seed/from/to and the writer's output address. override replaces resolve_bindings, so
+    // compute's seed/bounds and the writer's output address. override replaces resolve_bindings, so
     // the address is ours to re-apply too. Push order in create_descriptor: writer 0, compute 1.
     constexpr uint32_t writer_kernel_idx = 0;
     constexpr uint32_t compute_kernel_idx = 1;
 
     const auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
-    const auto output_range = ttnn::operations::uniform::detail::make_output_range(
-        operation_attributes.from, operation_attributes.to, output.dtype());
-    const uint32_t lower_bound_bits = std::bit_cast<uint32_t>(output_range.lower_bound);
-    const uint32_t upper_bound_bits = std::bit_cast<uint32_t>(output_range.upper_bound);
+    const uint32_t lower_bound_bits = std::bit_cast<uint32_t>(operation_attributes.lower_bound);
+    const uint32_t upper_bound_bits = std::bit_cast<uint32_t>(operation_attributes.upper_bound);
     const uint32_t out_addr = output.buffer()->address();
 
     const auto layout = rand_core_layout(ws);

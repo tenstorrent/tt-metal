@@ -23,12 +23,12 @@ struct RandDeviceOperation {
         Layout layout;
         const MemoryConfig memory_config;
         MeshDevice* device;
-        const float from;
-        const float to;
+        const float lower_bound;
+        const float upper_bound;
         uint32_t seed;
         ttsl::SmallVector<bool> mesh_dim_is_sharded;
 
-        // Cache key. seed/from/to are omitted (re-applied per dispatch via override_runtime_arguments,
+        // Cache key. Seed/bounds are omitted (re-applied per dispatch via override_runtime_arguments,
         // so calls differing only in those values reuse the cached program). `device` must be FIRST:
         // rand has no input tensor, so the framework discovers the mesh device via
         // get_first_object_of_type over attribute_values(), whose tuple path inspects only element 0.
@@ -67,14 +67,16 @@ struct RandDeviceOperation {
 }  // namespace ttnn::operations::rand
 
 namespace ttnn::prim {
+// lower_bound and upper_bound are inclusive, dtype-representable output bounds
+// selected by the caller from the public half-open interval.
 ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     const ttnn::Shape& shape,
     DataType dtype,
     Layout layout,
     const MemoryConfig& memory_config,
     MeshDevice& device,
-    float from,
-    float to,
+    float lower_bound,
+    float upper_bound,
     uint32_t seed,
     ttsl::SmallVector<bool> mesh_dim_is_sharded = {});
 }  // namespace ttnn::prim

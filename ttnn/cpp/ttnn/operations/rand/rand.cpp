@@ -8,10 +8,8 @@
 #include "ttnn/operations/rand/device/rand_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/operations/uniform/device/uniform_range.hpp"
+#include "ttnn/operations/uniform/uniform_range.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <cmath>
-#include <limits>
 #include <ttnn/distributed/tensor_topology.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
@@ -67,6 +65,7 @@ Tensor rand(
     uint32_t seed,
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
     TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
+    TT_FATAL(from < to, "Rand: `from` argument must be < `to` argument");
 
     ttnn::Shape device_shape = shape;
     ttsl::SmallVector<bool> mesh_dim_is_sharded;
@@ -82,14 +81,7 @@ Tensor rand(
         mesh_dim_is_sharded = build_shard_mask(config);
     }
 
-    if (dtype == DataType::BFLOAT16) {
-        const auto output_range = ttnn::operations::uniform::detail::make_output_range(from, to, dtype);
-        from = output_range.lower_bound;
-        // The FP32 primitive converts its exclusive upper bound to an inclusive
-        // predecessor. Advance by one FP32 value so that predecessor is the
-        // desired BF16 upper endpoint before the subsequent typecast.
-        to = std::nextafter(output_range.upper_bound, std::numeric_limits<float>::infinity());
-    }
+    const auto output_range = ttnn::operations::uniform::detail::make_output_range(from, to, dtype);
 
     auto tensor = ttnn::prim::uniform(
         device_shape,
@@ -97,8 +89,8 @@ Tensor rand(
         Layout::TILE,
         memory_config,
         device,
-        from,
-        to,
+        output_range.lower_bound,
+        output_range.upper_bound,
         seed,
         std::move(mesh_dim_is_sharded));
     if (dtype != DataType::FLOAT32) {

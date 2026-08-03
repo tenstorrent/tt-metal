@@ -13,7 +13,6 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "uniform_device_operation.hpp"
-#include "uniform_range.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::uniform {
@@ -94,9 +93,8 @@ struct UniformRange {
     uint32_t upper_bound_bits;
 };
 
-UniformRange uniform_range(const UniformDeviceOperation::operation_attributes_t& attrs, DataType output_dtype) {
-    const auto output_range = detail::make_output_range(attrs.from, attrs.to, output_dtype);
-    return {std::bit_cast<uint32_t>(output_range.lower_bound), std::bit_cast<uint32_t>(output_range.upper_bound)};
+UniformRange uniform_range(const UniformDeviceOperation::operation_attributes_t& attrs) {
+    return {std::bit_cast<uint32_t>(attrs.lower_bound), std::bit_cast<uint32_t>(attrs.upper_bound)};
 }
 }  // namespace
 
@@ -180,14 +178,14 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes
-                                   // generated number out of range [from, to)
+                                   // generated number outside the inclusive bounds
         .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
     compute_desc.runtime_args.reserve(num_cores_total);
 
     // Runtime args per core
-    const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes, output_dtype);
+    const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes);
 
     const auto layout = uniform_core_layout(ws);
     for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
@@ -225,7 +223,7 @@ void UniformDeviceOperation::override_runtime_arguments(
     constexpr uint32_t writer_kernel_idx = 0;
     constexpr uint32_t compute_kernel_idx = 1;
 
-    const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes, output.dtype());
+    const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes);
     const uint32_t out_addr = output.buffer()->address();
 
     const auto ws = uniform_work_split(output);

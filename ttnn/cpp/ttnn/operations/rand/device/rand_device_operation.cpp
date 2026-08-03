@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rand_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/uniform/device/uniform_range.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <memory>
@@ -12,9 +11,9 @@ namespace ttnn::operations::rand {
 
 void RandDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    TT_FATAL(operation_attributes.from < operation_attributes.to, "Rand: `from` argument must be < `to` argument");
-    ttnn::operations::uniform::detail::make_output_range(
-        operation_attributes.from, operation_attributes.to, operation_attributes.dtype);
+    TT_FATAL(
+        operation_attributes.lower_bound <= operation_attributes.upper_bound,
+        "Rand: inclusive lower bound must be <= inclusive upper bound");
 }
 
 void RandDeviceOperation::validate_on_program_cache_miss(
@@ -53,8 +52,8 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     Layout layout,
     const MemoryConfig& memory_config,
     MeshDevice& device,
-    float from,
-    float to,
+    float lower_bound,
+    float upper_bound,
     uint32_t seed,
     ttsl::SmallVector<bool> mesh_dim_is_sharded) {
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
@@ -65,8 +64,8 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
             layout,
             memory_config,
             std::addressof(device),
-            from,
-            to,
+            lower_bound,
+            upper_bound,
             seed,
             std::move(mesh_dim_is_sharded)},
         OperationType::tensor_args_t{});

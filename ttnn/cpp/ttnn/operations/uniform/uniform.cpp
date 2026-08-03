@@ -6,6 +6,7 @@
 #include "uniform.hpp"
 
 #include "device/uniform_device_operation.hpp"
+#include "uniform_range.hpp"
 
 namespace ttnn {
 
@@ -16,7 +17,10 @@ Tensor uniform(
     const uint32_t seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::prim::uniform(input, from, to, seed, memory_config, compute_kernel_config);
+    TT_FATAL(from < to, "Uniform: from param must be < to");
+    const auto output_range = operations::uniform::detail::make_output_range(from, to, input.dtype());
+    return ttnn::prim::uniform(
+        input, output_range.lower_bound, output_range.upper_bound, seed, memory_config, compute_kernel_config);
 }
 
 }  // namespace ttnn

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "uniform_device_operation.hpp"
-#include "uniform_range.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::uniform {
@@ -16,8 +15,9 @@ void UniformDeviceOperation::validate_inputs(
     TT_FATAL(
         tensor_args.input.dtype() == DataType::BFLOAT16 || tensor_args.input.dtype() == DataType::FLOAT32,
         "Uniform: Input tensor must be Float32 or Bfloat16");
-    TT_FATAL(operation_attributes.from < operation_attributes.to, "Uniform: from param must be < to");
-    detail::make_output_range(operation_attributes.from, operation_attributes.to, tensor_args.input.dtype());
+    TT_FATAL(
+        operation_attributes.lower_bound <= operation_attributes.upper_bound,
+        "Uniform: inclusive lower bound must be <= inclusive upper bound");
 }
 
 void UniformDeviceOperation::validate_on_program_cache_miss(
@@ -41,8 +41,8 @@ UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_out
 namespace ttnn::prim {
 ttnn::Tensor uniform(
     const Tensor& input,
-    const float from,
-    const float to,
+    const float lower_bound,
+    const float upper_bound,
     const uint32_t seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
@@ -50,8 +50,8 @@ ttnn::Tensor uniform(
     TT_FATAL(input.device() != nullptr, "Uniform: Input tensor needs to be on device");
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            from,
-            to,
+            lower_bound,
+            upper_bound,
             seed,
             memory_config.value_or(input.memory_config()),
             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)},
