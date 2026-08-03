@@ -182,10 +182,10 @@ class TtPrefillRuntime:
         Two warmups: the first chunk (actual_start=0, the gather-Q path) AND — when the config is
         multi-chunk (max_seq_len > chunk_size) — a second chunk (actual_start>0), which is the ONLY
         path that fires the SP ring cache-read (attention/dense_sp.py). Without the second warmup the
-        ring kernels JIT-compile inside the first *served/timed* chunk, adding ~0.9s to it (first served
-        chunk ~2.16s vs ~1.28s warm, at 5k). (Separately, the very first run ever also pays a one-time
-        ~10.6s empty-disk kernel-cache compile — orthogonal to this warmup.) One-shot
-        (max_seq_len == chunk_size) never reaches the ring path and uses FABRIC_1D, so it skips it."""
+        ring kernels JIT-compile inside the first *served/timed* chunk, inflating first-request TTFT.
+        (This is separate from the one-time empty-disk kernel-cache compile that only the very first run
+        ever pays.) One-shot (max_seq_len == chunk_size) never reaches the ring path and uses FABRIC_1D,
+        so it skips the second warmup."""
         assert self.model_built
         chunk = self.config.chunk_size
         ring = self.config.max_seq_len > chunk
