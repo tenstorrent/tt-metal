@@ -51,16 +51,16 @@ inline void make_lane_salt() {
 inline void mix_uint32_fast() {
     // A shorter bijective ARX permutation. The two modular additions provide
     // the nonlinearity that a pure xorshift lacks, while alternating right
-    // and left shifts diffuses both the exponent and mantissa source bits.
-    TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+    // and left shifts diffuses the low 31 bits retained by SFPCAST.
+    TTI_SFPSHFT((-17) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT(3, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPSHFT(14, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSHFT((-4) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPSHFT((-7) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT(10, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPSHFT(5, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSHFT((-15) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPSHFT((-18) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG0, 0);
 }
 

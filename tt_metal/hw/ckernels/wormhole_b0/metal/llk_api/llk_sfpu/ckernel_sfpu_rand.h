@@ -57,24 +57,24 @@ inline void mix_uint32_fast() {
     // Wormhole's in-place SFPSHFT and SFPSHFT2 immediate-source semantics.
     // LREG1 holds x on entry and LREG0 holds the result on exit.
     TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    // (-16 & 15) == 0: LREG4 = LREG0 >> 16.
-    TTI_SFPSHFT2((-16) & 0xFFF, 0, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    // (-17 & 15) == 15: LREG4 = LREG0 >> 17.
+    TTI_SFPSHFT2((-17) & 0xFFF, 0, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
 
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-    TTI_SFPSHFT(3, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
+    TTI_SFPSHFT(14, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
     TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
 
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-    TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG4, sfpshft_mod1_arg_imm);
+    TTI_SFPSHFT((-7) & 0xFFF, 0, p_sfpu::LREG4, sfpshft_mod1_arg_imm);
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
 
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG1, 0);
-    TTI_SFPSHFT(10, 0, p_sfpu::LREG1, sfpshft_mod1_arg_imm);
+    TTI_SFPSHFT(5, 0, p_sfpu::LREG1, sfpshft_mod1_arg_imm);
     TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
 
-    // (-15 & 15) == 1: LREG0 = LREG1 >> 15.
-    TTI_SFPSHFT2((-15) & 0xFFF, 0, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    // (-18 & 15) == 14: LREG0 = LREG1 >> 18.
+    TTI_SFPSHFT2((-18) & 0xFFF, 0, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
     TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
 }
 
