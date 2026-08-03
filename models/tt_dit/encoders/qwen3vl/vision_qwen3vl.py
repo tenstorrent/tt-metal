@@ -9,8 +9,9 @@ exports intermediate features from `deepstack_visual_indexes` that the decoder a
 layers. MiniMax-H3 needs it for the `fl2va` and `ref2va` tasks; `t2va` passes no pixels and never
 reaches it.
 
-Currently ported: the input stage (patch embedding and interpolated position embedding). The blocks,
-attention and mergers are still to come.
+The whole tower is ported. `forward` returns the merged output tokens plus one deepstack feature per
+entry of `deepstack_visual_indexes`, matching `Qwen3VLVisionModel`'s `pooler_output` and
+`deepstack_features`.
 
 Two things about this tower differ from the text encoder in `model_qwen3vl.py`:
 
@@ -24,14 +25,18 @@ Two things about this tower differ from the text encoder in `model_qwen3vl.py`:
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import torch
 
 import ttnn
 
 from ...layers.linear import Linear
-from ...layers.module import Module
+from ...layers.module import Module, ModuleList
 from ...layers.normalization import LayerNorm
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # `ttnn` SDPA requires a tile-aligned head dimension.
 _TILE = 32
@@ -317,3 +322,156 @@ class Qwen3VlVisionBlock(Module):
     def forward(self, hidden_states: ttnn.Tensor, *, pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
         hidden_states = hidden_states + self.attn.forward(self.norm1.forward(hidden_states), pos_embeds=pos_embeds)
         return hidden_states + self.mlp.forward(self.norm2.forward(hidden_states))
+
+
+class Qwen3VlVisionPatchMerger(Module):
+    """Merges a `spatial_merge_size ** 2` block of patches into one `out_hidden_size` token.
+
+    `use_postshuffle_norm` is the only structural difference between the tower's output merger and its
+    deepstack mergers, and it is not merely where the reshape sits: pre-shuffle normalizes each patch
+    independently over `hidden_size`, while post-shuffle normalizes the concatenated group of four over
+    `hidden_size * merge ** 2`. Different statistics, so the two are not interchangeable.
+
+    The reference uses `nn.GELU()` here -- the exact erf form -- where the block MLP uses
+    `gelu_pytorch_tanh`. Both map to `ttnn.gelu`'s default (accurate) mode: the two torch forms differ
+    by at most 4.7e-4, which is ~23x below the 1.1e-2 bf16 quantization noise floor, so the distinction
+    is not observable at this precision. Do not switch to `fast_and_approximate_mode=True`, which is
+    2.4e-2 and would be.
+    """
+
+    def __init__(
+        self,
+        *,
+        hidden_size: int,
+        out_hidden_size: int,
+        spatial_merge_size: int,
+        norm_eps: float,
+        use_postshuffle_norm: bool,
+        mesh_device,
+    ) -> None:
+        super().__init__()
+        self.merged_size = hidden_size * spatial_merge_size**2
+        self.use_postshuffle_norm = use_postshuffle_norm
+        self.norm = LayerNorm(
+            self.merged_size if use_postshuffle_norm else hidden_size, norm_eps=norm_eps, mesh_device=mesh_device
+        )
+        self.linear_fc1 = Linear(self.merged_size, self.merged_size, bias=True, mesh_device=mesh_device)
+        self.linear_fc2 = Linear(self.merged_size, out_hidden_size, bias=True, mesh_device=mesh_device)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """`(total_patches, hidden_size)` -> `(total_patches // merge ** 2, out_hidden_size)`."""
+        if self.use_postshuffle_norm:
+            x = self.norm.forward(ttnn.reshape(x, (-1, self.merged_size)))
+        else:
+            x = ttnn.reshape(self.norm.forward(x), (-1, self.merged_size))
+        return self.linear_fc2.forward(ttnn.gelu(self.linear_fc1.forward(x)))
+
+
+class Qwen3VlVisionModel(Module):
+    """The Qwen3-VL vision tower.
+
+    `forward` returns `(merged_tokens, deepstack_features)`, corresponding to the reference's
+    `pooler_output` and `deepstack_features`. The decoder scatters the former into the text sequence at
+    `<|image_pad|>` positions and adds the latter into its first few layers.
+
+    The position table is kept on the host rather than the device: interpolating it is a pure function
+    of `grid_thw` and the table, so `prepare_pos_embeds` settles it with host arithmetic and the result
+    is uploaded, as with the rotary tensors.
+    """
+
+    def __init__(
+        self,
+        *,
+        hidden_size: int = 1152,
+        num_heads: int = 16,
+        depth: int = 27,
+        intermediate_size: int = 4304,
+        in_channels: int = 3,
+        patch_size: int = 16,
+        temporal_patch_size: int = 2,
+        spatial_merge_size: int = 2,
+        num_position_embeddings: int = 2304,
+        out_hidden_size: int = 5120,
+        hidden_act: str = "gelu_pytorch_tanh",
+        norm_eps: float = 1e-6,
+        deepstack_visual_indexes: Sequence[int] = (8, 16, 24),
+        mesh_device: ttnn.MeshDevice,
+    ) -> None:
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.head_dim = hidden_size // num_heads
+        self.spatial_merge_size = spatial_merge_size
+        self.num_grid_per_side = int(num_position_embeddings**0.5)
+        self.deepstack_visual_indexes = tuple(deepstack_visual_indexes)
+        self._pos_embed_weight: torch.Tensor | None = None
+
+        self.patch_embed = Qwen3VlVisionPatchEmbed(
+            in_channels=in_channels,
+            hidden_size=hidden_size,
+            patch_size=patch_size,
+            temporal_patch_size=temporal_patch_size,
+            mesh_device=mesh_device,
+        )
+        self.blocks = ModuleList(
+            Qwen3VlVisionBlock(
+                hidden_size=hidden_size,
+                num_heads=num_heads,
+                intermediate_size=intermediate_size,
+                hidden_act=hidden_act,
+                norm_eps=norm_eps,
+                mesh_device=mesh_device,
+            )
+            for _ in range(depth)
+        )
+        merger_kwargs = dict(
+            hidden_size=hidden_size,
+            out_hidden_size=out_hidden_size,
+            spatial_merge_size=spatial_merge_size,
+            norm_eps=norm_eps,
+            mesh_device=mesh_device,
+        )
+        self.merger = Qwen3VlVisionPatchMerger(use_postshuffle_norm=False, **merger_kwargs)
+        self.deepstack_merger_list = ModuleList(
+            Qwen3VlVisionPatchMerger(use_postshuffle_norm=True, **merger_kwargs) for _ in self.deepstack_visual_indexes
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # The position table never reaches the device: it is only read by `prepare_pos_embeds`, which
+        # runs on the host. Popping it keeps a strict load from reporting it as unexpected.
+        weight = state.pop("pos_embed.weight", None)
+        if weight is not None:
+            self._pos_embed_weight = weight.detach().float()
+
+    def prepare_pos_embeds(self, grid_thw: torch.Tensor) -> torch.Tensor:
+        """The `(total_patches, hidden_size)` interpolated position embedding, on the host."""
+        if self._pos_embed_weight is None:
+            msg = "pos_embed weight is unavailable; call load_torch_state_dict first"
+            raise ValueError(msg)
+        return vision_pos_embeds(
+            self._pos_embed_weight,
+            grid_thw,
+            num_grid_per_side=self.num_grid_per_side,
+            spatial_merge_size=self.spatial_merge_size,
+        )
+
+    def prepare_rope(self, grid_thw: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """The `(cos, sin)` the tower's blocks rotate with, on the host."""
+        return vision_rope_tensors(grid_thw, head_dim=self.head_dim, spatial_merge_size=self.spatial_merge_size)
+
+    def forward(
+        self,
+        patches: ttnn.Tensor,
+        *,
+        pos_embeds: ttnn.Tensor,
+        rope: tuple[ttnn.Tensor, ttnn.Tensor],
+    ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
+        hidden_states = ttnn.add(self.patch_embed.forward(patches), pos_embeds)
+
+        deepstack_features: list[ttnn.Tensor] = []
+        for layer_idx, block in enumerate(self.blocks):
+            hidden_states = block.forward(hidden_states, pos_embeds=rope)
+            if layer_idx in self.deepstack_visual_indexes:
+                merger = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_idx)]
+                deepstack_features.append(merger.forward(hidden_states))
+
+        return self.merger.forward(hidden_states), deepstack_features
