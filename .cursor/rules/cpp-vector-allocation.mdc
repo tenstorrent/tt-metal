@@ -13,7 +13,8 @@ writing new code or editing existing accumulation logic.
 
 Call `reserve()` whenever the final element count is known or cheaply computable at
 the point of declaration, before any `push_back` / `emplace_back` / `insert` /
-`std::back_inserter`. An upper bound is fine: conditional appends still benefit.
+`std::back_inserter`. A tight upper bound is acceptable when its memory cost is reasonable;
+avoid reserving a loose bound that may greatly exceed the likely final size.
 
 ```cpp
 // BAD - reallocates as it grows, re-copying every element each time
