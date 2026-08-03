@@ -29,6 +29,9 @@
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 void kernel_main() {
+    // End-to-end kernel zone; see producer_combine_fabric2d.cpp for what CMB_E2E means and why the
+    // name is shared across both combine implementations. No-op unless the device profiler is on.
+    DeviceZoneScopedN("CMB_E2E");
     using namespace ttnn::operations::ccl::common;
 
     // ===== Compile Time Args =====

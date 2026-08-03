@@ -91,6 +91,12 @@ constexpr uint64_t CMD_FORWARD = 2;
 constexpr uint64_t SENTINEL_DST_CHIP = UINT64_MAX;
 
 void kernel_main() {
+    // End-to-end kernel zone. Spans the whole of kernel_main by RAII, so it covers the fabric connection
+    // open, the header prebuild and the drain as well as the send loop. Named identically in every kernel of
+    // both combine implementations so the two can be compared on one methodology: per chip, the op's
+    // end-to-end time is the largest CMB_E2E on it, since the chip is not done until its slowest core is.
+    // Compiles to nothing unless the device profiler is enabled, so non-profiled runs are unaffected.
+    DeviceZoneScopedN("CMB_E2E");
     // First thing the kernel does, so the fabric connection open and the header prebuild below are both
     // inside the kernel-total window.
     const uint64_t t_kernel_start = wall_clock();
