@@ -218,29 +218,10 @@ inline std::uint32_t convert_to_mxfp_elem_bits(float datum, const FormatParams& 
             // significant bits of mant_with_hb, in which case the result is
             // unconditionally zero.
             std::uint32_t mant_exp_adjusted_pre = (shift >= 24) ? 0u : (mant_with_hb >> shift);
-            // The shift above is truncating, so fold the bits it drops into a sticky
-            // bit before rounding. Without this, a value just above a rounding
-            // midpoint looks like an exact tie and rounds the wrong way (e.g. MxFp4
-            // 0.25000006 -> 0 instead of 0.5). OR-ing into bit 0 is safe because the
-            // round position is bit 23 - mant_width, well above bit 0 for every MX
-            // format (mant_width <= 3). This packer converts host data into MX, so
-            // its reference is the OCP MX spec's round-to-nearest-even; no hardware
-            // performs this conversion. Note the tt-llk golden
-            // _quantize_fp4_storage_model omits this sticky bit -- that model targets
-            // the hardware packer (device MX output), which is a separate question.
             const std::uint32_t discarded = (shift >= 32) ? mant_with_hb : (mant_with_hb & ((1u << shift) - 1u));
             if (discarded != 0u) {
                 mant_exp_adjusted_pre |= 1u;
             }
-            // input_width is 23, not 24: mant_with_hb is the significand scaled by
-            // 2^23 (value = mant_with_hb / 2^23), so it carries 23 fraction bits --
-            // the same fixed-point scale the normal path passes as 23 above. The
-            // right-shift by `shift` changes the value, not the number of fraction
-            // bits. Passing 24 would round off one extra bit and encode every
-            // subnormal element a binade too small (halved), collapsing the
-            // smallest subnormal to zero. Matches the tt-llk golden
-            // _quantize_fp4_storage_model, which applies the same rounder with
-            // shift_out hard-coded to 23 - mant_width in its subnormal branch.
             auto [mant_round_sub, exp_inc_sub] = round_ties_even(mant_exp_adjusted_pre, mant_width, 23);
             mant_exp_adjusted = mant_round_sub;
             elem_exp_unbiased_adj =
