@@ -66,7 +66,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Scaled by LOOP_FACTOR to match the number of dvalids the math thread now consumes.
             _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT * DVALIDS_PER_TILE);
             return;
         }
@@ -123,7 +122,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            // Scaled by LOOP_FACTOR to match the number of dvalids the unpack thread now produces.
             _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * DVALIDS_PER_TILE);
             return;
         }

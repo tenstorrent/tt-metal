@@ -67,10 +67,6 @@ def test_perf_reduce(
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
         ],
-        # LOOP_FACTOR keeps the measured TILE_LOOP window above ~1000 cycles. Zone instrumentation
-        # carries a fixed ~4-6 cycle per-zone cost, which on a 300-cycle window reads as >1% while
-        # being irrelevant to any real op. Measured on unpack_tilize the delta stays at +4 cycles while
-        # the window grows 244 -> 1178, so this raises measurement resolution; it does not hide cost.
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(
             None,
