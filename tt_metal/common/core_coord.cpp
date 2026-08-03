@@ -288,7 +288,9 @@ bool CoreRangeSet::intersects(const CoreRangeSet& other) const {
 
 CoreRangeSet CoreRangeSet::intersection(const CoreRangeSet& other) const {
     std::vector<CoreRange> intersection;
-    intersection.reserve(this->ranges_.size() * other.ranges().size());
+    // Only estimate the likely result size: the Cartesian-product upper bound would over-allocate
+    // heavily for sparse or disjoint range sets.
+    intersection.reserve(std::max(this->ranges_.size(), other.ranges().size()));
     for (const auto& local_cr : this->ranges_) {
         for (const auto& other_cr : other.ranges()) {
             if (auto intersect = local_cr.intersection(other_cr); intersect.has_value()) {
