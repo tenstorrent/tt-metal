@@ -214,7 +214,6 @@ def test_dispositions_accepted_when_every_actionable_thread_is_answered(
                 "comment_id": 101,
                 "action": "changed",
                 "reply": "Shared the constexpr across all five sites.",
-                "arches_required": ["wormhole"],
             },
             {
                 "comment_id": 202,
@@ -227,10 +226,6 @@ def test_dispositions_accepted_when_every_actionable_thread_is_answered(
     assert (
         json.loads((log_dir / "run.json").read_text())["review_dispositions"]["count"]
         == 2
-    )
-    assert (
-        json.loads((log_dir / "state.json").read_text())["REVIEW_ARCHES_REQUESTED"]
-        == "wormhole"
     )
 
 

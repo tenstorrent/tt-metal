@@ -391,25 +391,19 @@ if missing:
 if problems:
     raise SystemExit("INVALID_DISPOSITIONS:\n  " + "\n  ".join(problems))
 
-arches, perf = set(), False
-for entry in by_id.values():
-    arches.update(str(a).strip().lower() for a in (entry.get("arches_required") or []))
-    perf = perf or bool(entry.get("perf_relevant"))
+perf = any(e.get("perf_relevant") for e in by_id.values())
 normalized = {"version": 1, "threads": [by_id[k] for k in sorted(by_id)]}
 with open(path, "w", encoding="utf-8") as f:
     json.dump(normalized, f, indent=2)
 print(json.dumps({
     "count": len(by_id),
     "changed": sum(1 for e in by_id.values() if e.get("action") == "changed"),
-    "arches_required": sorted(a for a in arches if a in {"blackhole", "wormhole", "quasar"}),
     "perf_relevant": perf,
 }))
 PY
 )" || { echo "$out" >&2; ss OBSTACLE "invalid review dispositions"; return 1; }
 
-    local perf; perf="$(printf '%s' "$out" | python -c "import json,sys;print('1' if json.load(sys.stdin)['perf_relevant'] else '0')")"
-    ss PERF_REQUESTED "$perf" --json
-    ss REVIEW_ARCHES_REQUESTED "$(printf '%s' "$out" | python -c "import json,sys;print(','.join(json.load(sys.stdin)['arches_required']))")"
+    ss PERF_REQUESTED "$(printf '%s' "$out" | python -c "import json,sys;print(int(json.load(sys.stdin)['perf_relevant']))")" --json
     rj metric --patch-json "{\"review_dispositions\": $out}"
     echo "$out"
 }

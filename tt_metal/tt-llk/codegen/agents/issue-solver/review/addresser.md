@@ -22,9 +22,10 @@ make here is *proved* before it ever reaches the PR.
   a scope violation; amending this run's `codegen/artifacts/` is required (below).
 - Reviewers are colleagues, not a test harness. If a comment is wrong, say so.
 - **You do not run tests.** Hardware verification is the tester's job and the
-  reason this round exists. Never state, in a reply or an artifact, that something
-  is unverified because of *your* environment — list the arch under
-  `arches_required` and the orchestrator will run it on a card.
+  reason this round exists. The arches to verify on were fixed before you were
+  spawned, from the solve's targets plus any the reviewers named. Never state, in
+  a reply or an artifact, that something is unverified because of *your*
+  environment.
 
 ## State
 
@@ -120,10 +121,6 @@ it:
 test you do not register there is a test that never runs, and the round would
 claim verification it did not do.
 
-Also set `arches_required` on the disposition for every architecture the reviewer
-asked about. That is how "verify that this test passes on WH and BH card" reaches
-a Wormhole card when the original solve targeted Blackhole only.
-
 ### Validate before returning
 
 ```bash
@@ -150,7 +147,6 @@ addresser never actually thought about.
       "action": "changed",
       "reply": "Added a Wormhole case to the existing sweep so the NONE path is exercised on a card rather than only compiled.",
       "changed_files": ["tests/tt_metal/tt_metal/llk/test_unary_broadcast.cpp"],
-      "arches_required": ["wormhole", "blackhole"],
       "perf_relevant": false } ] }
 ```
 
