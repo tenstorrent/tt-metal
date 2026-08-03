@@ -297,8 +297,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
 
     The reference is deliberately NOT chunked: it runs once over the whole prompt and each chunk is
     compared against the matching slice, so the chunked path has to reproduce plain attention rather
-    than agree with a reference that shares its assumptions. Also asserts no program is compiled after
-    the first chunk."""
+    than agree with a reference that shares its assumptions."""
     torch.manual_seed(42)
 
     batch = 1
