@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Voxtral-TTS Block 1 (3.4B AR backbone) on TTNN, ours rather than `tt_transformers`.
+"""Voxtral-TTS Block 1: the 3.4B autoregressive backbone, on TTNN.
 
-Block 1, ours. It replaced a `models/tt_transformers` wrapper, which is gone -- see git history
-if you need it (`tt/ttnn_voxtral_backbone.py`, removed once this beat it on every metric). The
-rationale for owning this is in STATUS.md's Block 1 section.
+Ours. It replaced a `models/tt_transformers` wrapper, which is gone -- see git history if you
+need it (`tt/ttnn_voxtral_backbone.py`, removed once this beat it on every metric). The rationale
+for owning this is in STATUS.md's Block 1 section.
 
 Measured against the fp32 CPU reference on REAL prompts (never random ones -- STATUS.md trap #12),
 with `tt_transformers` on the same metric for comparison:
@@ -13,30 +13,35 @@ with `tt_transformers` on the same metric for comparison:
                              ours (mixed W)   ours BFP8 W   tt_transformers
     prefill, last position     0.999881        0.999881       0.999564
     decode step                0.99991         0.99986        0.981
-    decode ms/step             38.7            33.6           48
+    decode ms/frame            34.9            33.6           48
     end-to-end natural WER     0.88%           87.39%         1.17%
 
 ALL-BFP8 IS THE FAST ONE AND WE DO NOT SHIP IT. It triggers a card-wedging hang in multi-utterance
-runs and drives fixture case 4 into a repetition loop; both vanish under the mixed default. See
-WEIGHT_DTYPE and ttnn_voxtral_pipeline.CLEAR_PROGRAM_CACHE.
+runs; the mixed default avoids it. See WEIGHT_DTYPE here, and the full diagnosis in
+ttnn_voxtral_pipeline.
+
+(An earlier version of this note also blamed all-BFP8 for fixture case 4's repetition loop. That
+was wrong: case 4 is chaotic in EVERY implementation including the fp32 CPU reference, so it
+cannot attribute anything -- see score_quality_set.py's model-unstable bucket.)
 
 The decode gap against tt_transformers (0.99991 vs 0.981) is real and reproduces at every weight
 dtype we tried, so it is not ours to explain -- but note it is NOT caused by sdpa_decode, which is
 nearly free at these shapes.
 
 Mirrors `voxtral_backbone_ref._layer` op-for-op. Structurally this is Block 2's `_block` plus
-three things -- RoPE, a causal mask, and a KV cache -- so what Block 2 already proved carries over
-unchanged: the row fold, k+v fused into one weight, `nlp_create_qkv_heads`, HiFi4 with
-fp32_dest_acc_en, bf16 activations. And so does its central lesson, which decode needed twice: a
+three things -- RoPE, a causal mask in PREFILL, and a KV cache -- so what Block 2 already proved
+carries over unchanged: the row fold, q/k/v fused into one weight, HiFi4 with fp32_dest_acc_en,
+bf16 activations. And so does its central lesson, which decode needed twice: a
 BATCHED matmul costs per batch element, so fold whatever you can into ROWS (see `_layer_step`).
 
-DECODE IS BOUND BY WEIGHT BYTES, so the weight dtype is the speed. The six linears alone measure
-31.1 ms at bf16 for 6.05 GB, i.e. 194 GB/s -- the same ceiling a plain interleaved matmul reaches
-after the Block 2 work, so there is no layout trick left in them. Everything else in the step is
-overhead to be removed, and BFP8 halves the floor itself.
+DECODE IS BOUND BY WEIGHT BYTES, so the weight dtype is the speed. At the shipped mixed precision
+the six linears stream 4.58 GB per step and measure ~23.6 ms, i.e. 194 GB/s -- the same ceiling a
+plain interleaved matmul reaches after the Block 2 work, and hand-tuned matmul program configs
+measured SLOWER (169 vs 193 GB/s on wq). There is no layout trick left in them: only fewer BYTES
+help, and how far that can go is capped by the hang described at WEIGHT_DTYPE.
 
 WHERE THE TIME GOES, per decode frame, steady state on one N150 (measure with
-scratch probe_perf.py; the numbers below are case 2, 448 frames):
+the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
 
     six linears, weight streaming     ~23.6 ms   AT THE CEILING -- 194 GB/s, and a plain
                                                  interleaved matmul cannot do better here.
@@ -85,14 +90,37 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 
 SCALE = HEAD_DIM**-0.5
 Q_WIDTH = N_HEADS * HEAD_DIM          # 4096, deliberately != DIM
-KV_WIDTH = N_KV_HEADS * HEAD_DIM      # 1024
 TILE = 32
-# Prefill pads its sequence to this. TILE is all correctness needs -- unlike the `tt_transformers`
-# path, nothing here shards the sequence across the core grid, which is what forced ITS 256.
-# 128 is a SHAPE-CHURN choice, not a hardware one: every distinct padded
-# length is a distinct set of kernels, and a first-time compile costs ~6 s against ~1.3 s for a
-# warm prefill. At 32 the 15 fixture prompts want 11 distinct shapes; at 128 they want 3, and the
-# extra attention work on the padding is a fraction of one prefill that happens once per utterance.
+# Prefill pads its sequence to this. Correctness needs only TILE -- nothing here shards the
+# sequence across the core grid, which is what forced the tt_transformers path to 256.
+#
+# WHY PAD AT ALL, given that ttnn handles a sub-tile remainder itself: our prefill builds an
+# EXPLICIT [1,1,Sp,Sp] causal mask, and a tile-aligned length keeps mask, scores and softmax from
+# disagreeing at a ragged edge. Implementations that use sdpa(is_causal=True) materialise no mask
+# and so need no padding at all -- that is what the XTTS-v2 GPT and the ign/voxtral_p150_qb2
+# branch both do. Measured here, sdpa prefill costs 0.99988 -> 0.99977 PCC at the LAST position,
+# the one value that seeds every decode step, and saves ~30 ms of a ~100 ms prefill. Not worth it;
+# see below for why 30 ms is noise.
+#
+# WHY 128 SPECIFICALLY. Every op in prefill carries the sequence dimension -- the norms, all five
+# linears, the head split, RoPE, fill_cache, and the [1,32,Sp,Sp] score tensor -- so each distinct
+# Sp is its own set of compiled kernels. The 15 fixture prompts span P=74..357: unpadded that is
+# 15 shape-sets, at 128 it is three (128/256/384). Padding also caps the QUADRATIC term at three
+# known sizes; the worst case is P=357 -> 384, costing (384/357)^2 = 1.16x on attention.
+#
+# The repo's shared helper, tt_transformers' get_padded_prefill_len, uses a coarser ladder --
+# 128, then 1024, then powers of two. Do not adopt it here: it would send our 357 to 1024, i.e.
+# 7x the quadratic work, because it is tuned for LLM serving where prompts vary by orders of
+# magnitude. Ours are bounded by a voice preset plus a sentence.
+#
+# PREFILL COST HAS THREE TIERS, which is why "prefill is slow" and "prefill is free" are both
+# quoted in this repo's history:
+#     first ever at a shape, cold disk kernel cache      ~6 s
+#     first in a process, warm disk / empty program cache ~1.5 s
+#     subsequent in the same process                     ~100-146 ms
+# A long-lived server pays tier 2 once per shape then tier 3 forever, so prefill settles at ~0.4%
+# of a 36 s utterance -- less than Block 3's codec pass. Fewer shapes means fewer tier-1 and
+# tier-2 hits, which is the second reason to keep the padding.
 PREFILL_MULTIPLE = 128
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,

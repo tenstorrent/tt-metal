@@ -20,9 +20,11 @@ Branch: `lserbedzija/voxtral-tts-ttnn` (pushed). All work is under
 | **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0.88% WER on natural text |
 | Codec **encoder** | **impossible** — weights absent from the public release |
 
-**Block 1 now runs on our own implementation, not `tt_transformers`.** The wrapper stays runnable
-for bisection (`VOXTRAL_BACKBONE=tt_transformers`, needs `HF_MODEL`). Measured against the fp32
-CPU reference on real prompts, and end to end on the 15-case fixture:
+**Block 1 now runs on our own implementation, not `tt_transformers`.** The wrapper is DELETED, not
+parked behind a flag -- `git show d3dcb0fb7c6^:models/experimental/voxtral_tts/tt/ttnn_voxtral_backbone.py`
+if you ever need it back for bisection (it also needs `scripts/export_backbone_hf.py` from the same
+commit, plus `HF_MODEL`). Measured against the fp32 CPU reference on real prompts, and end to end
+on the 15-case fixture:
 
 | | ours | `tt_transformers` |
 |---|---|---|
@@ -90,10 +92,8 @@ Passing the directory instead of the file list collects nothing — pass the fil
 **End-to-end on device, and the quality numbers in §3.1:**
 ```bash
 python models/experimental/voxtral_tts/scripts/generate_quality_set.py
-# No HF export and no HF_MODEL: Block 1 is ours now and loads the Mistral-native checkpoint.
-# Only the bisection path needs them:
-#   scripts/export_backbone_hf.py --out /tmp/hf_backbone
-#   VOXTRAL_BACKBONE=tt_transformers HF_MODEL=/tmp/hf_backbone python .../generate_quality_set.py
+# No HF export and no HF_MODEL: Block 1 is ours and loads the Mistral-native checkpoint directly.
+# Those were only ever needed by the deleted tt_transformers wrapper (see §1).
 python models/experimental/voxtral_tts/scripts/score_quality_set.py \
   models/experimental/voxtral_tts/generated/results.json
 ```
@@ -561,8 +561,10 @@ on the grounds that a 3-token sequence means tiny ops. A tile is 32x32, so every
 of work for 3 useful tokens against 3072x9216 weights. Upstream's 47%-from-CUDA-graphs does not
 apply — their bottleneck was launch overhead.
 
-`USE_TRACE` is left **False**: ~6% is real but it forces `trace_region_size` on every caller. Flip it
-when that 6% is worth the coupling. Read trap #1 before touching capture code.
+Tracing is now **on unconditionally** for both blocks, no flag -- that ~6% is worth the one cost it
+imposes, which is that every caller must open the device with a `trace_region_size` (use
+`ttnn_voxtral_pipeline.open_device`). Read trap #1 before touching capture code, and note that
+Block 1 and Block 2 must complete ALL warm-ups before EITHER captures (`_prepare_traces`).
 Upstream's 47%-from-CUDA-graphs figure does not apply to us: their bottleneck was launch overhead,
 ours is arithmetic. Read trap #1 before touching capture code.
 
