@@ -4,11 +4,11 @@
 
 #include "combine_fabric2d.hpp"
 #include "device/combine_fabric2d_device_operation.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 ttnn::Tensor combine_fabric2d(
-    ttnn::MeshDevice& device,
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
     const ttnn::Tensor& expert_token_counts,
@@ -18,17 +18,21 @@ ttnn::Tensor combine_fabric2d(
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
-    uint32_t axis,
+    uint32_t cluster_axis,
     uint32_t num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     bool init_zeros,
+    bool use_fp8_combine,
     uint32_t num_l1_slots,
     uint32_t fwd_bump_every,
     uint32_t assignment_order,
     uint32_t stall_telemetry) {
+    // Accepted for signature parity with the production op, but there is nowhere to produce fp8: it comes
+    // out of the packer during untilize and this op has no untilize stage.
+    TT_FATAL(!use_fp8_combine, "combine_fabric2d does not support fp8 output (no untilize stage to produce it)");
     return ttnn::prim::combine_fabric2d(
-        &device,
+        dispatched_buffer.device(),
         dispatched_buffer,
         dispatched_metadata,
         expert_token_counts,
@@ -38,7 +42,7 @@ ttnn::Tensor combine_fabric2d(
         experts_per_chip,
         num_experts_per_tok,
         seq_len_per_chip,
-        axis,
+        cluster_axis,
         num_links,
         topology.value_or(tt::tt_fabric::Topology::Mesh),
         memory_config.value_or(
