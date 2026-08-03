@@ -1,0 +1,8 @@
+{
+  "functional_vs_fused_decode_pcc": 0.9999678128843891,
+  "functional_vs_fused_prefill_pcc": 1.0,
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "sequence_length": 32,
+  "threshold": 0.99
+}

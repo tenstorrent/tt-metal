@@ -1,0 +1,67 @@
+{
+  "candidate": "bfp4_experts_isolated",
+  "candidate_result": {
+    "decode_trace_host_ms_median": 1.5533780679106712,
+    "decode_trace_host_ms_samples": [
+      1.5533780679106712,
+      1.5525961061939597,
+      1.5457830158993602,
+      1.5852580545470119,
+      1.5701699303463101
+    ],
+    "output_shape": [
+      1,
+      1,
+      1,
+      2816
+    ],
+    "prefill_host_ms_median": 385.17754105851054,
+    "prefill_host_ms_samples": [
+      385.27922495268285,
+      385.15595998615026,
+      385.37471706513315,
+      385.0634340196848,
+      385.17754105851054
+    ]
+  },
+  "decode_speedup_vs_fused": 1.5805843121431573,
+  "fused": {
+    "decode_trace_host_ms_median": 2.455245004966855,
+    "decode_trace_host_ms_samples": [
+      2.4578500306233764,
+      2.4540029698982835,
+      2.4533719988539815,
+      2.455245004966855,
+      2.4626690428704023
+    ],
+    "output_shape": [
+      1,
+      1,
+      1,
+      2816
+    ],
+    "prefill_host_ms_median": 401.5319920144975,
+    "prefill_host_ms_samples": [
+      401.67740907054394,
+      401.7207820434123,
+      401.4003810007125,
+      401.5319920144975,
+      401.3681700453162
+    ]
+  },
+  "fused_vs_candidate_decode_pcc": 0.9989245735836816,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "logical_batch": 1,
+  "policy": {
+    "attention_math_fidelity": "MathFidelity.HiFi4",
+    "attention_weight_dtype": "DataType.BFLOAT16",
+    "dense_math_fidelity": "MathFidelity.HiFi4",
+    "dense_weight_dtype": "DataType.BFLOAT16",
+    "expert_down_in0_block_w": "11",
+    "expert_math_fidelity": "MathFidelity.LoFi",
+    "expert_up_gate_in0_block_w": "8",
+    "expert_weight_dtype": "DataType.BFLOAT4_B"
+  },
+  "tile_padded_rows": 32
+}

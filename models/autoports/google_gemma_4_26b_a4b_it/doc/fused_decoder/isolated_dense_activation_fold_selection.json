@@ -1,0 +1,94 @@
+{
+  "batch": 1,
+  "candidate": "always_fold_dense_activation",
+  "candidate_result": {
+    "decode_trace_host_ms_median": 2.4754400365054607,
+    "decode_trace_host_ms_samples": [
+      2.461153082549572,
+      2.483605989255011,
+      2.45484197512269,
+      2.4754400365054607,
+      2.4551720125600696,
+      2.4765919661149383,
+      2.4758410872891545,
+      2.477844012901187,
+      2.453627996146679,
+      2.4863609578460455,
+      2.4513149401172996
+    ],
+    "output_shape": [
+      1,
+      1,
+      1,
+      2816
+    ],
+    "prefill_host_ms_median": 401.36505605187267,
+    "prefill_host_ms_samples": [
+      401.3647750252858,
+      401.5637430129573,
+      401.49662597104907,
+      401.3453989755362,
+      401.20567206759006,
+      401.29141602665186,
+      401.36505605187267,
+      401.5920589445159,
+      401.3086491031572,
+      401.5402100048959,
+      401.43234410788864
+    ]
+  },
+  "decode_winner": "final",
+  "equivalence_threshold": 0.99,
+  "final": {
+    "decode_trace_host_ms_median": 2.455341978929937,
+    "decode_trace_host_ms_samples": [
+      2.4585379287600517,
+      2.458037924952805,
+      2.456385060213506,
+      2.4536290438845754,
+      2.459190087392926,
+      2.455341978929937,
+      2.4571450194343925,
+      2.454331028275192,
+      2.454850939102471,
+      2.455202047713101,
+      2.4497320409864187
+    ],
+    "output_shape": [
+      1,
+      1,
+      1,
+      2816
+    ],
+    "prefill_host_ms_median": 401.34634997230023,
+    "prefill_host_ms_samples": [
+      401.3299780199304,
+      401.5932190231979,
+      401.66114806197584,
+      401.5238679712638,
+      401.2706959620118,
+      401.32691198959947,
+      401.22307499404997,
+      401.34634997230023,
+      401.40963008161634,
+      401.40914893709123,
+      401.3301789527759
+    ]
+  },
+  "functional_equivalence_pcc": 1.0,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "minimum_material_prefill_improvement_fraction": 0.001,
+  "observed_prefill_improvement_fraction": -4.660832115137022e-05,
+  "prefill_winner": "final",
+  "provenance": {
+    "decoder": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/fused_decoder.py",
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_DENSE_ACTIVATION_CANDIDATE=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_isolated_dense_activation_fold_candidate",
+    "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+    "functional_test_sha256": "25c39e79914213ee0d2800b7074fd008c77d230c207784160ccfa33c57326419",
+    "fused_decoder_sha256": "fbdf80a2158b447f69c10c11f27139fa58de73ed0cc69e48153850f79b5a12e0",
+    "test_sha256": "106c33ac35c4a64d5fdd2e94ec63a8bc5766ecd20b5f3385ce6ce52231617899"
+  },
+  "selection": "explicit GELU for prefill and decode",
+  "sequence_length": 1024
+}

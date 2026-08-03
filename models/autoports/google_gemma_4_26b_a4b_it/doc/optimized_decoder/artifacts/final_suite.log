@@ -1,0 +1,11 @@
+Command:
+GEMMA4_RANGE_DOWNLOAD=1 TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py
+
+Captured UTC: 2026-08-03T13:34:16Z through 2026-08-03T13:35:44Z
+Result: 71 collected; 13 passed; 58 intentional opt-in skips; 0 failed; 0 errors; 87.771 seconds.
+
+Additional source gates:
+- python -m py_compile optimized_decoder.py test_optimized_decoder.py: passed
+- python -m json.tool doc/context_contract.json: passed
+- git diff --check over stage source, tests, Markdown, and JSON: passed
+- generated profiler CSV and watcher/triage captures preserve byte-exact tool output

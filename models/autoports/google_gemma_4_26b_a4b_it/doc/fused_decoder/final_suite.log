@@ -1,0 +1,528 @@
+Script started on 2026-08-03 11:43:46+00:00 [COMMAND="GEMMA4_RANGE_DOWNLOAD=1 TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py" <not executed on terminal>]
+[32m2026-08-03 11:43:47.931[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m76[0m - [34m[1mLoading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES[0m
+[32m2026-08-03 11:43:47.931[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m79[0m - [34m[1mInitial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=true,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}[0m
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collecting 38 items                                                            collected 38 items                                                             
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-sliding_shared-device_params0-mesh_device0] [90m2026-08-03 11:43:49.677[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:228)[0m
+[90m2026-08-03 11:43:49.677[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor started.[0m [90m(cluster.cpp:348)[0m
+[90m2026-08-03 11:43:49.677[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating TopologyDiscovery for architecture: blackhole[0m [90m(topology_discovery.cpp:91)[0m
+[90m2026-08-03 11:43:49.677[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting topology discovery.[0m [90m(topology_discovery.cpp:110)[0m
+[90m2026-08-03 11:43:49.678[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.9.0[0m [90m(topology_discovery.cpp:569)[0m
+[90m2026-08-03 11:43:49.678[0m | [32minfo    [m | [35m            UMD[0m | [37mFirmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported.[0m [90m(topology_discovery.cpp:601)[0m
+[90m2026-08-03 11:43:49.683[0m | [32minfo    [m | [35m            UMD[0m | [37mCompleted topology discovery.[0m [90m(topology_discovery.cpp:114)[0m
+[90m2026-08-03 11:43:49.761[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {}[0m [90m(cluster.cpp:168)[0m
+[90m2026-08-03 11:43:49.762[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:142)[0m
+[90m2026-08-03 11:43:49.762[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.10.0[0m [90m(cluster.cpp:145)[0m
+[90m2026-08-03 11:43:49.762[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor completed.[0m [90m(cluster.cpp:520)[0m
+[90m2026-08-03 11:43:49.763[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:1024)[0m
+[90m2026-08-03 11:43:50.030[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster completed.[0m [90m(cluster.cpp:1032)[0m
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.9c050000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+[32m2026-08-03 11:43:50.160[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:43:50.160[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:43:50.160[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-08-03 11:43:50.160[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-08-03 11:43:50.160[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-08-03 11:43:50.160[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-08-03 11:43:50.160[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-08-03 11:43:50.160[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-08-03 11:43:50.160[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-08-03 11:43:50.160[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-08-03 11:43:50.160[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-08-03 11:43:50.160[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-08-03 11:43:50.161[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-08-03 11:43:50.161[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-08-03 11:43:50.166[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:50.166[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:50.166[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:50.166[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:50.195[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[90m2026-08-03 11:43:50.235[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-08-03 11:43:50.814[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=268184809349218 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[32m2026-08-03 11:43:50.829[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+[transformers] You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This is expected if you use an Attention Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._attn_implementation`
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:43:52.218[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:43:52.218[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:43:52.230[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:52.231[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:52.232[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:52.233[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:52.261[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:43:52.302[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:43:53.515[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:43:53.515[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:43:53.532[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:53.533[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:53.533[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:53.534[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:53.562[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:43:53.603[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_bounded_modulo_cache_integrity[blackhole-device_params0-mesh_device0] [32m2026-08-03 11:43:55.684[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:43:55.684[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:43:55.697[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:55.698[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:55.698[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:55.699[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:55.727[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:43:55.768[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:43:56.624[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:43:56.624[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:43:56.636[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:56.637[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:56.638[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:56.639[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:56.667[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:43:56.709[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_prefill_capacity_probe[blackhole-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:43:58.379[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:43:58.380[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:43:58.392[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:58.392[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:58.393[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:58.394[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:58.422[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:43:58.463[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch1-0-True-device_params0-mesh_device0] [32m2026-08-03 11:43:58.805[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:43:58.805[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:43:58.817[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:58.818[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:58.819[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:58.819[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:58.848[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:43:58.889[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_moe_compute_gemma4_target_shape_candidate[blackhole-device_params0-mesh_device0] [32m2026-08-03 11:43:59.227[0m | [1mINFO    [0m | [36mttnn.device[0m:[36m__init__[0m:[36m142[0m - [1mDispatchCoreAxis.COL axis is only supported on WORKER dispatch core type, defaulting to DispatchCoreType.WORKER[0m
+[90m2026-08-03 11:43:59.239[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:59.240[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:59.241[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:59.242[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:59.271[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:43:59.315[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:43:59.655[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:43:59.655[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:43:59.668[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:59.669[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:59.670[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:59.671[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:43:59.701[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:43:59.746[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch1-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:01.043[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:01.043[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:01.054[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.055[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.056[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.057[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.085[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:01.126[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch1-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:01.454[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:01.454[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:01.467[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.468[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.469[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.470[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.499[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:01.542[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_isolated_dense_activation_fold_candidate[blackhole-device_params0-mesh_device0] [32m2026-08-03 11:44:01.883[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:01.883[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:01.895[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.897[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.898[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.899[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:01.928[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:01.971[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_natural-device_params0-mesh_device0] [32m2026-08-03 11:44:02.313[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:02.313[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:02.326[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:02.327[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:02.328[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:02.329[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:02.357[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:02.401[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:03.733[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:03.733[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:03.748[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:03.749[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:03.750[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:03.751[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:03.779[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:03.820[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:05.155[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:05.155[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:05.167[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:05.168[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:05.169[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:05.170[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:05.198[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:05.239[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:07.379[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:07.379[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:07.391[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:07.392[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:07.393[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:07.394[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:07.422[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:07.464[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_prefill_capacity_probe[blackhole-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:08.724[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:08.724[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:08.735[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:08.736[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:08.737[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:08.738[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:08.766[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:08.806[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch1-5-False-device_params0-mesh_device0] [32m2026-08-03 11:44:09.135[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:09.136[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:09.147[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:09.148[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:09.149[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:09.150[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:09.178[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:09.220[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:09.560[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:09.560[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:09.572[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:09.574[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:09.575[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:09.576[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:09.605[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:09.648[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch1-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:11.045[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:11.045[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:11.057[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.058[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.059[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.060[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.088[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:11.129[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch1-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:11.460[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:11.460[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:11.472[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.473[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.474[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.475[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.504[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:11.548[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_shared_view-device_params0-mesh_device0] [32m2026-08-03 11:44:11.886[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:11.886[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:11.898[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.899[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.900[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.901[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:11.930[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:11.974[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:13.333[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:13.333[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:13.345[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:13.346[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:13.346[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:13.347[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:13.375[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:13.417[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch32-0-True-device_params0-mesh_device0] [32m2026-08-03 11:44:14.874[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:14.874[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:14.887[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:14.887[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:14.888[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:14.888[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:14.917[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:14.958[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch32-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:15.297[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:15.297[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:15.308[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:15.309[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:15.310[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:15.310[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:15.338[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:15.379[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch32-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:15.719[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:15.719[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:15.731[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:15.732[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:15.733[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:15.734[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:15.763[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:15.806[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:16.152[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:16.152[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:16.165[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:16.166[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:16.166[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:16.167[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:16.196[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:16.240[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch32-5-False-device_params0-mesh_device0] [32m2026-08-03 11:44:18.314[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:18.315[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:18.327[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:18.328[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:18.329[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:18.330[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:18.358[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:18.399[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch32-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:18.740[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:18.740[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:18.752[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:18.753[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:18.754[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:18.754[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:18.782[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:18.824[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch32-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:19.161[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:19.161[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:19.174[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:19.175[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:19.176[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:19.177[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:19.206[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:19.249[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hot_path_is_owned_and_contains_fusions PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hot_path_fallback_audit PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch1-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:19.994[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:19.994[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:20.005[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.006[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.007[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.008[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.037[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:20.078[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch1-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:20.415[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:20.415[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:20.427[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.429[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.430[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.431[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.459[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:20.500[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch32-sliding_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:20.842[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:20.842[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:20.855[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.856[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.857[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.858[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:20.887[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:20.930[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch32-full_attention-device_params0-mesh_device0] [32m2026-08-03 11:44:21.267[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-08-03 11:44:21.268[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-08-03 11:44:21.280[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:21.281[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:21.282[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:21.283[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-08-03 11:44:21.312[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-08-03 11:44:21.355[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_candidate_matrix_selection SKIPPED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_evidence_source_binding PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+1.81s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-full_attention-device_params0-mesh_device0]
+1.74s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-sliding_attention-device_params0-mesh_device0]
+1.73s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-full_attention-device_params0-mesh_device0]
+1.35s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-sliding_shared-device_params0-mesh_device0]
+1.33s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-sliding_attention-device_params0-mesh_device0]
+1.11s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+1.06s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-full_attention-device_params0-mesh_device0]
+1.05s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-sliding_shared-device_params0-mesh_device0]
+1.02s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_shared_view-device_params0-mesh_device0]
+1.00s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_natural-device_params0-mesh_device0]
+0.99s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-full_attention-device_params0-mesh_device0]
+0.95s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-sliding_attention-device_params0-mesh_device0]
+0.92s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-full_attention-device_params0-mesh_device0]
+0.89s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+0.53s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_bounded_modulo_cache_integrity[blackhole-device_params0-mesh_device0]
+0.31s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch32-0-True-device_params0-mesh_device0]
+0.31s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-full_attention-device_params0-mesh_device0]
+0.31s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_prefill_capacity_probe[blackhole-full_attention-device_params0-mesh_device0]
+0.31s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch32-5-False-device_params0-mesh_device0]
+0.31s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+0.31s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-sliding_attention-device_params0-mesh_device0]
+0.31s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+0.31s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_prefill_capacity_probe[blackhole-sliding_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_natural-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch32-sliding_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_isolated_dense_activation_fold_candidate[blackhole-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch1-full_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-full_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-full_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch32-sliding_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch1-0-True-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-full_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_shared_view-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_moe_compute_gemma4_target_shape_candidate[blackhole-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch32-full_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch32-full_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch32-full_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_bounded_modulo_cache_integrity[blackhole-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-full_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch1-full_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-sliding_attention-device_params0-mesh_device0]
+0.29s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch1-full_attention-device_params0-mesh_device0]
+0.29s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-sliding_attention-device_params0-mesh_device0]
+0.29s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch1-sliding_attention-device_params0-mesh_device0]
+0.29s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch1-5-False-device_params0-mesh_device0]
+0.28s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch1-sliding_attention-device_params0-mesh_device0]
+0.22s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hot_path_is_owned_and_contains_fusions
+0.22s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_candidate_matrix_selection
+0.21s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_evidence_source_binding
+0.21s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hot_path_fallback_audit
+0.13s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch32-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch1-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch1-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch1-5-False-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch1-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch32-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_prefill_capacity_probe[blackhole-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch1-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch32-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch1-0-True-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-dense_split-batch1-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch32-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_isolated_dense_activation_fold_candidate[blackhole-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_final_vs_best_candidates[blackhole-alternative_expert_activation-batch32-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch32-0-True-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_prefill_capacity_probe[blackhole-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_perf_profile[blackhole-batch32-5-False-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_moe_compute_gemma4_target_shape_candidate[blackhole-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_decoder_functional_ab_latency[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_shared_view-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_natural-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_bounded_modulo_cache_integrity[blackhole-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-sliding_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-sliding_shared-device_params0-mesh_device0]
+
+(28 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-sliding_shared-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-sliding_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_bounded_modulo_cache_integrity[blackhole-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-sliding_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-sliding_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_natural-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch1-full_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_non_aligned_prefill[blackhole-full_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_advertised_context_traced_decode[blackhole-full_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights[blackhole-full_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hf_acceptance[blackhole-full_shared_view-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_traced_decode_batch_contract[blackhole-batch32-full_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hot_path_is_owned_and_contains_fusions
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_hot_path_fallback_audit
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_evidence_source_binding
+SKIPPED [2] models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py:216: set GEMMA4_PREFILL_CAPACITY_LENGTH to run fused capacity
+SKIPPED [4] models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py:237: set GEMMA4_FUSED_DECODER_PROFILE=1 to run the profiler harness
+SKIPPED [1] models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py:272: set GEMMA4_MOE_COMPUTE_CANDIDATE=1 to run the dedicated-op candidate
+SKIPPED [4] models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py:582: set GEMMA4_FUSED_DECODER_PERF=1 to run functional/fused A/B
+SKIPPED [8] models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py:647: set GEMMA4_FUSED_DECODER_CANDIDATE_AB=1 to rerun candidate selection
+SKIPPED [1] models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py:825: set GEMMA4_DENSE_ACTIVATION_CANDIDATE=1 to run isolated selection
+SKIPPED [1] models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py:785: set GEMMA4_FUSED_DECODER_CANDIDATE_AB=1 to verify matrix selection
+================= 17 passed, 21 skipped, 2 warnings in 33.30s ==================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 3 instances!
+ - leaked instance 0x7556f36684f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7556f3088048 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7556f37705e8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 34 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 303 functions!
+ - leaked function ""
+ - leaked function "get_dtype"
+ - leaked function "set_sub_device_stall_group"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "buffer_num_pages"
+ - leaked function "__init__"
+ - leaked function "device"
+ - leaked function "create_submeshes"
+ - leaked function "GetDefaultDevice"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html[90m2026-08-03 11:44:23.606[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT cache stats: 811/811 hits (100.0%) [811 cached, 4367 build-once dedup, 0 merged artifacts, 0 merged genfiles][0m [90m(build_cache_telemetry.cpp:207)[0m
+[90m2026-08-03 11:44:23.606[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT telemetry: 3 registered TelemetryTokens[0m [90m(build_cache_telemetry.cpp:230)[0m
+[90m2026-08-03 11:44:23.620[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:512)[0m
+[90m2026-08-03 11:44:23.620[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1037)[0m
+[90m2026-08-03 11:44:24.111[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster completed.[0m [90m(cluster.cpp:1046)[0m
+[90m2026-08-03 11:44:24.111[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor started.[0m [90m(cluster.cpp:754)[0m
+[90m2026-08-03 11:44:24.111[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor completed.[0m [90m(cluster.cpp:757)[0m
+
+Script done on 2026-08-03 11:44:24+00:00 [COMMAND_EXIT_CODE="0"]

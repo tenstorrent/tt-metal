@@ -1,0 +1,8 @@
+{
+  "candidate": "replace four full-attention Q/K transposes with decode-mode RoPE and two position transposes",
+  "functional_vs_candidate_decode_pcc": 0.9468379442050957,
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "required_equivalence_pcc": 0.99,
+  "result": "rejected: decode-mode RoPE is not numerically equivalent for the full-attention rotary contract"
+}

@@ -1,0 +1,13 @@
+{
+  "candidate": "bfp8_attention_only",
+  "decode_current_pos": 32,
+  "decode_pcc": 0.9998575936243222,
+  "decode_threshold": 0.995,
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "prefill_pcc": 0.9984293277714814,
+  "prefill_threshold": 0.995,
+  "sequence_length": 32,
+  "shared_physical_cache": false
+}
