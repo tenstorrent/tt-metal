@@ -14,7 +14,7 @@ live columns and fails, per test, on any drift from this catalog.
 
 PERF_TEST_SCHEMAS = {
     "perf_eltwise_bcast_col_custom": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "broadcast_type",
             "ct_dim",
@@ -24,6 +24,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "loop_factor",
             "marker",
             "math_fidelity",
@@ -34,7 +35,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_eltwise_binary_fpu": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -42,6 +43,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "marker",
             "math_fidelity",
             "mathop",
@@ -51,7 +53,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_eltwise_binary_sfpu": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -60,6 +62,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "iterations",
             "loop_factor",
             "marker",
@@ -75,7 +78,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_eltwise_typecast": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -85,6 +88,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "input_format",
             "iterations",
             "loop_factor",
@@ -103,7 +107,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_eltwise_unary_sfpu": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -114,6 +118,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "iterations",
             "loop_factor",
             "marker",
@@ -130,7 +135,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_eltwise_unary_sfpu_int32": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -141,6 +146,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "iterations",
             "loop_factor",
             "marker",
@@ -157,7 +163,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_fast_tilize": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -165,6 +171,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "loop_factor",
             "marker",
             "num_faces",
@@ -176,7 +183,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_fast_tilize_full": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -184,6 +191,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "loop_factor",
             "marker",
             "num_faces",
@@ -195,7 +203,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_fast_untilize": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -204,6 +212,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "loop_factor",
             "marker",
             "tile_cnt",
@@ -212,7 +221,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_fast_untilize_baseline_compare": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -220,6 +229,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "loop_factor",
             "marker",
             "tile_cnt",
@@ -228,7 +238,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_math_matmul": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -239,6 +249,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "in0_c_dim",
             "in0_r_dim",
             "in1_c_dim",
@@ -264,7 +275,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_math_transpose": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -272,6 +283,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "marker",
             "math_transpose_faces",
             "tile_cnt",
@@ -281,7 +293,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_matmul": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -291,6 +303,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "k_dimm",
             "loop_factor",
             "marker",
@@ -307,7 +320,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_pack_dest_bank": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dst_index",
@@ -316,6 +329,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "l1_acc",
             "loop_factor",
             "marker",
@@ -331,7 +345,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_pack_untilize": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -339,6 +353,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "loop_factor",
             "marker",
             "tile_cnt",
@@ -347,7 +362,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_reduce": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -355,6 +370,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "marker",
             "mathop",
             "reduce_pool_type",
@@ -364,7 +380,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_sfpu_binop_scalar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -373,6 +389,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "iterations",
             "loop_factor",
             "marker",
@@ -389,7 +406,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_sfpu_comp": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -400,6 +417,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "iterations",
             "loop_factor",
             "marker",
@@ -416,7 +434,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_sfpu_div_wh": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -425,6 +443,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "iterations",
             "loop_factor",
             "marker",
@@ -440,7 +459,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_sfpu_erfinv_wh": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -451,6 +470,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "iterations",
             "loop_factor",
             "marker",
@@ -467,7 +487,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_sfpu_reduce_row_max": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -476,6 +496,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "loop_factor",
             "marker",
             "mathop",
@@ -486,7 +507,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_sfpu_reduce_sdpa": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -494,6 +515,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "loop_factor",
             "marker",
             "mathop",
@@ -504,7 +526,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_sfpu_ternary": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -513,6 +535,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "iterations",
             "loop_factor",
             "marker",
@@ -529,7 +552,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_unpack_a_bcast_eltwise": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -538,6 +561,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "marker",
             "math_fidelity",
             "mathop",
@@ -548,7 +572,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_unpack_tilize": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -556,6 +580,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "loop_factor",
             "marker",
             "tile_cnt",
@@ -564,7 +589,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_unpack_transpose": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -572,6 +597,7 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "marker",
             "tile_cnt",
             "unpack_to_dest",
@@ -583,14 +609,9 @@ PERF_TEST_SCHEMAS = {
 }
 
 
-# Quasar per-perf-test CSV schema catalog.
-#
-# Same shape and rules as PERF_TEST_SCHEMAS above, derived statically from the
-# sibling test_*_quasar.py sources (see perf_schema_derive). One entry per Quasar
-# perf test: version + columns + aliases.
 PERF_TEST_SCHEMAS_QSR = {
     "perf_eltwise_binary_broadcast_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "broadcast_type",
             "dest_acc",
@@ -602,6 +623,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -616,7 +638,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_eltwise_binary_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "acc_to_dest",
             "dest_acc",
@@ -628,6 +650,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "input_tile_cnt",
             "loop_factor",
@@ -644,7 +667,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_eltwise_binary_reuse_dest_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -655,6 +678,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "input_num_blocks",
             "input_tile_cnt",
@@ -674,8 +698,43 @@ PERF_TEST_SCHEMAS_QSR = {
         ],
         "aliases": {},
     },
-    "perf_eltwise_unary_datacopy_quasar": {
+    "perf_eltwise_binary_sfpu_quasar": {
         "version": 1,
+        "columns": [
+            "data_copy_type",
+            "dest_acc",
+            "dest_sync",
+            "dst_index",
+            "dst_tile_idx",
+            "face_c_dim",
+            "face_r_dim",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_math",
+            "implied_math_format",
+            "input_format",
+            "loop_factor",
+            "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "op",
+            "output_format",
+            "sign_magnitude",
+            "src0_tile_idx",
+            "src1_tile_idx",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpacker_engine_sel",
+            "zero_point_bits",
+        ],
+        "aliases": {},
+    },
+    "perf_eltwise_unary_datacopy_quasar": {
+        "version": 2,
         "columns": [
             "data_copy_type",
             "dest_acc",
@@ -688,6 +747,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -704,8 +764,37 @@ PERF_TEST_SCHEMAS_QSR = {
         ],
         "aliases": {},
     },
-    "perf_matmul_quasar": {
+    "perf_eltwise_unary_sfpu_quasar": {
         "version": 1,
+        "columns": [
+            "approx_mode",
+            "data_copy_type",
+            "dest_acc",
+            "dest_sync",
+            "dst_index",
+            "face_c_dim",
+            "face_r_dim",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_math",
+            "implied_math_format",
+            "loop_factor",
+            "marker",
+            "mathop",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpacker_engine_sel",
+        ],
+        "aliases": {},
+    },
+    "perf_matmul_quasar": {
+        "version": 2,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -717,6 +806,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "k_dimm",
             "loop_factor",
@@ -733,7 +823,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_pack_l1_acc_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -744,6 +834,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "input_num_blocks",
             "loop_factor",
@@ -761,7 +852,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_pack_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -772,6 +863,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -789,7 +881,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_pack_untilize_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -800,6 +892,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -817,7 +910,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_reduce_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -828,6 +921,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -848,7 +942,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_transpose_dest_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "data_copy_type",
             "dest_acc",
@@ -861,6 +955,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -875,7 +970,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_unary_broadcast_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "broadcast_type",
             "dest_acc",
@@ -887,6 +982,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "input_num_blocks",
             "loop_factor",
@@ -908,7 +1004,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_unpack_reduce_col_tilizeA_strided_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -919,6 +1015,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -934,7 +1031,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_unpack_tilize_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "data_copy_type",
             "dest_acc",
@@ -946,6 +1043,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -963,7 +1061,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_unpack_unary_operand_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "data_copy_type",
             "dest_acc",
@@ -975,6 +1073,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
+            "formats.sfpu_math",
             "implied_math_format",
             "loop_factor",
             "marker",

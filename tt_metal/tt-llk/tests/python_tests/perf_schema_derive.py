@@ -214,7 +214,11 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
             tree = ast.parse(path.read_text())
         except SyntaxError:
             continue
-        if not _has_perfconfig(tree):
+        # WH/BH tests call PerfConfig directly; skip files that do not. Quasar
+        # sources are all perf siblings by construction (see _perf_test_sources)
+        # and may build their sweep via a shared runner with no direct
+        # PerfConfig call, so they are never skipped here.
+        if not quasar and not _has_perfconfig(tree):
             continue
         fields = _param_fields_in_tree(tree, specs)
         schemas[key] = sorted(set(fixed) | fields | {MARKER_COLUMN})
