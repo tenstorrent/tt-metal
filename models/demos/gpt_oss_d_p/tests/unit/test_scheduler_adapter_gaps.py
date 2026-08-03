@@ -190,9 +190,16 @@ _GALAXY_GATE = pytest.mark.skipif(
 )
 
 
-def _required_env():
-    """Fail fast if the harness env isn't set; makes it obvious what's missing."""
-    missing = [v for v in ("PREFILL_HF_MODEL", "PREFILL_TTNN_CACHE", "PREFILL_TRACE_DIR") if not os.environ.get(v)]
+def _required_env(*, needs_trace: bool):
+    """Fail fast if the harness env isn't set; makes it obvious what's missing.
+
+    ``PREFILL_TRACE_DIR`` is ONLY needed for PCC validation (T1/T2). Prefill compute itself never
+    reads the trace — the request-mode / LayerAck / multi-user tests (T3/T4/T5) run without it and
+    the producer synthesizes tokens."""
+    required = ["PREFILL_HF_MODEL", "PREFILL_TTNN_CACHE"]
+    if needs_trace:
+        required.append("PREFILL_TRACE_DIR")
+    missing = [v for v in required if not os.environ.get(v)]
     if missing:
         pytest.fail(f"missing required env for galaxy integration: {missing}")
 
@@ -231,7 +238,7 @@ _COMMON_ENV = {
 def test_T1_standalone_pcc_via_engine():
     """T1 — Standalone KV PCC through the common engine matches the standalone harness (~≥0.99).
     Regression here → gap 3 (weights)."""
-    _required_env()
+    _required_env(needs_trace=True)
     r = _run(_RUNNER, {**_COMMON_ENV, "PREFILL_STANDALONE": "1", "PREFILL_STANDALONE_PCC": "1"}, timeout_s=1800)
     assert r.returncode == 0, f"prefill_runner exited {r.returncode}\nstderr:\n{r.stderr[-2000:]}"
     _assert_pcc_ok(r.stdout)
@@ -241,7 +248,7 @@ def test_T1_standalone_pcc_via_engine():
 @pytest.mark.requires_mesh_topology(mesh_shape=(ROWS, COLS), topology=f"mesh-{ROWS}x{COLS}")
 def test_T2_multi_chunk_pcc_via_engine():
     """T2 — Multi-chunk (cached_len>0, SP ring cache-read) under engine control. Same PCC bar."""
-    _required_env()
+    _required_env(needs_trace=True)
     r = _run(
         _RUNNER,
         {**_COMMON_ENV, "PREFILL_STANDALONE": "1", "PREFILL_STANDALONE_PCC": "1", "PREFILL_STANDALONE_NCHUNKS": "11"},
@@ -256,7 +263,7 @@ def test_T2_multi_chunk_pcc_via_engine():
 def test_T3_request_mode_with_producer():
     """T3 — Request mode + producer over the H2D socket. 11 chunks, no shape/dtype error inside
     prefill_chunk. Failure on chunk 0 → gap 2 (input path)."""
-    _required_env()
+    _required_env(needs_trace=False)
     service_id = "gpt_oss_gap_t3"
     env = {**_COMMON_ENV, "PREFILL_H2D_SERVICE_ID": service_id}
 
@@ -283,7 +290,7 @@ def test_T4_layer_ack_completions():
     """T4 — LayerAck emission verified by scheduler_standins.CompletionCheckConsumer.
     Fails today: runtime has no set_layer_ack_channel (gap 1) so PREFILL_ENABLE_LAYER_ACK=1 errors
     during setup at prefill_runner.py:1097."""
-    _required_env()
+    _required_env(needs_trace=False)
     service_id = "gpt_oss_gap_t4"
     env = {
         **_COMMON_ENV,
@@ -316,7 +323,7 @@ def test_T4_layer_ack_completions():
 def test_T5_multi_user():
     """T5 — Producer alternates slot_ids across chunks; per-user cache-slot indexing works under real
     scheduling (harness only exercises slot_id=0). Runs on top of the T4 setup."""
-    _required_env()
+    _required_env(needs_trace=False)
     service_id = "gpt_oss_gap_t5"
     env = {
         **_COMMON_ENV,
