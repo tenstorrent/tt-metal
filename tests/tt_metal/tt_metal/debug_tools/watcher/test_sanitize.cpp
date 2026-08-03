@@ -334,9 +334,10 @@ void RunTestOnCore(
     bool use_write_with_state = false;
     bool use_inline_dw_write_from_state = false;
     bool use_inline_dw_write_with_state = false;
-    // WH/BH: NOC_MAX_TRANSACTION_ID == 0xF. Quasar user pool: USER_TXN_ID_MAX == 15. Same bound.
-    constexpr uint32_t k_max_user_txn_id = 15;
-    constexpr uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
+    // WH/BH expose trids [0,15]. Quasar reserves [8,31] for DFB implicit sync,
+    // leaving user kernels [0,7].
+    const uint32_t k_max_user_txn_id = is_quasar ? 7 : 15;
+    const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
     uint32_t invalid_txn_id = 0;
     switch (feature) {
         case SanitizeNOCAddress:

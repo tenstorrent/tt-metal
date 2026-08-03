@@ -13,11 +13,11 @@
 
 #include "host_tensor_impl.hpp"
 #include "mesh_tensor_impl.hpp"
+#include "tensor_impl.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
@@ -583,10 +583,6 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
 // ======================================================================================
 //                                  Utility functions
 // ======================================================================================
-
-bool logical_matches_physical(const TensorSpec& tensor_spec) {
-    return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
-}
 
 namespace host_buffer {
 
