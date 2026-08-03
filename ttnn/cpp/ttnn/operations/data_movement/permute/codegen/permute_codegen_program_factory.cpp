@@ -200,13 +200,14 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreBlockedG
     // 4-byte (int32/float32) datums need 32-bit DEST accumulation through the
     // tilize -> transpose_tile -> pack_untilize compute; bf16 (2-byte) does not.
     const bool fp32_dest_acc = (elem_size == 4);
-    // ops/permute/spec.py's build_permute_rm_blocked: transpose_tile rounds float32 through TF32
-    // (and its UInt32 format is corrupt on WH), but the compute only moves 32-bit datums, so
-    // float32/uint32 are carried through the CB reinterpreted as int32 to preserve every raw bit.
-    // Reader/writer byte math and the tensor's own dtype are unchanged; only the CB DataFormat flips.
+    // ops/permute/spec.py's build_permute_rm_blocked: uint32's register format is corrupt on WH,
+    // but the compute only moves 32-bit datums, so it is carried through the CB reinterpreted as
+    // int32 to preserve every raw bit. Reader/writer byte math and the tensor's own dtype are
+    // unchanged; only the CB DataFormat flips. float32 needs no such reinterpret: transpose_tile
+    // takes the unpack-to-dest path for every 32-bit format, where FP32 -> DEST is an identity
+    // conversion -- the lossy FP32 -> TF32 rounding only exists on the SrcA/SrcB path.
     const DataType input_dtype = input_tensor.dtype();
-    const DataType cb_dtype =
-        (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT32) ? DataType::INT32 : input_dtype;
+    const DataType cb_dtype = (input_dtype == DataType::UINT32) ? DataType::INT32 : input_dtype;
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(cb_dtype);
 
     CBFormatDescriptor cb0_fmt{.buffer_index = 0, .data_format = cb_data_format, .page_size = input_cb_page_size};
