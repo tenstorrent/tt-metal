@@ -1,0 +1,43 @@
+{
+  "label": "incumbent",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.29142990708351135,
+    0.29176294803619385,
+    0.2932712435722351,
+    0.2919553406536579,
+    0.2918485179543495
+  ],
+  "median_ms": 0.2918485179543495,
+  "noise_floor_ms": 0.0018413364887237549,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one dense full-attention decoder layer (layer 0), traced decode replay, batch 1, measured end to end on the host",
+  "measured_at": "2026-08-03T13:44:54+00:00",
+  "shipped_policy": {
+    "candidate": "default",
+    "layer_idx": 0
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense_mlp": "BFLOAT8_B",
+    "sparse_experts": "BFLOAT4_B",
+    "cache": "BFLOAT8_B",
+    "router": "FLOAT32"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/decode_layer0_batch1_default.json and exact executed candidate=default recorded by tests/optimized_decoder_perf.py",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ],
+  "incumbent_ms": 0.2918485179543495,
+  "layer_counts": {
+    "dense_full_attention": 1,
+    "sliding_attention_sparse_moe": 36,
+    "full_attention_sparse_moe": 12
+  },
+  "total_layers": 49,
+  "layer_counts_source": "Hugging Face config at revision d11e61a842617a22dc328552fa5bb86231ee4f37; cross-checked against OptimizedDecoder layer_types and mlp_layer_types dispatch"
+}

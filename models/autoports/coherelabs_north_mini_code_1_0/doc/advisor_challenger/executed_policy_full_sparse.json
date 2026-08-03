@@ -1,0 +1,14 @@
+{
+  "shipped_policy": {
+    "candidate": "default",
+    "layer_idx": 4
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense_mlp": "BFLOAT8_B",
+    "sparse_experts": "BFLOAT4_B",
+    "cache": "BFLOAT8_B",
+    "router": "FLOAT32"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/decode_layer4_batch1_final.json candidate=default as executed by tests/optimized_decoder_perf.py"
+}

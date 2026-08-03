@@ -1,0 +1,35 @@
+{
+  "label": "profile_dense_full_attention",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.3052257187664509,
+    0.3014811873435974,
+    0.300237201154232,
+    0.2994256839156151,
+    0.2995430678129196
+  ],
+  "median_ms": 0.300237201154232,
+  "noise_floor_ms": 0.0058000348508358,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one dense full-attention decoder layer (layer 0), traced decode replay, batch 1, profiling companion run",
+  "measured_at": "2026-08-03T13:52:34+00:00",
+  "shipped_policy": {
+    "candidate": "default",
+    "layer_idx": 0
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense_mlp": "BFLOAT8_B",
+    "sparse_experts": "BFLOAT4_B",
+    "cache": "BFLOAT8_B",
+    "router": "FLOAT32"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/decode_layer0_batch1_default.json and exact executed candidate=default recorded by tests/optimized_decoder_perf.py",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

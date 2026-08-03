@@ -1,0 +1,64 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "changed_precision": false,
+  "contribution_us": 0.0,
+  "incumbent_ms": 0.2918485179543495,
+  "final_ms": 0.2918485179543495,
+  "repeats_ms": [
+    0.29142990708351135,
+    0.29176294803619385,
+    0.2932712435722351,
+    0.2919553406536579,
+    0.2918485179543495
+  ],
+  "winning_config": "frozen incumbent candidate=default; no advisor candidate was measurable",
+  "oracle": "existing optimized-decoder real-checkpoint layer-1 decode oracle at the incumbent PCC bar",
+  "oracle_scope": "unchanged incumbent; official North-Mini layer-1 checkpoint decode",
+  "oracle_reference": "PyTorch reference recorded by the completed optimized-decoder stage",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "oracle_pcc": 0.995917,
+  "confirmed_fresh_process": false,
+  "iterations": [
+    {
+      "trigger": "initial pinned-advisor capture and per-kind reconciliation",
+      "result": "all three layer kinds not_measurable; screening prohibited"
+    }
+  ],
+  "rejected_knobs": [
+    "dense_full_attention:b10 (default-off; 0.599 us/layer attributable, below 1.841 us floor)",
+    "dense_full_attention:b3 (default-off; 0.555 us/layer attributable, below 1.841 us floor)",
+    "dense_full_attention:b4 (default-off; 0.555 us/layer attributable, below 1.841 us floor)",
+    "sliding_attention_sparse_moe:b3 (default-off; 0.584 us/layer attributable, below 14.526 us floor)",
+    "sliding_attention_sparse_moe:b4 (default-off; 0.568 us/layer attributable, below 14.526 us floor)",
+    "sliding_attention_sparse_moe:b10 (default-off; 0.554 us/layer attributable, below 14.526 us floor)",
+    "full_attention_sparse_moe:b6 (default-off; 0.562 us/layer attributable, below 0.847 us floor)"
+  ],
+  "model_estimate": {
+    "before_us": 39940.817,
+    "after_us": 39940.817,
+    "band_us": 534.941,
+    "per_kind": {
+      "dense_full_attention": {
+        "before_us": 274.481,
+        "after_us": 274.481,
+        "layers": 1,
+        "uncertainty_us": 1.841
+      },
+      "sliding_attention_sparse_moe": {
+        "before_us": 29795.04,
+        "after_us": 29795.04,
+        "layers": 36,
+        "uncertainty_us": 522.936
+      },
+      "full_attention_sparse_moe": {
+        "before_us": 9871.296,
+        "after_us": 9871.296,
+        "layers": 12,
+        "uncertainty_us": 10.164
+      }
+    },
+    "method": "per-layer measured device-window delta x layers_of_kind, summed; uncertainty floors summed linearly"
+  }
+}

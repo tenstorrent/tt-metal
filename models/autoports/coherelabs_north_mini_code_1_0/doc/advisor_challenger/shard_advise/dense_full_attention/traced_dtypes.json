@@ -1,0 +1,23 @@
+{
+  "layer_kind": "dense_full_attention",
+  "layer_idx": 0,
+  "batch": 1,
+  "traced_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense_mlp": "BFLOAT8_B",
+    "sparse_experts": "BFLOAT4_B",
+    "cache": "BFLOAT8_B",
+    "router": "FLOAT32"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense_mlp": "BFLOAT8_B",
+    "sparse_experts": "BFLOAT4_B",
+    "cache": "BFLOAT8_B",
+    "router": "FLOAT32"
+  },
+  "policy_source": "doc/optimized_decoder/decode_layer0_batch1_default.json and exact executed candidate=default recorded by tests/optimized_decoder_perf.py",
+  "advisor_commit": "618cd4e75dae69d334bb9d8cdeff314816ccf214",
+  "advisor_pin_expected": "618cd4e75d",
+  "advisor_home": "/home/mvasiljevic/tt-mlir"
+}
