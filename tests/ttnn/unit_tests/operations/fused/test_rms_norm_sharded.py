@@ -356,3 +356,67 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
 )
 def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, dtype):
     run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, dtype=dtype)
+
+
+# Full rows plus a partial one, expressed relative to the device grid width so the grid is always
+# non-rectangular whatever the device is.
+@pytest.mark.parametrize(
+    ("full_rows", "cores_in_last_row"), [(1, 1), (2, 3), (4, 1)], ids=["1_row_plus_1", "2_rows_plus_3", "4_rows_plus_1"]
+)
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+def test_rms_norm_sharded_width_non_rectangular_grid(device, full_rows, cores_in_last_row, dtype):
+    """
+    Width-sharded rms_norm over a core count that does not fill a rectangle, so the shard grid leaves
+    part of its bounding box unused. The sender broadcasts the reduced statistics to the whole bounding
+    box, including the unused cores, which take no part in the reduction.
+    """
+    torch.manual_seed(0)
+
+    device_grid = device.compute_with_storage_grid_size()
+    if full_rows + 1 > device_grid.y or cores_in_last_row >= device_grid.x:
+        pytest.skip(f"case does not fit a {device_grid.x}x{device_grid.y} device grid")
+
+    num_cores = full_rows * device_grid.x + cores_in_last_row
+    grid = ttnn.num_cores_to_corerangeset(num_cores, device_grid, row_wise=True)
+    assert len(grid.ranges()) > 1, f"{num_cores} cores on a {device_grid.x}-wide grid should not be a rectangle"
+
+    h = 32
+    shard_width = 32
+    w = num_cores * shard_width
+
+    torch_input_tensor = generate_input_tensor(h, w, "random", dtype)
+    torch_weight = generate_input_tensor(1, w, "random", dtype)
+
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(grid, [h, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_mem_config,
+    )
+    weight = ttnn.from_torch(
+        torch_weight[0],
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Keeping the output sharded exercises the write-back path on the same non-rectangular grid.
+    output_tensor = ttnn.rms_norm(input_tensor, weight=weight, memory_config=sharded_mem_config)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    golden_output = rms_norm_golden(torch_input_tensor, weight=torch_weight[0]).to(dtype)
+
+    assert_numeric_metrics(
+        golden_output,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.031,
+        atol=0.052,
+        frobenius_threshold=0.010,
+    )

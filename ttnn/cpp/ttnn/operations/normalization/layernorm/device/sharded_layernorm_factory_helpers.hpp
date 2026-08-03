@@ -54,6 +54,10 @@ struct GridParams {
     uint32_t num_blocks = 0;
     bool use_mcast = false;
     bool use_two_stage_reduce = false;
+    // False when the shard grid leaves part of its bounding box unused. The unused cores take no part in
+    // the reduction (num_blocks stays the real shard count) but are still inside the broadcast rectangle,
+    // so they get idle kernels and reserved L1. Only the mcast_1d path supports this.
+    bool grid_is_rectangular = true;
 
     static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
 };
@@ -80,6 +84,16 @@ struct CoreRanges {
     CoreRangeSet all_to_all_cores;
     CoreRangeSet all_to_all_workers_except_sender;
     CoreRangeSet not_all_to_all_workers;
+    // Every core the sender's broadcast reaches: the bounding box of the shard grid, which is wider than
+    // the shard grid itself for a non-rectangular grid. Locally allocated CBs and the reduction semaphores
+    // live here so the broadcast always lands on a reserved L1 address that is identical on every core.
+    CoreRangeSet mcast_dest_cores;
+    // mcast_dest_cores minus the shard grid: cores that own no shard and only exist to absorb the
+    // broadcast. They run the same kernels compiled to return immediately.
+    CoreRangeSet inactive_cores;
+    // Broadcast destination count for the NOC, which must cover the whole rectangle including the
+    // inactive cores. Distinct from num_blocks - 1, the number of partials the reduction gathers.
+    uint32_t num_mcast_dests = 0;
     uint32_t num_cores_x_mcast = 0;
     uint32_t num_cores_y_mcast = 0;
 

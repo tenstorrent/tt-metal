@@ -216,20 +216,23 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     uint32_t reduce_receiver_semaphore_id = 1;
     uint32_t reduce_second_stage_semaphore_id = 2;
 
+    // Scoped to the broadcast rectangle rather than the shard grid: the sender's semaphore multicast
+    // reaches every core in the rectangle, including the ones that own no shard when the grid is
+    // non-rectangular, so those need the semaphore to exist and start at zero.
     program_descriptor.semaphores.push_back(SemaphoreDescriptor{
         .id = reduce_sender_semaphore_id,
         .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.all_cores,
+        .core_ranges = core_ranges.mcast_dest_cores,
         .initial_value = 0});
     program_descriptor.semaphores.push_back(SemaphoreDescriptor{
         .id = reduce_receiver_semaphore_id,
         .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.all_cores,
+        .core_ranges = core_ranges.mcast_dest_cores,
         .initial_value = 0});
     program_descriptor.semaphores.push_back(SemaphoreDescriptor{
         .id = reduce_second_stage_semaphore_id,
         .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.all_cores,
+        .core_ranges = core_ranges.mcast_dest_cores,
         .initial_value = 0});
 
     // Get kernel defines using helper
