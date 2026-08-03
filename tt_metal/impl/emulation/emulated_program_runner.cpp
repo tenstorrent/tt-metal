@@ -2133,6 +2133,9 @@ static int __emule_fabric_dir_neighbor(
     return -1;
 }
 
+// Chip-count backstop for a single-direction walk (loudbox = 8).
+static constexpr int kMaxFabricWalkHops = 64;
+
 // Ordered chips reachable from `src` at distance 1,2,... in `dir` (line or ring), cached.
 static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fabric::RoutingDirection dir) {
     std::lock_guard<std::mutex> lock(g_fabric_route_mutex);
@@ -2142,10 +2145,10 @@ static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fab
         return it->second;
     }
     std::vector<uint32_t> walk;
-    walk.reserve(64);
+    walk.reserve(kMaxFabricWalkHops);
     auto& cp = MetalContext::instance().get_control_plane();
     uint32_t cur = src;
-    for (int hop = 0; hop < 64; ++hop) {  // 64 = chip-count backstop (loudbox = 8)
+    for (int hop = 0; hop < kMaxFabricWalkHops; ++hop) {
         int nxt = __emule_fabric_dir_neighbor(cp, cur, dir);
         if (nxt < 0 || static_cast<uint32_t>(nxt) == src) {
             break;  // line end, or ring wrapped back to the source
@@ -2513,9 +2516,9 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
                 walk = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(dir));
             }
             std::vector<uint32_t> tgts;
-            tgts.reserve(walk.size());
             if (r.kind == emule_route_kind::MCAST_1D) {
                 const uint32_t start = r.a ? r.a : 1, range = r.b ? r.b : 1;
+                tgts.reserve(std::min<size_t>(range, walk.size()));
                 for (uint32_t hop = start; hop < start + range && hop - 1 < walk.size(); ++hop) {
                     tgts.push_back(walk[hop - 1]);
                 }
