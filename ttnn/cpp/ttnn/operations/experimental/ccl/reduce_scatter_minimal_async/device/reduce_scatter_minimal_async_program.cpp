@@ -644,9 +644,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     // Positional args: routing info, TensorAccessorArgs. The V2 fabric mux client needs no worker-side
     // compile-time args (the device-side FabricMuxV2Sender is built entirely from runtime args).
     std::vector<uint32_t> writer_compile_args;
+    // Each TensorAccessorArgs always emits args_config and aligned_page_size; a sharded accessor reserves the
+    // extra space for its own shape/bank words when appending.
+    constexpr uint32_t min_args_per_tensor_accessor = 2;
     writer_compile_args.reserve(
         unicast_forward_args.size() + mcast_forward_args.size() + unicast_backward_args.size() +
-        mcast_backward_args.size());
+        mcast_backward_args.size() + 2 * min_args_per_tensor_accessor);
 
     writer_compile_args.insert(writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
