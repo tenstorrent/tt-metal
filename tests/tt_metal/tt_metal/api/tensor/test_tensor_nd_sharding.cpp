@@ -1222,9 +1222,9 @@ TEST_P(NDShardingTests, LoopbackTest) {
 
     auto host_tensor = HostTensor::from_vector(data, tensor_spec);
     auto& cq = mesh_device_->mesh_command_queue();
-    auto tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    auto tensor = cq.enqueue_write_tensor(host_tensor);
     EXPECT_TRUE(tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec().has_value());
-    auto readback_data = enqueue_read_tensor(cq, tensor).to_vector<uint16_t>();
+    auto readback_data = cq.enqueue_read_tensor(tensor).to_vector<uint16_t>();
 
     for (size_t i = 0; i < volume; i++) {
         EXPECT_EQ(data[i], readback_data[i]);
@@ -1246,7 +1246,7 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
 
     std::vector<uint16_t> empty_data(volume);
     auto host_empty = HostTensor::from_vector(empty_data, tensor_spec);
-    auto tensor = enqueue_write_tensor(mesh_device_->mesh_command_queue(), host_empty, *mesh_device_);
+    auto tensor = mesh_device_->mesh_command_queue().enqueue_write_tensor(host_empty);
 
     const auto& buffer = tensor.mesh_buffer();
 
@@ -1327,8 +1327,8 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
         auto host_tensor = HostTensor::from_vector(data, tensor_spec);
 
         auto start = std::chrono::high_resolution_clock::now();
-        auto device_tensor = enqueue_write_tensor(
-            mesh_device_->mesh_command_queue(), host_tensor, *mesh_device_, tensor_spec.memory_config());
+        auto device_tensor =
+            mesh_device_->mesh_command_queue().enqueue_write_tensor(host_tensor, tensor_spec.memory_config());
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
         return duration.count();

@@ -259,12 +259,12 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
     auto src0_host = HostTensor::from_vector(src0_vec, tensors.src0.tensor_spec());
     auto src1_host = HostTensor::from_vector(src1_vec, tensors.src1.tensor_spec());
-    enqueue_write_tensor(cq, src0_host, tensors.src0);
-    enqueue_write_tensor(cq, src1_host, tensors.src1);
+    cq.enqueue_write_tensor(src0_host, tensors.src0);
+    cq.enqueue_write_tensor(src1_host, tensors.src1);
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
-    auto result_vec = enqueue_read_tensor(cq, tensors.dst).to_vector<uint32_t>();
+    auto result_vec = cq.enqueue_read_tensor(tensors.dst).to_vector<uint32_t>();
 
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
