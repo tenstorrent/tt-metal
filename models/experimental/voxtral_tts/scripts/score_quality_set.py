@@ -43,6 +43,24 @@ import torch
 
 # Texts whose spoken form has no well-defined transcript -- scored, but not in the headline.
 ADVERSARIAL = re.compile(r"[\U0001F300-\U0001FAFF☀-➿]|[!@#$%^&*()]{3,}|\\[tn]|\t|\n")
+
+# A THIRD bucket: prompts the MODEL is chaotic on, where a fixed reference transcript cannot
+# measure an implementation. Currently just the one-word texts.
+#
+# Fixture case 4 is "Hello." -- one word of text carried on 74 prompt tokens, nearly all of it
+# voice-preset conditioning. Free-running frame counts for it, 9 being correct:
+#     fp32 CPU reference (no device, no precision loss)   81 /  8 / 57
+#     tt_transformers + bf16 flow                          9 /  8 / 72 / 88 / 55 / 118
+#     ours, several weight configurations                 45 /  8 / 39 / 69  ... 108 / 8 / 34 / 54
+# Every implementation, including the pure-torch reference, lands anywhere from 8 to 183 frames
+# depending only on the noise draw. The likely mechanism is that one word of text cannot compete
+# with 74 tokens of voice conditioning at the last prefill position -- the ssinghal/voxtral_tts
+# branch reports the same effect independently ("147 voice frames dilute text signal").
+#
+# Folding that into the headline is actively misleading: at 1 reference word a rambling take
+# scores tens of thousands of percent and swamps 340 good words. It cost real debugging time
+# twice, chasing a port defect that does not exist. Reported separately, like the adversarial set.
+UNSTABLE_MAX_WORDS = 1
 # Scripts that pin the language without guessing.
 SCRIPT_LANG = [("ऀॿ", "hindi"), ("؀ۿ", "arabic")]
 # Latin-script languages still need a hint; take it from characteristic words in the fixture text.
@@ -174,32 +192,41 @@ def main():
     if not rows:
         raise SystemExit("usage: score_quality_set.py <results.json> [...]")
 
-    clean, adv = [0.0, 0], [0.0, 0]
+    clean, adv, unstable = [0.0, 0], [0.0, 0], [0.0, 0]
     table = []
     for r, lang, hyp in transcribe(rows):
         e, nw = wer(r["text"], hyp)
-        bucket = adv if ADVERSARIAL.search(r["text"]) else clean
+        if ADVERSARIAL.search(r["text"]):
+            bucket, kind = adv, "adversarial"
+        elif nw <= UNSTABLE_MAX_WORDS:
+            bucket, kind = unstable, "model-unstable"
+        else:
+            bucket, kind = clean, ""
         bucket[0] += e * nw
         bucket[1] += nw
-        table.append((r, lang, e, nw, bucket is adv))
+        table.append((r, lang, e, nw, kind))
         print(f"\n  case {r['case']:>2} {r['voice']:<16} lang={lang:<11} "
               f"{r['audio_s']:.1f}s / {r['frames']} frames"
-              f"{'   [adversarial text]' if bucket is adv else ''}")
+              f"{f'   [{kind} text]' if kind else ''}")
         print(f"    REF: {norm(r['text'])[:110]}")
         print(f"    ASR: {norm(hyp)[:110]}")
         print(f"    WER: {e*100:.1f}%  ({nw} ref words)"
               f"{'  <- not terminated' if not r.get('terminated', True) else ''}")
 
     print("\n  === summary ===")
-    for r, lang, e, nw, is_adv in table:
+    for r, lang, e, nw, kind in table:
         print(f"    case {r['case']:>2}  {r['voice']:<16} {lang:<11} WER {e*100:>7.1f}%  "
-              f"({nw:>3} words){'  [adversarial]' if is_adv else ''}")
+              f"({nw:>3} words){f'  [{kind}]' if kind else ''}")
     print(f"\n  NATURAL-TEXT WER {clean[0]/max(clean[1],1)*100:.2f}% over {clean[1]} words "
           f"<- the headline; reference scores 0.0%")
     if adv[1]:
         print(f"  adversarial-text WER {adv[0]/max(adv[1],1)*100:.2f}% over {adv[1]} words "
               f"(emoji/symbol/whitespace texts; the model vocalises them, so there is no "
               f"well-defined transcript)")
+    if unstable[1]:
+        print(f"  model-unstable WER {unstable[0]/max(unstable[1],1)*100:.2f}% over "
+              f"{unstable[1]} words (one-word prompts; the MODEL is chaotic on these -- the fp32 "
+              f"CPU reference is too -- so this measures the model, not the port)")
     not_done = [r["case"] for r in rows if not r.get("terminated", True)]
     print(f"  natural [END_AUDIO] termination: {len(rows)-len(not_done)}/{len(rows)} cases"
           + (f", MISSING on {not_done}" if not_done else ""))

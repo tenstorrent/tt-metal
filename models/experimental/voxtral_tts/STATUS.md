@@ -15,18 +15,46 @@ Branch: `lserbedzija/voxtral-tts-ttnn` (pushed). All work is under
 |---|---|
 | CPU reference, 3 blocks + tokenizer + end-to-end pipeline | **done**, 30/30 vs upstream |
 | Block 3 — codec decoder on TTNN | **CLOSED**, 242x real-time, see §4 |
-| Block 1 — 3.4B AR backbone on TTNN | **done** — prefill + decode on `tt_transformers` |
+| Block 1 — 3.4B AR backbone on TTNN | **done — OURS** (`tt/ttnn_voxtral_gpt.py`), the default |
 | Block 2 — flow-matching transformer on TTNN | **done** — velocity PCC 0.9999989 |
-| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0.0% WER on natural text |
+| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0.88% WER on natural text |
 | Codec **encoder** | **impossible** — weights absent from the public release |
 
-The model is 4 networks but only 3 are portable. 118 tests pass, 96 of them with no device
-(the reference suite runs weight-free off a vendored tensor manifest).
+**Block 1 now runs on our own implementation, not `tt_transformers`.** The wrapper stays runnable
+for bisection (`VOXTRAL_BACKBONE=tt_transformers`, needs `HF_MODEL`). Measured against the fp32
+CPU reference on real prompts, and end to end on the 15-case fixture:
 
-**All three blocks now run on device and the pipeline generates real speech**, free-running, with
-natural `[END_AUDIO]` termination on all 15 fixture prompts and 0.0% WER on every natural-language
-one — including two 125-word paragraphs of 36–39 s. See §3. What remains is **performance**
-(RTF ≈ 2.2–3.5, so ~2–3x slower than real time) and the licensing wall in §6.
+| | ours | `tt_transformers` |
+|---|---|---|
+| prefill, last position | 0.999881 | 0.999564 |
+| decode step | 0.99991 | 0.981 |
+| decode ms/frame | 34.9 | 48 |
+| natural-text WER | 0.88% | 1.17% |
+
+**Performance: 83.7 → ~77 ms/frame, steady-state RTF ~1.0.** Per frame: Block 1 ~35 ms, Block 2
+~42.5 ms, host 0.2 ms. Block 2 is now the LARGER half and is where the next work belongs. Both
+modules carry a "where the time goes" map at the top with the ceiling for each line item.
+
+**Shipped configuration**, pinned by `tests/test_tt_defaults.py`:
+Block 1 mixed precision (BFP8 on FF1_FF3 only) + decode-native heads; Block 2 BFP8 weights at
+HiFi4 + fp32 accumulation; device traces implemented but off; no program-cache clearing.
+
+### THE ONE THING THAT WILL WASTE YOUR TIME: fixture case 4
+
+Case 4 is "Hello." — one word of text on 74 prompt tokens, almost all voice conditioning. **The
+MODEL is chaotic on it**, and that is not a port defect. Free-running frame counts, 9 correct:
+
+    fp32 CPU reference (no device, no precision loss)   81 /  8 / 57
+    tt_transformers + bf16 flow                          9 /  8 / 72 / 88 / 55 / 118
+    ours, four different weight configurations          8 to 183
+
+Every implementation, including pure torch, lands anywhere from 8 to 183 frames on the noise draw
+alone. The likely mechanism is that one word cannot compete with 74 tokens of voice conditioning
+at the last prefill position; the `ssinghal/voxtral_tts` branch reports the same effect
+independently ("147 voice frames dilute text signal"). At 1 reference word a rambling take scores
+tens of thousands of percent and swamps 340 good words, so `score_quality_set.py` now reports it
+in a separate **model-unstable** bucket. It cost real debugging time TWICE — do not read it as a
+regression, and do not tune precision against it.
 
 **Block 3 is closed, not merely paused.** Six independent optimization attempts were measured and
 all rejected (§4). The single remaining known win is worth ~0.1% end-to-end. Do not reopen it
@@ -61,9 +89,11 @@ Passing the directory instead of the file list collects nothing — pass the fil
 
 **End-to-end on device, and the quality numbers in §3.1:**
 ```bash
-python models/experimental/voxtral_tts/scripts/export_backbone_hf.py --out /tmp/hf_backbone
-export HF_MODEL=/tmp/hf_backbone                      # tt_transformers refuses to load without it
 python models/experimental/voxtral_tts/scripts/generate_quality_set.py
+# No HF export and no HF_MODEL: Block 1 is ours now and loads the Mistral-native checkpoint.
+# Only the bisection path needs them:
+#   scripts/export_backbone_hf.py --out /tmp/hf_backbone
+#   VOXTRAL_BACKBONE=tt_transformers HF_MODEL=/tmp/hf_backbone python .../generate_quality_set.py
 python models/experimental/voxtral_tts/scripts/score_quality_set.py \
   models/experimental/voxtral_tts/generated/results.json
 ```
@@ -118,8 +148,8 @@ That worst-sample bound is the gate that matters — see trap #9.
 
 | | vs fp32 reference |
 |---|---|
-| Block 1 prefill (last position, real prompts) | PCC 0.99956–0.99958 |
-| Block 1 decode | PCC 0.981 |
+| Block 1 prefill (last position, real prompts) | PCC 0.999881 |
+| Block 1 decode | PCC 0.99991 |
 | Block 2 velocity | PCC 0.9999989; semantic codes exact, 73/74 frame codes exact |
 
 ### 3.1 End-to-end on device — the numbers that actually matter
@@ -372,109 +402,41 @@ single fixed-precision step inside the fused pipeline. Pinning it further needs 
   for a ~1% speed gain. The knob exists for experiments; do not ship it.
 - Minor: the suite tests to T=469; T=1500 is measured by hand but not pinned.
 
-### Block 1 — DECIDED: replace `tt_transformers` with our own implementation
+### Block 1 — DONE, ours (`tt/ttnn_voxtral_gpt.py`)
 
-**Why, beyond speed.** Block 1 is the only block we do not own, and it is the only one whose numbers
-we cannot explain: 48 ms per decode step streams ~6.1 GB of bf16 weights = ~126 GB/s, against the
-**192 GB/s (66% of peak) that a plain interleaved matmul demonstrably reaches** on this hardware after
-the Block 2 work. The ~1.5x gap is per-op overhead in machinery we do not use — paged attention,
-32-user batch sharding, mesh handling. Owning it also drops:
-  * the HF-export shim (`scripts/export_backbone_hf.py`) and its RoPE-permute hazard, since we could
-    load the Mistral-native checkpoint directly;
-  * the L1 ceiling that forces `FF1_FF3` to BFP8 and caps prefill near 512;
-  * `HF_MODEL` as a required environment variable.
-
-**The batch fold does NOT transfer** — check this before assuming otherwise. `tt_transformers` decode
-already pads the batch to 32 users in the ROW dimension (our `DECODE_BATCH_PAD`), so weights are
-already read once for all 32 slots. There is no per-batch re-read to remove. The corollary from
-Block 2 does apply though, and harder: we use **1 of 32 rows**, so a decode step costs the same for
-1 user as for 32 — latency cannot improve by shrinking it, but throughput could scale ~32x with
-concurrent requests.
-
-**Expected payoff:** ~1.5x from removing overhead (48 -> ~32 ms), and BFP8 weights are orthogonal and
-worth ~2x on top (~16-24 ms), since Block 1 is bandwidth-limited on weight bytes with no layout trick
-left. Frame ~80 -> ~50 ms, RTF ~1.05 -> ~0.65.
-
-**What carries over from Block 2, already validated:** the fold (`[1, rows, dim]`, batch only split
-for attention), k+v fused into one weight, `nlp_create_qkv_heads` for the split + head layout,
-HiFi4 + `fp32_dest_acc_en` (nearly free and worth a lot of accuracy), bf16 activations, and the rule
-that any accumulator stays fp32.
-
-**What is genuinely new and must be got right:**
-1. **RoPE — the meta/interleaved convention**, not HF half-split. Our reference is bit-exact against
-   `mistral_inference`; mixing conventions is silently wrong, not an error. Loading the native
-   checkpoint means NO permute at all, which is simpler than the export path.
-2. **Causal mask** for prefill. Block 2 is unmasked, so this is new code here.
-3. **KV cache** on device: allocate once, append per decode step, attend over `[0, pos]`. Note the
-   XTTS-v2 finding that `sdpa_decode` is wrong when the cache length is an odd number of 32-tiles —
-   round the cache length to a multiple of 64.
-4. **Prefill length handling.** Our own implementation sets its own L1 budget, so the 512 ceiling and
-   the 256-multiple padding are ours to choose rather than inherited.
-
-**Increment order — each step must gate on PCC against `voxtral_backbone_ref` before the next.**
-Implementation lives in **`tt/ttnn_voxtral_gpt.py`**, developed alongside the `tt_transformers`
-wrapper so the working pipeline (RTF 1.04–1.07, 0.0% WER) stays intact until this earns the swap.
-1. ~~Load the Mistral-native checkpoint to device; assert weight shapes~~ — **DONE**
-   (`_assert_shapes`, which catches the non-square wq/wo).
-2. ~~ONE layer, prefill, vs `_layer()`~~ — **DONE, PCC 0.99999332.** That one number covers the
-   weight load, RoPE, the causal mask, GQA and SwiGLU together. Re-run it as the regression check:
-   `python models/experimental/voxtral_tts/tt/ttnn_voxtral_gpt.py`.
-   RoPE resolution: `wq`/`wk` are permuted interleaved→half-split ONCE at load
-   (`interleaved_to_halfsplit`) and the easy `rotate_half` form runs on device, avoiding an even/odd
-   lane shuffle inside a tile. A convention error would have read ~0.5, not 0.99999.
-3. **NEXT — all 26 layers, prefill, vs `reference_forward()`.** `TtVoxtralGPT(dev, n_layers=26)`
-   already constructs; what is missing is the harness. **Use real prompts, not random inputs**
-   (trap #12) — expect ~0.9996, the bf16 weight floor. Two things to watch: host RAM (the reference
-   loads fp32, ~12 GB) and our own L1 budget for prefill, which is now ours to set rather than
-   inherited, so the 512 ceiling and 256-multiple padding no longer apply by default.
-4. KV cache + single decode step vs `IncrementalBackbone.step()`.
-5. Swap into the pipeline; gate on WER and long-form frame counts, and diff the WAV bytes against the
-   current build to see exactly what changed.
-
-### Block 1 — DONE, on `tt_transformers`
 3.4B params, 26 layers, dim 3072, GQA 32/8, head_dim 128, SwiGLU 9216, RMSNorm, RoPE θ=1e6, tied
-embeddings, **`n_heads*head_dim` (4096) != `dim` (3072)** so wq/wo are not square.
+embeddings, **`n_heads*head_dim` (4096) != `dim` (3072)** so wq/wo are not square. Loads the
+Mistral-native checkpoint directly — no HF export, no `HF_MODEL`, no RoPE-permute hazard.
 
-Implemented in `tt/ttnn_voxtral_backbone.py` on top of `models/tt_transformers`, fed by an HF-format
-export (`scripts/export_backbone_hf.py`). Prefill + decode share one KV cache. Read that module's
-docstring before touching precision — it carries the measured table and the L1 constraint that
-forces FF1_FF3 to BFP8.
+Beats the `tt_transformers` wrapper it replaced on every metric: prefill last-position PCC
+0.999881 vs 0.999564, decode 0.99991 vs 0.981, 34.9 ms/frame vs 48, natural-text WER 0.88% vs
+1.17%. Read the module's "where the time goes" map before optimizing — it lists the ceiling for
+each line item, not just the cost.
 
-**Still open on Block 1:**
-- **It dominates runtime.** ~0.17 s per decode step is essentially all of the frame budget, so it
-  is where the RTF fix has to come from. Nothing here is traced yet.
-- Decode PCC 0.981 is well below prefill's 0.9996. It does not hurt WER, but it is unexplained and
-  worth a look before trusting Block 1 in a different configuration.
-- Prefill is capped near 512 by L1 (see the module docstring). Prompts beyond ~1024 tokens would
-  need real chunked prefill, which needs paged attention — `MAX_PREFILL_CHUNK_SIZE` cannot help
-  because its unit is 1024.
+**What is left in Block 1, honestly:** not much. 23.6 of its 34.9 ms is weight streaming at
+194 GB/s, which is the measured ceiling for a plain interleaved matmul here (hand-tuned matmul
+program configs are SLOWER — 169 vs 193 GB/s on wq). 6 ms is RMSNorm whose fp32 accumulation is
+load-bearing. So only fewer weight BYTES help, and that is capped by the hang below.
 
-**Risks investigated and CLEARED before the port** (all in `models/tt_transformers/tt/`):
-- `head_dim=128` is honoured: `model_config.py:2678` reads it from config, falling back to
-  `dim // n_heads` (which would give a wrong 96).
-- The non-square `wo` is handled: `model_config.py:1983` uses `k_dim = n_heads * head_dim`.
-- **`forward()` takes embeddings, not token ids** (`model.py:852`, `x: ttnn.Tensor`), so our
-  37-codebook summed input works — `embedding.py` is a separate module we simply bypass.
-- `lm_head` is skippable, and we *should* skip it: Block 2 consumes the post-final-norm hidden
-  state (`voxtral_backbone_ref.py:157`), and we never emit text tokens. That is 402M tied
-  parameters (131072x3072) we do not pay for.
-- RoPE convention: `use_hf_rope` defaults to `False` (Meta/interleaved), which matches our
-  bit-exact reference. Do not let a default flip it to HF half-split.
+**THE HANG, and the precision boundary it imposes.** All-BFP8 weights are ~5 ms/frame faster and
+trigger a silent, card-wedging hang in multi-utterance runs (recovery needs a `tt-smi` board
+reset). It needs five things at once — all-BFP8 Block 1, Block 2 in the loop, Block 3 on device,
+two distinct codec buckets, and a generation between two same-bucket decodes. Remove any one and
+it completes. **BFP8 on FF1_FF3 is safe; adding FF2 brings it back.** `tt_transformers` never saw
+it because it uses the same mixed precision. Ruled out by measurement, so do not retry: memory
+(flat, 8 GB free at the hang), program-cache COUNT (576 entries fine; we died at 310–341 while
+tt_transformers lived at 329), Block 3 length/content, a Block 1 leak (1400 steps clean), and
+every distinctive Block 1 op. The underlying ttnn failure — a hang rather than an error — is
+unreported upstream and still unexplained.
 
-**Constraint found and now handled by `scripts/export_backbone_hf.py`:** `tt_transformers`
-**requires HF-format checkpoints** —
-`model_config.py:588` raises unless `HF_MODEL` is set, and the Meta `consolidated.00.pth` path is
-vestigial. Ours is Mistral-native `consolidated.safetensors` + `params.json`. So the shim is bigger
-than a config-add: a `config.json` **plus a checkpoint transcription to HF parameter names**.
-Mechanical and CPU-testable. `model_params/Mistral-7B-Instruct-v0.3/config.json` is the schema to
-copy; the field mapping is dim→hidden_size, n_layers→num_hidden_layers, n_heads→num_attention_heads,
-n_kv_heads→num_key_value_heads, hidden_dim→intermediate_size, norm_eps→rms_norm_eps,
-tied_embeddings→tie_word_embeddings, plus an explicit `head_dim: 128`.
+**Device trace** of the decode step is implemented and correct (PCC 0.99982 traced vs 0.99985)
+and OFF: at equal window it is 0.7 ms SLOWER, because decode here is device-bound, not
+host-dispatch bound. Tracing Block 1 AND Block 2 together also works now and is bit-identical
+(0 differing codes of 2849) after fixing the capture ORDER — all warm-ups before any capture —
+but costs ~6 ms/frame, so both stay off. The `ign/voxtral_p150_qb2` branch reports decode as
+dispatch-bound; that is Blackhole, and it does not transfer to this N150.
 
-**Topology is settled:** this box has exactly one device (WORMHOLE_B0, 1 visible, 1 PCIe), so
-single-N150. Memory: 3.03B params in the 26 layers + 402M embedding = 3.43B →
-**bf16 6.86 GB, bfp8 3.64 GB**, plus ~218 MB KV cache at seq 2048 and ~260 MB for Block 3, against
-~11 GB usable. bf16 fits with headroom; start there and only drop to bfp8 if speed demands it.
+**Still open:** prefill beyond ~1024 tokens would need chunked prefill. batch=1 only.
 
 ### Block 2 — DONE, and the accuracy is not the problem
 390M, 3 layers, **3-token sequence**, bidirectional (no RoPE, no mask), 7 Euler steps per frame with
@@ -615,65 +577,35 @@ ours is arithmetic. Read trap #1 before touching capture code.
 
 ## 7. Suggested order when resuming
 
-**All three blocks work and the audio is good (§3.1). The open work is performance.**
+**All three blocks work, quality is good, and the port is no longer the bottleneck — the model is.**
 
-**Where the time actually goes — MEASURED, and it is not what this file used to claim.** An earlier
-version of this section said Block 1's decode step dominates. That was inferred from parameter count
-(3.4B vs 390M) and is **wrong**. Timed per frame at the real pipeline batch (B=1):
+Per frame, steady state on one N150: **Block 1 ~35 ms, Block 2 ~42.5 ms, host 0.2 ms, ~77 ms
+total, RTF ~1.0.** Both hot modules open with a "where the time goes" map giving the ceiling for
+each line item; read those before optimizing anything.
 
-| | fp32 | bf16 (current) |
-|---|---|---|
-| **Block 2** — flow, 7 Euler steps | **169.9 ms — 76.0%** | **109.4 ms — 69.4%** |
-| Block 1 — one decode step | 53.4 ms — 23.9% | 48.0 ms — 30.5% |
-| `embed_frame` (host gather) | 0.1 ms | 0.1 ms |
-| total | 223.4 ms → RTF 2.79 | 157.6 ms → **RTF 1.97** |
-
-Parameter count is the wrong proxy: Block 1's step is a few big matmuls, whereas Block 2 is ~660
-tiny dispatch-bound ops (3-token sequence, 7 sequential steps, batch-2 CFG). **Optimize Block 2
-first.** Of its 109 ms, ~79 ms is the 7 velocity evaluations and ~30 ms is host work — the semantic
-argmax, FSQ quantise and the CFG/Euler arithmetic. Steady-state per-frame settles near 120 ms on
-long clips once warm, so the 40-frame table above carries some warmup.
-
-**Block 2 runs at bf16 (2026-07-31), worth 1.55x on the block and 1.42x end-to-end for no
-measurable quality cost.** Sets weights and all activations; matmul accumulation stays fp32, and so
-does the host-side Euler state, which is why the error does not compound. Evidence in §3.2.
-
-1. Re-read this file and `reference/PROVENANCE.md`. Recreate the two venvs (§2).
-2. Run the 118 tests, then `generate_quality_set.py --cases 0,1` to confirm the device path still
-   produces speech before changing anything.
-3. **Cut Block 2's DEVICE arithmetic — that is where the time is.** 139 of 145 ms per frame at
-   batch 2 is device execution (§6, Block 2). The trunk runs `HiFi4` with `fp32_dest_acc_en`, the
-   most expensive setting available, and every matmul does 32 tile rows of work for 3 useful tokens.
-   Try `HiFi2` and `fp32_dest_acc_en=False` on the trunk while leaving the fp32 solver alone, gated
-   like bf16 was: code diffs first, then WER and long-form frame counts.
-   **Then flip `USE_TRACE = True`** — see the trigger condition in §6. Fidelity alone will stall at
-   the 121.7 ms dispatch wall; the two only pay off together, in that order.
-4. **Then Block 1's decode step** — 48 ms of the 158 ms frame (30%), so it caps at a ~1.4x
-   end-to-end win even if it went to zero. Find out where that 48 ms goes (device vs host dispatch)
-   before optimizing anything; `tt_transformers` has trace/prefetcher machinery we are not using.
-   Do **not** repeat the mistake this file made for a while and rank work by parameter count.
-5. Re-run §3.1's harness after each change. Trap #6 is that synthetic gates let the audible path
-   rot; WER is the gate that matters. For refactors that should be numerically neutral, comparing
-   the WAV bytes against the previous build is faster and stricter than ASR — the device-side Euler
-   change was confirmed bit-identical that way, over a 458-frame clip.
+1. Re-read this file. Recreate the venvs (§2). Run the tests, then
+   `generate_quality_set.py --cases 0,1` to confirm the device path still speaks.
+2. **Block 2 is the larger half and the right target.** 35 of its 42.5 ms is 7 SEQUENTIAL Euler
+   steps, each a 3-layer transformer over 3 tokens — every matmul does 32 tile rows of work for 6
+   useful ones. Already tried and rejected: lower math fidelity (~4 ms for 10–20x the integer-code
+   errors) and a device trace (bit-identical, ~6 ms/frame slower). BFP8 weights ARE on and were
+   worth 1.23x. The untried idea is CONCURRENT REQUESTS filling the wasted 26 tile rows —
+   throughput, not latency.
+3. **Block 1 is close to its floor.** Only fewer weight bytes help, and BFP8 beyond FF1_FF3 hits
+   the hang. Small change left: `paged_fused_update_cache` and `rotary_embedding_llama_fused_qk`
+   are worth ~0.7 ms combined.
+4. **Gate every change on WER, not PCC.** Two lessons from this port, both expensive: a cheap
+   RMSNorm looked fine at per-op PCC 0.999993 and took model decode PCC to 0.992; and case 4
+   cannot measure an implementation at all (see §1). Per-case WER on a short clip is trajectory
+   noise — the same case swings 0%–28.6% on the SEED alone at fixed precision. Only the aggregate
+   over 340+ words means anything.
+5. `tests/test_tt_defaults.py` pins the shipped configuration with the reason for each choice. If
+   you change a default, change that test in the same commit.
 
 **Deferred and still worth doing:**
-- A **listening pass** on fp32 vs bf16 (§3.2). The fp32 clips were judged "sounds ok"; nobody has
-  compared them to the bf16 ones now shipping, and WER cannot see timbre.
-- Block 1 **decode PCC 0.981** vs prefill's 0.9996 — unexplained, harmless so far.
-- **The sdpa compounding probe** — ~1 hour, needs no checkpoint. Block 1 currently does *not* use
-  sdpa, so this is a latent perf lever rather than a blocker. Block 1 escapes sdpa's *minor*
-  problem (the `attn_mask`/`is_causal` exclusivity: its attention is causal + RoPE with no additive
-  bias, so the native fast path works and no mask tensor is needed) but would **inherit the major
-  one** — the mask-independent 3.7–10.7x worst-case penalty in §4.1, proven with an all-zero mask.
-  Chain 26 sdpa attentions at Block 1's real shapes (GQA 32/8, head_dim 128, dim 3072, causal,
-  seq ~500) against an fp64 reference and report PCC **and worst-sample per layer**, to see whether
-  the error compounds or stays bounded. Cover **both** kernels — `sdpa` for prefill and
-  `sdpa_decode` for decode are separate code paths, and the XTTS-v2 work hit an odd-tile bug in the
-  latter needing the KV-cache length rounded to a multiple of 64. If it comes back unbounded, that
-  is worth escalating: it would affect every model in the repo.
-- **Prefill beyond ~1024 tokens** needs paged-attention chunked prefill (§6, Block 1).
-- Block 3's `bucket` for the real streaming chunk size (§6).
-
-The performance question is decided by Block 1: 87% of the parameters and 12.5 sequential steps per
-second of audio. Block 3 is done and should be left alone.
+- A **listening pass** — WER cannot see timbre, and nobody has A/B'd the current build.
+- **Report the ttnn hang upstream** (§6, Block 1). A silent hang needing a board reset is their
+  bug regardless of what we feed it, and we have a ~90 s repro.
+- **Prefill beyond ~1024 tokens** needs chunked prefill.
+- A **real comparison against `ign/voxtral_p150_qb2`** — theirs is Blackhole P150 on a larger 4B
+  variant, so none of the published numbers are like-for-like with ours.

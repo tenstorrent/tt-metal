@@ -173,9 +173,14 @@ SDPA = set(filter(None, os.environ.get("VOXTRAL_SDPA", "").split(",")))
 # the MODEL on a one-word prompt with 74 tokens of voice conditioning, not the port -- and it
 # cannot discriminate between implementations. Turning this path off on the strength of it was a
 # weak call: on the other 14 cases the two configurations are statistically indistinguishable.
-# Left OFF because it has not been re-gated on a case-4-excluded run, not because it is known bad.
-# That re-gate is the cheap next experiment, and 6.6 ms/frame is waiting behind it.
-DECODE_NATIVE = os.environ.get("VOXTRAL_GPT_DECODE_NATIVE", "0") == "1"
+# ON. 6.6 ms/frame for a decode PCC of 0.99990 against 0.99991, and re-gated properly after a
+# false alarm: it was briefly reverted when case 4 collapsed with it on, but case 4 is chaotic in
+# EVERY implementation including the fp32 CPU reference (see score_quality_set's model-unstable
+# bucket), so it cannot compare implementations. The one case that then differed between the two
+# 15-case runs was case 6 -- and across 6 seeds both paths give the IDENTICAL WER pattern
+# (0.0 / 28.6 / 28.6 / 28.6 / 0.0 / 0.0), i.e. case 6 is bimodal and the runs simply landed on
+# opposite sides. Quality-equivalent, measurably faster.
+DECODE_NATIVE = os.environ.get("VOXTRAL_GPT_DECODE_NATIVE", "1") != "0"
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
 _QKV_SHARD = ttnn.create_sharded_memory_config(
     (TILE, _QKV_WIDTH // 8), core_grid=ttnn.CoreGrid(y=1, x=8),
