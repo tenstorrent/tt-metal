@@ -119,6 +119,34 @@ TRACE_REGION_SIZE = 64 * 1024 * 1024
 # the slice, transpose, two matmuls, softmax and reshape with one op and needs no mask.
 SDPA = set(filter(None, os.environ.get("VOXTRAL_SDPA", "").split(",")))
 
+# DECODE-NATIVE HEAD LAYOUT, via VOXTRAL_GPT_DECODE_NATIVE=1. ttnn has decode-specific head ops
+# that work in [1, batch, n_heads, head_dim] instead of our [1, n_heads, seq, head_dim], and at
+# batch 1 they line up with everything downstream for free: nlp_create_qkv_heads_decode emits q
+# exactly as sdpa_decode wants it and k/v exactly as paged_update_cache wants them, already
+# sharded -- so the permute and the hand-rolled L1 shard both disappear, and so do the cache slice
+# and the mask (sdpa_decode bounds the cache with cur_pos instead).
+#
+# Measured in isolation over 26 layers: the qkv path drops 7.73 -> 5.47 ms (create_qkv_heads alone
+# 2.58 -> 0.55), and sdpa_decode over the whole 1024 cache is 1.78 ms against ~3.9 for slice plus
+# hand-rolled attention. BATCH MATTERS: these ops document B=32, and B=32 works, but then
+# sdpa_decode reads a 32x larger cache and costs 11.86 ms instead of 1.78. B=1 is supported
+# ("respects the unpadded B") and is the only sensible choice here.
+#
+# IN THE MODEL: 34.9 ms/frame against 41.5 for the hand-rolled path, decode PCC 0.99990 against
+# 0.99991 -- so ~6.6 ms for nothing measurable. DEFAULT ON. Set VOXTRAL_GPT_DECODE_NATIVE=0 for
+# the hand-rolled path, which is still the reference implementation for the numerics.
+DECODE_NATIVE = os.environ.get("VOXTRAL_GPT_DECODE_NATIVE", "1") != "0"
+_QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
+_QKV_SHARD = ttnn.create_sharded_memory_config(
+    (TILE, _QKV_WIDTH // 8), core_grid=ttnn.CoreGrid(y=1, x=8),
+    strategy=ttnn.ShardStrategy.WIDTH, orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True)
+# rotary_embedding_hf's decode mode requires cos/sin SHARDED as well as the input
+# ("Cos must be sharded in decode mode"), one tile row on one core at batch 1.
+_ROPE_SHARD = ttnn.create_sharded_memory_config(
+    (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)
+
 # L1 shard for paged_update_cache's input (one tile row on one core). Only the traced path needs
 # that op; see `_write_cache`.
 _DECODE_SHARD = ttnn.create_sharded_memory_config(
@@ -237,9 +265,10 @@ class TtVoxtralGPT:
             self.layers.append({
                 "an": vec(w[p + "attention_norm"]),
                 "fn": vec(w[p + "ffn_norm"]),
-                "wq": lin(wq),
-                # k and v fused into one weight -> one matmul, one weight stream (as in Block 2)
-                "wkv": lin(torch.cat([wk, w[p + "attention.wv"]], dim=0)),
+                # q, k and v fused into ONE weight: one matmul and one weight stream instead of
+                # two, and it is what the decode-native head op expects. Same bytes as the old
+                # wq + wkv pair, so this costs no memory.
+                "wqkv": lin(torch.cat([wq, wk, w[p + "attention.wv"]], dim=0)),
                 "wo": lin(w[p + "attention.wo"]),
                 "w1": lin(w[p + "feed_forward.w1"], ffd),
                 "w2": lin(w[p + "feed_forward.w2"], FF2_WEIGHT_DTYPE or wd),
@@ -258,7 +287,7 @@ class TtVoxtralGPT:
 
     def _assert_shapes(self):
         """Cheap guard against a silently wrong load: non-square wq/wo are what bite here."""
-        exp = {"wq": (DIM, Q_WIDTH), "wkv": (DIM, 2 * KV_WIDTH), "wo": (Q_WIDTH, DIM),
+        exp = {"wqkv": (DIM, _QKV_WIDTH), "wo": (Q_WIDTH, DIM),
                "w1": (DIM, HIDDEN_DIM), "w3": (DIM, HIDDEN_DIM), "w2": (HIDDEN_DIM, DIM)}
         for i, L in enumerate(self.layers):
             for k, e in exp.items():
@@ -290,12 +319,11 @@ class TtVoxtralGPT:
     def _qkv(self, x, w, S, cos, sin):
         """Pre-norm + fused QKV + RoPE. -> (q,k,v) as [1, heads, S, head_dim], v un-rotated."""
         h = self._norm(x, w["an"])
-        q = ttnn.linear(h, w["wq"], compute_kernel_config=COMPUTE_CONFIG)
-        kv = ttnn.linear(h, w["wkv"], compute_kernel_config=COMPUTE_CONFIG)
+        qkv = ttnn.linear(h, w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.reshape(q, [1, 1, S, Q_WIDTH]), ttnn.reshape(kv, [1, 1, S, 2 * KV_WIDTH]),
-            num_heads=N_HEADS, num_kv_heads=N_KV_HEADS,
-            transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.reshape(qkv, [1, 1, S, _QKV_WIDTH]), num_heads=N_HEADS,
+            num_kv_heads=N_KV_HEADS, transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return self._rope(qh, cos, sin), self._rope(kh, cos, sin), vh   # v carries no RoPE
 
     def _attend(self, qh, kh, vh, S, mask):
@@ -411,6 +439,31 @@ class TtVoxtralGPT:
                                              compute_kernel_config=COMPUTE_CONFIG)
         return ttnn.reshape(ttnn.matmul(a, vs, compute_kernel_config=COMPUTE_CONFIG),
                             [1, 1, Q_WIDTH])
+
+    def _layer_step_native(self, x, w, cos, sin, cache, pos, pos_t):
+        """Decode layer in ttnn's DECODE-NATIVE head layout. See DECODE_NATIVE.
+
+        Everything here is [1, batch, heads, head_dim] rather than [1, heads, seq, head_dim], and
+        at batch 1 the pieces fit together with no glue: create_qkv_heads_decode emits q the way
+        sdpa_decode wants it and k/v the way paged_update_cache wants them, ALREADY SHARDED. So
+        this path has no permute, no hand-built L1 shard, no cache slice and no mask -- sdpa_decode
+        bounds the cache with cur_pos instead.
+        """
+        qkv = ttnn.linear(self._norm(x, w["an"]), w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
+        qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(
+            qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
+        qh = ttnn.experimental.rotary_embedding_hf(qh, cos, sin, is_decode_mode=True,
+                                                   compute_kernel_config=COMPUTE_CONFIG)
+        kh = ttnn.experimental.rotary_embedding_hf(kh, cos, sin, is_decode_mode=True,
+                                                   compute_kernel_config=COMPUTE_CONFIG)
+        ttnn.experimental.paged_update_cache(cache[0], kh, update_idxs_tensor=pos_t)
+        ttnn.experimental.paged_update_cache(cache[1], vh, update_idxs_tensor=pos_t)
+        o = ttnn.transformer.scaled_dot_product_attention_decode(
+            qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
+            compute_kernel_config=COMPUTE_CONFIG)
+        a = ttnn.reshape(ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG), [1, 1, Q_WIDTH])
+        return self._mlp(ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG)), w)
 
     def _layer_step(self, x, w, cos, sin, cache, pos, mask, L, pos_t=None):
         """One decode position. x [1,1,3072] -> same, against `cache` filled to `pos`.
@@ -607,8 +660,15 @@ class TtVoxtralGPT:
         sin = up(sinb.reshape(1, 1, 1, HEAD_DIM))
         mask = up(m, ttnn.bfloat16)
         x = up(embed.reshape(1, 1, DIM))
+        pos_t = self._pos_tensor(pos, None) if DECODE_NATIVE else None
+        if DECODE_NATIVE:
+            cos = ttnn.to_memory_config(cos, _ROPE_SHARD)
+            sin = ttnn.to_memory_config(sin, _ROPE_SHARD)
         for i, w in enumerate(self.layers):
-            x = self._layer_step(x, w, cos, sin, self.caches[i], pos, mask, L)
+            if DECODE_NATIVE:
+                x = self._layer_step_native(x, w, cos, sin, self.caches[i], pos, pos_t)
+            else:
+                x = self._layer_step(x, w, cos, sin, self.caches[i], pos, mask, L)
         x = ttnn.rms_norm(x, weight=self.norm, epsilon=NORM_EPS,
                           compute_kernel_config=COMPUTE_CONFIG)
         self.pos = pos + 1
