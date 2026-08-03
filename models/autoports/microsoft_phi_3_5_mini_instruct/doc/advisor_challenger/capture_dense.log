@@ -1,0 +1,41 @@
+2026-08-03 06:50:15.398 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[ttnn-advise] ops=39 final_choices=36 spill.ran=True total_spills=1
+[ttnn-advise] artifacts in: models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/shard_advise/dense
+  report.json    models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/shard_advise/dense/report.json
+  report.txt     models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/shard_advise/dense/report.txt
+  final_ir.mlir  models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/shard_advise/dense/final_ir.mlir
+nanobind: leaked 1 instances!
+ - leaked instance 0x7b109cbacb58 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 14 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 233 functions!
+ - leaked function "get_num_devices"
+ - leaked function "storage_type"
+ - leaked function "dram_grid_size"
+ - leaked function ""
+ - leaked function "num_program_cache_entries"
+ - leaked function "from_json"
+ - leaked function "bounding_box"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "update_tensor_topology"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-03 06:50:31.458 | info     |    BuildKernels | JIT cache stats: 70/70 hits (100.0%) [70 cached, 7 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-03 06:50:31.458 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-03 06:50:31.473 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-03 06:50:31.473 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-03 06:50:31.982 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-03 06:50:31.982 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-03 06:50:31.983 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

@@ -1,0 +1,14 @@
+{
+  "shipped_policy": {
+    "attention_weight_dtype": "BFLOAT4_B",
+    "mlp_gate_up_weight_dtype": "BFLOAT4_B",
+    "mlp_down_weight_dtype": "BFLOAT4_B"
+  },
+  "shipped_weight_dtypes": {
+    "qkv": "BFLOAT4_B",
+    "o_proj": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/decode_b32_bfp4_final.csv and tests/optimized_decoder_perf.py::test_candidate_traced_decode"
+}

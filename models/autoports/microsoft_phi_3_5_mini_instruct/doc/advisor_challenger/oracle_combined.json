@@ -1,0 +1,9 @@
+{
+  "candidate": "rope_l1_query_key_norm_11c",
+  "decode_batch": 32,
+  "oracle_weights": "real",
+  "oracle_reference": "frozen incumbent with identical real weights and inputs",
+  "oracle_pcc_bar": 0.999999,
+  "oracle_passed": false,
+  "oracle_message": 0.9999910666979231
+}

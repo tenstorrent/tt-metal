@@ -1,0 +1,35 @@
+dense: window 725.175 us, 56 rows, closes: True
+   paired: 20 by name, 11 by position (46.142 us, 6.36 % of window)
+   chain                    450.615 us  62.14 %  (27 ops)
+   untraced                  96.957 us  13.37 %  (8 ops)
+   boundary                  73.604 us  10.15 %  (17 ops)
+   dram_resident             55.137 us   7.60 %  (2 ops)
+   agrees_with_shipped       48.862 us   6.74 %  (2 ops)
+   boundaries: advisor drops 16 (71.637 us, in scope) | agrees 1 (1.967 us, out of scope) | undetermined 0 (0.000 us) | UNRESOLVED 0 (0.000 us, check the IR)
+   retilize 63.691us/10  dram_to_l1 5.483us/4  l1_to_dram 4.430us/3
+   FEASIBILITY [measurable] floor 1.064 us (n=5), ceiling 71.637 us (67.33x)
+      13 chain(s) exceed the 1.064 us floor; screen those individually and group the rest.
+   !! LayerNormDeviceOperation on 1 core(s), 44.285 us (6.107 %) -- needs a measured attempt or a quoted hard error
+   !! LayerNormDeviceOperation on 1 core(s), 44.510 us (6.138 %) -- needs a measured attempt or a quoted hard error
+   note: the advice spilled 1x out of L1 while being built -- a capacity failure on one chain is a partial-application artifact, not a wrong direction
+   MODEL ESTIMATE this kind: 23205.6 us (32/32 layers); ceiling per model 2292.4 us
+   17 chain(s) with advisor-attributable value, ranked by it:
+      dense:b14            ops    0.000 + boundaries  10.090 us  (attributable 10.090 = 9.48x floor, conf high,   322.9 us/model)   
+      dense:b29            ops    0.000 + boundaries  10.079 us  (attributable 10.079 = 9.47x floor, conf high,   322.5 us/model)   
+      dense:3              ops    2.056 + boundaries   7.219 us  (attributable  7.219 = 6.78x floor, conf low,   231.0 us/model)   neg
+      dense:8              ops    1.519 + boundaries   7.024 us  (attributable  7.024 = 6.60x floor, conf low,   224.8 us/model)   neg
+      dense:2              ops    6.830 + boundaries   4.319 us  (attributable  4.319 = 4.06x floor, conf high,   138.2 us/model)   slice_static
+      dense:7              ops    6.594 + boundaries   3.740 us  (attributable  3.740 = 3.52x floor, conf high,   119.7 us/model)   slice_static
+      dense:1              ops    1.636 + boundaries   2.886 us  (attributable  2.886 = 2.71x floor, conf high,    92.4 us/model)   slice_static
+      dense:6              ops    1.264 + boundaries   1.788 us  (attributable  1.788 = 1.68x floor, conf high,    57.2 us/model)   slice_static
+      dense:4              ops   20.107 + boundaries   1.778 us  (attributable  1.778 = 1.67x floor, conf low,    56.9 us/model)   concat/multiply
+      dense:5              ops    6.798 + boundaries   1.778 us  (attributable  1.778 = 1.67x floor, conf low,    56.9 us/model)   multiply/add
+      dense:9              ops   19.823 + boundaries   1.762 us  (attributable  1.762 = 1.66x floor, conf low,    56.4 us/model)   concat/multiply
+      dense:10             ops    7.032 + boundaries   1.762 us  (attributable  1.762 = 1.66x floor, conf low,    56.4 us/model)   multiply/add
+      dense:b43            ops    0.000 + boundaries   1.587 us  (attributable  1.587 = 1.49x floor, conf high,    50.8 us/model)   
+      dense:b38            ops    0.000 + boundaries   0.965 us  (attributable  0.965 = 0.91x floor, conf high,    30.9 us/model)   
+      dense:b39            ops    0.000 + boundaries   0.964 us  (attributable  0.964 = 0.91x floor, conf high,    30.8 us/model)   
+      dense:12             ops    2.461 + boundaries   0.773 us  (attributable  0.773 = 0.73x floor, conf low,    24.7 us/model)   add
+      dense:0              ops  178.358 + boundaries   0.745 us  (attributable  0.745 = 0.70x floor, conf high,    23.8 us/model)   rms_norm/linear/nlp_create_qkv_heads
+   1 chain(s) with NO attributable value -- the advisor places the same conversions, or they are unresolved. Listed for completeness, not as candidates:
+      dense:11             ops  196.137 + boundaries   0.984 us  (attributable  0.000 = 0.00x floor, conf low,     0.0 us/model)   linear/add/rms_norm/linear/slice_sta

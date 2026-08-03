@@ -1,0 +1,35 @@
+{
+  "label": "rope_l1_query",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.792623907327652,
+    0.7923716306686401,
+    0.7940519973635674,
+    0.7934500835835934,
+    0.7934877276420593
+  ],
+  "median_ms": 0.7934500835835934,
+  "noise_floor_ms": 0.0016803666949272156,
+  "harness": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/scripts/harness.py",
+  "harness_scope": "one dense decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-08-03T06:55:34+00:00",
+  "shipped_policy": {
+    "attention_weight_dtype": "BFLOAT4_B",
+    "mlp_gate_up_weight_dtype": "BFLOAT4_B",
+    "mlp_down_weight_dtype": "BFLOAT4_B"
+  },
+  "shipped_weight_dtypes": {
+    "qkv": "BFLOAT4_B",
+    "o_proj": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/decode_b32_bfp4_final.csv and tests/optimized_decoder_perf.py::test_candidate_traced_decode",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

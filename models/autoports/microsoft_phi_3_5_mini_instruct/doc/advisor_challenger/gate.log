@@ -1,0 +1,5 @@
+  ok: incumbent.json: n>=5, incumbent_ms = median, policy sourced from execution
+  ok: captures: per layer kind, dtypes match shipped, batch and order agree
+  ok: reconciliation: tool-generated, closes at 100%, chains resolved
+  ok: final.json: non-overlap holds, oracle passed, outcome stated
+02b-advisor-challenger gate PASSED for microsoft_phi_3_5_mini_instruct

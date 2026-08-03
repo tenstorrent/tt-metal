@@ -440,6 +440,9 @@ class FunctionalDecoder(LightweightModule):
             use_height_and_width_as_shard_shape=True,
         )
 
+    def _decode_sdpa_memory_config(self):
+        return ttnn.DRAM_MEMORY_CONFIG
+
     def decode_forward(
         self,
         hidden_states,
@@ -485,7 +488,7 @@ class FunctionalDecoder(LightweightModule):
             cur_pos_tensor=current_positions,
             page_table_tensor=page_table,
             scale=self.scale,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self._decode_sdpa_memory_config(),
         )
         attended = ttnn.to_memory_config(attended, self._decode_concat_memory_config())
         attended = ttnn.experimental.nlp_concat_heads_decode(attended, num_heads=self.num_heads)

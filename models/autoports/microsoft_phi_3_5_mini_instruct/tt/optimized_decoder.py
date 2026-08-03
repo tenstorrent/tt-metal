@@ -22,6 +22,10 @@ class OptimizationPolicy:
     attention_weight_dtype: object = ttnn.bfloat4_b
     mlp_gate_up_weight_dtype: object = ttnn.bfloat4_b
     mlp_down_weight_dtype: object = ttnn.bfloat4_b
+    # The measured RoPE winner ships; rejected advisor candidates stay off.
+    advisor_rope_l1: str = "query_key"
+    advisor_sdpa_concat_l1: bool = False
+    advisor_norm_cores: int = 0
 
 
 DEFAULT_OPTIMIZATION_POLICY = OptimizationPolicy()
@@ -82,6 +86,63 @@ class OptimizedDecoder(FusedDecoder):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+
+    def _decode_rope(self, query, key, current_positions, *, use_long_rope):
+        targets = self.optimization_policy.advisor_rope_l1
+        if not targets:
+            return super()._decode_rope(query, key, current_positions, use_long_rope=use_long_rope)
+        cos_table = self.long_cos if use_long_rope else self.short_cos
+        sin_table = self.long_sin if use_long_rope else self.short_sin
+        rope_positions = ttnn.typecast(current_positions, ttnn.uint32)
+        cos = ttnn.reshape(
+            ttnn.embedding(rope_positions, cos_table, layout=ttnn.TILE_LAYOUT),
+            [1, 1, self.batch, self.head_dim],
+        )
+        sin = ttnn.reshape(
+            ttnn.embedding(rope_positions, sin_table, layout=ttnn.TILE_LAYOUT),
+            [1, 1, self.batch, self.head_dim],
+        )
+
+        def apply(value, enabled):
+            memory_config = value.memory_config()
+            staging = ttnn.L1_MEMORY_CONFIG if enabled else ttnn.DRAM_MEMORY_CONFIG
+            value = ttnn.to_memory_config(value, staging)
+            value = self._apply_rope(value, cos, sin)
+            return ttnn.to_memory_config(value, memory_config)
+
+        return apply(query, "query" in targets), apply(key, "key" in targets)
+
+    def _decode_sdpa_memory_config(self):
+        if self.optimization_policy.advisor_sdpa_concat_l1:
+            return self._decode_concat_memory_config()
+        return super()._decode_sdpa_memory_config()
+
+    def _norm(self, hidden_states, weight):
+        cores = self.optimization_policy.advisor_norm_cores
+        if not cores or tuple(hidden_states.shape) != (1, 1, self.batch, self.hidden_size):
+            return super()._norm(hidden_states, weight)
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        gx = min(cores, grid.x)
+        while cores % gx or cores // gx > grid.y:
+            gx -= 1
+        gy = cores // gx
+        width_tiles = math.ceil((self.hidden_size // ttnn.TILE_SIZE) / cores)
+        memcfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, width_tiles * ttnn.TILE_SIZE),
+            core_grid=ttnn.CoreGrid(x=gx, y=gy),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        value = ttnn.to_memory_config(hidden_states, memcfg)
+        value = ttnn.rms_norm(
+            value, epsilon=self.eps, weight=weight,
+            program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[gx, gy], subblock_w=1,
+                block_h=1, block_w=width_tiles, inplace=False,
+            ),
+        )
+        return ttnn.sharded_to_interleaved(value, ttnn.DRAM_MEMORY_CONFIG)
 
     def _decode_down(self, value):
         value = ttnn.to_memory_config(value, self._decode_projection_memcfg(tuple(value.shape)[-1]))

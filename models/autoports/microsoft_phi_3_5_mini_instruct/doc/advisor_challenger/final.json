@@ -1,0 +1,82 @@
+{
+  "outcome": "improved",
+  "changed": true,
+  "changed_precision": false,
+  "decode_batch": 32,
+  "incumbent_ms": 0.8071521855890751,
+  "final_ms": 0.7675417512655258,
+  "winning_repeats_ms": [
+    0.7675417512655258,
+    0.7673536241054535,
+    0.7679606229066849,
+    0.76710419729352,
+    0.7683019898831844
+  ],
+  "confirmed_fresh_process": true,
+  "winning_config": {
+    "advisor_rope_l1": "query_key",
+    "advisor_norm_cores": 0,
+    "advisor_sdpa_concat_l1": false
+  },
+  "oracle": "real-weight differential decoder oracle",
+  "oracle_scope": "batch-32 decode, candidate versus frozen incumbent with identical real weights and inputs",
+  "oracle_reference": "frozen incumbent",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "oracle_pcc": 1.0,
+  "model_estimate": {
+    "before_us": 23205.6,
+    "after_us": 21938.066101646422,
+    "band_us": 34.048,
+    "per_kind": {
+      "dense": {
+        "before_us": 23205.6,
+        "after_us": 21938.066101646422,
+        "layers": 32
+      }
+    },
+    "method": "per-layer measured delta x layers_of_kind, summed"
+  },
+  "advised_boundaries": {
+    "us_advisor_drops": 71.637,
+    "us_advisor_agrees": 1.967
+  },
+  "combination": {
+    "best_set": ["rope_query_l1", "rope_key_l1"],
+    "measured_sets": [
+      {
+        "set": ["incumbent"],
+        "measured_ms": 0.8071521855890751,
+        "repeats_ms": [0.8078553341329098, 0.8070055209100246, 0.8067911118268967, 0.8074920624494553, 0.8071521855890751],
+        "oracle_passed": true
+      },
+      {
+        "set": ["rope_query_l1", "rope_key_l1"],
+        "chains": ["dense:b14", "dense:3", "dense:2", "dense:1", "dense:4", "dense:5", "dense:b29", "dense:8", "dense:7", "dense:6", "dense:9", "dense:10"],
+        "measured_ms": 0.7675417512655258,
+        "repeats_ms": [0.7675417512655258, 0.7673536241054535, 0.7679606229066849, 0.76710419729352, 0.7683019898831844],
+        "oracle_passed": true,
+        "oracle_pcc": 1.0,
+        "oracle_weights": "real"
+      }
+    ]
+  },
+  "iterations": [
+    {
+      "trigger": "initial reconcile ranking",
+      "candidate": "query/key RoPE chains staged in L1",
+      "result": "kept and confirmed"
+    }
+  ],
+  "rejected_knobs": {
+    "advisor_norm_cores": {
+      "default": 0,
+      "screened": {"11": 0.745906, "12": 0.749010, "24": 0.748513},
+      "reason": "real-weight differential PCC moved to 0.9999910666979231; placement change rejected"
+    },
+    "advisor_sdpa_concat_l1": {
+      "default": false,
+      "reason": "TT_FATAL: Sharded output not supported for GQA"
+    }
+  }
+}
