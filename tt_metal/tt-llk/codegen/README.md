@@ -48,28 +48,15 @@ LLK_CODEGEN_PRIVATE_ROOT=/path/to/llk_code_gen \
 python codegen/scripts/llk_debug.py --help
 ```
 
-The tester reserves its first three simulator attempts for normal log/source
-debugging. Only after all three fail do attempts 4 and 5 become
-waveform-assisted. For an eligible runtime failure in those late attempts, it
-invokes `codegen/scripts/optional_wave_debug.py`. The bridge enforces this
-boundary, appends its status and deterministic findings to
-`agent_tester_cycleN.md`, and keeps private output below the existing
-`test_logs_cycleN/` directory. It does not add a dashboard step or modify
-`run.json`. Missing private tooling, missing FSDBs, backend errors, and timeouts
-are recorded and remain non-fatal, so normal code generation and refinement
-continue.
-
-Its own tests need `--noconftest`, because the repository-root `conftest.py`
-imports `ttnn`:
-
-```bash
-python -m pytest codegen/scripts/test_optional_wave_debug.py --noconftest
-```
-
 For interactive Claude Code use, invoke
 `/llk-wave-debug /path/to/failure.fsdb failure=hang`. The skill is defined in
 `.claude/skills/llk-wave-debug/SKILL.md` and uses the same deterministic tools
 and private-data boundary.
+
+This is a manual diagnosis path: it reads an FSDB that already exists. Nothing
+in CodeGen enables waveform dumping, and the `emu-*` simulators the tester runs
+against do not produce an FSDB at all, so supply one via `LLK_DEBUG_FSDB` or as
+an argument. Wiring wave *generation* into the tester loop is separate work.
 
 ### Batch Generation
 

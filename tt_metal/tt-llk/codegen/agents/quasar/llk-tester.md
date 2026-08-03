@@ -55,14 +55,6 @@ When `LOCK_TESTS` is `true` (from Inputs), the existing test is the immutable so
 
 Keep an `ATTEMPT` counter starting at **0**. Only a run that reaches the simulator (compile succeeded, simulator executed) increments it. A compile-step failure does **not** consume an attempt — diagnose, fix, re-run. A pass returns `PASS` immediately. A runtime failure → diagnose, apply one fix, run again. **Never exceed 5 simulator runs.** On attempt 5's failure, return `STUCK`.
 
-The simulator budget has two fixed debugging phases:
-
-- **Attempts 1–3: log/source-only.** Do not invoke waveform tooling, search for
-  an FSDB, or spend time interpreting waves.
-- **Attempts 4–5: waveform-assisted.** Reaching attempt 4 proves that three
-  simulator attempts failed. After an eligible runtime failure in either of
-  these attempts, run §2.5 before choosing the next fix or returning `STUCK`.
-
 A separate guard caps **consecutive compile-step failures at 5**: if the harness cannot be made to compile after 5 compile attempts, return `STUCK` (category `COMPILE_ERROR`).
 
 ```
@@ -77,8 +69,6 @@ while ATTEMPT < 5:
     COMPILE_FAILS = 0
     ATTEMPT += 1                  # only simulator runs consume budget
     if result == PASS: return success(ATTEMPT)
-    if ATTEMPT >= 4:
-        collect_optional_wave_evidence(result)  # §2.5; fail-open
     apply(diagnose(result))      # Step 3 + 4
 return stuck(last_result)
 ```
@@ -286,71 +276,6 @@ Invoke `simulate` via the Bash tool **synchronously and in the foreground**, wit
 
 Feed the pattern — not one variant — into Step 3. When `--maxfail` truncated the run, "all failures share a signature" and format-class inferences hold if the sample agrees, but "only one variant fails" is unproven until you re-run with `--maxfail 0`.
 
-### 2.5 — Optional deterministic waveform evidence
-
-This step is allowed **only for simulator attempts 4 and 5**. Attempts 1–3 must
-use the normal logs, test pattern, source, and authoritative references without
-calling waveform tooling. Do not retroactively analyze an FSDB from attempts
-1–3 after entering the waveform-assisted phase.
-
-After a kernel-specific `HANG`/`TIMEOUT` in attempt 4 or 5, make one best-effort
-waveform call for that simulator attempt before choosing a fix or returning
-`STUCK`. For `DATA_MISMATCH`, make the call when `LLK_DEBUG_FSDB` is set or
-`run.log` contains an existing `.fsdb` path. Never run it for a compile failure,
-pre-ready `ENV_ERROR`, or sibling-confirmed environment failure.
-
-The bridge uses the existing tester outputs:
-
-- it appends a short section to `{LOG_DIR}/agent_tester_cycle{N}.md`, creating
-  that file only if you have not written it yet;
-- private raw evidence goes under
-  `{LOG_DIR}/test_logs_cycle{N}/wave_debug_attempt{ATTEMPT}/`;
-- it does not add a dashboard step, modify `run.json`, or create a new run-result
-  schema.
-
-Diagnosis defaults to Quasar core `gen_y[1].gen_x[0]`. That is the harness core,
-so leave it alone unless the failing test moved — then pass `--scope`.
-
-Map the classified failure to `hang`, `timeout`, `mismatch`, or `unknown`, then
-run:
-
-```bash
-WAVE_FSDB_ARGS=()
-if [[ -n "${LLK_DEBUG_FSDB:-}" ]]; then
-  WAVE_FSDB_ARGS=(--fsdb "$LLK_DEBUG_FSDB")
-fi
-
-python "$WORKTREE_DIR/tt_metal/tt-llk/codegen/scripts/optional_wave_debug.py" \
-    --log-dir "$LOG_DIR" \
-    --cycle "$CYCLE" \
-    --attempt "$ATTEMPT" \
-    --failure-kind "{mapped failure kind}" \
-    "${WAVE_FSDB_ARGS[@]}" \
-  || {
-    printf '\n## Optional waveform debugging — attempt %s\n- Status: `unavailable`\n- Summary: optional waveform bridge could not be executed; continuing normal diagnosis.\n- Pipeline action: continue the normal tester/refiner flow.\n' \
-      "$ATTEMPT" >> "$LOG_DIR/agent_tester_cycle${CYCLE}.md"
-    true
-  }
-```
-
-This stage is strictly fail-open. A missing launcher, missing private checkout,
-missing FSDB, backend failure, timeout, invalid evidence file, or bridge error
-must be recorded and then ignored for control flow. It does not consume a
-simulator attempt, never launches an additional simulator run, and never changes
-`PASS`/`STUCK`/`ENV_ERROR`. The bridge itself enforces the attempt boundary:
-calls with `--attempt` outside 4–5 return `status=skipped` without touching
-waveform inputs or tester output files.
-
-When the status is `findings`, read the listed classification, summary, and
-`evidence.json` before Step 3. Treat it as deterministic positive evidence, but
-still apply the contradiction check.
-
-`findings` and `inconclusive` are the only statuses the private tool itself
-writes into `evidence.json`; `unavailable`, `failed`, and `skipped` are bridge
-statuses with no `evidence.json` behind them — do not go looking for one. For
-any of the four non-`findings` statuses, continue with R1–R6 exactly as before;
-absence of waveform evidence is not evidence about the kernel.
-
 ---
 
 ## Step 3: Diagnose
@@ -543,7 +468,6 @@ State the kernel and test paths literally so downstream steps / humans can inspe
 14. **Contradiction check before every hypothesis (§3.0.a).**
 15. **Harness-first on uniform failures (§3.0.b).**
 16. **Test-locked mode (`LOCK_TESTS=true`): the existing test is immutable** — author or modify no test, golden, or input-prep; missing test infrastructure is a terminal `STUCK` (§ Test-Locked Mode).
-17. **Waveform debugging is attempts 4–5 only and fail-open (§2.5).** Never invoke it during attempts 1–3. In attempts 4–5, record unavailable/failed/inconclusive status and continue; it never consumes an attempt or changes the tester outcome.
 
 ---
 
@@ -600,12 +524,6 @@ At minimum: the 1D collection smoke, each `compile` run, each `simulate` run
 
 ## Open questions / handoffs
 Things the optimizer / refiner / human must verify. Write "none" if none.
-
-## Optional waveform debugging
-The deterministic bridge appends one subsection per attempted waveform
-diagnosis during attempts 4–5. Preserve those appended sections when filling
-this template. If the run passed in attempts 1–3, or no eligible late runtime
-failure had an FSDB, write "not run".
 
 ## Final outcome
 - Result: PASS | STUCK | ENV_ERROR

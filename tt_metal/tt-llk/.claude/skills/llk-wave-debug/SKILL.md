@@ -35,11 +35,14 @@ device-ready marker, or confirmed environment failures.
 - Identify the **core under test**. Diagnosis defaults to scope
   `gen_y[1].gen_x[0]`; a failure on any other core needs an explicit `--scope`
   or every signal silently fails to resolve.
-- For a CodeGen run, obtain its `LOG_DIR`, cycle, and simulator-attempt number.
 
-If the test has not produced an FSDB yet, the sanctioned way to get one is the
-tool's own `capture` subcommand — do not hand-roll a VCS re-run, and do not
-capture at all unless the user explicitly asks for another simulator run.
+**This skill diagnoses an FSDB that already exists; it does not create one.**
+Waves are a launch-time decision, so there is no way to recover them for a run
+that has already finished. In particular the `emu-*` simulators that
+`run_test.sh` drives for Quasar produce no FSDB at all — a waveform comes from a
+VCS RTL run. If no FSDB exists, say so and continue with log/source debugging
+rather than re-running anything. The tool's `capture` subcommand can launch a
+wave-enabled run, but only do that when the user explicitly asks for one.
 
 ## Security boundary
 
@@ -66,45 +69,17 @@ The launcher resolves `/proj_sw/user_dev/llk_code_gen` by default. Use
 `LLK_CODEGEN_PRIVATE_ROOT` only when the private checkout is mounted elsewhere;
 every path in this skill is then relative to that root instead.
 
-If the launcher or private checkout is unavailable, record the exact error and
-continue ordinary log/source diagnosis. Waveform tooling must not block a
-CodeGen run.
+If the launcher or private checkout cannot be reached, record the exact error
+and continue ordinary log/source diagnosis. Waveform tooling is supplementary —
+it must never block or change the outcome of the work that invoked it.
 
 `--version` proves only that the private entry point loads. Use
 `python codegen/scripts/llk_debug.py --help` for the current subcommand list
 rather than assuming the set documented here is complete.
 
-### 2. Choose the execution path
+### 2. Run the diagnosis
 
-For an automated CodeGen tester run, use the fail-open bridge:
-
-```bash
-python codegen/scripts/optional_wave_debug.py \
-  --log-dir "$LOG_DIR" \
-  --cycle "$CYCLE" \
-  --attempt "$ATTEMPT" \
-  --failure-kind "$FAILURE_KIND" \
-  --fsdb "$FSDB"
-```
-
-The tester's fixed policy is attempts 1–3 without waveform tooling, followed by
-waveform-assisted attempts 4–5 only if the first three simulator attempts
-failed. Do not invoke this bridge for attempts 1–3; it independently enforces
-the boundary and returns `status=skipped` without reading an FSDB or writing
-tester artifacts. An `--attempt` outside 1–5 also returns `skipped`.
-
-Omit `--fsdb` when `LLK_DEBUG_FSDB` is set or the existing
-`test_logs_cycleN/run.log` names the waveform. Pass `--scope` (and `--arch`,
-once more than one is supported) when the failing core is not the default.
-
-The bridge appends to `agent_tester_cycleN.md`, creating it only if the tester
-has not written it yet, and puts private output under
-`test_logs_cycleN/wave_debug_attemptN/`. It deliberately returns zero for
-missing tooling, missing waveforms, backend errors, timeouts, and malformed
-evidence. **Read the appended status; do not infer success from the exit code.**
-
-For an interactive diagnosis outside a CodeGen run, write output to a private
-Weka directory:
+Write output to a private Weka directory:
 
 ```bash
 python codegen/scripts/llk_debug.py diagnose \
@@ -113,9 +88,15 @@ python codegen/scripts/llk_debug.py diagnose \
   "$FSDB"
 ```
 
-`diagnose` writes `evidence.json` (for you) and `evidence.md` (for a human)
-into `--output-dir`, alongside the trace, summary, catalogue, and resolution
-records.
+Pass `--scope` when the failing core is not the default. `diagnose` writes
+`evidence.json` (for you) and `evidence.md` (for a human) into `--output-dir`,
+alongside the trace, summary, catalogue, and resolution records, and echoes the
+evidence to stdout.
+
+Expect this to be slow on a large FSDB — cataloguing millions of signals over
+SSH takes minutes. Raise `--backend-timeout` well above its 120 s default and
+run it in the background rather than letting a foreground timeout kill it
+mid-catalogue.
 
 #### Remote FSDBs
 
@@ -132,14 +113,17 @@ one from the FSDB path.
 
 ### 3. Interpret evidence
 
-Two different status vocabularies are in play. Do not conflate them.
-
-`evidence.json` — written by the private tool, and only ever one of:
+`evidence.json` carries a `status` that is only ever one of two values:
 
 - `status: findings` — one or more registered deterministic detectors matched.
   Report the highest-severity causal finding first.
 - `status: inconclusive` — no registered detector matched. This is **not**
   evidence that the kernel is correct.
+
+There is no third value. If the command exited non-zero there is no
+`evidence.json` at all — read stderr, match it against **Common failures**
+below, and continue log/source debugging. Never report a waveform conclusion
+from a run that did not write evidence.
 
 Before you report `inconclusive`, check that the quiescence detectors could
 physically fire. Compare `summary.quiescent_threshold_fs` against
@@ -159,21 +143,7 @@ drawing any conclusion. Also compare `last_activity_fs` against
 `end_time_fs`: a trace that goes idle in its first few nanoseconds and stays
 idle is a capture-window problem, not a kernel finding.
 
-The bridge's tester-log status — a superset that also covers the cases where no
-`evidence.json` exists at all:
-
-| Status | Meaning | What to do |
-|--------|---------|------------|
-| `findings` | Detectors matched; `evidence.json` present | Cross-check, then report |
-| `inconclusive` | Tool ran, nothing matched; `evidence.json` present | Go to step 4 |
-| `unavailable` | No FSDB, or no private checkout/launcher | Continue log/source diagnosis |
-| `failed` | Backend error, timeout, non-zero exit, or unparsable evidence | Read `command.stderr.log`, then continue log/source diagnosis |
-| `skipped` | Attempt outside 4–5 | Nothing to do; not a failure |
-
-For `unavailable`, `failed`, and `skipped` there is no `evidence.json` to read —
-waveform diagnosis contributed nothing, and the tester outcome is unchanged.
-
-Cross-check each finding against the failed kernel, tester log, and capture time
+Cross-check each finding against the failed kernel, test log, and capture time
 range. Treat generic PC no-progress or terminal quiescence as an effect unless
 the evidence establishes that it is the earliest causal boundary. Include the
 `tool_source` revision and dirty/clean state in the report.
