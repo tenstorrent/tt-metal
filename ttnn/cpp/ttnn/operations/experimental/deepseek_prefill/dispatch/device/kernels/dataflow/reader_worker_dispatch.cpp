@@ -92,7 +92,6 @@ void kernel_main() {
     constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(19);
     constexpr uint32_t sender_core_idx = get_compile_time_arg_val(20);
     constexpr uint32_t num_sender_cores = get_compile_time_arg_val(21);
-    constexpr uint32_t core_mask = num_sender_cores - 1;
     // Batches are assigned round-robin (batch i -> core i % total_workers); all cores
     // grow offsets[] left-to-right from the single shared owner copy under the baton.
 
@@ -249,9 +248,12 @@ void kernel_main() {
     }
 #endif
 
-    // Variable that tracks the number of fabric sends. Used to determine which fabric
-    // link will be used to send the token to the destination device.
+    // Running counts of the two send classes, used to spread work round-robin across sender
+    // cores: fabric_sends_seen picks the fabric link for cross-device tokens, dram_writes_seen
+    // picks the writer core for local (DRAM) tokens. Balanced independently so each class is
+    // uniform on its own.
     uint32_t fabric_sends_seen = 0;
+    uint32_t dram_writes_seen = 0;
     for (uint32_t batch_idx = core_id; batch_idx < effective_total_batches; batch_idx += total_workers) {
         uint32_t batch_start = batch_idx * read_batch_size;
         uint32_t batch_end =
@@ -368,22 +370,12 @@ void kernel_main() {
                 uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
                 bool expert_lives_on_this_chip = (expert_chip == linearized_mesh_coord);
 
-                // expert_lives_on_this_chip - does the expert we have to write to live on this chip, if so
-                // we write to DRAM.
-                // this_core_writes_token_to_expert - this worker core from this sender group should write,
-                // if so, then this core writes to DRAM, else, the other worker core from the other sender group writes
-                // to DRAM.
-                bool this_core_writes_token_to_expert = (((uint32_t)routed_expert & core_mask) == sender_core_idx);
-                if (expert_lives_on_this_chip && !this_core_writes_token_to_expert) {
-                    continue;
-                }
-
                 // Destination page in the expert's dispatch buffer, from offsets[e] (one per token:
-                // offset++). Both sender groups process the same entries in the same order, so their
+                // offset++). Every sender core processes the same entries in the same order, so their
                 // offsets[e] stay identical with no runtime sync — every core computes the SAME page
-                // for a given token. The send-split below then picks the one sender that forwards it,
-                // so the token is sent exactly once (no double-send). (Within a group, its workers
-                // share one offsets[] copy via the baton.)
+                // for a given token. The send-split below then picks the one sender that handles it,
+                // so the token is written/sent exactly once (no double-send). (Within a group, its
+                // workers share one offsets[] copy via the baton.)
                 // If the dispatch buffer for this expert is full, still bump the counter
                 // (so capacity accounting stays consistent) but drop the token — no entry.
                 uint32_t& offset = offsets[routed_expert];
@@ -393,10 +385,16 @@ void kernel_main() {
                 }
                 uint32_t page_idx = offset++;
 
-                // Calculate the target fabric link for the token that needs to be sent via fabric.
-                if (!expert_lives_on_this_chip) {
-                    // Decision whether the token will be forwarded via this link is in round-robin
-                    // fashion, in order for fabric links to be better balanced.
+                // Pick which sender core handles this token, round-robin so the work is spread evenly
+                // across sender cores. Balanced separately per class — local experts -> DRAM writes,
+                // remote experts -> fabric sends. Every sender core advances the same counter in
+                // lockstep, so exactly one core is selected per token (no double-send, no drop).
+                if (expert_lives_on_this_chip) {
+                    uint32_t target_writer_core = dram_writes_seen++ % num_sender_cores;
+                    if (target_writer_core != sender_core_idx) {
+                        continue;
+                    }
+                } else {
                     uint32_t target_fabric_link = fabric_sends_seen++ % num_sender_cores;
                     if (target_fabric_link != sender_core_idx) {
                         continue;
