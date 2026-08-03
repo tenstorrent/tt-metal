@@ -48,9 +48,12 @@ ALWI void copy_tile_to_dst_init_short(
     // arch-specific so WH/BH don't wrongly enable the integer-FPU datacopy MOP.
 #ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
-    // tt-metal#49924 fold-in (reproduced here to size the copy->matmul zero-flag leak under LLK asserts):
-    // the canonical copy_init keeps the Src zero-substitution flag disabled to preserve bf16 -0.0.
-    MATH((ckernel::math::_configure_unary_preserve_zero_flag_state_()));
+    // tt-metal#49924 FIX: a plain copy establishes the format-driven DEFAULT zero-flag state (uint16 -> keep,
+    // every FP format -> flush) rather than forcing UNARY_PRESERVE. This resets the flag so a matmul/binary
+    // that follows the copy runs in DEFAULT (closes the copy->matmul leak the assert caught). Ops that
+    // genuinely need bf16 -0.0 preserved (signbit/copysign/SFPU sign paths) request UNARY_PRESERVE themselves.
+    MATH((ckernel::math::_configure_default_zero_flag_state_(
+        ckernel::math::src_zero_flag_srca_fmt, ckernel::math::src_zero_flag_srcb_fmt)));
 #else
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         cbid)));
