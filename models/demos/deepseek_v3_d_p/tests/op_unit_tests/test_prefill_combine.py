@@ -39,7 +39,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
-    get_max_payload_size,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -67,57 +66,15 @@ def run_combine(
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
+    cmb_version,
     is_ci_env,
     is_ci_v2_env,
-    is_perf_shape,
-    combine_impl="cmb1",
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
-    num_experts_per_tok) shape axis.
-
-    `combine_impl` picks which implementation moves the data: "cmb1" for
-    ttnn.experimental.deepseek_prefill.combine, "cmb2" for combine_fabric2d. Everything else —
-    input generation, the dispatch that produces the buffer and metadata, the torch reference and the
-    validation — is shared, which is the point: the two are then measured on the same work.
-
-    Two booleans that used to be one. `is_perf_shape` says WHICH CONFIGURATION this is — the large
-    seq / few-experts / low-top-k shape meant for timing, as opposed to the small correctness shape.
-    `run_pcc_check` says whether to CHECK THE OUTPUT. They were the same flag until phase 11, which
-    made "check the output at the perf shape" inexpressible — and that was exactly the combination
-    the 32-chip box needed, since the correctness shape's num_routed_experts // 16 gives zero experts
-    per chip there. The skips below are properties of the configuration, so they key off
-    `is_perf_shape` and are unaffected by turning the check on."""
+    num_experts_per_tok) shape axis."""
     num_devices = mesh_device.get_num_devices()
-
-    # What cmb2 does not cover. Mesh-level limitations are handled by skip marks on the
-    # parametrization (see _cmb2_unsupported_reason); these two are on other axes, so they can only
-    # be decided here. They come FIRST so that a case cmb2 cannot serve is reported with cmb2's own
-    # reason — the shared skips below would otherwise mask it with something true but uninformative
-    # ("fp8 perf test doesn't run PCC" says nothing about why THIS op declined).
-    #
-    # Both limitations have the same root: cmb2 writes one token per page straight out of the fabric
-    # packet and has no untilize stage. TILE breaks one-page-one-token addressing, and fp8 is
-    # produced by the packer DURING untilize, so there is nowhere for it to happen.
-    if combine_impl == "cmb2":
-        if dispatched_buffer_layout != ttnn.ROW_MAJOR_LAYOUT:
-            pytest.skip("combine_fabric2d writes one token per page; TILE layout is not supported")
-        if use_fp8_output:
-            pytest.skip("combine_fabric2d has no untilize stage, which is where fp8 output is produced")
-
-        # The op relies on the fabric carrying token + routing tail in ONE packet, which the cmb2
-        # mesh entries request via device_params. Assert the device actually came up that way rather
-        # than trusting the config went through — a silently-default payload would not fail here, it
-        # would fail much later and much less legibly.
-        fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
-        want_payload = emb_dim * 2 + CMB2_ROUTING_TAIL_BYTES
-        assert fabric_payload >= want_payload, (
-            f"fabric max payload is {fabric_payload} B but combine_fabric2d needs {want_payload} "
-            f"({emb_dim * 2} token + {CMB2_ROUTING_TAIL_BYTES} routing tail)"
-        )
-        logger.info(f"combine_fabric2d fabric max payload {fabric_payload} B (needs {want_payload})")
-
-    if num_devices >= 8 and is_perf_shape and use_predictable_data:
+    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
 
     # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
@@ -126,7 +83,7 @@ def run_combine(
     if use_fp8_output and use_predictable_data:
         pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
 
-    if use_fp8_output and is_perf_shape:
+    if use_fp8_output and not run_pcc_check:
         pytest.skip("fp8 perf test doesn't run PCC")
 
     # The fp8 output path is only wired up in combine_program_factory.cpp inside the
@@ -142,7 +99,7 @@ def run_combine(
         pytest.skip("fp8 combine output requires Blackhole hardware")
 
     # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
-    if (is_ci_env or is_ci_v2_env) and is_perf_shape and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("ROW_MAJOR perf coverage does not run in CI")
 
     # 1-link linear/ring coverage is redundant on BH in CI. `1 in shape` selects the 1D
@@ -151,6 +108,8 @@ def run_combine(
         pytest.skip("1-link linear/ring coverage does not run on BH in CI")
 
     torch.manual_seed(42)
+
+    num_devices = mesh_device.get_num_devices()
 
     # Log fabric config
     logger.debug(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
@@ -185,17 +144,6 @@ def run_combine(
     logger.debug(
         f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
     )
-
-    # More chips than experts: there is nothing for some chips to host, and the expert->chip mapping
-    # in create_dispatch_table divides by experts_per_chip. Without this the run dies with a bare
-    # ZeroDivisionError deep in init_helpers, which is how the 8x4 hole (correctness shape asks for
-    # num_routed_experts // 16 = 16 experts on 32 chips) stayed invisible for so long. The shape is
-    # genuinely unrunnable here, so say so.
-    if experts_per_chip == 0:
-        pytest.skip(
-            f"{num_routed_experts} experts over {num_devices} chips gives 0 experts/chip; "
-            f"this shape needs num_routed_experts >= num_devices"
-        )
 
     # Step 1: Generate initial inputs using torch
     # For 2D mesh, generate different weights per EP rank
@@ -314,88 +262,48 @@ def run_combine(
     if use_fp8_output:
         torch_output = torch_output.to(torch.float8_e4m3fn).to(torch.bfloat16)
 
-    # Run ttnn combine. Both implementations consume exactly the tensors staged above; combine_fabric2d
-    # additionally takes expert_offsets, which says where each ORIGIN chip's run starts inside an expert's
-    # region. Production rediscovers that per token from the metadata, so it does not need it — see the
-    # phase-10 plan for why we do.
-    if combine_impl == "cmb2":
-        # REPLICATED along the dispatch-group axis, unlike every other EP tensor here: dim 1 is indexed by
-        # the token's ORIGIN chip, and a chip needs every origin's boundaries for the experts it hosts, not
-        # just its own row. Sharding it the usual way would hand each chip the wrong slice.
-        tt_expert_offsets = ttnn.from_torch(
-            expert_offsets,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            dtype=ttnn.int32,
-        )
-        signpost(f"combine_fabric2d start seq={seq_len_per_chip} experts_per_chip={experts_per_chip}")
-        tt_output = ttnn.experimental.deepseek_prefill.combine_fabric2d(
-            mesh_device,
-            tt_dispatched_buffer,
-            tt_dispatched_metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-            tt_expert_offsets,
-            dispatch_group_size=dispatch_group_size,
-            experts_per_chip=experts_per_chip,
-            num_experts_per_tok=num_experts_per_tok,
-            seq_len_per_chip=seq_len_per_chip,
-            axis=sp_axis,
-            num_links=num_links,
-            topology=topology,
-            fwd_bump_every=CMBF2D_FWD_BUMP,
-            assignment_order=CMBF2D_ORDER,
-            stall_telemetry=CMBF2D_STALL,
-            **({"num_l1_slots": CMBF2D_L1_SLOTS} if CMBF2D_L1_SLOTS else {}),
-        )
-    else:
-        tt_combine = TtCombineModule(
-            mesh_device=mesh_device,
-            dispatch_group_size=dispatch_group_size,
-            num_dispatch_groups=num_dispatch_groups,
-            experts_per_chip=experts_per_chip,
-            num_experts_per_tok=num_experts_per_tok,
-            seq_len_per_chip=seq_len_per_chip,
-            cluster_axis=sp_axis,
-            num_links=num_links,
-            topology=topology,
-            init_zeros=False,
-            fp8_output=use_fp8_output,
-        )
+    # Run ttnn combine
+    tt_combine = TtCombineModule(
+        mesh_device=mesh_device,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+        experts_per_chip=experts_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+        seq_len_per_chip=seq_len_per_chip,
+        cluster_axis=sp_axis,
+        num_links=num_links,
+        topology=topology,
+        init_zeros=False,
+        fp8_output=use_fp8_output,
+        cmb_version=cmb_version,
+    )
 
+    if cmb_version == 1:
         tt_output = tt_combine(
             tt_dispatched_buffer,
             tt_dispatched_metadata,
             tt_expert_token_counts,
             tt_expert_region_offsets,
         )
-
-    ttnn.synchronize_device(mesh_device)
-    if combine_impl == "cmb2":
-        # Bandwidth from the op's own producer telemetry — no profiler run needed. Written to a file rather
-        # than the console: there are 128 producer rows, and a console summary is only a lossy copy.
-        #
-        # The ground truth handed to it is token-hops: how many cable crossings the ROUTING implies, counted
-        # from this test's own indices and dispatch table. A token going k chips around the ring crosses k
-        # cables whatever the op does internally, so this is a floor on the packets the producers must report
-        # between them — independent of how the op splits work, which is the property worth checking.
-        token_hops = _cmbf2d_expected_token_hops(
-            indices, expert_dispatch_table, dispatch_group_size, num_dispatch_groups, num_routed_experts
+    else:
+        tt_expert_offsets = ttnn.from_torch(
+            expert_offsets,
+            mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.int32,
         )
-        bwinfo_path = _cmbf2d_bwinfo_path()
-        _dump_combine_fabric2d_bwinfo(
-            mesh_device,
-            num_links,
-            axis=sp_axis,
-            expected_workers=num_devices * 2 * num_links,
-            min_payload_tokens=token_hops,
-            token_size_bytes=emb_dim * 2,
-            path=bwinfo_path,
+        tt_output = tt_combine(
+            tt_dispatched_buffer,
+            tt_dispatched_metadata,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+            tt_expert_offsets,
         )
-        logger.info(f"combine_fabric2d telemetry -> {bwinfo_path} ({token_hops} token-hops expected)")
+        # TODO [claude]: Call dump_combine_fabric2d_bwinfo() here to log bwinfo.txt for perf analysis.
 
     if not run_pcc_check:
+        ttnn.synchronize_device(mesh_device)
         logger.debug("Skipping PCC validation (run_pcc_check=False)")
         return
 
@@ -479,20 +387,6 @@ SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
 # V3 is the baseline and runs by default; every other model is gated behind
 # @pytest.mark.extended_model. dispatch_buffer_capacity_factor is ceil(N/2) of the most
 # conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
-#
-# The perf shape's seq_len_per_chip and capacity factor are env-overridable so the same test can be run
-# at several traffic scales; the defaults are the checked-in shape.
-CMB_PERF_SEQ = int(os.environ.get("CMB_PERF_SEQ", "640"))
-CMB_PERF_CAP = int(os.environ.get("CMB_PERF_CAP", "8"))
-# Whether the perf CONFIGURATION checks its output. Defaults ON: the perf shape is the only one that fits an
-# 8x4 mesh (the correctness shape's num_routed_experts // 16 gives experts_per_chip = 0 there), so with it off
-# the production op's output is never checked on a full galaxy at all — which is how a phase-10 alignment bug
-# survived behind a healthy-looking bandwidth number. Set CMB_PERF_PCC=0 to opt out when timing the op.
-#
-# The check itself is cheap next to what the test already does: validate_combine_output is ~69 us/slot
-# (0.7 s at ISL 640, ~2.8 s at 2560) and the torch reference it compares against is built unconditionally,
-# above the early return, whether or not anything looks at it.
-CMB_PERF_PCC = bool(int(os.environ.get("CMB_PERF_PCC", "1")))
 COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, False, SINGLE_GLX_AND_PROXY_MESHES),
     ("glm_51", GLM51Config, True, SINGLE_GLX_AND_PROXY_MESHES),
@@ -622,6 +516,7 @@ def _cross_product_conflated_cmb_test_dimensions():
     ids=["tile", "row_major"],
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+@pytest.mark.parametrize("cmb_version", [1, 2], ids=["cmb_v1", "cmb_v2"])
 def test_ttnn_combine(
     mesh_device,
     device_params,
@@ -633,10 +528,9 @@ def test_ttnn_combine(
     num_links,
     use_predictable_data,
     run_pcc_check,
-    is_perf_shape,
     dispatched_buffer_layout,
     use_fp8_output,
-    combine_impl,
+    cmb_version,
     is_ci_env,
     is_ci_v2_env,
 ):
@@ -654,24 +548,14 @@ def test_ttnn_combine(
         run_pcc_check,
         dispatched_buffer_layout,
         use_fp8_output,
+        cmb_version,
         is_ci_env,
         is_ci_v2_env,
-        is_perf_shape,
-        combine_impl=combine_impl,
     )
 
 
-# ---------------------------------------------------------------------------
-# cmb2 (combine_fabric2d) tuning knobs and bandwidth telemetry.
-#
-# Everything below serves the cmb2 branch of run_combine. It is not a second test: since phase 11 both
-# implementations run through test_ttnn_combine on the same inputs, the same dispatch, the same torch
-# reference and the same validation, and differ only on the two axes recorded in the run_combine
-# docstring. What remains here is what production has no equivalent of — the op's own producer
-# telemetry, and the env knobs a sweep driver varies one point per pytest invocation.
-#
-# Select cmb2 with: -k 'fabric2d-torus-xy-8x4-2link-cmb2'   (drop the suffix for the production op)
-# ---------------------------------------------------------------------------
+# Claude utilities below - Not for checkin
+
 CMBF2D_BWINFO_PATH = "generated/cmbf2d/bwinfo.txt"
 
 # Sweep knobs. The op's own defaults live in C++; these let a sweep driver vary one axis per pytest
@@ -699,30 +583,7 @@ CMBF2D_L1_SLOTS = int(os.environ.get("CMBF2D_L1_SLOTS", "0"))
 CMBF2D_EXPECTED_CLOCK_MHZ = 1350
 CMBF2D_CLOCK_TOLERANCE = 0.05
 
-
-def _cmbf2d_expected_token_hops(
-    indices, expert_dispatch_table, dispatch_group_size, num_dispatch_groups, num_routed_experts
-):
-    """Cable crossings the ROUTING implies, from the test's own inputs.
-
-    On the combine leg a token sitting on the chip that hosts its expert has to get back to the chip it came
-    from. Those two are `d` steps apart on the dispatch-group ring, so the token crosses min(d, R-d) cables —
-    a fact about the routing, not about the implementation. Summed over every (token, expert) pair that is not
-    already home, this is the total number of payload packets the producers must put on cables between them.
-
-    Same-chip pairs (d == 0) contribute nothing: they never touch a cable, which is why they are also absent
-    from the producers' counts.
-    """
-    hops = 0
-    for origin in range(dispatch_group_size):
-        rows = expert_dispatch_table[:, :num_routed_experts][:, indices[origin].reshape(-1).long()]
-        for g in range(num_dispatch_groups):
-            for host in rows[g].tolist():
-                if host < 0 or host == origin:
-                    continue
-                d = (host - origin) % dispatch_group_size
-                hops += min(d, dispatch_group_size - d)
-    return hops
+import os
 
 
 def _cmbf2d_bwinfo_path():
