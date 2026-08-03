@@ -361,6 +361,7 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             subdevice_id=self.dispatch_sd_id,
+            fp8_output=True,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -394,6 +395,9 @@ class TtMoe(LightweightModule):
         )
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+        # Reused by the post-dispatch masked decompress to map each local expert slot to its
+        # packed region (per_token_cast_back token_count_aware path).
+        self.global_expert_idx_table = global_expert_idx_tt
 
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
@@ -616,6 +620,12 @@ class TtMoe(LightweightModule):
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
+        # Cast the dispatch input to FP8_E4M3 + per-128-block scales here, on the full grid before the
+        # sub-device split: dispatch then moves 1 byte/element over fabric instead of 2, and the scales
+        # ride the metadata tail (fp8_scaled_input) so the routed buffer can be dequantized on arrival.
+        # x itself stays bf16 for the shared expert below.
+        x_fp8, x_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
+
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
@@ -639,18 +649,21 @@ class TtMoe(LightweightModule):
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
         dispatched_buffer, metadata = self.dispatch_module(
-            x,
+            x_fp8,
             scores,
             indices,
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
             padding_config=padding_config,
+            scales=x_scales,
         )
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_clear()
             else:
                 self.mesh_device.clear_loaded_sub_device_manager()
+        x_fp8 = ttnn.deallocate(x_fp8)
+        x_scales = ttnn.deallocate(x_scales)
         # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
@@ -675,6 +688,20 @@ class TtMoe(LightweightModule):
         # is independent of the result and can be freed here, unless the PCC check
         # needs it to compare against the bfloat16 torch reference.
         squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
+        # Masked dequantize the fp8 dispatched buffer back to bf16. token_count_aware sweeps only the
+        # packed [region_offset, region_offset + ceil_tile(token_count)) rows of each local expert, so
+        # the padding tail is never touched. Scales are read from the dispatch metadata tail, not a
+        # separate scale tensor (they arrived over fabric with the tokens).
+        squeezed_dispatch = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            squeezed_dispatch,
+            token_count_aware=True,
+            expert_region_offsets=tt_expert_region_offsets,
+            expert_token_counts=tt_expert_token_counts,
+            global_expert_idx_table=self.global_expert_idx_table,
+            experts_per_chip=self.experts_per_chip,
+            output_dtype=ttnn.bfloat16,
+            metadata=ttnn.squeeze(ttnn.squeeze(metadata, dim=0), dim=0),
+        )
         expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
