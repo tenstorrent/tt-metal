@@ -213,11 +213,21 @@ until I read the source.
 candidate. It is the field that makes cross-arm and cross-model comparison meaningful, and it makes the
 "is this op on the cliff?" check (I2a) mechanical.
 
-### C1b. Flag any material op on ≤2 cores as a static precondition
+### C1b. Flag any material op on ≤2 cores as a static precondition ⭐⭐ cheapest, highest-value change here
 
-Per I2a the big win is a threshold. `reconcile.py` already knows every op's shipped grid and cost, so it can
-emit **before any device time**: "op X, N µs/layer, on 1 core, legal ladder {…}". That single line is worth
-more than the advisor's recommendation, and in this corpus it would have flagged every double-digit win.
+Per I2a the big win is a threshold. `reconcile.py` already knows every op's shipped grid, its advised grid
+and its cost, so it can emit **before any device time**:
+
+> `CLIFF: rms_norm on 1 core, 44.5 µs/layer (3.7 % of window), advisor wants 88, legal ladder {11,22,44,88} — screen this first`
+
+**Validated by prediction.** Applying exactly this rule to the corpus's own per-op data flags 5 of 14 cells.
+All three double-digit wins are in flagged cells; **no unflagged cell produced one**. I then used it to
+predict an unscreened win in gemma-4-26B B and measured **−12.44 %/layer** — a candidate that cell had
+written, shipped disabled, and never screened, worth **26× what it did ship**.
+
+- **Files:** `scripts/reconcile.py` (emit it), `SKILL.md` §3 (screen flagged ops first), `check.sh` (fail a
+  published zero that has an unscreened flagged op).
+- **Cost:** no device time. **Effect in this corpus:** would have surfaced ≈ 8 ms/model.
 
 ### C2. Enforce control-plus-one-knob
 

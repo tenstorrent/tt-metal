@@ -8,10 +8,16 @@ without it?
 one class of defect, a reduction stuck on too few cores. Where that defect exists it is worth 6–13 % per
 layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned one.
 
-**Three things the stage got wrong, all measured on hardware afterwards (6 experiments):** it **discarded its own largest
-win** on a contradictory correctness rule (−8.5 pp), and in **both** cells where the grid ladder had more
-than one legal rung it **shipped the wrong rung** (−264 and −375 µs/model). Total left on the table:
-**≈ 4.1 ms/model across three cells.**
+**What the stage got wrong**, all measured on hardware afterwards (7 experiments):
+
+1. It **discarded its own largest win** on a contradictory correctness rule — a candidate that is faster *and
+   more accurate* than what shipped (−8.5 pp).
+2. In **every** cell whose grid ladder had more than one legal rung, it **shipped the wrong rung**.
+3. One cell **built a candidate, shipped it disabled, and never screened it** — it is worth **26× more than
+   what that cell did ship**.
+
+**Total left on the table: ≈ 8.0 ms/model across four cells.** All four were identifiable by a **one-line
+static check that needs no device time** (§3.8).
 
 ---
 
@@ -21,7 +27,7 @@ than one legal rung it **shipped the wrong rung** (−264 and −375 µs/model).
 |---|---|
 | **this file** | the account, and pointers |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
-| [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 6 experiments run on hardware to test the analysis |
+| [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 7 experiments run on hardware to test the analysis |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -82,7 +88,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The seven findings that matter
+## 3. The eight findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -206,6 +212,33 @@ recorded **0.196 µs** — **60×**, from JIT-cache warmth *across* processes. P
 it, and the stage mandates one process per configuration. A cell whose control ran first carries an inflated
 floor, which directly changes its `feasibility.verdict`.
 
+### 3.8 One static check, no device time, finds every big win in the corpus
+
+Over the corpus's own per-op data, flag a cell when **an op's shipped grid is ≤2 cores, the advisor wants
+strictly more, and the op is ≥2 % of the layer window**:
+
+| flagged cell | largest actionable low-core op | what happened |
+|---|---|---|
+| gemma-4-26B onA | `rms_norm` 1→88c, 44.7 µs, 2.5 % | shipped −12.98 %/layer |
+| **gemma-4-26B B** | `rms_norm` 1→88c, 44.5 µs, 3.7 % | **never screened — a −12.44 %/layer win was there** |
+| north-mini FN | `rms_norm` 1→22c, 26.1 µs, 5.0 % | shipped −10.37 %/layer |
+| north-mini onA | `rms_norm` 1→22c, 26.1 µs, 3.2 % | could not screen (untraceable) |
+| phi-3.5 FN | `rms_norm` 1→11c, 44.5 µs, 6.1 % | measured −13.4 %, discarded on the oracle |
+| *the other 9 cells* | *none* | **no double-digit layer win in any of them** |
+
+**Every double-digit win in the corpus is in a flagged cell, and no unflagged cell produced one.** I used the
+check to predict that gemma-4-26B B had an unscreened win, then measured it: the cell had **written** an
+11- and 22-core residual/norm geometry, **shipped it disabled**, and never screened it. R=22 gives
+**1.2583 → 1.1017 ms/layer (−12.44 %)** on sliding attention, reproduced four times, against floors of
+0.4–4.2 µs. That is ≈ **−3,918 µs/model** versus the **−147.9 µs** it shipped.
+
+⚠ **Its correctness is unverified.** gemma's real weights are absent from this host, and the differential PCC
+moves 0.0168 — the same magnitude as the change onA *shipped* after passing its absolute real-weight oracle
+at 0.999629. Benign reassociation is the likely reading, but it is inference. This is exactly the ambiguity
+§3.1's fix removes.
+
+→ [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E7
+
 ---
 
 ## 4. What makes a model advisor-compatible
@@ -273,6 +306,7 @@ Four experiments, 2026-08-03 16:07–16:23 UTC, in isolated worktrees using each
 | E4 | Was north-mini's sweep exhausted? | **No** — 16 cores is ~1 pp better; but 44/88 are *illegal*, refuting my other suggestion |
 | E5 | Did gemma-4-26B onA ship the best grid? | **No** — 44 beats the shipped 88 by 12.3 µs/layer on both kinds, at PCC 1.0 |
 | E6 | Why did the same candidate regress on gemma FN? | Its incumbent **already had the norm on 8 cores** — the comparison was 8→88, not 1→88. §5 corrected |
+| E7 | Can a static check predict which cells have a win? | **Yes** — and the cell it flagged has a **−12.4 %/layer** win it built and never screened |
 
 One conclusion across E2/E4/E5/E6: **the grid a cell ships is the grid it was told, not the grid that is
 fastest — and the whole win is usually just the first step off one core.**
@@ -317,6 +351,7 @@ fastest — and the whole win is usually just the first step off one core.**
 | 1 | Ship phi FN's combined candidate under an absolute oracle at the model's own bar | **+8.5 pp** on that cell |
 | 2 | Ship north-mini's 16-core MoE norm | **−264 µs/model**, ≈ +1 pp |
 | 2b | Ship gemma-4-26B onA's 44-core norm instead of 88 | **−375 µs/model**, at PCC 1.0 |
+| 2c | **Screen gemma-4-26B B's `GEMMA4_OPT_RESIDUAL_SHARD_CORES=22`** (sliding only) | **−3,918 µs/model** — 26× what it shipped. **Correctness needs the real weights** |
 | 3 | Tracer support for qwen's linear-attention `ttnn.copy` boundary | ~91 % of qwen's model time, currently unadvised |
 | 4 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window |
 | 5 | Sweep the legal ladder both sides of the advice in every norm cell | 1–5 pp per affected cell |

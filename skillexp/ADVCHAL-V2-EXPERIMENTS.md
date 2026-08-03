@@ -1,14 +1,15 @@
 # advchal-v2 — experiments run to test the analysis
 
-Six experiments run on hardware on **2026-08-03, 16:07–16:47 UTC**, after the corpus was complete, to test
+Seven experiments run on hardware on **2026-08-03, 16:07–16:58 UTC**, after the corpus was complete, to test
 claims the corpus data alone could not settle.
 
 | | outcome |
 |---|---|
 | confirmed a published claim | E1, E3 |
 | **refuted a hypothesis of mine** | E2, E4 (partly) |
-| **found a win the corpus missed** | E4 (north-mini, −264 µs/model), E5 (gemma-4-26B onA, −375 µs/model) |
+| **found a win the corpus missed** | E4 (north-mini, −264 µs/model), E5 (gemma-4-26B onA, −375 µs/model), **E7 (gemma-4-26B B, −3,918 µs/model)** |
 | **corrected the mechanism behind a published conclusion** | E6 |
+| **validated a proposed fix by prediction** | E7 — a static, zero-device-time check flagged the cell before the run |
 
 ## Method
 
@@ -385,3 +386,90 @@ And note the trap this creates for the stage: **the same env knob name means dif
 arms** (`GEMMA4_ADVISOR_NORM_CORES` defaults to 88 in one and 8 in the other), so a cross-arm comparison of
 "the 88-core candidate" is comparing two different deltas. Nothing in the stage records the incumbent's own
 grid for the op under test, which is exactly the field that would have made this visible.
+
+---
+
+## E7 — the static predictor's prediction, tested: g26 B left a −12.4 % win behind a knob it built itself
+
+**Where the prediction came from.** A one-line static check over the corpus's own per-op data — *shipped
+grid ≤ 2 cores **and** the advisor wants strictly more **and** the op is ≥ 2 % of the window* — flags 5 of
+14 cells:
+
+| cell | flagged | largest actionable low-core op | what actually happened |
+|---|---|---|---|
+| g26 onA | ✓ ×8 | `rms_norm` 1→88c, 44.7 µs, 2.5 % | shipped −12.98 %/layer |
+| **g26 B** | **✓ ×8** | **`rms_norm` 1→88c, 44.5 µs, 3.7 %** | **never screened it** |
+| nm FN | ✓ ×2 | `rms_norm` 1→22c, 26.1 µs, 5.0 % | shipped −10.37 %/layer |
+| nm onA | ✓ ×3 | `rms_norm` 1→22c, 26.1 µs, 3.2 % | could not screen — sparse MoE untraceable |
+| phi FN | ✓ ×2 | `rms_norm` 1→11c, 44.5 µs, 6.1 % | measured −13.4 %, discarded on the oracle |
+| the other 9 cells | ✗ | — | **none produced a double-digit layer win** |
+
+Every double-digit win in the corpus sits in a flagged cell; no unflagged cell produced one. So the check
+predicted that **g26 B has a large unscreened win**. This experiment tests that.
+
+### g26 B built the candidate and shipped it disabled
+
+`tt/optimized_decoder.py:58`:
+
+```python
+_RESIDUAL_SHARD_GEOMETRIES = {
+    0: None,               # <- the shipped default: norm unsharded
+    11: (11, 1, 256, 8, 4),
+    22: (11, 2, 128, 4, 4),
+}
+```
+
+The knob is `GEMMA4_OPT_RESIDUAL_SHARD_CORES`. The cell wrote both geometries, shipped `0`, and its
+measurement list contains no residual-shard candidate at all.
+
+### Measured
+
+| kind | control R=0 | R=11 | R=22 |
+|---|---|---|---|
+| **sliding** (25 layers) | 1.259101 / **1.258327** / 1.258247 / 1.258111 | 1.132508 (−10.0 %) | **1.101768 / 1.101644 / 1.102353 / 1.101011** (**−12.44 %**) |
+| **full** (5 layers) | 1.261566 | 1.350694 (**+7.07 %**) | 1.320076 (**+4.64 %**) |
+
+Floors on the sliding runs: 0.402–4.154 µs against a **156.7 µs** gap. Every R=22 repeat beats every R=0
+repeat by more than two orders of magnitude of the floor — non-overlap is not close.
+
+Per the stage's own product rule the ship would be **R=22 for sliding, R=0 for full**:
+
+```
+25 sliding layers x 156.7 us  =  3,918 us/model
+```
+
+against the **−147.9 µs/model** the cell actually shipped — a **26× larger** win, and about **−10.8 %** of
+its 36,224 µs full-model estimate.
+
+### Correctness: NOT established, and that is itself the finding
+
+gemma-4-26B's real weights are **not on this host** (HF cache = `config.json`, 28 KB), so the absolute
+oracle cannot be run. Using the cell's own harness state and its own `shipped_policy`, the differential
+comparison is:
+
+| comparison | differential PCC | vs a 0.995 bar |
+|---|---|---|
+| sliding: R=22 vs frozen R=0 | **0.9832233095682822** | **fails** |
+| sliding: R=11 vs frozen R=0 | 0.9830912129626893 | fails |
+| full: R=22 vs frozen R=0 | 0.9996136713325892 | passes |
+| full: R=11 vs frozen R=0 | 0.9996100242015759 | passes |
+
+**Circumstantial evidence that the sliding figure is benign reassociation, not a bug:** g26 onA's *shipped*
+change moved its differential PCC by almost exactly the same amount on the same layer kind of the same
+model (0.98225), and it then **passed the absolute real-weight oracle at PCC 0.999629**. Synthetic weights
+with `BFLOAT8_B` experts amplify reassociation, which is what both figures look like.
+
+But that is inference, not measurement. **Stated plainly: the −12.4 % timing win on g26 B is solid and
+reproduced four times; its correctness is unverified and requires the real weights.**
+
+And that is exactly the ambiguity action point **A1** exists to remove. With only a differential number I
+cannot distinguish "reassociated" from "wrong", and the stage's rule would say *reject* — which is how a
+26×-larger win would be lost a second time.
+
+### Result
+
+- **The static predictor works.** It flagged the cell, and the win is there.
+- **Running total left on the table across the corpus: ≈ 8.0 ms/model** — phi FN 3.47 ms, g26 B 3.92 ms
+  (correctness pending), gemma-4-26B onA 0.38 ms, north-mini FN 0.26 ms.
+- **The single cheapest fix in this whole analysis is a static check that needs no device time**, computed
+  from data `reconcile.py` already has. See action point **C1b**.
