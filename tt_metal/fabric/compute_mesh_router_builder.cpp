@@ -955,6 +955,14 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         if (vc0_crossover_to_vc1) {
             defines["FABRIC_2D_VC0_CROSSOVER_TO_VC1"] = "";
         }
+
+        // FABRIC_SKIP_LINKS_ENABLED: selects the indexed destination-keyed 2D ABI on this router.
+        // The gate is mesh-level (not per-node Z presence): Z-laden packet maps transit chips that
+        // have no Z edge of their own, so every router in a skip-link mesh runs the indexed decode.
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        if (fabric_context.has_intra_mesh_z_in_mesh(control_plane, local_node_.mesh_id)) {
+            defines["FABRIC_SKIP_LINKS_ENABLED"] = "";
+        }
     }
 
     // Get SOC descriptor for eth core lookup

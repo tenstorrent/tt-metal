@@ -1016,12 +1016,20 @@ struct routing_l1_info_t {
     };
 
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
-    uint8_t padding[8] = {};                                         // pad to 16-byte alignment
+    // This chip's (y, x) coordinates within its mesh, row-major with my_device_id
+    // (y = id / x_size, x = id % x_size). Populated host-side with the rest of the table.
+    std::uint8_t my_mesh_coord_y = 0;
+    std::uint8_t my_mesh_coord_x = 0;
+    uint8_t padding[6] = {};  // pad to 16-byte alignment
 };
 static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
 static_assert(
     offsetof(routing_l1_info_t, exit_node_table) == 516 + IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES,
     "exit_node_table must follow the 1028-byte 2D union slot");
+static_assert(
+    offsetof(routing_l1_info_t, my_mesh_coord_y) ==
+        516 + IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES + MAX_NUM_MESHES,
+    "my_mesh_coord_y must immediately follow exit_node_table");
 static_assert(offsetof(routing_l1_info_t, state_manager) % 16 == 0);
 static_assert(sizeof(routing_l1_info_t) % 16 == 0);
 
@@ -1040,7 +1048,7 @@ static_assert(
 // Verify total struct size
 static_assert(
     sizeof(routing_l1_info_t) == 2576,
-    "routing_l1_info_t must be 2576 bytes: base(516) + union(1028) + exit(1024) + pad(8)");
+    "routing_l1_info_t must be 2576 bytes: base(516) + union(1028) + exit(1024) + coords(2) + pad(6)");
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};

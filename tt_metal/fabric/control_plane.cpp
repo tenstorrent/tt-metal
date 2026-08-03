@@ -1826,10 +1826,19 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         mesh_shape[0],
         mesh_shape[1]);
 
-    intra_mesh_routing_path_t<2, true> routing_path_2d;
-    routing_path_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
-
-    std::memcpy(&routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
+    // Skip-link meshes embed the indexed destination-major vectors; all other meshes keep the
+    // legacy compressed 2D table. Both packers share the same call shape and query this
+    // ControlPlane's first-hop relation per destination. The gate matches the kernel-side
+    // FABRIC_SKIP_LINKS_ENABLED emission, so a chip's L1 layout always matches its decode.
+    if (this->get_fabric_context().has_intra_mesh_z_in_mesh(*this, mesh_id)) {
+        indexed_route_vectors_t indexed_vectors;
+        indexed_vectors.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
+        std::memcpy(&routing_info.indexed_route_vectors, &indexed_vectors, sizeof(indexed_route_vectors_t));
+    } else {
+        intra_mesh_routing_path_t<2, true> routing_path_2d;
+        routing_path_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
+        std::memcpy(&routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
+    }
 
     // Build per-dst-mesh exit node table (1 byte per mesh) for this src chip
     std::uint8_t exit_table[MAX_NUM_MESHES];
@@ -1856,6 +1865,9 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     routing_info.state_manager.state = RouterState::INITIALIZING;
     routing_info.my_mesh_id = *mesh_id;
     routing_info.my_device_id = chip_id;
+    const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
+    routing_info.my_mesh_coord_y = chip_id / mesh_shape[1];
+    routing_info.my_mesh_coord_x = chip_id % mesh_shape[1];
 
     // Build intra-mesh routing entries (chip-to-chip routing)
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();

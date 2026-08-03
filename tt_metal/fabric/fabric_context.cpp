@@ -370,6 +370,24 @@ bool FabricContext::has_any_intra_mesh_z_router(const ControlPlane& control_plan
     return false;
 }
 
+bool FabricContext::has_intra_mesh_z_in_mesh(const ControlPlane& control_plane, MeshId mesh_id) const {
+    // Mesh-level variant of has_intra_mesh_z_router, over the same source of truth (declared
+    // skip_links folded into intra-mesh connectivity as RoutingDirection::Z edges).
+    const auto& intra_mesh_connectivity = control_plane.get_mesh_graph().get_intra_mesh_connectivity();
+    const auto mesh_idx = *mesh_id;
+    if (mesh_idx >= intra_mesh_connectivity.size()) {
+        return false;
+    }
+    for (const auto& chip_connections : intra_mesh_connectivity[mesh_idx]) {
+        for (const auto& [neighbor_chip_id, router_edge] : chip_connections) {
+            if (router_edge.port_direction == RoutingDirection::Z) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool FabricContext::has_inter_mesh_z_router(
     const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const {
     // Source of truth is the mesh graph's inter-mesh connectivity: a galaxy Z router that bridges two

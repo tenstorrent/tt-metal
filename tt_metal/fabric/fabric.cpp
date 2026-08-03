@@ -357,8 +357,12 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 // Template: ProgramDescriptor appends to .defines vector; Program calls add_defines().
 template <typename ProgramOrDescriptor>
 void inject_fabric_kernel_defines(
-    ProgramOrDescriptor& worker_program_or_desc, tt::tt_metal::KernelHandle& kernel_id, FabricApiType api_type) {
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    ProgramOrDescriptor& worker_program_or_desc,
+    tt::tt_metal::KernelHandle& kernel_id,
+    FabricApiType api_type) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
 
     auto add_kernel_defines = [&, kernel_ref = [&]() {
         if constexpr (std::is_same_v<std::decay_t<ProgramOrDescriptor>, tt::tt_metal::ProgramDescriptor>) {
@@ -383,6 +387,18 @@ void inject_fabric_kernel_defines(
     }
     if (fabric_context.is_2D_routing_enabled()) {
         add_kernel_defines({{"FABRIC_2D", "1"}});
+        // Workers in a skip-link mesh produce indexed action maps instead of hop programs. The
+        // shape values match the GLOBAL physical shape the L1 vectors were packed with, and the
+        // gate matches the CP embed and the router define, so encode, L1 layout, and decode always
+        // agree for the mesh.
+        if (fabric_context.has_intra_mesh_z_in_mesh(control_plane, src_fabric_node_id.mesh_id)) {
+            const auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+            add_kernel_defines({
+                {"FABRIC_SKIP_LINKS_ENABLED", "1"},
+                {"FABRIC_SKIP_LINK_MESH_Y_SIZE", fmt::format("{}", mesh_shape[0])},
+                {"FABRIC_SKIP_LINK_MESH_X_SIZE", fmt::format("{}", mesh_shape[1])},
+            });
+        }
     }
 }
 
@@ -489,7 +505,7 @@ void append_routing_plane_connection_manager_rt_args(
         worker_core,
         worker_args,
         core_type);
-    inject_fabric_kernel_defines(worker_program_or_desc, kernel_id, api_type);
+    inject_fabric_kernel_defines(src_fabric_node_id, worker_program_or_desc, kernel_id, api_type);
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(
