@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "matmul_decode_device_operation.hpp"
+#include "per_core_weight_cb.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/shape.hpp"
@@ -163,17 +164,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         }}},
         .buffer = input_tensor_a.buffer(),
     });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in1_num_tiles * in1_tile_size,
-        .core_ranges = inputB_core_range_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = in1_cb_index,
-            .data_format = in1_data_format,
-            .page_size = in1_tile_size,
-            .tile = in1_tile_desc,
-        }}},
-        .buffer = input_tensor_b.buffer(),
-    });
+    for (auto& weight_cb : make_weight_cb_descriptors(
+             input_tensor_b,
+             inputB_core_range_set,
+             CBFormatDescriptor{
+                 .buffer_index = in1_cb_index,
+                 .data_format = in1_data_format,
+                 .page_size = in1_tile_size,
+                 .tile = in1_tile_desc,
+             },
+             in1_num_tiles * in1_tile_size)) {
+        desc.cbs.push_back(std::move(weight_cb));
+    }
     desc.cbs.push_back(CBDescriptor{
         .total_size = out_block_num_tiles * out_tile_size,
         .core_ranges = inputB_core_range_set,

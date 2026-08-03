@@ -80,6 +80,19 @@ struct CBDescriptor {
     const MeshTensor* tensor = nullptr;
     uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
+
+    // Places the CB at this exact L1 address instead of deriving it from `buffer`
+    // (`buffer->address() + address_offset`). `buffer` must still be set: it supplies the
+    // format, the bank size the total_size is checked against, and the shadow-buffer link.
+    //
+    // Motivating use is per-core L1 allocation (experimental_set_per_core_allocation), where a
+    // buffer has an independent address on every core but `Buffer::address()` reports only the
+    // first core's. A CB carries a single address for its whole core range, so a caller binding
+    // such a buffer must emit one descriptor per core, each naming that core's
+    // `get_per_core_address()` here, and each with `core_ranges` covering only that core.
+    // Unlike `address_offset` this is absolute, so it can name an address *below* the first
+    // core's -- which per-core allocation routinely produces.
+    std::optional<uint32_t> absolute_address = std::nullopt;
 };
 
 struct SemaphoreDescriptor {

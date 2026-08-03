@@ -218,7 +218,13 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
         TT_FATAL(
             !(cb_desc.buffer && cb_desc.tensor),
             "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
-        if (cb_desc.tensor) {
+        if (cb_desc.absolute_address.has_value()) {
+            // Absolute placement is not derivable from the backing buffer's address (which reports
+            // only the first core's under per-core allocation), so it wins here as it does at
+            // construction. The descriptor is re-derived per dispatch, so this picks up the
+            // buffer's current per-core addresses.
+            SetCircularBufferAbsoluteAddress(program, program_cbs[ci]->id(), cb_desc.absolute_address.value());
+        } else if (cb_desc.tensor) {
             Buffer* buf = cb_desc.tensor->mesh_buffer().get_reference_buffer();
             UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *buf, cb_desc.address_offset);
         } else if (cb_desc.buffer) {

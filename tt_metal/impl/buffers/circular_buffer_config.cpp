@@ -90,6 +90,27 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
                 this->total_size_,
                 this->max_size_ + descriptor.address_offset);
         }
+        if (descriptor.absolute_address.has_value()) {
+            uint32_t l1_alignment = hal::get_l1_alignment();
+            TT_FATAL(
+                descriptor.absolute_address.value() % l1_alignment == 0,
+                "absolute_address ({}) must be aligned to L1 alignment ({})",
+                descriptor.absolute_address.value(),
+                l1_alignment);
+            TT_FATAL(
+                descriptor.address_offset == 0,
+                "CBDescriptor cannot set both absolute_address ({}) and address_offset ({}): the absolute "
+                "address already names the final placement",
+                descriptor.absolute_address.value(),
+                descriptor.address_offset);
+            this->absolute_address_ = descriptor.absolute_address;
+            this->globally_allocated_address_ = descriptor.absolute_address.value();
+        }
+    } else {
+        TT_FATAL(
+            !descriptor.absolute_address.has_value(),
+            "CBDescriptor::absolute_address requires a backing buffer or tensor; a CB with neither is "
+            "locally allocated and its address is chosen by the CB allocator");
     }
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
@@ -293,6 +314,13 @@ uint32_t CircularBufferConfig::address_offset() const { return this->address_off
 
 void CircularBufferConfig::set_address_offset(uint32_t offset) { this->address_offset_ = offset; }
 
+std::optional<uint32_t> CircularBufferConfig::absolute_address() const { return this->absolute_address_; }
+
+void CircularBufferConfig::set_absolute_address(uint32_t address) {
+    this->absolute_address_ = address;
+    this->globally_allocated_address_ = address;
+}
+
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
     auto is_remote_index = parent.remote_buffer_indices_.contains(buffer_index);
@@ -377,8 +405,9 @@ void CircularBufferConfig::set_config(const std::map<uint8_t, tt::DataFormat>& d
 bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) {
     return lhs.total_size() == rhs.total_size() &&
            lhs.globally_allocated_address() == rhs.globally_allocated_address() &&
-           lhs.data_formats() == rhs.data_formats() && lhs.page_sizes() == rhs.page_sizes() &&
-           lhs.tiles() == rhs.tiles() && lhs.unpack_face_geometry() == rhs.unpack_face_geometry() &&
+           lhs.absolute_address() == rhs.absolute_address() && lhs.data_formats() == rhs.data_formats() &&
+           lhs.page_sizes() == rhs.page_sizes() && lhs.tiles() == rhs.tiles() &&
+           lhs.unpack_face_geometry() == rhs.unpack_face_geometry() &&
            lhs.shadow_global_buffer == rhs.shadow_global_buffer;
 }
 

@@ -163,10 +163,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             )
         with _region("ATTN_MIX"):
             hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
-        # The attention weights were prefetched (prefetch_weights) and left resident by
-        # ``LinearDecode.forward``; free them now so the MoE fused_experts matmul
-        # (full-grid static CBs) has L1 room. Re-prefetched at the next decode step.
-        self.self_attn.free_weights()
         _profile(self.device)
         with _region("FFN_HC"):
             post, comb, collapsed = self.ffn_hc(hidden_streams)
@@ -222,11 +218,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             win_row=win_row,
         )
         hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
-        # Free the prefetched attention weights before the FFN so the MoE
-        # fused_experts matmul (full-grid static CBs) has L1 room. ``deallocate``
-        # inside the trace is the same pattern as ``streams.deallocate()`` above; the
-        # next trace replay re-prefetches via the captured ``prefetch_weights``.
-        self.self_attn.free_weights()
         post, comb, collapsed = self.ffn_hc(hidden_streams)
         mlp_out = self.mlp.decode_static(self.post_attention_layernorm(collapsed), hash_token=hash_token)
         return self._mix(post, comb, mlp_out, hidden_streams)

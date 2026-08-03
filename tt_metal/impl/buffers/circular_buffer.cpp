@@ -173,6 +173,13 @@ uint32_t CircularBufferImpl::address() const {
 }
 
 void CircularBufferImpl::assign_global_address() {
+    // An absolute placement is not derivable from the shadow buffer's address (which reports only
+    // the first core's under per-core allocation), so it wins. Callers that bind a per-core
+    // allocated buffer re-apply it per CB on each dispatch via SetCircularBufferAbsoluteAddress.
+    if (const auto absolute = config_.absolute_address(); absolute.has_value()) {
+        globally_allocated_address_ = absolute.value();
+        return;
+    }
     globally_allocated_address_ = config_.shadow_global_buffer->address() + config_.address_offset();
 }
 

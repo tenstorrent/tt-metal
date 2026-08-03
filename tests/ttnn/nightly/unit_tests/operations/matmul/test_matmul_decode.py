@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
 import math
@@ -410,3 +412,151 @@ def test_matmul_decode_batched_width_sharded(device, d0, d1, m, k, n, b_blocks, 
 
     out = ttnn.to_torch(output_tensor).float().reshape(batch, m, n)
     assert_with_pcc(ref, out, 0.99)
+
+
+# ---------------------------------------------------------------------------
+# Per-core L1 allocation
+# ---------------------------------------------------------------------------
+# A per-core allocated weight has an independent L1 address on every core, while
+# Buffer::address() reports only the FIRST core's. The weight is bound zero-copy through a
+# circular buffer, and a CB carries one address for its whole core range, so matmul_decode
+# emits one single-core CB per core pinned to that core's own address
+# (make_weight_cb_descriptors / CBDescriptor::absolute_address).
+#
+# The bug this guards against is silent: it only appears once the per-core addresses actually
+# DIVERGE, which needs the cores' L1 free lists to differ. Uniform occupancy makes every core
+# agree with the first and the wrong binding looks correct -- which is exactly why it survived
+# eager runs and only showed up under trace. So the test deliberately skews occupancy first and
+# asserts the divergence is real before trusting the PCC result.
+
+
+def _rectangle_cores(num_cores, device):
+    """Row-major cores of the same rectangle ``num_cores_to_rectangle_core_range_set`` builds."""
+    grid = device.compute_with_storage_grid_size()
+    x = grid.x
+    while x > 0 and num_cores % x != 0:
+        x -= 1
+    y = num_cores // x
+    return [ttnn.CoreCoord(cx, cy) for cy in range(y) for cx in range(x)]
+
+
+def _weight_addresses_per_core(tensor, cores):
+    coord = tensor.device_coords()[0]
+    return [tensor.experimental_per_core_buffer_address(coord, core) for core in cores]
+
+
+@pytest.mark.skipif(
+    os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1",
+    reason="Per-core L1 allocation requires TT_METAL_ALLOCATOR_MODE_HYBRID=1 set before device creation",
+)
+@pytest.mark.parametrize("m, k, n", [(1, 1024, 4096), (32, 1024, 4096)])
+@pytest.mark.parametrize("num_inputA_cores", [32])
+def test_matmul_decode_per_core_allocated_weight(device, m, k, n, num_inputA_cores):
+    torch.manual_seed(0)
+    num_inputB_cores = n // 64
+    grid = device.compute_with_storage_grid_size()
+    if grid.x * grid.y < num_inputB_cores:
+        pytest.skip(f"Skipping test as device doesn't have {num_inputB_cores} cores")
+
+    tile_height = get_tile_height(m)
+    inputA_tile_size = ttnn.Tile((tile_height, 32))
+    torch_input_tensor_a = torch.randn((m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((k, n), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a.to(torch.float32) @ torch_input_tensor_b.to(torch.float32)
+
+    input_a_core_range_set = num_cores_to_rectangle_core_range_set(num_inputA_cores, device)
+    input_b_core_range_set = num_cores_to_rectangle_core_range_set(num_inputB_cores, device)
+    weight_cores = _rectangle_cores(num_inputB_cores, device)
+
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (m, k // num_inputA_cores),
+        core_grid=input_a_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    in1_memory_config = ttnn.create_sharded_memory_config(
+        (k, n // num_inputB_cores),
+        core_grid=input_b_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    in1_memory_config.experimental_set_per_core_allocation(True)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=inputA_tile_size,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    weight_dram = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Skew L1 occupancy: pin a ballast tensor on the FIRST HALF of the weight's cores only, so
+    # those cores' free lists sit lower than the rest. The per-core allocation that follows then
+    # hands out genuinely different addresses across the shard grid.
+    #
+    # The ballast must itself be per-core allocated. A lockstep buffer reserves the same address
+    # band on EVERY core by definition, so a lockstep ballast shifts all 64 cores equally and
+    # leaves them in agreement -- which is what the divergence assert below caught.
+    ballast_cores = ttnn.CoreRangeSet({ttnn.CoreRange(weight_cores[0], weight_cores[len(weight_cores) // 2 - 1])})
+    ballast_memory_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ballast_cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    ballast_memory_config.experimental_set_per_core_allocation(True)
+    ballast = ttnn.from_torch(
+        torch.zeros((32, 32 * ballast_cores.num_cores()), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ballast_memory_config,
+    )
+
+    weight = ttnn.to_memory_config(weight_dram, in1_memory_config)
+    addresses = _weight_addresses_per_core(weight, weight_cores)
+    assert len(set(addresses)) > 1, (
+        "per-core addresses did not diverge, so this test would pass even with the weight bound at "
+        f"a single address; got {sorted(set(addresses))}"
+    )
+
+    output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, weight)
+    assert output_tensor.shape == (m, n)
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(output_tensor), 0.99)
+
+    # Second call on a program-cache HIT, with the weight moved to different per-core addresses.
+    # override_runtime_arguments must re-apply them; without it the cached program keeps the first
+    # call's addresses (or resolve_bindings overwrites all of them with the first core's).
+    ttnn.deallocate(output_tensor)
+    ttnn.deallocate(weight)
+
+    # Re-skew rather than un-skew: keep the first ballast and add a second on a different subset,
+    # so the weight comes back both divergent across cores AND at different addresses than before.
+    # (Freeing the first ballast instead would restore uniform occupancy and hide the bug again.)
+    ballast2_memory_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(weight_cores[0], weight_cores[len(weight_cores) // 4 - 1])}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    ballast2_memory_config.experimental_set_per_core_allocation(True)
+    ballast2 = ttnn.from_torch(
+        torch.zeros((32, 32 * (len(weight_cores) // 4)), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ballast2_memory_config,
+    )
+    weight_moved = ttnn.to_memory_config(weight_dram, in1_memory_config)
+    moved_addresses = _weight_addresses_per_core(weight_moved, weight_cores)
+    assert len(set(moved_addresses)) > 1, f"per-core addresses did not diverge on reallocation: {moved_addresses}"
+    assert moved_addresses != addresses, (
+        "the weight landed at the same per-core addresses after reallocation, so this call would pass "
+        "even if the cache-hit path never re-applied them"
+    )
+
+    output_moved = ttnn.experimental.matmul_decode(input_tensor_a, weight_moved)
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(output_moved), 0.99)

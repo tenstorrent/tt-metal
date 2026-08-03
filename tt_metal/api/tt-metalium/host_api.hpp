@@ -278,6 +278,13 @@ void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
 
+// Re-place a globally-allocated circular buffer at an exact L1 address, overriding the address it
+// would otherwise inherit from its shadow buffer. The counterpart of CBDescriptor::absolute_address
+// for the program-cache-hit path: an op binding a per-core allocated buffer must re-apply each
+// per-core CB's address on every dispatch, since the buffer may have been freed and reallocated at
+// different per-core addresses since the cached program was built.
+void SetCircularBufferAbsoluteAddress(Program& program, CBHandle cb_handle, uint32_t address);
+
 // clang-format off
 /**
  * Update the address and total size of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.

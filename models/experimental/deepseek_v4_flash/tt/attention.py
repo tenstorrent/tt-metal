@@ -787,7 +787,14 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         )
 
     def prefetch_weights(self):
-        self.o_b_proj.fetch_weights()
+        # Only the weights ``_qkv`` consumes, all of which ``LinearDecode.forward``
+        # frees again before SDPA runs. ``o_b_proj`` is deliberately *not* prefetched:
+        # it is consumed at the very end of the block (``_grouped_output``), so a
+        # prefetched copy would stay resident across ``_sdpa_decode``, whose static
+        # CBs span the whole compute grid and reach ~960 KB per core. At 8192x4096
+        # bfp4 it is the largest of the four (~288 KB per core over the 64-core
+        # budget), and holding it there pushes the lowest occupied L1 address below
+        # the SDPA CB region end. It is fetched on demand in ``_grouped_output``.
         self.kv_proj.fetch_weights()
         self.q_b_proj.fetch_weights()
         self.q_a_proj.fetch_weights()

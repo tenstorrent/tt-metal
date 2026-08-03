@@ -46,6 +46,17 @@ ResolvedBindings resolve_bindings(
     bool allow_inplace_output_tensor_alias) {
     ResolvedBindings result;
 
+    // A CB placed at an explicit absolute address cannot be expressed as a fast-path binding: the
+    // fast path patches CBs with UpdateDynamicCircularBufferAddress(buffer->address()), which under
+    // per-core L1 allocation is only the FIRST core's address and would overwrite every per-core CB
+    // with it. Bail to the slow-path rebuild, which re-runs the factory and re-applies each CB's own
+    // absolute_address (see apply_descriptor_runtime_args). Bailing here rather than in each op keeps
+    // every present and future per-core-allocation op correct by default.
+    if (std::any_of(
+            desc.cbs.begin(), desc.cbs.end(), [](const CBDescriptor& cb) { return cb.absolute_address.has_value(); })) {
+        return ResolvedBindings{};
+    }
+
     // If the same Buffer* appears more than once, every binding for that buffer maps to the
     // first occurrence via std::find below; at cache hit all of those bindings get patched with
     // current_buffers[first_slot].address().  Whether that's safe depends on WHY it aliases:

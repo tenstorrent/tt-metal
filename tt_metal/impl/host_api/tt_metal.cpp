@@ -50,6 +50,7 @@
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -553,6 +554,17 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
+// L1 base of `core`'s shard. Under per-core allocation each core places its shard independently and
+// Buffer::address() reports only the first core's, so it cannot stand in for the rest.
+// Slow-dispatch counterpart of buffer_dispatch::shard_base_address; the bank offset the callers add
+// is unaffected, only the buffer-relative base changes.
+static DeviceAddr shard_l1_base_address(const Buffer& buffer, const CoreCoord& core) {
+    if (experimental::per_core_allocation::is_per_core_allocation(buffer)) {
+        return experimental::per_core_allocation::get_per_core_address(buffer, core);
+    }
+    return buffer.address();
+}
+
 void WriteToDeviceSharded(
     Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     TT_FATAL(
@@ -592,8 +604,8 @@ void WriteToDeviceSharded(
             }
             std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
             if (buffer.is_l1()) {
-                auto absolute_address =
-                    buffer.address() + bank_offset + (write_device_page * buffer.aligned_page_size()) + offset;
+                auto absolute_address = shard_l1_base_address(buffer, core) + bank_offset +
+                                        (write_device_page * buffer.aligned_page_size()) + offset;
                 auto core_coordinates =
                     device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
                 MetalContext::instance().get_cluster().write_core(
@@ -781,10 +793,11 @@ void read_pages_to_host_helper(
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
 
     if (dev_buffer.is_l1()) {
-        auto core_coordinates =
-            device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
+        const CoreCoord logical_core = dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id);
+        auto core_coordinates = device->worker_core_from_logical_core(logical_core);
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
-        auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * dev_buffer.aligned_page_size());
+        auto absolute_address = shard_l1_base_address(dev_buffer, logical_core) + bank_offset +
+                                (core_page_id * dev_buffer.aligned_page_size());
         if (aligned_page_size > page_size) {
             std::vector<uint8_t> page(aligned_page_size);
             MetalContext::instance().get_cluster().read_core(
@@ -1690,6 +1703,17 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
     circular_buffer->config().set_globally_allocated_address(tensor);
+    circular_buffer->assign_global_address();
+}
+
+void SetCircularBufferAbsoluteAddress(Program& program, CBHandle cb_handle, uint32_t address) {
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
+    TT_FATAL(
+        circular_buffer->globally_allocated(),
+        "SetCircularBufferAbsoluteAddress requires a globally-allocated (buffer-backed) CircularBuffer; a locally "
+        "allocated CB is placed by the CB allocator");
+    circular_buffer->config().set_absolute_address(address);
     circular_buffer->assign_global_address();
 }
 

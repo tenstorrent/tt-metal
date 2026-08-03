@@ -1665,7 +1665,18 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     f"[traced-decode] compiling submesh {sm['index']} "
                     f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags} causal={causal}"
                 )
-                compile_outs.append(self._decode_submesh_static(sm, flags, causal))  # JITs the programs
+                try:
+                    compile_outs.append(self._decode_submesh_static(sm, flags, causal))  # JITs the programs
+                except Exception:
+                    # A throw here leaves the already-issued submeshes' socket sends
+                    # unpaired, so the process wedges on the way out (in the drain
+                    # below, or in teardown) and the exception never reaches the
+                    # caller's report. Log it now, while the interpreter still runs.
+                    logger.exception(
+                        f"[traced-decode] compile run failed on submesh {sm['index']} "
+                        f"phase {phase_idx} pool={flags} causal={causal}"
+                    )
+                    raise
             # The run also *sends* an output, so drain it: an unread output would sit in
             # the socket FIFO and eventually backpressure the sender kernel. Discarded —
             # the real per-step outputs all come from the replay loop.

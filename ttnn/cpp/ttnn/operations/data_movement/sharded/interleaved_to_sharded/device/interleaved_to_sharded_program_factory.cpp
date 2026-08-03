@@ -19,6 +19,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "ttnn/per_core_allocation_cb.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -34,7 +36,11 @@ void push_i2s_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    Buffer* bound_buffer,
+    // The tensor `bound_buffer` belongs to, when there is one. Only needed so a per-core allocated
+    // buffer can be bound at each core's own address instead of the first core's; see
+    // ttnn/per_core_allocation_cb.hpp.
+    const Tensor* bound_tensor = nullptr) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
@@ -44,7 +50,13 @@ void push_i2s_cb_pair(
         .page_size = page_size,
     });
     cb.buffer = bound_buffer;
-    desc.cbs.push_back(std::move(cb));
+    if (bound_buffer == nullptr || bound_tensor == nullptr) {
+        desc.cbs.push_back(std::move(cb));
+        return;
+    }
+    for (auto& descriptor : ttnn::make_per_core_cb_descriptors(*bound_tensor, std::move(cb))) {
+        desc.cbs.push_back(std::move(descriptor));
+    }
 }
 
 }  // namespace
@@ -170,7 +182,8 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
         num_input_units * output_page_size,
         output_page_size,
         all_cores,
-        /*bound_buffer=*/dst_is_dram ? nullptr : dst_buffer);
+        /*bound_buffer=*/dst_is_dram ? nullptr : dst_buffer,
+        /*bound_tensor=*/dst_is_dram ? nullptr : &output);
 
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();

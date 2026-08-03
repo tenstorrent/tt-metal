@@ -23,14 +23,15 @@ enum class HubRole : uint32_t {
 };
 
 struct MatmulDecodeDeviceOperation {
-    // The weight (input B) is bound only through the sharded ``in1_cb`` (see the
-    // full / partial / batched program factories), and the CB infrastructure
-    // resolves the per-core read pointer from the buffer's shard mapping. The
-    // activation A and the output are not per-core allocated by the callers in
-    // question (LinearDecode resharded A to a lockstep width-sharded config and
-    // builds the output mem config lockstep), so the only per-core tensor that
-    // reaches this op is B, and it is addressed per-core via the CB. Declare the
-    // opt-in so ``launch()`` accepts a per-core allocated weight.
+    // The weight (input B) is the only tensor a caller may pass per-core allocated: the activation
+    // A and the output are lockstep (LinearDecode reshards A to a lockstep width-sharded config and
+    // builds the output mem config lockstep). B is bound zero-copy through the sharded ``in1_cb``,
+    // and a CB carries one address for its whole core range, so ``make_weight_cb_descriptors``
+    // (per_core_weight_cb.hpp) emits one single-core CB per core, each pinned to that core's own
+    // ``get_per_core_address()``. Cache hits keep those addresses because resolve_bindings bails on
+    // any descriptor carrying an absolute_address, routing the op to the rebuild path instead of
+    // re-pointing every CB at the first core's address. That is what makes this opt-in honest --
+    // see the hazard described on ttnn::device_operation::SupportsPerCoreAllocation.
     static constexpr bool supports_per_core_allocation = true;
 
     struct operation_attributes_t {

@@ -107,6 +107,12 @@ public:
 
     void set_address_offset(uint32_t offset);
 
+    // Absolute L1 placement that wins over `shadow_global_buffer->address() + address_offset()`.
+    // See CBDescriptor::absolute_address for why this exists (per-core L1 allocation).
+    std::optional<uint32_t> absolute_address() const;
+
+    void set_absolute_address(uint32_t address);
+
     const Buffer* shadow_global_buffer{nullptr};
 
     class Builder {
@@ -155,6 +161,7 @@ private:
     uint32_t max_size_ = 0;
     uint32_t buffer_size_ = 0;
     uint32_t address_offset_ = 0;
+    std::optional<uint32_t> absolute_address_ = std::nullopt;
 };
 
 bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
