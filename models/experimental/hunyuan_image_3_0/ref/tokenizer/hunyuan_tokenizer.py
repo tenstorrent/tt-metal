@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -99,12 +100,20 @@ def load_config(config_path: Path = CONFIG_PATH) -> HunyuanConfig:
     Callers only ever choose the *directory*; the filename is fixed. Rebuilding the
     path from ``parent`` + the constant ``config.json`` makes that explicit and keeps
     a caller from pointing this at an arbitrary file.
+
+    The join and the containment check are written out here rather than delegated to
+    ``safe_join``, so the path reaching ``open`` is visibly constrained to the absolute
+    config directory at this call site (same inline pattern as
+    ``model_config.load_config`` / ``weights._read_weight_index``).
     """
-    config_dir = Path(config_path).parent if Path(config_path).name == CONFIG_FILENAME else Path(config_path)
-    config_path = safe_join(config_dir, CONFIG_FILENAME)
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Missing bundled config: {config_path}")
-    with open(config_path) as f:
+    given = Path(config_path)
+    base_dir = os.path.abspath(str(given.parent if given.name == CONFIG_FILENAME else given))
+    resolved = os.path.abspath(os.path.join(base_dir, CONFIG_FILENAME))
+    if not resolved.startswith(base_dir + os.sep):
+        raise ValueError(f"refusing path {resolved!r}: outside config directory {base_dir!r}")
+    if not os.path.isfile(resolved):
+        raise FileNotFoundError(f"Missing bundled config: {resolved}")
+    with open(resolved) as f:
         return HunyuanConfig.from_dict(json.load(f))
 
 
@@ -116,8 +125,6 @@ def _resolve_tokenizer_dir(tokenizer_dir: Path = TOKENIZER_DIR) -> Path:
 
         candidates.append(MODEL_DIR)
     except ImportError:
-        import os
-
         env_dir = os.environ.get("HUNYUAN_MODEL_DIR")
         if env_dir:
             candidates.append(Path(env_dir))
