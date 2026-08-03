@@ -25,6 +25,7 @@ import inspect
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -130,11 +131,18 @@ def test_gap3_adapter_does_not_unconditionally_pass_empty_state_dict():
     ``state_dict={}`` with no completeness check and no ``load_state_dict`` fallback."""
     from models.demos.gpt_oss_d_p.tt.runners.adapters import gpt_oss as adapter_mod
 
-    src = inspect.getsource(adapter_mod.GptOssPrefillAdapter.build_runtime)
-    unconditional_empty = "state_dict={}" in src and "load_state_dict" not in src and "cache_is_complete" not in src
-    # Also allow a loud assertion path as an acceptable fallback per SCHEDULER_INTEGRATION.md.
-    has_hard_assert = "assert" in src and (".tensorbin" in src or "cache" in src.lower())
-    assert not unconditional_empty or has_hard_assert, (
+    # Strip line-comments before inspecting: the current TODO block mentions
+    # ``ModelArgs.load_state_dict`` and ``cache`` in prose, and we don't want those false-positives.
+    src_raw = inspect.getsource(adapter_mod.GptOssPrefillAdapter.build_runtime)
+    src = "\n".join(line.split("#", 1)[0] for line in src_raw.splitlines())
+
+    literal_empty_state_dict = "state_dict={}" in src
+    # Acceptable resolutions (all match the SCHEDULER_INTEGRATION.md guidance):
+    #  * conditional load: a real ``weight_cache_is_complete(`` / ``load_state_dict(`` CALL, or
+    #  * a hard-assert fallback naming the cache artifact (``.tensorbin`` or ``weight_cache``).
+    computes_state_dict_conditionally = ("weight_cache_is_complete(" in src) or ("load_state_dict(" in src)
+    has_hard_assert = ("assert " in src) and ((".tensorbin" in src) or ("weight_cache" in src))
+    assert (not literal_empty_state_dict) or computes_state_dict_conditionally or has_hard_assert, (
         "build_runtime hands TtPrefillRuntime state_dict={} unconditionally with no cache-completeness "
         "check and no bf16 fallback — a stale/incomplete tilized cache will silently produce garbage "
         "under the engine (gap 3)"
@@ -217,6 +225,46 @@ def _assert_pcc_ok(stdout: str, floor: float = 0.99):
 _RUNNER = [sys.executable, "-m", "models.demos.common.prefill.runners.prefill_runner"]
 _PRODUCER = [sys.executable, "-m", "models.demos.common.prefill.runners.prefill_producer"]
 
+# gpt-oss-120b build + compile before the H2D descriptor gets exported. Bounded well above the
+# observed ~5–8 min so a slow warm cache doesn't spuriously fail the descriptor-wait.
+_RUNNER_READY_TIMEOUT_S = 900
+
+
+def _descriptor_path(service_id: str) -> Path:
+    """Path prefill_runner writes to advertise its H2D service (h2d_stream_service_descriptor.cpp)."""
+    return Path(f"/dev/shm/tt_h2d_stream_service_{service_id}.bin")
+
+
+def _wait_for_runner_ready(runner: subprocess.Popen, service_id: str, timeout_s: int = _RUNNER_READY_TIMEOUT_S) -> None:
+    """Block until either (a) the runner exports its H2D descriptor (ready), or (b) the runner
+    subprocess dies before doing so — in which case fail loudly with the runner's captured output.
+    Without this the producer races the runner and times out at 60s while the runner is still
+    building the model (gpt-oss-120b compile is minutes)."""
+    desc = _descriptor_path(service_id)
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if desc.exists():
+            return
+        rc = runner.poll()
+        if rc is not None:
+            out = runner.stdout.read() if runner.stdout else ""
+            pytest.fail(f"prefill_runner exited (rc={rc}) before exporting descriptor {desc}\n{out[-4000:]}")
+        time.sleep(1.0)
+    runner.kill()
+    out = runner.stdout.read() if runner.stdout else ""
+    pytest.fail(f"prefill_runner did not export {desc} within {timeout_s}s\n{out[-4000:]}")
+
+
+def _cleanup_stale_descriptor(service_id: str) -> None:
+    """A previous run leaves this behind on abnormal exit, and the producer will read that stale
+    file instead of blocking for the new runner. Remove it before starting."""
+    desc = _descriptor_path(service_id)
+    if desc.exists():
+        try:
+            desc.unlink()
+        except OSError:
+            pass
+
 _COMMON_ENV = {
     "PREFILL_MODEL": "gpt_oss_d_p",
     "PREFILL_SP": str(ROWS),
@@ -260,8 +308,10 @@ def test_T3_request_mode_with_producer():
     service_id = "gpt_oss_gap_t3"
     env = {**_COMMON_ENV, "PREFILL_H2D_SERVICE_ID": service_id}
 
+    _cleanup_stale_descriptor(service_id)
     runner = subprocess.Popen(_RUNNER, env={**os.environ, **env}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
+        _wait_for_runner_ready(runner, service_id)
         prod = _run(_PRODUCER, {**env, "PREFILL_STANDALONE_NCHUNKS": "11"}, timeout_s=1800)
         assert prod.returncode == 0, f"prefill_producer exited {prod.returncode}\n{prod.stdout[-2000:]}"
         try:
@@ -291,8 +341,10 @@ def test_T4_layer_ack_completions():
         "PREFILL_ENABLE_LAYER_ACK": "1",
         "PREFILL_CHECK_COMPLETIONS": "1",
     }
+    _cleanup_stale_descriptor(service_id)
     runner = subprocess.Popen(_RUNNER, env={**os.environ, **env}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
+        _wait_for_runner_ready(runner, service_id)
         prod = _run(_PRODUCER, {**env, "PREFILL_STANDALONE_NCHUNKS": "11"}, timeout_s=1800)
         assert prod.returncode == 0, f"prefill_producer exited {prod.returncode}\n{prod.stdout[-2000:]}"
         try:
@@ -325,8 +377,10 @@ def test_T5_multi_user():
         "PREFILL_ENABLE_LAYER_ACK": "1",
         "PREFILL_CHECK_COMPLETIONS": "1",
     }
+    _cleanup_stale_descriptor(service_id)
     runner = subprocess.Popen(_RUNNER, env={**os.environ, **env}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
+        _wait_for_runner_ready(runner, service_id)
         # Producer must alternate slot_ids. If your producer needs a specific flag to do that, add it
         # here; the default trace producer today only fills slot 0, so this test may need a small
         # producer patch (or a scheduler stand-in) to exercise slot 1 as well.
