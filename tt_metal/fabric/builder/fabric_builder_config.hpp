@@ -53,7 +53,7 @@ static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
 // Per-family sender counts beyond the legacy 2D mesh width are no longer independent constants:
 // they are derived from the wiring rules as the family max over facing of wired-producer arity
-// (see RouterConnectionMapping for the express family, and the intermesh_z_boundary_* accessors
+// (see builder/router_wiring_rules.* for the express family, and the intermesh_z_boundary_* accessors
 // below for the Z-facing intermesh boundary family -- both are 5 VC0 / 4 VC1 by their rules).
 
 // VC2: 1 sender channel (worker-type, neighbour exchange) + 1 receiver (non-Z only)

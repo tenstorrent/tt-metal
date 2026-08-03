@@ -9,9 +9,8 @@
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
-#include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/connection_registry.hpp"
-#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 
 namespace tt::tt_fabric {
 
@@ -110,8 +109,9 @@ private:
         const RouterLocation& location,
         std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
         std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-        FabricRouterChannelMapping channel_mapping,
-        RouterConnectionMapping connection_mapping,
+        RouterVcShape shape,
+        RouterTurnSet turns_by_vc,
+        bool downstream_is_tensix_builder,
         std::shared_ptr<ConnectionRegistry> connection_registry);
 
     /**
@@ -178,17 +178,19 @@ private:
     /**
      * Build a reverse mapping from a builder variant's internal channels to router's external facing channel IDs.
      * For kernel internal channels that aren't externally facing, the mapping will be nullopt.
-     * Iterates through the channel mapping to find which logical channels are handled by the given builder type,
-     * then maps their internal channel IDs to router channel IDs.
+     * Iterates the shape's (vc, channel) pairs, keeps the ones the given builder variant owns
+     * (builder_type_for_vc), and maps their internal channel IDs to router channel IDs.
      *
-     * @param channel_mapping The channel mapping to use (already knows topology and mode)
+     * @param shape The router's per-VC channel shape
+     * @param downstream_is_tensix_builder Whether VC0 channels are tensix-owned (MUX mode)
      * @param builder_type Which builder variant (ERISC or TENSIX)
      * @param variant_num_sender_channels Number of sender channels the variant has
      * @return Vector where index is the variant's internal channel ID, value is optional router channel ID
      *         (nullopt for internal-only channels not exposed to external topology)
      */
     static std::vector<std::optional<size_t>> get_variant_to_router_channel_map(
-        const FabricRouterChannelMapping& channel_mapping,
+        const RouterVcShape& shape,
+        bool downstream_is_tensix_builder,
         BuilderType builder_type,
         size_t variant_num_sender_channels);
 
@@ -203,8 +205,9 @@ private:
     // Compute-mesh specific state
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
-    FabricRouterChannelMapping channel_mapping_;
-    RouterConnectionMapping connection_mapping_;
+    RouterVcShape shape_;
+    RouterTurnSet turns_by_vc_;
+    bool downstream_is_tensix_builder_ = false;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
     bool is_inter_mesh_;  // True if this router connects different meshes
 };

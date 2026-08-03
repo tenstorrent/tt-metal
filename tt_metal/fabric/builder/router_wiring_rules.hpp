@@ -7,6 +7,9 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <vector>
+
+#include <tt_stl/assert.hpp>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
@@ -20,12 +23,12 @@ struct IntermeshVCConfig;
 
 /**
  * The wiring rules for one router, as free functions: the turn-matrix primitive everything is
- * built from, the per-VC channel shape derived from it, and the arity/count derivations between
- * the two. These are facts about a router archetype -- pure functions of (topology, facing,
- * capability, ZPortRole, express, VC config), carrying no eth channel -- shared by the connection
- * map (builder/router_connection_mapping.*), the channel layout (fabric_router_channel_mapping.*),
- * and the injection-flag derivation (compute_mesh_router_builder.cpp), so none of them can drift
- * from the others.
+ * built from, the per-VC channel shape derived from it, the arity/count derivations between
+ * the two, and the per-VC turn set built from the primitive. These are facts about a router
+ * archetype -- pure functions of (topology, facing, capability, ZPortRole, express, VC config),
+ * carrying no eth channel -- shared by the per-router build and establishment
+ * (compute_mesh_router_builder.cpp), the fabric-wide max-counts pass (fabric_builder_context.cpp),
+ * and the injection-flag derivation, so none of them can drift from the others.
  */
 
 /**
@@ -122,6 +125,28 @@ struct RouterVcShape {
     std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_flat_base{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_counts{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_flat_base{};
+
+    // The flat index a (vc, channel) pair maps to, bounds-checked. The prefix sums are the whole
+    // answer; these just keep every consumer from re-writing base + i without the check.
+    uint32_t flat_sender_id(uint32_t vc, uint32_t channel) const {
+        TT_FATAL(
+            vc < builder_config::MAX_NUM_VCS && channel < sender_counts[vc],
+            "No sender channel {} on VC{} (router has {})",
+            channel,
+            vc,
+            vc < builder_config::MAX_NUM_VCS ? sender_counts[vc] : 0);
+        return sender_flat_base[vc] + channel;
+    }
+
+    uint32_t flat_receiver_id(uint32_t vc, uint32_t channel) const {
+        TT_FATAL(
+            vc < builder_config::MAX_NUM_VCS && channel < receiver_counts[vc],
+            "No receiver channel {} on VC{} (router has {})",
+            channel,
+            vc,
+            vc < builder_config::MAX_NUM_VCS ? receiver_counts[vc] : 0);
+        return receiver_flat_base[vc] + channel;
+    }
 };
 
 /**
@@ -131,12 +156,12 @@ struct RouterVcShape {
  * gates the channel counts (1D has its own counts and never creates VC1/VC2 channels), but
  * num_vcs is deliberately config-only and topology-independent: a 1D router with requires_vc1
  * reports 2 VCs while creating zero VC1 channels -- that existing oddity is preserved, not
- * fixed, and get_all_sender_mappings() already tolerates it.
+ * fixed, and consumers already tolerate counts exceeding created channels.
  *
  * The derivation emits prefix sums for every flat base and enforces the num_max_* ceilings,
  * turning the capacity comments elsewhere into guarantees at the one construction site. The
  * chip's extra port arrives as its ZPortRole (boundary, chord, or none) -- the same fact the
- * connection map reads, with one spelling.
+ * turn-set derivation reads, with one spelling.
  */
 RouterVcShape router_vc_shape(
     Topology topology,
@@ -145,5 +170,72 @@ RouterVcShape router_vc_shape(
     ZPortRole z_role,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config);
+
+/**
+ * @brief Represents a single downstream connection target for a receiver channel
+ *
+ * This struct defines where a receiver channel should connect to, including:
+ * - The target virtual channel (VC)
+ * - Optional target direction (for local connections)
+ *
+ * Targets carry no connection type and no channel index: a local turn is identified by its
+ * direction and VC, the slot a producer is placed into is computed at establishment time from the
+ * direction<->slot bijection (get_downstream_sender_channel_for_vc), and the boundary turn to an
+ * intermesh edge is identified by the edge's capability, not a type label.
+ */
+struct ConnectionTarget {
+    uint32_t target_vc;
+    std::optional<RoutingDirection> target_direction;  // The downstream direction this target reaches
+
+    ConnectionTarget(uint32_t target_vc_, std::optional<RoutingDirection> target_direction_ = std::nullopt) :
+        target_vc(target_vc_), target_direction(target_direction_) {}
+};
+
+/**
+ * The per-VC turn table of one router: which downstream routers its receiver feeds on each VC.
+ * Keyed by VC alone -- a router services exactly one receiver per active VC by construction
+ * (router_vc_shape gives it one), so there is no receiver dimension to index. An empty vector
+ * means nothing is wired on that VC.
+ */
+using RouterTurnSet = std::array<std::vector<ConnectionTarget>, builder_config::MAX_NUM_VCS>;
+
+/**
+ * @brief The one turn-set derivation for every router
+ *
+ * Behaviour is keyed on what role the ports have, not which ports they are:
+ * - A port with no routing direction (facing Z, capability INTERMESH) gets the boundary
+ *   template: the full non-self set on VC1, typed from-boundary. Its VC0 senders are fed by
+ *   the mesh routers' boundary targets on their own turn sets.
+ * - A routing-direction port gets its turn set from the wires_into primitive: 1D is the
+ *   opposite direction; legacy 2D is every non-self cardinal; express adds the express rule
+ *   (an intramesh X ingress unwires from intramesh Y, a landing X ingress does not).
+ * - The chip's extra port enters the set only when it has one: an express chord is an ordinary
+ *   same-VC target; an intermesh boundary is reached through the boundary target on VC0 (and on
+ *   VC1 only in pass-through mode); nothing exists without the port.
+ */
+RouterTurnSet turn_set_for_router(
+    Topology topology,
+    RoutingDirection facing,
+    EdgeCapability edge_capability,
+    ZPortRole z_role,
+    bool express_routing_enabled,
+    bool enable_vc1,
+    bool enable_mesh_pass_through);
+
+/**
+ * Which datamover builder owns a router's sender channels on a VC. With the tensix (MUX)
+ * extension every VC0 channel is owned by the TENSIX builder feeding the ERISC router; VC1/VC2
+ * are always ERISC. `downstream_is_tensix_builder` is the one link-scope layout fact -- it can
+ * differ per eth channel via is_dispatch_link in MUX mode -- so it arrives at the use site
+ * rather than being baked into any archetype.
+ */
+enum class BuilderType : uint8_t {
+    ERISC = 0,
+    TENSIX = 1,
+};
+
+inline BuilderType builder_type_for_vc(uint32_t vc, bool downstream_is_tensix_builder) {
+    return (vc == 0 && downstream_is_tensix_builder) ? BuilderType::TENSIX : BuilderType::ERISC;
+}
 
 }  // namespace tt::tt_fabric

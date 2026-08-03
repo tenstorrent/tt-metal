@@ -15,7 +15,6 @@
 #include <set>
 
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 
@@ -28,9 +27,9 @@ constexpr bool k_vc1 = true;
 constexpr bool k_no_vc1 = false;
 constexpr bool k_no_pass_through = false;
 
-std::set<RoutingDirection> target_directions(const RouterConnectionMapping& mapping, uint32_t vc) {
+std::set<RoutingDirection> target_directions(const RouterTurnSet& turn_set, uint32_t vc) {
     std::set<RoutingDirection> dirs;
-    for (const auto& target : mapping.get_downstream_targets(vc)) {
+    for (const auto& target : turn_set[vc]) {
         if (target.target_direction.has_value()) {
             dirs.insert(*target.target_direction);
         }
@@ -38,12 +37,12 @@ std::set<RoutingDirection> target_directions(const RouterConnectionMapping& mapp
     return dirs;
 }
 
-RouterConnectionMapping express_mapping(
+RouterTurnSet express_mapping(
     RoutingDirection direction,
     EdgeCapability capability = EdgeCapability::INTRAMESH_CARDINAL,
     bool enable_vc1 = k_vc1,
     bool has_express_chord = true) {
-    return RouterConnectionMapping::for_router(
+    return turn_set_for_router(
         Topology::Torus,
         direction,
         capability,
@@ -124,7 +123,7 @@ TEST(ExpressConnectionWiringTest, IntrameshTargetsNeverCrossVCs) {
     // boundary template, not to these shared maps.
     const auto mapping = express_mapping(RoutingDirection::N);
     for (uint32_t vc : {0u, 1u}) {
-        for (const auto& target : mapping.get_downstream_targets(vc)) {
+        for (const auto& target : mapping[vc]) {
             // Every target -- cardinal or boundary -- stays on its source VC.
             EXPECT_EQ(target.target_vc, vc);
         }
@@ -147,14 +146,14 @@ TEST(ExpressConnectionWiringTest, WorkerChannelIsReservedOnVC0Only) {
     for (const auto facing : {RoutingDirection::N, RoutingDirection::E}) {
         const auto mapping = express_mapping(facing);
         const auto producer = builder::routing_direction_to_eth_direction(facing);
-        for (const auto& t : mapping.get_downstream_targets(0)) {
+        for (const auto& t : mapping[0]) {
             const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
                 /*is_2d_routing=*/true, 0, producer, builder::routing_direction_to_eth_direction(*t.target_direction));
             EXPECT_GE(slot, 1u) << "producer " << static_cast<int>(facing) << " aliases the VC0 worker slot on "
                                 << static_cast<int>(*t.target_direction);
             lowest_vc0 = std::min(lowest_vc0, slot);
         }
-        for (const auto& t : mapping.get_downstream_targets(1)) {
+        for (const auto& t : mapping[1]) {
             lowest_vc1 = std::min(
                 lowest_vc1,
                 builder::get_downstream_sender_channel_for_vc(
@@ -174,7 +173,7 @@ TEST(ExpressConnectionWiringTest, NonExpressWiringIsUnchanged) {
     // Today's 2D routing is already dimension-ordered, so its wired-but-unused X->Y arcs are
     // harmless. Removing them would change downstream counts, stream assignment, and L1 layout on
     // every existing 2D configuration, so express gates the new behaviour.
-    const auto legacy = RouterConnectionMapping::for_router(
+    const auto legacy = turn_set_for_router(
         Topology::Torus,
         RoutingDirection::E,
         EdgeCapability::INTRAMESH_CARDINAL,
@@ -193,7 +192,7 @@ TEST(ExpressConnectionWiringTest, IntermeshZTemplateStillAppliesUnderExpress) {
     // the Z-direction target on this chip IS the boundary connection. The leak protection lives in
     // role-based emission: on a chord-less chip (role NONE) no Z target is emitted at all, so
     // same-mesh traffic can never leak onto the boundary link through an express-style Z target.
-    const auto mapping = RouterConnectionMapping::for_router(
+    const auto mapping = turn_set_for_router(
         Topology::Torus,
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_CARDINAL,
@@ -226,7 +225,7 @@ TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1BoundaryTargetDoesNotAlia
     // With the express Z target dropped, a Y-facing router's VC1 targets are exactly the three
     // cardinals plus the pass-through boundary target -- each direction appearing exactly once, so
     // no target aliases another. This only holds because the chord-less chip drops the Z output.
-    const auto mapping = RouterConnectionMapping::for_router(
+    const auto mapping = turn_set_for_router(
         Topology::Torus,
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_CARDINAL,
@@ -236,7 +235,7 @@ TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1BoundaryTargetDoesNotAlia
         /*enable_mesh_pass_through=*/true);
 
     std::set<RoutingDirection> used_directions;
-    for (const auto& target : mapping.get_downstream_targets(1)) {
+    for (const auto& target : mapping[1]) {
         ASSERT_TRUE(target.target_direction.has_value());
         EXPECT_TRUE(used_directions.insert(*target.target_direction).second)
             << "direction " << static_cast<int>(*target.target_direction) << " is shared by two VC1 targets";

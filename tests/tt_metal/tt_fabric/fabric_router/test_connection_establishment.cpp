@@ -12,27 +12,25 @@
 
 #include "tt_metal/fabric/builder/connection_registry.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 using namespace tt::tt_fabric;
 
 /**
- * Local connection establishment, driven end to end by the connection maps.
+ * Local connection establishment, driven end to end by the turn sets.
  *
- * A host-side router carries the channel mapping and the connection mapping built from the SAME
- * facts, and establish() mirrors the merged production pass: every direction-matching target in
- * the source router's connection mapping is recorded against the router present in that
- * direction, with the destination sender slot computed from the production direction<->slot
- * bijection -- never a hand-written channel number. Absent directions are skipped, which is how
- * edge devices fall out.
+ * A host-side router carries the channel shape and the turn set derived from the SAME facts, and
+ * establish() mirrors the merged production pass: every direction-matching target in the source
+ * router's turn set is recorded against the router present in that direction, with the
+ * destination sender slot computed from the production direction<->slot bijection -- never a
+ * hand-written channel number. Absent directions are skipped, which is how edge devices fall out.
  *
  * What is pinned here:
  * - Full device: every wired turn is recorded exactly once, VC-preserving, with per-mesh and
  *   per-boundary cardinalities.
- * - Destination slots: in-bounds for the destination's channel mapping, never aliasing another
+ * - Destination slots: in-bounds for the destination's shape, never aliasing another
  *   producer's slot, and never the VC0 worker slot.
  * - Edge devices: absent directions are skipped by direction matching.
  * - Establishment order does not change the resulting registry.
@@ -83,13 +81,13 @@ bool is_cardinal(const RouterConnectionRecord& c) {
 
 class ConnectionEstablishmentTest : public ::testing::Test {
 protected:
-    // One host-side router: both mappings from the same facts, so the channel layout and the
-    // turn set cannot disagree.
+    // One host-side router: shape and turn set from the same facts, so the channel layout and the
+    // turn table cannot disagree.
     struct HostRouter {
         FabricNodeId node;
         RoutingDirection facing;
-        FabricRouterChannelMapping channels;
-        RouterConnectionMapping connections;
+        RouterVcShape shape;
+        RouterTurnSet turns;
     };
 
     IntermeshVCConfig vc1_config_ = IntermeshVCConfig::full_mesh();
@@ -99,14 +97,14 @@ protected:
         return HostRouter{
             FabricNodeId(MeshId{0}, id),
             facing,
-            FabricRouterChannelMapping(
+            router_vc_shape(
                 Topology::Mesh,
-                false,
                 facing,
                 EdgeCapability::INTRAMESH_CARDINAL,
-                enable_vc1 ? &vc1_config_ : nullptr,
-                chip_role),
-            RouterConnectionMapping::for_router(
+                chip_role,
+                /*express_routing_enabled=*/false,
+                enable_vc1 ? &vc1_config_ : nullptr),
+            turn_set_for_router(
                 Topology::Mesh,
                 facing,
                 EdgeCapability::INTRAMESH_CARDINAL,
@@ -120,14 +118,14 @@ protected:
         return HostRouter{
             FabricNodeId(MeshId{0}, id),
             RoutingDirection::Z,
-            FabricRouterChannelMapping(
+            router_vc_shape(
                 Topology::Mesh,
-                false,
                 RoutingDirection::Z,
                 EdgeCapability::INTERMESH,
-                &vc1_config_,
-                ZPortRole::INTERMESH_BOUNDARY),
-            RouterConnectionMapping::for_router(
+                ZPortRole::INTERMESH_BOUNDARY,
+                /*express_routing_enabled=*/false,
+                &vc1_config_),
+            turn_set_for_router(
                 Topology::Mesh,
                 RoutingDirection::Z,
                 EdgeCapability::INTERMESH,
@@ -141,15 +139,14 @@ protected:
         return HostRouter{
             FabricNodeId(MeshId{0}, id),
             facing,
-            FabricRouterChannelMapping(
+            router_vc_shape(
                 Topology::Torus,
-                false,
                 facing,
                 EdgeCapability::INTRAMESH_CARDINAL,
-                nullptr,
                 ZPortRole::EXPRESS_CHORD,
-                /*express_routing_enabled=*/true),
-            RouterConnectionMapping::for_router(
+                /*express_routing_enabled=*/true,
+                nullptr),
+            turn_set_for_router(
                 Topology::Torus,
                 facing,
                 EdgeCapability::INTRAMESH_CARDINAL,
@@ -163,15 +160,14 @@ protected:
         return HostRouter{
             FabricNodeId(MeshId{0}, id),
             RoutingDirection::Z,
-            FabricRouterChannelMapping(
+            router_vc_shape(
                 Topology::Torus,
-                false,
                 RoutingDirection::Z,
                 EdgeCapability::INTRAMESH_EXPRESS,
-                nullptr,
                 ZPortRole::EXPRESS_CHORD,
-                /*express_routing_enabled=*/true),
-            RouterConnectionMapping::for_router(
+                /*express_routing_enabled=*/true,
+                nullptr),
+            turn_set_for_router(
                 Topology::Torus,
                 RoutingDirection::Z,
                 EdgeCapability::INTRAMESH_EXPRESS,
@@ -181,12 +177,12 @@ protected:
                 /*enable_mesh_pass_through=*/false)};
     }
 
-    // The merged production pass: every direction-matching target in the source map is recorded
+    // The merged production pass: every direction-matching target in the source turn set is recorded
     // against the router present in that direction. A target whose direction has no router is
     // skipped -- the edge-device mechanism.
     void establish(HostRouter& source, const std::map<RoutingDirection, HostRouter*>& present) {
         for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-            for (const auto& target : source.connections.get_downstream_targets(vc)) {
+            for (const auto& target : source.turns[vc]) {
                 TT_FATAL(target.target_direction.has_value(), "local connection target must name a direction");
                 const auto dest_dir = *target.target_direction;
                 if (!present.contains(dest_dir)) {
@@ -286,7 +282,7 @@ TEST_F(ConnectionEstablishmentTest, FullDevice_DestSlotsInBoundsDistinctAndWorke
     std::map<std::pair<RoutingDirection, uint32_t>, std::set<uint32_t>> slots_per_dest_vc;
     for (const auto& c : registry_.get_all_connections()) {
         const auto* dest = by_facing.at(c.dest_direction);
-        ASSERT_LT(c.dest_sender_channel, dest->channels.get_num_sender_channels_for_vc(c.dest_vc))
+        ASSERT_LT(c.dest_sender_channel, dest->shape.sender_counts[c.dest_vc])
             << "slot out of bounds on " << static_cast<int>(c.dest_direction) << " VC" << c.dest_vc;
         if (c.dest_vc == 0) {
             EXPECT_NE(c.dest_sender_channel, 0) << "VC0 worker slot taken by a wired producer";
@@ -415,6 +411,6 @@ TEST_F(ConnectionEstablishmentTest, ExpressChip_XRoutersEmitOnlyAroundTheXRing) 
         by_facing[r.facing] = &r;
     }
     for (const auto& c : registry_.get_all_connections()) {
-        EXPECT_LT(c.dest_sender_channel, by_facing.at(c.dest_direction)->channels.get_num_sender_channels_for_vc(0));
+        EXPECT_LT(c.dest_sender_channel, by_facing.at(c.dest_direction)->shape.sender_counts[0]);
     }
 }

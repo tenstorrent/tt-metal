@@ -5,7 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/channel_trimming_report.hpp"
@@ -41,10 +41,12 @@ bool fabric_has_intermesh_z_edge(const MeshGraph& mesh_graph) {
 }  // namespace
 
 void FabricBuilderContext::compute_max_channel_counts() {
-    // Create channel mappings for all router families present in this fabric
+    // Derive the shape of every router family present in this fabric. These are archetype
+    // queries -- "what shape would a router with these facts have" -- so no router or layout
+    // object is constructed; the derivation is a function call per family.
     const auto topology = fabric_context_.get_fabric_topology();
 
-    std::vector<FabricRouterChannelMapping> possible_mappings;
+    std::vector<RouterVcShape> possible_shapes;
 
     // An express mesh router's VC0 is five wide, so the fabric-wide maximum has to account for it or
     // the shared router config would report fewer sender channels than a router actually maps -- the
@@ -58,14 +60,13 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
     // Always have MESH routers
     bool needs_vc_config = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
-    possible_mappings.emplace_back(
+    possible_shapes.push_back(router_vc_shape(
         topology,
-        false,  // no tensix
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_CARDINAL,
-        needs_vc_config ? &intermesh_vc_config_ : nullptr,
         ZPortRole::NONE,
-        any_mesh_uses_express);
+        any_mesh_uses_express,
+        needs_vc_config ? &intermesh_vc_config_ : nullptr));
 
     // If Z-facing intermesh boundary routers exist in this fabric, enumerate both families they
     // introduce: the boundary itself (5 VC0 / 4 VC1 by its wiring rules), and the mesh routers on
@@ -79,38 +80,32 @@ void FabricBuilderContext::compute_max_channel_counts() {
     const bool has_intermesh_z_boundary =
         intermesh_vc_config_.requires_vc1 && fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
     if (has_intermesh_z_boundary) {
-        possible_mappings.emplace_back(
+        possible_shapes.push_back(router_vc_shape(
             topology,
-            false,  // no tensix
             RoutingDirection::Z,
             EdgeCapability::INTERMESH,
-            &intermesh_vc_config_,
-            ZPortRole::INTERMESH_BOUNDARY);
-        possible_mappings.emplace_back(
+            ZPortRole::INTERMESH_BOUNDARY,
+            /*express_routing_enabled=*/false,
+            &intermesh_vc_config_));
+        possible_shapes.push_back(router_vc_shape(
             topology,
-            false,  // no tensix
             RoutingDirection::N,
             EdgeCapability::INTRAMESH_CARDINAL,
-            needs_vc_config ? &intermesh_vc_config_ : nullptr,
             ZPortRole::INTERMESH_BOUNDARY,  // mesh routers on boundary chips carry the from-Z slot
-            any_mesh_uses_express);
+            any_mesh_uses_express,
+            needs_vc_config ? &intermesh_vc_config_ : nullptr));
     }
 
     // Compute max channel counts across all router families in this fabric
     max_sender_channels_per_vc_.fill(0);
     max_receiver_channels_per_vc_.fill(0);
 
-    for (const auto& mapping : possible_mappings) {
-        uint32_t num_vcs = mapping.get_num_virtual_channels();
-        for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-            auto sender_count = mapping.get_num_sender_channels_for_vc(vc);
+    for (const auto& shape : possible_shapes) {
+        for (uint32_t vc = 0; vc < shape.num_vcs; ++vc) {
             max_sender_channels_per_vc_[vc] =
-                std::max(max_sender_channels_per_vc_[vc], static_cast<std::size_t>(sender_count));
-            // Count a receiver for this VC if the mapping created one.
-            // A VC has a receiver if it has a LogicalReceiverChannelKey{vc, 0} in the map.
-            auto receiver_count = mapping.get_num_receiver_channels_for_vc(vc);
+                std::max(max_sender_channels_per_vc_[vc], static_cast<std::size_t>(shape.sender_counts[vc]));
             max_receiver_channels_per_vc_[vc] =
-                std::max(max_receiver_channels_per_vc_[vc], static_cast<std::size_t>(receiver_count));
+                std::max(max_receiver_channels_per_vc_[vc], static_cast<std::size_t>(shape.receiver_counts[vc]));
         }
     }
 }

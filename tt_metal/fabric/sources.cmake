@@ -25,7 +25,6 @@ set(FABRIC_SOURCES
     mesh_graph.cpp
     protected_ring_model.cpp
     erisc_datamover_builder.cpp
-    fabric_router_channel_mapping.cpp
     fabric_router_builder.cpp
     compute_mesh_router_builder.cpp
     fabric_builder.cpp
@@ -39,7 +38,6 @@ set(FABRIC_SOURCES
     builder/fabric_remote_channels_allocator.cpp
     builder/static_sized_channel_connection_writer_adapter.cpp
     builder/connection_registry.cpp
-    builder/router_connection_mapping.cpp
     builder/router_wiring_rules.cpp
     channel_trimming_export.cpp
     channel_trimming_import.cpp
