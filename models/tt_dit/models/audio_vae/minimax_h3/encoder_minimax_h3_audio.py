@@ -212,7 +212,11 @@ class MiniMaxH3AudioCausalAttention(Module):
 
     def forward(self, x_BSC: ttnn.Tensor) -> ttnn.Tensor:
         batch, seq_len, _ = x_BSC.shape
-        qkv = self.qkv(x_BSC)
+        # The qkv projection is 2048 -> 6144 over the whole latent sequence, and at a 10 s
+        # clip (405 frames, batch 2 for stereo) the default matmul blocking overshoots L1
+        # (1979264 B against 1572864 B). A smaller block trades a little throughput for a
+        # working shape; the real fix is a tuned config, which is a performance-pass job.
+        qkv = self.qkv(x_BSC, default_block_size=(4, 4, 4))
         query, key, value = (
             ttnn.permute(ttnn.reshape(part, (batch, seq_len, self.num_heads, self.head_dim)), (0, 2, 1, 3))
             for part in ttnn.chunk(qkv, 3, dim=-1)

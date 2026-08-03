@@ -545,6 +545,53 @@ Measured numbers worth keeping:
     would remove the last fallback; the MAC path is correct meanwhile -- verified that
     `ttnn.slice`'s `slice_step` supports strided fp32 slicing, which is what it relies on.
 
+32. **The last audio failure was a matmul, not a convolution.** Three rounds of conv3d
+    blocking edits left the overflow byte count identical at 1979264 B, which was the tell:
+    the traceback frames point at `linear.py:98`, i.e. the `qkv` projection inside the
+    audio encoder's `CausalAttention`. At a 10 s clip that is 2048 -> 6144 over 405 latent
+    frames at batch 2, and the default `(8, 8, 8)` matmul blocking overshoots L1.
+    `default_block_size=(4, 4, 4)` fixes it. **Lesson: read the traceback frames before
+    tuning blockings** -- an unchanging byte count across parameter edits means the op
+    being tuned is not the op that is failing.
+
+    With that fixed the whole audio suite passes, and the encode gates come in at
+    RMSE/sigma **4.6-5.2%**, i.e. essentially at the original 5% bar rather than needing
+    the relaxed one. So the earlier 10.6% was not accumulation after all -- it was this
+    matmul's blocking. The three components measured clean along the way
+    (MAC bit-exact, `Activation1d` 0.17%, no SDPA in the decoder) were correct findings,
+    but the accumulation *explanation* built on them was wrong.
+
+### 2026-08-03 — M8f baselines (single device, untuned)
+
+Roundtrip quality: **visual PSNR 40.46 dB**, **audio PSNR 29.89 dB** (both vs the
+reference's own round trip). Suite runs in 153 s, so it is cheap to re-run per iteration.
+
+| Baseline | Per invocation |
+|---|---|
+| visual encoder, clip tile `(17,256,256)` | **3.544 s** |
+| visual encoder, keyframe tile `(1,256,256)` | 0.264 s |
+| visual decoder, `(7,16,16)` = 1797 tokens | **0.755 s** -> **14.0 TFLOP/s** effective |
+| audio encode, 5 s stereo | 0.416 s |
+| audio decode, 5 s stereo | 6.185 s |
+
+Projected single-device sequential totals:
+
+| Config | Encode | Decode |
+|---|---|---|
+| 768P 5 s | **793.8 s** (224 inv) | 148.0 s (196 inv) |
+| 768P 10 s | 1488.4 s (420) | 296.0 s (392) |
+| 1440P 5 s | 2948.4 s (832) | 549.6 s (728) |
+| 1440P 10 s | 5528.2 s (1560) | 1099.3 s (1456) |
+
+**The encoder dominates, not the decoder -- 5.4x it at 768P 5 s.** That inverts the
+plan's §5 assumption *and* the FLOP-based expectation: the two halves are within 10% on
+FLOPs (3009 vs 3261 TFLOP) but the decoder achieves **14.0 TFLOP/s** against the
+encoder's **~2.3 TFLOP/s**, so the encoder is ~6x less efficient per FLOP. That is the
+untuned conv3d blocking stubs, which is where the largest absolute win sits.
+
+Neither number includes the data-parallel mapping: with tiles spread over the 32-chip
+mesh these divide by up to 32 (768P 5 s decode ~4.6 s, encode ~24.8 s).
+
 ## Hangs / resets
 
 None yet. No device work has run.
