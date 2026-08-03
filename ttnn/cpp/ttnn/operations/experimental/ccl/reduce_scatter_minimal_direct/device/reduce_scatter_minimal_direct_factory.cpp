@@ -176,14 +176,25 @@ std::pair<CoreRangeSet, std::vector<CoreCoord>> reduce_scatter_direct_worker_cor
 // have not reduced yet; see the reader kernel for the full argument.
 ////////////////////////////////////////////////////////////////
 
-ReduceScatterMinimalDirectMeshWorkloadFactory::cached_mesh_workload_t
-ReduceScatterMinimalDirectMeshWorkloadFactory::create_mesh_workload(
+namespace {
+
+// Per-coordinate ProgramDescriptor. Declared here, defined below create_workload_descriptor.
+tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const ReduceScatterMinimalDirectParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshCoordinate& sender_device_coord,
     const ReduceScatterMinimalDirectInputs& tensor_args,
-    tensor_return_value_t& output_tensors) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    const std::vector<Tensor>& output_tensors,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& sems,
+    bool needs_init_sync);
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor ReduceScatterMinimalDirectProgramFactory::create_workload_descriptor(
+    const ReduceScatterMinimalDirectParams& operation_attributes,
+    const ReduceScatterMinimalDirectInputs& tensor_args,
+    tensor_return_value_t& output_tensors,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
 
     auto* mesh_device = tensor_args.input_tensor.device();
     auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -196,23 +207,17 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_mesh_workload(
     // One arrival counter per SOURCE device (so every counter has exactly one sender -- an absolute wait on
     // it can never be satisfied by a different device that raced ahead), plus the reader's and writer's
     // private invocation counters. Allocate in L1_SMALL when available.
+    // Parked on the descriptor's `semaphores` slot, which keeps them alive for the cached workload's
+    // lifetime -- the kernels take their addresses as runtime args. Order is the contract in
+    // SemaphoreIndex: arrivals [0..N-1], then reader_gen, writer_gen, compute_gen, init_sync.
     bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
     auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
-    std::vector<tt::tt_metal::GlobalSemaphore> arrival_sems;
-    arrival_sems.reserve(operation_attributes.num_devices);
-    for (uint32_t s = 0; s < operation_attributes.num_devices; ++s) {
-        arrival_sems.push_back(
+    auto& sems = workload_descriptor.semaphores;
+    sems.reserve(SemaphoreIndex::count(operation_attributes.num_devices));
+    for (size_t s = 0; s < SemaphoreIndex::count(operation_attributes.num_devices); ++s) {
+        sems.push_back(
             ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
     }
-    auto reader_gen_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    auto writer_gen_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    auto compute_gen_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    // Start-barrier counter, only consumed when the writer's init sync is compiled in (below).
-    auto init_sync_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
 
     // The writer's start barrier is needed only when the op allocates a buffer a peer writes into, since
@@ -224,41 +229,32 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_mesh_workload(
     const bool needs_init_sync =
         !(tensor_args.persistent_output_tensor.has_value() && tensor_args.persistent_staging_tensor.has_value());
 
+    // One descriptor per coordinate: the program depends on the sender coordinate (device_idx, ring
+    // neighbours, per-destination hop/direction/route table), so the mesh cannot share one.
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(
-            operation_attributes,
-            coord,
-            tensor_args,
-            output_tensors,
-            arrival_sems,
-            reader_gen_sem,
-            writer_gen_sem,
-            compute_gen_sem,
-            init_sync_sem,
-            needs_init_sync);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+        workload_descriptor.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord),
+             build_program_descriptor_at(
+                 operation_attributes, coord, tensor_args, output_tensors, sems, needs_init_sync)});
     }
 
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+    return workload_descriptor;
 }
 
-ReduceScatterMinimalDirectMeshWorkloadFactory::cached_program_t
-ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
+namespace {
+
+tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const ReduceScatterMinimalDirectParams& operation_attributes,
     const ttnn::MeshCoordinate& sender_device_coord,
     const ReduceScatterMinimalDirectInputs& tensor_args,
-    const tensor_return_value_t& output_tensors,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& arrival_sems,
-    const tt::tt_metal::GlobalSemaphore& reader_gen_sem,
-    const tt::tt_metal::GlobalSemaphore& writer_gen_sem,
-    const tt::tt_metal::GlobalSemaphore& compute_gen_sem,
-    const tt::tt_metal::GlobalSemaphore& init_sync_sem,
+    const std::vector<Tensor>& output_tensors,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& sems,
     bool needs_init_sync) {
+    using SemaphoreIndex = ReduceScatterMinimalDirectProgramFactory::SemaphoreIndex;
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& output_tensor = output_tensors.at(0);
     const auto& staging = output_tensors.at(1);
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
     auto* mesh_device = input_tensor.device();
 
     const uint32_t axis = reduce_scatter_direct_active_axis(operation_attributes);
@@ -347,15 +343,14 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     for (auto [cb_id, num_pages] : std::initializer_list<std::pair<uint32_t, uint32_t>>{
              {direct_cb_send_id, 2 * tile_granularity}, {direct_cb_out_id, 2 * tile_granularity}}) {
-        tt::tt_metal::CircularBufferConfig cfg =
-            tt::tt_metal::CircularBufferConfig(num_pages * cb_page_size, {{cb_id, df}})
-                .set_page_size(cb_id, cb_page_size);
-        CreateCircularBuffer(program, worker_core_range, cfg);
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = num_pages * cb_page_size,
+            .core_ranges = worker_core_range,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_id), .data_format = df, .page_size = cb_page_size}}},
+        });
     }
 
-    tt::tt_metal::CircularBufferConfig reduce_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(cb_reduce_pages * cb_page_size, {{direct_cb_reduce_id, df}})
-            .set_page_size(direct_cb_reduce_id, cb_page_size);
     if (arrivals_in_cb) {
         TT_FATAL(
             staging.buffer()->aligned_page_size() * staging.buffer()->shard_spec().shape()[0] ==
@@ -366,9 +361,17 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
             staging.buffer()->aligned_page_size(),
             cb_reduce_pages,
             cb_page_size);
-        reduce_cb_cfg = reduce_cb_cfg.set_globally_allocated_address(*staging.buffer());
     }
-    const auto reduce_cb_handle = CreateCircularBuffer(program, worker_core_range, reduce_cb_cfg);
+    // On the aliased path the reduce CB IS this core's staging shard, so it is backed by the staging
+    // buffer (the descriptor equivalent of set_globally_allocated_address). Handing the framework the
+    // Buffer* is also what lets it re-point the CB on a cache hit when the tensor moves.
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = cb_reduce_pages * cb_page_size,
+        .core_ranges = worker_core_range,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(direct_cb_reduce_id), .data_format = df, .page_size = cb_page_size}}},
+        .buffer = arrivals_in_cb ? staging.buffer() : nullptr,
+    });
 
     // --- Kernels ---
     std::vector<uint32_t> reader_ct_args = {
@@ -404,24 +407,29 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
     std::vector<uint32_t> compute_ct_args = {
         tile_granularity, num_devices, direct_cb_reduce_id, direct_cb_out_id, parity_stride_tiles};
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/kernels/"
-        "reduce_scatter_minimal_direct_reader.cpp",
-        worker_core_range,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/kernels/"
-        "reduce_scatter_minimal_direct_writer.cpp",
-        worker_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
-    auto compute_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/kernels/"
-        "reduce_scatter_minimal_direct_compute.cpp",
-        worker_core_range,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_ct_args});
+    // Push the kernels NOW, before the per-link runtime-arg loop, so they can be referred to by stable
+    // index -- both emplace_runtime_args() and the fabric helper's ProgramDescriptor overload take a
+    // KernelHandle that indexes into desc.kernels.
+    constexpr const char* kernel_dir =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/kernels/";
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = std::string(kernel_dir) + "reduce_scatter_minimal_direct_reader.cpp",
+        .core_ranges = worker_core_range,
+        .compile_time_args = std::move(reader_ct_args),
+        .config = tt::tt_metal::ReaderConfigDescriptor{}});
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = std::string(kernel_dir) + "reduce_scatter_minimal_direct_writer.cpp",
+        .core_ranges = worker_core_range,
+        .compile_time_args = std::move(writer_ct_args),
+        .config = tt::tt_metal::WriterConfigDescriptor{}});
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = std::string(kernel_dir) + "reduce_scatter_minimal_direct_compute.cpp",
+        .core_ranges = worker_core_range,
+        .compile_time_args = std::move(compute_ct_args),
+        .config = tt::tt_metal::ComputeConfigDescriptor{}});
+    constexpr tt::tt_metal::KernelHandle reader_kernel_id = 0;
+    constexpr tt::tt_metal::KernelHandle writer_kernel_id = 1;
+    constexpr tt::tt_metal::KernelHandle compute_kernel_id = 2;
 
     // --- Destination order: farthest ring distance first, since a destination cannot start reducing until
     // its last contribution lands. Direction is whichever way round the ring is shorter (ties -> forward,
@@ -449,15 +457,14 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         const uint32_t hops = use_fwd ? fwd_hops : bwd_hops;
         // Walk `hops` steps in the chosen direction to land on device j's coordinate.
         const auto dest_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            input_tensor, sender_device_coord, use_fwd ? static_cast<int>(hops) : -static_cast<int>(hops), topology, axis);
+            input_tensor,
+            sender_device_coord,
+            use_fwd ? static_cast<int>(hops) : -static_cast<int>(hops),
+            topology,
+            axis);
         TT_FATAL(dest_coord.has_value(), "ring neighbour {} hops away must exist", hops);
         const auto dest_node = mesh_device->get_fabric_node_id(*dest_coord);
-        dests.push_back(Dest{
-            j,
-            use_fwd ? 0u : 1u,
-            hops,
-            dest_node.chip_id,
-            static_cast<uint32_t>(*dest_node.mesh_id)});
+        dests.push_back(Dest{j, use_fwd ? 0u : 1u, hops, dest_node.chip_id, static_cast<uint32_t>(*dest_node.mesh_id)});
     }
     // On a 2D fabric, WE do not get to choose the direction. The header carries an absolute route from
     // the routing table (fabric_set_unicast_route -> decode_route_to_buffer), and a packet must be handed
@@ -468,10 +475,10 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
     // computed, since 2D ignores it and 1D never reaches this block.
     if (::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config)) {
         const auto self_node = mesh_device->get_fabric_node_id(sender_device_coord);
-        const auto fwd_dir = tt::tt_fabric::pipeline_get_forwarding_direction(
-            self_node, mesh_device->get_fabric_node_id(*fwd_coord));
-        const auto bwd_dir = tt::tt_fabric::pipeline_get_forwarding_direction(
-            self_node, mesh_device->get_fabric_node_id(*bwd_coord));
+        const auto fwd_dir =
+            tt::tt_fabric::pipeline_get_forwarding_direction(self_node, mesh_device->get_fabric_node_id(*fwd_coord));
+        const auto bwd_dir =
+            tt::tt_fabric::pipeline_get_forwarding_direction(self_node, mesh_device->get_fabric_node_id(*bwd_coord));
 
         // The axis_topology we were handed is not trustworthy on its own: it binds a MESH-VIEW axis index
         // to a fabric dimension (axis 1 -> X, axis 0 -> Y), while a torus fabric config wraps a PHYSICAL
@@ -492,9 +499,8 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
                 neighbor.chip_id);
             const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(self_node, *dir);
             const auto it = neighbors.find(*neighbor.mesh_id);
-            const bool adjacent =
-                it != neighbors.end() && std::find(it->second.begin(), it->second.end(), neighbor.chip_id) !=
-                                             it->second.end();
+            const bool adjacent = it != neighbors.end() &&
+                                  std::find(it->second.begin(), it->second.end(), neighbor.chip_id) != it->second.end();
             TT_FATAL(
                 adjacent,
                 "reduce_scatter_minimal_direct: the {} ring neighbour (chip {}) is not one hop away in "
@@ -568,10 +574,15 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
     }
 
     // --- Runtime args ---
+    // Tensor base addresses are pushed as Buffer* (see the RTArgList builds below) so the framework
+    // records a BufferBinding at that position and patches it on the cache-hit fast path. Everything else
+    // here is geometry- or semaphore-derived and fixed for the cached workload's lifetime.
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-    const uint32_t input_addr = input_tensor.buffer()->address();
-    const uint32_t output_addr = output_tensor.buffer()->address();
-    const uint32_t staging_addr = staging.buffer()->address();
+    const auto& reader_gen_sem = sems[SemaphoreIndex::reader_gen(num_devices)];
+    const auto& writer_gen_sem = sems[SemaphoreIndex::writer_gen(num_devices)];
+    const auto& compute_gen_sem = sems[SemaphoreIndex::compute_gen(num_devices)];
+    const auto& init_sync_sem = sems[SemaphoreIndex::init_sync(num_devices)];
+    const auto& arrival_sems = sems;  // indexed by SOURCE device: SemaphoreIndex::arrival_base + s
 
     for (uint32_t link = 0; link < num_links; ++link) {
         const CoreCoord core = worker_cores_vec[link];
@@ -582,9 +593,13 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         // Mirror core: deterministic placement means the peer's worker `link` is at these same coords.
         const CoreCoord peer_core = mesh_device->worker_core_from_logical_core(core);
 
+        // Built as a plain vector first, then promoted, exactly as the writer below does: positions 0/1
+        // are buffer base addresses and become Buffer* bindings, everything after is a plain value.
+        // GlobalSemaphore addresses ride along as plain values -- they are workload-scoped (parked on
+        // WorkloadDescriptor::semaphores) so they do not move across cache hits and need no binding.
         std::vector<uint32_t> reader_rt = {
-            input_addr,
-            staging_addr,
+            0u,  // input base address  -- replaced by a Buffer* binding below
+            0u,  // staging base address -- replaced by a Buffer* binding below
             device_idx,
             chunk_start,
             chunk_count,
@@ -593,27 +608,37 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
             reader_gen_sem.address()};
         for (uint32_t s = 0; s < num_devices; ++s) {
             if (s != device_idx) {
-                reader_rt.push_back(arrival_sems[s].address());
+                reader_rt.push_back(arrival_sems[SemaphoreIndex::arrival_base + s].address());
             }
         }
         for (const auto& d : dests) {
             reader_rt.push_back(d.slice);
         }
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt);
+        tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.reserve(reader_rt.size());
+        reader_rt_args.push_back(input_tensor.buffer());
+        reader_rt_args.push_back(staging.buffer());
+        for (size_t i = 2; i < reader_rt.size(); ++i) {
+            reader_rt_args.push_back(reader_rt[i]);
+        }
+        desc.kernels[reader_kernel_id].emplace_runtime_args(core, reader_rt_args);
 
-        std::vector<uint32_t> compute_rt = {chunk_count, tile_count, compute_gen_sem.address()};
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, {core}, compute_rt);
+        const std::vector<uint32_t> compute_rt = {chunk_count, tile_count, compute_gen_sem.address()};
+        desc.kernels[compute_kernel_id].emplace_runtime_args(core, {compute_rt[0], compute_rt[1], compute_rt[2]});
 
+        // Built as a plain vector first: the fabric helper appends to one, and only positions 0/1 need to
+        // become Buffer* bindings, which happens in the RTArgList promotion below.
         std::vector<uint32_t> writer_rt = {
-            staging_addr,
-            output_addr,
+            0u,  // staging base address -- replaced by a Buffer* binding below
+            0u,  // output base address  -- replaced by a Buffer* binding below
             device_idx,
             chunk_start,
             chunk_count,
             tile_start,
             tile_count,
             writer_gen_sem.address(),
-            arrival_sems[device_idx].address(),  // our source slot's counter, same address on every peer
+            // our source slot's counter, same address on every peer
+            arrival_sems[SemaphoreIndex::arrival_base + device_idx].address(),
             (uint32_t)peer_core.x,
             (uint32_t)peer_core.y,
             num_connections,
@@ -648,64 +673,35 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
             dst_nodes.push_back(mesh_device->get_fabric_node_id(*bwd_coord));
             link_indices.push_back(link);
         }
+        // The helper's ProgramDescriptor overload indexes desc.kernels via the KernelHandle to add
+        // per-kernel defines, and appends the connection args (plus, on a 2D mesh, extra header words)
+        // onto writer_rt.
+        tt::tt_metal::KernelHandle writer_kernel_handle = writer_kernel_id;
         append_routing_plane_connection_manager_rt_args(
             sender_fabric_node_id,
             dst_nodes,
             link_indices,
-            program,
-            writer_kernel_id,
-            {core},
+            desc,
+            writer_kernel_handle,
+            core,
             writer_rt,
             tt::tt_fabric::FabricApiType::Linear);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt);
+
+        // Promote to an RTArgList, swapping positions 0/1 for Buffer* so the framework records their
+        // BufferBindings; every other position keeps the value computed above.
+        tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.reserve(writer_rt.size());
+        writer_rt_args.push_back(staging.buffer());
+        writer_rt_args.push_back(output_tensor.buffer());
+        for (size_t i = 2; i < writer_rt.size(); ++i) {
+            writer_rt_args.push_back(writer_rt[i]);
+        }
+        desc.kernels[writer_kernel_id].emplace_runtime_args(core, writer_rt_args);
     }
 
-    shared_variables_t shared_variables{
-        .worker_cores = worker_cores_vec,
-        .reader_kernel_id = reader_kernel_id,
-        .compute_kernel_id = compute_kernel_id,
-        .writer_kernel_id = writer_kernel_id,
-        .arrival_sems = arrival_sems,
-        .reader_gen_sem = reader_gen_sem,
-        .writer_gen_sem = writer_gen_sem,
-        .compute_gen_sem = compute_gen_sem,
-        .init_sync_sem = init_sync_sem,
-        .reduce_cb_handle = arrivals_in_cb ? std::optional{reduce_cb_handle} : std::nullopt,
-    };
-    return {std::move(program), std::move(shared_variables)};
+    return desc;
 }
 
-void ReduceScatterMinimalDirectMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const ReduceScatterMinimalDirectParams& /*operation_attributes*/,
-    const ReduceScatterMinimalDirectInputs& tensor_args,
-    tensor_return_value_t& output_tensors) {
-    const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t output_addr = output_tensors.at(0).buffer()->address();
-    const uint32_t staging_addr = output_tensors.at(1).buffer()->address();
-
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& sv = cached_workload.shared_variables.at(coordinate_range);
-        auto& reader_args_by_core = GetRuntimeArgs(program, sv.reader_kernel_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, sv.writer_kernel_id);
-
-        // On the aliased path cb_reduce lives on top of the staging buffer, so it has to follow it.
-        if (sv.reduce_cb_handle.has_value()) {
-            UpdateDynamicCircularBufferAddress(program, *sv.reduce_cb_handle, *output_tensors.at(1).buffer());
-        }
-
-        // Only the tensor addresses move. The semaphores are owned by shared_variables (their addresses are
-        // fixed for the cached program's lifetime) and the chunk partition / destination routes are
-        // geometry-derived, so both stay valid.
-        for (const auto& core : sv.worker_cores) {
-            auto& r = reader_args_by_core[core.x][core.y];
-            r[0] = input_addr;
-            r[1] = staging_addr;
-            auto& w = writer_args_by_core[core.x][core.y];
-            w[0] = staging_addr;
-            w[1] = output_addr;
-        }
-    }
-}
+}  // namespace
 
 }  // namespace ttnn::experimental::prim

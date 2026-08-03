@@ -9,6 +9,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include <utility>
 #include <vector>
@@ -41,7 +42,7 @@ struct ReduceScatterDirectGeometry {
     uint32_t stride_pages;             // input pages between the starts of consecutive runs
 };
 
-// Single source of truth for the geometry above, shared by compute_output_specs (which sizes staging
+// Single source of truth for the geometry above, shared by `compute_output_specs` (which sizes staging
 // from it) and the program factory (which wires it into the kernels), so the two can never disagree.
 ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
     const ReduceScatterMinimalDirectParams& args, const ttnn::Tensor& input_tensor, bool fp32_dest_acc_en);
@@ -75,67 +76,49 @@ uint32_t reduce_scatter_direct_num_links(const ReduceScatterMinimalDirectParams&
 std::pair<CoreRangeSet, std::vector<CoreCoord>> reduce_scatter_direct_worker_cores(
     const ReduceScatterMinimalDirectParams& args, ttnn::MeshDevice* mesh_device, uint32_t chunks_per_slice);
 
-// Direct (one-shot) reduce-scatter program factory: one MeshWorkload per participating device
-// coordinate via create_at, cached and rebound by override_runtime_arguments. Returns two tensors --
-// [0] output slice, [1] staging for the incoming contributions.
-struct ReduceScatterMinimalDirectMeshWorkloadFactory {
-    struct shared_variables_t {
-        // One worker core per link (each owns that link's fwd + bwd connection).
-        std::vector<tt::tt_metal::CoreCoord> worker_cores;
-        tt::tt_metal::KernelHandle reader_kernel_id{};
-        tt::tt_metal::KernelHandle compute_kernel_id{};
-        tt::tt_metal::KernelHandle writer_kernel_id{};
-        // Arrival counters indexed by SOURCE device: source s increments arrival_sems[s] on every peer's
-        // mirror core, so each counter has exactly one sender and an absolute wait on it cannot be
-        // satisfied by a different (raced-ahead) device. Never reset; waits target base + 1 where base is
-        // the reader's private invocation counter.
-        std::vector<tt::tt_metal::GlobalSemaphore> arrival_sems;
-        // Per-core private invocation counters (one per kernel). Each is bumped once per program launch by
-        // its owner, so all three always read the same invocation index without any cross-kernel
-        // handshake -- that index drives the staging double-buffer parity. The compute one is only read on
-        // the sharded path (where compute must pick a parity half itself); its body runs on all three
-        // TRISCs, so exactly one of them (PACK) does the increment.
-        tt::tt_metal::GlobalSemaphore reader_gen_sem;
-        tt::tt_metal::GlobalSemaphore writer_gen_sem;
-        tt::tt_metal::GlobalSemaphore compute_gen_sem;
-        // Writer start-barrier counter: every peer's mirror core increments it once per invocation, and
-        // the writer holds its sends until all N-1 have. Only read when the writer's init sync is
-        // compiled in (op-allocated buffers); held here so its address stays valid either way.
-        tt::tt_metal::GlobalSemaphore init_sync_sem;
-        // Set only on the sharded path, where cb_reduce is globally allocated on top of the staging
-        // tensor and so has to be rebound whenever that buffer moves.
-        std::optional<tt::tt_metal::CBHandle> reduce_cb_handle;
-    };
-
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+// Direct (one-shot) reduce-scatter program factory. Declarative workload-scoped form: the framework
+// builds and caches the MeshWorkload from the descriptor we return. Returns two tensors -- [0] output
+// slice, [1] staging for the incoming contributions.
+//
+// create_workload_descriptor() runs ONCE per workload (cache miss):
+//   1. Allocates the GlobalSemaphores and parks them on WorkloadDescriptor::semaphores, which keeps them
+//      alive for the cached workload's lifetime -- every kernel takes their addresses as runtime args.
+//      Order is fixed and read back by index: [0 .. num_devices-1] the per-SOURCE arrival counters, then
+//      reader_gen, writer_gen, compute_gen, init_sync. See semaphore_index below.
+//        - arrival counters are indexed by SOURCE device, so each has exactly one sender and an absolute
+//          wait on it cannot be satisfied by a different (raced-ahead) device. Never reset.
+//        - the three *_gen counters are per-kernel private invocation counters, each bumped once per
+//          launch by its owner, so all three read the same invocation index with no cross-kernel
+//          handshake -- that index drives the staging double-buffer parity. (compute's body runs on all
+//          three TRISCs, so exactly one of them (PACK) does the increment.)
+//        - init_sync is the writer's start barrier, only read when that barrier is compiled in.
+//   2. Runs the distributed Synchronize so every device sees the semaphores before any program launches.
+//   3. Emits ONE ProgramDescriptor per mesh coordinate: the program depends on the sender coordinate
+//      (device_idx, ring neighbours, and the per-destination hop/direction/route table), so the mesh
+//      cannot share a single descriptor.
+//
+// Buffer base addresses are bound as Buffer* through emplace_runtime_args(), and the aliased reduce CB
+// via CBDescriptor::buffer, so the framework patches them on the cache-hit fast path -- no manual
+// override_runtime_arguments() hook.
+struct ReduceScatterMinimalDirectProgramFactory {
     using tensor_return_value_t = std::vector<Tensor>;
 
-    static cached_mesh_workload_t create_mesh_workload(
-        const ReduceScatterMinimalDirectParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const ReduceScatterMinimalDirectInputs& tensor_args,
-        tensor_return_value_t& output_tensors);
+    // Layout of WorkloadDescriptor::semaphores. Kept next to the factory so the producer and every
+    // consumer index it the same way.
+    struct SemaphoreIndex {
+        static constexpr size_t arrival_base = 0;  // + source device index
+        static size_t reader_gen(uint32_t num_devices) { return num_devices; }
+        static size_t writer_gen(uint32_t num_devices) { return num_devices + 1; }
+        static size_t compute_gen(uint32_t num_devices) { return num_devices + 2; }
+        static size_t init_sync(uint32_t num_devices) { return num_devices + 3; }
+        static size_t count(uint32_t num_devices) { return num_devices + 4; }
+    };
 
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const ReduceScatterMinimalDirectParams& operation_attributes,
         const ReduceScatterMinimalDirectInputs& tensor_args,
-        tensor_return_value_t& output_tensors);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const ReduceScatterMinimalDirectParams& operation_attributes,
-        const ttnn::MeshCoordinate& sender_device_coord,
-        const ReduceScatterMinimalDirectInputs& tensor_args,
-        const tensor_return_value_t& output_tensors,
-        const std::vector<tt::tt_metal::GlobalSemaphore>& arrival_sems,
-        const tt::tt_metal::GlobalSemaphore& reader_gen_sem,
-        const tt::tt_metal::GlobalSemaphore& writer_gen_sem,
-        const tt::tt_metal::GlobalSemaphore& compute_gen_sem,
-        const tt::tt_metal::GlobalSemaphore& init_sync_sem,
-        bool needs_init_sync);
+        tensor_return_value_t& output_tensors,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim
