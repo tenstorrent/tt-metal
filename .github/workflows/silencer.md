@@ -92,7 +92,7 @@ safe-outputs:
   dispatch-workflow:
     # Lets Silencer trigger a fresh `workflow_dispatch` run of the same tracked workflow
     # it just fixed, aimed at its own PR branch (see *Validating changes via CI*).
-    # Requires gh-aw >= v0.84.2 — the per-call `ref` override landed in github/gh-aw#49408.
+    # The per-call `ref` override this relies on landed in github/gh-aw#49408.
     #
     # Unlike the *runtime* scan-target list — which is deliberately read out of
     # `aggregate-workflow-data.yaml` on every run so there is "no parallel list to drift"
@@ -190,9 +190,9 @@ safe-outputs:
 source: githubnext/agentics/workflows/ci-doctor.md@497230d3867fe453aae74b15d06178d45a39fcce
 engine: copilot
 
-# Required by `private-to-public-flows: allow`, which strict mode rejects — and as of
-# v0.84.2 that is still the *only* reason: test-compiling this file with `strict: true`
-# reports `tools.github.private-to-public-flows` as the single violation, so adding
+# Required by `private-to-public-flows: allow`, which strict mode rejects — and that is
+# still the *only* reason: test-compiling this file with `strict: true` reports
+# `tools.github.private-to-public-flows` as the single violation, so adding
 # `dispatch-workflow` below cost no additional strict property. Scoped to this workflow
 # only (`strict` defaults to true; the other agentic workflows are unaffected). This
 # drops compile-time enforcement, not the properties themselves — Silencer still
