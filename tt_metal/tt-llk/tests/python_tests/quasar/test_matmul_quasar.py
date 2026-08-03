@@ -31,10 +31,9 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
@@ -44,7 +43,6 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
-    PERF_RUN_TYPE,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -330,20 +328,16 @@ def test_matmul(
         "disable_format_inference": disable_format_inference,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    # The shared source keys off PERF_RUN_TYPE. PerfConfig injects it per run type;
-    # the functional path runs the plain L1-to-L1 kernel, so supply it explicitly.
-    configuration = TestConfig(
-        boot_mode=boot_mode,
-        **{
-            **test_config_kwargs,
-            "templates": templates + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

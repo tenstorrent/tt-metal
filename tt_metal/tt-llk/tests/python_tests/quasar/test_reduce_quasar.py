@@ -25,10 +25,9 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -38,10 +37,10 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    generate_input_dim,
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
@@ -257,6 +256,11 @@ def test_reduce_quasar(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=tile_dimensions,
+            ),
             TILE_COUNT(tile_cnt),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
@@ -288,18 +292,15 @@ def test_reduce_quasar(
         ),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
@@ -419,6 +420,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
@@ -445,18 +447,15 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         "disable_format_inference": False,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

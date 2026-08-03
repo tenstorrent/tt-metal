@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import PERF_RUN_TYPES_QUASAR, EltwiseBinaryReuseDestType
+from helpers.llk_params import (
+    PERF_LOOP_FACTOR_QUASAR,
+    PERF_RUN_TYPES_QUASAR,
+    EltwiseBinaryReuseDestType,
+)
 from helpers.param_config import parametrize, runtime
 from quasar.test_eltwise_binary_reuse_dest_quasar import (
     INPUT_DIMENSIONS,
@@ -33,7 +37,7 @@ from quasar.test_eltwise_binary_reuse_dest_quasar import (
     input_dimensions=runtime(INPUT_DIMENSIONS),
     output_dimensions=runtime(valid_output_dimensions),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_eltwise_binary_reuse_dest_quasar(

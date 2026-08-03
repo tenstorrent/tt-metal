@@ -28,10 +28,10 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
@@ -40,9 +40,9 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.utils import passed_test
@@ -189,6 +189,7 @@ def test_eltwise_binary_broadcast_quasar(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(4),
             TEST_FACE_DIMS(),
@@ -210,19 +211,16 @@ def test_eltwise_binary_broadcast_quasar(
         "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-            "boot_mode": boot_mode,
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

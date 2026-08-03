@@ -27,10 +27,10 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -42,7 +42,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
-    PERF_RUN_TYPE,
     REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
     generate_input_dim,
@@ -373,19 +372,16 @@ def test_eltwise_binary_reuse_dest_quasar(
         "disable_format_inference": disable_format_inference,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "boot_mode": boot_mode,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     # Verify results match golden

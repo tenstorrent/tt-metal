@@ -27,12 +27,12 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
     generate_stimuli,
 )
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -40,7 +40,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
-    PERF_RUN_TYPE,
     RELU_CONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -341,26 +340,22 @@ def test_pack_quasar(
         "disable_format_inference": (formats.input_format.is_mx_format()),
     }
 
-    if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
-        configuration.run(perf_report)
-        return
-
     # Single output MX quantization, after relu — matches HW's pack-time
     # block-scale derivation from post-relu values.
-    if formats.output_format.is_mx_format():
+    if not is_perf and formats.output_format.is_mx_format():
         golden_tensor = quantize_mx_tensor_chunked(
             golden_tensor.to(torch.bfloat16), formats.output_format
         )
 
-    configuration = TestConfig(
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
         boot_mode=boot_mode,
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 

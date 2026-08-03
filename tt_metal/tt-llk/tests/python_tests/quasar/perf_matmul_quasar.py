@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import PERF_RUN_TYPES_QUASAR, Transpose
+from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR, Transpose
 from helpers.param_config import parametrize
 from quasar.test_matmul_quasar import (
     MATMUL_FORMAT,
@@ -36,7 +36,7 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
     enable_direct_indexing=matmul_enable_direct_indexing,
     transpose=[Transpose.No],
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_matmul_quasar(
@@ -64,8 +64,8 @@ def test_perf_matmul_quasar(
         register_format_hint,
         enable_direct_indexing,
         transpose,
-        run_types,
-        loop_factor,
+        run_types=run_types,
+        loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
     )

@@ -24,10 +24,10 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
@@ -38,7 +38,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -233,19 +232,15 @@ def test_unary_broadcast_quasar(
         "dest_acc": dest_acc,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
-
-    configuration = TestConfig(
-        boot_mode=boot_mode,
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
 
     res_from_L1 = configuration.run().result
 

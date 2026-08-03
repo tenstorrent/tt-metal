@@ -3,7 +3,12 @@
 
 import pytest
 from helpers.constraints import get_valid_dest_accumulation_modes
-from helpers.llk_params import PERF_RUN_TYPES_QUASAR, BroadcastType, MathOperation
+from helpers.llk_params import (
+    PERF_LOOP_FACTOR_QUASAR,
+    PERF_RUN_TYPES_QUASAR,
+    BroadcastType,
+    MathOperation,
+)
 from helpers.param_config import parametrize
 from quasar.test_eltwise_binary_broadcast_quasar import (
     BINARY_BROADCAST_FORMATS,
@@ -35,7 +40,7 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
         dest_acc, dest_sync_mode, is_perf=True
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_eltwise_binary_broadcast_quasar(
