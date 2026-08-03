@@ -16,6 +16,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -27,8 +28,9 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
 SERVICE_ID = "ci_ds_prefill"
 TABLE_PATH = "/tmp/ci_prefill_kv_table.pb"  # IPC rendezvous files; cleaned up around each scenario
 DEVMAP_PATH = "/tmp/ci_prefill_kv_devmap.json"
-# Logs live under generated/test_reports/ so the workflow's upload-artifact-with-job-uuid step
-# (path /work/generated/test_reports/, prefix "test_reports_") uploads them as a downloadable artifact.
+# Full logs are kept under generated/test_reports/ on the pod. NOTE: no workflow step uploads that
+# directory today (blaze-models-prefill-tests-impl.yaml only uploads PREFILL_SUMMARIES/**/*.md), so
+# in CI these files die with the pod -- what survives is the live stream (see _ChildStream below).
 _REPORT_DIR = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), "generated", "test_reports")
 
 _RUNNER_MODULE = "models.demos.common.prefill.runners.prefill_runner"
@@ -37,7 +39,10 @@ _PRODUCER_MODULE = "models.demos.common.prefill.runners.prefill_producer"
 _READY_TIMEOUT_S = int(os.environ.get("PREFILL_CI_RUNNER_READY_TIMEOUT_S", "1200"))  # 20 min for load + JIT
 _PRODUCER_TIMEOUT_S = int(os.environ.get("PREFILL_CI_PRODUCER_TIMEOUT_S", "900"))
 _LOG_TAIL_LINES = int(os.environ.get("PREFILL_CI_LOG_TAIL_LINES", "200"))
+_STREAM_LOGS = os.environ.get("PREFILL_CI_STREAM_LOGS", "1") == "1"  # live child output; see _ChildStream
+_HEARTBEAT_S = float(os.environ.get("PREFILL_CI_HEARTBEAT_S", "30"))
 _DESCRIPTOR = f"/dev/shm/tt_h2d_stream_service_{SERVICE_ID}.bin"
+_T0 = time.monotonic()
 
 # --- launch mode: standard (bare pytest) vs CI (under an MPI launcher) --------------------------
 # This test runs in one of two ways, and ONLY the child-process environment differs between them:
@@ -186,8 +191,8 @@ def _tail(path: str, n: int = _LOG_TAIL_LINES) -> str:
 
 def _emit_log_group(title: str, path: str, n: int = _LOG_TAIL_LINES) -> None:
     """Echo the tail of `path` to stdout so it shows inline in the GitHub Actions step log, wrapped in
-    a collapsible ::group:: when running under Actions. The FULL file is uploaded as an artifact
-    (generated/test_reports/), so this is only the bounded inline view."""
+    a collapsible ::group:: when running under Actions. Post-mortem fallback for PREFILL_CI_STREAM_LOGS=0;
+    with streaming on (the default) the whole log is already in the step log, so this is skipped."""
     if not os.path.exists(path):
         return
     in_gha = os.environ.get("GITHUB_ACTIONS") == "true"
@@ -195,6 +200,132 @@ def _emit_log_group(title: str, path: str, n: int = _LOG_TAIL_LINES) -> None:
     print(_tail(path, n), flush=True)
     if in_gha:
         print("::endgroup::", flush=True)
+
+
+# --- live child output --------------------------------------------------------------------------
+# Both children are launched detached with their output going into a file, so in CI the runner used
+# to be invisible until the post-mortem tail in `finally` -- and a step killed by the workflow's
+# `timeout-minutes` never reaches that tail, nor is generated/test_reports/ uploaded anywhere, so a
+# timed-out run yielded NOTHING about what the runner was doing. Each child's output is now pumped
+# onto this process's stdout line by line as it is produced (pytest.ini's addopts carry -s, so
+# nothing here is captured or deferred), which puts it in the CI step log while the test is still
+# running: the runner and the producer show up interleaved and tagged, and whatever was printed
+# before a kill survives the kill. Set PREFILL_CI_STREAM_LOGS=0 for the old file-only behaviour.
+def _elapsed() -> str:
+    return f"+{time.monotonic() - _T0:7.1f}s"
+
+
+class _ChildStream:
+    """One child's merged stdout+stderr, pumped by a daemon thread into `log_path` AND onto our own
+    stdout, tagged with `tag` and the elapsed test time.
+
+    The pump being a thread is what makes the runner visible while the main thread sits blocked in
+    the producer's wait: both children stream concurrently, and the tags tell them apart.
+    """
+
+    def __init__(self, tag: str, log_path: str):
+        self.tag = tag
+        self.log_path = log_path
+        self.lines = 0
+        self.last_output = time.monotonic()
+        self._thread = None
+
+    def start(self, proc: subprocess.Popen) -> "_ChildStream":
+        self._thread = threading.Thread(target=self._pump, args=(proc,), name=f"stream-{self.tag}", daemon=True)
+        self._thread.start()
+        return self
+
+    def _pump(self, proc: subprocess.Popen) -> None:
+        try:
+            log = open(self.log_path, "w", buffering=1)  # line-buffered, so the tail survives a SIGKILL
+        except OSError:
+            log = None
+        try:
+            for line in proc.stdout:  # text mode, line at a time; ends at child EOF
+                self.lines += 1
+                self.last_output = time.monotonic()
+                # File and stdout fail INDEPENDENTLY on purpose. Sharing one try meant that once
+                # log.write() started failing (a full report volume, say), it raised before every
+                # later print() and silently took the live stream with it -- and the step log is
+                # exactly the view you still have when storage is the thing that broke. Neither may
+                # stop the drain either: the child blocks as soon as the 64K pipe fills.
+                if log is not None:
+                    try:
+                        log.write(line)
+                    except Exception:
+                        with contextlib.suppress(Exception):
+                            log.close()
+                        log = None  # a broken handle is dropped, not retried once per remaining line
+                        with contextlib.suppress(Exception):
+                            print(f"[{self.tag}] file log stopped ({self.log_path}); stream continues", flush=True)
+                if _STREAM_LOGS:
+                    with contextlib.suppress(Exception):
+                        # Single write: a streamed line can't tear against the main thread's output.
+                        print(f"[{self.tag} {_elapsed()}] {line.rstrip()}\n", end="", flush=True)
+        except Exception:
+            # Same reason: whatever went wrong reading the pipe, keep emptying it so that a child
+            # holding the mesh can never wedge on a full pipe. The log/stream just stops here.
+            with contextlib.suppress(Exception):
+                while proc.stdout.read(65536):
+                    pass
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdout.close()
+            if log is not None:
+                with contextlib.suppress(Exception):
+                    log.close()
+
+    def status(self) -> str:
+        return f"{self.tag}: {self.lines} lines, last output {time.monotonic() - self.last_output:.0f}s ago"
+
+    def finish(self, timeout: float = 30.0) -> None:
+        """Let the pump drain what is left in the pipe after the child exits, so the log is whole."""
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+
+def _spawn(module: str, env: dict, stream: _ChildStream) -> subprocess.Popen:
+    """Launch a child with its output piped into `stream`. `-u` stops the child block-buffering 8K at
+    a time, which is what makes the stream live rather than arriving in bursts."""
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "-m", module],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",  # device logs are not guaranteed UTF-8; a decode error must not stop the pump
+        bufsize=1,
+    )
+    stream.start(proc)
+    return proc
+
+
+@contextlib.contextmanager
+def _heartbeat(note):
+    """Print `note()` every _HEARTBEAT_S for as long as the body runs, so a long wait can be told
+    apart from a hang. The runner logs only twice between launch and readiness (its banner, then the
+    descriptor), so the readiness wait is otherwise minutes of silence with the model load in it."""
+    stop = threading.Event()
+
+    def _beat() -> None:
+        while not stop.wait(_HEARTBEAT_S):
+            print(f"[e2e {_elapsed()}] {note()}", flush=True)
+
+    thread = threading.Thread(target=_beat, name="e2e-heartbeat", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+
+
+def _readiness_gates() -> str:
+    """Which of the three files the runner publishes to signal 'serving' are there yet."""
+    return " ".join(
+        f"{name}={'ok' if os.path.exists(path) else 'pending'}"
+        for name, path in (("descriptor", _DESCRIPTOR), ("kv_table", TABLE_PATH), ("device_map", DEVMAP_PATH))
+    )
 
 
 @contextlib.contextmanager
@@ -214,29 +345,42 @@ def _running_runner(tag: str, num_users: int, max_seq_len: int, **extra):
         )
     else:
         print("[producer-runner-e2e] launch mode=standard (bare pytest; children inherit env)", flush=True)
-    with open(log_path, "w") as log:
-        proc = subprocess.Popen([sys.executable, "-m", _RUNNER_MODULE], env=env, stdout=log, stderr=subprocess.STDOUT)
+    stream = _ChildStream("runner", log_path)
+    proc = _spawn(_RUNNER_MODULE, env, stream)
+    print(f"[e2e {_elapsed()}] runner [{tag}] launched (pid={proc.pid}); its output follows, tagged", flush=True)
     try:
         deadline = time.monotonic() + _READY_TIMEOUT_S
-        while not (os.path.exists(_DESCRIPTOR) and os.path.exists(TABLE_PATH) and os.path.exists(DEVMAP_PATH)):
-            if proc.poll() is not None:
-                raise RuntimeError(
-                    f"runner [{tag}] exited early (rc={proc.returncode}) during startup:\n{_tail(log_path)}"
-                )
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"runner [{tag}] not ready within {_READY_TIMEOUT_S}s:\n{_tail(log_path)}")
-            time.sleep(2.0)
-        yield log_path
+        with _heartbeat(lambda: f"runner [{tag}] not ready yet: {_readiness_gates()} | {stream.status()}"):
+            while not (os.path.exists(_DESCRIPTOR) and os.path.exists(TABLE_PATH) and os.path.exists(DEVMAP_PATH)):
+                if proc.poll() is not None:
+                    stream.finish()
+                    raise RuntimeError(
+                        f"runner [{tag}] exited early (rc={proc.returncode}) during startup:\n{_tail(log_path)}"
+                    )
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"runner [{tag}] not ready within {_READY_TIMEOUT_S}s:\n{_tail(log_path)}")
+                time.sleep(2.0)
+        print(f"[e2e {_elapsed()}] runner [{tag}] ready ({_readiness_gates()}); starting producer", flush=True)
+        yield stream
     finally:
-        if proc.poll() is None:
+        died_rc = proc.poll()  # not None => the runner exited on its OWN, before our teardown signal
+        if died_rc is None:
             proc.send_signal(signal.SIGINT)  # graceful; SIGKILL is the hard fallback
             try:
                 proc.wait(timeout=120)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=30)
-        _emit_log_group(f"runner log [{tag}]", log_path)  # inline tail; the artifact has the full log
+        stream.finish()
+        if not _STREAM_LOGS:  # otherwise it was already streamed live, line by line
+            _emit_log_group(f"runner log [{tag}]", log_path)
         _cleanup_ipc()
+        # A runner that died mid-run is a broken run, not a passing one, and nothing else makes the test
+        # red: the producer reads KV that is already in DRAM, PCCs it, and exits 0. Only a NONZERO
+        # self-exit counts, since with PREFILL_SEND_SHUTDOWN=1 the runner is *meant* to drain and exit 0;
+        # and only with no exception in flight, so a real failure from the body is never masked by this.
+        if died_rc not in (None, 0) and sys.exc_info()[0] is None:
+            raise RuntimeError(f"runner [{tag}] died mid-run (rc={died_rc}); results are not trustworthy")
 
 
 def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str, model: str) -> None:
@@ -268,22 +412,40 @@ def test_producer_runner_pcc(scenario, tmp_path):
             trace_dir = str(tmp_path / "prompt_trace")
             _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"], model)
         trace_env["PREFILL_TRACE_DIR"] = trace_dir
-    with _running_runner(scenario, sc["users"], sc["max_seq_len"], **trace_env) as runner_log:
+    with _running_runner(scenario, sc["users"], sc["max_seq_len"], **trace_env) as runner_stream:
         env = _transport_env(
             sc["users"], sc["max_seq_len"], PREFILL_PRODUCER_CHECK_PCC="1", **trace_env, **sc["producer"]
         )
+        producer_stream = _ChildStream("producer", prod_log)
+
+        def _both_running() -> str:
+            return f"producer [{scenario}] running | {producer_stream.status()} | {runner_stream.status()}"
+
+        producer = None  # so the finally can tell "never spawned" from "spawned and still alive"
         try:
-            with open(prod_log, "w") as f:
-                result = subprocess.run(
-                    [sys.executable, "-m", _PRODUCER_MODULE],
-                    env=env,
-                    stdout=f,
-                    stderr=subprocess.STDOUT,
-                    timeout=_PRODUCER_TIMEOUT_S,
-                )
+            producer = _spawn(_PRODUCER_MODULE, env, producer_stream)
+            print(f"[e2e {_elapsed()}] producer [{scenario}] launched (pid={producer.pid})", flush=True)
+            with _heartbeat(_both_running):
+                returncode = producer.wait(timeout=_PRODUCER_TIMEOUT_S)  # raises TimeoutExpired
         finally:
-            _emit_log_group(f"producer log [{scenario}]", prod_log)  # inline tail; the artifact has the full log
-        assert result.returncode == 0, (
-            f"producer scenario {scenario!r} failed (rc={result.returncode}; PCC below threshold or error). "
-            f"See the grouped producer log above and the test_reports_* artifact. Runner tail:\n{_tail(runner_log)}"
+            # Reap on EVERY exit where the producer is still alive, not just our own timeout: a
+            # pytest-timeout signal or a Ctrl-C would otherwise leave it running, holding the transport
+            # into the next scenario. subprocess.run() guaranteed this (bare `except: kill`) and the
+            # rewrite has to as well. Kill BEFORE draining -- with a live pipe the pump is still blocked
+            # in its read, so finish() would burn its whole join timeout before we got here.
+            if producer is not None and producer.poll() is None:
+                producer.kill()
+                with contextlib.suppress(Exception):
+                    producer.wait(timeout=30)
+            producer_stream.finish()
+            if not _STREAM_LOGS:  # otherwise it was already streamed live, line by line
+                _emit_log_group(f"producer log [{scenario}]", prod_log)
+        assert returncode == 0, (
+            f"producer scenario {scenario!r} failed (rc={returncode}; PCC below threshold or error). "
+            f"See the [producer]-tagged output above in this step log."
+            # The runner tail is appended ONLY when the live stream is off. pytest renders an assertion
+            # message three times on failure -- the ::error annotation, the FAILURES section, and (via
+            # -rA in pytest.ini) the short test summary -- so with streaming on, a 200-line tail that is
+            # already in the log verbatim would land in it four times over, ~800 lines of pure noise.
+            + ("" if _STREAM_LOGS else f" Runner tail:\n{_tail(runner_stream.log_path)}")
         )

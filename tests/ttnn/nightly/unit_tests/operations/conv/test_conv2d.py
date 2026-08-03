@@ -652,6 +652,33 @@ def test_conv_features_multi_device(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_packer_l1_acc_untilize_activation_without_bias(device, torch_tensor_map):
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        2,
+        128,
+        128,
+        32,
+        32,
+        3,
+        3,
+        1,
+        1,
+        (1, 1),
+        None,
+        shard_layout=BS,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        has_bias=False,
+        packer_l1_acc=True,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [2])
 @pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize(
@@ -828,6 +855,14 @@ def test_conv_dram(
 
     if input_channels > 1024 and input_dtype == ttnn.bfloat8_b:
         pytest.skip("Skipping tests with large accumulation due to bfloat8 accuracy issues.")
+
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip(
+            "Row-major DRAM auto-slicing underestimates peak L1 for simultaneous interleaved-to-row-major "
+            "untilize staging buffers and can select an oversized slice; tiled DRAM-slicing coverage remains "
+            "enabled. See https://github.com/tenstorrent/tt-metal/issues/51672"
+        )
+
     batch_size = 1
     config = {}
     config["act_block_h"] = act_block_h_override

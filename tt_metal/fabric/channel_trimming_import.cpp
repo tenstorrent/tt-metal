@@ -59,8 +59,11 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info_impl(
 
     Vc0TrimFastPathInfo info{};
 
-    const std::size_t vc0_width = std::min<std::size_t>(actual_sender_channels_vc0, 8u * sizeof(uint16_t));
-    const uint16_t vc0_mask = vc0_width == 0 ? 0 : static_cast<uint16_t>((1u << vc0_width) - 1u);
+    const std::size_t vc0_mask_width =
+        std::min<std::size_t>(actual_sender_channels_vc0, std::numeric_limits<uint16_t>::digits);
+    const std::size_t packet_size_scan_width =
+        std::min(vc0_mask_width, entry.sender_channel_max_packet_size_seen_bytes_by_vc.size());
+    const uint16_t vc0_mask = vc0_mask_width == 0 ? 0 : static_cast<uint16_t>((1u << vc0_mask_width) - 1u);
     const uint16_t vc0_sender_mask = entry.sender_channel_used_bitfield_by_vc & vc0_mask;
     const bool vc0_sender_idle = vc0_sender_mask == 0;
     const bool vc0_worker_only = vc0_sender_mask == 0x1u;
@@ -73,6 +76,17 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info_impl(
     info.terminal_only_nonforwarding =
         vc0_sender_idle && vc0_receiver_observed_traffic && !vc0_has_downstream_router_forwarding;
     info.terminal_or_source_only = (vc0_sender_idle || vc0_worker_only) && vc0_has_no_downstream_forwarding;
+
+    uint16_t max_packet_size_bytes = 0;
+    for (std::size_t channel = 0; channel < packet_size_scan_width; ++channel) {
+        if ((vc0_sender_mask & (1u << channel)) != 0) {
+            max_packet_size_bytes =
+                std::max(max_packet_size_bytes, entry.sender_channel_max_packet_size_seen_bytes_by_vc[channel]);
+        }
+    }
+    if (max_packet_size_bytes != 0) {
+        info.local_sender_max_packet_size_bytes = max_packet_size_bytes;
+    }
 
     return info;
 }
@@ -149,6 +163,58 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info(
     std::size_t actual_sender_channels_vc0,
     const ChannelTrimmingGlobalOverrides& global_overrides) {
     return try_derive_vc0_trim_fast_path_info_impl(entry, actual_sender_channels_vc0, global_overrides);
+}
+
+bool vc0_speedy_path_enabled(
+    std::size_t actual_sender_channels_vc0, bool deadlock_avoidance_enabled, const Vc0TrimFastPathInfo& info) {
+    return (actual_sender_channels_vc0 == 1 && !deadlock_avoidance_enabled) || info.worker_only_nonforwarding ||
+           info.enable_terminal_speedy_rx;
+}
+
+void apply_vc0_trim_fast_path_peer_info(
+    Vc0TrimFastPathInfo& local_info, const Vc0TrimFastPathInfo& peer_info, bool allow_terminal_speedy_rx) {
+    local_info.peer_sender_max_packet_size_bytes = peer_info.local_sender_max_packet_size_bytes;
+    local_info.enable_terminal_speedy_rx =
+        allow_terminal_speedy_rx && local_info.terminal_only_nonforwarding && peer_info.worker_only_nonforwarding;
+}
+
+uint32_t limit_credit_amortization_frequency_by_packet_size(
+    uint32_t default_frequency,
+    uint32_t reference_packet_size_bytes,
+    std::optional<uint16_t> max_packet_size_bytes,
+    bool log_missing_packet_size_metadata) {
+    if (default_frequency == 0 || reference_packet_size_bytes == 0) {
+        return default_frequency;
+    }
+    if (!max_packet_size_bytes.has_value() || *max_packet_size_bytes == 0) {
+        if (log_missing_packet_size_metadata && default_frequency != 1) {
+            log_debug(
+                tt::LogFabric,
+                "Channel trimming: limiting credit amortization frequency from {} to 1 because packet-size metadata "
+                "is unavailable",
+                default_frequency);
+        }
+        return 1;
+    }
+    if (*max_packet_size_bytes <= reference_packet_size_bytes) {
+        return default_frequency;
+    }
+
+    const uint64_t reference_batch_size_bytes = static_cast<uint64_t>(default_frequency) * reference_packet_size_bytes;
+    const uint32_t packet_limited_frequency =
+        static_cast<uint32_t>(reference_batch_size_bytes / *max_packet_size_bytes);
+    const uint32_t limited_frequency = std::max<uint32_t>(std::min(default_frequency, packet_limited_frequency), 1);
+    if (limited_frequency != default_frequency) {
+        log_debug(
+            tt::LogFabric,
+            "Channel trimming: limiting credit amortization frequency from {} to {} for observed packet size {} bytes "
+            "against reference packet size {} bytes",
+            default_frequency,
+            limited_frequency,
+            *max_packet_size_bytes,
+            reference_packet_size_bytes);
+    }
+    return limited_frequency;
 }
 
 ChannelTrimmingOverrideMap load_channel_trimming_overrides(const std::string& yaml_path) {

@@ -184,6 +184,91 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
 }
 
+TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateDimensions) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: {
+            dims: [ 2, 4 ]
+            dim_types: [ RING, RING ]
+          }
+          channels: { count: 1 }
+          host_topology: { dims: [ 2, 4 ] }
+        }
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto& instance = desc.get_instance(desc.instances_by_name("M0").at(0));
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc), FabricType::TORUS_XY);
+}
+
+TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateSwitchDimensions) {
+    const std::string text_proto = R"proto(
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: {
+            dims: [ 2, 4 ]
+            dim_types: [ RING, RING ]
+          }
+          channels: { count: 1 }
+        }
+        top_level_instance: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto& instance = desc.get_instance(desc.instances_by_name("SW0").at(0));
+    const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(switch_desc), FabricType::TORUS_XY);
+}
+
+TEST(MeshGraphDescriptorTests, CollapsedTorusSwitchRetainsMeshDirectionsAndEdgePorts) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 1 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: {
+            dims: [ 2, 4 ]
+            dim_types: [ RING, RING ]
+          }
+          channels: { count: 1 }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+    const auto test_file = std::filesystem::temp_directory_path() / "test_collapsed_torus_switch.textproto";
+    {
+        std::ofstream file(test_file);
+        file << text_proto;
+    }
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::T3K, test_file.string());
+    std::filesystem::remove(test_file);
+
+    const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(0);
+    EXPECT_EQ(connectivity.at(0).at(4).port_direction, RoutingDirection::S);
+    EXPECT_EQ(connectivity.at(4).at(0).port_direction, RoutingDirection::N);
+
+    const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(0);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 4);
+}
+
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoFile) {
     const std::filesystem::path text_proto_file_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";
