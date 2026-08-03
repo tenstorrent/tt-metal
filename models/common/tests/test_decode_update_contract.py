@@ -59,8 +59,8 @@ def test_sampling_update_commands_are_required_and_have_no_legacy_alias():
 
 
 def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
-    from models.demos.qwen25_vl.tt.generator import Generator as Qwen25Generator
     from models.demos.qwen3_vl.tt.generator import Generator as Qwen3Generator
+    from models.demos.qwen25_vl.tt.generator import Generator as Qwen25Generator
 
     for generator_cls in (Qwen25Generator, Qwen3Generator):
         generator = SimpleNamespace(
@@ -92,8 +92,7 @@ def test_shared_generator_routes_slot_remap_to_exactly_one_sampling_owner():
             read_decode_output=lambda output: events.append("read") or output,
             process_decode_output_host=lambda output, **kwargs: (_ for _ in ()).throw(RuntimeError("readback"))
             if fail_readback
-            else events.append("process")
-            or output,
+            else events.append("process") or output,
             _apply_sampling_slot_remap=lambda remap: events.append(("host-remap", remap)),
         )
 
