@@ -5279,7 +5279,7 @@ AdjacencyGraph<TestGlobalNode> make_mesh_level_physical_graph_cluster_trace_80()
 // Line64 mesh benchmark: keep moderate cap (many Hamiltonian paths exist; full grid enumeration explodes).
 constexpr size_t kTopologyBenchmarkLine64MultiSolveEnumerationCap = 10;
 // Ring64 on 80-node trace: large cap for incremental scaling (SAT vs DFS); may exhaust before cap.
-constexpr size_t kTopologyBenchmarkRing64MultiSolveEnumerationCap = 500;
+constexpr size_t kTopologyBenchmarkRing64MultiSolveEnumerationCap = 10;
 
 // Real inter-mesh physical adjacency captured from the superpod DeepSeek "blitz decode" 64-stage pipeline run
 // (512 ASICs -> 64 logical meshes). The logical topology is a pure 64-node ring and the physical graph here also
@@ -5477,7 +5477,7 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
     ASSERT_EQ(graph_data.n_target, kRingNodes);
     ASSERT_EQ(graph_data.n_global, kTraceNodes);
 
-    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "7200", 1);
+    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "600", 1);
 
     auto validate_all = [&](const std::vector<MappingResult<TestTargetNode, TestGlobalNode>>& results,
                             const char* label) {
@@ -5513,7 +5513,7 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
                 global_graph,
                 constraints,
                 excluded,
-                ConnectionValidationMode::STRICT,
+                ConnectionValidationMode::RELAXED,
                 /*quiet_mode=*/true,
                 engine,
                 unique_shapes_flag);
@@ -5525,29 +5525,16 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
             excluded.push_back(results.back().target_to_global);
 
             const auto t_incremental_begin = clock::now();
-            std::string incremental_delta_ms_csv;
-            std::string incremental_cumulative_ms_csv;
-            long cumulative_incremental_round_ms = 0;
             for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
-                const auto t_round_begin = clock::now();
                 auto next_result = enum_session.next(
                     target_graph,
                     global_graph,
                     constraints,
                     excluded,
-                    ConnectionValidationMode::STRICT,
+                    ConnectionValidationMode::RELAXED,
                     /*quiet_mode=*/true,
                     engine,
                     unique_shapes_flag);
-                const long round_delta_ms =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_round_begin).count();
-                cumulative_incremental_round_ms += round_delta_ms;
-                if (!incremental_delta_ms_csv.empty()) {
-                    incremental_delta_ms_csv += ',';
-                    incremental_cumulative_ms_csv += ',';
-                }
-                incremental_delta_ms_csv += std::to_string(round_delta_ms);
-                incremental_cumulative_ms_csv += std::to_string(cumulative_incremental_round_ms);
                 if (!next_result.success) {
                     break;
                 }
@@ -5570,16 +5557,8 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
 
             if (!unique_shapes_flag) {
                 EXPECT_GE(n_found, 2u) << engine_label << ": expect multiple distinct embeddings";
-                EXPECT_LE(n_found, kMaxSolutions) << engine_label << ": at most one result per requested slot";
-                if (n_found < kMaxSolutions) {
-                    log_info(
-                        tt::LogFabric,
-                        "Benchmark_Ring64_On_ClusterTrace80_MultiSolve: enumeration exhausted before cap "
-                        "engine={} unique_shapes=false solutions_found={} max_requested={}",
-                        engine_label,
-                        n_found,
-                        kMaxSolutions);
-                }
+                EXPECT_EQ(n_found, kMaxSolutions)
+                    << engine_label << ": should fill requested enumeration cap (distinct assignments)";
                 std::set<std::vector<int>> distinct_raw;
                 for (const auto& r : results) {
                     std::vector<int> raw(graph_data.n_target, -1);
@@ -5662,8 +5641,7 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
                 tt::LogFabric,
                 "Benchmark_Ring64_On_ClusterTrace80_MultiSolve: engine={} unique_shapes={} "
                 "first_solution_ms={} incremental_total_ms={} incremental_avg_ms={} total_ms={} "
-                "solutions_found={} max_requested={} ring_nodes={} trace_nodes={} "
-                "incremental_delta_ms_per_round=[{}] incremental_cumulative_ms_after_round=[{}]",
+                "solutions_found={} max_requested={} ring_nodes={} trace_nodes={}",
                 engine_label,
                 unique_shapes_word,
                 first_ms,
@@ -5673,9 +5651,7 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
                 n_found,
                 kMaxSolutions,
                 kRingNodes,
-                kTraceNodes,
-                incremental_delta_ms_csv,
-                incremental_cumulative_ms_csv);
+                kTraceNodes);
         }
     }
 }

@@ -411,9 +411,9 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         bucket.mesh_host_rank = mesh_host_rank;
     }
 
-    // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank) for canonical ordering
-    // Order: PSD rank first (so output rank i matches topology mapper's mpi_rank_to_host[i]),
-    // then mesh_id, mesh_host_rank, hostname - ensures alignment with physical discovery
+    // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank) for canonical ordering.
+    // Order: mesh_id first (so sequential output rank i tracks mesh order, keeping MPI rank == mesh_id for
+    // single-MGD), then mesh_host_rank, hostname, and PSD rank as a deterministic tiebreaker.
     using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, int, int>;
     std::vector<Entry> entries;
     for (const auto& [mesh_id, hostname_map] : mesh_host_asics) {
@@ -437,18 +437,20 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         }
     }
     std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
-        // Primary: PSD rank - output rank must match topology mapper's mpi_rank_to_host expectation
-        if (std::get<4>(a) != std::get<4>(b)) {
-            return std::get<4>(a) < std::get<4>(b);
-        }
-        // Secondary: mesh_id, mesh_host_rank, hostname for deterministic ordering
+        // Primary: mesh_id ascending, so the sequential binding.rank aligns with mesh order (rank 0 from mesh id 0
+        // first). This preserves main's single-MGD invariant that MPI world rank == mesh_id (needed for e.g. the
+        // Blitz pipeline's rank_bindings / discovery alignment). PSD identity is not lost: it is stored separately
+        // in binding.psd_mpi_rank below, so PSD rank only needs to be a deterministic tiebreaker here.
         if (std::get<0>(a) != std::get<0>(b)) {
             return std::get<0>(a) < std::get<0>(b);
         }
         if (std::get<3>(a) != std::get<3>(b)) {
             return std::get<3>(a) < std::get<3>(b);
         }
-        return std::get<1>(a) < std::get<1>(b);
+        if (std::get<1>(a) != std::get<1>(b)) {
+            return std::get<1>(a) < std::get<1>(b);
+        }
+        return std::get<4>(a) < std::get<4>(b);
     });
 
     // Assign contiguous ranks 0..N-1 and track slot per host for rankfile
