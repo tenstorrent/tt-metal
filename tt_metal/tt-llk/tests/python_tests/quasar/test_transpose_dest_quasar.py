@@ -28,10 +28,9 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf import PerfConfig
+from helpers.perf import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
@@ -40,10 +39,10 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_TRANSPOSE_FACES,
     NUM_FACES,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -291,6 +290,7 @@ def test_transpose_dest_quasar(
             MATH_TRANSPOSE_FACES(math_transpose_faces),
         ],
         "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
@@ -312,18 +312,15 @@ def test_transpose_dest_quasar(
         "dest_acc": dest_acc,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

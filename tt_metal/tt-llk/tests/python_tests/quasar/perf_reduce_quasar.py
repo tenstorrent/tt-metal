@@ -4,6 +4,7 @@
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
+    PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
     MathFidelity,
     ReduceDimension,
@@ -39,7 +40,7 @@ from quasar.test_reduce_quasar import (
         formats, is_perf=True
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_reduce_quasar(
@@ -92,7 +93,7 @@ def test_perf_reduce_quasar(
     math_fidelity=[MathFidelity.LoFi],
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_reduce_quasar_mxfp4_2x_gapool(

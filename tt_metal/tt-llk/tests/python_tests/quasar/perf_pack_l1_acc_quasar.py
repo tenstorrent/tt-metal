@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import PERF_RUN_TYPES_QUASAR
+from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize, runtime
 from quasar.test_pack_l1_acc_quasar import (
     ALL_PACK_L1_ACC_COMBINATIONS,
@@ -23,7 +23,7 @@ from quasar.test_pack_l1_acc_quasar import test_pack_l1_acc_quasar as run_pack_l
     dest_sync_mode=lambda: pack_l1_acc_dest_sync_modes(is_perf=True),
     input_dimensions=runtime(lambda: pack_l1_acc_input_dimensions(is_perf=True)),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_pack_l1_acc_quasar(
