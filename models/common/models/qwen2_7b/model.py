@@ -17,6 +17,7 @@ Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded f
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
@@ -77,6 +78,23 @@ class Qwen2ExecutorRuntimeConfig:
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size``). ``max_prefill_batch_size`` caps the
+    # per-group batch; 32 folds the whole batch-32 prefill in ONE 32-user pass (TTTv1 structural parity)
+    # so the eager norm+lm_head tail + full-vocab readback run once instead of 4×. At the natural 128
+    # bucket the fold is 32*128=4096=2*2048, an exact multiple of MAX_QKV_MM_SEQ_LEN (reshape-safe), and
+    # the DRAM guard (padded_batch*seq < 128K) passes with 4096. This fold width is independent of
+    # ``mlp_prefill_len_cutoff`` (raised to the 1024 engine default in _resolve_qwen_wh_tuning), so each
+    # lever keeps its own win. ``disable_batched_prefill`` is the escape hatch
+    # back to the sequential loop. ``max_prefill_chunk_size`` (above) drives the #45234 decline.
+    # The batch_size threading below is complete; the shared engine does the folding/trace work.
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 32
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
         # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens):
@@ -306,10 +324,27 @@ def _resolve_qwen_wh_tuning(
 ) -> _Qwen2WHTuning:
     """Pick WH tuning knobs for Qwen2-7B-Instruct on N150 / N300.
 
-    ``get_padded_prefill_len`` maps 129..1024 tokens to a 1024-wide tile. ``MLP1D``
-    then reshapes/chunks using ``prefill_len_cutoff``. Cutoff 512 still trips
-    ``validate_circular_buffer_region`` on WH (prefill multicast + LM DRAM matmul vs L1).
-    256 halves the per-kernel M tile; HiFi4 shrinks CB vs HiFi2 for FF and LM DRAM linears.
+    ``get_padded_prefill_len`` maps 129..1024 tokens to a 1024-wide tile. ``MLP1D`` then
+    reshapes/chunks using ``prefill_len_cutoff``.
+
+    ``mlp_prefill_len_cutoff=1024`` = the shared engine's own Wormhole default (``mlp_1d.py``:
+    ``512 if is_blackhole() else 1024``) and TTTv1's ``prefill_len_cutoff``. For the folded batch-32-ci
+    FF prefill (``[1,1,B*S,dim]``, B*S=32*128=4096 at the natural 128 bucket) this tiles the FF matmul as
+    4 chunks of 1024 (``per_core_M=4``) instead of 16 chunks of 256 (``per_core_M=1``) — 4× fewer / 4×
+    larger sub-matmuls on the ~80%-FLOP FF block, matching TTTv1's blocking.
+
+    This supersedes an earlier note here that "cutoff 512 still trips ``validate_circular_buffer_region``
+    on WH (prefill multicast + LM DRAM matmul vs L1)". That is no longer true: 1024 was re-tested on
+    device on N300 (2026-07-27) and capture/replay is clean — no circular-buffer assert — despite this
+    checkpoint having the widest per-device FF shard of the family (intermediate 18944 → 9472/device).
+    The L1 headroom that makes it fit is the HiFi4 FF/LM configuration set below (HiFi4 shrinks the CB
+    footprint vs HiFi2), which was tuned after that observation was recorded. Fallbacks, in order, if a
+    future config change reintroduces the assert: 512, then 256 (the previous value) — the fold width in
+    ``max_prefill_batch_size`` is independent of this knob and keeps its own win either way.
+
+    Output is unchanged by the cutoff: ``in0_block_w`` and the K-contraction order are independent of the
+    M-tiling, so only ``per_core_M`` changes. Decode never reads ``prefill_len_cutoff``.
+
     Decode W1→DRAM before W3 avoids L1 overlap between W1 activations and W3 matmul CBs
     (N300 batch 32).
     """
@@ -318,7 +353,7 @@ def _resolve_qwen_wh_tuning(
     if not (model_slug.startswith("Qwen2-7B") and num_dev in (1, 2)):
         return t
 
-    t.mlp_prefill_len_cutoff = 256
+    t.mlp_prefill_len_cutoff = 1024
     t.mlp_ff_compute_kernel_cfg = _qwen_wh_mlp_matmul_compute_kernel()
     t.mlp_decode_spill_w1_to_dram = max_batch_size >= 16
     t.lm_head_compute_kernel_cfg = _qwen_wh_mlp_matmul_compute_kernel()
@@ -348,7 +383,7 @@ def _resolve_qwen_wh_tuning(
         t.attn_li_o_decode_kernel_cfg = lo
     logger.info(
         f"MLP/LM/attention tuning for {hf_model_id} on {num_dev} device(s): "
-        f"prefill_len_cutoff=256, FF prefill HiFi4, attn prefill+decode HiFi4+fp32, "
+        f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, FF prefill HiFi4, attn prefill+decode HiFi4+fp32, "
         f"decode spill W1→DRAM={t.mlp_decode_spill_w1_to_dram}, "
         f"perf_decode_tuning={perf_decode_tuning}"
     )
@@ -580,7 +615,11 @@ class Qwen2_7BDecoderLayer(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         # Match Llama ``TransformerBlock1D``: fractured embed / norm activations must be
         # all-gathered to full ``dim`` before Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
@@ -594,6 +633,7 @@ class Qwen2_7BDecoderLayer(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
@@ -861,6 +901,10 @@ class Qwen2_7B(LightweightModule):
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
                 kv_cache_dtype=precision.kv_cache_dtype,
+                # A/B escape hatch: DISABLE_BATCHED_EXTRACT=1 forces the per-slot last-token extract
+                # (one lm_head per user, bit-identical to the sequential path) instead of the default
+                # gathered extract (one lm_head over the whole group).
+                batched_prefill_batched_extract=not os.environ.get("DISABLE_BATCHED_EXTRACT"),
             )
         return model
 
@@ -890,7 +934,11 @@ class Qwen2_7B(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -900,6 +948,7 @@ class Qwen2_7B(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
             )
 
         if get_last_token == -1:

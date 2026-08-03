@@ -122,8 +122,7 @@ static_assert(hashable_v<ComputeGen2Config>, "ComputeGen2Config must be hashable
 static_assert(hashable_v<KernelAdvancedOptions>, "KernelAdvancedOptions must be hashable via ttsl reflection");
 static_assert(hashable_v<DFBAdvancedOptions>, "DFBAdvancedOptions must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreAdvancedOptions>, "SemaphoreAdvancedOptions must be hashable via ttsl reflection");
-static_assert(
-    hashable_v<TensorParameterAdvancedOptions>, "TensorParameterAdvancedOptions must be hashable via ttsl reflection");
+static_assert(hashable_v<TensorSpecRelaxations>, "TensorSpecRelaxations must be hashable via ttsl reflection");
 
 TEST(ProgramSpecReflectionTest, IsHashable) {
     const ProgramSpec spec = MakeMinimalValidProgramSpec();
@@ -2543,7 +2542,6 @@ TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigDefaultsMapToInternalDefaults) {
     EXPECT_FALSE(built.dst_full_sync_en);      // double_buffer_dest defaults true -> !true
     EXPECT_FALSE(built.math_approx_mode);      // sfpu_precision_mode defaults Precise
     EXPECT_FALSE(built.enable_2x_src_format);  // enable_2x_src_register defaults false
-    EXPECT_FALSE(built.unpack_to_dest_en);
 }
 
 TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigInversionAndEnumMapToInternal) {
@@ -2592,8 +2590,8 @@ TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigInversionAndEnumMapToInternal) {
 //    coupling through the shared DFB binding induces additional DM solver constraints.
 //
 //    NOTE: The original plan called for lifting this artificial constraint once LLK adopted
-//    DFBAccessor using implicit RTAs. However, to realize performance gains, we're
-//    chosen instead to GUARANTEE using implicit CTAs for DFBAccessor. This
+//    DFBBindingToken using implicit RTAs. However, to realize performance gains, we've
+//    chosen instead to GUARANTEE using implicit CTAs for DFBBindingToken. This
 //    constraint is therefore permanent.
 //
 //    If we were ever to start encountering serious unsolvable-Program issues as a result
@@ -3914,8 +3912,8 @@ void kernel_main() {
 // ----------------------------------------------------------------------------
 //
 // Like the TensorAccessor smoke above, these JIT-compile a kernel that constructs a Scratchpad from
-// its binding accessor (scratch::<name>) and reads the CRTA-injected base address — exercising the
-// generated scratch:: namespace + ScratchpadAccessor object and the device-side Scratchpad ctor. Compile-only on
+// its binding token (scratch::<name>) and reads the CRTA-injected base address — exercising the
+// generated scratch:: namespace + ScratchpadBindingToken object and the device-side Scratchpad ctor. Compile-only on
 // the mock Wormhole device (Gen1: the Quasar TRISC firmware isn't built in this checkout, so a
 // Quasar JIT-compile would fail at link).
 
@@ -4147,7 +4145,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcross
         TensorParameter tp{
             .unique_id = TensorParamName{"input_tensor"},
             .spec = tt::tt_metal::TensorSpec(std::move(shape), std::move(tensor_layout)),
-            .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true},
+            .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true},
         };
         spec.tensor_parameters = {tp};
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
@@ -4178,7 +4176,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedRowMajorKernelHashStab
         TensorParameter tp{
             .unique_id = TensorParamName{"input_tensor"},
             .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, width}, std::move(tensor_layout)),
-            .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = dynamic},
+            .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = dynamic},
         };
         spec.tensor_parameters = {tp};
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
@@ -4214,7 +4212,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedKernelHashStableAcrossShap
     auto make_spec = [](const tt::tt_metal::Shape& shape, bool dynamic) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
         auto tp = MakeShardedTensorParameter("input_tensor", shape, {32, 32}, /*num_cores=*/2);
-        tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = dynamic};
+        tp.relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = dynamic};
         spec.tensor_parameters = {tp};
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
         return spec;
@@ -4248,7 +4246,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedBindingTracksShapeCRTASlot
     // directly to be robust against BDS-internal flattening conventions.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto tp = MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, 2);
-    tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
+    tp.relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -4274,7 +4272,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedRowMajorBindingTracksP
     auto make_spec = [](bool dynamic) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
         auto tp = MakeMinimalTensorParameter("input_tensor");
-        tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = dynamic};
+        tp.relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = dynamic};
         spec.tensor_parameters = {tp};
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
         return spec;
@@ -4324,7 +4322,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedTileBindingHasNoRuntim
     TensorParameter tp{
         .unique_id = TensorParamName{"input_tensor"},
         .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 32}, std::move(tensor_layout)),
-        .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true},
+        .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true},
     };
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
@@ -4365,7 +4363,7 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     auto plain_tp = MakeMinimalTensorParameter("plain_tensor");
     auto dyn_tp =
         MakeShardedTensorParameter("dyn_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
-    dyn_tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
+    dyn_tp.relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {plain_tp, dyn_tp};
     BindTensorParameterToKernel(spec.kernels[0], "plain_tensor", "plain_ta");
     BindTensorParameterToKernel(spec.kernels[0], "dyn_tensor", "dyn_ta");

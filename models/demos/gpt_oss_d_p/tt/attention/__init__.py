@@ -10,10 +10,19 @@ import ttnn
 from models.demos.gpt_oss_d_p.tt.config import MeshConfig
 
 from .config import AttentionConfig, ProgramConfig
+from .kv_cache import GptOssKVCache, allocate_kv_cache, write_kv_chunk
 from .prefill import attention_forward
 from .weights import AttentionWeights, load_attention_weights
 
-__all__ = ["Attention", "AttentionConfig", "ProgramConfig", "AttentionWeights"]
+__all__ = [
+    "Attention",
+    "AttentionConfig",
+    "ProgramConfig",
+    "AttentionWeights",
+    "GptOssKVCache",
+    "allocate_kv_cache",
+    "write_kv_chunk",
+]
 
 
 class Attention:
@@ -99,17 +108,22 @@ class Attention:
         kv_cache=None,
         user_id=0,
         batch_size=1,
+        cached_len=0,
+        indexed_rope=False,
     ):
         """
         Prefill attention forward.
 
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
-            rope_mats: Tuple/list of (cos, sin) matrices for RoPE (YaRN baked in)
+            rope_mats: Tuple/list of (cos, sin) matrices for RoPE (YaRN baked in). Whole-cache
+                block-cyclic SP cos/sin when ``indexed_rope`` is set (see tt/rope.build_indexed_rope).
             position_idx: Position indices (unused in prefill)
-            kv_cache: Optional [k_cache, v_cache] pair; may be None
+            kv_cache: Optional GptOssKVCache (packed K/V); may be None
             user_id: User/batch index; also the cache slot index (default: 0)
             batch_size: number of users packed on the sequence dim
+            cached_len: valid prefix already in the cache before this chunk (>0 -> cache-read path)
+            indexed_rope: use the on-device indexed RoPE (whole-cache block-cyclic SP cos/sin)
 
         Returns:
             Attention output [batch, seq_len, hidden_size]
@@ -131,4 +145,6 @@ class Attention:
             ccl_manager=self.ccl_manager,
             batch_size=batch_size,
             layer_idx=self.layer_idx,
+            cached_len=cached_len,
+            indexed_rope=indexed_rope,
         )

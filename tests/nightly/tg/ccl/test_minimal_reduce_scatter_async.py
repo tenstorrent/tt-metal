@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import torch
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
@@ -268,3 +269,117 @@ def test_reduce_scatter_async_quad_host_mesh(
         cluster_axis=cluster_axis,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_blackhole("This test is for wormhole")
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "fp32_dest_acc_en, stats_dtype",
+    [
+        (True, ttnn.bfloat16),
+        (False, ttnn.float32),
+    ],
+    ids=["fp32acc_bf16stats", "bf16acc_fp32stats"],
+)
+def test_fused_rms_minimal_rejects_stats_dtype_mismatch(mesh_device, fp32_dest_acc_en, stats_dtype, expect_error):
+    torch.manual_seed(42)
+
+    cluster_axis = 0
+    num_devices = mesh_device.shape[cluster_axis]
+    num_cores_x, num_cores_y = 4, 8
+    num_cores = num_cores_x * num_cores_y
+    hidden_dim = num_cores * num_devices * 32
+
+    mesh_shape = list(ttnn.MeshShape(num_devices, 1))
+    input_shard_dims = (3, None)
+    gamma_shard_dims = (2, None)
+    stats_shard_dims = (3, None)
+
+    core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+    )
+
+    input_mem_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.as_tensor(
+        torch.randn(1, 1, 32, hidden_dim),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=input_shard_dims, mesh_shape=mesh_shape),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=input_mem_config,
+    )
+
+    weight = ttnn.as_tensor(
+        torch.randn(1, 1, hidden_dim // 32, 32),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=gamma_shard_dims, mesh_shape=mesh_shape),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    stats_mem_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    stats = ttnn.from_torch(
+        torch.zeros(1, 1, 32, num_devices),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=stats_dtype,
+        memory_config=stats_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=stats_shard_dims, mesh_shape=mesh_shape),
+    )
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    size_per_device = hidden_dim // num_devices
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(num_cores_x, num_cores_y),
+        subblock_w=1,
+        block_h=1,
+        block_w=(size_per_device // num_cores) // 32,
+        inplace=False,
+    )
+
+    semaphore = ttnn.create_global_semaphore(mesh_device, core_grid, 0)
+
+    compute_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
+
+    with expect_error(RuntimeError, "must match the compute accumulation format"):
+        ttnn.fused_rms_minimal(
+            input_tensor,
+            program_config,
+            cluster_axis,
+            mesh_device,
+            semaphore,
+            topology=ttnn.Topology.Linear,
+            memory_config=output_mem_config,
+            epsilon=1e-05,
+            weight=weight,
+            stats=stats,
+            use_noc1_only=False,
+            compute_kernel_config=compute_cfg,
+        )

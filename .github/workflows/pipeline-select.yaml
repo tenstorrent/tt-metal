@@ -113,7 +113,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
   single-card-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}

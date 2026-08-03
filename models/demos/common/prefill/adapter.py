@@ -246,7 +246,7 @@ class PrefillModelAdapter(ABC):
 # model is one line here (plus the adapter class in that model's package). Keeping
 # these as strings means importing this common module never imports a model's
 # device/runtime stack — only the selected model is imported, at get_adapter time.
-DEFAULT_MODEL = "deepseek_v3_d_p"
+DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
@@ -259,6 +259,8 @@ ADAPTER_PATHS = {
     # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
+    # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
+    "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

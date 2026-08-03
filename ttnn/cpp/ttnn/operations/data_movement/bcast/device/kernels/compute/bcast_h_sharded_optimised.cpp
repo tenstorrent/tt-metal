@@ -32,15 +32,19 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt++) {
             dfb_b.wait_front(onetile);
             for (uint32_t ht = 0; ht < Ht_per_batch_b; ht += h_blk) {
+                // Clamp the final (partial) block so we never process rows past this batch's
+                // Ht_per_batch_b tiles; otherwise current_index over-runs c_0/c_16 (past
+                // num_tile_per_core on the last batch), corrupting the borrowed shard buffers.
+                const uint32_t block_tiles = (Ht_per_batch_b - ht) < h_blk ? (Ht_per_batch_b - ht) : h_blk;
                 tile_regs_acquire();
-                for (uint32_t htr = 0; htr < h_blk; htr++) {
+                for (uint32_t htr = 0; htr < block_tiles; htr++) {
                     uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
                     BCAST_OP<BroadcastType::ROW>(cb_a_id, cb_b_id, current_index, 0, htr);
                 }
                 tile_regs_commit();
 
                 tile_regs_wait();
-                for (uint32_t htr = 0; htr < h_blk; htr++) {
+                for (uint32_t htr = 0; htr < block_tiles; htr++) {
                     uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
                     pack_tile<true>(htr, cb_out_id, current_index);
                 }

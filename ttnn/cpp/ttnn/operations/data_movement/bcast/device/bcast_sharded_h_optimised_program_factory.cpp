@@ -90,7 +90,16 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
     const uint32_t output_cb_index = tt::CBIndex::c_16;
 
     const uint32_t h_blk = std::min(Ht, 8u);
-    const uint32_t w_blk = std::min(Wt, 8u);
+    // w_blk must divide Wt. The reader streams b tiles through the small c_1 ring buffer
+    // (num_input_tiles = w_blk) in fixed w_blk chunks, writing each chunk contiguously from
+    // get_write_ptr(). If w_blk does not divide Wt, the per-batch push count (Wt) misaligns
+    // the ring across batches and a chunk's contiguous write wraps past the buffer end,
+    // corrupting b tiles (and over-reading src1 / deadlocking when batch_b > 1). Pick the
+    // largest divisor of Wt that is <= 8; this is unchanged (== min(Wt, 8)) for all Wt <= 8.
+    uint32_t w_blk = std::min(Wt, 8u);
+    while (Wt % w_blk != 0) {
+        w_blk--;
+    }
 
     const uint32_t num_input_tiles = w_blk;
     const uint32_t src1_cb_index = tt::CBIndex::c_1;
