@@ -1711,7 +1711,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             if isinstance(logits_i, tuple):
                 logits_i = logits_i[0]
             # Some models must run the on-device sampling op eagerly rather than from its
-            # own captured trace: the force-argmax path does an all_gather_async whose
+            # own captured trace: the greedy fast-path does an all_gather_async whose
             # multi_device_global_semaphore is taken from get_and_cycle_*() at capture time
             # and frozen into the trace, so replaying the sampling trace reuses a stale
             # semaphore and the gather corrupts from the 2nd decode step (#48037). Running

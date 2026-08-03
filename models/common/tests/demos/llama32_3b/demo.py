@@ -237,7 +237,7 @@ _BATCH32_CI_MAX_SEQ_LEN: dict[str, int] = {
 
 
 def _sampling_bucket() -> str:
-    """Map SAMPLING_MODE to a perf-gate bucket. Non-topk on-device modes (e.g. force-argmax)
+    """Map SAMPLING_MODE to a perf-gate bucket. Non-topk on-device modes (e.g. the greedy fast-path)
     fall into ``on_device_topk`` so they stay gated, never silently un-gated."""
     return "host" if os.environ.get("SAMPLING_MODE", "host").lower() == "host" else "on_device_topk"
 
@@ -743,7 +743,7 @@ def test_llama32_3b(test_config, mesh_device, optimizations):
             max_seq_len = _BATCH32_CI_MAX_SEQ_LEN.get(device_name, 2048)
             # Own perf gate measured at the seq2048/decode1024 workload (NOT the lighter batch-32
             # constant, which would be a config-artifact miss). The gate is keyed by SAMPLING_MODE
-            # (host argmax vs on-device sampling differ on 3B). Non-topk on-device modes (force-argmax)
+            # (host argmax vs on-device sampling differ on 3B). Non-topk on-device modes (greedy fast-path)
             # fall back to the on_device_topk bucket; cells not measured fall back to the short-context
             # batch-32 constant so they stay gated, never silently un-gated.
             _bucket = _sampling_bucket()
@@ -956,7 +956,7 @@ def _run_perf_benchmark(
     #   on_device_topk  -> temp=0,k=32,p=0.08      => trace-captured TOP-K op path with k=32
     #                      (PERF.md-parity recipe). Both on-device modes route through the same
     #                      per-device ttnn.topk -> all-gather of the [*,k] tuples -> ttnn.sampling
-    #                      op path (the model is built with allow_force_argmax=False, so the
+    #                      op path (the model is built with allow_greedy_fastpath=False, so the
     #                      full-vocab argmax all-gather is never taken); they differ only in k.
     sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
     _on_device_params = {
@@ -971,7 +971,7 @@ def _run_perf_benchmark(
     logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
 
     # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling
-    # path (inert on host/force-argmax; gated to the top-k path by _decode_loop_active).
+    # path (inert on host/greedy fast-path; gated to the top-k path by _decode_loop_active).
     # fast_prefill_last_token: slice the single consumed last-token row on device before readback so the
     # batch-1 host concat/readback moves one row instead of the full [1,1,32,vocab] tile — closes most of
     # the residual T3K batch-1 PREFILL TTFT gap vs TTTv1 (which reads back only tokens). Inert for batch>1.

@@ -780,7 +780,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     #            B=1 fast path to B>1): each device reduces its OWN vocab shard to (idx, max)
     #            on device, then only 2 tiny [num_devices, B] tensors are read to host — no
     #            full-vocab all-gather, no [B,1,vocab] logits transfer.
-    #   "sample" - TTSampling force-argmax path (all-gathers full logits across devices before
+    #   "sample" - TTSampling greedy fast-path (all-gathers full logits across devices before
     #            arg-maxing). Avoids the full logits HOST transfer but adds a real device-side
     #            all-gather; measured slower overall than "shard" — kept for comparison.
     #   "host"  - legacy: full [B,1,vocab] logits to host, then torch.argmax. Baseline.

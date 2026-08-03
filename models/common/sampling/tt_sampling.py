@@ -30,6 +30,19 @@ TIEBREAK_DELTA_SCALE = 2**-6
 # so it never perturbs a non-zero maximum.
 TIEBREAK_DELTA_FLOOR = 1e-30
 
+# Renamed from "allow_force_argmax" (#51987). A SAMPLING_AG_CONFIG still carrying the old key
+# would otherwise fall back to a disabled fast-path, which shows up only as a silent decode
+# perf regression, so reject it explicitly instead.
+_LEGACY_GREEDY_FASTPATH_KEY = "allow_force_argmax"
+
+
+def _reject_legacy_greedy_fastpath_key(sampling_ag_config):
+    if _LEGACY_GREEDY_FASTPATH_KEY in sampling_ag_config:
+        raise ValueError(
+            f"SAMPLING_AG_CONFIG uses the removed key '{_LEGACY_GREEDY_FASTPATH_KEY}'; "
+            "rename it to 'allow_greedy_fastpath'."
+        )
+
 
 class TTSampling(LightweightModule):
     """
@@ -64,7 +77,7 @@ class TTSampling(LightweightModule):
         otherwise uses standard all_gather where the CCL API handles memory allocation (tt-transformers).
     """
 
-    def _is_force_argmax_sampling(self, k, p, temp):
+    def _is_greedy_fastpath(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
 
         When every user in the batch has k=1 (top-1), p=0.0 or p=1.0 (no top-p filter),
@@ -76,13 +89,16 @@ class TTSampling(LightweightModule):
 
         Note: callers may represent greedy rows with p=1.0, while the
         device argmax-style representation uses p=0.0.
-        The model config must also set allow_force_argmax=True for this to activate.
+        The model config must also set allow_greedy_fastpath=True for this to activate.
+
+        The fast path never changes which token is emitted -- greedy decoding is argmax
+        either way -- so this is purely a choice of implementation, not of semantics.
 
         Changing this state between decode steps invalidates captured traces, so
-        SamplingGenerator maintains separate trace slots keyed by force_argmax.
+        SamplingGenerator maintains separate trace slots keyed by greedy_fastpath.
         """
         return (
-            self._allow_force_argmax_sampling
+            self._allow_greedy_fastpath
             and is_default_value(k, 1)
             and (is_default_value(p, 1.0) or is_default_value(p, 0.0))
             and is_default_value(temp, 1.0)
@@ -100,8 +116,8 @@ class TTSampling(LightweightModule):
         return ttnn.uint16
 
     @property
-    def force_argmax_sampling(self) -> bool:
-        return self._force_argmax_sampling
+    def greedy_fastpath(self) -> bool:
+        return self._greedy_fastpath
 
     def __init__(
         self,
@@ -180,18 +196,20 @@ class TTSampling(LightweightModule):
         else:
             self.sampling_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-        # Force argmax sampling
+        # Greedy fast-path (see _is_greedy_fastpath: cheaper implementation of greedy
+        # decode, gated on every user in the batch already asking for greedy sampling)
         if hasattr(args, "model_config") and "SAMPLING_AG_CONFIG" in args.model_config:
             # The model config may describe the fastest full-size Galaxy path, but
             # the actual CCL shape is resolved from the runtime mesh below.
             sampling_ag_config = args.model_config["SAMPLING_AG_CONFIG"]
-            self._allow_force_argmax_sampling = sampling_ag_config["allow_force_argmax"]
+            _reject_legacy_greedy_fastpath_key(sampling_ag_config)
+            self._allow_greedy_fastpath = sampling_ag_config["allow_greedy_fastpath"]
             self.num_argmax_gather_links = sampling_ag_config["num_links"]
             self.argmax_chunks_per_sync = sampling_ag_config.get("chunks_per_sync", 10)
             self.argmax_num_workers_per_link = 1
             self.ag_topology = sampling_ag_config["topology"]
         else:
-            self._allow_force_argmax_sampling = False
+            self._allow_greedy_fastpath = False
             self.num_argmax_gather_links = self.num_gather_links
             self.argmax_chunks_per_sync = 10
             self.argmax_num_workers_per_link = 1
@@ -208,7 +226,7 @@ class TTSampling(LightweightModule):
         if temp is None:
             temp = torch.ones(total_param_size)
 
-        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        self._greedy_fastpath = self._is_greedy_fastpath(k, p, temp)
 
         # Create sampling parameter tensors on device
         # When _sampling_dp > 1, dims=(0, None) shards the [128] tensor across 4 rows → [32] per row
@@ -529,7 +547,7 @@ class TTSampling(LightweightModule):
             return None
         return self.sampling_all_gather_axis
 
-    def _get_force_argmax_all_gather_config(self, cluster_axis):
+    def _get_greedy_fastpath_all_gather_config(self, cluster_axis):
         num_links = self.num_argmax_gather_links
         if hasattr(self.tt_ccl, "get_num_links"):
             # Clamp the tuned config to the links available on the actual submesh.
@@ -553,8 +571,8 @@ class TTSampling(LightweightModule):
         empty_slots: list[int] | None = None,
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
-        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
-        if not self._force_argmax_sampling:
+        self._greedy_fastpath = self._is_greedy_fastpath(k, p, temp)
+        if not self._greedy_fastpath:
             # When _sampling_dp > 1, create multi-device host tensors so
             # copy_host_to_device_tensor writes per-row shards correctly.
             if self._sampling_dp > 1:
@@ -711,8 +729,8 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
-        if self._force_argmax_sampling:
-            logger.info("Forcing argmax sampling")
+        if self._greedy_fastpath:
+            logger.info("Using greedy fast-path (argmax) sampling")
             slice_valid_vocab = self._can_slice_valid_vocab_for_argmax()
             if not slice_valid_vocab:
                 x = self._mask_invalid_vocab_logits(x)
@@ -720,9 +738,9 @@ class TTSampling(LightweightModule):
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
                 cluster_axis = self._get_sampling_cluster_axis()
-                num_links, topology = self._get_force_argmax_all_gather_config(cluster_axis)
+                num_links, topology = self._get_greedy_fastpath_all_gather_config(cluster_axis)
                 logger.debug(
-                    f"Force argmax sampling all-gather: cluster_axis={cluster_axis}, "
+                    f"Greedy fast-path all-gather: cluster_axis={cluster_axis}, "
                     f"num_links={num_links}, topology={topology}"
                 )
                 x = ttnn.experimental.all_gather_async(
@@ -748,7 +766,7 @@ class TTSampling(LightweightModule):
                 output_tensor=tt_out_tok,
                 keepdim=False,
             )
-            # Argmax path: logprobs not supported (force-argmax is disabled
+            # Argmax path: logprobs not supported (the greedy fast-path is disabled
             # when logprobs are enabled via format_sampling_params guard).
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs

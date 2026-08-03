@@ -543,11 +543,11 @@ class Phi4Transformer(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 max_batch_size=_nearest_32(cfg.max_batch_size),
-                # Clone TTTv1's decision: allow_force_argmax=False for all non-Galaxy meshes
+                # Clone TTTv1's decision: allow_greedy_fastpath=False for all non-Galaxy meshes
                 # (only Llama-3.1-8B on TG flips it True). Phi-4's top-k recipe routes through the
                 # cheap per-device ttnn.topk -> all-gather of [*,32] tuples -> ttnn.sampling path,
                 # never the full-vocab argmax all-gather.
-                allow_force_argmax=False,
+                allow_greedy_fastpath=False,
                 pad_to_power_of_2=True,
             )
             if self.supports_on_device_sampling

@@ -460,12 +460,12 @@ class Transformer(TTTransformer):
     # Symptom: on-device sampling produced gibberish at batch-32 (BERTScore F1 ~0.34)
     # but is correct at batch-1, and host argmax of the same batch-32 run is correct
     # (F1 0.79) -> the decode forward is fine; only the on-device sampling path is wrong
-    # at batch-32. Root cause: with allow_force_argmax disabled (the non-Galaxy default),
+    # at batch-32. Root cause: with allow_greedy_fastpath disabled (the non-Galaxy default),
     # greedy decode (temperature=0 -> k=1,p=0,temp=1) goes through the heavy top-k/top-p
     # multi-all-gather sampling pipeline, which is what corrupts at batch-32, rather than
     # the simple single-gather argmax path.
     #
-    # Fix: route greedy decode through the force-argmax path (enabled in __init__ below),
+    # Fix: route greedy decode through the greedy fast-path (enabled in __init__ below),
     # and re-stage the decode trace inputs from host every step + run the sampling op
     # eagerly so the all-gather re-acquires a fresh multi_device_global_semaphore each
     # step instead of reusing a stale one frozen into a captured trace.
@@ -482,12 +482,12 @@ class Transformer(TTTransformer):
         paged_attention_config=None,
         use_paged_kv_cache=False,
     ):
-        # Enable the single-gather force-argmax sampling path for greedy decode. The
-        # non-Galaxy default (default_sampling_force_argmax) sets allow_force_argmax=False,
+        # Enable the single-gather greedy fast-path sampling path for greedy decode. The
+        # non-Galaxy default (default_sampling_greedy_fastpath) sets allow_greedy_fastpath=False,
         # which forces greedy decode onto the heavy top-k/top-p pipeline that corrupts at
         # batch-32 (#48037). Must be set before super().__init__ builds the sampling module.
         ag_cfg = dict(args.model_config.get("SAMPLING_AG_CONFIG", {}) or {})
-        ag_cfg["allow_force_argmax"] = True
+        ag_cfg["allow_greedy_fastpath"] = True
         args.model_config["SAMPLING_AG_CONFIG"] = ag_cfg
 
         # Call parent constructor with vision-specific classes

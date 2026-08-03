@@ -624,11 +624,11 @@ class Qwen3_32B(LightweightModule):
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
             max_batch_size=_nearest_32(cfg.max_batch_size),
-            # Clone TTTv1's decision: allow_force_argmax=False for all non-Galaxy meshes (only
+            # Clone TTTv1's decision: allow_greedy_fastpath=False for all non-Galaxy meshes (only
             # Llama-3.1-8B on TG flips it True). The perf recipe (temp=0, top_k=32, top_p=0.08)
             # routes through the cheap top-k op path — per-device ttnn.topk -> all-gather of the
             # [*,32] tuples -> ttnn.sampling — never the full-vocab argmax all-gather.
-            allow_force_argmax=False,
+            allow_greedy_fastpath=False,
             pad_to_power_of_2=True,
         )
 

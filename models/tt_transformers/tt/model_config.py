@@ -1078,8 +1078,18 @@ class ModelArgs:
                 "num_workers_per_link": 2,
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
-            default_sampling_force_argmax = {
-                "allow_force_argmax": False,
+            # allow_greedy_fastpath permits -- but does not itself trigger -- a cheaper
+            # implementation of greedy decode. It only takes effect when every user in the
+            # batch already asks for greedy sampling (k=1, no top-p, temp=1), so it never
+            # changes which token is emitted; greedy is argmax on either path.
+            #   fast path: one all-gather of the full logits (skipped entirely at
+            #              num_devices == 1) + on-device argmax.
+            #   normal path: local top-k per device, three all-gathers (values, indices,
+            #                sampled tokens), then top-k/top-p/temperature/RNG over the
+            #                padded vocab.
+            # The fast path also cannot produce log-probs, since it runs no softmax.
+            default_sampling_greedy_fastpath = {
+                "allow_greedy_fastpath": False,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
@@ -1096,8 +1106,8 @@ class ModelArgs:
                         "num_workers_per_link": 1,
                         "rs_memory_config": ttnn.L1_MEMORY_CONFIG,
                     },
-                    "sampling_force_argmax": {
-                        "allow_force_argmax": True,
+                    "sampling_greedy_fastpath": {
+                        "allow_greedy_fastpath": True,
                         "num_links": 4,
                         "chunks_per_sync": 10,
                         "num_workers_per_link": 2,
@@ -1114,14 +1124,14 @@ class ModelArgs:
                 self.model_config["ATTN_AGMM_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_agmm"]
                 self.model_config["MLP_RS_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["mlp_rs"]
                 self.model_config["SAMPLING_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name][
-                    "sampling_force_argmax"
+                    "sampling_greedy_fastpath"
                 ]
             else:
                 self.model_config["ATTN_LN_AG_CONFIG"] = default_ln_ag
                 self.model_config["FFN_LN_AG_CONFIG"] = default_ln_ag
                 self.model_config["ATTN_AGMM_CONFIG"] = default_agmm
                 self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
-                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
+                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_greedy_fastpath
 
             logger.info(f"Attention grid: {self.attn_input_grid}")
             logger.info(f"MLP grid: {self.mlp_core_grid}")

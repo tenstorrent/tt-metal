@@ -35,11 +35,11 @@ def _list_collected_sampling_cases() -> list[pytest.param]:
     Collected from TTTv1 demo runs (Phase B of test_case_collection.md).
 
     Each entry is:
-        (mesh_shape, vocab_size, k, p, temp, force_argmax, hf_model_name)
+        (mesh_shape, vocab_size, k, p, temp, greedy_fastpath, hf_model_name)
 
     Source CSVs: sampling_generator_config_collected.csv,
                  sampling_generator_params_collected.csv
-    Deduplicated by (topology, vocab, k, p, temp, force_argmax).
+    Deduplicated by (topology, vocab, k, p, temp, greedy_fastpath).
     """
     # fmt: off
     return [
@@ -95,17 +95,17 @@ class TestConfigUnit:
         cfg = Sampling1DConfig(vocab_size=1024)
         assert cfg.max_batch_size == 32
         assert cfg.max_top_k == 32
-        assert cfg.allow_force_argmax is False
+        assert cfg.allow_greedy_fastpath is False
         assert cfg.num_gather_links == 1
         assert cfg.mesh_device is None
         assert cfg.index_offsets is None
         assert cfg.seeds is None
 
     def test_config_custom(self):
-        cfg = Sampling1DConfig(vocab_size=128256, max_top_k=64, allow_force_argmax=True)
+        cfg = Sampling1DConfig(vocab_size=128256, max_top_k=64, allow_greedy_fastpath=True)
         assert cfg.vocab_size == 128256
         assert cfg.max_top_k == 64
-        assert cfg.allow_force_argmax is True
+        assert cfg.allow_greedy_fastpath is True
 
     def test_config_not_resolved_without_device(self):
         cfg = Sampling1DConfig(vocab_size=1024)
@@ -149,9 +149,9 @@ class TestSampling1DDevice:
         assert isinstance(sampler._user_ids, ttnn.Tensor)
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_force_argmax(self, ttnn_mesh_device, vocab_size):
-        """allow_force_argmax=True, k/p/temp=None → matches torch.argmax."""
-        sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_force_argmax=True)
+    def test_greedy_fastpath(self, ttnn_mesh_device, vocab_size):
+        """allow_greedy_fastpath=True, k/p/temp=None → matches torch.argmax."""
+        sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_greedy_fastpath=True)
         sampler.load_device_buffers()
         B = sampler.config.max_batch_size
 
@@ -260,19 +260,19 @@ class TestSampling1DDevice:
     # ------------------------------------------------------------------
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_error_all_none_no_force_argmax(self, ttnn_mesh_device, vocab_size, expect_error):
-        """decode_forward with all-None k/p/temp when allow_force_argmax=False → ValueError (line 178)."""
+    def test_error_all_none_no_greedy_fastpath(self, ttnn_mesh_device, vocab_size, expect_error):
+        """decode_forward with all-None k/p/temp when allow_greedy_fastpath=False → ValueError (line 178)."""
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         logits_host = torch.randn(1, 1, 32, vocab_size, dtype=torch.bfloat16)
         logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
 
-        with expect_error(ValueError, "allow_force_argmax is False"):
+        with expect_error(ValueError, "allow_greedy_fastpath is False"):
             sampler.decode_forward(logits_tt)
 
     @pytest.mark.parametrize("vocab_size", [1024])
     def test_forward_dispatches_to_decode_forward(self, ttnn_mesh_device, vocab_size):
         """forward() delegates to decode_forward() (line 186)."""
-        sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_force_argmax=True)
+        sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_greedy_fastpath=True)
         logits_host = torch.randn(1, 1, 32, vocab_size, dtype=torch.bfloat16)
         logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
 
@@ -343,7 +343,29 @@ class TestSampling1DDevice:
         assert sampler.config.num_gather_links == 1
 
     def test_from_model_args_with_sampling_ag_config(self, ttnn_mesh_device):
-        """from_model_args reads allow_force_argmax/num_links/topology from SAMPLING_AG_CONFIG (lines 416-419)."""
+        """from_model_args reads allow_greedy_fastpath/num_links/topology from SAMPLING_AG_CONFIG (lines 416-419)."""
+
+        class MockArgs:
+            padded_vocab_size = 1024
+            sub_core_grids = None
+            sub_core_grid_topk = None
+            start_core = ttnn.CoreCoord(0, 0)
+            max_top_k = 32
+
+        model_config = {
+            "SAMPLING_AG_CONFIG": {
+                "allow_greedy_fastpath": True,
+                "num_links": 3,
+                "topology": ttnn.Topology.Linear,
+            }
+        }
+        sampler = Sampling1D.from_model_args(ttnn_mesh_device, None, MockArgs(), model_config=model_config)
+        assert sampler.config.allow_greedy_fastpath is True
+        assert sampler.config.num_argmax_gather_links == 3
+        assert sampler.config.ag_topology == ttnn.Topology.Linear
+
+    def test_from_model_args_rejects_legacy_key(self, ttnn_mesh_device, expect_error):
+        """The pre-#51987 key must raise, not silently read as a disabled fast-path."""
 
         class MockArgs:
             padded_vocab_size = 1024
@@ -359,10 +381,8 @@ class TestSampling1DDevice:
                 "topology": ttnn.Topology.Linear,
             }
         }
-        sampler = Sampling1D.from_model_args(ttnn_mesh_device, None, MockArgs(), model_config=model_config)
-        assert sampler.config.allow_force_argmax is True
-        assert sampler.config.num_argmax_gather_links == 3
-        assert sampler.config.ag_topology == ttnn.Topology.Linear
+        with expect_error(ValueError, "allow_force_argmax"):
+            Sampling1D.from_model_args(ttnn_mesh_device, None, MockArgs(), model_config=model_config)
 
     # ------------------------------------------------------------------
     # Buffer passthrough: _resolve_buf ttnn.Tensor path (lines 493-494)
@@ -582,11 +602,11 @@ def _make_sampling_params(ttnn_mesh_device, B, *, k_val=1, p_val=0.0, temp_val=1
 
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
 @pytest.mark.parametrize(
-    "mesh_shape,vocab_size,k_val,p_val,temp_val,force_argmax,hf_model_name",
+    "mesh_shape,vocab_size,k_val,p_val,temp_val,greedy_fastpath,hf_model_name",
     _list_collected_sampling_cases(),
 )
 def test_sampling1d_topk1_vs_argmax(
-    ttnn_mesh_device, mesh_shape, vocab_size, k_val, p_val, temp_val, force_argmax, hf_model_name
+    ttnn_mesh_device, mesh_shape, vocab_size, k_val, p_val, temp_val, greedy_fastpath, hf_model_name
 ):
     """
     Top-k=1, p=0.0, temp=1.0 should produce the same result as torch.argmax.
@@ -654,7 +674,7 @@ def test_sampling1d_topk1_vs_argmax(
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
 def test_sampling1d_argmax_vs_reference(ttnn_mesh_device):
     """
-    Force-argmax path (k/p/temp=None, allow_force_argmax=True) vs torch.argmax.
+    Greedy fast-path (k/p/temp=None, allow_greedy_fastpath=True) vs torch.argmax.
 
     Tests the all-gather-free argmax path on single device.
     """
@@ -665,7 +685,7 @@ def test_sampling1d_argmax_vs_reference(ttnn_mesh_device):
     sampler = Sampling1D(
         vocab_size=vocab_size,
         mesh_device=ttnn_mesh_device,
-        allow_force_argmax=True,
+        allow_greedy_fastpath=True,
     )
 
     logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
@@ -769,7 +789,7 @@ def test_sampling1d_argmax_slices_qwen3_32b_padded_tail(ttnn_mesh_device):
         vocab_size=padded_vocab_size,
         valid_vocab_size=valid_vocab_size,
         mesh_device=ttnn_mesh_device,
-        allow_force_argmax=True,
+        allow_greedy_fastpath=True,
     )
 
     logits_host = torch.full((1, 1, B, padded_vocab_size), -1.0, dtype=torch.bfloat16)
@@ -1464,7 +1484,7 @@ def test_sampling1d_logprobs_disabled_returns_none(ttnn_mesh_device):
     B = 32
     vocab_size = 1024
 
-    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_force_argmax=True)
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_greedy_fastpath=True)
     logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
     cluster_shape = tuple(ttnn_mesh_device.shape)
 
@@ -1489,12 +1509,12 @@ def test_sampling1d_argmax_never_emits_logprobs(ttnn_mesh_device):
     B = 32
     vocab_size = 1024
 
-    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_force_argmax=True)
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_greedy_fastpath=True)
     logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
     logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
 
     _, log_probs = sampler.decode_forward(logits_tt, enable_log_probs=True)
-    assert log_probs is None, "argmax path must never compute logprobs (force-argmax ⇒ no logprobs)"
+    assert log_probs is None, "argmax path must never compute logprobs (greedy fast-path ⇒ no logprobs)"
 
 
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
@@ -1597,7 +1617,7 @@ def test_sampling1d_trace_capture(ttnn_mesh_device, mode):
         vocab_size=vocab_size,
         mesh_device=mesh_device,
         max_batch_size=B,
-        allow_force_argmax=True,
+        allow_greedy_fastpath=True,
         pad_to_power_of_2=(mode == "topk" and num_devices > 1),
     )
 

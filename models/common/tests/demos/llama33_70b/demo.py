@@ -480,8 +480,8 @@ def _run_perf_benchmark(
         # On-device sampling toggle for SKU evidence-gathering:
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
         #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured top-k op path with k=1.
-        #                      Sampling1D is built allow_force_argmax=False, so even greedy routes
-        #                      through ttnn.topk (k=1 top-k == argmax-via-topk), NOT the force-argmax
+        #                      Sampling1D is built allow_greedy_fastpath=False, so even greedy routes
+        #                      through ttnn.topk (k=1 top-k == argmax-via-topk), NOT the greedy fast-path
         #                      full-vocab all-gather.
         #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured top-k op path with k=32
         #                      (gathers only the [*,32] tuples). On T3K (8 dev) the vocab

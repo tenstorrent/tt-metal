@@ -592,10 +592,10 @@ class DeepSeekR1Qwen14B(LightweightModule):
         # Buffers are lazy (nothing materializes until the first on-device sampled decode), so
         # this is harmless when sampling_params is None (host-argmax path, the demo default).
         # On-device argmax + top-k both capture/replay on 1x1/1x2/1x8 meshes (test_sampling1d_trace
-        # _capture), so the gate is all 1D meshes. allow_force_argmax=False clones TTTv1's
-        # default_sampling_force_argmax decision for all non-Galaxy meshes (Qwen2 generic path,
+        # _capture), so the gate is all 1D meshes. allow_greedy_fastpath=False clones TTTv1's
+        # default_sampling_greedy_fastpath decision for all non-Galaxy meshes (Qwen2 generic path,
         # model_config.py): the perf recipe (temp=0, top_k=32, top_p=0.08) routes through the cheap
-        # top-k op path, never the full-vocab force-argmax all-gather.
+        # top-k op path, never the full-vocab greedy fast-path all-gather.
         self.supports_on_device_sampling = self.num_devices >= 1
         self.sampling = (
             Sampling1D(
@@ -603,7 +603,7 @@ class DeepSeekR1Qwen14B(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 max_batch_size=_nearest_32(cfg.max_batch_size),
-                allow_force_argmax=False,
+                allow_greedy_fastpath=False,
                 pad_to_power_of_2=True,
             )
             if self.supports_on_device_sampling

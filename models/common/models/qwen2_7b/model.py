@@ -669,10 +669,10 @@ class Qwen2_7B(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 max_batch_size=_nearest_32(cfg.max_batch_size),
-                # Clone TTTv1's decision: default_sampling_force_argmax.allow_force_argmax=False for
+                # Clone TTTv1's decision: default_sampling_greedy_fastpath.allow_greedy_fastpath=False for
                 # all non-Galaxy meshes. The top-k perf recipe (temp=0, top_p=0.08, top_k=32) routes
                 # through the cheap top-k op path, never the full-vocab argmax all-gather.
-                allow_force_argmax=False,
+                allow_greedy_fastpath=False,
                 pad_to_power_of_2=True,
             )
             if self.supports_on_device_sampling

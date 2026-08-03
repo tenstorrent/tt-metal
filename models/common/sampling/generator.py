@@ -67,7 +67,7 @@ SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
 class _TraceKey:
     penalties_on: bool
     log_probs_on: bool
-    force_argmax: bool
+    greedy_fastpath: bool
 
 
 class SamplingGenerator:
@@ -114,8 +114,8 @@ class SamplingGenerator:
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
-    def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
-        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax)
+    def _trace_slot(self, penalties_on: bool, log_probs_on: bool, greedy_fastpath: bool):
+        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, greedy_fastpath=greedy_fastpath)
         slot = self._trace_states.get(key)
         if slot is None:
             slot = self._new_trace_state()
@@ -130,7 +130,7 @@ class SamplingGenerator:
             if slot["id"] is None:
                 continue
             logger.debug(
-                f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+                f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, greedy_fastpath={key.greedy_fastpath}, trace_id={slot['id']})"
             )
             try:
                 ttnn.release_trace(self.mesh_device, slot["id"])
@@ -224,7 +224,7 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
-        old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
+        old_greedy_fastpath = self.tt_sampling.greedy_fastpath
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
@@ -234,7 +234,7 @@ class SamplingGenerator:
             num_logprobs=num_logprobs,
             empty_slots=empty_slots,
         )
-        if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
+        if self.tt_sampling.greedy_fastpath != old_greedy_fastpath:
             self.reset_trace()
 
         old_penalties_active = self._penalties_active
@@ -244,7 +244,7 @@ class SamplingGenerator:
             and is_default_value(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
         )
         if (
-            not self.tt_sampling.force_argmax_sampling
+            not self.tt_sampling.greedy_fastpath
             or self._penalties_active
             or self._penalties_active != old_penalties_active
         ):
@@ -299,13 +299,13 @@ class SamplingGenerator:
         """
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
-        force_argmax = self.tt_sampling.force_argmax_sampling
+        greedy_fastpath = self.tt_sampling.greedy_fastpath
 
-        key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
+        key, slot = self._trace_slot(penalties_on, log_probs_on, greedy_fastpath)
 
         if not skip_precompile:
             logger.debug(
-                f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
+                f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},greedy_fastpath={greedy_fastpath})"
             )
             self._run_sampling(
                 logits,
@@ -362,7 +362,7 @@ class SamplingGenerator:
 
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
-        force_argmax = self.tt_sampling.force_argmax_sampling
+        greedy_fastpath = self.tt_sampling.greedy_fastpath
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
@@ -374,7 +374,7 @@ class SamplingGenerator:
                 tt_out_tok=tt_out_tok,
             )
         else:
-            key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
+            key, slot = self._trace_slot(penalties_on, log_probs_on, greedy_fastpath)
             if slot["id"] is None:
                 return self.capture_trace(
                     logits,

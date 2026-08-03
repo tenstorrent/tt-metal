@@ -644,7 +644,7 @@ class Qwen25Coder32B(LightweightModule):
         # default). Qwen2.5-Coder-32B is a T3K-only port (8 devices), where Sampling1D's all-gather
         # uses a barrier-free Ring and is trace-capture-safe.
         #
-        # Clone TTTv1's decision: ``default_sampling_force_argmax.allow_force_argmax=False`` for all
+        # Clone TTTv1's decision: ``default_sampling_greedy_fastpath.allow_greedy_fastpath=False`` for all
         # non-Galaxy meshes (only Llama-3.1-8B on TG flips it True). The PERF.md recipe
         # (temp=0, top_k=32, top_p=0.08) routes through the cheap top-k op path -- per-device
         # ttnn.topk -> all-gather of the [*,32] tuples -> ttnn.sampling -- never the full-vocab
@@ -656,7 +656,7 @@ class Qwen25Coder32B(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 max_batch_size=_nearest_32(cfg.max_batch_size),
-                allow_force_argmax=False,
+                allow_greedy_fastpath=False,
                 pad_to_power_of_2=True,
             )
             if self.supports_on_device_sampling
