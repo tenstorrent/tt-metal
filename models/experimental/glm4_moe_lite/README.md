@@ -182,6 +182,45 @@ Each step below was individually validated on-device and coherence-gated
 Versus the earlier published baseline (74.8 ms / 13.37 tok/s): **−31.4% latency,
 +45.8% throughput**.
 
+### What actually bounds the decode step (measured 2026-08-03)
+
+Re-profiled the 50.1 ms configuration with Tracy and then A/B-tested each candidate
+lever on device. The measurement rig is accurate to ~0.1 ms: turning off the sharded
+norm reproduced its historical delta (+2.8 ms measured vs +2.7 ms recorded).
+
+| lever | Δ vs 50.1 ms | verdict |
+| --- | --- | --- |
+| `DENSE_TT_DTYPE=bf16` (2x dense weight bytes) | **+9.8 ms** | **weight bandwidth dominates** |
+| `SHARDED_NORM=0` | +2.8 ms | kernel parallelism: real but small |
+| `CCL_NUM_LINKS=1` (from 4) | +1.6 ms | collectives are only ~2 ms of the step |
+| `CCL_TOPOLOGY=linear` (from ring) | 0.0 ms | no effect at 4 links |
+| `USE_DECODE_ROPE=0` (removes ~564 ops/step) | **0.0 ms** | **op count is NOT a lever under trace** |
+| `EXPERTS_TT_DTYPE=bf4` | -0.2 ms (noise) | experts are top-4 of 64, a small byte share |
+| `DENSE_TT_DTYPE=bf4` | -2.7 ms | **REJECTED — breaks output quality** |
+
+Two results overturn the previous plan of record:
+
+**Op count is not the lever.** The Tracy profile shows device kernel time of 26.3 ms
+against a 50.1 ms step, which looks like ~25 ms of per-op firmware overhead across
+2406 ops. That reading is wrong: removing 564 ops per step (23% of them, by using the
+interleaved RoPE kernel instead of the 7-op sharded decode-mode closure) changed the
+step time by 0.0 ms. Under trace replay the command stream is pre-recorded, so per-op
+firmware setup is pipelined; the profiler's FW durations are an artefact of
+instrumentation serialising what trace overlaps. Do not optimise against them.
+
+**bf4 is a quality regression, not a speedup.** It measures -2.7 ms and passes a
+single-prompt check, but a wider battery fails: "17 multiplied by 24" produced empty
+output, and "why is the sky blue" produced `because of__(blank)__scatters more light`
+-- garbled, and the wavelength mechanism lost. This independently reproduces the
+earlier decision to revert bf4. One easy factual-recall prompt is not a coherence gate.
+
+So the step is weight-bandwidth-bound, and bf8 is already the precision floor. The
+remaining headroom needs a mechanism that *overlaps* weight reads with compute rather
+than shrinking them -- which is exactly what the GlobalCB prefetcher targeted, and
+that is blocked on L1 (see below). Untested idea with a plausible path: per-tensor
+mixed precision, bf4 only on the least sensitive large weights (w_o is 11.1 MB/layer)
+with PCC gating per tensor, rather than the blanket flag that fails above.
+
 ### Next steps
 
 The largest remaining decode bucket is matmul (~39.5% of step time at ~20% M=1

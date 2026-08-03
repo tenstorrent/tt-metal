@@ -1456,11 +1456,22 @@ class Glm4MoeLiteDenseOnlyTT:
             # including in the eager warmup, which is called with enable_trace=False.
             # The user cap also shrinks: worker columns 0-5, not the full 8x9 grid.
             max_decode_rope_users = WORKER_GRID_X * int(grid_size.y)
-        use_decode_rope = (
-            enable_trace
-            or self.prefetcher is not None
-            or os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip() == "1"
-        ) and active <= max_decode_rope_users
+        # Decode-mode (sharded) RoPE vs the interleaved kernel is an OP-COUNT tradeoff, and
+        # profiling says op count dominates: the decode-mode closure is ~7 device ops per
+        # call (permute, pad, 2x to_memory_config, rope, slice, permute) against 1 for the
+        # interleaved path. At 2 calls/layer x 47 layers that is ~564 extra dispatches per
+        # decode step, and per-op firmware overhead measured ~10.4 us. So allow an explicit
+        # "0" to turn it off even under trace, which previously forced it on unconditionally.
+        _rope_env = os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip()
+        if self.prefetcher is not None:
+            # Required under prefetch: the interleaved kernel takes the full grid and cannot
+            # be confined to the worker SubDevice.
+            _want_decode_rope = True
+        elif _rope_env == "0":
+            _want_decode_rope = False
+        else:
+            _want_decode_rope = enable_trace or _rope_env == "1"
+        use_decode_rope = _want_decode_rope and active <= max_decode_rope_users
         cos_decode = sin_decode = trans_decode = rope_sharded_cfg = None
         if use_decode_rope:
             (
