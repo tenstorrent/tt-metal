@@ -55,9 +55,9 @@ ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/reader_indexe
 ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp — role: receiver | tag: clean | cleanest modern receiver
 ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp — role: sender | tag: refactor | unicast scatter + up(counter)
 ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp — role: hybrid | tag: refactor | richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast)
-ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp — role: sender | tag: refactor | legacy raw API; FLAG-ONLY
-ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp — role: receiver | tag: refactor | legacy
-ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp — role: sender | tag: refactor | confirmation inc
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp — role: sender | tag: refactor | object API; FLAG-ONLY STAR; v9 candidate via Counter send_signal; ready/done waits stay op-owned
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp — role: receiver | tag: refactor | object API; v9 Counter receive_signal candidate; row-ready up stays op-owned
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp — role: sender | tag: refactor | done-counter return leg only; helper-neutral companion in the sort atomic unit
 ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp — role: sender | tag: refactor | single-shot go-flag mcast to 2-3 rects; legacy API
 ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp — role: sender | tag: refactor | RM twin of above
 
