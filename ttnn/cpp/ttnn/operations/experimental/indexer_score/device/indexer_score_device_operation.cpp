@@ -183,6 +183,15 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         "boundary (one straddle). A coarser indexer SP (Sq > chunk_local) is not yet supported.",
         Sq,
         chunk_local);
+    // Key-stripe split (TP-deduplicated cache): the reader's invP divisors become (sp*split, chunk_local/split),
+    // so the finer per-stripe chunk must itself be tile-aligned. The global chunk is unchanged (sp*chunk_local),
+    // so the T-divisibility check above already covers the split layout.
+    TT_FATAL(attrs.key_stripe_split >= 1, "key_stripe_split must be >= 1 (got {})", attrs.key_stripe_split);
+    TT_FATAL(
+        chunk_local % (attrs.key_stripe_split * tt::constants::TILE_WIDTH) == 0,
+        "block_cyclic_chunk_local ({}) must split evenly into {} tile-aligned key stripes",
+        chunk_local,
+        attrs.key_stripe_split);
 }
 
 // Semaphore addresses are hashed, but different mesh devices can allocate the same L1 addresses. Re-check
@@ -278,6 +287,9 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_topology,
         fused_has_sub_device,
         fused_sub_device,
+        // The key-stripe split scales those divisors (finer KEY striping than the query sharding), so it is
+        // part of the reader binary too -- an unsplit vs tp-split key cache must not share a program.
+        attrs.key_stripe_split,
         tensor_args);
 }
 
@@ -596,7 +608,8 @@ IndexerScoreDeviceOperation::invoke(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
     std::vector<uint32_t> seq_shard_axes,
-    std::optional<BlockCyclicLayout> block_cyclic) {
+    std::optional<BlockCyclicLayout> block_cyclic,
+    uint32_t key_stripe_split) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
@@ -610,7 +623,8 @@ IndexerScoreDeviceOperation::invoke(
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
             .kv_len = kv_len,
-            .block_cyclic = block_cyclic},
+            .block_cyclic = block_cyclic,
+            .key_stripe_split = key_stripe_split},
         tensor_args_t{.q = q, .k = k, .weights = weights}};
 }
 
@@ -658,6 +672,7 @@ ttnn::Tensor launch_indexer_score(
     bool allow_subshard,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
+    bool block_cyclic_tp_sharded = false,  // MSA frontend never TP-shards; DSA passes it through
     // Fused ring (all-gather subsumed): k is the gathered [B,1,T,D] persistent output buffer, k_local is this
     // chip's SP shard = the all-gather INPUT, fused_ring carries the AG config. Both nullopt = the classic path.
     std::optional<ttnn::Tensor> k_local = std::nullopt,
@@ -695,6 +710,7 @@ ttnn::Tensor launch_indexer_score(
             *block_cyclic_sp_axis);
     }
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
+    uint32_t key_stripe_split = 1;  // >1 only for a TP-deduplicated (GLM-5.2) key cache; see below
     if (block_cyclic_sp_axis.has_value()) {
         const auto mesh_shape = q.device()->get_view().shape();
         const uint32_t sp_axis = *block_cyclic_sp_axis;
@@ -745,9 +761,27 @@ ttnn::Tensor launch_indexer_score(
                 *seq_subshard_axis,
                 *cluster_axis);
         }
-        // Store {sp, chunk_local} (matching sparse_sdpa's BlockCyclicLayout); the factory derives the global
-        // chunk (sp*chunk_local) and the invP tile divisors from these.
-        if (sp > 1) {
+        // Store the QUERY sharding {sp, chunk_local} (matching sparse_sdpa's BlockCyclicLayout); the factory
+        // derives the global chunk (sp*chunk_local) and the causal geometry from these. GLM-5.2 KV dedup: when
+        // the cache is striped across ALL sp*tp devices (block_cyclic_tp_sharded, gathered TP-inner then
+        // SP-outer into linear chip order) the KEYS are striped tp-times finer than the queries are sharded --
+        // record that as key_stripe_split, which ONLY the invP key remap consumes. Do NOT fold it into
+        // block_cyclic: device_causal_geometry indexes with the SP-ring rank (device_index < sp), so an
+        // {sp*tp, chunk_local/tp} layout would place every device's queries at the wrong causal offset.
+        if (block_cyclic_tp_sharded) {
+            TT_FATAL(
+                chunk_local % (tp * tt::constants::TILE_WIDTH) == 0,
+                "indexer_score: block_cyclic_tp_sharded needs block_cyclic_chunk_local ({}) divisible by tp ({}) "
+                "with a tile-aligned ({}) per-stripe chunk",
+                chunk_local,
+                tp,
+                tt::constants::TILE_WIDTH);
+            key_stripe_split = tp;
+        }
+        // sp == 1 with unsplit keys is the identity permutation -> leave it contiguous. A tp-split key cache
+        // still needs the remap even at sp == 1 (the gathered buffer is TP-stripe-major), and the sp == 1
+        // geometry is identical either way (chunk_global == chunk_local -> no rotation, no straddle).
+        if (sp > 1 || key_stripe_split > 1) {
             block_cyclic = BlockCyclicLayout{.sp = sp, .chunk_local = chunk_local};
         }
     }
@@ -815,7 +849,8 @@ ttnn::Tensor launch_indexer_score(
         cache_batch_idx,
         kv_len,
         std::move(seq_shard_axes),
-        block_cyclic);
+        block_cyclic,
+        key_stripe_split);
     // Attach the fused-ring config + local shard (both nullopt on the classic path -> byte-identical behavior).
     operation_attributes.fused_ring = std::move(fused_ring);
     tensor_args.k_local = std::move(k_local);
@@ -835,7 +870,8 @@ ttnn::Tensor indexer_score_dsa(
     std::optional<uint32_t> kv_len,
     const std::optional<std::vector<uint32_t>>& seq_shard_axes,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    bool block_cyclic_tp_sharded) {
     // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
@@ -854,7 +890,8 @@ ttnn::Tensor indexer_score_dsa(
         seq_shard_axes.value_or(std::vector<uint32_t>{}),
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
-        block_cyclic_chunk_local);
+        block_cyclic_chunk_local,
+        block_cyclic_tp_sharded);
 }
 
 ttnn::Tensor indexer_score_msa(
@@ -945,6 +982,7 @@ ttnn::Tensor ring_indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
+        /*block_cyclic_tp_sharded=*/false,  // fused ring is not yet TP-dedup aware
         k_local,
         fused_ring);
 }

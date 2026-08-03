@@ -804,11 +804,165 @@ def test_glm_kv_cache_table(
     )
 
 
+# sp x tp -- GLM-5.2 KV-dedup (TP-sharded) chunk address table
+# Meshes are restricted to physically-realizable fabric topologies: 2x4 is the LoudBox (8 devices,
+# the sp=2/tp=4 proxy) and 8x4 is the Galaxy (32 devices, production sp=8/tp=4). 4-device sub-meshes
+# (1x4, 2x2) can't fabric-init on an 8-device LoudBox (ethernet handshake times out), and the
+# disaggregation readback requires fabric. The sp=1/tp=2 writer splits those would add are already
+# covered fabric-free by the update_padded_kv_cache op-unit test.
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(2, 4), (8, 4)],
+    ids=["2x4", "8x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024], ids=["seq5k", "seq10k"])
+@pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
+@pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.2 DSA / TP-dedup is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm52_tp_sharded_kv_cache_table(
+    mesh_device,
+    seq_len,
+    num_users,
+    num_layers,
+    device_params,
+):
+    """End-to-end readback for the GLM-5.2 TP-DEDUPLICATED (SP x TP -sharded) KV chunk address table.
+
+    The KV cache is sharded across BOTH mesh axes: every (row, col) device stores a distinct
+    640/tp-token block-cyclic sub-slice (vs the SP-only path where each TP column replicates its row).
+    This test proves table + writer + allocation all agree byte-for-byte:
+
+      1. Allocate a cache whose PER-DEVICE size is seq_len/(sp*tp) (init_kvpe_cache divides by sp, so we
+         pass seq_len/tp to land the extra /tp).
+      2. Fill it with update_padded_kv_cache(tp_axis=...), one chunk-aligned write per 5k seq chunk
+         (chunk-aligned => no server rotation, so a natural-order input sharded across SP feeds each
+         (sp, tp) chip its own 1/tp window).
+      3. Build the table with populate_kv_chunk_address_table_kimi(tp_axis=1): per-(row, col) singleton
+         device groups + a col offset.
+      4. Read every 32-token chunk back through the table (by GLOBAL natural position) and compare to a
+         bfp8 round-trip of the natural-order reference.
+    """
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+    F = sp * tp
+    assert tp > 1, "this test exercises the TP-sharded table; tp must be > 1"
+
+    kvpe_cache_head_dim = 576  # qk_rope_head_dim(64) + kv_lora_rank(512)
+    num_kvpe_cache_layers = num_users * num_layers
+    num_seq_chunks = seq_len // PREFILL_CHUNK_OUTPUT_TOKENS
+    assert seq_len % PREFILL_CHUNK_OUTPUT_TOKENS == 0
+    assert PREFILL_CHUNK_OUTPUT_TOKENS % F == 0, f"5k chunk must divide evenly across sp*tp={F}"
+
+    torch.manual_seed(42)
+    # Natural-order reference, one distinct value per (batch, token) so the readback is a strong check.
+    reference = torch.randn(num_kvpe_cache_layers, 1, seq_len, kvpe_cache_head_dim).to(torch.bfloat16)
+
+    # Per-device rows = seq_len/(sp*tp). init_kvpe_cache divides seq_len by sp only, so pass seq_len/tp.
+    assert seq_len % tp == 0
+    # init_kvpe_cache allocates batch = num_users * num_kvpe_cache_layers, so pass PER-USER layers here.
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_cache_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len // tp,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=num_users,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # Fill via the TP-sharded writer: natural-order input sharded across SP, replicated across TP.
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2
+    mesh_device.enable_program_cache()
+    for seq_chunk in range(num_seq_chunks):
+        tok_lo = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS
+        for u in range(num_users):
+            for l in range(num_layers):
+                batch_idx = u * num_layers + l
+                chunk_nat = reference[batch_idx, 0, tok_lo : tok_lo + PREFILL_CHUNK_OUTPUT_TOKENS, :]
+                tt_input = ttnn.from_torch(
+                    chunk_nat.reshape(1, 1, PREFILL_CHUNK_OUTPUT_TOKENS, kvpe_cache_head_dim),
+                    device=mesh_device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims
+                    ),
+                )
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    tt_kvpe_cache,
+                    tt_input,
+                    slot_idx=u,
+                    layer_idx=l,
+                    num_layers=num_layers,
+                    kv_actual_global=tok_lo,
+                    cluster_axis=sp_axis,
+                    tp_axis=tp_axis,
+                )
+    ttnn.synchronize_device(mesh_device)
+
+    # Build the TP-sharded table over the just-written cache.
+    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8 = 18 tiles * 1088 bytes
+    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+    lookup_table_config.num_layers = num_layers
+    lookup_table_config.max_sequence_length = seq_len
+    lookup_table_config.num_slots = num_users
+    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
+    lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(lookup_table_config)
+    populate_kv_chunk_address_table_kimi(
+        lookup_table=lookup_table,
+        config=lookup_table_config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
+        num_users=num_users,
+        tp_axis=tp_axis,
+    )
+
+    # bfp8 round-trip of the reference; slicing on 32-token (tile-aligned) chunk boundaries preserves the
+    # per-tile shared exponent, so this matches the bytes the writer stored.
+    reference_bf8 = ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
+        torch.bfloat16
+    )
+
+    chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
+    for slot in range(num_users):
+        for layer in range(num_layers):
+            batch_idx = slot * num_layers + layer
+            for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                raw_bytes = lookup_table.read_device_chunk(layer=layer, position=position, slot=slot)
+                chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
+                chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
+                expected_chunk = reference_bf8[batch_idx : batch_idx + 1, :, position:pos_end, :]
+                assert_equal(chunk_torch, expected_chunk)
+    logger.info(f"[glm52] TP-sharded table readback verified: sp={sp} tp={tp} seq_len={seq_len}")
+
+
 # sp x tp -- STANDARD (SP-only, TP-replicated) GLM-5.2 merged KV chunk address table.
 # main has a model-driven table readback for glm_5_1 (test_glm_kv_cache_table) but none for glm_5.2;
 # this is the missing SP-only baseline. It runs the real GLM-5.2 DSA MLA (layer 0 = a "full" layer, so
 # the indexer runs and fills the index-key cache), fills both the KVPE and indexer caches, builds the
-# merged 2-config kimi table (config 0 = KVPE, config 1 = index), and reads every 32-token chunk back.
+# merged 2-config kimi table (config 0 = KVPE, config 1 = index) with tp_axis=None, and reads every
+# 32-token chunk back. The TP-DEDUPLICATED counterpart (tp_axis=1, model-driven) is the test above this
+# baseline (test_glm52_tp_sharded_kv_cache_table); this one is its SP-only companion.
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [

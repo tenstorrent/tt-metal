@@ -21,7 +21,8 @@ ttnn::Tensor sparse_sdpa(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    bool block_cyclic_tp_sharded) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -52,7 +53,22 @@ ttnn::Tensor sparse_sdpa(
             chunk_local,
             q_isl,
             q_isl * tp);
-        block_cyclic = ttnn::prim::BlockCyclicLayout{sp, chunk_local};
+        // GLM-5.2 KV dedup: the cache is striped across all sp*tp devices (linear chip sp*tp+tp), gathered
+        // TP-inner then SP-outer into that linear order. Use an effective stripe count sp*tp and per-stripe
+        // chunk chunk_local/tp. The global chunk (stripes*chunk = sp*chunk_local) is unchanged, so causality
+        // / q_isl are unaffected; only the invP KEY remap now decodes the finer sp*tp striping.
+        uint32_t stripes = sp;
+        uint32_t stripe_chunk = chunk_local;
+        if (block_cyclic_tp_sharded) {
+            TT_FATAL(
+                chunk_local % tp == 0,
+                "sparse_sdpa: block_cyclic_tp_sharded needs block_cyclic_chunk_local ({}) divisible by tp ({})",
+                chunk_local,
+                tp);
+            stripes = sp * tp;
+            stripe_chunk = chunk_local / tp;
+        }
+        block_cyclic = ttnn::prim::BlockCyclicLayout{stripes, stripe_chunk};
     }
 
     // fp8 q/kv must be tilized through a 32-bit dest accumulator, so default fp32_dest_acc_en on for fp8.

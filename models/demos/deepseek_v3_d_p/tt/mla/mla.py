@@ -293,6 +293,7 @@ class ttMLA:
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         active_seq_len: Optional[int] = None,
         first_layer_idx: Optional[int] = None,
+        tp_shard_kv: bool = False,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -318,6 +319,10 @@ class ttMLA:
         assert (
             self.active_seq_len <= self.max_seq_len
         ), f"active_seq_len ({self.active_seq_len}) exceeds max_seq_len ({self.max_seq_len})"
+        # GLM-5.2 KV dedup: when True the KVPE (and indexer key) caches are sharded across BOTH the SP
+        # and TP axes (not TP-replicated). Writes pass tp_axis to update_padded_kv_cache and reads add a
+        # TP-inner all-gather leg before the SP gather. Only wired for the SPARSE single-chunk path today.
+        self.tp_shard_kv = tp_shard_kv
         self.slot_num = slot_num
         self.layer_num = layer_num
         self.sparse_kv_cache_format = MlaKvCacheFormat(sparse_kv_cache_format or MlaKvCacheFormat.BF16_RM)
@@ -585,6 +590,7 @@ class ttMLA:
                     slot_num=slot_num,
                     layer_num=self.layer_num,
                     first_layer_idx=first_layer_idx,
+                    tp_shard_kv=self.tp_shard_kv,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -897,6 +903,9 @@ class ttMLA:
 
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
+        # TP-dedup is only wired for the SPARSE path (_sparse_chunked_attn); the dense ring_mla cache is
+        # still TP-replicated, so fail loud if a dense layer is asked to TP-shard its KV.
+        assert not self.tp_shard_kv, "tp_shard_kv is only supported on the sparse (DSA) path, not dense ring_mla"
         # Metadata (trace-safe) path reads slot_idx/kv_actual_global on-device from the metadata tensor.
         self._update_kv_cache(
             kvpe_cache,
@@ -1171,6 +1180,7 @@ class ttMLA:
         cache_layer_idx: int,
         kv_actual_isl: int,
         metadata: Optional[ttnn.Tensor] = None,
+        tp_axis: Optional[int] = None,
     ) -> None:
         # Metadata (trace-safe) path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read
         # on-device, each its own 1-element tensor. Scalar path passes host slot/kv_actual_global.
@@ -1183,6 +1193,7 @@ class ttMLA:
                 layer_idx=cache_layer_idx,
                 num_layers=self.layer_num,
                 cluster_axis=self.sp_axis,
+                tp_axis=tp_axis,
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -1193,6 +1204,7 @@ class ttMLA:
                 num_layers=self.layer_num,
                 kv_actual_global=kv_actual_isl,
                 cluster_axis=self.sp_axis,
+                tp_axis=tp_axis,
             )
 
     def _output_gate(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
@@ -1496,6 +1508,7 @@ class ttMLA:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             kv_actual_isl=kv_actual_isl,
+            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # GLM-5.2 KV dedup: write only this chip's 1/tp window
         )
         # After the write above, KV is populated up to [0, kv_actual_isl + chunk_size_global); the gather
         # only needs that populated prefix (top-k indices never address the unwritten suffix).
@@ -1573,6 +1586,9 @@ class ttMLA:
 
         # Write the chunk via the SAME chunked path as _chunked_attn (not a single-shot fill):
         # update_padded_kv_cache writes at the per-chip offset derived from kv_actual_global.
+        # KV-only (last-layer migration fill) is not yet wired for TP-dedup — fail loud rather than
+        # silently write a TP-replicated cache when tp_shard_kv was requested.
+        assert not self.tp_shard_kv, "tp_shard_kv is not yet supported on the KV-only (_forward_kv_only) path"
         self._update_kv_cache(
             kvpe_cache,
             tt_kvpe,
@@ -1679,6 +1695,9 @@ class ttMLA:
             k_chunk_size=k_chunk,
             block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
+            # GLM-5.2 KV dedup: cache striped over sp*tp (linear chip), gathered TP-inner+SP-outer by
+            # _gather_kvpe_prefix → sparse_sdpa uses an sp*tp stripe count + chunk_local/tp.
+            block_cyclic_tp_sharded=self.tp_shard_kv and block_cyclic_chunk_local is not None,
             cache_batch_idx=cache_batch_idx,
         )
         ttnn.deallocate(q_rm)
@@ -1729,6 +1748,18 @@ class ttMLA:
         conversion. The prefix is rounded to a whole block-cyclic slab; sparse SDPA only dereferences current
         top-k indices, so its unwritten suffix is never consumed."""
 
+        if self.tp_shard_kv and self.tp_factor > 1:
+            # GLM-5.2 KV dedup: high_bw_all_gather rides ONE cluster axis and lands in the single
+            # preallocated worst-case scratch, so it cannot rebuild an sp*tp-striped slab -- that needs a
+            # TP-inner gather first, into an intermediate the scratch has no room for. Take the pre-fusion
+            # two-stage route; teaching the high-BW gather sp*tp stripes is follow-up work.
+            return self._gather_kvpe_prefix_tp_sharded(
+                kvpe_cache,
+                cache_batch_idx,
+                populated_global,
+                block_cyclic_chunk_local=block_cyclic_chunk_local,
+            )
+
         storage = kvpe_cache.storage
         slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
         if self.sp_factor == 1:
@@ -1766,4 +1797,77 @@ class ttMLA:
             format=kvpe_cache.format,
             storage=gathered,
             geometry=kvpe_cache.geometry,
+        )
+
+    def _gather_kvpe_prefix_tp_sharded(
+        self,
+        kvpe_cache: MlaKvCache,
+        cache_batch_idx,
+        populated_global: int,
+        *,
+        block_cyclic_chunk_local: int,
+    ) -> MlaKvCache:
+        """_gather_kvpe_prefix for an SP*TP-DEDUPED cache: the pre-fusion two-stage gather.
+
+        Each device holds only 1/tp of its SP row's slab, so the slab must be rebuilt TP-inner BEFORE the
+        SP-outer gather; that order is what yields the linear chip-major buffer sparse_sdpa decodes with
+        sp*tp stripes (block_cyclic_tp_sharded=True), for any slab count. high_bw_all_gather cannot do it:
+        it rides one cluster axis and writes the single model-owned worst-case scratch, which has no room
+        for the TP-stage intermediate -- hence the plain, self-allocating all_gather_async this path was
+        validated on. Both stages allocate, so the result is ALWAYS transient and the caller releases it
+        (unlike the SP-only path above, whose sp>1 result IS the persistent scratch).
+
+        Pipeline (all on device): ND->interleaved, slot + populated-width slice (no-op for a single-slot,
+        full-width cache), TP-inner all-gather, SP-outer all-gather (no-op at sp==1). The cache is already
+        in the op format, so there is NO read-back dtype/layout conversion."""
+        storage = ttnn.to_memory_config(kvpe_cache.storage, ttnn.DRAM_MEMORY_CONFIG)
+        slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
+        seq_hi = storage.shape[2]
+        if populated_global is not None and block_cyclic_chunk_local is not None:
+            chunk_size_global = block_cyclic_chunk_local * self.sp_factor
+            num_slabs = -(-populated_global // chunk_size_global)  # ceil-div
+            cl_dev = block_cyclic_chunk_local // self.tp_factor  # per-DEVICE slab width
+            seq_hi = min(num_slabs * cl_dev, seq_hi)
+
+        if storage.shape[0] > 1 or seq_hi != storage.shape[2]:
+            selected = ttnn.slice(
+                storage,
+                [slot_lo, 0, 0, 0],
+                [slot_lo + 1, 1, seq_hi, storage.shape[3]],
+            )
+            ttnn.deallocate(storage)
+            storage = selected
+        tp_full = self._kvpe_all_gather(storage, dim=2, cluster_axis=self.tp_axis)  # [1,1,seq_hi*tp,row_width]
+        ttnn.deallocate(storage)
+        gathered = self._kvpe_all_gather(tp_full, dim=2, cluster_axis=self.sp_axis)  # [1,1,chunk_global,row_width]
+        if self.sp_factor > 1:
+            ttnn.deallocate(tp_full)
+
+        return MlaKvCache(
+            format=kvpe_cache.format,
+            storage=gathered,
+            geometry=kvpe_cache.geometry,
+        )
+
+    def _kvpe_all_gather(self, t, dim, cluster_axis):
+        """All-gather across a mesh cluster axis -> replicated on that axis. factor==1: no-op.
+        cluster_axis picks SP (sequence) or TP; the guard reads the matching mesh factor.
+
+        Survives #52606 (which moved the SP-only gathers to high_bw_all_gather and dropped this helper):
+        that op writes ONE preallocated worst-case scratch, so it cannot hold the TP-stage intermediate the
+        dedup gather needs. Sole caller is _gather_kvpe_prefix_tp_sharded, validated on this plain gather."""
+        factor = self.sp_factor if cluster_axis == self.sp_axis else self.tp_factor
+        if factor == 1:
+            return t
+        # Per-axis topology: match the ring/line topology to the axis this gather rides.
+        topology = self.sp_ccl_topology if cluster_axis == self.sp_axis else self.tp_ccl_topology
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=dim,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=cluster_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=cluster_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=topology,
+            cluster_axis=cluster_axis,
         )

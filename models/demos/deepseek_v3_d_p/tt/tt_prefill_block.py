@@ -255,6 +255,7 @@ class TtPrefillBlock(LightweightModule):
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
+        tp_shard_kv: bool = False,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -326,6 +327,7 @@ class TtPrefillBlock(LightweightModule):
             kv_only=kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
+            tp_shard_kv=tp_shard_kv,
         )
 
         if kv_only:
