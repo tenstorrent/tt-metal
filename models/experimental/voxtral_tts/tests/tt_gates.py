@@ -41,7 +41,7 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import END_AUDIO_ID
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import CFG_ALPHA, TtVoxtralFlow
-from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT, rope_tables
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (
     FRAME_RATE, TtVoxtralPipeline, open_device)
 

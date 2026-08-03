@@ -22,8 +22,10 @@ WHAT MAKES THIS BLOCK UNUSUAL:
     device trace; it was correct and bit-identical but ~6 ms/frame SLOWER on this N150, so the
     capture machinery was removed rather than left as a dormant second path.
 
-THIS BLOCK IS THE BOTTLENECK, measured -- ~100 ms of a ~110 ms frame, against ~48 ms for Block 1's
-whole 3.4B decode step. Parameter count says the opposite and parameter count is the wrong proxy.
+THIS BLOCK IS THE LARGER HALF OF THE FRAME, measured: 42.5 ms against Block 1's 34.9 ms for a
+whole 3.4B decode step. Parameter count says the opposite (390M against 3.4B) and parameter count
+is the wrong proxy -- Block 1's step is a few big matmuls at the DRAM ceiling, whereas this is 7
+sequential passes over a 3-token sequence.
 
 IT IS WEIGHT-READ BOUND, and the fix was structural. A batched matmul re-reads the whole weight per
 batch element, so CFG's batch-2 forward was doubling every weight read; `_trunk` therefore folds the
