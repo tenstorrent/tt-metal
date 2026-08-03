@@ -48,11 +48,14 @@ inline void make_lane_salt() {
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
 }
 
-inline void mix_uint32_fast() {
+inline void begin_mix_uint32_fast() {
     // A shorter bijective ARX permutation. The two modular additions provide
     // the nonlinearity that a pure xorshift lacks, while alternating right
     // and left shifts diffuses the low 31 bits retained by SFPCAST.
     TTI_SFPSHFT((-17) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+}
+
+inline void finish_mix_uint32_fast() {
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
     TTI_SFPSHFT(14, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
@@ -65,7 +68,7 @@ inline void mix_uint32_fast() {
 }
 
 inline void rand_row() {
-    mix_uint32_fast();
+    finish_mix_uint32_fast();
     // SFPCAST converts the low 31 bits as a sign-magnitude integer and rounds
     // directly to FP32. Clear its arbitrary sign, then normalise by 2^-31.
     // This gives a correctly rounded 31-bit uniform grid, including both
@@ -77,7 +80,10 @@ inline void rand_row() {
     rand_prng<p_sfpu::LREG5>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-    TTI_SFPNOP;
+    // Prime the following row's mixer in SFPMAD's dependency slot. This reads
+    // LREG5 and writes LREG0, independently of SFPMAD's LREG6 result. The
+    // speculative prime after the final row is harmless.
+    begin_mix_uint32_fast();
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
     dst_reg++;
 }
@@ -95,10 +101,11 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     make_lane_salt();
     rand_prng<p_sfpu::LREG5>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
+    begin_mix_uint32_fast();
 
     // One row fits in the 32-entry replay buffer. Record and execute it once,
     // then replay it for the remaining rows without scalar loop-control gaps.
-    constexpr std::uint32_t row_instruction_count = 19;
+    constexpr std::uint32_t row_instruction_count = 18;
     TTI_REPLAY(0, row_instruction_count, 1, 1);
     rand_row();
 #pragma GCC unroll 7

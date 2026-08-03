@@ -52,11 +52,14 @@ inline void make_lane_salt() {
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
 }
 
-inline void mix_uint32_fast() {
+inline void begin_mix_uint32_fast() {
     // The same bijective ARX permutation used on Blackhole, scheduled around
     // Wormhole's in-place SFPSHFT and SFPSHFT2 immediate-source semantics.
     // LREG1 holds x on entry and LREG0 holds the result on exit.
     TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+}
+
+inline void finish_mix_uint32_fast() {
     // (-17 & 15) == 15: LREG4 = LREG0 >> 17.
     TTI_SFPSHFT2((-17) & 0xFFF, 0, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
@@ -79,7 +82,7 @@ inline void mix_uint32_fast() {
 }
 
 inline void rand_row() {
-    mix_uint32_fast();
+    finish_mix_uint32_fast();
     // SFPCAST converts the low 31 bits as a sign-magnitude integer and rounds
     // directly to FP32. Clear its arbitrary sign, then normalise by 2^-31.
     // This gives a correctly rounded 31-bit uniform grid, including both
@@ -91,7 +94,10 @@ inline void rand_row() {
     rand_prng<p_sfpu::LREG1>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-    TTI_SFPNOP;
+    // Prime the following row's mixer in SFPMAD's dependency slot. This reads
+    // LREG1 and writes LREG0, independently of SFPMAD's LREG6 result. The
+    // speculative prime after the final row is harmless.
+    begin_mix_uint32_fast();
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_3, 0);
     dst_reg++;
 }
@@ -109,8 +115,9 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     make_lane_salt();
     rand_prng<p_sfpu::LREG1>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
+    begin_mix_uint32_fast();
 
-    constexpr std::uint32_t row_instruction_count = 23;
+    constexpr std::uint32_t row_instruction_count = 22;
     TTI_REPLAY(0, row_instruction_count, 1, 1);
     rand_row();
 #pragma GCC unroll 7
