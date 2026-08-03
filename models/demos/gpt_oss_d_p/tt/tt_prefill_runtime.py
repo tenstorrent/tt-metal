@@ -313,7 +313,7 @@ class TtPrefillRuntime:
         """PCC the populated KV cache for ``slot_id`` against the golden trace; return the min per-layer
         PCC (K and V). Optional bring-up hook — never called in production serving.
 
-        Golden layout (see scripts/generate_golden_kv_cache.py): {trace_dir}/kv_cache/layer_N.safetensors
+        Golden layout: {trace_dir}/kv_cache/layer_N.safetensors
         with ``key_cache_layer_N`` (post-RoPE K, HF half-split convention) + ``value_cache_layer_N`` (raw
         V), each [1, num_kv_heads, seq_len, head_dim]. GQA => NO index_k. The device K is Meta-RoPE
         swizzled over the full head_dim, so the golden K's rotary slice is permuted HF->Meta first."""

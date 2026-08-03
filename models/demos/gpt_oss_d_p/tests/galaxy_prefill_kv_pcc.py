@@ -5,8 +5,8 @@
 
 Mirrors ``minimax_m3/tests/galaxy_prefill_kv_pcc.py``. Builds the full 36-layer model with real bf16
 weights via ``TtPrefillRuntime``, runs prefill over the golden trace's prompt, measures throughput,
-then PCC-checks every layer's post-RoPE K / raw V against the golden trace from
-``scripts/generate_golden_kv_cache.py`` (GQA: NO index_k, unlike M3).
+then PCC-checks every layer's post-RoPE K / raw V against the golden trace (GQA: NO index_k, unlike
+M3). The golden trace is generated offline; point PREFILL_TRACE_DIR at it (layout below).
 
 GALAXY-GATED: needs the (4,8) Blackhole galaxy (32 devices) for TP=8 + EP=32. Auto-SKIPs (returns 0)
 when not on a galaxy or when no golden trace is provided.
