@@ -13,8 +13,9 @@ import torch
 import ttnn
 
 from .config import TimeSeriesTransformerConfig
-from .ops import linear, pad_last_dim, softmax
-from .weights import LoadResult, load_tensors, upload
+from .layers import Linear
+from .ops import pad_last_dim, softmax
+from .weights import LoadResult, merge_results, substate
 
 
 @dataclass
@@ -78,31 +79,22 @@ class MultiHeadAttention:
         self.last_attention_probs: Optional[ttnn.Tensor] = None
 
         d_model = config.d_model
-        for name in ("q_proj", "k_proj", "v_proj", "out_proj"):
-            if rng is None:
-                weight = torch.zeros((d_model, d_model), dtype=torch.float32)
-            else:
-                weight = torch.randn((d_model, d_model), generator=rng, dtype=torch.float32) * 0.02
-            bias = torch.zeros((d_model,), dtype=torch.float32)
-            setattr(self, f"{name}_weight_torch", weight)
-            setattr(self, f"{name}_bias_torch", bias)
-            setattr(self, f"{name}_weight", upload(weight, device=device, dtype=dtype))
-            setattr(self, f"{name}_bias", upload(bias, device=device, dtype=dtype))
+        projection = dict(device=device, dtype=dtype, memory_config=memory_config, rng=rng)
+        self.q_proj = Linear(d_model, d_model, **projection)
+        self.k_proj = Linear(d_model, d_model, **projection)
+        self.v_proj = Linear(d_model, d_model, **projection)
+        self.out_proj = Linear(d_model, d_model, **projection)
 
     def load_hf_state_dict(self, state: Mapping[str, torch.Tensor], *, strict: bool = True) -> LoadResult:
-        mapping = tuple(
-            (f"{name}.{suffix}", f"{name}_{attr}")
-            for name in ("q_proj", "k_proj", "v_proj", "out_proj")
-            for suffix, attr in (("weight", "weight"), ("bias", "bias"))
-        )
-        return load_tensors(
-            self,
-            state,
-            mapping,
-            device=self.device,
-            dtype=self.dtype,
-            strict=strict,
-            label="attention",
+        return merge_results(
+            [
+                ("q_proj", self.q_proj.load_hf_state_dict(substate(state, "q_proj"), strict=strict)),
+                ("k_proj", self.k_proj.load_hf_state_dict(substate(state, "k_proj"), strict=strict)),
+                ("v_proj", self.v_proj.load_hf_state_dict(substate(state, "v_proj"), strict=strict)),
+                ("out_proj", self.out_proj.load_hf_state_dict(substate(state, "out_proj"), strict=strict)),
+            ],
+            state=state,
+            claimed=("q_proj", "k_proj", "v_proj", "out_proj"),
         )
 
     # -- shape plumbing -----------------------------------------------------
@@ -118,15 +110,6 @@ class MultiHeadAttention:
         batch, seq = int(x.shape[0]), int(x.shape[2])
         x = ttnn.permute(x, (0, 2, 1, 3))
         return ttnn.reshape(x, (batch, seq, self.num_heads * self.head_dim))
-
-    def project(self, x: ttnn.Tensor, name: str) -> ttnn.Tensor:
-        return linear(
-            x,
-            getattr(self, f"{name}_weight"),
-            getattr(self, f"{name}_bias"),
-            dtype=self.dtype,
-            memory_config=self.memory_config,
-        )
 
     # -- attention cores ----------------------------------------------------
 
@@ -190,14 +173,14 @@ class MultiHeadAttention:
         verbatim afterwards; a self-attention cache is extended with this step's keys/values.
         """
         is_cross_attention = key_value_states is not None
-        query = self.split_heads(self.project(hidden_states, "q_proj"))
+        query = self.split_heads(self.q_proj(hidden_states))
 
         if cache is not None and is_cross_attention and cache.is_filled:
             key, value = cache.key, cache.value
         else:
             source = key_value_states if is_cross_attention else hidden_states
-            key = self.split_heads(self.project(source, "k_proj"))
-            value = self.split_heads(self.project(source, "v_proj"))
+            key = self.split_heads(self.k_proj(source))
+            value = self.split_heads(self.v_proj(source))
             if cache is not None:
                 if is_cross_attention:
                     cache.key, cache.value = key, value
@@ -210,7 +193,7 @@ class MultiHeadAttention:
         else:
             context = self.eager_attention(query, key, value, attention_mask)
 
-        return self.project(self.merge_heads(context), "out_proj")
+        return self.out_proj(self.merge_heads(context))
 
 
 __all__ = ["KeyValueCache", "MultiHeadAttention"]

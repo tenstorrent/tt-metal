@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Callable, Optional
+from typing import Optional
 
 import torch
 
@@ -27,41 +27,6 @@ def substate(state: Mapping[str, torch.Tensor], prefix: str) -> dict[str, torch.
         return dict(state)
     head = f"{prefix}."
     return {key[len(head) :]: value for key, value in state.items() if key.startswith(head)}
-
-
-def load_tensors(
-    module: object,
-    state: Mapping[str, torch.Tensor],
-    mapping: Sequence[tuple[str, str]],
-    *,
-    device,
-    dtype: ttnn.DataType,
-    strict: bool,
-    label: str,
-    transform: Optional[Callable[[str, torch.Tensor], torch.Tensor]] = None,
-) -> LoadResult:
-    """Copy ``state[key]`` onto ``module.<attr>`` (device) and ``module.<attr>_torch`` (host).
-
-    ``mapping`` is a sequence of ``(state_key, attribute_name)`` pairs. Returns the usual
-    ``{"missing_keys", "unexpected_keys"}`` report so callers can aggregate across modules.
-    """
-    used: set[str] = set()
-    missing: list[str] = []
-    for key, attr in mapping:
-        tensor = state.get(key)
-        if tensor is None:
-            missing.append(key)
-            continue
-        used.add(key)
-        value = to_float_tensor(tensor)
-        if transform is not None:
-            value = transform(attr, value)
-        setattr(module, f"{attr}_torch", value)
-        setattr(module, attr, upload(value, device=device, dtype=dtype))
-    unexpected = sorted(key for key in state if key not in used)
-    if strict and missing:
-        raise ValueError(f"Missing {label} weights: {missing}")
-    return {"missing_keys": missing, "unexpected_keys": unexpected}
 
 
 def pick_roots(state: Mapping[str, torch.Tensor], roots: Sequence[str]) -> dict[str, torch.Tensor]:
@@ -96,7 +61,6 @@ def merge_results(
 
 __all__ = [
     "LoadResult",
-    "load_tensors",
     "merge_results",
     "pick_roots",
     "substate",

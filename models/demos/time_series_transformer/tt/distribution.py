@@ -14,8 +14,9 @@ import torch
 import ttnn
 
 from .config import TimeSeriesTransformerConfig
-from .ops import linear, squareplus
-from .weights import LoadResult, load_tensors, upload
+from .layers import Linear
+from .ops import squareplus
+from .weights import LoadResult, merge_results, substate
 
 # torch.finfo(torch.float32).eps, matching HuggingFace's clamp_min on distribution scales.
 FLOAT32_EPS = 1.1920928955078125e-07
@@ -41,45 +42,27 @@ class ParameterProjection:
         self.num_params = num_params
         self.out_dim = out_dim
 
-        for index in range(num_params):
-            if rng is None:
-                weight = torch.zeros((out_dim, d_model), dtype=torch.float32)
-            else:
-                weight = torch.randn((out_dim, d_model), generator=rng, dtype=torch.float32) * 0.02
-            bias = torch.zeros((out_dim,), dtype=torch.float32)
-            setattr(self, f"proj_{index}_weight_torch", weight)
-            setattr(self, f"proj_{index}_bias_torch", bias)
-            setattr(self, f"proj_{index}_weight", upload(weight, device=device, dtype=dtype))
-            setattr(self, f"proj_{index}_bias", upload(bias, device=device, dtype=dtype))
+        self.proj = [
+            Linear(out_dim, d_model, device=device, dtype=dtype, memory_config=memory_config, rng=rng)
+            for _ in range(num_params)
+        ]
 
     def load_hf_state_dict(self, state: Mapping[str, torch.Tensor], *, strict: bool = True) -> LoadResult:
-        mapping = tuple(
-            (f"proj.{index}.{suffix}", f"proj_{index}_{suffix}")
-            for index in range(self.num_params)
-            for suffix in ("weight", "bias")
-        )
-        return load_tensors(
-            self,
-            state,
-            mapping,
-            device=self.device,
-            dtype=self.dtype,
-            strict=strict,
-            label="parameter projection",
+        return merge_results(
+            [
+                (f"proj.{index}", head.load_hf_state_dict(substate(state, f"proj.{index}"), strict=strict))
+                for index, head in enumerate(self.proj)
+            ],
+            state=state,
+            claimed=("proj",),
         )
 
     def project(self, hidden_states: ttnn.Tensor, index: int) -> ttnn.Tensor:
         """Apply a single parameter head."""
-        return linear(
-            hidden_states,
-            getattr(self, f"proj_{index}_weight"),
-            getattr(self, f"proj_{index}_bias"),
-            dtype=self.dtype,
-            memory_config=self.memory_config,
-        )
+        return self.proj[index](hidden_states)
 
     def __call__(self, hidden_states: ttnn.Tensor) -> list[ttnn.Tensor]:
-        return [self.project(hidden_states, index) for index in range(self.num_params)]
+        return [head(hidden_states) for head in self.proj]
 
 
 class DistributionHead:
