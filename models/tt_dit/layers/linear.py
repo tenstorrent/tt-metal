@@ -387,6 +387,7 @@ class RowParallelLinear(Module):
             self._mesh_axis_size > 1
             and self.ccl_manager is not None
             and self.ccl_manager.topology == ttnn.Topology.Ring
+            and _os_for_fidelity.environ.get("TT_COSMOS3_RS_FUSED") in ("1", "true", "True")
         ):
             needs_reshape = len(x.shape) <= 3
             if needs_reshape:
