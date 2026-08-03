@@ -36,8 +36,8 @@ namespace tt::tt_fabric::fabric_router_tests {
 constexpr uint32_t RECEIVER_NOC_UNICAST_WRITE = 0;
 
 void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uint16_t hop_mask) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 1;  // per-dest offsets are base + slot*payload; >1 would overlap streams
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -78,7 +78,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
     ASSERT_LE(num_dests, static_cast<uint32_t>(NOC_SPARSE_MCAST_WRITE_MAX_DESTS));
 
     auto sender_device = fixture->get_device(src_physical_device_id);
-    CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
     auto worker_mem_map = BaseFabricFixture::generate_worker_mem_map(sender_device, topology);
     uint32_t payload = worker_mem_map.packet_payload_size_bytes;
 
