@@ -367,7 +367,14 @@ ProgramDescriptor build_row(
         // split_work_to_cores's all_cores is column-major by default, so a row-major grid_to_cores
         // list can name a logical core outside all_cores' bounding box, indexing past the end of
         // Kernel::core_to_runtime_args_ (sized from that bounding box) and segfaulting.
-        cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
+        //
+        // Column-major, unlike the 2D and block paths: this path's reference is emit_per_core_rt ->
+        // iter_cores, which walks CoreCoord(i / grid.y, i % grid.y), while those paths order cores by
+        // _get_valid_cores and really are row-wise. The order decides which tile-row -- and so which
+        // run of interleaved pages -- each core pulls. Enumerating this path row-wise costs up to 11%
+        // of device time when total_Ht is under the core count and the assigned rectangle is narrow
+        // (worst at total_Ht == 24, a 3-wide rectangle, for Wt >= 7).
+        cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/false);
     }
 
     // MEMORY: writer_tilize_interleaved.cpp's batched branch walks CB pages linearly from the
