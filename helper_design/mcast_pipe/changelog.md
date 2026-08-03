@@ -6,6 +6,26 @@ feedback round lands.
 
 ---
 
+## Round 15 — width-sharded Conv activation migration (2026-08-03)
+
+- **Trigger:** the earlier v9 port's 25 numerical failures predated the Round-13 ACKed completion
+  rule for a real INCLUDE-source loopback, so the production reader was re-entered for a fresh
+  end-to-end port rather than left design-blocked.
+- **API:** remains `MCAST_PIPE_API_VERSION 9`. One rotating, handshaked Flag `Mcast2D` owns the full
+  reader rectangle while carrying `max(input_cores,output_cores)-1` as the distinct active ACK
+  population. `McastArgs<12,3,num_input_cores>` consumes only the actual sender-coordinate prefix.
+- **Rollout:** the activation reader and width-sharded factory migrated atomically in `fe866a1d0c4`.
+  The raw multicast/semaphore protocol and physical-coordinate lookup arrays were replaced by
+  `SenderPipe::send()` and `ReceiverPipe::receive(round)`, removing 102 net production lines.
+- **Validation:** host build passed; exact fresh-cache `--dev` route passed at PCC 0.999956503 with
+  JIT evidence; the full feature inventory passed 48 cases with 16 legitimate skips; the mapped
+  DRAM-config route passed at PCC 0.998234911; post-integration helper coverage passed 72/72.
+- **Reconcile:** all 91 census/ledger paths exist; no raw primitive callsite was introduced; totals
+  are 13 migrated kernels / 12 migrated host bindings / 78 deferred kernels, with nothing pending,
+  quarantined, or marked `needs_recheck`.
+
+---
+
 ## Round 14 — sort control-channel migration (2026-08-03)
 
 - **Trigger:** upstream split sort's single return semaphore into independent reader-ready and

@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line migration at code commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, matmul in1 multicast migration at code commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 migration at code commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control migration at code commit 7337302b564. Remaining kernel status is reconciled through 2026-08-03 from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
+  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line migration at code commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, width-sharded activation migration at code commit fe866a1d0c4c32b78aae8a76e875c0da109f51c8, matmul in1 multicast migration at code commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 migration at code commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control migration at code commit 7337302b564. Remaining kernel status is reconciled through 2026-08-03 from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -333,6 +333,34 @@
         "fully-end-to-end",
         "counter-signal-only",
         "helper-neutral-writer-companion"
+      ]
+    },
+    {
+      "id": "activation-mcast:conv2d-width-sharded:rotating-rect",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp",
+      "dispatch": "width-sharded Conv2D activation multicast when skip_activation_mcast is false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp"
+      ],
+      "migration_unit": "conv2d-activation-width-sharded",
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "fe866a1d0c4c32b78aae8a76e875c0da109f51c8",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact BF16/BF16 filter-3 tile-output test_conv_features node under --dev from fresh isolated cache: passed at PCC 0.999956503; activation_reader_width_sharded JIT artifact confirmed",
+        "CONV-WIDTH test_conv_features: 48 passed, 16 expected row-major+bfloat8 skips",
+        "CONV-WIDTH test_conv_dram_config: 1 passed at PCC 0.998234911; activation_reader_width_sharded JIT artifact confirmed",
+        "test_mcast_pipe.py: 72 passed after production integration"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-03",
+      "flags": [
+        "tier:6",
+        "atomic-unit:conv2d-activation-width-sharded",
+        "fully-end-to-end",
+        "rotating-sender",
+        "loopback-completion-verified"
       ]
     }
   ],
@@ -683,21 +711,28 @@
       "op_family": "conv",
       "role": "hybrid",
       "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "fe866a1d0c4c32b78aae8a76e875c0da109f51c8",
       "validation_set": [
-        "CONV-WIDTH: migrated run 25 failed, 24 passed, 16 expected skips"
+        "build_metal.sh: passed",
+        "exact BF16/BF16 filter-3 tile-output node under --dev from fresh isolated cache: passed at PCC 0.999956503; activation_reader_width_sharded JIT artifact confirmed",
+        "CONV-WIDTH test_conv_features: 48 passed, 16 expected row-major+bfloat8 skips",
+        "CONV-WIDTH test_conv_dram_config: 1 passed at PCC 0.998234911; activation_reader_width_sharded JIT artifact confirmed",
+        "test_mcast_pipe.py: 72 passed after production integration"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: the prior migration failed 25 numeric cases and was restored to baseline. SenderPipe now ACKs real loopback copies, but this kernel has not been re-ported and revalidated against the complete inventory.",
+      "last_verified": "2026-08-03",
+      "census_note": "Fully end-to-end at v9. Host Mcast2D emits one rotating full-rectangle wire with adopted factory semaphores and the divergent active ACK count. Kernel McastArgs owns both sender and receiver faces; the current SenderPipe ACK-fences real loopback completion before resetting its local Flag cell.",
       "flags": [
-        "v9-port-blocked",
-        "retest-required",
-        "exact-baseline-restored"
+        "tier:6",
+        "atomic-unit:conv2d-activation-width-sharded",
+        "fully-end-to-end",
+        "rotating-sender",
+        "loopback-completion-verified"
       ],
-      "note": "v8 dual-pipe: both faces use the helper (was sender-only + raw receiver). consumer_ack_count=num_mcast_cores-1 divergence is the v8-unblocked case."
+      "migration_unit": "conv2d-activation-width-sharded",
+      "note": "API-v9 Mcast2D/McastArgs port removes the raw multicast, semaphore, and X/Y lookup wire. consumer_ack_count=max(input_num_cores,output_num_cores)-1 remains distinct from the full-rectangle fan-out."
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp",
@@ -2107,6 +2142,27 @@
       "recall_sweep": "All 91 ledger kernel paths exist. Diff recall from 74a3e672551 through 7337302b564 introduced no raw multicast primitive callsites; it added the expected McastArgs/send_signal/receive_signal helper calls in the two sort Pipe faces. The writer remains helper-neutral.",
       "needs_recheck": [],
       "validation": "Host build passed; exact fresh-cache --dev sort node passed with all three JIT artifacts; Ht=2 deadlock regression 2/2; test_sort_long_tensor 7/7; helper suite 72/72."
+    },
+    {
+      "date": "2026-08-03",
+      "report": "migration/reconcile_2026-08-03-conv-width.md",
+      "base_from": "e712d3ab4bb (approved Tier-6 plan)",
+      "base_to": "fe866a1d0c4 (width-sharded Conv migration)",
+      "api_version": "9 (unchanged)",
+      "buckets": {
+        "unchanged": 90,
+        "added": 0,
+        "removed": 0,
+        "renamed": 0,
+        "migrated": 1,
+        "helper_neutral": 0
+      },
+      "host_bindings_migrated": [
+        "activation-mcast:conv2d-width-sharded:rotating-rect"
+      ],
+      "recall_sweep": "All 91 ledger kernel paths exist and exactly match census.txt. All 13 migrated rows retain mcast_pipe.hpp and McastArgs. Diff recall from e712d3ab4bb through fe866a1d0c4 introduced no raw multicast primitive callsite; it removed the expected raw activation multicast block and added Mcast2D/McastArgs helper use. The Conv directory recognition sweep found no uncensused production invocation; conv_reader_common.hpp remains declaration-only.",
+      "needs_recheck": [],
+      "validation": "Host build passed; exact fresh-cache --dev width-sharded node passed at PCC 0.999956503 with activation_reader_width_sharded JIT evidence; test_conv_features WIDTH_SHARDED 48 passed / 16 expected skips; test_conv_dram_config WIDTH_SHARDED 1 passed at PCC 0.998234911 with JIT evidence; helper suite 72/72."
     }
   ]
 }

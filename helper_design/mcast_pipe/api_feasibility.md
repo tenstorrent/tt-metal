@@ -2,6 +2,33 @@ DERIVED FROM: current mcast_pipe API v9, census.txt, kernel_annotations/*, migra
 
 # Step ★ — API Feasibility (`mcast_pipe`)
 
+## Step-D re-entry and outcome (2026-08-03) — width-sharded Conv activation
+
+> DERIVED FROM: current `activation_reader_width_sharded.cpp`, its annotation and v8 migration log,
+> current `conv2d_op_width_sharded_program_factory.cpp`, API-v9 helper/host wire, and `CONV-WIDTH` map.
+
+The prior v9 failure is not a current design-gap verdict: its 25 numerical failures predated the
+helper's ACKed completion for real loopback copies. Required behavior maps to the existing API:
+
+| Requirement | API-v9 formulation |
+|---|---|
+| Every input core sends once; active peers receive each round | rotating `Mcast2D` wire + `McastArgs` sender-coordinate prefix |
+| Broadcast reaches the full dense reader rectangle, including sender | `SenderPipe::send()` derives INCLUDE source from in-rect + distinct src/dst |
+| Only `max(input,output)-1` peers acknowledge | `Mcast2D(..., num_active)` divergent ACK subset |
+| Sender consumes its loopback destination before local flag reuse | rotating sender's ACKed loopback fence, then local INVALID reset |
+| Receiver ACKs before waiting and clears for its next round | `ReceiverPipe::receive(round)` |
+
+The host may emit coordinates for the full rectangle while the kernel decoder uses
+`SPAN=num_input_cores`; the unused suffix belongs to output-only/noop rectangle cores and is never
+indexed. Overall verdict: **feasible as currently materialized at API v9**. No helper change, new
+knob, style cell, or API bump is required.
+
+Apply outcome: migrated in `fe866a1d0c4`. Build, exact fresh-cache JIT, all 48 runnable
+`CONV-WIDTH` feature cases, the mapped DRAM-config route, and the post-integration 72-case helper
+suite passed. The API-v9 feasibility claim is now production-verified.
+
+---
+
 > **Current v9 addendum (2026-07-30):** `SenderPipe` now selects its completion
 > fence from actual loopback participation: ACKed for a real sender loopback
 > copy and SENT for remote-only traffic. The helper still infers loopback from

@@ -157,6 +157,17 @@
       "coverage": "helper-wire coverage only; no mapped device operation test reaches the GroupNorm v2 sender-only binding"
     },
     {
+      "id": "activation-mcast:conv2d-width-sharded:rotating-rect",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp",
+      "dispatch": "width-sharded Conv2D activation multicast when skip_activation_mcast is false",
+      "migration_unit": "conv2d-activation-width-sharded",
+      "inventory": [
+        "CONV-WIDTH"
+      ],
+      "coverage": "complete with exact fresh-cache activation_reader_width_sharded JIT evidence"
+    },
+    {
       "id": "sort:single-row-multi-core:control",
       "classification": "required",
       "factory": "ttnn/cpp/ttnn/operations/data_movement/sort/device/sort_program_factory.cpp",
@@ -471,10 +482,10 @@
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp",
-      "status": "blocked",
+      "status": "migrated",
       "inventory": "CONV-WIDTH",
-      "coverage": "complete migrated attempt",
-      "result": "25 failed, 24 passed, 16 expected skips; restored baseline"
+      "coverage": "complete with exact fresh-cache and DRAM-route JIT evidence",
+      "result": "exact BF16/BF16 filter-3 tile-output case passed at PCC 0.999956503; full feature inventory 48 passed, 16 expected skips; DRAM-config route 1 passed at PCC 0.998234911; prior pre-loopback-fix numerical regression resolved"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp",

@@ -2,6 +2,13 @@ DERIVED FROM: current mcast_pipe API v9, api_feasibility.md, hazards_catalog.md,
 
 # Step E — Style Bake-off (`mcast_pipe`)
 
+> **Step-E re-entry (2026-08-03) — width-sharded Conv: NO-OP.** No new style fork is introduced.
+> INCLUDE-source loopback, divergent handshake count, rotating Flag lifecycle, and ACKed loopback
+> completion are already correctness-decided helper paths with focused device coverage. This run
+> reused those decisions and validated them in-context through `CONV-WIDTH`: 48 feature cases and
+> the mapped DRAM-config route passed, with fresh JIT evidence. No micro-benchmark or API-version
+> change was warranted.
+
 > **Step-E re-entry (2026-08-03) — sort Counter control channel: NO-OP, no device.** The sort
 > coordinator/reader re-audit maps its multicast release event onto the existing no-handshake
 > `DataReadySignal::Counter` `send_signal()` / `receive_signal()` path. Counter is forced here by
