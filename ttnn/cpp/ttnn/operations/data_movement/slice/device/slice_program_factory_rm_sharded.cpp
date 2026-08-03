@@ -24,7 +24,16 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<ui
     if (values.empty()) {
         return chunks;
     }
-    chunks.reserve(values.size());
+
+    // Contiguous values coalesce into far fewer chunks than there are values, so count the
+    // runs up front instead of reserving the worst case
+    size_t num_chunks = 1;
+    for (size_t i = 1; i < values.size(); ++i) {
+        if (values[i] != values[i - 1] + 1) {
+            ++num_chunks;
+        }
+    }
+    chunks.reserve(num_chunks);
 
     // Initialize the first chunk
     std::vector<uint32_t> current_chunk;
