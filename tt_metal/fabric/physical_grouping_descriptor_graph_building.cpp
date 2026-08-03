@@ -467,6 +467,11 @@ namespace {
 enum class CardinalDirection { North, South, East, West };
 enum class AdjacencyDirection { A_LEFT_OF_B, A_ABOVE_B, A_RIGHT_OF_B, A_BELOW_B };
 
+// Keep PGD's signed-dimension check aligned with has_genuine_torus_axis.
+bool is_genuine_torus_dimension(int32_t dim) {
+    return dim >= 0 && tt::tt_fabric::is_genuine_torus_dim(static_cast<uint32_t>(dim));
+}
+
 // Metadata for flattened mesh nodes
 struct NodeMetadata {
     ::tt::tt_metal::TrayID tray_id{0};
@@ -589,7 +594,6 @@ std::vector<int32_t> compute_combined_node_grid_dims(
 // build_row_major_mesh_graph ring_dims). Avoids rebuilding the full graph from a row-major node list.
 tt::tt_fabric::AdjacencyGraph<uint32_t> add_torus_wrap_edges(
     const FlattenedMesh& mesh, const std::vector<bool>& ring_dims) {
-    constexpr int32_t MIN_RING_DIM = 3;
     std::map<uint32_t, std::set<uint32_t>> adj_set;
     for (const auto& [node, neighbors] : mesh.graph.get_adjacency_map()) {
         adj_set[node].insert(neighbors.begin(), neighbors.end());
@@ -610,10 +614,10 @@ tt::tt_fabric::AdjacencyGraph<uint32_t> add_torus_wrap_edges(
     };
 
     if (mesh.node_grid_dims.size() >= 2) {
-        if (!ring_dims.empty() && ring_dims[0] && mesh.node_grid_dims[0] >= MIN_RING_DIM) {
+        if (!ring_dims.empty() && ring_dims[0] && is_genuine_torus_dimension(mesh.node_grid_dims[0])) {
             connect_opposite_edges(CardinalDirection::North, CardinalDirection::South);
         }
-        if (ring_dims.size() > 1 && ring_dims[1] && mesh.node_grid_dims[1] >= MIN_RING_DIM) {
+        if (ring_dims.size() > 1 && ring_dims[1] && is_genuine_torus_dimension(mesh.node_grid_dims[1])) {
             connect_opposite_edges(CardinalDirection::West, CardinalDirection::East);
         }
     }
@@ -1048,11 +1052,10 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
             info.adjacency_graph = mesh.graph;
         } else if (can_add_torus_wrap) {
             std::vector<bool> ring_dims(ring_dims_template.begin(), ring_dims_template.end());
-            constexpr int32_t MIN_RING_DIM = 3;
-            if (ring_dims[0] && node_grid_dims[0] < MIN_RING_DIM) {
+            if (ring_dims[0] && !is_genuine_torus_dimension(node_grid_dims[0])) {
                 continue;
             }
-            if (ring_dims.size() > 1 && ring_dims[1] && node_grid_dims[1] < MIN_RING_DIM) {
+            if (ring_dims.size() > 1 && ring_dims[1] && !is_genuine_torus_dimension(node_grid_dims[1])) {
                 continue;
             }
             info.adjacency_graph = add_torus_wrap_edges(mesh, ring_dims);

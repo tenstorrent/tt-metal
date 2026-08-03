@@ -91,7 +91,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     reader.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}};
     reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "in"}};
-    reader.hw_config = ttnn::create_reader_datamovement_config(device->arch());
+    reader.hw_config =
+        ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
 
     KernelSpec writer;
     writer.unique_id = WRITER;
@@ -99,7 +100,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     writer.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::CONSUMER}};
     writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"}};
-    writer.hw_config = ttnn::create_writer_datamovement_config(device->arch());
+    writer.hw_config =
+        ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
 
     const auto& slice_start = args.slice_start;
     const auto& slice_end = args.slice_end;

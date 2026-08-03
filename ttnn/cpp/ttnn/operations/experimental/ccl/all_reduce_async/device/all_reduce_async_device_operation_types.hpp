@@ -30,6 +30,10 @@ struct AllReduceAsyncParams {
     bool use_optimal_ccl_for_llama = false;
     uint32_t cluster_axis = 0;
     distributed::MeshDevice* mesh_device = nullptr;
+    // Accumulate the cross-device reduction in the fp32 dest register (order-independent). Default false
+    // preserves existing bf16 behavior; opted into per-call (e.g. the Llama LM-head all_reduce, whose
+    // ring-order-dependent bf16 sum caused per-row logit non-determinism).
+    bool fp32_dest_acc = false;
 
     AllReduceAsyncParams(
         uint32_t num_links,
@@ -42,7 +46,8 @@ struct AllReduceAsyncParams {
         bool use_noc1_only,
         bool use_optimal_ccl_for_llama,
         uint32_t cluster_axis,
-        distributed::MeshDevice* mesh_device) :
+        distributed::MeshDevice* mesh_device,
+        bool fp32_dest_acc = false) :
         num_links(num_links),
         ring_size(ring_size),
         dtype(dtype),
@@ -53,7 +58,8 @@ struct AllReduceAsyncParams {
         use_noc1_only(use_noc1_only),
         use_optimal_ccl_for_llama(use_optimal_ccl_for_llama),
         cluster_axis(cluster_axis),
-        mesh_device(mesh_device) {}
+        mesh_device(mesh_device),
+        fp32_dest_acc(fp32_dest_acc) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -69,6 +75,7 @@ struct AllReduceAsyncParams {
         attrs.emplace_back("use_noc1_only", use_noc1_only);
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("cluster_axis", cluster_axis);
+        attrs.emplace_back("fp32_dest_acc", fp32_dest_acc);
         return attrs;
     }
 

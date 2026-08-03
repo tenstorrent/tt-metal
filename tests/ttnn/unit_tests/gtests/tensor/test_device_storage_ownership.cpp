@@ -18,16 +18,15 @@ namespace {
 using ::testing::SizeIs;
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::DeviceStorage;
 using tt::tt_metal::GenericMeshDeviceFixture;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::MeshDevice1x2Fixture;
 using tt::tt_metal::MeshTensor;
-using tt::tt_metal::Tensor;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
-using tt::tt_metal::TensorTopology;
+using ttnn::DeviceStorage;
+using ttnn::Tensor;
 
 // Most ownership tests only need a single device.
 using DeviceStorageOwnershipTest = GenericMeshDeviceFixture;
@@ -53,7 +52,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_DefaultConstructedState) {
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ThrowsWhenConstructedFromMovedFromMeshTensor) {
-    auto source_mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    auto source_mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec());
     MeshTensor moved_mesh_tensor(std::move(source_mesh_tensor));
 
     EXPECT_TRUE(source_mesh_tensor.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
@@ -67,7 +66,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ThrowsWhenConstructedFromMovedF
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerAfterCreation) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
 
     EXPECT_TRUE(storage.is_allocated());
@@ -75,7 +74,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerAfterCreation) {
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_CopySharesOwnership) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& original_storage = tensor.device_storage();
 
     // Copying DeviceStorage shares the underlying mesh_buffer
@@ -87,7 +86,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_CopySharesOwnership) {
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerRestoredAfterCopyDestroyed) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& original_storage = tensor.device_storage();
     EXPECT_TRUE(original_storage.is_sole_owner_of_device_memory());
 
@@ -103,7 +102,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerRestoredAfterCopyDestr
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveConstructorTransfersOwnership) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     DeviceStorage original = tensor.device_storage();
     EXPECT_TRUE(original.is_allocated());
 
@@ -115,7 +114,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveConstructorTransfersOwnersh
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveAssignmentTransfersOwnership) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     DeviceStorage original = tensor.device_storage();
     EXPECT_TRUE(original.is_allocated());
 
@@ -128,7 +127,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveAssignmentTransfersOwnershi
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveDoesNotAddSharedReference) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     ASSERT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
 
     // Copying the storage increments the use-count — tensor is no longer sole owner.
@@ -153,7 +152,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveDoesNotAddSharedReference) 
 }
 
 TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewSharesOwnership) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
 
     auto coords = storage.get_coords();
@@ -170,7 +169,7 @@ TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewSharesOwnership) {
 }
 
 TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewDeallocateAffectsOwner) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
 
     std::vector<distributed::MeshCoordinate> subset_coords = {storage.get_coords()[0]};
@@ -183,7 +182,7 @@ TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewDeallocateAffectsOwner) {
 }
 
 TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_OwnerDeallocateAffectsView) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     DeviceStorage owner_storage = tensor.device_storage();
 
     std::vector<distributed::MeshCoordinate> subset_coords = {owner_storage.get_coords()[0]};
@@ -196,7 +195,7 @@ TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_OwnerDeallocateAffectsView) {
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_BufferGettersThrowWhenDeallocated) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     tensor.deallocate(/*force=*/true);
 
     EXPECT_THROW(tensor.device_storage().get_buffer(), std::exception);
@@ -204,7 +203,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_BufferGettersThrowWhenDeallocat
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorMovesOutUnderlyingMemory) {
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec());
     DeviceStorage storage(std::move(mesh_tensor));
 
     // Capture identity of the underlying device memory before releasing.
@@ -219,7 +218,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorMovesOutUnderl
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorLeavesDefaultConstructedState) {
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec());
     DeviceStorage storage(std::move(mesh_tensor));
     ASSERT_TRUE(storage.is_allocated());
 
@@ -238,7 +237,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorThrowsWhenDefa
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorThrowsWhenDeallocated) {
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec());
     DeviceStorage storage(std::move(mesh_tensor));
     storage.deallocate();
     ASSERT_FALSE(storage.is_allocated());
@@ -255,20 +254,20 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorThrowsWhenDeal
 // ======================================================================================
 
 TEST_F(DeviceStorageOwnershipTest, Tensor_MoveTransfersOwnership) {
-    Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor1 = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
 
     // Move constructor transfers ownership
     Tensor tensor2 = std::move(tensor1);
     EXPECT_TRUE(tensor2.device_storage().is_sole_owner_of_device_memory());
 
     // Move assignment transfers ownership
-    Tensor tensor3 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor3 = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     tensor3 = std::move(tensor2);
     EXPECT_TRUE(tensor3.device_storage().is_sole_owner_of_device_memory());
 }
 
 TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateForceAlwaysDeallocates) {
-    Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor1 = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     Tensor tensor2 = tensor1;  // NOLINT(performance-unnecessary-copy-initialization)
 
     EXPECT_TRUE(tensor1.is_allocated());
@@ -281,7 +280,7 @@ TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateForceAlwaysDeallocates) {
 }
 
 TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateNonForceOnlyWhenSoleOwner) {
-    Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor1 = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     Tensor tensor2 = tensor1;  // NOLINT(performance-unnecessary-copy-initialization)
 
     // Non-force deallocate is no-op when ownership is shared
@@ -296,7 +295,7 @@ TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateNonForceOnlyWhenSoleOwner) {
 }
 
 TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateIsIdempotent) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
 
     tensor.deallocate(/*force=*/true);
     EXPECT_FALSE(tensor.is_allocated());
@@ -307,7 +306,7 @@ TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateIsIdempotent) {
 
 TEST_F(DeviceStorageMultiDeviceTest, Tensor_ShardsShareDeviceStorageOwnership) {
     const auto num_devices = mesh_device_->num_devices();
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     auto shards = get_device_tensors(tensor);
 
     ASSERT_THAT(shards, SizeIs(num_devices));

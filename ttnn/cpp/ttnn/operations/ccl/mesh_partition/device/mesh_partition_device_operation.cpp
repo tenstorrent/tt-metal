@@ -75,7 +75,7 @@ MeshPartitionDeviceOperation::spec_return_value_t MeshPartitionDeviceOperation::
     const uint32_t cluster_axis_size = detail::get_cluster_axis_size(input_tensor, operation_attributes.cluster_axis);
 
     output_shape[operation_attributes.dim] = output_shape[operation_attributes.dim] / cluster_axis_size;
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         Shape(output_shape),
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(),
