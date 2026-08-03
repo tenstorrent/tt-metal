@@ -89,13 +89,9 @@ constexpr uint32_t COUNTS_PAGE = get_compile_time_arg_val(17);
 constexpr uint32_t IDX_PAGE = get_compile_time_arg_val(18);
 constexpr uint32_t BFP4_TILE = get_compile_time_arg_val(19);
 constexpr uint32_t BFP8_TILE = get_compile_time_arg_val(20);
-// MEASUREMENT KNOB (H_DTYPE) — the h intermediate's tile size in bytes. Deliberately SEPARATE
-// from BFP8_TILE, which also sizes x, the output and the reduce operands: only the h transport
-// follows this. Defaults to BFP8_TILE so the shipped path is byte-identical.
-#ifndef H_TILE_BYTES
-#define H_TILE_BYTES BFP8_TILE
-#endif
-constexpr uint32_t H_TILE = H_TILE_BYTES;
+// The h intermediate's tile size. bfp4 h was measured and is a precision failure (pcc=nan on 8 of
+// 9 cells: the packer emits bfp8 into a bfp4 CB), so h is bfp8 like x, the output and the reduce.
+constexpr uint32_t H_TILE = BFP8_TILE;
 
 constexpr uint32_t MAX_CHILDREN = get_compile_time_arg_val(21);
 constexpr uint32_t REMAP = get_compile_time_arg_val(22);  // 1 = bank-run remap of the N axis
@@ -183,46 +179,16 @@ constexpr auto hmc = McastArgs<CT_HMCAST, RT_HMCAST, HGROUPS * KGROUPS>();
 // level (`static_assert(!has_flag(opts, NocOptions::POSTED), "Mcasts with posted transactions are
 // not supported")`, marked TODO). Structurally identical to `SenderPipe::send()` on the Flag path:
 // linked data -> local VALID -> flag multicast terminating the link -> flush -> restore INVALID.
-#ifndef HPOSTED
-#define HPOSTED 0
-#endif
-
-#if HSLOT
-// PERF 4 — one SenderPipe TYPE per cb_h slot, differing only in which VALID cell it broadcasts.
+// PER-SLOT FLAGS (PERF 4). One VALID cell per cb_h slot instead of one shared by every round.
+// A shared flag serialises the rounds — mcast_pipe's own caveat: "the sender of round r+1 cannot
+// proceed until every receiver has reset round r's flag". The Counter signal removes that chain
+// but must issue its data UNLINKED (an atomic on another command buffer cannot terminate a
+// NOC_CMD_VC_LINKED chain) and so pays an acked barrier per round — 11 % worse end to end.
+// Per-slot flags take the union: the link survives, and rounds r and r+1 touch different cells.
+// Rounds r and r+DEPTH_H share a cell and are ordered by the ack itself.
 //
-// The shared-flag h pipe serialises the rounds by construction: mcast_pipe's own comment says it —
-// "with Flag, the sender of round r+1 cannot proceed until every receiver has reset round r's flag,
-// and that reset chain is a per-round grid-wide serialisation". The Counter signal removes that
-// chain but pays an ACKED write barrier per round (it must issue its data UNLINKED, because an
-// atomic on a different command buffer cannot terminate a NOC_CMD_VC_LINKED chain), which measured
-// 11 % worse end to end. Per-SLOT flags get both: the link survives, so no acked barrier, and
-// rounds r and r+1 touch different cells, so they overlap. Rounds r and r+DEPTH_H share a cell and
-// are ordered by the ack itself — a core acks slot s only after `cb_reserve_back` proves it consumed
-// round r, which is strictly after it put that cell back to INVALID.
-//
-// PRE_HANDSHAKE = false: the ack wait is the caller's monotone counter (see the send site).
-template <uint32_t S>
-using HSlotSender = SenderPipe<noc_index, SEM_H_RDY_BASE + S, false, SEM_H_FREE, DataReadySignal::Flag, true>;
-
-// Runtime slot -> compile-time semaphore id. Recursive so it stays correct at any DEPTH_H; the
-// pipes are value types over the rect, and SenderPipe's ctor does NOT touch the flag cell, so
-// constructing one per send is free and cannot clobber an in-flight VALID.
-template <uint32_t S = 0>
-inline void h_slot_send(const Noc& noc, uint32_t slot, uint32_t l1, uint32_t size) {
-    if constexpr (S < DEPTH_H) {
-        if (slot == S) {
-            HSlotSender<S>(noc, hmc.template rect<noc_index>(), hmc.num_active).send(l1, l1, size);
-            return;
-        }
-        h_slot_send<S + 1>(noc, slot, l1, size);
-    }
-}
-
-#if HPOSTED
-// PERF 17 (#4) — the POSTED twin of `h_slot_send`. Same five steps as `SenderPipe::send()` on the
-// Flag path; the ONLY difference is `posted = true` on the data multicast. `slot` may be a runtime
-// value here (no template recursion needed) because the flag cell is addressed through the runtime
-// `get_semaphore`, exactly as the RECEIVE side already does.
+// Written raw rather than through mcast_pipe because `noc.h` blocks posted multicast at the
+// library level (`static_assert(!has_flag(opts, NocOptions::POSTED))`, marked TODO).
 inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size) {
     const auto hrect = hmc.template rect<noc_index>();
     const auto& rb = hrect.bounds();
@@ -256,8 +222,6 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size) {
     noc_async_writes_flushed();
     noc_semaphore_set(hf, INVALID);
 }
-#endif
-#endif
 
 constexpr uint32_t TA_BASE = CT_HMCAST + 5;
 constexpr auto x_args = TensorAccessorArgs<TA_BASE>();
@@ -278,74 +242,22 @@ using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
 using BRG = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WG_SHARD_W>;  // W_gate
 using BRD = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WD_SHARD_W>;  // W_down
 
-// PERF 17 — the W_down NoC split (NEXT_ROUND_PLAN #1 + #3, ONE lever). WD_SPLIT eighths of every
-// phase-2 K-block's hidden rows are read by the WRITER on NOC_1; this kernel keeps the head rows.
-// See the descriptor's MOE_SWIGLU_WD_SPLIT for the mechanism, the one-producer argument and the
-// WD_RESIDENT precondition. 0 == the shipped all-reader stream, byte for byte.
-#ifndef WD_SPLIT
-#define WD_SPLIT 0
-#endif
-//: How many of a K-block's `hn_r` hidden rows the WRITER owns. The TAIL rows, so both sides read a
-//: contiguous run and the bank-run coalescing is unchanged on either side.
+// The W_down NoC split: WD_SPLIT eighths of every phase-2 K-block's hidden rows are read by the
+// WRITER on NOC_1; this kernel keeps the head rows. The writer takes the TAIL rows so both sides
+// read a contiguous run and the coalescing is unchanged on either side.
 inline uint32_t wd_rows_writer(uint32_t hn_r) { return (hn_r * WD_SPLIT) / 8; }
 
-#if WD_SPLIT
-// PERF 17 — the cross-RISC completion gate. `noc_async_read_barrier()` is PER-RISC-V, so this
-// kernel's barrier proves nothing about the writer's share of the SAME K-blocks; publishing a block
-// to compute without this wait hands the `down` matmul a half-written weight tile.
+// The cross-RISC completion gate. `noc_async_read_barrier()` is PER-RISC-V, so this kernel's
+// barrier proves nothing about the writer's share of the SAME K-blocks; publishing a block without
+// this wait hands the `down` matmul a half-written weight tile.
 //
-// The counter is K-BLOCKS COMPLETED SINCE THE START OF THE OP (monotone, never reset), and
-// `wd_done` is this kernel's running total of blocks already PUBLISHED — exactly `b * HGROUPS` at
-// the top of M-block b, since the reader pushes exactly HGROUPS blocks per block. Waiting for
-// `wd_done + n` before pushing n blocks is therefore the tightest legal gate: at WD_WPUB_TRID the
-// writer releases block by block, so the reader never waits on bytes it is not about to publish.
+// The counter is K-blocks completed since the start of the op (monotone, never reset); `wd_done`
+// is this kernel's running total of blocks already published. Waiting for `wd_done + n` before
+// pushing n blocks is the tightest legal gate — the writer releases block by block by trid.
 inline void wd_split_gate(uint32_t& wd_done, uint32_t n) {
     wd_done += n;
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_WDSPLIT)), wd_done);
 }
-#endif
-
-// PERF 17b (NEXT_ROUND_PLAN §14.3) — drop the TRAILING atomic barrier after the gather's signals.
-// Mirror of the writer's; see there. The data-before-signal `noc_async_write_barrier()` STAYS.
-#ifndef SCATTER_NOBAR
-#define SCATTER_NOBAR 0
-#endif
-#if SCATTER_NOBAR
-#define MAYBE_ATOMIC_BARRIER() ((void)0)
-#else
-#define MAYBE_ATOMIC_BARRIER() noc_async_atomic_barrier()
-#endif
-
-// PERF 17b (NEXT_ROUND_PLAN §14.2) — ROTATE THE PEER-LOOP START. Mirror of the writer's; see there
-// for the mechanism and the npe evidence. Order-only change: destinations, source offsets and
-// transaction counts are identical, and every far-side wait is a monotone counter.
-#ifndef SCATTER_ROT
-#define SCATTER_ROT 0
-#endif
-inline uint32_t peer_at(uint32_t i, uint32_t n, uint32_t my_row) {
-#if SCATTER_ROT
-    uint32_t w = i + my_row;
-    while (w >= n) {
-        w -= n;
-    }
-    return w;
-#else
-    (void)my_row;
-    (void)n;
-    return i;
-#endif
-}
-
-// PERF 17 (HSPLIT) — the dual-NoC h all-gather. HSPLIT eighths of a round's TILES are broadcast by
-// the WRITER on NOC_1; this kernel keeps the head tiles and the linked VALID flag. See
-// MOE_SWIGLU_HSPLIT in the descriptor for the completion protocol and why a swap is the wrong
-// direction. 0 == the shipped reader-only multicast, byte for byte.
-#ifndef HSPLIT
-#define HSPLIT 0
-#endif
-//: The HEAD tiles this kernel broadcasts. Split by TILE, so both halves stay tile-aligned (and
-//: therefore NoC-alignment-safe) at every runtime m_eff. Never 0 — the knob is clamped to 7/8.
-inline uint32_t h_tiles_noc0(uint32_t t) { return t - (t * HSPLIT) / 8; }
 
 void kernel_main() {
     const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
@@ -429,22 +341,9 @@ void kernel_main() {
     // expectation must be too — declared here, outside the M-block loop, not reset per block.
     uint32_t h_free_expected = 0;
     (void)h_free_expected;
-#if WD_SPLIT
-    // PERF 17 — W_down K-blocks this kernel has already PUBLISHED, running across M-blocks so it
-    // stays aligned with the writer's equally-monotone completion counter.
+    // W_down K-blocks this kernel has already PUBLISHED, running across M-blocks so it stays
+    // aligned with the writer's equally-monotone completion counter.
     uint32_t wd_done = 0;
-#endif
-#if HSPLIT
-    // PERF 17 (HSPLIT) — this core's private per-slot expectation for the NOC_1 half of each h
-    // round. Private and monotone for the same reason the HSEND=writer counters are: a ROOT
-    // self-copies its own round and is excluded from its own multicast, so its counter for that slot
-    // is one behind everyone else's, and a shared expectation would be wrong on exactly 11 cores.
-    uint32_t h2_exp[DEPTH_H] = {0};
-#endif
-#if HSEND_WRITER
-    // PERF 3 — per-cb_h-slot arrival expectation, this core's own running total. See the wait site.
-    uint32_t h_exp[DEPTH_H] = {0};
-#endif
 #ifdef ABLATE_NO_REDUCE_XFER
     (void)sem_data_ptr;
     (void)data_arrivals;
@@ -519,37 +418,10 @@ void kernel_main() {
         // extra L1-accumulating pack — which is exactly why K-chunking was rejected here (it would
         // cost `m_eff` extra accumulating packs per extra K-block, roughly what the overlap wins).
         // Each chunk is CONTIGUOUS in the CB (row stride GU_CHUNK_W, not HN_PAD).
-        // PERF 8 — TRANSACTION-ID RING on the weight stream (`WG_TRID`).
-        //
-        // The chunked stream keeps only ONE chunk in DRAM at a time: the publish loop barriers on
-        // chunk c and only THEN issues c+1, because `noc_async_read_barrier()` is all-or-nothing and
-        // issuing c+1 first would make that barrier wait for it too. So chunk c+1's full DRAM
-        // latency is paid AFTER chunk c has already landed, GU_CHUNKS times per M-block. The
-        // measured consequence (Perf 7 §5): removing the weight stream saves 100 % of its cost, i.e.
-        // it overlaps the matmul NOT AT ALL, while the matmul is a co-equal 27 % of the op.
-        //
-        // The fix is the reference op's `WEIGHT_TRID_RING`: tag chunk c with trid c+1, issue EVERY
-        // chunk up front, then drain per chunk with `noc_async_read_barrier_with_trid`, which waits
-        // for that chunk only and leaves the rest streaming. Trid 0 stays the untagged default and is
-        // restored after each issue, so x staging and W_down on this cmd buf are unaffected.
-        //
-        // Issuing every chunk before any push rules out `get_write_ptr` (it advances only on
-        // `cb_push_back`, so all chunks would land on top of each other). The address is derived:
-        // cb_w_gate holds exactly GU_CHUNKS chunks and is pushed GU_CHUNKS times per M-block, so its
-        // write pointer is the CB BASE at the top of every block and chunk c sits at
-        // `base + c * WG_CHUNK_TILES * BFP4_TILE`.
-#if WG_TRID
-        const uint32_t wg_base = get_write_ptr(cb_w_gate);
-#endif
         auto issue_wg_chunk = [&](uint32_t c) {
             cb_reserve_back(cb_w_gate, WG_CHUNK_TILES);
             MaybeDeviceZoneScope("reader_wg_issue");
-#if WG_TRID
-            const uint32_t wg_wp = wg_base + c * WG_CHUNK_TILES * BFP4_TILE;
-            noc_async_read_set_trid(c + 1);
-#else
             const uint32_t wg_wp = get_write_ptr(cb_w_gate);
-#endif
             const uint32_t h0 = c * GU_CHUNK_W;
             // The ragged last column (hn < HN_PAD) narrows the LAST chunk; the host guarantees every
             // chunk still holds at least one real column, so `w` is never 0.
@@ -573,23 +445,14 @@ void kernel_main() {
 #else
             (void)wg_wp;
 #endif
-#if WG_TRID
-            noc_async_read_set_trid(0);  // back to untagged for x staging / W_down on this cmd buf
-#endif
         };
-        // At WG_TRID the whole block goes to DRAM at once; otherwise only chunk 0, and the publish
-        // loop below issues c+1 after draining c (the pre-PERF-8 shape, byte for byte).
-// PERF 8 — WHERE the tail chunks are issued is the whole result. Issuing all GU_CHUNKS here was
-// measured +17 %/+6 %/+5 %, because the x STAGING PROLOGUE below carries its own blanket
-// `noc_async_read_barrier()`, which is all-or-nothing and drains trid-tagged reads too -- so the
-// whole weight block got paid for before a single stick was tilized. That is the identical defect
-// the XSTAGE_FIRST knob documents. Chunk 0 stays here (the x barrier drains one third of the block,
-// which is the pre-PERF-8 behaviour); chunks 1..N-1 are issued AFTER that barrier, so they stream
-// under the matmul on chunk 0 instead of in front of x.
-#define ISSUE_ALL_WG_CHUNKS() issue_wg_chunk(0)
-#if XSTAGE_FIRST == 0
-        ISSUE_ALL_WG_CHUNKS();
-#endif
+        // PERF 8 — WHERE the tail chunks are issued is the whole result. Issuing all GU_CHUNKS here was
+        // measured +17 %/+6 %/+5 %, because the x STAGING PROLOGUE below carries its own blanket
+        // `noc_async_read_barrier()`, which is all-or-nothing and drains trid-tagged reads too -- so the
+        // whole weight block got paid for before a single stick was tilized. That is the identical defect
+        // the XSTAGE_FIRST knob documents. Chunk 0 stays here (the x barrier drains one third of the block,
+        // which is the pre-PERF-8 behaviour); chunks 1..N-1 are issued AFTER that barrier, so they stream
+        // under the matmul on chunk 0 instead of in front of x.
 
         cb_reserve_back(cb_x_tiles, x_slot_tiles);
         const uint32_t x_base = get_write_ptr(cb_x_tiles);
@@ -649,7 +512,7 @@ void kernel_main() {
             //
             // The multicast wire is untouched: the lane VALUE is the sender's column, so the
             // receiver's `receive(lane)` resolves against the existing host-built coord table.
-            const uint32_t t_first = moe_fused_swiglu::inject_first(my_col, my_row, HGROUPS, XSTAGE_DIAG);
+            const uint32_t t_first = moe_fused_swiglu::inject_first(my_col);
             for (uint32_t t = t_first; t < m_eff; t += HGROUPS) {
                 const uint32_t dst = x_base + t * X_ROW_BYTES;
                 uint32_t row = b * M_BLOCK + t;
@@ -663,11 +526,7 @@ void kernel_main() {
                     const uint32_t wp = get_write_ptr(cb_x_in);
 #ifndef ABLATE_NO_XSTAGE_XFER  // /perf-measure: drop the ACTIVATION DRAM stream, keep the tilize
                     for (uint32_t i = 0; i < TILE_H; ++i) {
-#if XSTAGE_STAGGER
                         const uint32_t s = (i + my_col + my_row) % TILE_H;
-#else
-                        const uint32_t s = i;
-#endif
                         noc_async_read(
                             x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
                             wp + s * X_SLICE,
@@ -704,9 +563,7 @@ void kernel_main() {
 
         // The staging prologue's barriers are behind us, so this prefetch now has the multicast chain
         // AND the whole gate matmul to land under, instead of standing in front of the stick reads.
-#if XSTAGE_FIRST
-        ISSUE_ALL_WG_CHUNKS();
-#endif
+        issue_wg_chunk(0);
 
         // ---- x multicast chain ----
         // m_eff rounds, not M_BLOCK: at count 128 (M_t 4) this is HALF the handshake chain and half
@@ -723,11 +580,7 @@ void kernel_main() {
                     // from a column into a diagonal. Every core in the row derives the same lane
                     // from the same `my_row`, so sender and receivers agree by construction, and the
                     // lane value IS the sender's column so the coord table needs no change.
-#if XSTAGE_DIAG
-                    const uint32_t round = (t + my_row) % HGROUPS;
-#else
                     const uint32_t round = t % HGROUPS;
-#endif
                     if (round == my_col) {
                         x_send.send(x_base + t * X_ROW_BYTES, x_base + t * X_ROW_BYTES, X_ROW_BYTES);
                     } else {
@@ -749,20 +602,6 @@ void kernel_main() {
         // here rather than the over-wait it is everywhere else in this kernel.
         {
             MaybeDeviceZoneScope("reader_wg_wait");
-#if WG_TRID
-            // Past every blanket read barrier now: put chunks 1..N-1 in flight together, each on its
-            // own trid, so the drain below can release chunk 0 to compute while they are still in
-            // DRAM. This is the overlap the one-chunk-in-flight stream never had.
-            for (uint32_t c = 1; c < GU_CHUNKS; ++c) {
-                issue_wg_chunk(c);
-            }
-            // Every chunk is already in flight; drain them one at a time so compute starts on
-            // chunk 0 while chunks 1..N-1 are still streaming from DRAM.
-            for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
-                noc_async_read_barrier_with_trid(c + 1);
-                cb_push_back(cb_w_gate, WG_CHUNK_TILES);
-            }
-#else
             for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
                 noc_async_read_barrier();
                 cb_push_back(cb_w_gate, WG_CHUNK_TILES);
@@ -770,7 +609,6 @@ void kernel_main() {
                     issue_wg_chunk(c + 1);
                 }
             }
-#endif
         }
 
         // -------------------------------------------------------------------
@@ -827,9 +665,7 @@ void kernel_main() {
 #endif
             }
         };
-#if !WD_LATE
         issue_wd_batch();
-#endif
 
         // -------------------------------------------------------------------
         // Phase 1c — the cross-column reduce's RECEIVER side. The invite (SEM_GO) is the flow control
@@ -878,18 +714,12 @@ void kernel_main() {
 #ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
             const uint32_t sem_go = static_cast<uint32_t>(get_semaphore(SEM_GO));
             for (uint32_t i = 0; i < KGROUPS; ++i) {
-                const uint32_t p = peer_at(i, KGROUPS, my_row);  // §14.2 rotation
+                const uint32_t p = i;
                 const uint32_t px = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 0);
                 const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 1);
                 noc_semaphore_inc(get_noc_addr(px, py, sem_go), 1);
             }
-            MAYBE_ATOMIC_BARRIER();
-#endif
-#if WD_LATE
-            // PERF 9 — past the invite, so the column is already told and nothing downstream waits
-            // on this issue; the reads stream under the contributor wait below and land in the
-            // DRAM-idle window.
-            issue_wd_batch();
+            noc_async_atomic_barrier();
 #endif
             // The UP half of the gather, when MOE_SWIGLU_SCATTER_NOC=split puts it on NOC_0. The
             // GATE half stays on the writer's NOC_1; each RISC-V owns one accumulator CB outright.
@@ -907,19 +737,19 @@ void kernel_main() {
                 const uint32_t slot_bytes = my_row * up_bytes;
                 const uint32_t sem_data_id = static_cast<uint32_t>(get_semaphore(SEM_DATA));
                 for (uint32_t i = 0; i < sl_w; ++i) {
-                    const uint32_t w = peer_at(i, sl_w, my_row);  // §14.2 rotation
+                    const uint32_t w = i;  // §14.2 rotation
                     const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
                     const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
                     noc_async_write(usrc + w * up_bytes, get_noc_addr(vx, vy, udst + slot_bytes), up_bytes);
                 }
                 noc_async_write_barrier();
                 for (uint32_t i = 0; i < sl_w; ++i) {
-                    const uint32_t w = peer_at(i, sl_w, my_row);  // §14.2 rotation
+                    const uint32_t w = i;  // §14.2 rotation
                     const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
                     const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
                     noc_semaphore_inc(get_noc_addr(vx, vy, sem_data_id), 1);
                 }
-                MAYBE_ATOMIC_BARRIER();
+                noc_async_atomic_barrier();
 #endif
                 cb_pop_front(cb_up_acc, h_block_tiles);
             }
@@ -1149,9 +979,9 @@ void kernel_main() {
                         // LINKED flag is the round's VALID signal. Still `src == dst`, so still
                         // exclude-source (§4 trap 4). At HSPLIT == 0 it is the whole block.
 #if HPOSTED
-                        h_slot_send_posted((b * HGROUPS + r) % DEPTH_H, hdst, h_tiles_noc0(h_block_tiles) * H_TILE);
+                        h_slot_send_posted((b * HGROUPS + r) % DEPTH_H, hdst, h_block_tiles * H_TILE);
 #else
-                        h_slot_send(noc, (b * HGROUPS + r) % DEPTH_H, hdst, h_tiles_noc0(h_block_tiles) * H_TILE);
+                        h_slot_send(noc, (b * HGROUPS + r) % DEPTH_H, hdst, h_block_tiles * H_TILE);
 #endif
                     }
 #else

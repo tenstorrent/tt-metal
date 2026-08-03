@@ -136,70 +136,6 @@ constexpr auto blk_in(uint32_t cb) { return input(cb, WaitPolicy::PerChunk, PopP
 constexpr auto blk_out(uint32_t cb) { return output(cb, ReservePolicy::PerChunk, PushPolicy::PerChunk); }
 ALWI auto blk_shape(uint32_t n) { return EltwiseShape::tiles(n, ELTWISE_BLK); }
 
-// ---------------------------------------------------------------------------
-// PERF 17 (NEXT_ROUND_PLAN #6) — THE SLICE-FOLD MECHANISM.
-//
-// The reduce-scatter's per-worker fold is `copy` + (KGROUPS-1) in-place `add`s. Every one of those
-// `add<>` calls is a separate `eltwise_chain` at the default `SetupOwner::Chain`, so it RE-EMITS the
-// chain's one-time setup — the binary MOP init plus the input/pack dtype reconfig — even though the
-// loop body is byte-identical every iteration (same two input CBs, same output CB, same op, same
-// shape). That is KGROUPS-1 redundant setups per fold, two folds per slice, every M-block.
-//
-//   REDUCE_MECH 0 `addchain` — the shipped chain, byte for byte.
-//   REDUCE_MECH 1 `hoist`    — SAME math and SAME CB traffic; the first add owns the setup and the
-//                              rest run `SetupOwner::Caller`, which the helper admits exactly when
-//                              the chain's whole setup is boot-hoistable (uniform math MOP + SFPU
-//                              init and homogeneous pack CBs). Uniform here by construction, and a
-//                              violation is a COMPILE ERROR, not a wrong answer.
-//   REDUCE_MECH 2 `pair`     — folds TWO contributors per chain: `BinaryFpu(g_a, g_b) -> D0`, then
-//                              `DestReuseBinary(acc) -> D0`, then ONE `PackTile(acc)`. That is
-//                              ceil((K-1)/2) chains instead of K-1, so it halves the PACK count as
-//                              well as the setup count. It is `pack_l1_pair`'s mechanism (§7) with
-//                              DEST reuse standing in for packer L1-accumulation, which is what
-//                              lets it skip the bf16 accumulator CB that made `pack_l1_pair` L1-dead
-//                              (+102 KB against 10 560 B free at 11x8) — and it sidesteps the
-//                              packer-L1-accumulate-on-a-block-float correctness bug entirely.
-#ifndef REDUCE_MECH
-#define REDUCE_MECH 0
-#endif
-// §14.1 — fold the gate SiLU into the DEST accumulation (see fold_dest_silu).
-#ifndef SILU_FUSE
-#define SILU_FUSE 0
-#endif
-// §14.4 — last `down` K-block packs straight to cb_out_tiles (no separate interm->out copy).
-#ifndef DOWN_OUT
-#define DOWN_OUT 0
-#endif
-
-// The no-reconfig twins of `blk_in` / `blk_out`, for the steps that run under
-// `SetupOwner::Caller`. Required, not cosmetic: the helper static_asserts that a Caller chain
-// declares reconfig DISABLED on every spec, because under Caller it emits none — "the caller's
-// manual setup owns the format". Correct here because every step of the loop has the identical
-// operand and pack formats, so the format the FIRST step established still holds.
-constexpr auto nrc_in(uint32_t cb) {
-    return input(cb, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block, DataFormatReconfig::Disabled);
-}
-constexpr auto nrc_out(uint32_t cb) {
-    return output(cb, ReservePolicy::PerChunk, PushPolicy::PerChunk, DataFormatReconfig::Disabled);
-}
-
-// One in-place accumulate step, with the setup either owned by this call or already emitted.
-// `SetupOwner::Caller` is legal only for the second and later steps of an otherwise identical loop.
-template <SetupOwner SO, uint32_t ACC, uint32_t IN>
-ALWI void fold_step(uint32_t n) {
-    if constexpr (SO == SetupOwner::Caller) {
-        eltwise_chain<SetupOwner::Caller>(
-            blk_shape(n),
-            BinaryFpu<nrc_in(ACC), nrc_in(IN), BinaryFpuOp::Add, BroadcastDim::None, Dst::D0>{},
-            PackTile<nrc_out(ACC)>{});
-    } else {
-        eltwise_chain<SetupOwner::Chain>(
-            blk_shape(n),
-            BinaryFpu<blk_in(ACC), blk_in(IN), BinaryFpuOp::Add, BroadcastDim::None, Dst::D0>{},
-            PackTile<blk_out(ACC)>{});
-    }
-}
-
 // `dest_acc` — the running sum lives in DEST for the WHOLE fold and is packed to L1 exactly ONCE.
 //
 // `add_tiles_init(IN, IN, /*acc_to_dest=*/true)` makes `add_tiles` compute
@@ -290,110 +226,11 @@ ALWI void fold_dest(uint32_t nc, uint32_t n) {
     cb_push_back(ACC, n);
 }
 
-// PERF 17b (NEXT_ROUND_PLAN §14.1) — the gate fold WITH SiLU applied in DEST, packed ONCE.
-//
-// The shipped shape folds KGROUPS-1 contributors into `cb_slice_gate`, packs it, then UNPACKS it
-// again so `add_bias_bcast_rows` can add the last contributor and apply SiLU into `cb_gate_silu`.
-// `cb_slice_gate` exists only to carry the running sum across that boundary. Folding all KGROUPS
-// contributors in DEST and running SiLU there deletes the CB, its pack and its unpack.
-//
-// THE REAL TRADE — and it is NOT "free packer SiLU versus SFPU SiLU", which an earlier note here got
-// wrong. SiLU is SFPU work either way; the changelog is explicit that the epilogue is "dominated by
-// the 48-tile SFPU SiLU". What actually changes is WHICH THREAD ISSUES IT: `SiluActivation` inside
-// `add_bias_bcast_rows` uses `silu_tile_init_pack()` (PACK thread), where it can overlap MATH work;
-// here it is `silu_tile()` on the MATH thread, serialised with the adds. So this trades one L1
-// round-trip against some MATH/PACK overlap, and only the measurement decides it.
-//
-// NOT fused any further on purpose: keeping the SiLU result in DEST to do the SwiGLU multiply would
-// need a DEST x L1 product, i.e. `binary_dest_reuse_tiles`, which is the slow path — and the kernel
-// already carries a measurement saying the FPU multiply through L1 beats DEST reuse.
-template <uint32_t ACC, uint32_t IN>
-ALWI void fold_dest_silu(uint32_t nc, uint32_t n) {
-    cb_wait_front(IN, nc * n);
-    cb_reserve_back(ACC, n);
-    reconfig_data_format(IN, IN);  // BEFORE the inits — see fold_dest
-    pack_reconfig_data_format(ACC);
-    for (uint32_t t0 = 0; t0 < n; t0 += ELTWISE_BLK) {
-        uint32_t w = n - t0;
-        if (w > ELTWISE_BLK) {
-            w = ELTWISE_BLK;
-        }
-        tile_regs_acquire();
-        uint32_t c;
-        if (nc & 1u) {
-            copy_tile_to_dst_init_short(IN);
-            for (uint32_t i = 0; i < w; ++i) {
-                copy_tile(IN, t0 + i, i);
-            }
-            c = 1;
-        } else {
-            add_tiles_init(IN, IN, /*acc_to_dest=*/false);
-            for (uint32_t i = 0; i < w; ++i) {
-                add_tiles(IN, IN, t0 + i, n + t0 + i, i);
-            }
-            c = 2;
-        }
-        add_tiles_init(IN, IN, /*acc_to_dest=*/true);
-        for (; c + 1 < nc; c += 2) {
-            for (uint32_t i = 0; i < w; ++i) {
-                add_tiles(IN, IN, c * n + t0 + i, (c + 1) * n + t0 + i, i);
-            }
-        }
-        // SiLU on the whole DEST window, then the single pack.
-        silu_tile_init();
-        for (uint32_t i = 0; i < w; ++i) {
-            silu_tile(i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < w; ++i) {
-            pack_tile(i, ACC);
-        }
-        tile_regs_release();
-    }
-    add_tiles_init(IN, IN, /*acc_to_dest=*/false);
-    cb_pop_front(IN, nc * n);
-    cb_push_back(ACC, n);
-}
-
-// Fold `nc` contributors of `in_cb` into `acc_cb`, seeded by a copy of the first. Returns nothing;
-// the CB pop/push totals are identical for every mechanism, which is what keeps the cross-core
-// contract (whole-CB pushes, base-address write pointers) untouched.
+// Fold `nc` contributors of `IN` into `ACC`. All `nc` accumulate in DEST behind ONE pack; see
+// `fold_dest` for why that is worth 2.6-4.0 % and for the reconfig-before-init trap it hides.
 template <uint32_t ACC, uint32_t IN>
 ALWI void fold_chain(uint32_t nc, uint32_t n) {
-#if REDUCE_MECH == 2
-    // All but the LAST contributor accumulate in DEST behind one pack; the last one goes through the
-    // ordinary `add<>` helper.
-    //
-    // WHY THE LAST ONE IS A HELPER CALL, and it is not cosmetic. `eltwise_chain` COMPILE-TIME-ELIDES
-    // its dtype reconfig when the statically-previous CB on that side is the same one — that static
-    // sequence is the invariant this compute kernel's hoisted reconfigs already stand on. A raw block
-    // is INVISIBLE to that tracker, so leaving `fold_dest`'s hand-rolled unpack/pack config as the
-    // exit state let the following helpers elide reconfigs they actually needed: measured as
-    // `inf` in the output at pcc = 1.000000 (right pattern, wrong scale). Ending on a real chain
-    // re-establishes both the hardware state and the tracker's model of it in one step.
-    // ALL `nc` contributors in DEST behind ONE pack. The earlier build kept the last contributor on
-    // the `add<>` helper to hand the reconfig state back; that turned out to be unnecessary once
-    // `fold_dest` sets its OWN formats before its inits — the following helper chains reconfigure
-    // themselves. Dropping it removes one more full pack + unpack pass per fold.
     fold_dest<ACC, IN>(nc, n);
-#else
-    copy<blk_in(IN), blk_out(ACC)>(blk_shape(n));
-    uint32_t c = 1;
-#if REDUCE_MECH == 1
-    if (c < nc) {
-        fold_step<SetupOwner::Chain, ACC, IN>(n);  // owns the setup for the whole loop
-        ++c;
-        for (; c < nc; ++c) {
-            fold_step<SetupOwner::Caller, ACC, IN>(n);
-        }
-    }
-#else
-    for (; c < nc; ++c) {
-        add<blk_in(ACC), blk_in(IN), blk_out(ACC)>(blk_shape(n));
-    }
-#endif
-#endif
 }
 
 // Per-K-block FMA step count for the gate/up matmul: the padded K slot is KR_PAD tiles wide but
@@ -489,8 +326,8 @@ void kernel_main() {
         // ---- 1. fused tilize of the x tile-rows this core injects (bf16 ROW_MAJOR only) ----
         if constexpr (INPUT_FORMAT == 0) {
             MaybeDeviceZoneScope("compute_tilize");
-            const uint32_t n_inject = moe_fused_swiglu::inject_rows(
-                m_eff, moe_fused_swiglu::inject_first(my_col, my_row, HGROUPS, XSTAGE_DIAG), HGROUPS);
+            const uint32_t n_inject =
+                moe_fused_swiglu::inject_rows(m_eff, moe_fused_swiglu::inject_first(my_col), HGROUPS);
             for (uint32_t i = 0; i < n_inject; ++i) {
                 // Asymmetric page mode: TILE_H row-major stick slices in -> KR_PAD bfp8 tiles out.
                 tilize<KR_PAD, cb_x_in, cb_x_stage>(1, TILE_H);
@@ -648,14 +485,7 @@ void kernel_main() {
                 // count, so PACK is the ONLY pusher of cb_slice_gate/cb_slice_up here, and the
                 // dataflow kernels are the only pusher of the landing CBs.
                 if (slice_tiles) {
-                    // PERF 17 (#6) — the fold MECHANISM is a knob (see `fold_chain`). Every variant
-                    // consumes exactly KGROUPS-1 contributors here and leaves the last one to the
-                    // SiLU-fused add below, so the CB pop/push totals are mechanism-independent.
-#if SILU_FUSE
-                    // §14.1 — all KGROUPS contributors in DEST, SiLU in DEST, ONE pack straight to
-                    // cb_gate_silu. `cb_slice_gate` is not touched at all on this path.
-                    fold_dest_silu<cb_gate_silu, cb_gather_gate>(KGROUPS, slice_tiles);
-#else
+                    // KGROUPS-1 contributors fold here; the last one rides the SiLU-fused add below.
                     fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, slice_tiles);
                     // The final gate add, with SiLU on the packer thread. A slice is at most one DEST
                     // window, so the root's m_eff-call bias walk (the helper's bias index does not
@@ -674,7 +504,6 @@ void kernel_main() {
                             SiluActivation>(sg_buf, gg_buf, silu_buf, BiasAddShape::of(1, 1, 1, w), {}, t0);
                     }
                     gg_buf.pop_front(slice_tiles);
-#endif
 
                     fold_chain<cb_slice_up, cb_gather_up>(KGROUPS, slice_tiles);
 
@@ -760,20 +589,9 @@ void kernel_main() {
                 // and no root-side copy (measured worth 8.6 % and 52 224 B/core against the version
                 // that lands them separately and copies).
                 if (slice_tiles) {
-#if H_BFP4
-                    // MEASUREMENT KNOB (H_DTYPE=bfp4). Phase 1's reconfigs are deliberately HOISTED out
-                    // of the loop (see `reconfig_data_format` above), so this multiply INHERITS the
-                    // cb_gate_acc pack format. That is correct only while cb_h_slice is bfp8 — the
-                    // epilogue's single dtype boundary. At bfp4 the packer would emit bfp8 into a bfp4
-                    // CB and the unpacker reads garbage exponents: measured pcc=nan, max_abs=inf on 8 of
-                    // 9 precision cells. Retarget the packer here, and restore it after, so the hoisted
-                    // configuration the next M-block relies on is unchanged.
-                    pack_reconfig_data_format(cb_h_slice);
-#endif
+                    // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
+                    // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
                     mul<blk_in(cb_gate_silu), blk_in(cb_slice_up), blk_out(cb_h_slice)>(blk_shape(slice_tiles));
-#if H_BFP4
-                    pack_reconfig_data_format(cb_gate_acc);
-#endif
                 }
             } else if (is_root) {
                 // FPU multiply through L1 (deliberately not SFPU and not DEST-reuse — the L1
@@ -789,52 +607,6 @@ void kernel_main() {
         // interm region (so every K-block accumulates at the SAME L1 address) ----
         {
             MaybeDeviceZoneScope("compute_down");
-#if H_BFP4
-            // MEASUREMENT KNOB (H_DTYPE=bfp4). `InitMode::Short` deliberately SKIPS the unpacker
-            // format reconfiguration — sound while in0 (cb_h) matched phase 1's bfp8, but in0 is now
-            // bfp4 and the unpacker would still be configured for bfp8. Mirrors phase 1's
-            // `reconfig_data_format(cb_w_gate, cb_x_tiles)` argument order (in1, in0).
-            reconfig_data_format(cb_w_down, cb_h);
-#endif
-#if DOWN_OUT
-            // §14.4 — LAST K-BLOCK PACKS STRAIGHT TO THE OUTPUT. Non-last blocks still L1-accumulate
-            // into the interm; the last one RELOADS that partial into DEST, adds its own result and
-            // packs once to `cb_out_tiles` — so the separate bf16->bfp8 `compute_out_pack` copy below
-            // is not needed. Saves one 24-tile pack per M-block (the copy costs unpack + pack; the
-            // reload costs unpack only).
-            //
-            // `caller_owns_pack_target` MUST go with it: the helper static_asserts that it "requires
-            // TileRowMajor + packer_l1_acc + last_block_target == Interm", because it is precisely
-            // the flag that makes the software-reload path statically dead. Turning it off is what
-            // brings that reload to life.
-            matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/true,
-                LastBlockTarget::Out,
-                OutputCBLayout::TileRowMajor,
-                matmul_config::InitMode::Short,
-                InputPolicy::WaitAndPopPerKBlock,
-                InputPolicy::WaitAndPopPerKBlock,
-                NoPostCompute,
-                NoPreKBlock,
-                NoPostKBlock,
-                /*untilize_block_ct_dim=*/0,
-                HnSteps,
-                NoIn0Source,
-                NoIn1BaseOffset,
-                /*caller_owns_pack_target=*/false>(
-                h_buf,
-                wd_buf,
-                out_tiles_buf,
-                out_interm_buf,
-                shape_dn,
-                {},
-                {},
-                /*in1_per_core_w=*/EC_MAX,
-                /*out_row_width=*/EC_MAX,
-                {},
-                HnSteps{hn_last});
-#else
             out_interm_buf.reserve_back(out_block_tiles);
             matmul_block<
                 /*transpose=*/false,
@@ -864,7 +636,6 @@ void kernel_main() {
                 {},
                 HnSteps{hn_last});
             out_interm_buf.push_back(out_block_tiles);
-#endif
             // matmul_block leaves packer L1 accumulation ENABLED after its last K-block, and neither
             // the eltwise chain (L1Accumulation::Disabled is a compile-time no-op) nor a
             // packer_l1_acc=false matmul resets it. Without this the copy below — and the next
@@ -872,13 +643,11 @@ void kernel_main() {
             pack_reconfig_l1_acc(0);
         }
 
-#if !DOWN_OUT
         {
             // The one genuine dtype boundary: bf16 accumulation -> bfp8 output tiles.
             MaybeDeviceZoneScope("compute_out_pack");
             copy<blk_in(cb_out_interm), blk_out(cb_out_tiles)>(blk_shape(out_block_tiles));
         }
-#endif
 
         // The resident x block was retained by both matmuls; release it now.
         x_buf.pop_front(x_slot_tiles);
