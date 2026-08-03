@@ -287,8 +287,9 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
             }
         }
 
-        std::vector<uint32_t> reader_rt_args = {bank_id, vc, total_num_blocks_in_buffer};
+        std::vector<uint32_t> reader_rt_args;
         reader_rt_args.reserve(3 + 3 * num_tensors);
+        reader_rt_args.insert(reader_rt_args.end(), {bank_id, vc, total_num_blocks_in_buffer});
         reader_rt_args.insert(reader_rt_args.end(), page_sizes.begin(), page_sizes.end());
         reader_rt_args.insert(reader_rt_args.end(), block_num_pages.begin(), block_num_pages.end());
         reader_rt_args.insert(reader_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
