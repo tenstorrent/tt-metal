@@ -457,12 +457,9 @@ private:
         ConnT* conn, uint32_t alignment, const ccl_routing_utils::line_unicast_route_info_t& route) :
         conn_(conn), alignment_(alignment), route_(route) {}
 
-    ConnT* conn_;                                            // borrowed from the FabricStreamSender
-    uint32_t alignment_;                                     // L1 alignment for on-wire payload sizing
-    ccl_routing_utils::line_unicast_route_info_t route_;     // bound at open(); reused by every unicast arm_*
-    volatile PACKET_HEADER_TYPE* fused_hdr_ = nullptr;       // lazily allocated by arm_fused_write_inc
-    volatile PACKET_HEADER_TYPE* mcast_write_hdr_ = nullptr; // lazily allocated by arm_multicast_write
-    volatile PACKET_HEADER_TYPE* mcast_fused_hdr_ = nullptr; // lazily allocated by arm_multicast_fused_write_inc
+    ConnT* conn_;                                        // borrowed from the FabricStreamSender
+    uint32_t alignment_;                                 // L1 alignment for on-wire payload sizing
+    ccl_routing_utils::line_unicast_route_info_t route_; // bound at open(); reused by every unicast arm_*
     bool closed_ = false;
 };
 
@@ -753,10 +750,12 @@ private:
 };
 
 /**
- * @brief FabricDuplexStream — the OPENED duplex egress. Owns the per-direction lazily-pooled
- *        headers and the per-direction routes; hands out armed duplex channels. Borrows the
- *        connection from the FabricDuplexSender that produced it, so the sender must outlive it
- *        (declare the sender first). RAII-closes on destruction.
+ * @brief FabricDuplexStream — the OPENED duplex egress. Holds the per-direction routes and hands
+ *        out armed duplex channels; each arm_* draws fresh per-direction pooled headers (one per
+ *        CONNECTED direction) that the returned channel OWNS — nothing header-related is shared, so
+ *        arming the same channel type twice yields two independent handles. Borrows the connection
+ *        from the FabricDuplexSender that produced it, so the sender must outlive it (declare the
+ *        sender first). RAII-closes on destruction.
  * @tparam C      Chip-level cast mode of the payload route (set by the open() overload used).
  * @tparam ConnT  Connection policy (DuplexConn).
  */
@@ -772,10 +771,6 @@ public:
         for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
             uni_route_[d] = o.uni_route_[d];
             mcast_route_[d] = o.mcast_route_[d];
-            write_hdr_[d] = o.write_hdr_[d];
-            fused_hdr_[d] = o.fused_hdr_[d];
-            scatter_hdr_[d] = o.scatter_hdr_[d];
-            inc_hdr_[d] = o.inc_hdr_[d];
         }
         o.closed_ = true;
     }
@@ -809,11 +804,6 @@ private:
     // are held (rather than a union) so the arm_* bodies can `if constexpr` on C without casting.
     ccl_routing_utils::line_unicast_route_info_t uni_route_[DuplexConn::kNumDirections] = {};
     ccl_routing_utils::line_multicast_route_info_t mcast_route_[DuplexConn::kNumDirections] = {};
-    // Per-direction, per-channel pooled headers; allocated lazily and ONLY for connected directions.
-    volatile PACKET_HEADER_TYPE* write_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
-    volatile PACKET_HEADER_TYPE* fused_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
-    volatile PACKET_HEADER_TYPE* scatter_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
-    volatile PACKET_HEADER_TYPE* inc_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
     bool closed_ = false;
 };
 

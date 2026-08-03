@@ -165,13 +165,7 @@ FORCE_INLINE typename MuxConn<NumBuffers>::SenderT* MuxConn<NumBuffers>::sender(
 
 template <typename ConnT>
 FORCE_INLINE FabricStream<ConnT>::FabricStream(FabricStream&& o) :
-    conn_(o.conn_),
-    alignment_(o.alignment_),
-    route_(o.route_),
-    fused_hdr_(o.fused_hdr_),
-    mcast_write_hdr_(o.mcast_write_hdr_),
-    mcast_fused_hdr_(o.mcast_fused_hdr_),
-    closed_(o.closed_) {
+    conn_(o.conn_), alignment_(o.alignment_), route_(o.route_), closed_(o.closed_) {
     o.closed_ = true;
 }
 
@@ -383,18 +377,17 @@ FORCE_INLINE void FabricStreamSender<ConnT>::signal_once(
 template <typename ConnT>
 FORCE_INLINE FusedWriteIncChannel<ConnT> FabricStream<ConnT>::arm_fused_write_inc(
     uint32_t page_size_bytes, uint32_t val, bool flush) {
-    if (fused_hdr_ == nullptr) {
-        fused_hdr_ = PacketHeaderPool::allocate_header();
-    }
+    // Each arm draws its OWN pooled header, which the returned channel then owns.
+    auto* hdr = PacketHeaderPool::allocate_header();
     // set_state programs the invariant inc value + flush + nominal payload size; the two addresses
     // are placeholders filled per-issue. Helper owns the mask. Route is the stream's, bound at open().
     linear_fabric::fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<kFusedArmMask>(
-        fused_hdr_,
+        hdr,
         static_cast<uint8_t>(route_.distance_in_hops),
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{0, 0, val, flush},
         static_cast<uint16_t>(align(page_size_bytes, alignment_)));
-    ccl_routing_utils::fabric_set_line_unicast_route(fused_hdr_, route_);
-    return FusedWriteIncChannel<ConnT>(conn_, fused_hdr_);
+    ccl_routing_utils::fabric_set_line_unicast_route(hdr, route_);
+    return FusedWriteIncChannel<ConnT>(conn_, hdr);
 }
 
 template <typename ConnT>
@@ -415,17 +408,15 @@ FORCE_INLINE void FusedWriteIncChannel<ConnT>::write_fused(
 template <typename ConnT>
 FORCE_INLINE MulticastWriteChannel<ConnT> FabricStream<ConnT>::arm_multicast_write(
     const ccl_routing_utils::line_multicast_route_info_t& route, uint32_t page_size_bytes) {
-    if (mcast_write_hdr_ == nullptr) {
-        mcast_write_hdr_ = PacketHeaderPool::allocate_header();
-    }
+    auto* hdr = PacketHeaderPool::allocate_header();
     linear_fabric::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        mcast_write_hdr_,
+        hdr,
         static_cast<uint8_t>(route.start_distance_in_hops),
         static_cast<uint8_t>(route.range_hops),
         nullptr,
         static_cast<uint16_t>(align(page_size_bytes, alignment_)));
-    ccl_routing_utils::fabric_set_line_multicast_route(mcast_write_hdr_, route);
-    return MulticastWriteChannel<ConnT>(conn_, mcast_write_hdr_);
+    ccl_routing_utils::fabric_set_line_multicast_route(hdr, route);
+    return MulticastWriteChannel<ConnT>(conn_, hdr);
 }
 
 template <typename ConnT>
@@ -441,17 +432,15 @@ FORCE_INLINE void MulticastWriteChannel<ConnT>::write(uint64_t dst_noc_addr, uin
 template <typename ConnT>
 FORCE_INLINE MulticastFusedWriteIncChannel<ConnT> FabricStream<ConnT>::arm_multicast_fused_write_inc(
     const ccl_routing_utils::line_multicast_route_info_t& route, uint32_t page_size_bytes, uint32_t val, bool flush) {
-    if (mcast_fused_hdr_ == nullptr) {
-        mcast_fused_hdr_ = PacketHeaderPool::allocate_header();
-    }
+    auto* hdr = PacketHeaderPool::allocate_header();
     linear_fabric::fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<kFusedArmMask>(
-        mcast_fused_hdr_,
+        hdr,
         static_cast<uint8_t>(route.start_distance_in_hops),
         static_cast<uint8_t>(route.range_hops),
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{0, 0, val, flush},
         static_cast<uint16_t>(align(page_size_bytes, alignment_)));
-    ccl_routing_utils::fabric_set_line_multicast_route(mcast_fused_hdr_, route);
-    return MulticastFusedWriteIncChannel<ConnT>(conn_, mcast_fused_hdr_);
+    ccl_routing_utils::fabric_set_line_multicast_route(hdr, route);
+    return MulticastFusedWriteIncChannel<ConnT>(conn_, hdr);
 }
 
 template <typename ConnT>
@@ -476,31 +465,31 @@ FORCE_INLINE void MulticastFusedWriteIncChannel<ConnT>::write_fused(
 template <Cast C, typename ConnT>
 FORCE_INLINE DuplexWriteChannel<C, ConnT> FabricDuplexStream<C, ConnT>::arm_write(uint32_t page_size_bytes) {
     const uint16_t on_wire = static_cast<uint16_t>(align(page_size_bytes, alignment_));
+    // Fresh per-direction headers that the returned channel then owns; an unconnected direction
+    // stays nullptr and is never issued to (the channel gates each issue on conn_->has(d)).
+    volatile PACKET_HEADER_TYPE* hdr[DuplexConn::kNumDirections] = {nullptr, nullptr};
     for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
         // Only CONNECTED directions get a header: an end-of-line worker has one side unwired, and
         // arming it would burn a pooled header on a send that can never be issued.
         if (!conn_->has(d)) {
             continue;
         }
-        if (write_hdr_[d] == nullptr) {
-            write_hdr_[d] = PacketHeaderPool::allocate_header();
-        }
+        hdr[d] = PacketHeaderPool::allocate_header();
         if constexpr (C == Cast::Multicast) {
             linear_fabric::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-                write_hdr_[d],
+                hdr[d],
                 static_cast<uint8_t>(mcast_route_[d].start_distance_in_hops),
                 static_cast<uint8_t>(mcast_route_[d].range_hops),
                 nullptr,
                 on_wire);
-            ccl_routing_utils::fabric_set_line_multicast_route(write_hdr_[d], mcast_route_[d]);
+            ccl_routing_utils::fabric_set_line_multicast_route(hdr[d], mcast_route_[d]);
         } else {
             linear_fabric::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-                write_hdr_[d], static_cast<uint8_t>(uni_route_[d].distance_in_hops), nullptr, on_wire);
-            ccl_routing_utils::fabric_set_line_unicast_route(write_hdr_[d], uni_route_[d]);
+                hdr[d], static_cast<uint8_t>(uni_route_[d].distance_in_hops), nullptr, on_wire);
+            ccl_routing_utils::fabric_set_line_unicast_route(hdr[d], uni_route_[d]);
         }
     }
-    return DuplexWriteChannel<C, ConnT>(
-        conn_, write_hdr_[DuplexConn::kForward], write_hdr_[DuplexConn::kBackward], on_wire);
+    return DuplexWriteChannel<C, ConnT>(conn_, hdr[DuplexConn::kForward], hdr[DuplexConn::kBackward], on_wire);
 }
 
 template <Cast C, typename ConnT>
@@ -508,29 +497,27 @@ FORCE_INLINE DuplexFusedWriteIncChannel<C, ConnT> FabricDuplexStream<C, ConnT>::
     uint32_t page_size_bytes, uint32_t val, bool flush) {
     const uint16_t on_wire = static_cast<uint16_t>(align(page_size_bytes, alignment_));
     const tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader arm_hdr{0, 0, val, flush};
+    volatile PACKET_HEADER_TYPE* hdr[DuplexConn::kNumDirections] = {nullptr, nullptr};
     for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
         if (!conn_->has(d)) {
             continue;
         }
-        if (fused_hdr_[d] == nullptr) {
-            fused_hdr_[d] = PacketHeaderPool::allocate_header();
-        }
+        hdr[d] = PacketHeaderPool::allocate_header();
         if constexpr (C == Cast::Multicast) {
             linear_fabric::fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<kFusedArmMask>(
-                fused_hdr_[d],
+                hdr[d],
                 static_cast<uint8_t>(mcast_route_[d].start_distance_in_hops),
                 static_cast<uint8_t>(mcast_route_[d].range_hops),
                 arm_hdr,
                 on_wire);
-            ccl_routing_utils::fabric_set_line_multicast_route(fused_hdr_[d], mcast_route_[d]);
+            ccl_routing_utils::fabric_set_line_multicast_route(hdr[d], mcast_route_[d]);
         } else {
             linear_fabric::fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<kFusedArmMask>(
-                fused_hdr_[d], static_cast<uint8_t>(uni_route_[d].distance_in_hops), arm_hdr, on_wire);
-            ccl_routing_utils::fabric_set_line_unicast_route(fused_hdr_[d], uni_route_[d]);
+                hdr[d], static_cast<uint8_t>(uni_route_[d].distance_in_hops), arm_hdr, on_wire);
+            ccl_routing_utils::fabric_set_line_unicast_route(hdr[d], uni_route_[d]);
         }
     }
-    return DuplexFusedWriteIncChannel<C, ConnT>(
-        conn_, fused_hdr_[DuplexConn::kForward], fused_hdr_[DuplexConn::kBackward], on_wire);
+    return DuplexFusedWriteIncChannel<C, ConnT>(conn_, hdr[DuplexConn::kForward], hdr[DuplexConn::kBackward], on_wire);
 }
 
 template <Cast C, typename ConnT>
@@ -544,59 +531,57 @@ FORCE_INLINE DuplexScatterWriteChannel<C, ConnT> FabricDuplexStream<C, ConnT>::a
     const auto arm_hdr =
         tt::tt_fabric::NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, static_cast<uint8_t>(num_chunks));
     const uint16_t on_wire = static_cast<uint16_t>(chunk_size_bytes * num_chunks);
+    volatile PACKET_HEADER_TYPE* hdr[DuplexConn::kNumDirections] = {nullptr, nullptr};
     for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
         if (!conn_->has(d)) {
             continue;
         }
-        if (scatter_hdr_[d] == nullptr) {
-            scatter_hdr_[d] = PacketHeaderPool::allocate_header();
-        }
+        hdr[d] = PacketHeaderPool::allocate_header();
         if constexpr (C == Cast::Multicast) {
             linear_fabric::fabric_multicast_noc_scatter_write_set_state<
                 UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-                scatter_hdr_[d],
+                hdr[d],
                 static_cast<uint8_t>(mcast_route_[d].start_distance_in_hops),
                 static_cast<uint8_t>(mcast_route_[d].range_hops),
                 arm_hdr,
                 on_wire);
-            ccl_routing_utils::fabric_set_line_multicast_route(scatter_hdr_[d], mcast_route_[d]);
+            ccl_routing_utils::fabric_set_line_multicast_route(hdr[d], mcast_route_[d]);
         } else {
             linear_fabric::fabric_unicast_noc_scatter_write_set_state<
                 UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-                scatter_hdr_[d], static_cast<uint8_t>(uni_route_[d].distance_in_hops), arm_hdr, on_wire);
-            ccl_routing_utils::fabric_set_line_unicast_route(scatter_hdr_[d], uni_route_[d]);
+                hdr[d], static_cast<uint8_t>(uni_route_[d].distance_in_hops), arm_hdr, on_wire);
+            ccl_routing_utils::fabric_set_line_unicast_route(hdr[d], uni_route_[d]);
         }
     }
     return DuplexScatterWriteChannel<C, ConnT>(
-        conn_, scatter_hdr_[DuplexConn::kForward], scatter_hdr_[DuplexConn::kBackward], chunk_size_bytes);
+        conn_, hdr[DuplexConn::kForward], hdr[DuplexConn::kBackward], chunk_size_bytes);
 }
 
 template <Cast C, typename ConnT>
 FORCE_INLINE DuplexIncChannel<C, ConnT> FabricDuplexStream<C, ConnT>::arm_inc(uint32_t val, bool flush) {
     const tt::tt_fabric::NocUnicastAtomicIncCommandHeader arm_hdr{0, val, flush};
+    volatile PACKET_HEADER_TYPE* hdr[DuplexConn::kNumDirections] = {nullptr, nullptr};
     for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
         if (!conn_->has(d)) {
             continue;
         }
-        if (inc_hdr_[d] == nullptr) {
-            inc_hdr_[d] = PacketHeaderPool::allocate_header();
-        }
+        hdr[d] = PacketHeaderPool::allocate_header();
         if constexpr (C == Cast::Multicast) {
             linear_fabric::fabric_multicast_noc_unicast_atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-                inc_hdr_[d],
+                hdr[d],
                 static_cast<uint8_t>(mcast_route_[d].start_distance_in_hops),
                 static_cast<uint8_t>(mcast_route_[d].range_hops),
                 arm_hdr);
-            ccl_routing_utils::fabric_set_line_multicast_route(inc_hdr_[d], mcast_route_[d]);
+            ccl_routing_utils::fabric_set_line_multicast_route(hdr[d], mcast_route_[d]);
         } else {
             linear_fabric::fabric_unicast_noc_unicast_atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-                inc_hdr_[d], static_cast<uint8_t>(uni_route_[d].distance_in_hops), arm_hdr);
-            ccl_routing_utils::fabric_set_line_unicast_route(inc_hdr_[d], uni_route_[d]);
+                hdr[d], static_cast<uint8_t>(uni_route_[d].distance_in_hops), arm_hdr);
+            ccl_routing_utils::fabric_set_line_unicast_route(hdr[d], uni_route_[d]);
         }
     }
-    return DuplexIncChannel<C, ConnT>(conn_, inc_hdr_[DuplexConn::kForward], inc_hdr_[DuplexConn::kBackward]);
+    return DuplexIncChannel<C, ConnT>(conn_, hdr[DuplexConn::kForward], hdr[DuplexConn::kBackward]);
 }
 
 // ----------------------------------------------------------------------------
