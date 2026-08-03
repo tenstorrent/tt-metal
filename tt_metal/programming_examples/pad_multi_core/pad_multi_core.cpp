@@ -99,7 +99,8 @@ int main() {
 
     // specify compile time args for TTNN reader/writer
     std::vector<uint32_t> reader_compile_time_args;
-    reader_compile_time_args.reserve(20);
+    // 20 explicit args below + 2 appended by TensorAccessorArgs for an interleaved buffer
+    reader_compile_time_args.reserve(22);
     // N, H, C (treat rows as N, single H=1, columns (packed) as C)
     reader_compile_time_args.push_back(src_M);                // N
     reader_compile_time_args.push_back(1);                    // H
