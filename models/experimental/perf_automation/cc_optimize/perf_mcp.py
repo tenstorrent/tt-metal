@@ -1111,54 +1111,6 @@ def _tp_candidate(open_op: dict, op_code: str) -> bool:
     return (open_op.get("bound_by") or "").lower() == "memory"
 
 
-_MODEL_LEVER_SIG_PREFIX = "model:"
-
-
-def _model_lever_required(buckets, attempts) -> bool:
-    """True when the profile shows work WAITING and no model-scoped attempt is on file yet.
-
-    An op charged 40 ms that computed for 6 is not slow, it is spinning on its producer, and no rung
-    on it recovers the difference -- gemma-3-12b-it spent 130 attempts and seven hours proving that
-    while 207 ms of idle sat in eltwise and datamove.
-
-    NOT a rung. It never enters the per-op ladder, no op is blocked by it, and one `model:*` row --
-    win, loss, or "none: <evidence>" -- satisfies it for the whole run, because a model-wide change
-    is made once. Arms on measured evidence only: `kernel << FW` is true or false on any
-    architecture, so a model whose ops compute what they occupy never sees this.
-    """
-    if not any(((b or {}).get("wait") or {}).get("idle") for b in (buckets or [])):
-        return False
-    for a in attempts or []:
-        if isinstance(a, dict) and str(a.get("op_signature") or "").startswith(_MODEL_LEVER_SIG_PREFIX):
-            return False
-    return True
-
-
-def _idle_bucket_note(buckets) -> str:
-    """One line naming the worst waiting bucket, for the TARGET REASON.
-
-    The agent reads one (op, rung) instruction per round. Guidance it met in a catalogue on 3 of 51
-    recalls is not where the decision happens, so the evidence goes where the decision does.
-    """
-    worst, best_wait = None, 0.0
-    for b in buckets or []:
-        w = (b or {}).get("wait") or {}
-        if w.get("idle") and (w.get("wait_ms") or 0.0) > best_wait:
-            worst, best_wait = b, w["wait_ms"]
-    if not worst:
-        return ""
-    w = worst["wait"]
-    return (
-        "PROFILE SAYS THIS WORK IS WAITING, NOT SLOW: the '%s' bucket held the device %.1f ms and "
-        "computed for %.1f ms -- %.1f ms is producer wait, upstream of any op here. No grid/dtype/"
-        "shard/tt-lang/cpp edit recovers it. Before this run may finish you must record ONE "
-        "model-scoped attempt (op_signature='model:prefetch' or 'model:host-loop'); call "
-        "recall_knobs and read GUIDELINES 13. A measured no-gain counts -- record it with the "
-        "evidence. This is NOT a rung on any op and does not replace the target above."
-        % (worst.get("id"), w["fw_ms"], w["kernel_ms"], w["wait_ms"])
-    )
-
-
 def _untried_material_ops(blocking, attempts) -> list:
     """Ops with a material gap that have no recorded attempt at all, in gap order.
 
@@ -4148,15 +4100,6 @@ def termination_check() -> dict:
     _untried = _untried_material_ops(blocking, _load_attempts())
     if _untried:
         can_stop = False
-    # AND THE RUN MAY NOT FINISH HAVING ONLY TUNED OPS WHEN THE PROFILE SAYS THE WORK IS WAITING.
-    # An op charged 40 ms that computed for 6 is spinning on its producer; no rung on it recovers the
-    # difference. Satisfied by ONE `model:*` row -- win, loss or "none: <evidence>" -- because a
-    # model-wide change is made once. Not a rung: it never enters any op's ladder and blocks no op.
-    # Arms on measured evidence only, so a model whose ops compute what they occupy never sees it.
-    _attempts_now = _load_attempts()
-    _needs_model_lever = _model_lever_required((rep or {}).get("buckets") or [], _attempts_now)
-    if _needs_model_lever:
-        can_stop = False
     pt_status = _perf_target_status(rep, dev)
     # STOPPING IS ONLY ALLOWED AGAINST A REAL BANDWIDTH BAND. 60-80% of peak DRAM bandwidth is a
     # hardware fact; 60-80% of 1000/modeled_floor is not -- the floor is a sum of per-op minimum times
@@ -4184,10 +4127,7 @@ def termination_check() -> dict:
             "bound_by": blocking[0]["bound_by"],
             "rung": blocking[0]["next_rung"],
             "gap_ms": blocking[0]["gap_ms"],
-            # The wait evidence rides on the reason the agent actually reads each round -- a
-            # catalogue entry it met on 3 of 51 recalls is not where the decision is made.
-            "reason": blocking[0]["reason"]
-            + ((" || " + _idle_bucket_note((rep or {}).get("buckets") or [])) if _needs_model_lever else ""),
+            "reason": blocking[0]["reason"],
         }
         if blocking
         else None

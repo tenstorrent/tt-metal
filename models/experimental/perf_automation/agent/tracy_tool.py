@@ -116,55 +116,6 @@ def throughput(per_token_ms_val: float | None, batch_size: int) -> dict[str, flo
     return {"tokens_per_sec_per_user": tsu, "tokens_per_sec": round(tsu * max(batch_size, 1), 4)}
 
 
-# An op is charged the whole time it HELD the device, not the time it computed. When those differ by
-# a lot the op is spinning on its producer's semaphore, and no configuration of it can recover the
-# difference -- that time belongs upstream. The profiler's report CSV carries one `Device Time`
-# column, but the RAW row (already attached per member) carries both halves, so the split costs
-# nothing to compute and was simply being discarded.
-#
-# gemma-3-12b-it, the case this exists for:
-#     GeGLU mul 128x15360 bf4_b:  40.557ms FW vs 6.151ms kernel   (34.4ms producer wait)
-# Six ms of work inside forty ms of occupancy, at the top of the ranking, with every rung on it
-# measuring flat.
-_WAIT_MIN_MS = float(os.environ.get("PERF_MCP_WAIT_MIN_MS", "5.0"))
-_WAIT_MIN_FRACTION = float(os.environ.get("PERF_MCP_WAIT_MIN_FRACTION", "0.5"))
-
-
-def _wait_profile(members) -> dict[str, Any] | None:
-    """FW vs kernel time for a set of profiler members, or None when the raw row cannot answer.
-
-    `idle` requires BOTH a large absolute wait and a large fraction: ratio alone flags every cheap op
-    in the profile, and absolute alone flags a big op that is merely slow. None means "no evidence",
-    which the caller must not read as "no wait" -- older captures carry no raw row at all.
-    """
-    if not members:
-        return None
-    fw_ns = kernel_ns = 0.0
-    usable = 0
-    for m in members:
-        raw = (m or {}).get("raw") or {}
-        f = _to_float(raw.get("DEVICE FW DURATION [ns]"))
-        k = _to_float(raw.get("DEVICE KERNEL DURATION [ns]"))
-        # Real captures carry blanks and '-' in a handful of rows. Skip those members rather than
-        # abandoning the bucket -- one bad row out of 14k must not erase the whole signal -- but
-        # return None if NONE were usable, so "no evidence" never reads as "no wait".
-        if f is None or k is None:
-            continue
-        fw_ns += f
-        kernel_ns += k
-        usable += 1
-    if not usable or fw_ns <= 0:
-        return None
-    fw_ms, kernel_ms = fw_ns / 1e6, kernel_ns / 1e6
-    wait_ms = max(0.0, fw_ms - kernel_ms)
-    return {
-        "fw_ms": round(fw_ms, 4),
-        "kernel_ms": round(kernel_ms, 4),
-        "wait_ms": round(wait_ms, 4),
-        "idle": bool(wait_ms >= _WAIT_MIN_MS and wait_ms >= _WAIT_MIN_FRACTION * fw_ms),
-    }
-
-
 def host_overhead_bucket(buckets: Sequence[dict[str, Any]], device_ms: float) -> dict[str, Any]:
     """host_overhead = Σ device Op-to-Op Gap (dispatch idle). source=op_gap when real, else unavailable."""
     gaps = [b.get("dispatch_gap_ms") for b in buckets if b.get("dispatch_gap_ms") is not None]
@@ -416,14 +367,11 @@ def build_buckets(
         fids = [normalize_fidelity(m["raw"].get("MATH FIDELITY", "")) for m in members]
         mems = [normalize_memory(m["raw"].get("INPUT_0_MEMORY", "")) for m in members]
         rep0 = members[0]
-        _wait = _wait_profile(members)
         buckets.append(
             {
                 "id": op_class,
                 "device_ms": device_ms,
                 "count": len(members),
-                # None when the capture carries no raw row -- absent evidence, not evidence of none.
-                "wait": _wait,
                 "members": members,  # transient; pct filled below
                 "_cores": cores,
                 "_gaps": gaps,
@@ -469,10 +417,6 @@ def build_buckets(
                 "layout_churn_ms": round(churn_ms, 4),
                 "layout_churn_count": churn_n,
                 "top_ops": _top_ops(b["members"], available_cores),
-                # FW vs KERNEL for the bucket. An op charged 40ms that computed for 6 is not slow,
-                # it is spinning on its producer, and NO rung on it can recover the difference.
-                # None when the capture carries no raw row -- absent evidence, never "no wait".
-                "wait": b.get("wait"),
             }
         )
     # Stable, useful ordering: biggest device-time bucket first.
