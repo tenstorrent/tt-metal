@@ -22,7 +22,10 @@ from ....layers.normalization import RMSNorm
 from ....parallel.config import EncoderParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
+from ..fibo_matmul_configs import register_fibo_smollm3_matmul_configs
 from .config import SmolLM3Config
+
+register_fibo_smollm3_matmul_configs()
 
 MAX_CHUNK_SIZE = 128
 

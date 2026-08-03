@@ -26,6 +26,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...pipelines.bria_fibo.fibo_conv3d_configs import register_fibo_conv3d_configs
+from ...pipelines.bria_fibo.fibo_matmul_configs import register_fibo_vae_matmul_configs
 from ...utils import cache
 from ...utils.conv3d import (
     ConvDims,
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 register_fibo_conv3d_configs()
+register_fibo_vae_matmul_configs()
 
 CACHE_T = 2
 
