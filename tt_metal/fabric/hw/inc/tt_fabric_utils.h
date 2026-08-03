@@ -66,6 +66,18 @@ FORCE_INLINE void check_worker_connections(
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         channel_connection_established = false;
         local_sender_channel_worker_interface.template teardown_worker_connection<true, RISC_CPU_DATA_CACHE_ENABLED>();
+    } else if (channel_connection_established && local_sender_channel_worker_interface.cached_worker_x != 0xFFFF) {
+        // Live L1 connection info diverged from what this ERISC cached at connect time:
+        // a second worker connected to this same channel. Spin so tt-triage names this line.
+        const auto& live_worker_info = *local_sender_channel_worker_interface.worker_location_info_ptr;
+        const bool double_connection_detected =
+            (local_sender_channel_worker_interface.cached_worker_x != live_worker_info.worker_xy.x) ||
+            (local_sender_channel_worker_interface.cached_worker_y != live_worker_info.worker_xy.y);
+        if (double_connection_detected) {
+            while (true) {
+                asm volatile("nop");
+            }
+        }
     }
 }
 

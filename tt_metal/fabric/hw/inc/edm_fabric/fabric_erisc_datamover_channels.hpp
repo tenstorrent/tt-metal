@@ -469,6 +469,8 @@ struct EdmChannelWorkerInterface {
         worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
         this->cached_worker_semaphore_address = worker_semaphore_address;
+        this->cached_worker_x = worker_info.worker_xy.x;
+        this->cached_worker_y = worker_info.worker_xy.y;
     }
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
@@ -480,6 +482,10 @@ struct EdmChannelWorkerInterface {
     uint64_t cached_worker_semaphore_address = 0;
     volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;
+    // Worker coords cached at connect time; compared against live L1 to catch a
+    // second worker connecting to this same channel. 0xFFFF = not yet cached.
+    uint16_t cached_worker_x = 0xFFFF;
+    uint16_t cached_worker_y = 0xFFFF;
 };
 
 // Derived class for static-sized sender channels with fixed number of buffer slots.

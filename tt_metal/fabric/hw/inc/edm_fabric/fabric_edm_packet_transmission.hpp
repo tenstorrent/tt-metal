@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include "api/debug/dprint.h"
 
 #include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -203,6 +204,15 @@ FORCE_INLINE
             if (header.command_fields.unicast_seminc_fused.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
+            // FUSEDINC PROBE: printed on the chip that ACTUALLY executes the increment.
+            // sem/dst are 64-bit NOC addrs: hi carries the target x/y, lo the L1 offset.
+            DPRINT(
+                "FUSEDINC semhi={} semlo={} dsthi={} dstlo={} val={}\n",
+                (uint32_t)(semaphore_dest_address >> 32),
+                (uint32_t)(semaphore_dest_address & 0xFFFFFFFF),
+                (uint32_t)(dest_address >> 32),
+                (uint32_t)(dest_address & 0xFFFFFFFF),
+                (uint32_t)increment);
             noc_semaphore_inc<true>(
                 semaphore_dest_address,
                 increment,
