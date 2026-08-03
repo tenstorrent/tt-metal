@@ -2413,6 +2413,9 @@ def _emit_fullpipe(result: dict) -> dict:
         full_pipeline_ms=result.get("full_pipeline_ms"),
         best_ms=result.get("best_ms"),
         method=result.get("method"),
+        # _verdict_identity keys ownership on this id and fails closed without it, so dropping it
+        # here made EVERY record_kernel_attempt unownable and no rung could ever clear.
+        measurement_id=result.get("measurement_id"),
     )
     m = result.get("method")
     src = "trace_replay" if m == "trace" else ("eager_wall" if m == "eager" else "n/a")
@@ -3216,7 +3219,14 @@ def _attempt_fullpipe_verdict() -> dict:
     """
     out = {"own": False, "ms": None, "ref": None, "delta": None, "win": False}
     fp = gate_verdicts().get("full_pipeline") or {}
-    if str(fp.get("status")) != "ok":
+    # A `regressed` reading is a real measurement -- the candidate ran, the replay finished, the
+    # number came back worse -- and record_kernel_attempt's contract is that even a measured LOSS
+    # clears the op as tried. Refusing it deadlocked the ladder: three genuinely different grid
+    # variants could measure, all lose, none record, and termination_check returned the same
+    # next_target forever. Ownership stays one-shot and id-keyed, so this cannot resurrect the
+    # borrowed-verdict bug. `diverged` stays refused -- in this harness that is nearly always the
+    # degraded-device regime rather than the edit.
+    if str(fp.get("status")) not in ("ok", "regressed"):
         return out
     try:
         ms = float(fp.get("full_pipeline_ms"))
