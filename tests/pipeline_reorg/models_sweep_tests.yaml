@@ -4,6 +4,7 @@
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run (env vars must be inlined).
 #   model: Model identifier for filtering (workflow_dispatch model selection).
+#   model_family: (optional) Human-facing model family for grouping/reporting (e.g. Llama, Qwen, Gemma). Omit when a test spans multiple families.
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
@@ -21,6 +22,7 @@
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10
   model: llama3.1-8b
+  model_family: Llama
   skus:
     wh_n150:
       timeout: 15
@@ -36,6 +38,7 @@
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
     pytest --timeout 1140 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
   model: llama3.3-70b
+  model_family: Llama
   skus:
     wh_galaxy:
       timeout: 20
@@ -48,6 +51,7 @@
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
     pytest --timeout 1440 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: llama3.3-70b
+  model_family: Llama
   skus:
     wh_llmbox_perf:
       timeout: 25
@@ -61,6 +65,7 @@
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: qwen3-32b
+  model_family: Qwen
   skus:
     wh_llmbox_perf:
       timeout: 15
@@ -76,6 +81,7 @@
     export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
     pytest --timeout 540 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768
   model: gemma-3-4b
+  model_family: Gemma
   skus:
     wh_n150:
       timeout: 10

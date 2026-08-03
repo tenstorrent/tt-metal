@@ -112,6 +112,26 @@ class LoopBlock(FusedLoop):
         block.tile_id_block = "0"
         return compute_unit.fpu.calculate(operation, config, compute_unit, block)
 
+    def pack_loop(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        pack_node: "PackNode",
+        block: "BlockData",
+    ) -> str:
+        code = ""
+        if config.perf_run_type in (
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ):
+            return code
+        block.tile_id_global = (
+            f"{block.tile_count_x} * {block.block_y} + {block.block_x}"
+        )
+        block.tile_id_block = "0"
+        code += pack_node.packer.pack(pack_node, operation, config, block)
+        return code
+
 
 class LoopBlockRow(FusedLoop):
     def unpack_loop(
@@ -176,6 +196,7 @@ class LoopTileByTile(FusedLoop):
         code = ""
         if config.perf_run_type == PerfRunType.PACK_ISOLATE:
             return code
+
         code += f"for (std::uint32_t tile_x = 0; tile_x < {block.block_tiles_x}; tile_x++) {{\n"
         code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
         block.tile_id_global = f"{block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x)"
@@ -203,6 +224,7 @@ class LoopTileByTile(FusedLoop):
         code = ""
         if config.perf_run_type == PerfRunType.PACK_ISOLATE:
             return code
+
         code += f"for (std::uint32_t tile_x = 0; tile_x < {block.block_tiles_x}; tile_x++) {{\n"
         code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
         block.tile_id_global = f"{block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x)"
@@ -219,7 +241,7 @@ class LoopTileByTile(FusedLoop):
                 operation, config, compute_unit, block
             )
         else:
-            code += f"std::uint32_t tile_id = {tile_id_block};\n"
+            code += f"[[maybe_unused]] std::uint32_t tile_id = {tile_id_block};\n"
             block.tile_id_global = f"{block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x)"
             block.tile_id_block = "tile_id"
             code += compute_unit.fpu.calculate(operation, config, compute_unit, block)

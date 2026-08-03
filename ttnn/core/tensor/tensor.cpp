@@ -17,6 +17,7 @@
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -96,7 +97,7 @@ Tensor::Tensor(
 }
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
-    Tensor(HostTensor::from_buffer(std::move(buffer), std::move(tensor_spec), TensorTopology{})) {}
+    Tensor(HostTensor::from_buffer(std::move(buffer), std::move(tensor_spec))) {}
 
 Tensor::Tensor(HostTensor tensor) :
     tensor_id(Tensor::next_tensor_id()),
@@ -164,9 +165,9 @@ Tensor Tensor::from_span(
     ttsl::Span<const T> buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     T pad_value) {
-    auto host_tensor = HostTensor::from_span(buffer, spec, pad_value);
+    auto host_tensor = tt::tt_metal::host_tensor_from_span_with_pad_value(buffer, spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
@@ -180,7 +181,11 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
-    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
+    // TODO(#38947): tile parameter should be removed.
+    TT_FATAL(
+        !tile.has_value() || *tile == Tile{},
+        "Configuring borrowed data with a custom tile configuration is not supported.");
+    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin));
     return Tensor(std::move(host_tensor));
 }
 
@@ -189,9 +194,9 @@ Tensor Tensor::from_vector(
     std::vector<T>&& buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     T pad_value) {
-    auto host_tensor = HostTensor::from_vector(std::move(buffer), spec, pad_value);
+    auto host_tensor = tt::tt_metal::host_tensor_from_vector_with_pad_value(std::move(buffer), spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     res = ttnn::to_dtype(res, spec.data_type());
     if (device) {
@@ -201,7 +206,7 @@ Tensor Tensor::from_vector(
 }
 
 template <typename T>
-std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) const {
+std::vector<T> Tensor::to_vector(std::optional<QueueId> cq_id) const {
     // Type support is checked by HostTensor::to_vector
     auto cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
     return cpu_tensor.host_tensor().to_vector<T>();
@@ -212,37 +217,37 @@ template Tensor Tensor::from_span<bfloat16>(
     ttsl::Span<const bfloat16> buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     bfloat16 pad_value);
 template Tensor Tensor::from_span<float>(
     ttsl::Span<const float> buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     float pad_value);
 template Tensor Tensor::from_span<int32_t>(
     ttsl::Span<const int32_t> buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     int32_t pad_value);
 template Tensor Tensor::from_span<uint8_t>(
     ttsl::Span<const uint8_t> buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     uint8_t pad_value);
 template Tensor Tensor::from_span<uint16_t>(
     ttsl::Span<const uint16_t> buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     uint16_t pad_value);
 template Tensor Tensor::from_span<uint32_t>(
     ttsl::Span<const uint32_t> buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     uint32_t pad_value);
 template Tensor Tensor::from_borrowed_data<float>(
     ttsl::Span<float> buffer,
@@ -278,56 +283,54 @@ template Tensor Tensor::from_vector<bfloat16>(
     std::vector<bfloat16>&& buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     bfloat16 pad_value);
 template Tensor Tensor::from_vector<float>(
     std::vector<float>&& buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     float pad_value);
 template Tensor Tensor::from_vector<int32_t>(
     std::vector<int32_t>&& buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     int32_t pad_value);
 template Tensor Tensor::from_vector<uint8_t>(
     std::vector<uint8_t>&& buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     uint8_t pad_value);
 template Tensor Tensor::from_vector<uint16_t>(
     std::vector<uint16_t>&& buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     uint16_t pad_value);
 template Tensor Tensor::from_vector<uint32_t>(
     std::vector<uint32_t>&& buffer,
     const TensorSpec& spec,
     tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    std::optional<QueueId> cq_id,
     uint32_t pad_value);
 
-template std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template std::vector<bfloat16> Tensor::to_vector<bfloat16>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template std::vector<int32_t> Tensor::to_vector<int32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template std::vector<uint16_t> Tensor::to_vector<uint16_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
+template std::vector<float> Tensor::to_vector<float>(std::optional<QueueId> cq_id) const;
+template std::vector<bfloat16> Tensor::to_vector<bfloat16>(std::optional<QueueId> cq_id) const;
+template std::vector<int32_t> Tensor::to_vector<int32_t>(std::optional<QueueId> cq_id) const;
+template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<QueueId> cq_id) const;
+template std::vector<uint16_t> Tensor::to_vector<uint16_t>(std::optional<QueueId> cq_id) const;
+template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<QueueId> cq_id) const;
 
 Tensor Tensor::to_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const tt::tt_metal::MemoryConfig> mem_config,
-    std::optional<tt::tt_metal::QueueId> cq_id) const {
+    std::optional<QueueId> cq_id) const {
     return tt::tt_metal::to_device(*this, mesh_device, mem_config, cq_id);
 }
 
-Tensor Tensor::cpu(bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) const {
-    return ttnn::cpu(*this, blocking, cq_id);
-}
+Tensor Tensor::cpu(bool blocking, std::optional<QueueId> cq_id) const { return ttnn::cpu(*this, blocking, cq_id); }
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;

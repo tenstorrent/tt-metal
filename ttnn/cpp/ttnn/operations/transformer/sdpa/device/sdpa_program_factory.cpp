@@ -125,11 +125,7 @@ EffectiveKvGeometry resolve_effective_kv_geometry(
     if (use_mla || !geo.active()) {
         return {k_num_heads, v_num_heads, k_block_size};
     }
-    return {
-        geo.num_kv_heads.value_or(k_num_heads),
-        geo.num_kv_heads.value_or(v_num_heads),
-        geo.block_size.value_or(k_block_size),
-    };
+    return {geo.num_kv_heads, geo.num_kv_heads, geo.block_size};
 }
 
 // Chunked prefill parameters collected from page table layout.
@@ -176,6 +172,13 @@ ChunkedParams compute_chunked_params(
 
 tt::DataFormat fp32_dest_intermediate_dataformat(bool fp32_dest_acc_en) {
     return fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+}
+
+uint32_t attention_sink_tile_count(bool use_attention_sink, bool use_streaming_compute, uint32_t q_chunk_tiles) {
+    if (!use_attention_sink) {
+        return 0;
+    }
+    return use_streaming_compute ? 1 : q_chunk_tiles;
 }
 
 }  // namespace
@@ -442,8 +445,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;  // finalized below once out_out_subblock_h is known
     uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;                               // Single column of values in each iteration
-    uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
+    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
+    // Streaming compute broadcasts the per-head scalar directly; legacy compute consumes one
+    // expanded first-column tile per Q row.
+    uint32_t attention_sink_tiles = attention_sink_tile_count(use_attention_sink, use_streaming_compute, Sq_chunk_t);
 
     // log all values
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
@@ -698,7 +703,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
+    tt::DataFormat im_df =
+        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);

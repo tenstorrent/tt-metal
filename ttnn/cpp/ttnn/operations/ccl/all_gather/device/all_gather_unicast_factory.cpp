@@ -14,7 +14,7 @@ namespace ttnn::operations::ccl {
 using namespace ::ttnn::ccl;
 
 ////////////////////////////////////////////////////////////////
-// Store-and-forward AllGather (Fabric_1D line/ring only)
+// Store-and-forward AllGather (line/ring over a single mesh axis; for Fabric 1D and 2D)
 //
 // Every device relays stripes to its neighbor one hop at a time; a shard reaches far devices by being
 // re-forwarded at each hop. Forward and backward directions run on separate cores. Per direction: the reader
@@ -96,16 +96,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     //   antipode       -- on a ring, the device N/2 hops away.
     ////////////////////////////////////////////////////////////////
 
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config);
-    TT_FATAL(!fabric_is_2d, "all_gather unicast algorithm supports Fabric_1D line/ring only, not Fabric_2D");
+    TT_FATAL(!operation_attributes.is_true_2d(), "all_gather unicast algorithm does not support true 2D topologies");
 
-    uint32_t active_axis = 0;
-    for (uint32_t a = 0; a < 2; ++a) {
-        if (operation_attributes.axis_num_devices[a] > 1) {
-            active_axis = a;
-        }
-    }
-    const uint32_t axis = operation_attributes.cluster_axis.value_or(active_axis);
+    const uint32_t axis = operation_attributes.get_1d_axis();
     const auto topology = operation_attributes.axis_topology[axis];
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
@@ -546,23 +539,28 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 };
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
+                // route for Fabric_2D
+                const auto route_node =
+                    neighbor.has_value() ? mesh_device->get_fabric_node_id(*neighbor) : sender_fabric_node_id;
                 std::vector<uint32_t> writer_rt_args = {
-                    output_addr,               // output tensor address
-                    device_idx,                // this device's index (initial stripe)
-                    stripe_step,               // stripe index step per iteration
-                    num_iters,                 // iterations this direction runs
-                    local_output_start,        // this worker's slice start (chunks)
-                    num_worker_output_chunks,  // this worker's slice length (chunks)
-                    final_start,               // last-iteration slice start (even-ring split)
-                    final_count,               // last-iteration slice length (even-ring split)
-                    do_local_write ? 1u : 0u,  // write local data into local output on iteration 0
-                    barrier_sem.address(),     // barrier_sem L1 address
-                    data_valid_sem.address(),  // data_valid_sem L1 address
-                    (uint32_t)partner_core.x,  // barrier_sem target (neighbor partner core x)
-                    (uint32_t)partner_core.y,  // barrier_sem target (neighbor partner core y)
-                    (uint32_t)mirror_core.x,   // data_valid_sem target (neighbor mirror core x)
-                    (uint32_t)mirror_core.y,   // data_valid_sem target (neighbor mirror core y)
-                    num_granular,              // leading sends the downstream relays
+                    output_addr,                      // output tensor address
+                    device_idx,                       // this device's index (initial stripe)
+                    stripe_step,                      // stripe index step per iteration
+                    num_iters,                        // iterations this direction runs
+                    local_output_start,               // this worker's slice start (chunks)
+                    num_worker_output_chunks,         // this worker's slice length (chunks)
+                    final_start,                      // last-iteration slice start (even-ring split)
+                    final_count,                      // last-iteration slice length (even-ring split)
+                    do_local_write ? 1u : 0u,         // write local data into local output on iteration 0
+                    barrier_sem.address(),            // barrier_sem L1 address
+                    data_valid_sem.address(),         // data_valid_sem L1 address
+                    (uint32_t)partner_core.x,         // barrier_sem target (neighbor partner core x)
+                    (uint32_t)partner_core.y,         // barrier_sem target (neighbor partner core y)
+                    (uint32_t)mirror_core.x,          // data_valid_sem target (neighbor mirror core x)
+                    (uint32_t)mirror_core.y,          // data_valid_sem target (neighbor mirror core y)
+                    num_granular,                     // leading sends the downstream relays
+                    (uint32_t)route_node.chip_id,     // neighbor chip id (packet header 2D route)
+                    (uint32_t)(*route_node.mesh_id),  // neighbor mesh id (packet header 2D route)
                 };
                 TT_FATAL(num_iters == 0 || neighbor.has_value(), "an active direction must have a neighbor");
                 if (num_iters > 0) {

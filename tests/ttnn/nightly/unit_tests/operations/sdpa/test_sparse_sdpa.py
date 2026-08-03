@@ -190,8 +190,15 @@ def test_sparse_sdpa_determinism(device, q_dtype, kv_dtype):
         return ttnn.to_layout(o, ttnn.TILE_LAYOUT)
 
     ref, marker = None, None
+    kv_format = (
+        ttnn.transformer.SparseKVFormat.BF16 if kv_dtype == ttnn.bfloat16 else ttnn.transformer.SparseKVFormat.FP8_E4M3
+    )
     for _ in range(iters):
-        cur = comparable(ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=K_DIM**-0.5, k_chunk_size=kc))
+        cur = comparable(
+            ttnn.transformer.sparse_sdpa(
+                tt_q, tt_kv, tt_idx, V_DIM, kv_format=kv_format, scale=K_DIM**-0.5, k_chunk_size=kc
+            )
+        )
         if ref is None:
             ref = cur
         else:
@@ -217,6 +224,34 @@ _NV = {
     "sparse": lambda s, T, K: 256,
     "mixed": lambda s, T, K: 1 + (s * 7) % K,  # earlier arbitrary distribution (for before/after compare)
 }
+
+
+def _run_sparse_sdpa_perf(device, H, S, T, TOPK, kc, nv, cache_format):
+    nv_fn = _NV[nv]
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
+    if cache_format == "bf16":
+        out, _ = run_op(q, kv, indices, device, kc, V_DIM)
+    else:
+        assert cache_format == "scaled_fp8"
+        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_latent_bf16 = to_dev(kv[..., :V_DIM].to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_latent, tt_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            tt_latent_bf16, round_scale_to_power_of_two=True
+        )
+        tt_rope = to_dev(kv[..., V_DIM:].to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(tt_latent, tt_scales, tt_rope)
+        tt_indices = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+        tt_out = ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_packed,
+            tt_indices,
+            V_DIM,
+            kv_format=ttnn.transformer.SparseKVFormat.SCALED_FP8,
+            scale=K_DIM**-0.5,
+            k_chunk_size=kc,
+        )
+        out = ttnn.to_torch(tt_out)
+    assert tuple(out.shape) == (1, H, S, V_DIM)
 
 
 @run_for_blackhole()
@@ -262,4 +297,58 @@ def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
     assert lower <= duration_ms <= upper, (
         f"sparse_sdpa {nv} device kernel duration {duration_ms:.3f} ms outside band [{lower:.3f}, {upper:.3f}] ms "
         f"(expected {expected_ms:.3f} ms, margin +/- {SPARSE_PERF_MARGIN * 100:.0f}%)"
+    )
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("H", [32, 64], ids=["deepseek-h32", "glm-h64"])
+def test_sparse_sdpa_perf_scaled_fp8_production(device, H):
+    """Production DeepSeek and GLM geometries using the scaled mixed-format cache."""
+    _run_sparse_sdpa_perf(device, H, 640, 56320, 2048, 256, "dense", "scaled_fp8")
+
+
+@run_for_blackhole()
+@skip_with_watcher("Watcher perturbs host dispatch timing.")
+def test_sparse_sdpa_indexed_cache_hit_host_dispatch_is_cheap(device):
+    """The indexed cache hit must patch runtime args in place, not re-run create_descriptor. A rebuild-on-hit
+    stays one cache entry (invisible to entry-count asserts) yet its host cost scales with the full compute grid
+    and is paid on every indexed-decode dispatch. Host enqueue time is the only signal, so assert min-of-N stays
+    an order of magnitude below the >1ms a full-descriptor rebuild costs on the production grid."""
+    import time
+
+    H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 8
+    device.clear_program_cache()
+    gen = torch.Generator().manual_seed(0)
+    q = torch.randn(1, H, S, K_DIM, generator=gen, dtype=torch.float32)
+    kv_full = torch.randn(B, 1, T, K_DIM, generator=gen, dtype=torch.float32)
+    indices = torch.stack([torch.randperm(T, generator=gen)[:TOPK] for _ in range(S)]).reshape(1, 1, S, TOPK)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+
+    def hit(cb):
+        return ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_kv,
+            tt_idx,
+            V_DIM,
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            k_chunk_size=kc,
+            cache_batch_idx=cb,
+        )
+
+    hit(0)  # warm: cache miss / compile
+    entries = device.num_program_cache_entries()
+    samples = []
+    for i in range(200):
+        t0 = time.perf_counter_ns()
+        hit(i % B)  # vary the slot so the override actually re-applies kv_batch_page_offset
+        samples.append(time.perf_counter_ns() - t0)
+    ttnn.synchronize_device(device)
+    assert device.num_program_cache_entries() == entries, "timed calls must be pure cache hits"
+    min_us = min(samples) / 1000.0
+    logger.info(f"sparse_sdpa indexed cache-hit host dispatch: min={min_us:.1f}us over {len(samples)} hits")
+    assert min_us < 1000.0, (
+        f"indexed cache-hit host dispatch {min_us:.0f}us: override_runtime_arguments is rebuilding the full "
+        f"descriptor on every hit instead of patching the runtime-arg slots in place"
     )

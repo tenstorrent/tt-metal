@@ -184,12 +184,32 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_for_subchanne
         phys.y);
 }
 
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_dispatch_engine_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
+    const auto dispatch_noc0_cores = get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::NOC0);
+    TT_FATAL(
+        logical_coord.y == 0,
+        "Dispatch-engine logical y coordinate must be 0 (got {})",
+        logical_coord.str());
+    TT_FATAL(
+        logical_coord.x < dispatch_noc0_cores.size(),
+        "Dispatch-engine logical index {} out of range ({} dispatch cores in soc descriptor)",
+        logical_coord.x,
+        dispatch_noc0_cores.size());
+    const tt::umd::CoreCoord& noc0_core = dispatch_noc0_cores[logical_coord.x];
+    return {noc0_core.x, noc0_core.y};
+}
+
+uint32_t metal_SocDescriptor::get_num_dispatch_engine_cores() const {
+    return static_cast<uint32_t>(get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::NOC0).size());
+}
+
 tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
     const tt::tt_metal::CoreCoord& logical_coord, const tt::CoreType& core_type) const {
     switch (core_type) {
         case tt::CoreType::ETH: return this->get_physical_ethernet_core_from_logical(logical_coord);
         case tt::CoreType::WORKER: return this->get_physical_tensix_core_from_logical(logical_coord);
         case tt::CoreType::DRAM: return this->get_physical_dram_core_from_logical(logical_coord);
+        case tt::CoreType::DISPATCH: return this->get_physical_dispatch_engine_core_from_logical(logical_coord);
         default: TT_THROW("Undefined conversion for core type.");
     }
 }

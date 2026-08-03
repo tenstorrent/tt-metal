@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -16,6 +18,69 @@ using namespace tt::constants;
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace {
+
+// Runtime-arg slots holding buffer addresses, matched positionally by the kernels.  Both factories
+// pass addresses as plain uint32 runtime args, so override_runtime_arguments() re-applies exactly
+// these on every cache hit; every other slot is derived from state the program hash covers.
+constexpr uint32_t kInterleavedReaderIn0AddrIdx = 0;
+constexpr uint32_t kInterleavedReaderIn1AddrIdx = 1;  // literal 0 when there is no separate KV input
+constexpr uint32_t kInterleavedWriterQAddrIdx = 0;
+constexpr uint32_t kInterleavedWriterKAddrIdx = 1;
+constexpr uint32_t kInterleavedWriterVAddrIdx = 2;
+
+constexpr uint32_t kShardedQBaseAddrIdx = 6;
+constexpr uint32_t kShardedQStartAddrIdx = 7;    // q_base_addr + remote_q_head_start_idx * head_size
+constexpr uint32_t kShardedKVBaseAddrIdx = 15;   // k_base_addr on the reader, v_base_addr on the writer
+constexpr uint32_t kShardedKVStartAddrIdx = 16;  // ..._base_addr + remote_kv_head_start_idx * head_size
+
+// Single source of truth for the Interleaved factory's per-core work split.  create_descriptor() and
+// override_runtime_arguments() both walk `cores` in this order, so the core -> runtime-arg-slot
+// mapping cannot drift; it also carries the reader/writer kernel indices, which shift when the
+// transpose_k_heads compute kernels are present.
+struct InterleavedWorkSplit {
+    std::vector<CoreCoord> cores;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_blocks_per_core_group_1 = 0;
+    uint32_t num_blocks_per_core_group_2 = 0;
+    // Kernel push order in create_descriptor(): [compute core_group_1, [compute core_group_2,]]
+    // reader, writer.  The compute kernels exist only when transpose_k_heads, and the second one only
+    // when core_group_2 is non-empty.
+    uint32_t reader_kernel_idx = 0;
+    uint32_t writer_kernel_idx = 1;
+};
+
+InterleavedWorkSplit build_interleaved_work_split(
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
+    const auto& input_shape = input_tensor.padded_shape();
+    const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
+    const uint32_t num_cores_y = grid.y;
+    // Block is a unit of work; ie. num of in0_w_tiles per core
+    const uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
+    auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
+        tt::tt_metal::split_work_to_cores(grid, num_blocks);
+
+    InterleavedWorkSplit split;
+    split.all_cores = std::move(all_cores);
+    split.core_group_1 = std::move(core_group_1);
+    split.core_group_2 = std::move(core_group_2);
+    split.num_blocks_per_core_group_1 = blocks_group_1;
+    split.num_blocks_per_core_group_2 = blocks_group_2;
+    split.cores.reserve(num_cores);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        split.cores.push_back(CoreCoord{i / num_cores_y, i % num_cores_y});
+    }
+    const uint32_t num_compute_kernels =
+        operation_attributes.transpose_k_heads ? (split.core_group_2.num_cores() > 0 ? 2 : 1) : 0;
+    split.reader_kernel_idx = num_compute_kernels;
+    split.writer_kernel_idx = num_compute_kernels + 1;
+    return split;
+}
+
+}  // namespace
+
 ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -27,7 +92,6 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     const uint32_t head_dim = operation_attributes.head_dim;
     const bool transpose_k_heads = operation_attributes.transpose_k_heads;
     auto& output = tensor_return_value;
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
     const auto& input_shape = input_tensor.padded_shape();
 
@@ -67,11 +131,12 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
     uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
 
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    // Block is a unit of work; ie. num of in0_w_tiles per core
-    uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
+    const auto split = build_interleaved_work_split(operation_attributes, input_tensor);
+    const auto& all_cores = split.all_cores;
+    const auto& core_group_1 = split.core_group_1;
+    const auto& core_group_2 = split.core_group_2;
+    const uint32_t num_blocks_per_core_group_1 = split.num_blocks_per_core_group_1;
+    const uint32_t num_blocks_per_core_group_2 = split.num_blocks_per_core_group_2;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -216,8 +281,8 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
         });
     }
 
-    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    uint32_t num_blocks_written = 0;
+    for (const CoreCoord& core : split.cores) {
         uint32_t num_blocks_per_core = 0;
         if (core_group_1.contains(core)) {
             num_blocks_per_core = num_blocks_per_core_group_1;
@@ -273,17 +338,6 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
 
 namespace {
 
-// Address-derived reader/writer runtime-arg slot indices for the Sharded factory.  These slots hold
-// input-buffer addresses (a raw base and per-core `base + head_offset` start addresses) that a plain
-// Buffer* binding cannot express, so they are re-applied on every cache hit via get_dynamic_runtime_args().
-// Kept next to the builder below so the baked layout and the re-applied layout cannot drift.
-constexpr uint32_t kReaderKernelIdx = 0;  // reader is pushed first in create_descriptor()
-constexpr uint32_t kWriterKernelIdx = 1;  // writer is pushed second
-constexpr uint32_t kQBaseAddrIdx = 6;     // q_base_addr
-constexpr uint32_t kQStartAddrIdx = 7;    // q_start_addr = q_base_addr + remote_q_head_start_idx * head_size
-constexpr uint32_t kKVBaseAddrIdx = 15;   // k_base_addr (reader) / v_base_addr or k_base_addr (writer)
-constexpr uint32_t kKVStartAddrIdx = 16;  // k_start_addr (reader) / v_start_addr or k_start_addr (writer)
-
 struct ShardedCoreArgs {
     CoreCoord core;
     std::vector<uint32_t> reader_args;
@@ -292,9 +346,9 @@ struct ShardedCoreArgs {
 
 // Single source of truth for the Sharded per-core reader/writer runtime args, INCLUDING the
 // address-derived slots (q/k/v base + per-core start addresses).  create_descriptor() emplaces these
-// on a cache miss; get_dynamic_runtime_args() re-derives them and re-applies only the address slots on
-// every cache hit.  Both paths share this one builder so the baked and re-applied addresses cannot
-// drift (an off-by-one in a re-applied index would silently corrupt an address).
+// on a cache miss; override_runtime_arguments() re-runs this builder and patches only the address
+// slots in place on every cache hit.  Both paths share this one builder so the baked and the
+// re-applied addresses cannot drift (an off-by-one index would silently corrupt an address).
 std::vector<ShardedCoreArgs> build_sharded_core_args(
     const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
     const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args,
@@ -521,13 +575,11 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Build the per-core reader/writer runtime args (including the address-derived slots) via the
-    // shared builder.  The reader/writer kernels bake raw q/k/v base addresses AND per-core
-    // `base + head_offset` start addresses as uint32 runtime args; a plain Buffer* binding can only
-    // express the bare base, so those address-derived slots cannot be registered as BufferBindings.
-    // Instead they are refreshed on every cache hit by get_dynamic_runtime_args() (which re-runs this
-    // same builder), tripping the descriptor fast-path while the output CBs are patched via their
-    // `.buffer` bindings.
+    // Build the per-core reader/writer runtime args (including the address-derived q/k/v base and
+    // per-core start-address slots) via the shared builder.  The reader/writer kernels bake raw q/k/v
+    // base addresses AND per-core `base + head_offset` start addresses as uint32 runtime args; a plain
+    // Buffer* binding can only express the bare base, so those slots are re-applied on every cache hit
+    // by override_runtime_arguments() (which re-runs this same builder).
     auto per_core_args = build_sharded_core_args(operation_attributes, tensor_args, tensor_return_value);
     for (auto& e : per_core_args) {
         reader_desc.runtime_args.emplace_back(e.core, std::move(e.reader_args));
@@ -540,37 +592,70 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> NlpCreateHeadsDeviceOperation::get_dynamic_runtime_args(
+void NlpCreateHeadsDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Only the Sharded factory smuggles computed addresses; the Interleaved factory binds its
-    // input/output buffers via emplace_runtime_args(Buffer*) and needs no dynamic re-application.
-    const auto factory = select_program_factory(operation_attributes, tensor_args);
-    if (!std::holds_alternative<Sharded>(factory)) {
-        return {};
+    auto& output = tensor_return_value;
+
+    // Mirror select_program_factory() so the patched slots belong to the factory that actually built
+    // this cached program.  Only per-dispatch state is re-applied: buffer addresses (override
+    // supersedes resolve_bindings, so nothing else re-points them) and the globally-allocated output
+    // CBs.  Every other slot derives from the operation attributes or the input/output TensorSpecs,
+    // which the program hash covers, so a cache hit means they are identical by construction.
+    if (std::holds_alternative<Sharded>(select_program_factory(operation_attributes, tensor_args))) {
+        // Kernel push order in Sharded::create_descriptor(): reader 0, writer 1.
+        constexpr uint32_t kReaderKernelIdx = 0;
+        constexpr uint32_t kWriterKernelIdx = 1;
+        constexpr uint32_t kAddrIdxs[] = {
+            kShardedQBaseAddrIdx, kShardedQStartAddrIdx, kShardedKVBaseAddrIdx, kShardedKVStartAddrIdx};
+
+        // The active core set is fixed by the (hashed) shard specs, so it never grows across hits:
+        // every core the miss emplaced args for is covered here.
+        for (const auto& e : build_sharded_core_args(operation_attributes, tensor_args, output)) {
+            auto& reader_args = GetRuntimeArgs(program, kReaderKernelIdx, e.core);
+            auto& writer_args = GetRuntimeArgs(program, kWriterKernelIdx, e.core);
+            for (const uint32_t idx : kAddrIdxs) {
+                reader_args[idx] = e.reader_args[idx];
+                writer_args[idx] = e.writer_args[idx];
+            }
+        }
+
+        // CB push order in Sharded::create_descriptor(): q 0, k 1, v 2 — each globally allocated on
+        // the matching output shard buffer, whose address moves on every re-allocation.
+        const auto cbs = program.circular_buffers();
+        UpdateDynamicCircularBufferAddress(program, cbs[0]->id(), *std::get<0>(output).buffer());
+        UpdateDynamicCircularBufferAddress(program, cbs[1]->id(), *std::get<1>(output).buffer());
+        UpdateDynamicCircularBufferAddress(program, cbs[2]->id(), *std::get<2>(output).buffer());
+        return;
     }
 
-    // Re-run the shared per-core builder so the addresses re-applied here are, by construction,
-    // identical to those baked in create_descriptor().  For every active core re-apply the four
-    // address-derived slots on both the reader (kernel 0) and writer (kernel 1).  The active core
-    // set is fixed by the (hashed) output shard specs, so it never grows across hits and every core
-    // that received args on the cache miss also gets them here.
-    auto per_core_args = build_sharded_core_args(operation_attributes, tensor_args, tensor_return_value);
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(per_core_args.size() * 8);
-    for (const auto& e : per_core_args) {
-        dynamic_args.push_back({kReaderKernelIdx, e.core, kQBaseAddrIdx, e.reader_args[kQBaseAddrIdx]});
-        dynamic_args.push_back({kReaderKernelIdx, e.core, kQStartAddrIdx, e.reader_args[kQStartAddrIdx]});
-        dynamic_args.push_back({kReaderKernelIdx, e.core, kKVBaseAddrIdx, e.reader_args[kKVBaseAddrIdx]});
-        dynamic_args.push_back({kReaderKernelIdx, e.core, kKVStartAddrIdx, e.reader_args[kKVStartAddrIdx]});
-        dynamic_args.push_back({kWriterKernelIdx, e.core, kQBaseAddrIdx, e.writer_args[kQBaseAddrIdx]});
-        dynamic_args.push_back({kWriterKernelIdx, e.core, kQStartAddrIdx, e.writer_args[kQStartAddrIdx]});
-        dynamic_args.push_back({kWriterKernelIdx, e.core, kKVBaseAddrIdx, e.writer_args[kKVBaseAddrIdx]});
-        dynamic_args.push_back({kWriterKernelIdx, e.core, kKVStartAddrIdx, e.writer_args[kKVStartAddrIdx]});
+    // Interleaved: the reader takes the input (and optional KV input) addresses, the writer the three
+    // output addresses; the Interleaved CBs are not globally allocated, so there is nothing to
+    // re-point there.
+    const Tensor& input_tensor = tensor_args.input_tensor_q;
+    const auto split = build_interleaved_work_split(operation_attributes, input_tensor);
+
+    const uint32_t in0_addr = input_tensor.buffer()->address();
+    const bool read_from_input_tensor_kv = tensor_args.input_tensor_kv.has_value();
+    const uint32_t in1_addr = read_from_input_tensor_kv ? tensor_args.input_tensor_kv->buffer()->address() : 0;
+    const uint32_t q_addr = std::get<0>(output).buffer()->address();
+    const uint32_t k_addr = std::get<1>(output).buffer()->address();
+    const uint32_t v_addr = std::get<2>(output).buffer()->address();
+
+    for (const CoreCoord& core : split.cores) {
+        auto& reader_args = GetRuntimeArgs(program, split.reader_kernel_idx, core);
+        reader_args[kInterleavedReaderIn0AddrIdx] = in0_addr;
+        if (read_from_input_tensor_kv) {
+            reader_args[kInterleavedReaderIn1AddrIdx] = in1_addr;
+        }
+        auto& writer_args = GetRuntimeArgs(program, split.writer_kernel_idx, core);
+        writer_args[kInterleavedWriterQAddrIdx] = q_addr;
+        writer_args[kInterleavedWriterKAddrIdx] = k_addr;
+        writer_args[kInterleavedWriterVAddrIdx] = v_addr;
     }
-    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::experimental::transformer

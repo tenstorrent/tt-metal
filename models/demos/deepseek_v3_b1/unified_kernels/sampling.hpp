@@ -354,7 +354,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         pack_tile(0, probs_cb);
         cb_push_back(probs_cb, 1);
         tile_regs_release();
-        reconfig_data_format_srca<false, true>(exp_cb, probs_cb);
+        reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(exp_cb, probs_cb);
         cb_wait_front(probs_cb, 1);
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();

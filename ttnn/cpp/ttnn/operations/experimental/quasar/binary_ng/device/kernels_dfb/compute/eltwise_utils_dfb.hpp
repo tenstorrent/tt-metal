@@ -7,7 +7,7 @@
 // DataflowBuffer (DFB) port of kernels/compute/eltwise_utils.hpp (FPU preprocess).
 //
 // Mechanically identical to the CircularBuffer helper, with the CB->DFB swap: the LLK operand id
-// comes from DFBAccessor's `operator uint32_t()` (a `dfb::<name>` token converts directly to the cb
+// comes from DFBBindingToken's `operator uint32_t()` (a `dfb::<name>` token converts directly to the cb
 // id every LLK call takes), and FIFO sync goes through a DataflowBuffer instance. See the CB original
 // for the rationale on the pre -> activation -> post reconfigure dance.
 

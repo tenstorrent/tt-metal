@@ -5,6 +5,17 @@ on:
     # Run every night at 3AM UTC
     - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      architecture:
+        description: "Architecture to run performance tests on"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - wormhole
+          - blackhole
+          - quasar
 
 permissions:
   checks: write
@@ -12,14 +23,17 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
-    github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
+    github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
   llk-perf-tests:
     name: "LLK perf tests"
     uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      # Scheduled runs have no dispatch inputs, so retain the existing behavior.
+      architecture: ${{ inputs.architecture || 'all' }}
     secrets: inherit
 
   llk-perf-summary:

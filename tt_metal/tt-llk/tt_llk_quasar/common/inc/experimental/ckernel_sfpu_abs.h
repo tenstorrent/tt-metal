@@ -27,7 +27,7 @@ inline void _calculate_abs_sfp_rows_()
 }
 
 // Implements element-wise absolute value: abs(x)
-template <int ITERATIONS = 8>
+template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _calculate_abs_()
 {
 #pragma GCC unroll 8
