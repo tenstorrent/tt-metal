@@ -4,12 +4,15 @@
 
 // SDPA blocked bcast-col SUB with SrcB reuse, driven through the Compute API.
 //
-// Per block, ONE held srcB tile is subtracted (column-broadcast) from CT_DIM srcA column tiles,
-// each landing in its own dest slot. This reuse that distinguishes this op from
+// A block is an RT_DIM x CT_DIM tile grid filling one acquired dest section. Per row of the block,
+// ONE held srcB tile is column-broadcast and subtracted from that row's CT_DIM srcA column tiles,
+// each difference landing in its own dest slot. That reuse is what distinguishes this op from
 // calling the stock one-tile broadcast CT_DIM times.
 //
 // Mirrors the call sequence in sub_exp_block_bcast_cols() in
-// ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp.
+// ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp, including
+// its per-row advance of the srcA tile index, the srcB tile index and the dest base within a single
+// tile_regs_acquire().
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
@@ -22,14 +25,20 @@
 #define CT_DIM 1
 #endif
 
+// Row tiles per block: the number of sub_tiles_bcast_cols_custom calls sharing one dest section.
+#ifndef RT_DIM
+#define RT_DIM 1
+#endif
+
 #ifndef NUM_BLOCKS
 #define NUM_BLOCKS 1
 #endif
 
 void kernel_main() {
     constexpr std::uint32_t ct_dim = CT_DIM;
+    constexpr std::uint32_t rt_dim = RT_DIM;
     constexpr std::uint32_t num_blocks = NUM_BLOCKS;
-    constexpr std::uint32_t onetile = 1;
+    constexpr std::uint32_t tiles_per_block = rt_dim * ct_dim;
 
     DataflowBuffer dfb0(dfb::in0);
     DataflowBuffer dfb1(dfb::in1);
@@ -41,29 +50,33 @@ void kernel_main() {
     binary_op_init_common(icb0, icb1, ocb);
     sub_bcast_cols_init_short_custom(icb0, icb1, ct_dim);
 
-    // Held for the whole run; never popped per block, so tile_index_b stays 0 below.
-    dfb1.wait_front(onetile);
+    // One bcast tile per row of a block, held for the whole run and never popped per block, so
+    // tile_index_b below indexes straight off the read pointer.
+    dfb1.wait_front(rt_dim);
 
     for (std::uint32_t block = 0; block < num_blocks; block++) {
-        // A whole block must be resident: the op unpacks all ct_dim srcA tiles in one call.
-        dfb0.wait_front(ct_dim);
-        dfb_out.reserve_back(ct_dim);
+        // A whole block must be resident: the op unpacks a row's ct_dim srcA tiles in one call.
+        dfb0.wait_front(tiles_per_block);
+        dfb_out.reserve_back(tiles_per_block);
 
         tile_regs_acquire();
         // tile_index_a is relative to the buffer read pointer, which pop_front advances per block,
-        // so it stays 0 too. The op writes dest slots [0, ct_dim).
-        sub_tiles_bcast_cols_custom(icb0, icb1, 0, 0, 0, ct_dim);
+        // so within a block it is just the row's offset into the grid. Row `row` writes dest slots
+        // [row * ct_dim, (row + 1) * ct_dim).
+        for (std::uint32_t row = 0; row < rt_dim; row++) {
+            sub_tiles_bcast_cols_custom(icb0, icb1, row * ct_dim, row, row * ct_dim, ct_dim);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
-        for (std::uint32_t i = 0; i < ct_dim; i++) {
+        for (std::uint32_t i = 0; i < tiles_per_block; i++) {
             pack_tile(i, ocb);
         }
         tile_regs_release();
 
-        dfb_out.push_back(ct_dim);
-        dfb0.pop_front(ct_dim);
+        dfb_out.push_back(tiles_per_block);
+        dfb0.pop_front(tiles_per_block);
     }
 
-    dfb1.pop_front(onetile);
+    dfb1.pop_front(rt_dim);
 }

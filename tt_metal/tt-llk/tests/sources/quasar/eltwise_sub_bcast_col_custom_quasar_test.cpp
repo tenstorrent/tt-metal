@@ -83,7 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape = tensor_shape_from_params(params);
 
-    // The MOP and addr-mods are identical for every block, so init once outside the loop.
+    // The addr-mods are identical for every block, so init once outside the loop.
     _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(tensor_shape);
 
     const std::uint32_t ct_dim     = params.OUTPUT_NUM_TILES_IN_BLOCK;

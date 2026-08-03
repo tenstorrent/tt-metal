@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_assert.h"
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_eltwise_binary_custom.h"
 
@@ -17,11 +18,13 @@
  * @brief Init the math (FPU) thread for the SDPA blocked bcast-col SUB path.
  *
  * Configures the ALU data-format state from the operand formats (defensively; the compute API also
- * calls state_configure) and programs the COL reuse addr-mods + MOP.
+ * calls state_configure) and programs the COL reuse addr-mods. There is no MOP on this path: the
+ * execute call emits its ELWSUB stream directly.
  *
  * @tparam math_fidelity: Accepted for API parity; SUB is LoFi-only on Quasar, so the value is unused.
- * @param operandA: DFB id of srcA; its tile shape drives the MOP geometry and ALU format state.
- * @param operandB: DFB id of srcB (the bcast-col operand); used for the ALU format state.
+ * @param operandA: DFB id of srcA; its format feeds the ALU format state and its tile shape is
+ *        validated (full 32x32 tiles only).
+ * @param operandB: DFB id of srcB (the bcast-col operand); its format feeds the ALU format state.
  * @note Run before @ref llk_math_eltwise_binary_sub_bcast_cols_custom on this thread.
  */
 template <ckernel::MathFidelity math_fidelity>
@@ -41,7 +44,8 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
 /**
  * @brief SDPA blocked bcast-col SUB over ct_dim column tiles starting at dst_index.
  *
- * @tparam is_fp32_dest_acc_en: Accepted for API parity with Blackhole (bounds the dest budget there).
+ * @tparam is_fp32_dest_acc_en: Accepted for API parity with Blackhole; dest capacity is
+ *         taken from the DST_ACCUM_MODE (matching the Blackhole wrapper).
  * @param operandA: DFB id of srcA; its tile shape is derived for the LLK call.
  * @param dst_index: First destination tile index; ct_dim tiles land in [dst_index, dst_index + ct_dim).
  * @param ct_dim: Number of column tiles written.
@@ -50,6 +54,12 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
     const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
+    // Derive the Tile32x32 dest capacity: one section is half the dest register under SyncHalf
+    constexpr std::uint32_t max_dest_tiles =
+        (DST_SYNC_MODE == DstSync::SyncHalf ? ckernel::DEST_NUM_TILES_FP16_HALF : ckernel::DEST_NUM_TILES_FP16) >>
+        (DST_ACCUM_MODE ? 1 : 0);  // and a 32-bit dest halves the tile count again.
+    LLK_ASSERT(dst_index + ct_dim <= max_dest_tiles, "dst range out of bounds");
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 

@@ -38,7 +38,7 @@ using namespace ckernel::math;
  *
  * @tparam eltwise_binary_type: FPU op (ELWSUB for the SDPA SUB path).
  * @tparam broadcast_type: Broadcast type (COL for this op).
- * @param tensor_shape: Operand tile shape.
+ * @param tensor_shape: Operand tile shape. Full 32x32 tiles only.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_sub_bcast_col_init_custom_ (T0); on pack, with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_sub_bcast_cols_reuse_custom_ runs the configured op on this thread.
  */
@@ -47,6 +47,14 @@ inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel
 {
     static_assert(broadcast_type == BroadcastType::COL, "custom sub bcast-col path supports COL broadcast only");
     static_assert(eltwise_binary_type == EltwiseBinaryType::ELWSUB, "custom sub bcast-col path supports ELWSUB only");
+
+    // Full 32x32 tile only: the srcB walk below hardcodes the 16-row face stride and the +24 face 0 -> face 2
+    // jump, and dest slots are Tile32x32. Kept in sync with the same check in
+    // @ref _llk_unpack_AB_sub_bcast_col_init_custom_ so both threads reject the shape before programming HW.
+    LLK_ASSERT(
+        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
+            tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
+        "custom sub bcast-col path supports full 32x32 tiles only");
 
     constexpr std::uint8_t SRCB_STEP      = ELTWISE_MATH_ROWS; // +8: second half of the current face
     constexpr std::uint8_t SRCB_REWIND    = static_cast<std::uint8_t>(0x3F & -static_cast<std::int32_t>(ELTWISE_MATH_ROWS)); // -8 in 6-bit two's complement
@@ -76,7 +84,6 @@ inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel
  * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
  * @param tensor_shape: Operand tile shape (drives the face-row count).
  * @param dst_index: First destination tile index.
- * @note Call @ref _llk_math_eltwise_binary_init_custom_ first. SyncHalf budget: ct_dim <= 8 (16-bit dest) / <= 4 (fp32).
  */
 inline void _llk_math_sub_bcast_cols_reuse_custom_(
     const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)

@@ -485,21 +485,25 @@ void run_single_core_broadcast(
     ASSERT_TRUE(result);
 }
 
-// ---------------------------------------------------------------------------------------------
-// SDPA blocked bcast-col SUB with SrcB reuse (sub_tiles_bcast_cols_custom), issue #50774.
-// ---------------------------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// SDPA blocked bcast-col SUB with SrcB reuse (sub_tiles_bcast_cols_custom)
+// --------------------------------------------------------------------------
 // Distinct data flow from the stock broadcast path above, which is why it gets its own config and
-// runner rather than another BroadcastConfig axis: srcA is a strip of ct_dim column tiles that all
-// reuse ONE srcB tile, the op writes ct_dim dest slots itself, and srcB is never re-read from L1.
-// Calling the stock one-tile broadcast ct_dim times would instead need ct_dim copies of srcB.
+// runner rather than another BroadcastConfig axis: each row of a block is ct_dim column tiles that
+// all reuse ONE srcB tile, the op writes ct_dim dest slots itself, and srcB is never re-read from
+// L1. Calling the stock one-tile broadcast ct_dim times would instead need ct_dim copies of srcB.
+//
+// A block is an rt_dim x ct_dim tile grid that fills one acquired dest section, so srcA is a
+// (num_blocks * rt_dim) x ct_dim grid of tiles and srcB is rt_dim tiles (row r of every block reuses srcB tile r).
+// rt_dim > 1 is the case that mirrors sub_exp_block_bcast_cols(): nonzero srcA / srcB tile indices
+// and a nonzero dest base, all within one tile_regs_acquire().
 
 struct SubBcastColCustomConfig {
     std::uint32_t ct_dim = 1;
+    std::uint32_t rt_dim = 1;
     std::uint32_t num_blocks = 1;
     TileShape tile_shape = TileShape::FULL_TILE;
-    // SUB is LoFi-only on Quasar (fidelity phases are MUL-only), and gold_broadcast applies no
-    // fidelity mask for SUB, so this affects the device config only.
-    MathFidelity math_fidelity = MathFidelity::LoFi;
+    MathFidelity math_fidelity = MathFidelity::LoFi;  // SUB is LoFi-only on Quasar (fidelity phases are MUL-only)
 };
 
 void run_sub_bcast_col_custom(
@@ -515,21 +519,26 @@ void run_sub_bcast_col_custom(
     const std::uint32_t tile_width = tile_dims.get_tile_shape()[1];
     const std::uint32_t tile_height = tile_dims.get_tile_shape()[0];
     const std::uint32_t single_tile_size = tile_width * tile_height * sizeof(bfloat16);
-    const std::uint32_t total_tiles = test_config.ct_dim * test_config.num_blocks;
+    const std::uint32_t tiles_per_block = test_config.rt_dim * test_config.ct_dim;
+    const std::uint32_t total_tiles = tiles_per_block * test_config.num_blocks;
+    // Tile rows of the srcA / output grid, across all blocks. Tile columns are ct_dim.
+    const std::uint32_t total_tile_rows = test_config.rt_dim * test_config.num_blocks;
 
     log_info(
         tt::LogTest,
-        "Testing sub_bcast_cols_custom ct_dim={} num_blocks={} tile={{{}, {}}}",
+        "Testing sub_bcast_cols_custom ct_dim={} rt_dim={} num_blocks={} tile={{{}, {}}}",
         test_config.ct_dim,
+        test_config.rt_dim,
         test_config.num_blocks,
         tile_height,
         tile_width);
 
-    // srcA and the output are strips of total_tiles tiles; srcB is a single tile, reused by all.
+    // srcA and the output are total_tile_rows x ct_dim grids; srcB is rt_dim tiles, each reused by
+    // its row in every block.
     auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
     std::uint32_t dram_buffer_src_a_addr = src_a_dram_buffer->address();
 
-    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, 1);
+    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, test_config.rt_dim);
     std::uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
 
     auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
@@ -541,6 +550,7 @@ void run_sub_bcast_col_custom(
 
     experimental::KernelSpec::CompilerOptions::Defines defines_vec;
     defines_vec.emplace("CT_DIM", std::to_string(test_config.ct_dim));
+    defines_vec.emplace("RT_DIM", std::to_string(test_config.rt_dim));
     defines_vec.emplace("NUM_BLOCKS", std::to_string(test_config.num_blocks));
 
     const experimental::DFBSpecName INP0_DFB{"inp0_dfb"};
@@ -560,11 +570,12 @@ void run_sub_bcast_col_custom(
         };
     };
 
-    // in0/out hold one block: the op unpacks all ct_dim srcA tiles and writes all ct_dim dest slots
-    // in a single call, so a whole block must be resident. in1 holds the one reused tile.
-    experimental::DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB, test_config.ct_dim);
-    experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB, 1);
-    experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB, test_config.ct_dim);
+    // in0/out hold one whole block: the compute kernel indexes every row of the block off the read
+    // pointer inside a single dest acquire, so all rt_dim * ct_dim tiles must be resident. in1 holds
+    // the rt_dim reused tiles.
+    experimental::DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB, tiles_per_block);
+    experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB, test_config.rt_dim);
+    experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB, tiles_per_block);
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
@@ -591,7 +602,8 @@ void run_sub_bcast_col_custom(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .runtime_arg_schema =
-            {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
+            {.runtime_arg_names =
+                 {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "num_bcast_tiles"}},
         .hw_config = reader_hw_config,
     };
 
@@ -672,8 +684,9 @@ void run_sub_bcast_col_custom(
                  {"src0_bank_id", 0u},
                  {"src1_addr", static_cast<std::uint32_t>(dram_buffer_src_b_addr)},
                  {"src1_bank_id", 0u},
-                 // srcA tile count; srcB is always one tile and is read unconditionally.
-                 {"num_tiles", static_cast<std::uint32_t>(total_tiles)}}),
+                 // srcA tile count, then the srcB (bcast) tile count: one per row of a block.
+                 {"num_tiles", static_cast<std::uint32_t>(total_tiles)},
+                 {"num_bcast_tiles", static_cast<std::uint32_t>(test_config.rt_dim)}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
@@ -688,31 +701,35 @@ void run_sub_bcast_col_custom(
     experimental::SetProgramRunArgs(program_run, params);
 
     const std::uint32_t tile_elems = tile_height * tile_width;
-    const std::uint32_t strip_width = tile_width * total_tiles;
+    // Row-major host geometry of the srcA / output tile grid, and of the srcB tile column.
+    const std::uint32_t grid_width = tile_width * test_config.ct_dim;
+    const std::uint32_t grid_height = tile_height * total_tile_rows;
+    const std::uint32_t bcast_height = tile_height * test_config.rt_dim;
 
     std::vector<bfloat16> input0 = generate_uniform_random_vector<bfloat16>(
         -1.0f, 1.0f, tile_elems * total_tiles, std::chrono::system_clock::now().time_since_epoch().count());
 
     std::vector<bfloat16> input1 = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, tile_elems, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, tile_elems * test_config.rt_dim, std::chrono::system_clock::now().time_since_epoch().count());
 
-    // No mask_src_b_for_broadcast call: it is a no-op for COL (see its body), and correctly so --
-    // the FPU reads column 0 of each srcB row and ignores the rest, which is what gold_broadcast
-    // models. Tile srcB unmasked so host and device see identical bytes.
-    //
-    // Replicate srcB across the strip so gold_broadcast's COL case (src_b[i * num_cols]) resolves to
-    // column 0 of each row: the same tile subtracted from every srcA column tile.
-    std::vector<bfloat16> input1_strip(tile_elems * total_tiles);
-    for (std::uint32_t r = 0; r < tile_height; r++) {
-        for (std::uint32_t c = 0; c < strip_width; c++) {
-            input1_strip[(r * strip_width) + c] = input1[(r * tile_width) + (c % tile_width)];
+    // No mask_src_b_for_broadcast call: it is a no-op for COL (see its body): The FPU reads
+    // column 0 of each srcB row and ignores the rest, which is what gold_broadcast models.
+    // Tile srcB unmasked so host and device see identical bytes.
+
+    // Replicate srcB across the grid so gold_broadcast's COL case (src_b[i * num_cols]) resolves to
+    // column 0 of the right srcB row: the same tile subtracted from every srcA column tile of its
+    // row, and (r % bcast_height) makes every block reuse the same rt_dim srcB tiles.
+    std::vector<bfloat16> input1_grid(tile_elems * total_tiles);
+    for (std::uint32_t r = 0; r < grid_height; r++) {
+        for (std::uint32_t c = 0; c < grid_width; c++) {
+            input1_grid[(r * grid_width) + c] = input1[((r % bcast_height) * tile_width) + (c % tile_width)];
         }
     }
 
     std::vector<bfloat16> golden = gold_broadcast(
         input0,
-        input1_strip,
-        {tile_height, strip_width},
+        input1_grid,
+        {grid_height, grid_width},
         EltwiseOp::SUB,
         BroadcastDim::COL,
         0,
@@ -724,17 +741,22 @@ void run_sub_bcast_col_custom(
 
     const int num_faces = static_cast<int>(tile_width / 16 * tile_height / 16);
     const bool tiny_tile = test_config.tile_shape != TileShape::FULL_TILE;
-    // srcA / output span total_tiles tiles across the column dimension; srcB is a single tile.
-    ::unit_tests::compute::GoldenConfig strip_config = {
-        .num_tiles_r_dim = 1,
-        .num_tiles_c_dim = static_cast<int>(total_tiles),
+    // gold_standard_tilize/untilize walk a tile grid row-major, which is exactly the DRAM page order
+    // the reader streams into in0: block b owns tile rows [b * rt_dim, (b + 1) * rt_dim).
+    ::unit_tests::compute::GoldenConfig grid_config = {
+        .num_tiles_r_dim = static_cast<int>(total_tile_rows),
+        .num_tiles_c_dim = static_cast<int>(test_config.ct_dim),
         .num_faces = num_faces,
         .tiny_tile = tiny_tile};
-    ::unit_tests::compute::GoldenConfig single_tile_config = {
-        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .num_faces = num_faces, .tiny_tile = tiny_tile};
+    // srcB is a single column of rt_dim tiles.
+    ::unit_tests::compute::GoldenConfig bcast_config = {
+        .num_tiles_r_dim = static_cast<int>(test_config.rt_dim),
+        .num_tiles_c_dim = 1,
+        .num_faces = num_faces,
+        .tiny_tile = tiny_tile};
 
-    auto tilized_input0 = ::unit_tests::compute::gold_standard_tilize(packed_input0, strip_config);
-    auto tilized_input1 = ::unit_tests::compute::gold_standard_tilize(packed_input1, single_tile_config);
+    auto tilized_input0 = ::unit_tests::compute::gold_standard_tilize(packed_input0, grid_config);
+    auto tilized_input1 = ::unit_tests::compute::gold_standard_tilize(packed_input1, bcast_config);
 
     distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
     distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
@@ -744,7 +766,7 @@ void run_sub_bcast_col_custom(
 
     std::vector<std::uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);
-    auto dest_buffer_data_untilized = ::unit_tests::compute::gold_standard_untilize(dest_buffer_data, strip_config);
+    auto dest_buffer_data_untilized = ::unit_tests::compute::gold_standard_untilize(dest_buffer_data, grid_config);
 
     bool result = is_close_packed_vectors<bfloat16, std::uint32_t>(
         dest_buffer_data_untilized, packed_golden, [&](const bfloat16& a, const bfloat16& b) {
@@ -884,21 +906,23 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
     }
 }
 
-// Blocked bcast-col SUB with SrcB reuse (issue #50774). All cases run back-to-back in one TEST_F.
-//
-// Cases are ordered so the first red one localises the bug:
+// Blocked bcast-col SUB with SrcB reuse. All cases run back-to-back in one TEST_F.
+// Cases are ordered so the first red one localizes the bug:
 //   - ct_dim=1 carries no reuse at all, so a failure there means the srcB face traversal (the
 //     +8/-8/+24 addr-mod walk) is wrong.
-//   - ct_dim=1 passing but ct_dim=2 failing means the srcB hold is wrong -- i.e. the per-tile
+//   - ct_dim=1 passing but ct_dim=2 failing means the srcB hold is wrong i.e. the per-tile
 //     SETRWC(CLR_A) is releasing srcB, or the L1 srcB tile pointer is advancing.
 //   - num_blocks>1 additionally exercises dest-section switching and the per-block srcB re-unpack,
 //     whose 1:1 pairing with the math thread's single CLR_B is what keeps blocks from deadlocking.
+//   - rt_dim>1 is the only shape that exercises nonzero srcA/srcB tile indices and a nonzero dest
+//     base, so a failure there (with the matching rt_dim=1 case green) points at the API wrappers'
+//     index arithmetic rather than the face walk.
 TEST_F(LLKMeshDeviceFixture, TensixComputeSubBcastColCustom) {
     using unit_tests::compute::broadcast::SubBcastColCustomConfig;
 
     const std::vector<SubBcastColCustomConfig> cases = {
-        // Full 32x32 tiles. ct_dim=8 fills half-dest exactly (the 16-bit SyncHalf budget); 3 and 7
-        // cover non-power-of-two block widths.
+        // Full 32x32 tiles, one row per block: every call uses tile_index_a/b = 0 and dst_index = 0.
+        // ct_dim=8 fills half-dest, 3 and 7 cover non-power-of-two block widths.
         {.ct_dim = 1, .num_blocks = 1},
         {.ct_dim = 2, .num_blocks = 1},
         {.ct_dim = 3, .num_blocks = 1},
@@ -907,14 +931,23 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeSubBcastColCustom) {
         {.ct_dim = 8, .num_blocks = 1},
         {.ct_dim = 2, .num_blocks = 2},
         {.ct_dim = 8, .num_blocks = 2},
+        // Multi-row blocks, mirroring sub_exp_block_bcast_cols(): row r of a block reads srcA tile
+        // r * ct_dim and srcB tile r and writes dest slots [r * ct_dim, (r + 1) * ct_dim), all inside
+        // one acquire. rt_dim * ct_dim is capped by the same half-dest budget as ct_dim above.
+        {.ct_dim = 1, .rt_dim = 2, .num_blocks = 1},
+        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 1},
+        {.ct_dim = 2, .rt_dim = 4, .num_blocks = 1},
+        {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1},
+        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 2},
         // No tiny-tile (16x32) cases: the op does not support that shape. Its srcB face traversal
-        // and dest walk assume a full 32-row tile, and the 16x32 case hangs the device.
+        // and dest walk assume a full 32-row tile, and the 16x32 case hangs the device. Both Quasar
+        // init LLKs now assert the full-tile shape, so an API caller gets an assert, not a hang.
     };
 
     for (const auto& cfg : cases) {
         SCOPED_TRACE(
-            "ct_dim=" + std::to_string(cfg.ct_dim) + " num_blocks=" + std::to_string(cfg.num_blocks) +
-            " tiny_tile=" + std::to_string(cfg.tile_shape != TileShape::FULL_TILE));
+            "ct_dim=" + std::to_string(cfg.ct_dim) + " rt_dim=" + std::to_string(cfg.rt_dim) + " num_blocks=" +
+            std::to_string(cfg.num_blocks) + " tiny_tile=" + std::to_string(cfg.tile_shape != TileShape::FULL_TILE));
         unit_tests::compute::broadcast::run_sub_bcast_col_custom(this->devices_.at(0), cfg);
         if (HasFatalFailure()) {
             // Later cases are not diagnostic once an earlier one is red.

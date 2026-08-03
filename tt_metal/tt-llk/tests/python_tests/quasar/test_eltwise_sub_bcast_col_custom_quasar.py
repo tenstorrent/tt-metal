@@ -2,18 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Quasar bring-up test for the SDPA blocked bcast-col SUB LLK (issue #50774).
+"""Quasar bring-up test for the SDPA blocked bcast-col SUB LLK.
 
-Exercises ``_llk_unpack_AB_sub_bcast_col_custom_`` / ``_llk_math_sub_bcast_cols_reuse_custom_``:
-one SrcB tile is unpacked in COL layout and held while ``ct_dim`` SrcA column tiles are
-subtracted from it, each landing in its own dest slot.
+Exercises _llk_unpack_AB_sub_bcast_col_custom_ / _llk_math_sub_bcast_cols_reuse_custom_:
+one SrcB tile is unpacked in COL layout and held while it is subtracted (column-broadcast)
+from each of ``ct_dim`` SrcA column tiles, each difference landing in its own dest slot.
 
-The ``(ct_dim, num_blocks)`` cases are ordered so the first failure localises the bug. The
-custom math MOP uses ``CLR_NONE`` in every slot instead of the stock per-face
-``CLR_SRCB_VLD``, relying on ADDR_MOD_2's SrcB counter reset for COL face traversal; the
-``ct_dim=1`` case exercises exactly that with SrcB reuse switched off. If ``ct_dim=1``
-fails the MOP itself is wrong; if it passes and ``ct_dim=2`` fails, the per-tile
-``SETRWC(CLR_A, ..., SET_AB_F)`` is not holding SrcB across tiles.
+The (ct_dim, num_blocks) cases are ordered so the first failure localises the bug. Math
+emits its ELWSUB stream directly (no MOP) with CLR_NONE in every slot instead of
+per-face CLR_SRCB_VLD, walking the COL faces via the SrcB increments in ADDR_MOD_5/6/7
+(+8, -8, +8, +24); the ct_dim=1 case exercises exactly that with SrcB reuse switched off. If
+ct_dim=1 fails the face walk itself is wrong; if it passes and ct_dim=2 fails, the
+per-tile SETRWC(CLR_A, ..., SET_AB) is not holding SrcB across tiles.
 """
 
 import logging

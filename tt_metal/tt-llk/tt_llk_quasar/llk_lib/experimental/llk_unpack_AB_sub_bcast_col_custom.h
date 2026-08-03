@@ -28,13 +28,20 @@ using namespace ckernel;
  * is issued as a runtime instruction stream in @ref _llk_unpack_AB_sub_bcast_col_custom_ (no MOP),
  * so neither ct_dim nor the buffer descriptors are needed at init time.
  *
- * @param tensor_shape: Operand tile shape (4 faces for full 32x32 tiles).
+ * @param tensor_shape: Operand tile shape. Full 32x32 tiles only.
  * @note On the math thread, pair with @ref _llk_math_eltwise_binary_init_custom_ (T1); on pack, with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_unpack_AB_sub_bcast_col_custom_ is the matching execute call on this thread.
  */
 inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    // Stricter than validate_tensor_shape_tile_dependent_ops_ on purpose: unlike Blackhole, this path
+    // is full-tile only. The math-side srcB face walk hardcodes the 16-row face stride and the +24 jump
+    // from face 0 to face 2, and dest slots are allocated as Tile32x32, so a smaller tile (e.g. 16x32,
+    // which the generic validator accepts) does not just give wrong data, it hangs the device.
+    LLK_ASSERT(
+        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
+            tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
+        "custom sub bcast-col path supports full 32x32 tiles only");
 
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
