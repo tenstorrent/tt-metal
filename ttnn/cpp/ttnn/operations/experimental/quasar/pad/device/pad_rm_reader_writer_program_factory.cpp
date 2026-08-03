@@ -173,7 +173,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                   "num_local_unpadded_Y",
                   "full_unpadded_X_nbytes",
                   "num_local_W"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------
@@ -199,7 +200,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                   "full_padded_X_nbytes",
                   "dst_stick_offset",
                   "num_local_W"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------

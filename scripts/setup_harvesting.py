@@ -16,6 +16,11 @@ This script:
 import subprocess
 import sys
 import os
+import re
+import json
+import shutil
+import urllib.request
+import urllib.error
 
 
 def run_command(cmd, cwd=None, shell=True, check=True, capture_output=False):
@@ -37,9 +42,17 @@ def clone_repos():
     print("STEP 1: Cloning repositories")
     print("=" * 80)
 
+    # Only repos whose local checkout is actually used are cloned:
+    #   * tt-flash           - installed into the venv; provides the flasher.
+    #   * tt-system-firmware - provides the harvesting tooling (STEP 5/6).
+    # Firmware bundles are fetched as GitHub release assets over the API (see
+    # list_released_versions / download_release_bundle), so neither firmware
+    # source needs a local clone. The archived tt-firmware repo is deliberately
+    # NOT cloned: selecting it still works via the release endpoint, and cloning
+    # it would add a needless startup dependency (and failure mode) on an
+    # unmaintained repo that nothing here reads.
     repos = {
         "tt-flash": "https://github.com/tenstorrent/tt-flash",
-        "tt-firmware": "https://github.com/tenstorrent/tt-firmware.git",
         "tt-system-firmware": "https://github.com/tenstorrent/tt-system-firmware.git",
     }
 
@@ -75,49 +88,186 @@ def setup_tt_flash_venv():
     return venv_path
 
 
-def select_firmware_version():
-    """Let user select firmware version from available tags."""
-    print("\n" + "=" * 80)
-    print("STEP 3: Selecting firmware version")
-    print("=" * 80)
+GITHUB_ORG = "tenstorrent"
+_USER_AGENT = "tt-setup-harvesting"
 
-    print("\nFetching available firmware versions...")
-    tags_output = run_command("git tag -l 'v19.*'", cwd="tt-firmware", capture_output=True)
 
-    tags = [tag.strip() for tag in tags_output.split("\n") if tag.strip()]
+def _github_api_json(url):
+    """Fetch and parse a GitHub REST API JSON endpoint (public, unauthenticated)."""
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": _USER_AGENT, "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
 
-    if not tags:
-        print("ERROR: No v19.x.y tags found in tt-firmware repository")
+
+# Current-epoch firmware bundles are named
+# ``fw_pack-<MAJOR>.<MINOR>.<PATCH>[-rcN].fwbundle`` (a 3-component version).
+# The legacy v80.x epoch (pre-renumber) instead ships a 4-component
+# ``fw_pack-80.x.y.z.fwbundle``, which this pattern deliberately does NOT match
+# — that is how the v80.x line is excluded, regardless of how its git tag is
+# spelled (``v80.18.1`` in tt-system-firmware, ``v80.18.1.0`` in tt-firmware).
+_FW_BUNDLE_RE = re.compile(r"^fw_pack-((\d+)\.\d+\.\d+(?:-rc\d+)?)\.fwbundle$")
+
+# A firmware version string is strictly MAJOR.MINOR.PATCH[-rcN]. Validating it
+# before building any filesystem path is the primary defense against path
+# traversal via the (externally sourced) version value.
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-rc\d+)?$")
+
+
+def _fwbundle_filename(version):
+    """Return the bundle filename for a validated version, or exit on bad input."""
+    if not _VERSION_RE.match(version):
+        print(f"\nERROR: refusing unexpected firmware version string: {version!r}")
+        sys.exit(1)
+    return f"fw_pack-{version}.fwbundle"
+
+
+def list_released_versions(repo_dir):
+    """Return [(tag, version, release_json), ...] of flashable v19+ firmware releases.
+
+    Firmware bundles are published as GitHub *release assets* (they are not all
+    committed into the git tree), so enumerating releases is what gives the set
+    of flashable versions. A release is kept only when it carries a standard
+    ``fw_pack-<major>.<minor>.<patch>[-rcN].fwbundle`` asset whose major is >= 19.
+    This:
+
+      * drops the older v18.x line (major < 19),
+      * drops the legacy v80.x epoch, whose bundle is a 4-component
+        ``fw_pack-80.x.y.z.fwbundle`` that does not match the pattern (true
+        whether its tag is 3-part ``v80.18.1`` or 4-part ``v80.18.1.0``),
+      * keeps every v19.x release including ``-rc`` ones, plus future v20.x/v21.x
+        releases that follow the same naming, and
+      * guarantees the download step can find the asset (we matched it here).
+
+    The returned ``version`` is taken from the matched asset (not the tag), so it
+    is always exactly what download_release_bundle() will look for.
+    """
+    url = f"https://api.github.com/repos/{GITHUB_ORG}/{repo_dir}/releases?per_page=100"
+    print(f"\nFetching available firmware releases from {repo_dir} (v19 and above)...")
+    try:
+        releases = _github_api_json(url)
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        print(f"\nERROR: Failed to fetch releases for {repo_dir}: {exc}")
         sys.exit(1)
 
-    print("\nAvailable firmware versions:")
-    for i, tag in enumerate(tags, 1):
+    versions = []
+    for release in releases:
+        tag = release.get("tag_name", "")
+        for asset in release.get("assets", []):
+            match = _FW_BUNDLE_RE.match(asset.get("name", ""))
+            if match and int(match.group(2)) >= 19:
+                versions.append((tag, match.group(1), release))
+                break
+    return versions
+
+
+def download_release_bundle(release, version, dest_dir):
+    """Download the fw_pack-<version>.fwbundle release asset; return its local path or None."""
+    asset_name = _fwbundle_filename(version)
+    asset_url = None
+    for asset in release.get("assets", []):
+        if asset.get("name") == asset_name:
+            asset_url = asset.get("browser_download_url")
+            break
+    if not asset_url:
+        return None
+
+    # Sanitize the destination path inline, at the file-write sink: basename
+    # strips any directory components from the dynamic name, and the absolute-
+    # path containment check confirms the result stays inside dest_dir, so
+    # dynamic input cannot be used to write outside the intended directory.
+    base_directory = os.path.abspath(dest_dir)
+    dest_path = os.path.abspath(os.path.join(base_directory, os.path.basename(asset_name)))
+    if dest_path != base_directory and not dest_path.startswith(base_directory + os.sep):
+        print(f"\nERROR: refusing to write firmware bundle outside {base_directory}: {dest_path}")
+        sys.exit(1)
+
+    print(f"\nDownloading {asset_name} ...")
+    print(f"  from: {asset_url}")
+    request = urllib.request.Request(asset_url, headers={"User-Agent": _USER_AGENT})
+    try:
+        with urllib.request.urlopen(request) as response, open(dest_path, "wb") as out:
+            shutil.copyfileobj(response, out)
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        print(f"\nERROR: Failed to download {asset_name}: {exc}")
+        sys.exit(1)
+    return dest_path
+
+
+def select_firmware_repo():
+    """Let user choose which firmware repository to source the bundle from."""
+    print("\n" + "=" * 80)
+    print("STEP 3: Selecting firmware")
+    print("=" * 80)
+
+    print("\n" + "!" * 80)
+    print("WARNING: The 'tt-firmware' repository is now ARCHIVED and no longer maintained.")
+    print("         Prefer 'tt-system-firmware' for up-to-date firmware.")
+    print("!" * 80)
+
+    repos = {
+        "1": ("tt-firmware", "tt-firmware  (ARCHIVED - no longer maintained)"),
+        "2": ("tt-system-firmware", "tt-system-firmware  (maintained)"),
+    }
+
+    print("\nAvailable firmware repositories:")
+    for key, (_repo_dir, label) in repos.items():
+        print(f"  {key}. {label}")
+
+    while True:
+        choice = input("\nSelect firmware repository (1-2): ").strip()
+        if choice not in repos:
+            print("Invalid choice. Please enter 1 or 2.")
+            continue
+
+        repo_dir, _label = repos[choice]
+        if repo_dir == "tt-firmware":
+            print("\nYou selected an ARCHIVED repository (tt-firmware); it is no longer maintained.")
+            confirm = input("Continue with tt-firmware anyway? (yes/no): ").strip().lower()
+            if confirm != "yes":
+                print("Please choose again.")
+                continue
+
+        print(f"\n✓ Selected firmware repository: {repo_dir}")
+        return repo_dir
+
+
+def select_firmware_version(repo_dir):
+    """Let user select a v19+ firmware release and obtain its bundle."""
+    versions = list_released_versions(repo_dir)
+
+    if not versions:
+        print(f"ERROR: No v19+ firmware releases found in {repo_dir} repository")
+        sys.exit(1)
+
+    print("\nAvailable firmware versions (v19 and above):")
+    for i, (tag, _version, _release) in enumerate(versions, 1):
         print(f"  {i}. {tag}")
 
     while True:
         try:
-            choice = input(f"\nSelect firmware version (1-{len(tags)}): ").strip()
+            choice = input(f"\nSelect firmware version (1-{len(versions)}): ").strip()
             idx = int(choice) - 1
-            if 0 <= idx < len(tags):
-                selected_tag = tags[idx]
+            if 0 <= idx < len(versions):
+                selected_tag, version, selected_release = versions[idx]
                 break
             else:
-                print(f"Please enter a number between 1 and {len(tags)}")
+                print(f"Please enter a number between 1 and {len(versions)}")
         except (ValueError, KeyboardInterrupt):
             print("\nInvalid input. Please enter a number.")
 
-    print(f"\nChecking out {selected_tag}...")
-    run_command(f"git checkout {selected_tag}", cwd="tt-firmware")
+    # Bundles are published as GitHub release assets. Every listed release is
+    # guaranteed to carry its fw_pack-<version>.fwbundle asset (list_released_
+    # versions only keeps releases whose asset it matched), so download it.
+    fwbundle_path = download_release_bundle(selected_release, version, dest_dir=os.getcwd())
 
-    # Extract version number (remove 'v' prefix)
-    version = selected_tag[1:] if selected_tag.startswith("v") else selected_tag
-    fwbundle_path = f"tt-firmware/fw_pack-{version}.fwbundle"
-
-    if not os.path.exists(fwbundle_path):
-        print(f"\nERROR: Expected firmware bundle not found at: {fwbundle_path}")
+    if not fwbundle_path or not os.path.exists(fwbundle_path):
+        print(f"\nERROR: Could not obtain a firmware bundle for {selected_tag} from {repo_dir}")
         sys.exit(1)
 
-    print(f"\n✓ Firmware bundle found: {fwbundle_path}")
+    print(f"\n✓ Firmware bundle ready: {fwbundle_path}")
     return fwbundle_path, version
 
 
@@ -308,8 +458,9 @@ def main():
         # Step 2: Setup tt-flash venv
         venv_path = setup_tt_flash_venv()
 
-        # Step 3: Select firmware version
-        fwbundle_path, _ = select_firmware_version()
+        # Step 3: Select firmware repository (with archived-repo warning) + version
+        repo_dir = select_firmware_repo()
+        fwbundle_path, _ = select_firmware_version(repo_dir)
 
         # Step 4: Select chip type
         harvesting_cols, expected_chips = select_chip_type()

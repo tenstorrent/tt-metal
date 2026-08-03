@@ -42,6 +42,22 @@ ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
 ARG ZSTD_VERSION=1.5.7
 ARG ZSTD_SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
 
+# curl 8.21.0. curl.se publishes PGP signatures rather than a sidecar
+# checksum file, so SHA256 is computed directly from a signature-verified
+# download of curl-8.21.0.tar.gz (same trust model already used here for
+# gdb/doxygen). See MINFRA-1374: curl --aws-sigv4 only started sending the
+# X-Amz-Content-Sha256 header Garage requires in curl 8.x, and Ubuntu
+# 22.04's apt package is permanently pinned at 7.81.
+ARG CURL_VERSION=8.21.0
+ARG CURL_SHA256=d9b327997999045a24cda50f3983e69e51c516bd8be6ef9842fc7f99135e33bb
+
+# OpenSSL 4.0.1, built statically and linked into curl (see install-curl.sh).
+# SHA256 for openssl-4.0.1.tar.gz from the official openssl/openssl GitHub
+# release, computed directly from a downloaded release archive (same trust
+# model as curl above).
+ARG OPENSSL_VERSION=4.0.1
+ARG OPENSSL_SHA256=2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09
+
 # NOTE: OMPI_VERSION is the single source of truth for the OpenMPI version.
 # If you change this value, you MUST also update OMPI_VERSION in:
 #   - dockerfile/Dockerfile (ENV OMPI_VERSION in base stage)
@@ -305,6 +321,73 @@ LABEL org.opencontainers.image.description="Zstandard - fast real-time compressi
 LABEL org.opencontainers.image.licenses="BSD-3-Clause OR GPL-2.0-only"
 LABEL org.opencontainers.image.version="${ZSTD_VERSION}"
 COPY --from=zstd-builder /install/ /install/
+
+#############################################################
+# curl - requires configure/make to build (see MINFRA-1374)
+# Outputs: /install/bin/curl, /install/lib/libcurl.*, /install/include/...
+#
+# Built in the manylinux base (matching zstd/openmpi) for ABI consistency
+# with the rest of the from-source tool images, rather than ubuntu:22.04.
+# OpenSSL is built from source and statically linked (see install-curl.sh)
+# rather than using this builder's system openssl-devel: AlmaLinux 9 has
+# shipped OpenSSL 3.2.x since 9.4, newer than either Ubuntu 22.04 or 24.04's
+# 3.0.x, so a curl dynamically linked against the builder's libssl.so failed
+# on both destinations with "version `OPENSSL_3.2.0' not found".
+#############################################################
+
+FROM quay.io/pypa/manylinux_2_34_x86_64 AS curl-builder
+ARG CURL_VERSION
+ARG CURL_SHA256
+ARG OPENSSL_VERSION
+ARG OPENSSL_SHA256
+
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+RUN FILES=(/etc/yum.repos.d/*.repo) && \
+    sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
+
+# Build deps matching manylinux (AlmaLinux 9) for ABI compatibility.
+# perl is required to run OpenSSL's Configure (install-curl.sh builds OpenSSL
+# from source and statically links it into curl - see that script for why:
+# this builder's system OpenSSL is newer than either Ubuntu destination's,
+# which broke every curl consumer in the final image at runtime).
+# zlib-devel/libpsl-devel are required for curl itself (compression, and
+# Public Suffix List cookie-domain checks) - install-curl.sh fails configure
+# outright if either is missing, rather than silently building without it,
+# since this curl replaces /usr/bin/curl for every consumer in the final
+# image, not just the Garage/SigV4 use case. Confirmed libpsl-devel is in
+# AlmaLinux 9's AppStream repo (no CRB needed) by checking
+# https://repo.almalinux.org/almalinux/9/AppStream/x86_64/os/Packages/
+# directly. Not attempting HTTP/2 (libnghttp2-devel) here - unlike the
+# others, its availability/name on this base wasn't verified, and it's a
+# nice-to-have, not a security property, so configure just skips it if absent.
+RUN dnf install -y \
+    gcc \
+    make \
+    perl \
+    wget \
+    ca-certificates \
+    pkgconf-pkg-config \
+    zlib-devel \
+    libpsl-devel \
+    && dnf clean all
+
+COPY dockerfile/scripts/install-curl.sh /tmp/install-curl.sh
+RUN CURL_VERSION=${CURL_VERSION} \
+    CURL_SHA256=${CURL_SHA256} \
+    OPENSSL_VERSION=${OPENSSL_VERSION} \
+    OPENSSL_SHA256=${OPENSSL_SHA256} \
+    INSTALL_PREFIX=/install \
+    /bin/bash /tmp/install-curl.sh
+
+FROM scratch AS curl
+ARG CURL_VERSION
+LABEL org.opencontainers.image.source="https://github.com/curl/curl"
+LABEL org.opencontainers.image.description="curl - command line tool and library for transferring data with URLs"
+LABEL org.opencontainers.image.licenses="curl"
+LABEL org.opencontainers.image.version="${CURL_VERSION}"
+COPY --from=curl-builder /install/ /install/
 
 #############################################################
 # SFPI - Tenstorrent SFPI compiler

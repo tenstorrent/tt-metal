@@ -119,7 +119,13 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1753088}], indirect=True
+    # trace_region_size is the TOTAL trace budget across DRAM banks (#47122). The captured
+    # ViT 2CQ trace is ~1.70 MiB; with 12 banks and max page size 8192, each bank needs
+    # 147456 B. 1753088 only reserved 146112 B/bank under pre-#47766 dram_alignment
+    # rounding and OOM'd on N300 (#47887). 2_000_000 leaves headroom after page rounding.
+    "device_params",
+    [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2_000_000}],
+    indirect=True,
 )
 @pytest.mark.parametrize("batch_size", [8])
 def test_vit(device, batch_size, is_single_card_n300):

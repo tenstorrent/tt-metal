@@ -23,6 +23,25 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& b = tensor_args.residual_input_tensor;
     const auto& gamma = tensor_args.weight;
 
+    TT_FATAL(
+        tensor_args.stats.has_value(),
+        "fused_rms_minimal requires a pre-allocated stats tensor; passing stats=None is not supported. It backs "
+        "an internal globally-allocated circular buffer.");
+
+    {
+        const bool fp32_dest_acc_en =
+            std::get<2>(get_compute_kernel_config_args(a.device()->arch(), args.compute_kernel_config));
+        const auto expected_stats_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
+        TT_FATAL(
+            tensor_args.stats->dtype() == expected_stats_dtype,
+            "fused_rms_minimal: stats tensor dtype ({}) must match the compute accumulation format; with "
+            "fp32_dest_acc_en={} the stats tensor must be {}. Allocate the stats tensor with that dtype (this is "
+            "required for correct circular-buffer sizing and the internal all-gather handshake).",
+            tensor_args.stats->dtype(),
+            fp32_dest_acc_en,
+            expected_stats_dtype);
+    }
+
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
     TT_FATAL(
         a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] <= 32 &&
@@ -34,8 +53,38 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
+
+    // Input layout contract (see the fused_rms_minimal docstring). The op is width-sharded in L1 and does not reshard
+    // internally, so reject anything that would otherwise dereference an empty shard spec below with a bad optional.
+    TT_FATAL(
+        a.is_sharded(),
+        "fused_rms_minimal requires a width-sharded L1 input; an interleaved input is not supported. Reshard to "
+        "width-sharded L1 first.");
+    TT_FATAL(
+        a.memory_config().buffer_type() == BufferType::L1,
+        "fused_rms_minimal requires the input in L1 but got buffer type {}.",
+        a.memory_config().buffer_type());
+    TT_FATAL(
+        a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+        "fused_rms_minimal requires a width-sharded input but got memory layout {}.",
+        a.memory_config().memory_layout());
+    // The all-gather addresses the input on the same cores the caller built the global_semaphore on, so the input
+    // shard grid must be covered by the semaphore's core range.
+    // Copy by value: attribute_values() returns a temporary tuple, so a reference into it would dangle.
+    const auto semaphore_cores = std::get<0>(args.semaphore.attribute_values());
+    TT_FATAL(
+        semaphore_cores.contains(a.shard_spec().value().grid),
+        "fused_rms_minimal requires the input to be sharded on the grid the global_semaphore was created on; the "
+        "input shard grid {} is not contained within the semaphore grid {}.",
+        a.shard_spec().value().grid,
+        semaphore_cores);
+
     uint32_t input_width = a.tensor_spec().tile().get_tile_shape()[1];
     uint32_t input_height = a.tensor_spec().tile().get_tile_shape()[0];
+    TT_FATAL(
+        args.output_mem_config.shard_spec().has_value(),
+        "fused_rms_minimal requires a sharded output memory config (width-sharded in L1); an interleaved output "
+        "memory config is not supported.");
     TT_FATAL(
         args.output_mem_config.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
         "Minimal version requires row major sharding orientation");
@@ -57,8 +106,8 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
     }
     TT_FATAL(
-        gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR,
-        "RMS all gather requires a weight which is row major");
+        gamma.has_value(), "fused_rms_minimal requires a weight (gamma) tensor; passing weight=None is not supported.");
+    TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "RMS all gather requires a weight which is row major");
 
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
@@ -168,7 +217,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         shard_spec.shape[1]);
 }
 
-TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     if (args.inplace) {
@@ -182,6 +231,12 @@ TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     auto output_shape = input_tensor.logical_shape();
     auto output_padded_shape = input_tensor.padded_shape();
 
+    // This runs before validate_on_program_cache_miss (create_output_tensors is called ahead of validation in
+    // device_operation::launch), so guard the dereference here too rather than relying on the check in validate.
+    TT_FATAL(
+        args.output_mem_config.shard_spec().has_value(),
+        "fused_rms_minimal requires a sharded output memory config (width-sharded in L1); an interleaved output "
+        "memory config is not supported.");
     auto output_shard_spec = args.output_mem_config.shard_spec().value();
     auto input_shard_spec = input_tensor.shard_spec().value();
     if (output_shard_spec != input_shard_spec) {
@@ -189,12 +244,8 @@ TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     }
 
     auto mem_config = args.output_mem_config;
-    if (!mem_config.shard_spec().has_value()) {
-        mem_config =
-            tt::tt_metal::MemoryConfig(mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
-    }
 
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             args.dtype.value_or(input_tensor.dtype()),

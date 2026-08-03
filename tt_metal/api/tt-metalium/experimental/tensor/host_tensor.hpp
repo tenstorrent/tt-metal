@@ -4,17 +4,13 @@
 
 #pragma once
 
-#include <optional>
-
 #include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/tile.hpp>
 #include <tt-metalium/buffer.hpp>
 
 // Tensor related constructs
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -28,6 +24,7 @@ namespace tt::tt_metal {
 
 // Implementation details for HostTensor
 class HostTensorImpl;
+class TensorTopology;
 
 /**
  * HostTensor represents a Tensor in host memory. It is intended to be used with MeshTensor for host <-> device
@@ -94,15 +91,16 @@ public:
     // Factory methods for creating an Engaged HostTensor.
 
     /**
-     * Constructs a host tensor from a distributed host buffer.
+     * Constructs a host tensor from a single device host buffer.
+     * The buffer occupies the 0x0 shard of the distributed host buffer (unit TensorTopology).
      */
-    static HostTensor from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+    static HostTensor from_buffer(HostBuffer buffer, TensorSpec spec);
 
     /**
-     * Constructs a host tensor from a single device host buffer.
+     * Allocate a single-shard HostTensor whose contents are unspecified and meant to be overwritten.
      * The buffer occupies the 0x0 shard of the distributed host buffer.
      */
-    static HostTensor from_buffer(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
+    static HostTensor allocate_for_overwrite(TensorSpec spec);
 
     /**
      * Converts a buffer of elements of type `T` to a `Tensor`.
@@ -112,20 +110,18 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_span(std::span<const T> buffer, TensorSpec spec);
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
      *
      * We assume buffer is laid out in row-major order.
-     * TODO(#38947): tile parameter should be removed.
      */
     template <typename T>
-    static HostTensor from_borrowed_data(
-        std::span<T> buffer, const Shape& shape, MemoryPin pin, const std::optional<Tile>& tile = std::nullopt);
+    static HostTensor from_borrowed_data(std::span<T> buffer, const Shape& shape, MemoryPin pin);
 
     template <typename T>
-    static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_vector(const std::vector<T>& buffer, TensorSpec spec);
 
     /**
      * From original Tensor:
@@ -133,7 +129,7 @@ public:
      * physical shape matches logical shape, and no type conversion is needed.
      */
     template <typename T>
-    static HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_vector(std::vector<T>&& buffer, TensorSpec spec);
 
     // Getters:
 
@@ -149,11 +145,6 @@ public:
      * Returns the TensorSpec of the HostTensor.
      */
     const TensorSpec& tensor_spec() const;
-
-    /**
-     * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
-     */
-    const TensorTopology& tensor_topology() const;
 
     /**
      * Returns true if this HostTensor was left in a moved-from state.
@@ -196,9 +187,6 @@ public:
     // Applies a transformation function to each host buffer across devices in parallel, returning a new HostTensor.
     HostTensor transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
 
-    // Updates the topology of the HostTensor post construction.
-    void update_tensor_topology(TensorTopology tensor_topology);
-
     /**
      * Access to the implementation.
      *
@@ -208,7 +196,10 @@ public:
     const HostTensorImpl& impl() const;
 
 private:
-    // Internal constructors. Use the from_buffer factories to build a HostTensor from a backing buffer.
+    friend HostTensor host_tensor_from_buffer_with_topology(
+        DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+
+    // Internal constructors. Use free-function factories to build a HostTensor from a backing buffer.
     explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
     // impl_ could be a nullptr if HostTensor is in a moved-from state.

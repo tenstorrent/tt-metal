@@ -35,9 +35,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TEST_FACE_R_DIM,
         params.num_faces,
         params.num_faces);
-    _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
-
-    _llk_unpack_AB_sub_bcast_col_custom_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), CT_DIM);
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
+    {
+        _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
+        _llk_unpack_AB_sub_bcast_col_custom_(
+            L1_ADDRESS(params.buffer_A[block * params.NUM_TILES_IN_BLOCK]), L1_ADDRESS(params.buffer_B[0]), params.NUM_TILES_IN_BLOCK);
+    }
 }
 
 #endif
@@ -57,19 +60,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(params.num_faces);
-
-    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-
-    // call custom LLK. The templated MUL/SUB scaffold is Blackhole-only; Wormhole has only the
-    // SUB-named wrapper, so MUL is exercised on BH alone (the test skips the MUL variant on non-BH).
+    // Call the custom LLK once per destination section. The templated MUL/SUB scaffold is
+    // Blackhole-only; Wormhole has only the SUB-named wrapper.
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
+    {
+        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(params.num_faces);
 #ifdef ARCH_BLACKHOLE
-    _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP>(CT_DIM, tensor_shape);
+        _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP>(params.NUM_TILES_IN_BLOCK, tensor_shape);
 #else
-    _llk_math_sub_bcast_cols_reuse_custom_(CT_DIM, tensor_shape);
+        _llk_math_sub_bcast_cols_reuse_custom_(params.NUM_TILES_IN_BLOCK, tensor_shape);
 #endif
-
-    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
@@ -97,15 +100,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>(params.TEST_FACE_R_DIM);
 
-    // wait for math to finish
-    _llk_packer_wait_for_math_done_();
-
-    // pack the result
-    for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        _llk_packer_wait_for_math_done_();
+        for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
+        {
+            const std::uint32_t result_tile = block * params.NUM_TILES_IN_BLOCK + tile;
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[result_tile]));
+        }
+        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif

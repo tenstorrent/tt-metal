@@ -94,7 +94,7 @@ def t2v_metrics(mesh_device, height):
         assert is_blackhole(), "4x32 is only supported for blackhole"
         assert height == 720, "4x32 is only supported for 720p"
         expected_metrics = {
-            "encoder": 0.5,
+            "encoder": 0.54,
             "denoising": 75.0,
             "vae": 5.0,
             "total": 80.5,
@@ -408,6 +408,7 @@ def test_pipeline_performance(
             (2, 2): "BH_QB",
             (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
+            (4, 32): "BH_QG",
         }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,

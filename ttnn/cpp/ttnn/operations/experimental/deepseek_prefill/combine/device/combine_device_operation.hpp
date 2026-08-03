@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine {
 struct CombineDeviceOperation {
     using operation_attributes_t = CombineParams;
     using tensor_args_t = CombineInputs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<CombineProgramFactory>;
 

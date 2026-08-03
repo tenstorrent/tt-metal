@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal::distributed {

@@ -133,6 +133,18 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.k != 0, "K must be non-zero");
 
+    // The stable bitonic network is only implemented in the WH/BH LLKs; the Quasar LLK
+    // static_asserts STABLE_SORT == false. Reject it here so the caller gets an actionable error
+    // instead of a kernel JIT failure.
+    if (args.stable) {
+        const auto arch = input_tensor.device()->arch();
+        TT_FATAL(
+            arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+            "TopK stable=true is not supported on {}: the bitonic top-k LLK only implements the stable "
+            "network on Wormhole and Blackhole",
+            arch);
+    }
+
     {
         const int8_t logical_rank = static_cast<int8_t>(input_tensor.logical_shape().rank());
         const int8_t last_dim = logical_rank - 1;
@@ -267,13 +279,13 @@ TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_spe
     const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max());  // 65535
 
     // Create values tensor specification (same data type as input)
-    const auto values_spec = TensorSpec(
+    const auto values_spec = tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), args.output_memory_config));
 
     // Create indices tensor specification (integer type based on dimension size)
     const DataType index_dtype = uint16_output ? DataType::UINT16 : DataType::UINT32;
-    const auto index_spec =
-        TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), args.output_memory_config));
+    const auto index_spec = tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), args.output_memory_config));
 
     return {values_spec, index_spec};
 }
@@ -300,6 +312,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
     int8_t dim,
     bool largest,
     bool sorted,
+    bool stable,
     const tt::tt_metal::MemoryConfig& memory_config,
     const tt::tt_metal::CoreRangeSet& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
@@ -310,6 +323,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
             .dim = dim,
             .largest = largest,
             .sorted = sorted,
+            .stable = stable,
             .output_memory_config = memory_config,
             .sub_core_grids = sub_core_grids},
         TopkInputs{

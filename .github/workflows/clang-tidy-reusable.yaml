@@ -196,6 +196,54 @@ jobs:
               sys.exit(0)
           PYEOF
 
+      - name: Test S3 write+readback
+        # The probe above only confirms S3 *reads* work; writes can fail silently
+        # (IAM policy, ACL, proxy stripping PUT) with nothing to catch it. Writes,
+        # reads back, and deletes a per-invocation sentinel object; warns (does not
+        # fail the job) on error so a broken ctcache doesn't block clang-tidy analysis.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          python3 - << 'PYEOF'
+          import os, sys, uuid
+          import boto3
+          from botocore.config import Config
+
+          if os.environ.get("CTCACHE_S3_OK") != "1":
+              print("Skipping write test — S3 not configured or probe failed")
+              sys.exit(0)
+
+          bucket = os.environ.get("CTCACHE_S3_BUCKET", "ctcache")
+          folder = os.environ.get("CTCACHE_S3_FOLDER", "ct20")
+          run_id = os.environ.get("GITHUB_RUN_ID", "local")
+          attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+          # uuid suffix: parallel clang-tidy-reusable legs (full/tt_metal/ttnn/tt-train/catchall)
+          # share the same run_id+attempt, so a plain run_id key collides across them.
+          key = f"{folder}/.write-test/{run_id}-{attempt}-{uuid.uuid4().hex[:12]}"
+          payload = b"ctcache-write-test-ok"
+
+          try:
+              s3 = boto3.client("s3", config=Config(s3={"addressing_style": "path"}))
+              s3.put_object(Bucket=bucket, Key=key, Body=payload)
+              print(f"Wrote sentinel: s3://{bucket}/{key}")
+
+              try:
+                  response = s3.get_object(Bucket=bucket, Key=key)
+                  body = response["Body"].read()
+                  if body != payload:
+                      print(f"::warning::S3 readback MISMATCH: expected {payload!r}, got {body!r}")
+                  else:
+                      print("Readback: content matches ✓")
+              finally:
+                  try:
+                      s3.delete_object(Bucket=bucket, Key=key)
+                      print("Sentinel deleted (cleanup)")
+                  except Exception:
+                      print(f"::warning::Failed to delete write-test sentinel {key} — manual cleanup may be needed")
+          except Exception as e:
+              print(f"::warning::ctcache S3 write+readback FAILED: {type(e).__name__}")
+              print("::warning::Writes to Garage S3 may be broken — ctcache will run but results may not be persisted")
+          PYEOF
+
       - name: Create ccache tmpdir
         run: |
           mkdir -p /tmp/ccache

@@ -8,6 +8,9 @@
 
 namespace tt::tt_metal::operation {
 
+using ttnn::StorageType;
+using ttnn::Tensor;
+
 template <typename OutputTensorsT>
 OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
     Tensors input_tensors, const OutputTensors& output_tensors, int ideal_compute_cycles) :

@@ -105,6 +105,30 @@ Why it matters: this title is the release-note line; <reason>.
 Suggested title: `<rewritten title>`
 ````
 
+## PR Description Completeness
+
+Every PR must say **what it does and why** in its own words. Flag a PR whose body is
+still the unmodified template, or whose Summary is empty, consists only of the
+template's HTML comments, or merely restates the file list the diff already shows.
+This is the one description requirement — raise it at 🟡 IMPORTANT.
+
+**Why it matters:** the Summary is the only place a reviewer learns the intent a diff
+cannot convey, and it is what the release notes and any future bisect are read against.
+
+Additionally, where they apply, raise these at 🟢 SUGGESTION — never block on them:
+
+- **User-visible behaviour changes** — a change to an op's output dtype, shape, or
+  accepted argument set should be stated explicitly, since it is the migration signal
+  for callers.
+- **Perf/accuracy numbers** — before/after figures for a PR categorised Performance
+  or claiming an accuracy improvement.
+- **Issue link** — ask the author to link the issue this fixes or relates to, if there
+  is one. When the diff itself cites an issue number (in a test name, comment, or
+  docstring) that the body does not link, name that number.
+
+Do not attempt to write the Summary for the author; state what is missing and why a
+reviewer needs it.
+
 ## Testing Expectations
 
 - New public API → unit test in the nearest `tests/` target

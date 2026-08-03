@@ -1,0 +1,177 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * The log1p(x) code is derived from code by Norbert Juffa.
+ *
+ * Copyright (c) 2015-2023, Norbert Juffa
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice,
+ * this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#pragma once
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "ckernel_sfpu_log.h"
+#include "cmath_common.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// For inputs with u = 1 + a > 0, write u = 2^k * t with t chosen in [0.75, 1.5),
+// so m = t - 1 lies in [-0.25, 0.5). Then
+//   log1p(a) = log(u) = k * log(2) + log1p(m).
+// This implementation carries k in exponent-bit units (k << 23), which makes the
+// rescaling and final k * log(2) term cheaper on SFPU.
+// Inputs with 1 + a < 0 fall through to the default NaN.
+// The boundary case u == 0 (a == -1) is outside the 2^k * t derivation above;
+// it still evaluates to -inf via the same bit-level reduction path.
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
+    sfpi::vFloat u = a + 1.0f;
+    sfpi::vFloat r = std::numeric_limits<float>::quiet_NaN();
+
+    v_if(u >= 0.0f) {
+        sfpi::vFloat three_quarters = 0.75f;
+        sfpi::vInt e = sfpi::as<sfpi::vInt>(three_quarters);
+        sfpi::vFloat e_float;
+
+        // Subtracting the encoding of 0.75 and then zeroing the mantissa isolates
+        // the exponent-bit offset e = k << 23 for the unique k with
+        // 2^(-k) * u in [0.75, 1.5).
+        e = sfpi::as<sfpi::vInt>(u) - e;
+        e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
+
+        // Reinterpreting a - e applies the same 2^(-k) scaling to a.
+        // Affine correction below reconstructs
+        //   m <- 2^(-k) * a + (2^(-k) - 1) = 2^(-k) * (1 + a) - 1.
+        sfpi::vFloat m = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - e);
+        sfpi::vFloat neg_four = -4.0f;
+        // Use s' = -4 * 2^(-k) instead of 4 * 2^(-k); see -0.25 for explanation.
+        sfpi::vFloat s = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(neg_four) - e);
+
+        // Use -0.25 (instead of 0.25) so we can reuse it in the bf16 Horner step later.
+        sfpi::vFloat neg_quarter = -0.25f;
+        sfpi::vFloat neg1 = -1.0f;
+        // t = -s' / 4 - 1 = 2^(-k) - 1
+        sfpi::vFloat t = __builtin_rvtt_sfpmad(neg_quarter.get(), s.get(), neg1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+
+        sfpi::vMag abs_e = sfpi::abs(e);
+
+        // Minimax approximations for log1p(m) on [-0.25, 0.5]. Both paths keep the
+        // exact linear term m explicit and approximate only the nonlinear
+        // correction m^2 * P(m); the fp32 path keeps more terms than the
+        // bf16-rounded path. fp16 or bf16 constants are used where possible to
+        // reduce instruction count.
+        if constexpr (is_fp32_dest_acc_en) {
+            // log1p(m) ~= m + m*m * (
+            //   -0x1p-1 + m * (0x1.555572p-2 + m * (-0x1.00001ap-2 + m * (0x1.998p-3 +
+            //   m * (-0x1.55p-3 + m * (0x1.274p-3 + m * (-0x1.0c4p-3 + m *
+            //   (0x1.b84p-4 + m * (-0x1.92cp-5)))))))))
+
+            m = m + t;
+            r = -0x1.92cp-5f;
+            r = r * m + 0x1.b84p-4f;
+            r = r * m + -0x1.0c4p-3f;
+            r = r * m + 0x1.274p-3f;
+            r = r * m + -0x1.55p-3f;
+            r = r * m + 0x1.998p-3f;
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
+            r = r * m + sfpi::vConstFloatPrgm1;
+            s = m * m;
+            r = r * m + sfpi::vConstFloatPrgm2;
+            r = r * m + -0.5f;
+        } else {
+            // log1p(x) = x + x*x * (-0x1.008p-1 + x * (0x1.744p-2 + x * (-0x1p-2)))
+
+            m = m + t;
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
+            r = neg_quarter * m + sfpi::vConstFloatPrgm1;
+            s = m * m;
+            r = r * m + sfpi::vConstFloatPrgm2;
+        }
+        // convert<vFloat> returns |e| as a real number in exponent-bit units;
+        // restore sign and multiply by log(2) * 2^(-23) to recover k * log(2).
+        e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
+        r = r * s + m;
+        sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+        r = e_float * sfpi::vConstFloatPrgm0 + r;
+
+        // since u>=0, safely checks for u == NaN or u == inf
+        v_if(sfpi::as<sfpi::vInt>(u) >= sfpi::as<sfpi::vInt>(infinity)) { r = u; }
+        v_endif;
+    }
+    v_endif;
+
+    return r;
+}
+
+/**
+ * @tparam APPROXIMATION_MODE Ignored
+ * @tparam FAST_APPROX Ignored
+ * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
+ * @tparam ITERATIONS Number of iterations for given face
+ */
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_log1p() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+/**
+ * @tparam APPROXIMATION_MODE Ignored
+ * @tparam FAST_APPROX Ignored
+ * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
+ */
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
+inline void log1p_init() {
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
+    const float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
+    const float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
+    // e represents k << 23 rather than k, so pre-fold the 2^(-23) factor into
+    // the constant used for the final exponent contribution.
+    sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
+
+    if constexpr (is_fp32_dest_acc_en) {
+        // Stored separately because the tuned fp32 m^3 and m^4 coefficients are
+        // no longer the shared exact 1/3 and -1/4 values used in the bf16 path.
+        sfpi::vConstFloatPrgm1 = -0x1.00001ap-2f;
+        sfpi::vConstFloatPrgm2 = 0x1.555572p-2f;
+    } else {
+        // Horner coefficients used by bf16 polynomial
+        sfpi::vConstFloatPrgm1 = 0x1.744p-2f;
+        sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
+    }
+}
+
+}  // namespace sfpu
+}  // namespace ckernel

@@ -208,7 +208,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ needs.validate-inputs.outputs.platform }}
 
   trace-model:

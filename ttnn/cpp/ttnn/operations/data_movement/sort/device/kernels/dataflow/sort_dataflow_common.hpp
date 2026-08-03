@@ -8,12 +8,12 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 template <typename T = uint16_t>
-FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
+FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) {
     // Constants
     constexpr uint32_t one_tile = 1;
 
     // Reserve space
-    DataflowBuffer dfb(cb_id);
+    DataflowBuffer dfb(dfb_id);
     dfb.reserve_back(one_tile);
 
     // Writer config

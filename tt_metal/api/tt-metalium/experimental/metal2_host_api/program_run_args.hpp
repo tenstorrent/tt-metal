@@ -59,9 +59,9 @@ struct ProgramRunArgs {
         //  set, for every node the kernel runs on.
         //  Missing arguments or superfluous arguments will trigger validation errors.
         //
-        // When calling UpdateProgramRunArgs:
-        //  Only non-enqueue invariant runtime arguments must be set.
-        //  Updated arguments must be updated for every node the kernel runs on.
+        // When calling UpdateProgramRunArgs (arbitrary partial args update):
+        //  Any subset of Program arguments may be supplied; any omitted ones retain their prior value.
+        //  A supplied runtime argument may target any subset of the kernel's nodes.
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes,
         // passing a common runtime argument would provide better dispatch efficiency.
@@ -75,9 +75,8 @@ struct ProgramRunArgs {
         //  Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names
         //  must be set.
         //
-        // When calling UpdateProgramRunArgs:
-        //  Only non-enqueue invariant common runtime arguments must be set.
-        //  (However, CRTAs should seldom-to-never be enqueue invariant!)
+        // When calling UpdateProgramRunArgs (arbitrary partial update):
+        //  Any subset of common runtime arguments may be supplied; omitted ones retain their prior value.
         //
         using CommonRuntimeArgValues = Table<std::string, uint32_t>;
         CommonRuntimeArgValues common_runtime_arg_values;
@@ -87,7 +86,9 @@ struct ProgramRunArgs {
         // positional vararg values.
         AdvancedKernelRunArgs advanced_options;
     };
-    // A KernelRunArgs must be specified for ALL kernels in the ProgramSpec.
+    // For SetProgramRunArgs, a KernelRunArgs must be specified for ALL kernels in the ProgramSpec
+    //  (except for kernels that have no runtime or common runtime arguments).
+    // For UpdateProgramRunArgs, any kernel may be omitted (its arguments retain their prior values).
     Group<KernelRunArgs> kernel_run_args;
 
     ////////////////////////////////////////////////////////////////////////
@@ -98,8 +99,17 @@ struct ProgramRunArgs {
     // (Non-owning reference. Will also permit MeshTensorView when it becomes available.)
     using TensorArgument = std::variant<std::reference_wrapper<const MeshTensor>>;
 
-    // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
-    // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
+    // A TensorArgument must be specified:
+    //  For EVERY TensorParameter in the ProgramSpec, when calling SetProgramRunArgs.
+    //  For any SUBSET of TensorParameters, when calling UpdateProgramRunArgs. (For advanced users only.)
+    //
+    // CAUTION: MeshTensor is an RAII object. The user is responsible for ensuring that the MeshTensor
+    //          object remains alive until the last Program execution that uses it has completed on the
+    //          device. Use extreme caution if you use UpdateProgramRunArgs with an incomplete set of
+    //          TensorArguments. A stale binding to a destroyed MeshTensor will produce undefined behavior.
+    //
+    // The argument's TensorSpec MUST match the TensorParameter's TensorSpec (shape, layout, data type).
+    // (Any declared TensorParameter relaxations will modify the matching rules; see advanced_options.hpp.)
     Table<TensorParamName, TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
@@ -115,8 +125,9 @@ struct ProgramRunArgs {
         std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 
-        // Note: borrowed-memory DFBs update their backing L1 SRAM address from
-        // the corresponding tensor_arg.
+        // NOTE: Borrowed-memory DFBs update their backing L1 SRAM address from the corresponding
+        // tensor_arg. If you update a borrowed-memory DFB size from an UpdateProgramRunArgs call
+        // (i.e. partial args update; advanced users only) you must ALSO supply its backing tensor_arg.
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
     Group<DFBRunOverrides> dfb_run_overrides;

@@ -39,6 +39,10 @@ class Packer:
     # Controls the tile iteration pattern for the pack loop.
     loop: FusedLoop = FusedLoop()
 
+    # Set `per_block_init = True` if init() needs block dimensions and must
+    # be called per-block inside the batch loop rather than hoisted out.
+    per_block_init: bool = False
+
     @staticmethod
     def _l1_acc_golden(
         tensor: torch.Tensor,

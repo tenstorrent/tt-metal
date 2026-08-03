@@ -803,3 +803,72 @@ def test_native_single_core_sharded_input(device):
     tt_in = _from_torch(t, device, mc=in_cfg)
     tt_out = ttnn.split(tt_in, TILE, dim=-1)
     _check(tt_out, ref)
+
+
+# 20. Single-chunk parity — split_size >= dim size returns the whole tensor as one chunk; exercises num_splits=1 device path.
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("split_size", [64, 100])  # == dim size, and > dim size
+def test_split_single_chunk(device, layout, torch_dtype, ttnn_dtype, split_size):
+    """split_size >= dim size returns exactly one chunk equal to the input."""
+    torch.manual_seed(21)
+    t = torch.randn([64, 64]).to(torch_dtype)
+    ref = torch.split(t, split_size, dim=-1)
+    assert len(ref) == 1, f"Expected torch reference to produce 1 chunk, got {len(ref)} (split_size={split_size})"
+
+    tt_in = _from_torch(t, device, dtype=ttnn_dtype, layout=layout, mc=L1)
+    tt_out = ttnn.split(tt_in, split_size, dim=-1, memory_config=L1)
+    assert len(tt_out) == 1, f"Expected a single chunk, got {len(tt_out)}"
+    _check(tt_out, ref)
+
+
+# 21. Strict list-size validation — under- and over-covering lists must raise; negative dims exercised.
+
+
+@pytest.mark.parametrize(
+    "shape, split_sizes, dim",
+    [
+        ([64, 64], [32], -1),  # under-covers: 32 < 64
+        ([64, 64], [32, 64], -1),  # over-covers: 32 + 64 > 64
+        ([64, 64], [16, 16], 0),  # under-covers on dim 0: 32 < 64
+        ([2, 64, 64], [32, 40], -2),  # over-covers via negative dim: 72 > 64
+    ],
+)
+def test_split_list_size_must_cover_dim(device, expect_error, shape, split_sizes, dim):
+    """A split_sizes list that does not sum exactly to the split dim must raise."""
+    torch.manual_seed(22)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = _from_torch(t, device, mc=L1)
+    with expect_error(RuntimeError, "split_sizes must sum exactly to the size of dimension"):
+        ttnn.split(tt_in, split_sizes, dim=dim, memory_config=L1)
+
+
+# 22. Integer-overload remainder path — non-divisible dim produces [split_size, remainder] chunks with correct shapes/values.
+
+
+@pytest.mark.parametrize(
+    "shape, split_size, dim",
+    [
+        ([2 * TILE, 3 * TILE // 2], TILE, -1),  # 48 / 32 = 1 rem 16 → chunks [32, 16]
+        ([3 * TILE // 2, 2 * TILE], TILE, 0),  # 48 / 32 = 1 rem 16 → chunks [32, 16]
+    ],
+)
+def test_split_int_remainder(device, shape, split_size, dim):
+    """Non-divisible dim size produces ceil(dim/split_size) chunks; last chunk is the remainder."""
+    torch.manual_seed(23)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, split_size, dim=dim)
+    assert len(ref) == 2, f"Expected 2 reference chunks, got {len(ref)}"
+
+    tt_in = _from_torch(t, device, layout=ttnn.ROW_MAJOR_LAYOUT, mc=L1)
+    tt_out = ttnn.split(tt_in, split_size, dim=dim, memory_config=L1)
+    assert len(tt_out) == 2, f"Expected 2 output chunks, got {len(tt_out)}"
+    _check(tt_out, ref)

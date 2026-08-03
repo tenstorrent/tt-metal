@@ -795,7 +795,10 @@ void InitDeviceProfiler(IDevice* device) {
     profiler.setProfileBufferBankSizeBytes(bank_size_bytes, num_dram_banks);
 
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    // Quasar uses the L1-only path for now;
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    }
 
     if (MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
         // Split into two buffers. Assign the active DRAM buffer address to all control buffer indices.
@@ -819,6 +822,11 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
     const ChipId device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
+    const CoreType dispatch_core_type =
+        resolve_dispatch_core_type(
+            MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
+            device_id,
+            dispatch_core_config);
     std::vector<CoreCoord> dispatch_cores;
     for (const CoreCoord& core : tt::get_logical_dispatch_cores(
              MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
@@ -826,7 +834,7 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
              device_num_hw_cqs,
              dispatch_core_config)) {
         const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
+            device->virtual_core_from_logical_core(core, dispatch_core_type);
         dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -915,6 +923,9 @@ static void ReadDeviceProfilerResultsImpl(
         // buffer is nearly full), so the L1 buffers must be read alongside DRAM.
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -966,6 +977,9 @@ void ReadDeviceProfilerResultsInternal(
         MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance(context_id).hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -1021,6 +1035,9 @@ void ProcessDeviceProfilerResults(
     if (MetalContext::instance().rtoptions().get_profiler_trace_only() ||
         MetalContext::instance().rtoptions().get_profiler_accumulate()) {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -1053,10 +1070,11 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
     }
 
     if (env.get_rtoptions().get_profiler_do_dispatch_cores()) {
+        const CoreType dispatch_core_type =
+            resolve_dispatch_core_type(env, device_id, dispatch_core_config);
         for (const CoreCoord& core :
              tt::get_logical_dispatch_cores(env, device_id, device_num_hw_cqs, dispatch_core_config)) {
-            const CoreCoord curr_core =
-                device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
+            const CoreCoord curr_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
             virtual_cores.push_back(curr_core);
         }
     }

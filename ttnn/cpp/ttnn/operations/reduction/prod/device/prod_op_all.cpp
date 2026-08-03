@@ -8,8 +8,8 @@
 
 namespace tt::operations::primary {
 
-tt::tt_metal::Tensor prod_all(const tt::tt_metal::Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
-    tt::tt_metal::Tensor result = ttnn::prim::prod_all(input, output_mem_config);
+ttnn::Tensor prod_all(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    ttnn::Tensor result = ttnn::prim::prod_all(input, output_mem_config);
     switch (result.dtype()) {
         case tt::tt_metal::DataType::FLOAT32:
             return ttnn::prod_result_computation_WH_B0<float>(

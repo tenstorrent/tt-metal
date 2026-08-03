@@ -21,7 +21,7 @@ namespace ttnn::experimental::prim {
 struct PagedUpdateCacheDeviceOperation {
     using operation_attributes_t = PagedUpdateCacheParams;
     using tensor_args_t = PagedUpdateCacheInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<PagedUpdateCacheProgramFactory, PagedUpdateCacheMeshWorkloadFactory>;
 
@@ -40,11 +40,11 @@ struct PagedUpdateCacheDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 
-    // update_idxs is excluded from the program hash (so decode steps that differ only in position
-    // cache-hit). The cache-write offsets it determines (cache_start_id, tile_update_offset_B) are
-    // DYNAMIC and re-applied to the cached program on every dispatch. Returns empty in index-tensor
-    // mode (positions read on-device) and for coords excluded from a mesh dispatch.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Cache-hit in-place patch of all per-dispatch state: buffer addresses (runtime args + the input-shard
+    // CB) and the cache-write offsets derived from update_idxs, which the program hash excludes so decode
+    // steps differing only in position cache-hit. No descriptor rebuild — see the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,

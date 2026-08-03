@@ -93,7 +93,7 @@ const std::vector<std::string> field_names_alu_config_all = {
     "ALU_ACC_CTRL_Fp32_enabled",
     "ALU_ACC_CTRL_SFPU_Fp32_enabled",
     "ALU_ACC_CTRL_INT8_math_enabled"};
-const std::vector<uint32_t> field_values_alu_config_all = {1, 0, 1, 15, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1};
+const std::vector<uint32_t> field_values_alu_config_all = {0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1};
 
 // PACK_EDGE_OFFSET
 const std::vector<std::string> field_names_pack_edge_offset_all = {
@@ -154,7 +154,7 @@ const std::vector<std::string> field_names_unpack_tile_descriptor_wormhole_or_bl
     "digest_type",
     "digest_size"};
 const std::vector<uint32_t> field_values_unpack_tile_descriptor_wormhole_or_blackhole = {
-    5, 1, 0, 10, 7, 2, 4, 8, 16, 32, 0, 0, 0};
+    5, 1, 0, 10, 7, 2, 4, 8, 0, 0, 0, 0, 0};
 
 // UNPACK CONFIG
 const std::vector<std::string> field_names_unpack_config_wormhole_or_blackhole = {
@@ -181,7 +181,7 @@ const std::vector<std::string> field_names_unpack_config_wormhole_or_blackhole =
     "fifo_size",
     "reserved_5"};
 const std::vector<uint32_t> field_values_unpack_config_wormhole_or_blackhole = {0, 1, 2, 0, 1, 1, 0, 3,  0, 0,  16,
-                                                                                5, 6, 0, 0, 2, 3, 0, 28, 0, 29, 0};
+                                                                                5, 6, 0, 0, 2, 3, 0, 0,  0, 0,  0};
 
 const std::vector<std::string> field_names_pack_config_blackhole = {
     "row_ptr_section_size",

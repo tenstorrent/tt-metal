@@ -151,7 +151,12 @@ class ReduceFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        return f"_llk_math_reduce_({block.tile_id_block});\n"
+        pool_type_cpp = self.reduce_pool.cpp_enum_value
+        reduce_dim_cpp = self.reduce_dim.cpp_enum_value
+        return (
+            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}>"
+            f"({block.tile_id_block}, {compute_unit.src_a.tile_shape.cpp_value});\n"
+        )
 
     def uninit(
         self,

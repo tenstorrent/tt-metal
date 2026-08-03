@@ -50,38 +50,38 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Zero-copy wrap of caller-provided raw bytes into a host Tensor matching `spec`.
-Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const TensorSpec& spec) {
+// Zero-copy wrap of caller-provided raw bytes into a host ttnn::Tensor matching `spec`.
+ttnn::Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const TensorSpec& spec) {
     auto* raw = const_cast<std::byte*>(bytes.data());
     const auto& shape = spec.logical_shape();
     switch (spec.data_type()) {
         case DataType::BFLOAT16:
-            return Tensor::from_borrowed_data<bfloat16>(
+            return ttnn::Tensor::from_borrowed_data<bfloat16>(
                 ttsl::Span<bfloat16>(reinterpret_cast<bfloat16*>(raw), bytes.size() / sizeof(bfloat16)),
                 shape,
                 MemoryPin{});
         case DataType::FLOAT32:
-            return Tensor::from_borrowed_data<float>(
+            return ttnn::Tensor::from_borrowed_data<float>(
                 ttsl::Span<float>(reinterpret_cast<float*>(raw), bytes.size() / sizeof(float)), shape, MemoryPin{});
         case DataType::INT32:
-            return Tensor::from_borrowed_data<int32_t>(
+            return ttnn::Tensor::from_borrowed_data<int32_t>(
                 ttsl::Span<int32_t>(reinterpret_cast<int32_t*>(raw), bytes.size() / sizeof(int32_t)),
                 shape,
                 MemoryPin{});
         case DataType::UINT8:
-            return Tensor::from_borrowed_data<uint8_t>(
+            return ttnn::Tensor::from_borrowed_data<uint8_t>(
                 ttsl::Span<uint8_t>(reinterpret_cast<uint8_t*>(raw), bytes.size() / sizeof(uint8_t)),
                 shape,
                 MemoryPin{});
         case DataType::UINT16:
-            return Tensor::from_borrowed_data<uint16_t>(
+            return ttnn::Tensor::from_borrowed_data<uint16_t>(
                 ttsl::Span<uint16_t>(reinterpret_cast<uint16_t*>(raw), bytes.size() / sizeof(uint16_t)),
                 shape,
                 MemoryPin{});
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
         case DataType::UINT32:
-            return Tensor::from_borrowed_data<uint32_t>(
+            return ttnn::Tensor::from_borrowed_data<uint32_t>(
                 ttsl::Span<uint32_t>(reinterpret_cast<uint32_t*>(raw), bytes.size() / sizeof(uint32_t)),
                 shape,
                 MemoryPin{});
@@ -454,7 +454,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     const auto& per_shard_spec = distributed_dummy.tensor_spec();
     const auto& topology = distributed_dummy.tensor_topology();
 
-    device_tensor_ = create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
+    device_tensor_ = ttnn::create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
     per_shard_spec_ = device_tensor_.tensor_spec();
 
     // Each device may resolve a different free service core; record it per coord.
@@ -1170,7 +1170,7 @@ const TensorSpec& H2DStreamService::get_per_shard_spec() const {
     return *per_shard_spec_;
 }
 
-const Tensor& H2DStreamService::get_backing_tensor() const {
+const ttnn::Tensor& H2DStreamService::get_backing_tensor() const {
     require_owner(is_owner_, "H2DStreamService::get_backing_tensor");
     return device_tensor_;
 }
@@ -1294,7 +1294,7 @@ void H2DStreamService::forward_to_tensor(ttsl::Span<const std::byte> bytes, ttsl
     TT_FATAL(
         cfg_.global_spec.layout() == Layout::ROW_MAJOR,
         "H2DStreamService::forward_to_tensor(span): global_spec must be ROW_MAJOR (got {}). "
-        "Use the Tensor overload with a pre-distributed host tensor for other layouts.",
+        "Use the ttnn::Tensor overload with a pre-distributed host tensor for other layouts.",
         cfg_.global_spec.layout());
 
     ttsl::Span<const std::byte> mapper_input = bytes;
@@ -1304,14 +1304,14 @@ void H2DStreamService::forward_to_tensor(ttsl::Span<const std::byte> bytes, ttsl
         mapper_input = ttsl::Span<const std::byte>(preprocess_scratch_.data(), preprocess_scratch_.size());
     }
 
-    Tensor borrowed = make_borrowed_host_tensor(mapper_input, cfg_.global_spec);
-    Tensor distributed = (*mapper_)(borrowed);
+    ttnn::Tensor borrowed = make_borrowed_host_tensor(mapper_input, cfg_.global_spec);
+    ttnn::Tensor distributed = (*mapper_)(borrowed);
     forward_to_tensor(distributed, metadata);
 }
 
-void H2DStreamService::forward_to_tensor(const Tensor& host_tensor, ttsl::Span<const std::byte> metadata) {
+void H2DStreamService::forward_to_tensor(const ttnn::Tensor& host_tensor, ttsl::Span<const std::byte> metadata) {
     TT_FATAL(
-        host_tensor.storage_type() == StorageType::HOST,
+        host_tensor.storage_type() == ttnn::StorageType::HOST,
         "H2DStreamService::forward_to_tensor: expected host tensor, got storage_type={}",
         host_tensor.storage_type());
     TT_FATAL(

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_polygamma.h"
@@ -17,12 +18,12 @@ namespace ckernel {
  * Performs the elementwise polygamma function ψ^(n)(x) using a finite-sum plus
  * Euler–Maclaurin tail approximation:
  *
- *   ψ^(n)(x) ≈ (-1)^(n+1) * n! * [ Σ_{k=0}^{10} 1 / (x + k)^(n+1)
+ *   ψ^(n)(x) ≈ (-1)^(n+1) * n! * [ Σ_{k=0}^{5} 1 / (x + k)^(n+1)
  *                                  + R_EM(x, n; B₂, B₄, B₆) ],
  *
  * where R_EM is an Euler–Maclaurin remainder using Bernoulli numbers B₂, B₄, and B₆
- * to approximate the infinite tail Σ_{k=11}^{∞} 1/(x+k)^(n+1), rather than performing
- * a hard truncation at k = 10. The kernel is intended for positive real inputs x and
+ * to approximate the infinite tail Σ_{k=6}^{∞} 1/(x+k)^(n+1), rather than performing
+ * a hard truncation at k = 5. The kernel is intended for positive real inputs x and
  * integer orders 1 ≤ n ≤ 11.
  *
  * polygamma_tile(idst, n_packed, scale_packed);
@@ -37,7 +38,7 @@ namespace ckernel {
  * |              | uint32_t.                                                |          |                            |          |
  */
 // clang-format on
-ALWI void polygamma_tile(uint32_t idst, uint32_t n_packed, uint32_t scale_packed) {
+ALWI void polygamma_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32_t scale_packed) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

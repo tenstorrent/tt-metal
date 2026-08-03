@@ -8,6 +8,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -174,6 +175,15 @@ public:
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
 
+    // In-place opt-in sub-cluster filter. Each include/exclude entry is an instance path matched as a
+    // suffix (relative): {"bh_galaxy_node_0"} matches under every parent, and matching an instance
+    // selects its whole subtree. Kept = (all nodes, or include-matched) minus exclude-matched; only
+    // connections with both endpoints kept survive, and survivors re-index to a dense 0..M-1 space.
+    // Throws on a path matching nothing or a filter keeping no nodes; no-op when both lists are empty.
+    void apply_instance_filter(
+        const std::vector<std::vector<std::string>>& include_paths,
+        const std::vector<std::vector<std::string>>& exclude_paths);
+
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
 
@@ -183,8 +193,39 @@ public:
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
-    // Method to emit merged cabling descriptor
-    void emit_cabling_descriptor(const std::string& output_path) const;
+    // Method to emit merged cabling descriptor.
+    // When hierarchical=false (default), a nested resolved tree is flattened into a single-level,
+    // hostname-keyed "extracted_topology" descriptor (CableGen shape). When hierarchical=true, the
+    // nested tree is serialized faithfully (one graph_template per graph instance), preserving the
+    // hierarchy so the derived FSD instance_path reflects the full structure.
+    void emit_cabling_descriptor(const std::string& output_path, bool hierarchical = false) const;
+
+    // A child to nest under a composite root. instance_name is the child's directory name (used to
+    // uniquify the child's top instance_path segment). deployment_path, when non-empty, is the child's
+    // own deployment (host_id-indexed); it lets hierarchical children (whose leaf nodes are named by
+    // instance, not hostname) load positionally instead of being sliced from the composite deployment
+    // by hostname. fsd_path, when non-empty, supplies the child's intra-cluster hierarchy.
+    struct AggregateChild {
+        std::string instance_name;
+        std::string cabling_path;
+        std::string fsd_path;         // may be empty
+        std::string deployment_path;  // may be empty
+    };
+
+    // Build a composite generator that nests each child under a root named composite_name, wiring
+    // glue descriptors (inter-child cabling, referencing hosts by hostname) at the composite level.
+    // When a child's fsd_path is non-empty, its intra-cluster hierarchy is taken from that FSD's
+    // per-host instance_path (e.g. sp4/sp2_0/...): each child host lands at
+    //   <composite_name>/<fsd_seg0>-<instance_name>/<fsd_seg1>/.../<fsd_leaf>
+    // so the aggregated FSD combines the directory forest with the descriptor's own hierarchy. When
+    // fsd_path is empty, the child's resolved tree is nested directly under instance_name instead.
+    // Used to aggregate a tree of cluster configs while keeping the hierarchy (see
+    // merge_cluster_configs.py).
+    static CablingGenerator build_nested_aggregate(
+        const std::string& composite_name,
+        const std::vector<AggregateChild>& children,
+        const std::vector<std::string>& glue_descriptor_paths,
+        const std::string& deployment_descriptor_path);
 
     // Method to emit deployment descriptor (one host per node in host_id order; use for merged output)
     void emit_deployment_descriptor(const std::string& output_path) const;
@@ -204,6 +245,7 @@ public:
 private:
     // Track which node_descriptors were explicitly present in source files (not inferred)
     std::unordered_set<std::string> explicit_node_descriptors_;
+
     // Common initialization logic for all constructors
     void initialize_cluster(
         const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,

@@ -259,24 +259,3 @@ class RotarySetup:
         )
 
         return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}
-
-    def get_indexer_rope_tables(self, interleave: bool) -> dict[str, ttnn.Tensor]:
-        """Full-length REPLICATED cos/sin (+ trans_matrix iff ``interleave``) for the DSA lightning
-        indexer's natural-path RoPE. Distinct from ``get_rope_tensors`` (SP-sharded, interleaved-only,
-        for the MLA q_pe/k_pe): the indexer keeps a replicated full/gathered key cache, chooses its
-        convention per config (GLM interleaved -> ``rotary_embedding_llama``; DeepSeek half-split ->
-        ``rotary_embedding_hf``), and slices the tables per chunk itself. Pure rotations (no mscale),
-        same theta/YaRN as the MLA. Returns ``{"cos", "sin", "trans"}`` with ``trans=None`` for the
-        half-split (DeepSeek) convention."""
-        cos, sin = get_cos_sin_matrix(self.hf_config, interleave=interleave)
-
-        def repl(t):
-            return ttnn.from_torch(
-                t.to(torch.bfloat16),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-
-        return {"cos": repl(cos), "sin": repl(sin), "trans": repl(get_rot_transformation_mat()) if interleave else None}

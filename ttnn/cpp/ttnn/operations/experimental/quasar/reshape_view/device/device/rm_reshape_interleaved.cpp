@@ -90,6 +90,12 @@ void kernel_main() {
     constexpr bool can_be_clean = ((source_page_size_bytes % 16) == 0 && (dest_page_size_bytes % 16) == 0);
     uint64_t dst_noc_addr_offset = 0;
     for (uint32_t i = read_start_page; i < read_end_page; i++) {
+        // Drain any prior iteration's writes that read source_buffer before this iteration's read
+        // overwrites it: source_buffer is a single fixed CB slot reused every iteration, and the
+        // clean-path enhanced_noc_async_write below reads it asynchronously.  Without this flush the
+        // next read can overwrite the slot while the previous write's source-read is still in flight
+        // (write-after-read), corrupting the output.  Uses the object-noc flush to match the writes.
+        noc.async_writes_flushed();
         // Read from source
         uint64_t src_noc_addr = s.get_noc_addr(i, 0);
 

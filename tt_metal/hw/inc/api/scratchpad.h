@@ -22,11 +22,11 @@
 //   // In the kernel code:
 //   Scratchpad<int32_t> my_pad(scratch::my_scratchpad_name);
 //
-// Here my_scratchpad_name is a constexpr ScratchpadAccessor, auto-included in
+// Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
 // kernel_bindings_generated.h.
-class ScratchpadAccessor {
+class ScratchpadBindingToken {
 public:
-    explicit constexpr ScratchpadAccessor(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
+    explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
 private:
@@ -43,7 +43,7 @@ private:
  * A Scratchpad is the device-side counterpart to the host ScratchpadSpec: it provides indexed
  * access to the scratchpad region reserved in per-node SRAM ("L1") for the duration of a Program.
  *
- * Construct one from the accessor your host code declared on the kernel's scratchpad binding:
+ * Construct one from the binding token your host code declared on the kernel's scratchpad binding:
  * @code
  *   // Host code declares the accessor name "my_scratchpad_name" for this kernel.
  *   // In the kernel:
@@ -75,10 +75,10 @@ public:
     using reference = T&;
     using const_reference = const T&;
 
-    // Resolve a scratchpad from its accessor token: read the per-node base SRAM (L1) address from the CRTA
-    // slot at the accessor token's CRTA word offset; size is the static spec value.
-    [[nodiscard]] explicit Scratchpad(const ScratchpadAccessor& accessor) noexcept :
-        Scratchpad(pointer{get_common_arg_val<uint32_t>(accessor.crta_offset_)}, accessor.size_in_bytes_) {}
+    // Resolve a scratchpad from its binding token: read the per-node base SRAM (L1) address from the CRTA
+    // slot at the token's CRTA word offset; size is the static spec value.
+    [[nodiscard]] explicit Scratchpad(const ScratchpadBindingToken& token) noexcept :
+        Scratchpad(pointer{get_common_arg_val<uint32_t>(token.crta_offset_)}, token.size_in_bytes_) {}
 
     [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes) noexcept :
         start_addr_(base_addr), sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}) {

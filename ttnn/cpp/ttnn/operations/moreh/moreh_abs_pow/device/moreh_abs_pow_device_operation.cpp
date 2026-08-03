@@ -42,7 +42,7 @@ MorehAbsPowOperation::spec_return_value_t MorehAbsPowOperation::compute_output_s
         return tensor_args.output->tensor_spec();
     }
     const auto& input = tensor_args.input;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input.logical_shape(),
         TensorLayout(input.dtype(), PageConfig(input.layout()), operation_attributes.memory_config));
 }

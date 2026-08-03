@@ -12,7 +12,7 @@
 
 void kernel_main() {
     constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
+    constexpr uint32_t tile_height = get_compile_time_arg_val(0);
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_rows = get_arg_val<uint32_t>(1);

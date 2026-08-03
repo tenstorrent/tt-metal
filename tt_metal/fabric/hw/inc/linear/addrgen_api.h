@@ -100,6 +100,33 @@ FORCE_INLINE void to_noc_unicast_write(
     to_noc_unicast_write(page_size, pkt_hdr, id, d, offset);
 }
 
+// Resolves num_dests page ids through the shared addrgen into a flat, hop-ordered address list; counts[]
+// groups those pages per writing chip (num_chips chips, sum(counts) == num_dests). Valid because the
+// destination tensor is replicated with identical layout on every chip, so page id -> noc address is the
+// same function everywhere; only the page differs. Pages must be in hop order with each chip's pages
+// contiguous (see the setter).
+template <typename AddrGenType>
+FORCE_INLINE void to_noc_sparse_mcast_write(
+    uint32_t packet_payload_size,
+    volatile PACKET_HEADER_TYPE* pkt_hdr,
+    const uint32_t* ids,
+    uint8_t num_dests,
+    const uint8_t* counts,
+    uint8_t num_chips,
+    const AddrGenType& d,
+    uint32_t offset = 0) {
+    NocSparseMulticastWriteCommandHeader cmd;
+    for (uint8_t i = 0; i < num_dests; i++) {
+        cmd.noc_address[i] = addrgen_detail::get_noc_address(d, ids[i], offset);
+    }
+    for (uint8_t i = 0; i < num_chips; i++) {
+        cmd.counts[i] = counts[i];
+    }
+    cmd.num_dests = num_dests;
+    cmd.num_chips = num_chips;
+    pkt_hdr->to_noc_sparse_mcast_write(cmd, packet_payload_size);
+}
+
 template <typename AddrGenType>
 FORCE_INLINE void to_noc_fused_unicast_write_atomic_inc(
     uint32_t page_size,

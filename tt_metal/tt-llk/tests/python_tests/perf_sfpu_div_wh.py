@@ -73,6 +73,7 @@ def _run(formats, dest_acc, input_dimensions):
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
     return configuration
 

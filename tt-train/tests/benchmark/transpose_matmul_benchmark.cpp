@@ -44,7 +44,7 @@ ttnn::Tensor create_random_tensor(
     ttml::core::parallel_generate(
         std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<float>(-0.1f, 0.1f); }, seed);
     return ttnn::Tensor::from_vector(
-        data, ttnn::TensorSpec(shape, TensorLayout(dtype, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)), device);
+        data, tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)), device);
 }
 
 void report_counters(benchmark::State& state, double time_us, uint32_t M, uint32_t K, uint32_t N) {

@@ -120,7 +120,7 @@ struct EltwiseAddOrCopy {
 
             if (args.do_add) {
                 cb_wait_front(cb_in0_wait, cb_in0_wait_tiles);
-                reconfig_data_format<false, true>(cb_in0, cb_in1);
+                reconfig_data_format<SrcOrder::Regular, true>(cb_in0, cb_in1);
                 pack_reconfig_data_format<true>(cb_out);
                 add_tiles_init(cb_in0, cb_in1);
                 tile_regs_acquire();
@@ -135,7 +135,7 @@ struct EltwiseAddOrCopy {
                 tile_regs_release();
                 cb_pop_front(cb_in0_wait, cb_in0_wait_tiles);
             } else {
-                reconfig_data_format<false, true>(cb_in1, cb_in1);
+                reconfig_data_format<SrcOrder::Regular, true>(cb_in1, cb_in1);
                 pack_reconfig_data_format<true>(cb_out);
                 copy_tile_to_dst_init_short(cb_in1);
                 tile_regs_acquire();

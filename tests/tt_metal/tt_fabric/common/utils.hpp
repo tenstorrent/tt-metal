@@ -69,6 +69,16 @@ void expect_galaxy_rank_group_4x4_4x4split_check(
 
 // Galaxy corner folding: mesh endpoint logical chips (row-major first/last) must map to tray_ids 1–4
 // and asic_location 1. Used by MultiHost init tests and ControlPlaneFixture.TestGalaxyCornerPins.
+// Compare inter-mesh port assignment YAML files (exact; both are already sorted/host-independent).
+bool compare_intermesh_port_assignment_files(
+    const std::filesystem::path& generated_file, const std::filesystem::path& golden_file);
+
+// Check the generated inter-mesh port assignment against a golden file. The file is per-rank, so only rank 0
+// is compared (mock tests only). golden_name is the golden file base name (without extension).
+void check_intermesh_port_assignment_against_golden(const std::string& golden_name);
+
+// Galaxy corner folding (dual/quad/triple-pod 16x8/single-galaxy ControlPlane init tests only): mesh endpoint logical
+// chips (row-major first/last) must map to tray_ids 1–4 and asic_location 1 in the physical system descriptor.
 void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
 
 // Cross-checks three independent inputs: tt-run rank bindings (TT_MESH_ID / TT_MESH_HOST_RANK),

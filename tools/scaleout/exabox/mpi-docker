@@ -10,6 +10,8 @@ print_usage() {
     echo "  --mpi-interface <iface>   (Optional) Network interface to pin MPI to (default: ens5f0np0)"
     echo "                            Passed to --prtemca oob_tcp_if_include and --mca btl_tcp_if_include."
     echo "                            Interface names vary by site; override on non-Markham clusters."
+    echo "  --tag-host                (Optional) Prefix each rank's output with [hostname]"
+    echo "                            instead of mpirun's [jobid,rank] --tag-output (off by default)"
     echo "  --print                   Print the command alongside execution"
     echo "  --print-only              Print the command without executing it"
     echo "  [global-mpi-args]     Global MPI arguments applied to all ranks"
@@ -47,6 +49,10 @@ default() {
     local extra_volumes=""
     local print_flag=false
     local print_only=false
+    # Host-tag each rank's output (replaces mpirun's [jobid,rank] --tag-output).
+    # Off by default to preserve [jobid,rank] for callers that parse it; enable
+    # with --tag-host.
+    local tag_host=false
     # Interface names differ between sites; default works on Markham,
     # override elsewhere via --mpi-interface.
     local mpi_interface="ens5f0np0"
@@ -110,6 +116,10 @@ default() {
                 ;;
             --print-only)
                 print_only=true
+                shift
+                ;;
+            --tag-host)
+                tag_host=true
                 shift
                 ;;
             *)
@@ -223,8 +233,18 @@ default() {
         exit 1
     fi
 
-    # Build the command for each rank group
-    local base_mpirun_args="--tag-output --prtemca oob_tcp_if_include $mpi_interface --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_include $mpi_interface"
+    # With --tag-host we host-tag each rank ourselves, so drop mpirun's [jobid,rank]
+    # --tag-output to avoid a double tag.
+    local output_tag_arg="--tag-output"
+    if [[ "$tag_host" == true ]]; then
+        output_tag_arg=""
+    fi
+    local base_mpirun_args="$output_tag_arg --prtemca oob_tcp_if_include $mpi_interface --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_include $mpi_interface"
+
+    # Bare [real-host] tag applied in the remote shell (outside the container), so it
+    # reports the true host regardless of container hostname. No single quotes (would
+    # clash with the bash -c '...' wrapper); $(hostname)/$l resolve on the rank.
+    local host_tag_pipe='while IFS= read -r l; do printf "[%s] %s\n" "$(hostname)" "$l"; done'
 
     # Add global MPI args to base
     if [[ ${#global_mpi_args[@]} -gt 0 ]]; then
@@ -281,7 +301,11 @@ default() {
         local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes $entrypoint_opt $image $executable"
 
         # Single segment without per-rank args
-        mpirun_segments+=("bash -c '$docker_cmd'")
+        if [[ "$tag_host" == true ]]; then
+            mpirun_segments+=("bash -c 'set -o pipefail; $docker_cmd 2>&1 | $host_tag_pipe'")
+        else
+            mpirun_segments+=("bash -c '$docker_cmd'")
+        fi
     else
         # Multi-executable mode with per-rank specifications
         for group in "${rank_groups[@]}"; do
@@ -354,7 +378,11 @@ default() {
             local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes $entrypoint_opt $image $executable"
 
             # Combine this group's MPI args with docker command
-            mpirun_segments+=("${mpi_args[*]} bash -c '$docker_cmd'")
+            if [[ "$tag_host" == true ]]; then
+                mpirun_segments+=("${mpi_args[*]} bash -c 'set -o pipefail; $docker_cmd 2>&1 | $host_tag_pipe'")
+            else
+                mpirun_segments+=("${mpi_args[*]} bash -c '$docker_cmd'")
+            fi
         done
     fi
 

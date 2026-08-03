@@ -63,6 +63,15 @@ struct HDSocketConnectorState;
 class D2HSocket {
 public:
     /**
+     * @brief Process scope of the socket's host FIFO: sharable across processes, or private to this one.
+     *
+     * CrossProcess backs the FIFO with a named POSIX shared-memory object (/dev/shm) that this socket can export
+     * via export_descriptor() for another process to connect() and read zero-copy. InProcess backs it with a
+     * process-private anonymous mmap that cannot be exported.
+     */
+    enum class ProcessScope { CrossProcess, InProcess };
+
+    /**
      * @brief Constructs a D2HSocket for streaming data from a device core to host.
      *
      * Allocates pinned host memory for the data FIFO and bytes_sent signaling.
@@ -72,10 +81,16 @@ public:
      * @param mesh_device The mesh device containing the sender core.
      * @param sender_core The source core coordinate (device + core) that sends data.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
+     * @param scope CrossProcess (FIFO sharable across processes) or InProcess (process-private); defaults to
+     * CrossProcess.
      *
      * @throws TT_FATAL if pinned memory allocation fails or addresses are invalid.
      */
-    D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
+    D2HSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& sender_core,
+        uint32_t fifo_size,
+        ProcessScope scope = ProcessScope::CrossProcess);
 
     /**
      * @brief Identifies an L1 region on the sender core that the caller has already
@@ -113,7 +128,8 @@ public:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& sender_core,
         uint32_t fifo_size,
-        ExternalConfigBuffer external_config);
+        ExternalConfigBuffer external_config,
+        ProcessScope scope = ProcessScope::CrossProcess);
 
     /**
      * @brief Connects to an existing D2HSocket from another process.
@@ -350,6 +366,7 @@ private:
     uint32_t* bytes_sent_ptr_ = nullptr;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer_ = nullptr;
     std::unique_ptr<NamedShm> shm_;
+    ProcessScope process_scope_ = ProcessScope::CrossProcess;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
     MeshDevice* mesh_device_ = nullptr;
     bool is_owner_ = true;

@@ -11,27 +11,26 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t Ht = get_compile_time_arg_val(0);
-    uint32_t Wt = get_compile_time_arg_val(1);
-    uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t origin_W = get_compile_time_arg_val(3);
+    // Carries the per-core work-split count (the host's units_per_core_group_N), not a tile height.
+    uint32_t Ht = get_arg(args::units_per_core);
+    uint32_t Wt = get_arg(args::Wt);
+    uint32_t NC = get_arg(args::NC);
+    constexpr uint32_t origin_W = get_arg(args::origin_W);
 
-    auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_scaler = tt::CBIndex::c_2;
-    DataflowBuffer dfb_scaler_obj(cb_scaler);
-    constexpr auto cb_mask_w = tt::CBIndex::c_3;
-    DataflowBuffer dfb_mask_w_obj(cb_mask_w);
-    constexpr auto cb_accum_dst = tt::CBIndex::c_24;
-    DataflowBuffer dfb_accum_dst_obj(cb_accum_dst);
-    constexpr auto cb_masked_input = tt::CBIndex::c_25;
-    DataflowBuffer dfb_masked_input_obj(cb_masked_input);
-    constexpr auto cb_out = tt::CBIndex::c_16;
-    DataflowBuffer dfb_out_obj(cb_out);
+    // Selected at runtime between the input DFB and the masked-input DFB; stays uint32_t-valued so the
+    // reassignment below is legal (DFBAccessor converts to uint32_t at compile time).
+    uint32_t cb_input = dfb::input;
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
+    DataflowBuffer dfb_mask_w_obj(dfb::mask_w);
+    DataflowBuffer dfb_accum_dst_obj(dfb::accum_dst);
+    DataflowBuffer dfb_masked_input_obj(dfb::masked_input);
+    DataflowBuffer dfb_out_obj(dfb::out);
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
 
-    binary_op_init_common(cb_input, cb_input, cb_out);
+    binary_op_init_common(cb_input, cb_input, dfb::out);
 
     dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
@@ -48,7 +47,7 @@ void kernel_main() {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
-            cb_input = tt::CBIndex::c_0;
+            cb_input = dfb::input;
             bool is_w_single_tile = (Wt == 1);
             if (!is_w_single_tile) {
                 tile_regs_acquire();
@@ -56,10 +55,10 @@ void kernel_main() {
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
                     DataflowBuffer(cb_input).wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
-                    reconfig_data_format(cb_input, cb_scaler);
+                    reconfig_data_format(cb_input, dfb::scaler);
 #endif
-                    matmul_init(cb_input, cb_scaler, false);
-                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                    matmul_init(cb_input, dfb::scaler, false);
+                    matmul_tiles(cb_input, dfb::scaler, 0, 0, reduce_dst_idx);
                     DataflowBuffer(cb_input).pop_front(onetile);
                 }
                 tile_regs_commit();
@@ -79,7 +78,7 @@ void kernel_main() {
                 copy_tile(cb_input, 0, reduce_dst_idx);
 
                 copy_tile_init_with_dt(dfb_mask_w_obj);
-                copy_tile(cb_mask_w, 0, mask_dst_idx);
+                copy_tile(dfb::mask_w, 0, mask_dst_idx);
 
                 mask_tile_init();
                 mask_tile(reduce_dst_idx, mask_dst_idx);
@@ -92,7 +91,7 @@ void kernel_main() {
                 dfb_masked_input_obj.push_back(onetile);
 
                 DataflowBuffer(cb_input).pop_front(onetile);
-                cb_input = cb_masked_input;
+                cb_input = dfb::masked_input;
             }
 
             tile_regs_acquire();
@@ -101,14 +100,14 @@ void kernel_main() {
                 dfb_accum_dst_obj.wait_front(onetile);
 
                 copy_tile_init_with_dt(dfb_accum_dst_obj);
-                copy_tile(cb_accum_dst, 0, reduce_dst_idx);
+                copy_tile(dfb::accum_dst, 0, reduce_dst_idx);
             }
 
 #if defined FP32_DEST_ACC_EN
-            reconfig_data_format(cb_input, cb_scaler);
+            reconfig_data_format(cb_input, dfb::scaler);
 #endif
-            matmul_init(cb_input, cb_scaler, false);
-            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+            matmul_init(cb_input, dfb::scaler, false);
+            matmul_tiles(cb_input, dfb::scaler, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 
             dfb_out_obj.reserve_back(onetile);

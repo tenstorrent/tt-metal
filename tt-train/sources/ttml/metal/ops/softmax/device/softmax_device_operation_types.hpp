@@ -22,6 +22,6 @@ using operation_attributes_t = SoftmaxParams;
 using tensor_args_t = SoftmaxInputs;
 
 using tensor_return_value_t = ttnn::Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttml::metal::ops::softmax::device

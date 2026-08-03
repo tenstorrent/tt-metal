@@ -9,6 +9,7 @@
 #include <optional>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 using namespace tt::constants;
@@ -253,6 +254,7 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     // sizing in its own cache entry.  On cache hit, the framework copies runtime
     // args and patches dynamic CB addresses (.buffer is set below); CB sizing
     // itself is not re-applied — it is carried by the cached descriptor.
+    // CB order here (src0, then c_16) is mirrored positionally by override_runtime_arguments; keep in sync.
     constexpr uint8_t src0_cb_index = 0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = shard_height_padded * stick_size_padded,
@@ -320,36 +322,32 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> SliceDeviceOperation::get_dynamic_runtime_args(
-    const operation_attributes_t& args,
+void SliceDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Height-sharded RM factory is CB-bound: addresses ride on the sharded CBs, so re-apply reader arg0
-    // (num source cores, from the same per-core walk create_descriptor uses) on core 0 to trip the
-    // fast-path and let the framework re-patch the CB addresses instead of rebuilding. (#48928)
-    if (!std::holds_alternative<SliceRmShardedProgramFactory>(select_program_factory(args, tensor_args))) {
-        return {};
+    const auto factory = select_program_factory(operation_attributes, tensor_args);
+
+    // Height-sharded RM reader args depend only on shapes/slice_start/shard specs, all cache-keyed, so
+    // on a hit the only thing that changes is the two CB addresses. Patch those in O(1) instead of
+    // rebuilding all per-core args (which scaled host cost with the core grid). CBs: src0, then c_16.
+    if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
+        tt::tt_metal::ProgramDescriptor cb_addr_only;
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_args.input.buffer()});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_return_value.buffer()});
+        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
+        return;
     }
-    const auto& input = tensor_args.input;
-    const auto sp_padded = input.shard_spec().value();
-    const auto sp_unpadded = output.shard_spec().value();
-    const auto bbox_p = sp_padded.grid.bounding_box();
-    const auto bbox_u = sp_unpadded.grid.bounding_box();
-    // Build only core 0 (num_cores=1); its reader arg0 == what create_descriptor bakes for core 0.
-    const auto core0 = ttnn::operations::data_movement::get_slice_runtime_args_rm_sharded(
-        input,
-        output,
-        args.slice_start,
-        /*num_cores_unpadded=*/1,
-        sp_unpadded.orientation == ShardOrientation::ROW_MAJOR,
-        bbox_u.end_coord.x + 1,
-        bbox_u.end_coord.y + 1,
-        sp_unpadded.shape[0],
-        sp_padded.shape[0],
-        bbox_p.end_coord.x + 1,
-        bbox_p.end_coord.y + 1);
-    return {tt::tt_metal::DynamicRuntimeArg{0, corerange_to_cores(sp_unpadded.grid).front(), 0, core0[0].first[0]}};
+
+    // Other factories bake buffer addresses into their runtime args, so re-derive and re-apply.
+    auto desc = std::visit(
+        [&](auto&& f) {
+            return std::decay_t<decltype(f)>::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+        },
+        factory);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::prim

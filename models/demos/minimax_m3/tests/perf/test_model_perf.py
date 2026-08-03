@@ -24,7 +24,7 @@ single_bh_galaxy_4x8. If a run hangs, kill the whole tracy process tree (it hold
 Run (validate trace, fast random):
   PERF_LAYERS=4 PERF_EXPERTS=64 PERF_SEQ=512 pytest models/demos/minimax_m3/tests/perf/test_model_perf.py::test_model_fwd -s
 Run (real headline):
-  REAL=1 PERF_SEQ=2048 TRACE_REGION=1000000000 HF_MODEL=/data/vmelnykov/MiniMax-M3 pytest ...::test_model_fwd -s
+  REAL=1 PERF_SEQ=2048 TRACE_REGION=1000000000 HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref pytest ...::test_model_fwd -s
 """
 
 import json

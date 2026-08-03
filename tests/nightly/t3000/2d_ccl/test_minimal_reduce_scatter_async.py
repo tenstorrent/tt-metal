@@ -10,7 +10,7 @@ from models.common.utility_functions import skip_for_blackhole
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype",
     [

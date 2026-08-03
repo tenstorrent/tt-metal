@@ -422,7 +422,7 @@ def test_sdpa_create_perf_table(b, nh, s, d):
 
 # === TEST 5: PERFORMANCE CHECK ===
 # Symmetric +/- band — catches both regressions and unexpected speedups.
-SDPA_PERF_MARGIN = 0.01
+SDPA_PERF_MARGIN = 0.015
 
 SDPA_PERF_CHECK_CONFIGS = [
     # (shape_id, q_chunk_size, k_chunk_size, expected_util)

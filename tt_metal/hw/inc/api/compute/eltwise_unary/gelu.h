@@ -16,11 +16,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_init() {
-#ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
-#else
-    MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx)));
-#endif
 }
 
 // clang-format off
@@ -40,18 +36,8 @@ ALWI void gelu_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
-#ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (fast_and_approx, DST_ACCUM_MODE), idst, VectorMode::RC));
-#else
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_gelu,
-        (fast_and_approx, SFPU_ITERATIONS),
-        idst,
-        ::ckernel::VectorMode::RC));
-#endif
 }
 
 #ifndef ARCH_QUASAR

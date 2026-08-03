@@ -15,7 +15,7 @@ namespace layernorm = ttnn::prim;
 struct RMSAllGatherDeviceOperation {
     using operation_attributes_t = RMSAllGatherParams;
     using tensor_args_t = RMSAllGatherInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<RMSAllGatherMeshWorkloadFactory>;
     using shared_variables_t = RMSAllGatherMeshWorkloadFactory::shared_variables_t;

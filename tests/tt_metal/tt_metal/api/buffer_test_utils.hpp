@@ -13,13 +13,13 @@
 
 namespace tt::test::buffer::detail {
 inline void writeL1Backdoor(
-    tt::tt_metal::IDevice* device, CoreCoord coord, uint32_t address, std::vector<uint32_t>& data) {
+    tt::tt_metal::IDevice* device, tt::tt_metal::CoreCoord coord, uint32_t address, std::vector<uint32_t>& data) {
     log_info(tt::LogTest, "{} -- coord={} address={}", __FUNCTION__, coord.str(), address);
     tt_metal::detail::WriteToDeviceL1(device, coord, address, data);
 }
 inline void writeL1Backdoor(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    CoreCoord coord,
+    tt::tt_metal::CoreCoord coord,
     uint32_t address,
     std::vector<uint32_t>& data) {
     log_info(tt::LogTest, "{} -- coord={} address={}", __FUNCTION__, coord.str(), address);
@@ -27,20 +27,20 @@ inline void writeL1Backdoor(
 }
 inline void writeL1Backdoor(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    CoreCoord coord,
+    tt::tt_metal::CoreCoord coord,
     uint32_t address,
     std::span<const uint8_t> data) {
     log_info(tt::LogTest, "{} -- coord={} address={}", __FUNCTION__, coord.str(), address);
     tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], coord, address, data);
 }
 inline void readL1Backdoor(
-    tt::tt_metal::IDevice* device, CoreCoord coord, uint32_t address, uint32_t byte_size, std::vector<uint32_t>& data) {
+    tt::tt_metal::IDevice* device, tt::tt_metal::CoreCoord coord, uint32_t address, uint32_t byte_size, std::vector<uint32_t>& data) {
     log_info(tt::LogTest, "{} -- coord={} address={} byte_size={}", __FUNCTION__, coord.str(), address, byte_size);
     tt_metal::detail::ReadFromDeviceL1(device, coord, address, byte_size, data);
 }
 inline void readL1Backdoor(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    CoreCoord coord,
+    tt::tt_metal::CoreCoord coord,
     uint32_t address,
     uint32_t byte_size,
     std::vector<uint32_t>& data) {
@@ -49,7 +49,7 @@ inline void readL1Backdoor(
 }
 inline void readL1Backdoor(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    CoreCoord coord,
+    tt::tt_metal::CoreCoord coord,
     uint32_t address,
     std::span<uint8_t> data) {
     log_info(tt::LogTest, "{} -- coord={} address={} byte_size={}", __FUNCTION__, coord.str(), address, data.size());

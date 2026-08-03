@@ -82,7 +82,7 @@ struct tensor_args_t {
     std::optional<Tensor> optional_output_tensor;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 using tensor_return_value_t = std::vector<Tensor>;
 
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail

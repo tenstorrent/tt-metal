@@ -1006,6 +1006,56 @@ MatmulProgramConfig get_program_config(
         attributes.output_dtype.value_or(input_tensor_a.dtype()));
     log_debug(tt::LogOp, "Auto generated program config: {}", config);
 
+    // Quasar: a single DFB's TRISC ring extent (entry_size * capacity, in 16-byte L1 units) must fit in
+    // uint16_t (< 65536; see validate_ring_extent in dataflow_buffer.cpp). The mcast in0/in1 CBs hold
+    // per_core_{M,N} * in0_block_w * MCAST_INPUT_BUFFERING_DEPTH tiles, so a large auto-chosen in0_block_w
+    // (e.g. gcd(in0_shard_w, K) on a small grid where per_core_N is large) overflows the ring and FATALs at
+    // program creation. Reduce in0_block_w to the largest divisor of itself whose in0 AND in1 rings fit;
+    // a divisor of the original preserves every K / shard-width divisibility the generated config satisfied.
+    // Skip HEIGHT_SHARDED in0 (its validators pin in0_block_w == K, so it cannot be reduced) and non-Quasar
+    // (no tile-counter ring constraint).
+    if (input_tensor_a.device()->arch() == tt::ARCH::QUASAR &&
+        input_tensor_a.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        const auto in0_tile = utilities::get_matmul_tile(input_tensor_a, transpose_a);
+        const auto in1_tile = utilities::get_matmul_tile(input_tensor_b, transpose_b);
+        const uint64_t in0_tile_bytes =
+            static_cast<uint64_t>(in0_tile.get_height()) * in0_tile.get_width() * input_tensor_a.element_size();
+        const uint64_t in1_tile_bytes =
+            static_cast<uint64_t>(in1_tile.get_height()) * in1_tile.get_width() * input_tensor_b.element_size();
+        std::visit(
+            [&](auto& pc) {
+                if constexpr (requires {
+                                  pc.in0_block_w;
+                                  pc.per_core_M;
+                                  pc.per_core_N;
+                              }) {
+                    // ring_units = tile_bytes * capacity / 16 must be <= 65535  ->  tile_bytes * capacity <= 65535*16
+                    constexpr uint64_t kMaxRingBytes = 65535ull * 16ull;
+                    const uint64_t depth = utilities::MCAST_INPUT_BUFFERING_DEPTH;
+                    auto ring_fits = [&](uint32_t bw) {
+                        return in0_tile_bytes * pc.per_core_M * bw * depth <= kMaxRingBytes &&
+                               in1_tile_bytes * pc.per_core_N * bw * depth <= kMaxRingBytes;
+                    };
+                    if (pc.in0_block_w > 1 && !ring_fits(pc.in0_block_w)) {
+                        uint32_t bw = pc.in0_block_w;
+                        while (bw > 1 && !(pc.in0_block_w % bw == 0 && ring_fits(bw))) {
+                            --bw;
+                        }
+                        log_debug(
+                            tt::LogOp,
+                            "Quasar DFB ring clamp: in0_block_w {} -> {} (per_core_M={}, per_core_N={}) to fit the "
+                            "uint16_t TRISC ring",
+                            pc.in0_block_w,
+                            bw,
+                            pc.per_core_M,
+                            pc.per_core_N);
+                        pc.in0_block_w = bw;
+                    }
+                }
+            },
+            config);
+    }
+
     // Sanity checks for matmul program configs
     std::visit(
         [input_tensor_a](const auto& program_config) {

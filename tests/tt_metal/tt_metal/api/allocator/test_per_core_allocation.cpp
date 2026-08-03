@@ -39,7 +39,6 @@ protected:
         for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
         }
-        this->num_devices_ = this->devices_.size();
         init_max_cbs();
     }
 

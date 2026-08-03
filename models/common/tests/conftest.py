@@ -223,6 +223,13 @@ def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int,
     _CANDIDATE_REQ_SHAPES = {
         (1, 1): ((1, 1),),
         (1, 2): ((1, 2), (1, 1)),
+        # A 2-chip N300 does not always enumerate as (1, 2): auto-discovery on some hosts (e.g. the
+        # wh_n300 CI runners) reports the same two chips transposed, as (2, 1). Both are the same
+        # hardware, so a (2, 1) system must serve the (1, 2) request every N300 demo makes — a request
+        # that uses all devices is opened in the requested *view* by _pick_parent_shape_for_submesh.
+        # Without this entry the lookup below misses, `allowed` comes back empty, and EVERY test on
+        # such a host skips.
+        (2, 1): ((1, 2), (2, 1), (1, 1)),
         (2, 4): ((2, 4), (1, 8), (1, 4), (1, 2), (1, 1)),
         (8, 4): ((8, 4), (4, 8), (1, 8), (1, 4), (1, 2), (1, 1)),
         # [INFO] add more system shapes here

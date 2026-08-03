@@ -28,7 +28,13 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const auto s = TensorAccessor(src_args, src_addr);
     Noc noc;
-    const uint32_t src_tile_bytes = cb_in0.get_tile_size();
+    // Page bytes must come from the CB's configured page size, NOT get_tile_size(): the op runs in
+    // ROW_MAJOR too, where a page is one token row (head_dim * element bytes) while get_tile_size()
+    // still reports the dtype's 32x32 tile size. Reading tile-size bytes into a row-major page slot
+    // over-reads the source page and overruns the CB in L1 (it scribbled the writer's metadata
+    // scratch, which sits directly after this CB, corrupting the on-device slot_idx /
+    // kv_actual_global read). The writer derives its page bytes the same way.
+    const uint32_t src_page_bytes = get_local_cb_interface(cb_id_in0).fifo_page_size;
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_tiles;
@@ -38,7 +44,7 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
         cb_in0.reserve_back(onetile);
-        noc.async_read(s, cb_in0, src_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read(s, cb_in0, src_page_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
         cb_in0.push_back(onetile);
     }

@@ -66,12 +66,10 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             break;
     }
 
-    // Defines for the shared subordinate eth fw source
-    if (params.core_type == HalProgrammableCoreType::IDLE_ETH ||
-        params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-        defines.push_back(fmt::format(
-            "PROGRAMMABLE_CORE_TYPE={} ", static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
-    }
+    // Index into kernel_config_base[] / mailboxes for the core type of this build.
+    defines.push_back(fmt::format(
+        "PROGRAMMABLE_CORE_TYPE={}",
+        static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
 
     return defines;
 }

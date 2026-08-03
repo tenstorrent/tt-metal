@@ -1,6 +1,7 @@
 set(LLRT_SRC
     llrt.cpp
     core_descriptor.cpp
+    dispatch_engine_cores.cpp
     firmware_capability.cpp
     rtoptions.cpp
     tlb_config.cpp

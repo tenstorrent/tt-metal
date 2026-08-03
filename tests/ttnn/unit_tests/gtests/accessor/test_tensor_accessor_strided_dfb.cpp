@@ -119,7 +119,8 @@ void run_strided_dfb_copy_test(
     auto* device = mesh_device->get_devices().at(0);
 
     MemoryConfig mem_config(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
-    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+    tt::tt_metal::TensorSpec tensor_spec(
+        params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
     auto input_tensor = Tensor::from_vector(src, tensor_spec, mesh_device);

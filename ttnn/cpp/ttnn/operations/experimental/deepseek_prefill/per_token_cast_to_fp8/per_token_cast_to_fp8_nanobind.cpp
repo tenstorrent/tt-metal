@@ -31,14 +31,14 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
             this mode for UE8M0-style scaling.
 
             Args:
-                * :attr:`input_tensor`: BFLOAT16 or FLOAT32 ROW_MAJOR tensor of shape [..., M, H].
+                * :attr:`input_tensor`: BFLOAT16 or FLOAT32 ROW_MAJOR or TILE tensor of shape [..., M, H].
                   Requires H % 128 == 0, DRAM interleaved memory, and Blackhole hardware.
                 * :attr:`memory_config`: optional DRAM interleaved output memory config
                   (default: same as input).
                 * :attr:`round_scale_to_power_of_two`: round each scale upward to a power of two.
 
             Returns:
-                Tuple (e4m3, scale_fp32). Both are ROW_MAJOR.
+                Tuple (e4m3, scale_fp32). Both are ROW_MAJOR. FP8_E4M3 can only be in ROW_MAJOR layout.
         )doc",
         &per_token_cast_to_fp8,
         nb::arg("input_tensor").noconvert(),

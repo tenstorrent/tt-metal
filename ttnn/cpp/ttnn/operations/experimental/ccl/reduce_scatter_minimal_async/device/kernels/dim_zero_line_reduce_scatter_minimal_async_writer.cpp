@@ -47,8 +47,9 @@ constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val
 constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(13);
 constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(14);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(15);
+constexpr uint32_t barrier_target_count = get_compile_time_arg_val(16);
 
-constexpr uint32_t num_ct_args = 16;
+constexpr uint32_t num_ct_args = 17;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -243,7 +244,7 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
         }
 
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_target_count);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 

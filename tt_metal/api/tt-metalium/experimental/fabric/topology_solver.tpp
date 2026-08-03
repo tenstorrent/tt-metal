@@ -317,6 +317,13 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes) {
+    if (target_nodes.empty() || global_nodes.empty()) {
+        return false;
+    }
+    if (target_nodes.size() > global_nodes.size()) {
+        return false;
+    }
+
     // Save current state before modifying (for rollback if validation fails)
     std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     for (const auto& target_node : target_nodes) {
@@ -325,24 +332,13 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
             (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
     }
 
-    // For each target node, ensure it can map to any of the global nodes
-    // This creates a many-to-many relationship: any target can map to any global
+    // Each target in the group may map only to globals in global_nodes (intersect with existing).
     for (const auto& target_node : target_nodes) {
         if (valid_mappings_[target_node].empty()) {
-            // First constraint: initialize with the provided set of global nodes
             valid_mappings_[target_node] = global_nodes;
         } else {
-            // Intersect with existing constraints to ensure compatibility
-            // This allows the target to map to any global node that satisfies both
-            // the existing constraints and the new many-to-many constraint
             valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], global_nodes);
         }
-    }
-
-    // Track that these global nodes are reserved for these target nodes via many-to-many constraint
-    // This allows us to enforce that nodes not in the constraint cannot map to these global nodes
-    for (const auto& global_node : global_nodes) {
-        reserved_global_nodes_[global_node].insert(target_nodes.begin(), target_nodes.end());
     }
 
     // Validate automatically and return false if invalid (will restore saved_state on failure)

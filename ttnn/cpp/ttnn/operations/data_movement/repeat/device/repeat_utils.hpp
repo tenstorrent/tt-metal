@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement::repeat {
 
 // True when repeat can run natively on sharded L1 buffers (no strip/reshard round-trip).
 bool is_native_repeat_sharding(
-    const TensorSpec& input_spec,
+    const tt::tt_metal::TensorSpec& input_spec,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt,
     int32_t repeat_dim = -1,
     uint32_t num_repeats = 1);

@@ -6,10 +6,125 @@
 #include "paged_fused_update_cache_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
+
+namespace CMAKE_UNIQUE_NAMESPACE_FUSED_UPDATE_CACHE {
+
+// Kernel push order in every fused create_descriptor: reader(0), writer(1), compute(2). Compute's
+// runtime args are the constants {has_work, is_input1}, so only the dataflow kernels are patched.
+constexpr uint32_t kReaderKernelIdx = 0;
+constexpr uint32_t kWriterKernelIdx = 1;
+
+// Reader rt args: [0]=has_work [1]=is_input1 [2]=cache addr [3]=cache_start_id [4]=index addr
+//                 [5]=core index [6]=page_table addr [7]=wait_to_start
+constexpr uint32_t kReaderCacheAddrArg = 2;
+constexpr uint32_t kReaderCacheStartIdArg = 3;
+constexpr uint32_t kReaderIndexAddrArg = 4;
+constexpr uint32_t kReaderPageTableAddrArg = 6;
+// Writer rt args: [0]=has_work [1]=cache addr [2]=cache_start_id [3]=tile_update_offset_B
+//                 [4]=core index [5]=send_signal [6]=send core x [7]=send core y
+//                 ([8]=is_input1, row-major only)
+constexpr uint32_t kWriterCacheAddrArg = 1;
+constexpr uint32_t kWriterCacheStartIdArg = 2;
+constexpr uint32_t kWriterTileUpdateOffsetArg = 3;
+
+// CB push order: [0] cache, [1] src1(=input1), [2] src2(=input2), intermediates, output, then the
+// optional index CB followed by the optional page-table CB. Tiled pushes one extra intermediate CB,
+// so its optional CBs start one slot later.
+constexpr uint32_t kSrc1CbPos = 1;
+constexpr uint32_t kSrc2CbPos = 2;
+constexpr uint32_t kFirstOptionalCbPosTiled = 6;
+constexpr uint32_t kFirstOptionalCbPosRowMajor = 5;
+
+// Patch a cached fused-update-cache program's per-dispatch state in place, mirroring
+// create_descriptor's arg layout: every buffer address (override_runtime_arguments supersedes
+// resolve_bindings, so addresses are ours to re-apply) plus the hash-excluded cache_start_id /
+// tile_update_offset_B. Every other arg is derived from hashed inputs (shard grids, share_cache,
+// shapes, dtypes) and so is identical by construction on a cache hit. Addresses come from
+// tensor_args, exactly as in create_descriptor — this op is in-place, so tensor_return_value holds
+// the same two cache tensors.
+template <typename PerIndexOffsets>
+void patch_runtime_args(
+    Program& program,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    const std::vector<PerIndexOffsets>& offsets,
+    uint32_t first_optional_cb_pos) {
+    const auto& update_idxs_tensor = tensor_args.update_idxs_tensor;
+    const auto& page_table = tensor_args.page_table;
+    const bool use_index_tensor = update_idxs_tensor.has_value();
+    const bool is_paged_cache = page_table.has_value();
+
+    // A nullptr buffer mirrors a descriptor that left CBDescriptor::buffer unset (non-sharded index /
+    // page table), which the framework likewise skips.
+    const auto program_cbs = program.circular_buffers();
+    const auto patch_cb_address = [&](uint32_t cb_pos, const Buffer* buffer) {
+        if (buffer != nullptr) {
+            UpdateDynamicCircularBufferAddress(program, program_cbs[cb_pos]->id(), *buffer);
+        }
+    };
+    patch_cb_address(kSrc1CbPos, tensor_args.input_tensor1.buffer());
+    patch_cb_address(kSrc2CbPos, tensor_args.input_tensor2.buffer());
+    uint32_t optional_cb_pos = first_optional_cb_pos;
+    if (use_index_tensor) {
+        patch_cb_address(optional_cb_pos++, update_idxs_tensor->is_sharded() ? update_idxs_tensor->buffer() : nullptr);
+    }
+    if (is_paged_cache) {
+        patch_cb_address(optional_cb_pos, page_table->is_sharded() ? page_table->buffer() : nullptr);
+    }
+
+    const uint32_t dst1_addr = tensor_args.cache_tensor1.buffer()->address();
+    const uint32_t dst2_addr = tensor_args.cache_tensor2.buffer()->address();
+    // Unlike the CB bindings above, the reader takes the index / page-table address whether or not
+    // the tensor is sharded.
+    const uint32_t index_addr = use_index_tensor ? update_idxs_tensor->buffer()->address() : 0;
+    const uint32_t page_table_addr = is_paged_cache ? page_table->buffer()->address() : 0;
+
+    const auto& input1_shard_spec = tensor_args.input_tensor1.shard_spec().value();
+    const bool row_major = input1_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    const CoreRangeSet& input1_cores = input1_shard_spec.grid;
+    const CoreRangeSet& input2_cores = tensor_args.input_tensor2.shard_spec().value().grid;
+    const auto cores1 = corerange_to_cores(input1_cores, input1_cores.num_cores(), row_major);
+    const auto cores2 = corerange_to_cores(input2_cores, input2_cores.num_cores(), row_major);
+
+    // Empty offsets == index-tensor mode, where create_descriptor bakes 0 and the kernels read the real
+    // positions on-device; writing 0 back reproduces the descriptor exactly. Cores outside
+    // cores1/cores2 only ever got the constant {!has_work}, so they need no patching.
+    for (uint32_t i = 0; i < cores1.size(); ++i) {
+        const uint32_t cache_start_id = offsets.empty() ? 0 : offsets[i].cache_start_id;
+        const uint32_t tile_update_offset_B = offsets.empty() ? 0 : offsets[i].tile_update_offset_B;
+
+        // Index i handles input1 on cores1[i] (writing cache_tensor1) and input2 on cores2[i]
+        // (writing cache_tensor2); both share the same offsets.
+        const auto patch_core = [&](const CoreCoord& core, uint32_t cache_addr) {
+            auto& reader_args = GetRuntimeArgs(program, kReaderKernelIdx, core);
+            reader_args[kReaderCacheAddrArg] = cache_addr;
+            reader_args[kReaderCacheStartIdArg] = cache_start_id;
+            if (use_index_tensor) {
+                reader_args[kReaderIndexAddrArg] = index_addr;
+            }
+            if (is_paged_cache) {
+                reader_args[kReaderPageTableAddrArg] = page_table_addr;
+            }
+
+            auto& writer_args = GetRuntimeArgs(program, kWriterKernelIdx, core);
+            writer_args[kWriterCacheAddrArg] = cache_addr;
+            writer_args[kWriterCacheStartIdArg] = cache_start_id;
+            writer_args[kWriterTileUpdateOffsetArg] = tile_update_offset_B;
+        };
+        patch_core(cores1[i], dst1_addr);
+        patch_core(cores2[i], dst2_addr);
+    }
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE_FUSED_UPDATE_CACHE
 
 PagedFusedUpdateCacheDeviceOperation::program_factory_t PagedFusedUpdateCacheDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -264,54 +379,40 @@ ttsl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> PagedFusedUpdateCacheDeviceOperation::get_dynamic_runtime_args(
+void PagedFusedUpdateCacheDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // Coords excluded from a mesh dispatch get an empty ProgramDescriptor (see the mesh factories) — no
-    // kernels, nothing to patch.
+    using namespace CMAKE_UNIQUE_NAMESPACE_FUSED_UPDATE_CACHE;
+
+    // Coords excluded from a mesh dispatch got an empty ProgramDescriptor (see the mesh factories) —
+    // no kernels, no CBs, nothing to patch.
     if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value() &&
-        !operation_attributes.mesh_coords.value().contains(mesh_dispatch_coordinate.value())) {
-        return {};
+        !operation_attributes.mesh_coords->contains(mesh_dispatch_coordinate.value())) {
+        return;
     }
 
-    // Per-index offsets come from the factory matching the input layout — the same tiled-vs-row-major
-    // condition select_program_factory uses. Index-tensor mode bakes no per-call offsets (positions are
-    // read on-device from the re-patched index tensor), so the helper returns empty and there is nothing
-    // dynamic to re-apply.
-    const auto& input_tensor1 = tensor_args.input_tensor1;
-    const bool is_tiled = input_tensor1.layout() == tt::tt_metal::Layout::TILE;
-
-    // Kernel push order in both factories' create_descriptor: reader(0), writer(1), compute(2).
-    // Reader rt args:  [0]=has_work, [1]=is_input1, [2]=dst, [3]=cache_start_id, ...
-    // Writer rt args:  [0]=has_work, [1]=dst, [2]=cache_start_id, [3]=tile_update_offset_B, ...
-    constexpr uint32_t kReaderKernelIdx = 0;
-    constexpr uint32_t kWriterKernelIdx = 1;
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    const auto emit = [&](const auto& offsets) {
-        if (offsets.empty()) {
-            return;
-        }
-        // Each index i handles input1 on core1 and input2 on core2, both using the same offsets.
-        dynamic_args.reserve(offsets.size() * 6);
-        for (const auto& off : offsets) {
-            for (const auto& core : {off.core1, off.core2}) {
-                dynamic_args.push_back({kReaderKernelIdx, core, /*arg_idx=*/3, off.cache_start_id});
-                dynamic_args.push_back({kWriterKernelIdx, core, /*arg_idx=*/2, off.cache_start_id});
-                dynamic_args.push_back({kWriterKernelIdx, core, /*arg_idx=*/3, off.tile_update_offset_B});
-            }
-        }
-    };
-
-    if (is_tiled) {
-        emit(PagedTiledFusedUpdateCacheProgramFactory::compute_tiled_fused_offsets(operation_attributes, tensor_args));
+    // Patch the cached program in place: rebuilding the descriptor here would pay the whole
+    // cache-miss host cost (work split, CoreRangeSets, compile-time args, per-core arg vectors) on
+    // every cache hit. The mesh factories just delegate to the single-device ones, so the
+    // tiled-vs-row-major split is the only part of select_program_factory that changes the cached
+    // program's shape — mirror it once, here.
+    if (tensor_args.input_tensor1.layout() == Layout::TILE) {
+        patch_runtime_args(
+            program,
+            tensor_args,
+            PagedTiledFusedUpdateCacheProgramFactory::compute_tiled_fused_offsets(operation_attributes, tensor_args),
+            kFirstOptionalCbPosTiled);
     } else {
-        emit(PagedRowMajorFusedUpdateCacheProgramFactory::compute_row_major_fused_offsets(
-            operation_attributes, tensor_args));
+        patch_runtime_args(
+            program,
+            tensor_args,
+            PagedRowMajorFusedUpdateCacheProgramFactory::compute_row_major_fused_offsets(
+                operation_attributes, tensor_args),
+            kFirstOptionalCbPosRowMajor);
     }
-    return dynamic_args;
 }
 
 }  // namespace ttnn::experimental::prim

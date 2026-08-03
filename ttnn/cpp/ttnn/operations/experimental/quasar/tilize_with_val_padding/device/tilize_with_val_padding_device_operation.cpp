@@ -171,7 +171,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
@@ -190,7 +190,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
             operation_attributes.output_mem_config.buffer_type(),
             shard_spec);  // If the input is using the legacy sharded optimized program
                           // factory, the output has the same shard spec as the input.
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             input_shape,
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
@@ -200,7 +200,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
                 operation_attributes.output_padded_shape));
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_shape,
         TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,

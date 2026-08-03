@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Base single-DFB config sweep (legacy kept configs + full Metal 2.0 matrix).
+// Base single-DFB config sweep (full Metal 2.0 matrix).
 
 #include "dfb_test_common.hpp"
 
@@ -18,51 +18,11 @@ static std::string M2ImplicitSyncParamName(const ::testing::TestParamInfo<bool>&
     return info.param ? "ImplicitSyncTrue" : "ImplicitSyncFalse";
 }
 
-// legacy single-DFB config sweep macros + kept configs
-#define DFB_TEST(prefix, suffix, p_kind, c_kind, num_p, pap_kind, num_c, cap_kind, extra_skip)          \
-    TEST_P(DFBImplicitSyncParamFixture, prefix##Test1xDFB##suffix) {                                    \
-        DFB_SKIP_IF_UNSUPPORTED((num_p), (num_c));                                                      \
-        extra_skip;                                                                                     \
-        experimental::dfb::DataflowBufferConfig config{                                                 \
-            .entry_size = 1024,                                                                         \
-            .num_entries = dfb_default_num_entries((num_p), (num_c)),                                   \
-            .num_producers = (num_p),                                                                   \
-            .pap = dfb::AccessPattern::pap_kind,                                                        \
-            .num_consumers = (num_c),                                                                   \
-            .cap = dfb::AccessPattern::cap_kind,                                                        \
-            .enable_producer_implicit_sync = GetParam(),                                                \
-            .enable_consumer_implicit_sync = GetParam()};                                               \
-        run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::p_kind, DFBPorCType::c_kind); \
-    }
-
-#define DFB_TEST_BUF(prefix, suffix, p_kind, c_kind, num_p, pap_kind, num_c, cap_kind, extra_skip, n_buf)     \
-    TEST_P(DFBImplicitSyncParamFixture, prefix##Test1xDFB##suffix) {                                          \
-        DFB_SKIP_IF_UNSUPPORTED((num_p), (num_c));                                                            \
-        extra_skip;                                                                                           \
-        experimental::dfb::DataflowBufferConfig config{                                                       \
-            .entry_size = 1024,                                                                               \
-            .num_entries = dfb_default_num_entries((num_p), (num_c)),                                         \
-            .num_producers = (num_p),                                                                         \
-            .pap = dfb::AccessPattern::pap_kind,                                                              \
-            .num_consumers = (num_c),                                                                         \
-            .cap = dfb::AccessPattern::cap_kind,                                                              \
-            .enable_producer_implicit_sync = GetParam(),                                                      \
-            .enable_consumer_implicit_sync = GetParam()};                                                     \
-        CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));                             \
-        run_single_dfb_program(                                                                               \
-            this->devices_.at(0), config, DFBPorCType::p_kind, DFBPorCType::c_kind, core_range_set, (n_buf)); \
-    }
-
-// canonical for Quasar, so only configs with UNIQUE coverage are kept here --
-//   * the three 1Sx1S cases (num_p==num_c==1) which also run on WH/BH (see
-//     DFB_SKIP_IF_UNSUPPORTED), and
-//   * DM->Tensix 6Sx4A, which has no 2.0 twin (needs BLOCKED).
-// (The Tensix->DM ALL column was ported into the 2.0 sweep below.)
+// All single-DFB configs now live in the Metal 2.0 sweep below. The 2.0 driver runs the
+// simple 1x1 explicit-sync cases on WH/BH too (a DFB lowers to a circular buffer there);
+// implicit-sync and multi-core stay Quasar-only. The former legacy-only configs (the three
+// 1Sx1S and DM->Tensix 6Sx4A) have been uplifted to 2.0, so no legacy DFB_TEST entries remain.
 // ====================================================================================
-DFB_TEST_BUF(DM,       1Sx1S, DM,     DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP, 18)
-DFB_TEST    (DMTensix, 1Sx1S, DM,     TENSIX, 1, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
-DFB_TEST    (TensixDM, 1Sx1S, TENSIX, DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
-DFB_TEST    (DMTensix, 6Sx4A, DM,     TENSIX, 6, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
 
 // Metal 2.0 single-DFB config sweep
 #define DFB_TEST_2_0(suffix, p_type, c_type, num_p, pap_kind, num_c, cap_kind) \
@@ -167,6 +127,7 @@ DFB_TEST_2_0(DMTensixTest1xDFB4Sx2A, DM, TENSIX, 4, STRIDED, 2, ALL)
 DFB_TEST_2_0(DMTensixTest1xDFB4Sx4A, DM, TENSIX, 4, STRIDED, 4, ALL)
 DFB_TEST_2_0(DMTensixTest1xDFB6Sx1A, DM, TENSIX, 6, STRIDED, 1, ALL)
 DFB_TEST_2_0(DMTensixTest1xDFB6Sx2A, DM, TENSIX, 6, STRIDED, 2, ALL)
+DFB_TEST_2_0(DMTensixTest1xDFB6Sx4A, DM, TENSIX, 6, STRIDED, 4, ALL)
 
 // ALL — Tensix→DM (ported from the legacy sweep: Tensix producer + ALL DM consumer)
 DFB_TEST_2_0(TensixDMTest1xDFB1Sx4A, TENSIX, DM, 1, STRIDED, 4, ALL)

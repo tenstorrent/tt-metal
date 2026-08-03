@@ -35,7 +35,7 @@ void MorehNllLossStep1DeviceOperation::validate_on_program_cache_miss(
 MorehNllLossStep1DeviceOperation::spec_return_value_t MorehNllLossStep1DeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& target_tensor = tensor_args.target_tensor;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         target_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));

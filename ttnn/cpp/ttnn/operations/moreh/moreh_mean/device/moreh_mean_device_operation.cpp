@@ -65,7 +65,7 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
 
     if (operation_attributes.keepdim) {
         output_shape[dim] = 1;
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
                 tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
@@ -85,7 +85,7 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
         shape.push_back((is_reduced_dim && is_tile_dim) ? 1 : input_shape[i]);
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(std::move(shape)),
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));

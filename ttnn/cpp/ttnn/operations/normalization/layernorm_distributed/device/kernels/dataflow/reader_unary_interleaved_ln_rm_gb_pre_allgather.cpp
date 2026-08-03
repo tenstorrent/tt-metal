@@ -11,7 +11,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -20,29 +20,29 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(2);           // Width in tiles
     const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
+    constexpr uint32_t dfb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_reduce = tt::CBIndex::c_1;
 
     // ublocks size defined in tiles
-    const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
+    const uint32_t src0_tile_bytes = get_tile_size(dfb_inp);
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
     const auto src_a = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb_inp_buf(cb_inp);
+    DataflowBuffer dfb_inp_buf(dfb_inp);
 
 #if FUSE_PRE_ADD
     const uint32_t res_addr = get_arg_val<uint32_t>(4);  // Residual source address in dram
-    constexpr uint32_t cb_res = tt::CBIndex::c_5;
-    const uint32_t src1_tile_bytes = get_tile_size(cb_res);
+    constexpr uint32_t dfb_res = tt::CBIndex::c_5;
+    const uint32_t src1_tile_bytes = get_tile_size(dfb_res);
     constexpr auto res_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     const auto src_b = TensorAccessor(res_args, res_addr);
-    CircularBuffer cb_res_buf(cb_res);
+    DataflowBuffer dfb_res_buf(dfb_res);
 #endif
 
     uint32_t inp_tile_idx = tile_offset;
@@ -50,17 +50,17 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             for (uint32_t r = 0; r < blk; r++) {
-                cb_inp_buf.reserve_back(1);
-                noc.async_read(src_a, cb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
+                dfb_inp_buf.reserve_back(1);
+                noc.async_read(src_a, dfb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
 #if FUSE_PRE_ADD
-                cb_res_buf.reserve_back(1);
-                noc.async_read(src_b, cb_res_buf, src1_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
+                dfb_res_buf.reserve_back(1);
+                noc.async_read(src_b, dfb_res_buf, src1_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
 #endif
                 inp_tile_idx++;
                 noc.async_read_barrier();
-                cb_inp_buf.push_back(1);
+                dfb_inp_buf.push_back(1);
 #if FUSE_PRE_ADD
-                cb_res_buf.push_back(1);
+                dfb_res_buf.push_back(1);
 #endif
             }
         }  // wt loop

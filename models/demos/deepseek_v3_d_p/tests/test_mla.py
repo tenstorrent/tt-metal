@@ -20,6 +20,7 @@ from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
@@ -37,7 +38,7 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     partition_iters,
     single_trace,
 )
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -91,9 +92,31 @@ def run_mla_inference(
         # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
         # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
         layer_num=1,
+        sparse_kv_cache_format=tt_kvpe_cache.format,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
-    rope_tensors = rope_setup.get_rope_tensors(seq_len)
+    # Sparse (DSA) single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
+    # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked
+    # path. Dense keeps natural rope + no index cache.
+    has_indexer = resolve_has_indexer(config)
+    index_kv_cache = None
+    if has_indexer:
+        rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
+        # Layer-slot count mirrors the serving adapter: the indexer strides the folded user-major cache by
+        # num_full_indexer_layers (GLM-5.2 cross-layer reuse), so the cache must carry that many slots for
+        # update_padded_kv_cache's cache_batch % num_layers check. Falls back to 1 (no indexer_types).
+        index_kv_cache = init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
+        )
+    else:
+        rope_tensors = rope_setup.get_rope_tensors(seq_len)
 
     # Verify TT MLA exists
     assert mla_tt is not None, "TT MLA should exist"
@@ -134,6 +157,7 @@ def run_mla_inference(
         kvpe_cache=tt_kvpe_cache,
         indexer_indices=inject_indices,
         return_indexer_indices=return_indices,
+        index_kv_cache=index_kv_cache,
     )
     indices = None
     if return_indices:
@@ -219,9 +243,9 @@ def run_model(
     logger.info("=" * 80)
 
     # Initialize KVPE cache
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 576
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
@@ -314,7 +338,7 @@ def run_model(
         # Read back KVPE cache from device
         # Cache is replicated across TP, so concat TP replicas on dim 1 (unused) and discard extras
         tt_kvpe_cache_torch = ttnn.to_torch(
-            tt_kvpe_cache,
+            tt_kvpe_cache.storage,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
         tt_kvpe_cache_torch = tt_kvpe_cache_torch[:1, :1, :, :]
@@ -656,8 +680,9 @@ def _run_chunked_prefill(
     indexed_rope = rope_setup.get_rope_tensors_indexed(
         cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
     )
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len_cache,
         mesh_shape=mesh_shape,
@@ -700,7 +725,7 @@ def _run_chunked_prefill(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_shard_dims),
         )
-        ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache)
+        ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache.storage)
         ttnn.synchronize_device(mesh_device)
 
     mesh_device.enable_program_cache()
@@ -786,7 +811,7 @@ def _run_chunked_prefill(
     #      Meta-style) but re-interleaved for the GPU trace (HF half-split -> device Meta basis). ----
     if any(users[u]["kv_post"] is not None for u in range(num_users)):
         cache_sr = ttnn.to_torch(
-            tt_kvpe_cache,
+            tt_kvpe_cache.storage,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
         ).to(torch.float32)[
             :, :1

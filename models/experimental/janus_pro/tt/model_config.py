@@ -129,8 +129,27 @@ class ModelArgs(TTModelArgs):
         return JanusForConditionalGeneration
 
     def load_state_dict(self):
-        model = self.reference_vision_transformer(wrap=False)
+        # Weight-seeding path: take weights from the base model at its native checkpoint dtype.
+        # Do NOT route through reference_vision_transformer() below, which upcasts to float32 for
+        # the golden reference only. Mirrors models/demos/multimodal/gemma3, which likewise keeps
+        # the float32 upcast off the weight path.
+        model = super().reference_vision_transformer(wrap=False)
         return convert_vision_hf_to_meta(model.state_dict(), self.head_dim)
+
+    def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
+        # Golden-reference path: force float32 so the reference matches float32 test inputs (a stable
+        # PCC baseline). Float an ISOLATED model instance, never self.cached_hf_model (which seeds the
+        # TT weights via load_state_dict), so the upcast cannot leak into the weight path regardless of
+        # call order. Mirrors models/demos/multimodal/gemma3.tt.model_config.reference_vision_transformer.
+        model = self.get_hf_model_cls().from_pretrained(
+            self.CKPT_DIR, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
+        )
+        model = model.float()
+        if wrap:
+            from models.tt_transformers.tt.model_config import HfModelWrapper
+
+            return HfModelWrapper(model, self.head_dim, use_hf_rope=self.use_hf_rope)
+        return model
 
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)

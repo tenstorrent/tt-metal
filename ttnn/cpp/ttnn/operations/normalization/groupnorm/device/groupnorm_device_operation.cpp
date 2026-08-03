@@ -274,7 +274,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec GroupNormDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec GroupNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
@@ -290,7 +290,7 @@ TensorSpec GroupNormDeviceOperation::compute_output_specs(
             }
 
             auto mem_config = args.output_mem_config;
-            return TensorSpec(
+            return tt::tt_metal::TensorSpec(
                 input_tensor.logical_shape(),
                 TensorLayout::fromPaddedShape(
                     program_config.out_data_format,

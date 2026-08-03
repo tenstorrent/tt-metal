@@ -16,7 +16,7 @@
 
 #include "context/metal_env_accessor.hpp"
 #include "core_descriptor.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
@@ -55,6 +55,8 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
         .pcie_core = pcie_core,
         .harvesting_mask = cluster.get_harvesting_mask(device_id),
         .dispatch_core_type = dispatch_core_config.get_dispatch_core_type(),
+        .resolved_dispatch_core_type =
+            resolve_dispatch_core_type(env, device_id, dispatch_core_config),
         .dispatch_core_axis = dispatch_core_config.get_dispatch_core_axis(),
         .coordinate_virtualization_enabled = hal.is_coordinate_virtualization_enabled(),
         .dispatch_message_addr = ctx.dispatch_mem_map().get_dispatch_message_addr_start(),

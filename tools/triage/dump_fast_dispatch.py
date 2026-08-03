@@ -248,13 +248,13 @@ def read_wait_globals(
     try:
         if dispatcher_core_data.kernel_name == "cq_dispatch":
             my_dispatch_cb_sem_id_const = kernel_elf.get_constant("my_dispatch_cb_sem_id")
-            fd_core_type_idx_const = kernel_elf.get_constant("fd_core_type_idx")
-            assert my_dispatch_cb_sem_id_const is not None and fd_core_type_idx_const is not None
+            programmable_core_type_idx_const = kernel_elf.get_constant("programmable_core_type_idx")
+            assert my_dispatch_cb_sem_id_const is not None and programmable_core_type_idx_const is not None
             my_dispatch_cb_sem_id = int(my_dispatch_cb_sem_id_const)
-            fd_core_type_idx = int(fd_core_type_idx_const)
+            programmable_core_type_idx = int(programmable_core_type_idx_const)
 
             # sem_l1_base is a firmware global array of L1 pointers; index by core type
-            sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[fd_core_type_idx]
+            sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[programmable_core_type_idx]
             sem_value = sem_base_ptr[my_dispatch_cb_sem_id * 16 // 4]
             local_count = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).local_count_
 

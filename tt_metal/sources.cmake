@@ -1,5 +1,9 @@
 set(TT_METAL_PUBLIC_API
     api/internal/service/inter_process_counter_channel.hpp
+    api/internal/disaggregation/layer_completion_message.hpp
+    api/internal/disaggregation/layer_completion_queue.hpp
+    api/internal/disaggregation/layer_completion_reorder_buffer.hpp
+    api/internal/disaggregation/layer_completion_router.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
@@ -59,6 +63,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
+    api/tt-metalium/experimental/blaze/named_kernel_args.hpp
     api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
     api/tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp
     api/tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp
@@ -71,6 +76,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
+    api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp
     api/tt-metalium/experimental/metal2_host_api/utility/group.hpp
     api/tt-metalium/experimental/metal2_host_api/utility/table.hpp
     api/tt-metalium/experimental/mock_device/mock_allocator.hpp
@@ -87,8 +93,14 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
+    api/tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp
+    api/tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp
+    api/tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp
+    api/tt-metalium/experimental/byte_based_tensor_transfers.hpp
+    api/tt-metalium/experimental/tensor_apis_with_pad_values.hpp
+    api/tt-metalium/experimental/tensor_host_pad_apis.hpp
+    api/tt-metalium/experimental/tensor_serialization_support.hpp
     api/tt-metalium/experimental/tensor/host_tensor.hpp
-    api/tt-metalium/experimental/tensor/impl/tensor_impl.hpp
     api/tt-metalium/experimental/tensor/mesh_tensor.hpp
     api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
     api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
@@ -98,8 +110,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
     api/tt-metalium/experimental/tensor/tensor_apis.hpp
     api/tt-metalium/experimental/tensor/tensor_types.hpp
-    api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
-    api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
     api/tt-metalium/experimental/udm/mesh_builder.hpp
     api/tt-metalium/experimental/udm/mesh_circular_buffer.hpp
     api/tt-metalium/experimental/udm/mesh_kernel.hpp

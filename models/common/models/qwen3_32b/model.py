@@ -17,6 +17,7 @@ Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded f
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
@@ -80,6 +81,22 @@ class Qwen3_32BExecutorRuntimeConfig:
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size`` — Qwen3-32B does, below). Qwen3's
+    # per-head QK-norm is a row-independent RMSNorm on ``[B, n_heads, S, head_dim]`` (each user's rows
+    # normalized independently), so the batched fold is bit-safe. ``max_prefill_batch_size`` caps the
+    # per-group batch; 32 folds the whole batch-32 prefill in ONE 32-user pass (TTTv1 structural parity,
+    # generator.py:679-700) so the eager norm+lm_head tail + full-vocab readback run once instead of 4×.
+    # At S=128 the fold is 32*128=4096=2*2048, an exact multiple of MAX_QKV_MM_SEQ_LEN (reshape-safe).
+    # ``disable_batched_prefill`` is the escape hatch back to the sequential loop;
+    # ``max_prefill_chunk_size`` (above) drives the #45234 decline.
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 32
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
         # Only trace the seq lens TTTv1 traces; bigger ones have small op2op gaps so tracing buys
@@ -292,24 +309,42 @@ class _Qwen3_32BWHTuning:
 
     mlp_prefill_len_cutoff: int | None = None
     mlp_decode_spill_w1_to_dram: bool = False
+    # Use ttnn.experimental.minimal_matmul for the QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
+    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. On a 32B the
+    # batch-32-ci prefill is matmul-compute-bound (~80% of FLOPs = the 3 MLP matmuls), so minimal_matmul
+    # is a real prefill-TTFT win — it closes the batch-32-ci TTFT gap vs TTTv1 (which uses minimal_matmul
+    # for the same matmuls). The shared plumbing (attention_1d.use_minimal_qkv_matmul / mlp_1d
+    # use_minimal_w2_matmul, both gated seq_len>128) is already in the base; this flag just engages it.
+    prefill_minimal_matmul: bool = True
 
 
 def _resolve_qwen3_32b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen3_32BWHTuning:
     """Pick WH L1 tuning knobs for Qwen3-32B on T3K.
 
-    Mirrors the 7B port's empirical L1 cutoff (``mlp_prefill_len_cutoff=256`` for the wide FF
-    matmul on Wormhole). ``mlp_decode_spill_w1_to_dram`` is currently off on T3K because per-device
-    FF shards (5120×3456 per chip) are smaller than 7B-on-N300; re-evaluate if decode batch-32
-    trips L1 circular-buffer validation.
+    ``mlp_prefill_len_cutoff=1024`` = the shared engine's own Wormhole default (``mlp_1d.py``:
+    ``512 if is_blackhole() else 1024``) and TTTv1's ``prefill_len_cutoff`` (``model_config.py``).
+    For the folded batch-32-ci FF prefill (``[1,1,B*S,dim]``, B*S=4096 at the 128 bucket) this tiles
+    the wide FF matmul as 4 chunks of 1024 (``per_core_M=4``) instead of 16 chunks of 256
+    (``per_core_M=1``) — 4× fewer / 4× larger sub-matmuls on the ~80%-FLOP FF block, matching TTTv1's
+    blocking (fewer weight refetches, better mcast amortization). The earlier 256 was
+    inherited-conservative from the 7B-on-N300 port (per-device FF shard 9472 ≫ the T3K 32B shard
+    3456), so its tighter-L1 motive does not apply here; 1024 fits — TTTv1 runs it for this exact model
+    on this box and every non-overriding TTTv2 model runs the 1024 engine default. Output is unchanged:
+    the K-contraction / ``in0_block_w`` are independent of the M-tiling, so only ``per_core_M`` changes.
+    ``mlp_decode_spill_w1_to_dram`` is currently off on T3K because per-device FF shards (5120×3456 per
+    chip) are smaller than 7B-on-N300; re-evaluate if decode batch-32 trips L1 circular-buffer
+    validation.
     """
     t = _Qwen3_32BWHTuning(
-        mlp_prefill_len_cutoff=256,
+        mlp_prefill_len_cutoff=1024,
         mlp_decode_spill_w1_to_dram=False,
     )
+    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
     logger.info(
         f"L1 tuning for Qwen3-32B on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}, "
+        f"prefill_minimal_matmul={t.prefill_minimal_matmul}"
     )
     return t
 
@@ -391,6 +426,7 @@ def _build_decoder_layer(
             sdpa_decode_compute_kernel_cfg=precision.attn_sdpa_kernel_cfg,
             li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
+            prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -414,6 +450,7 @@ def _build_decoder_layer(
             ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
+            prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -528,7 +565,11 @@ class Qwen3_32BDecoderLayer(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         # Match Llama ``TransformerBlock1D``: fractured embed / norm activations must be
         # all-gathered to full ``dim`` before Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
@@ -542,6 +583,7 @@ class Qwen3_32BDecoderLayer(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
@@ -815,6 +857,10 @@ class Qwen3_32B(LightweightModule):
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
                 kv_cache_dtype=precision.kv_cache_dtype,
+                # A/B escape hatch: DISABLE_BATCHED_EXTRACT=1 forces the per-slot last-token extract
+                # (one lm_head per user, bit-identical to the sequential path) instead of the default
+                # gathered extract (one lm_head over the whole group).
+                batched_prefill_batched_extract=not os.environ.get("DISABLE_BATCHED_EXTRACT"),
             )
         return model
 
@@ -844,7 +890,11 @@ class Qwen3_32B(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -854,6 +904,7 @@ class Qwen3_32B(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
             )
 
         if get_last_token == -1:

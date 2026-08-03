@@ -5,6 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <tt-metalium/allocator.hpp>
+#include <unordered_map>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -33,6 +34,15 @@ namespace {
 
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
+
+// Builds the expected bank id -> worker core map from a per-bank list (indexed by DRAM bank id).
+std::unordered_map<uint32_t, CoreCoord> to_bank_map(const std::vector<CoreCoord>& per_bank) {
+    std::unordered_map<uint32_t, CoreCoord> assignment;
+    for (uint32_t bank_id = 0; bank_id < per_bank.size(); ++bank_id) {
+        assignment.emplace(bank_id, per_bank[bank_id]);
+    }
+    return assignment;
+}
 
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
     MeshDeviceConfig config(MeshShape(1, 1));
@@ -136,9 +146,30 @@ TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
     auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
     auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    const MeshCoordinate coord(0, 0);
     for (auto& [_, dev] : devs) {
-        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0));
-        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1));
+        for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+            std::unordered_map<uint32_t, CoreCoord> per_device;
+            EXPECT_NO_THROW(per_device = dev->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord));
+            // On a 1x1 mesh the single local device is the queried device, so the per-coordinate overload
+            // must match querying that device directly (bank id -> the same per-bank worker core).
+            const auto expected =
+                dev->impl().get_device(coord)->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+            EXPECT_EQ(per_device, to_bank_map(expected));
+        }
+    }
+}
+
+TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) {
+    for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            std::unordered_map<uint32_t, CoreCoord> per_device;
+            EXPECT_NO_THROW(per_device = mesh_device_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord));
+            // The per-coordinate result must match querying that specific device directly.
+            auto* device = mesh_device_->impl().get_device(coord);
+            ASSERT_NE(device, nullptr);
+            EXPECT_EQ(per_device, to_bank_map(device->get_optimal_dram_bank_to_logical_worker_assignment(noc)));
+        }
     }
 }
 

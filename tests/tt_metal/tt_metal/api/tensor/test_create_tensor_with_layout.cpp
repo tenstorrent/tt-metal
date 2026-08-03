@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -38,8 +38,7 @@ class CreateTensorWithLayoutTest : public GenericMeshDeviceFixture,
 TEST_P(CreateTensorWithLayoutTest, Tile) {
     const CreateTensorParams& params = GetParam();
 
-    auto tensor = MeshTensor::allocate_on_device(
-        *mesh_device_, TensorSpec(params.inputs.shape, params.inputs.layout), TensorTopology());
+    auto tensor = MeshTensor::allocate_on_device(*mesh_device_, TensorSpec(params.inputs.shape, params.inputs.layout));
     EXPECT_EQ(tensor.padded_shape(), params.expected.padded_shape);
     EXPECT_EQ(tensor.logical_shape(), params.inputs.shape);
 }

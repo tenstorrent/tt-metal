@@ -115,7 +115,9 @@ void kernel_main() {
 #endif
 
     // WRITER
-    const auto s = TensorAccessor(tensor::out);
+    // Constructed to materialize the tensor::out binding; not read directly -> maybe_unused (matches the
+    // in1_sender_writer sibling) to avoid -Wunused-but-set-variable.
+    [[maybe_unused]] const auto s = TensorAccessor(tensor::out);
 
     // DEBUG: matmul mcast hang — each receiver reports its own NoC coords and which core it
     // increments (in1_mcast_sender_noc_x/y). Compare against the sender's mcast rectangle.

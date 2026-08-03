@@ -60,7 +60,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      build-wheel: true
+      build-inplace-wheel: true
   galaxy-integration-tests:
     needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/galaxy-integration-tests-impl.yaml

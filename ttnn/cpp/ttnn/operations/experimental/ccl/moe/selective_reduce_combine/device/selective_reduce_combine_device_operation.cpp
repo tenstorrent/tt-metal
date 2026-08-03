@@ -26,20 +26,23 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
         "dense_token_maps_tensor must be rank 2 ([experts, per-token-stride]); got rank {}",
         tensor_args.dense_token_maps_tensor.logical_shape().rank());
 
-    const auto num_links = operation_attributes.num_links;
-    TT_FATAL(num_links > 0, "num_links must be > 0, got {}", num_links);
+    // Local combine mode: no fabric/links/mux, so skip link-related validation.
+    if (!operation_attributes.local_combine) {
+        const auto num_links = operation_attributes.num_links;
+        TT_FATAL(num_links > 0, "num_links must be > 0, got {}", num_links);
 
-    const auto worker_layout = detail::compute_worker_layout(
-        input_tensor,
-        operation_attributes.hidden_size,
-        operation_attributes.num_token_parallel_cores,
-        operation_attributes.num_data_parallel_cores);
-    const auto num_worker_cores = worker_layout.num_worker_cores;
-    TT_FATAL(
-        num_worker_cores % num_links == 0,
-        "num_worker_cores ({}) must be divisible by num_links ({})",
-        num_worker_cores,
-        num_links);
+        const auto worker_layout = detail::compute_worker_layout(
+            input_tensor,
+            operation_attributes.hidden_size,
+            operation_attributes.num_token_parallel_cores,
+            operation_attributes.num_data_parallel_cores);
+        const auto num_worker_cores = worker_layout.num_worker_cores;
+        TT_FATAL(
+            num_worker_cores % num_links == 0,
+            "num_worker_cores ({}) must be divisible by num_links ({})",
+            num_worker_cores,
+            num_links);
+    }
 
     const auto batch_size = operation_attributes.batch_size;
     const auto seq_size = operation_attributes.seq_size;
@@ -85,7 +88,7 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
     auto output_shape = ttnn::Shape({select_experts_k, total_tokens_per_device, hidden_size});
 
     auto mem_config = operation_attributes.output_memory_config;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape(output_shape), TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), mem_config));
 }
 

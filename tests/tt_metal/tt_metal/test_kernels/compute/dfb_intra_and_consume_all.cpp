@@ -12,17 +12,11 @@
 //   dfb(1) - Intra-tensix, N packer-producer -> N unpacker-consumer pairs (hidden TCs, no remapper).
 //            This kernel acts as both producer and consumer for dfb(1).
 //
-// Execution order (all 4 TRISCs per Neo run kernel_main concurrently):
-//
-//   Phase 1 - blocked consumer of dfb(0):
-//     UNPACK TRISC: wait_front / pop_front for every entry (active).
-//     PACK / MATH TRISCs: wait_front and pop_front are no-ops; they race through Phase 1.
-//
-//   Phase 2 - intra-tensix on dfb(1):
-//     PACK TRISC:   reserve_back -> increment words in entry (+1) -> push_back
-//                   [then wait_front / pop_front are no-ops for PACK]
-//     UNPACK TRISC: [reserve_back / push_back are no-ops for UNPACK]
-//                   wait_front -> increment words in entry (+1) -> pop_front
+// Every TRISC must call wait_front / copy_tile / pop_front in the same loop iteration.
+// copy_tile self-gates per-TRISC (UNPACK=llk_unpack_A, MATH=llk_math_datacopy); only UNPACK
+// actually blocks in wait/pop, but MATH must still execute copy_tile in program order after
+// wait_front. Splitting PACK out or gating wait_front to UNPACK-only desyncs MATH from UNPACK
+// and traps TRISC1 (ERROR_TRISC1 / 0x19).
 //
 // Net result for dfb(1) L1 ring: every word = original_value + 2.
 //
@@ -32,6 +26,9 @@
 //   [2] words_per_entry      - words per dfb(1) entry for in-place increment
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -39,34 +36,30 @@ void kernel_main() {
     constexpr uint32_t entries_per_neo = get_arg(args::entries_per_neo);
     constexpr uint32_t words_per_entry = get_arg(args::words_per_entry);
 
-    // Phase 1: consume all entries from the DM-produced strided x blocked DFB.
-    // UNPACK TRISC: each Neo's unpacker waits for its own TC credit (remapper fans out 1 DM post
-    // to N consumer TCs so every blocked UNPACK TRISC sees the full set of entries).
-    // PACK / MATH TRISCs: wait_front and pop_front are no-ops; they exit Phase 1 immediately.
+    // Phase 1: blocked consumer of the DM-produced strided x blocked DFB.
     DataflowBuffer dfb_consumer(dfb::remapper_in);
+
+    unary_op_init_common(dfb::remapper_in, dfb::remapper_in);
+
     for (uint32_t i = 0; i < num_entries_consumer; i++) {
+        acquire_dst();
         dfb_consumer.wait_front(1);
+        copy_tile(dfb::remapper_in, 0, 0);
         dfb_consumer.pop_front(1);
+        release_dst();
     }
     dfb_consumer.finish();
 
-    // Phase 2: intra-tensix DFB credit flow (packer -> unpacker, hidden TC per Neo).
-    // PACK TRISC fills its Neo's TC slot; UNPACK TRISC drains it.
-    // Because PACK races through Phase 1 (no-ops), it can pre-fill the entire TC capacity
-    // of dfb(1) before the UNPACK TRISC arrives from Phase 1. PACK then blocks in finish()
-    // until UNPACK has consumed all entries and called its own finish().
-    //
-    // Both PRODUCER ("intra_out") and CONSUMER ("intra_in") bindings on this kernel
-    // reference the same self-looped intra DFB, so either accessor resolves to the same ID.
+    // Phase 2: intra-tensix credit flow (packer -> unpacker, hidden TC per Neo).
     DataflowBuffer dfb_intra(dfb::intra_out);
 
 #ifdef UCK_CHLKC_UNPACK
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
 #endif
 
+    unary_op_init_common(dfb::intra_out, dfb::intra_out);
+
     for (uint32_t i = 0; i < entries_per_neo; i++) {
-        // PACK: wait for a free ring slot, increment the entry in-place, post credit.
-        // UNPACK / MATH: reserve_back and push_back are no-ops.
         dfb_intra.reserve_back(1);
 #ifdef UCK_CHLKC_PACK
         {
@@ -78,9 +71,9 @@ void kernel_main() {
 #endif
         dfb_intra.push_back(1);
 
-        // UNPACK: wait for credit, increment the entry in-place, pop credit.
-        // PACK / MATH: wait_front and pop_front are no-ops.
+        acquire_dst();
         dfb_intra.wait_front(1);
+        copy_tile(dfb::intra_out, 0, 0);
 #ifdef UCK_CHLKC_UNPACK
         if (trisc_id == 0) {
             volatile uint32_t* entry = reinterpret_cast<volatile uint32_t*>(dfb_intra.get_read_ptr() << 4);
@@ -90,6 +83,7 @@ void kernel_main() {
         }
 #endif
         dfb_intra.pop_front(1);
+        release_dst();
     }
     dfb_intra.finish();
 }

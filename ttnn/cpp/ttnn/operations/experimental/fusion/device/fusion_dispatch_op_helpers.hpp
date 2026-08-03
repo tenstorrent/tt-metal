@@ -60,7 +60,7 @@ inline std::vector<std::pair<uint32_t, uint32_t>> compute_cb_io_tensor_map(
 /// Slot: a per-core runtime arg that holds an IO tensor address.
 struct PerCoreRTArgSlot {
     std::uint32_t kernel_idx;
-    CoreCoord core;
+    tt::tt_metal::CoreCoord core;
     std::uint32_t arg_idx;
     std::uint32_t io_tensor_index;
 };
@@ -83,7 +83,7 @@ struct CBSlot {
 /// at dispatch time (order matches the build-time allocation order).
 struct SemaphoreRTArgSlot {
     std::uint32_t kernel_idx;
-    CoreCoord core;
+    tt::tt_metal::CoreCoord core;
     std::uint32_t arg_idx;
     std::uint32_t sem_index;
 };

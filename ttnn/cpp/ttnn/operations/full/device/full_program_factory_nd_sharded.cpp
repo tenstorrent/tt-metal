@@ -3,10 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <filesystem>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
 #include "full_program_factory_common.hpp"
 #include "full_program_factory_nd_sharded.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -17,7 +28,9 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-ProgramDescriptor FullNDShardedProgramFactory::create_descriptor(
+namespace m2 = tt::tt_metal::experimental;
+
+ttnn::device_operation::ProgramArtifacts FullNDShardedProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
@@ -34,45 +47,83 @@ ProgramDescriptor FullNDShardedProgramFactory::create_descriptor(
     const auto& aligned_page_size = output.buffer()->aligned_page_size();
     const auto& page_size = output.buffer()->page_size();
 
-    constexpr CBIndex cb_fill_value_id = CBIndex::c_24;
+    const m2::DFBSpecName FILL_VALUE{"fill_value"};
+    const m2::TensorParamName OUTPUT{"output"};
+    const m2::KernelSpecName WRITER{"writer"};
 
-    ProgramDescriptor desc;
+    // One page, sized to the output's page: the kernel builds a single filled page and writes it to
+    // every page of every shard it owns.
+    m2::DataflowBufferSpec fill_value_dfb{
+        .unique_id = FILL_VALUE,
+        .entry_size = static_cast<uint32_t>(page_size),
+        .num_entries = 1,
+        .data_format_metadata = data_format,
+    };
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = page_size,
-        .core_ranges = compute_core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_fill_value_id),
-            .data_format = data_format,
-            .page_size = page_size,
-        }}},
-    });
-
-    auto writer_defines = defines_from_map(get_writer_defines(dtype));
+    // Exactly one OUTPUT_DTYPE_* define reaches the kernel. Without it the fill loop compiles out
+    // entirely and the buffer holds whatever was already in SRAM.
+    const m2::KernelSpec::CompilerOptions::Defines writer_defines(get_writer_defines(dtype));
     auto u = encode_fill_value(fill_value, dtype);
 
     uint32_t elems_per_page = page_size / datum_size(data_format);
-    std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)cb_fill_value_id, elems_per_page, page_size, aligned_page_size, num_shards, num_compute_cores};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full_nd_sharded.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = compute_core_range;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.defines = std::move(writer_defines);
-    writer_desc.config = WriterConfigDescriptor{};
+    m2::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/full/device/kernels/writer_full_nd_sharded.cpp"},
+        .compiler_options = {.defines = writer_defines},
+        // The one instance that touches this buffer both fills the page (reserve_back / push_back) and
+        // drains it (wait_front / pop_front), so it holds both endpoints under one accessor name.
+        .dfb_bindings =
+            {m2::DFBBinding{
+                 .dfb_spec_name = FILL_VALUE,
+                 .accessor_name = "value",
+                 .endpoint_type = m2::DFBEndpointType::PRODUCER,
+             },
+             m2::DFBBinding{
+                 .dfb_spec_name = FILL_VALUE,
+                 .accessor_name = "value",
+                 .endpoint_type = m2::DFBEndpointType::CONSUMER,
+             }},
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .compile_time_args =
+            {{"elems_per_page", elems_per_page},
+             {"page_size", static_cast<uint32_t>(page_size)},
+             {"aligned_page_size", static_cast<uint32_t>(aligned_page_size)},
+             {"num_shards", num_shards},
+             {"num_cores", num_compute_cores}},
+        .runtime_arg_schema = {.runtime_arg_names = {"fill_value", "start_shard_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(operation_attributes.mesh_device->arch()),
+    };
+
+    m2::KernelRunArgs writer_run_args{.kernel = WRITER};
 
     uint32_t start_shard_id = 0;
     for (auto core : ordered_cores_with_data) {
-        writer_desc.emplace_runtime_args(core, {output.buffer(), u.u32, start_shard_id});
+        m2::AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, core, {{"fill_value", u.u32}, {"start_shard_id", start_shard_id}});
         start_shard_id++;
     }
 
-    desc.kernels.push_back(std::move(writer_desc));
+    m2::ProgramSpec spec{
+        .name = "full_nd_sharded",
+        .kernels = {std::move(writer_spec)},
+        .dataflow_buffers = {std::move(fill_value_dfb)},
+        .tensor_parameters = {m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},
+        .work_units = {m2::WorkUnitSpec{
+            .name = "main",
+            .kernels = {WRITER},
+            .target_nodes = compute_core_range,
+        }},
+    };
 
-    return desc;
+    m2::ProgramRunArgs run_params;
+    run_params.kernel_run_args.push_back(std::move(writer_run_args));
+    run_params.tensor_args.emplace(OUTPUT, m2::TensorArgument{output.mesh_tensor()});
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_params),
+    };
 }
 
 }  // namespace ttnn::operations::full

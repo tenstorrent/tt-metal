@@ -42,29 +42,29 @@ bool SimpleDramLoopback(
 namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, TestSimpleDramBufferLo) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 1));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 2));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 4));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 8));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 16));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 32));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 1024));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 16 * 1024));
+    for (auto& device : this->devices_) {
+        size_t lo_address = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+        ASSERT_TRUE(SimpleDramLoopback(device, lo_address, 1));
+        ASSERT_TRUE(SimpleDramLoopback(device, lo_address, 2));
+        ASSERT_TRUE(SimpleDramLoopback(device, lo_address, 4));
+        ASSERT_TRUE(SimpleDramLoopback(device, lo_address, 8));
+        ASSERT_TRUE(SimpleDramLoopback(device, lo_address, 16));
+        ASSERT_TRUE(SimpleDramLoopback(device, lo_address, 32));
+        ASSERT_TRUE(SimpleDramLoopback(device, lo_address, 1024));
+        ASSERT_TRUE(SimpleDramLoopback(device, lo_address, 16 * 1024));
     }
 }
 TEST_F(MeshDeviceFixture, TestSimpleDramBufferHi) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id)->dram_size_per_channel() - (16 * 1024);
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 1));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 2));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 4));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 8));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 16));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 32));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 1024));
-        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 16 * 1024));
+    for (auto& device : this->devices_) {
+        size_t hi_address = device->dram_size_per_channel() - (16 * 1024);
+        ASSERT_TRUE(SimpleDramLoopback(device, hi_address, 1));
+        ASSERT_TRUE(SimpleDramLoopback(device, hi_address, 2));
+        ASSERT_TRUE(SimpleDramLoopback(device, hi_address, 4));
+        ASSERT_TRUE(SimpleDramLoopback(device, hi_address, 8));
+        ASSERT_TRUE(SimpleDramLoopback(device, hi_address, 16));
+        ASSERT_TRUE(SimpleDramLoopback(device, hi_address, 32));
+        ASSERT_TRUE(SimpleDramLoopback(device, hi_address, 1024));
+        ASSERT_TRUE(SimpleDramLoopback(device, hi_address, 16 * 1024));
     }
 }
 

@@ -7,8 +7,13 @@
 #ifndef _NOC_PARAMETERS_H_
 #define _NOC_PARAMETERS_H_
 
-// TODO: review these values
-#define VIRTUAL_TENSIX_START_X 1
+// Quasar functional workers occupy physical x[2..9], y[2..5] (no harvesting;
+// physical col x=1 is empty, x=0 is router). Coordinate virtualization is
+// identity here (tt-umd translated==physical, craq-sim applies no QSR remap),
+// so the virtual Tensix origin must equal the physical worker start. X was
+// copy-pasted from Blackhole (=1, where BH's physical Tensix start is 1) and
+// must be 2 for Quasar; Y already matches (physical y-start is 2).
+#define VIRTUAL_TENSIX_START_X 2
 #define VIRTUAL_TENSIX_START_Y 2
 #define COORDINATE_VIRTUALIZATION_ENABLED 1
 

@@ -58,6 +58,7 @@ on:
       - "(Tier 2) Models Unit Tests"
       - "(Tier 3) Models End-To-End Tests"
       - "(Tier 3) Models Unit Tests"
+      - "All Model Tests"
       - "(Galaxy) Choose your pipeline"
       - "ttnn - run sweeps"
       - "Blackhole sanity tests"

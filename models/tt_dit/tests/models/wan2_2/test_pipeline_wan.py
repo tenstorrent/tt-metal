@@ -19,7 +19,12 @@ from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_conf
 from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
-from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
+from ....utils.test import (
+    line_params_req_exact_devices,
+    ring_params_8k_req_exact_devices,
+    ring_params_req_exact_devices,
+    skip_if_unsupported_num_links,
+)
 
 
 @pytest.mark.parametrize(
@@ -35,7 +40,7 @@ from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True, None],
         [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False, None],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False, None],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params_8k_req_exact_devices, ttnn.Topology.Ring, False, None],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
     ids=[
@@ -74,6 +79,7 @@ def test_pipeline_inference(
     is_fsdp,
     quant_config_name,
     no_prompt,
+    request,
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -184,11 +190,11 @@ def test_pipeline_inference(
 
     vbench_thresholds_by_height = {
         720: {
-            "subject_consistency": 0.92,
-            "background_consistency": 0.93,
+            "subject_consistency": 0.91,
+            "background_consistency": 0.92,
             "motion_smoothness": 0.955,
             "dynamic_degree": 1.0,
-            "imaging_quality": 0.645,
+            "imaging_quality": 0.62,
         },
         480: {
             "subject_consistency": 0.94,

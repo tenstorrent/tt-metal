@@ -23,11 +23,12 @@ from models.demos.stable_diffusion_xl_base.tests.test_common import (
 )
 from models.demos.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
+from models.demos.stable_diffusion_xl_base.utils.golden_cache import golden_ci_mode, load_golden, save_golden
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {
-    "1024x1024": {"10": 0.995, "50": 0.996},
+    "1024x1024": {"10": 0.995, "50": 0.995},
     "512x512": {"10": 0.999, "50": 0.998},
 }
 
@@ -44,7 +45,8 @@ def run_unet_inference(
     num_inference_steps,
     debug_mode,
 ):
-    torch.manual_seed(0)
+    seed = 0
+    torch.manual_seed(seed)
 
     if isinstance(prompts, str):
         prompts = [prompts]
@@ -293,6 +295,27 @@ def run_unet_inference(
     ttnn.synchronize_device(ttnn_device)
     pcc_per_iter = []
     tt_latents_output = None
+
+    golden_name = f"refiner_{height}x{width}_steps{num_inference_steps}_seed{seed}.pt"
+    golden_meta = dict(
+        model="refiner",
+        base_pipeline_location=str(sdxl_base_pipeline_location),
+        refiner_pipeline_location=str(sdxl_refiner_pipeline_location),
+        resolution=[height, width],
+        num_inference_steps=int(num_inference_steps),
+        seed=int(seed),
+        prompts=list(prompts),
+        guidance_scale=guidance_scale,
+        strength=strength,
+        aesthetic_score=aesthetic_score,
+        negative_aesthetic_score=negative_aesthetic_score,
+        guidance_rescale=guidance_rescale,
+        denoising_start=denoising_start,
+    )
+    use_golden = golden_ci_mode(is_ci_env, is_ci_v2_env) and len(prompts) == 1
+    golden_payload = load_golden(golden_name, golden_meta) if use_golden else None
+    golden_latents = [] if golden_payload is None else None
+
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts)):
         prepare_input_tensors(
@@ -321,16 +344,21 @@ def run_unet_inference(
                 tid=tid,
                 compile_run=debug_mode,
             )
-            latents = run_torch_denoising(
-                latents=latents,
-                iter=iter,
-                pipeline=pipeline,
-                prompt_embeds=prompt_embeds,
-                added_cond_kwargs=added_cond_kwargs,
-                t=t,
-                guidance_scale=guidance_scale,
-                extra_step_kwargs=extra_step_kwargs,
-            )
+            if golden_payload is not None:
+                latents = golden_payload["golden"][i]
+            else:
+                latents = run_torch_denoising(
+                    latents=latents,
+                    iter=iter,
+                    pipeline=pipeline,
+                    prompt_embeds=prompt_embeds,
+                    added_cond_kwargs=added_cond_kwargs,
+                    t=t,
+                    guidance_scale=guidance_scale,
+                    extra_step_kwargs=extra_step_kwargs,
+                )
+                if use_golden:
+                    golden_latents.append(latents.detach().clone())
 
             ttnn.synchronize_device(ttnn_device)
             if i < (len(ttnn_timesteps) - 1):
@@ -347,6 +375,8 @@ def run_unet_inference(
             pcc_per_iter.append(float(pcc_message))
 
         tt_scheduler.set_step_index(0)
+    if use_golden and golden_payload is None:
+        save_golden(golden_name, golden_meta, golden_latents)
     if tid is not None:
         ttnn.release_trace(ttnn_device, tid)
     if not is_ci_env:

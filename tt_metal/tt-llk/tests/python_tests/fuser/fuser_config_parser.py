@@ -122,6 +122,7 @@ class FuserConfigSchema(BaseModel):
 
     dest_acc: DestAccumulation = DestAccumulation.No
     loop_factor: Annotated[int, Field(ge=1)] = 16
+    quasar_use_dvalid: bool = False
     operands: List[OperandDefinition] = Field(..., min_length=1)
     operations: List[OperationSchema] = Field(..., min_length=1)
 
@@ -188,12 +189,28 @@ class FuserConfigSchema(BaseModel):
             for op in self.operations
         ]
 
+        num_stages = len(pipeline)
+        for i, operation in enumerate(pipeline):
+            operation.stage_id = i + 1
+            operation.needs_pack_sync = any(
+                node.src_a.is_output
+                or (node.src_b is not None and node.src_b.is_output)
+                for node in operation.math.math_nodes
+                if hasattr(node, "unpacker") and node.unpacker is not None
+            )
+
+        for i, operation in enumerate(pipeline):
+            operation.has_pack_consumer = (
+                i + 1 < num_stages and pipeline[i + 1].needs_pack_sync
+            )
+
         return FuserConfig(
             pipeline=pipeline,
             global_config=GlobalConfig(
                 dest_acc=self.dest_acc,
                 test_name=test_name,
                 loop_factor=self.loop_factor,
+                quasar_use_dvalid=self.quasar_use_dvalid,
             ),
             operand_registry=operands,
         )
@@ -211,6 +228,8 @@ class FuserConfigSchema(BaseModel):
     @classmethod
     def load(cls, test_name: str):
         yaml_path = (FUSER_CONFIG_DIR / f"{test_name}.yaml").resolve()
+        if not yaml_path.exists():
+            yaml_path = (FUSER_CONFIG_DIR / arch.value / f"{test_name}.yaml").resolve()
         if not yaml_path.is_relative_to(FUSER_CONFIG_DIR.resolve()):
             raise ValueError(f"Invalid test name: {test_name}")
         if not yaml_path.exists():

@@ -13,20 +13,24 @@ Env:
   PREFILL_CHUNKED     "1" -> chunked prefill (chunk loop, cache-read path); "0" -> one-shot  [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
+  PREFILL_SKIP_PCC    "1" -> perf only: skip the per-layer golden KV PCC (no kv_cache/ needed) [default 0]
+  PREFILL_STANDALONE_CHUNKED_PCC  min K/V/index_k PCC gate (fail below this)                 [default 0.88]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
                       M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8" (cache holds both)      [default bf4]
   HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
 
 Run (after weights are present on disk):
-  cd /data/philei/tt-metal
-  export TT_METAL_HOME=/data/philei/tt-metal PYTHONPATH=/data/philei/tt-metal
+  cd <your tt-metal checkout>
+  export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd)
   source python_env/bin/activate
-  export HF_MODEL=/data/vmelnykov/MiniMax-M3-ref
+  # Real bf16 weights + the tilized per-tensor cache both live here (the cache dir is derived from
+  # HF_MODEL, so a complete cache means the ~869GB bf16 source is never read):
+  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-  # chunked over the 8192-token golden (two 5120 chunks), 5 timed iterations:
+  # chunked over the 10240-token golden (two 5120 chunks, no pad tail), 5 timed iterations:
   PREFILL_CHUNKED=1 PREFILL_TPS_ITERS=5 \
-    PREFILL_TRACE_DIR=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_8192 \
+    PREFILL_TRACE_DIR=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240 \
     python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
 """
 
@@ -86,11 +90,16 @@ def plan(n_tokens, chunk_size, chunked):
 def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config):
     """Per-layer K / V / index_k PCC: device cache (gather_layer) vs the golden trace. The device
     stores K / index_k Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so
-    permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle)."""
+    permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle).
+
+    Fails if overall min PCC is below PREFILL_STANDALONE_CHUNKED_PCC (default 0.88), matching
+    models/demos/minimax_m3/tt/runners/prefill_kv_validation.py.
+    """
     from safetensors import safe_open
 
     from models.common.utility_functions import comp_pcc
 
+    threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     head_dim = hf_config.head_dim
     rotary_dim = getattr(hf_config, "rotary_dim", head_dim)
     half = rotary_dim // 2
@@ -121,10 +130,13 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
             line += f" index_k={pcc_ik:.5f}"
         logger.info(line)
 
+    min_pcc = min(mins.values())
     logger.info(
         f"[kv-pcc] min PCC across {num_layers} layers: "
-        f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f}"
+        f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f} "
+        f"(overall {min_pcc:.5f}, threshold {threshold})"
     )
+    assert min_pcc >= threshold, f"KV-cache PCC {min_pcc:.5f} < threshold {threshold}"
     return mins
 
 
@@ -248,37 +260,68 @@ def main():
         print(f"[prefill-pcc] compiling ({num_layers}L, SP=8 × TP=4 + EP=32) ...", flush=True)
         runtime.compile(kv_cache)
 
-        # --- throughput: each iteration re-fills slot 0; the cache is valid after the last ---
+        # --- throughput. Each iteration re-fills slot 0 (valid for the PCC check after the loop) and
+        # times two distinct full-prefill passes, each with syncs placed so it pays for no extra barrier:
+        #   WHOLE SEQUENCE  all n_chunks cold from an empty cache, ONE sync at the very end
+        #                   -> time to prefill the whole prompt         (e.g. 55k @ 0 cache)
+        #   LAST CHUNK      pre-fill chunks 0..n-2, sync ONCE (barrier, NOT timed), then time only the
+        #                   final chunk against that accumulated cache   (e.g. 5k @ 50k cache)
         padded = token_ids + [0] * (total - n_tokens)
+        a_last = (n_chunks - 1) * chunk  # context tokens already in cache ahead of the final chunk
+        last_len = min(a_last + chunk, total) - a_last  # width of the final chunk (incl pad)
 
-        def run_once():
+        def prefill_chunk(c):
+            a = c * chunk
+            inp = runtime.make_chunk_input(padded[a : a + chunk])
+            runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
+
+        def run_whole():  # cold, no mid-loop syncs — one barrier at the end
             for c in range(n_chunks):
-                a = c * chunk
-                inp = runtime.make_chunk_input(padded[a : a + chunk])
-                runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
+                prefill_chunk(c)
             ttnn.synchronize_device(mesh)
 
-        times = []
+        def run_last_chunk():  # returns the timed last-chunk wall seconds
+            for c in range(n_chunks - 1):
+                prefill_chunk(c)
+            ttnn.synchronize_device(mesh)  # barrier before the timed region — NOT counted
+            t0 = time.perf_counter()
+            prefill_chunk(n_chunks - 1)
+            ttnn.synchronize_device(mesh)
+            return time.perf_counter() - t0
+
+        whole_times, last_times = [], []
         for i in range(tps_iters):
             t0 = time.perf_counter()
-            run_once()
-            dt = time.perf_counter() - t0
-            times.append(dt)
+            run_whole()
+            whole_times.append(time.perf_counter() - t0)
+            last_times.append(run_last_chunk())
             print(
-                f"[prefill-pcc] iter {i}: {dt * 1000:.1f} ms  "
-                f"{n_tokens / dt:.1f} tok/s (real)  {total / dt:.1f} tok/s (incl pad)",
+                f"[prefill-pcc] iter {i}: whole {whole_times[-1] * 1000:.1f} ms  "
+                f"last_chunk {last_times[-1] * 1000:.1f} ms",
                 flush=True,
             )
-        med = statistics.median(times)
+
+        w = statistics.median(whole_times)
         print(
-            f"[prefill-pcc] THROUGHPUT over {tps_iters} iters: median {n_tokens / med:.1f} tok/s (real prompt), "
-            f"{total / med:.1f} tok/s (processed); wall median {med * 1000:.1f} ms "
-            f"[min {min(times) * 1000:.1f}, max {max(times) * 1000:.1f}]",
+            f"[prefill-pcc] WHOLE SEQUENCE over {tps_iters} iters: {n_tokens} tok @ 0 cache, "
+            f"median {n_tokens / w:.1f} tok/s (real prompt), {total / w:.1f} tok/s (processed); "
+            f"wall median {w * 1000:.1f} ms [min {min(whole_times) * 1000:.1f}, max {max(whole_times) * 1000:.1f}]",
+            flush=True,
+        )
+        lc = statistics.median(last_times)
+        print(
+            f"[prefill-pcc] LAST CHUNK over {tps_iters} iters: {last_len} tok @ {a_last} cache, "
+            f"median {last_len / lc:.1f} tok/s; "
+            f"wall median {lc * 1000:.1f} ms [min {min(last_times) * 1000:.1f}, max {max(last_times) * 1000:.1f}]",
             flush=True,
         )
 
-        # --- accuracy: per-layer KV PCC vs golden ---
-        check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
+        # --- accuracy: per-layer KV PCC vs golden (skipped in perf-only mode; synthetic
+        # traces carry only metadata.json, so there is no golden KV cache to compare against) ---
+        if os.environ.get("PREFILL_SKIP_PCC") == "1":
+            print("[prefill-pcc] PREFILL_SKIP_PCC=1 -> skipping per-layer KV PCC", flush=True)
+        else:
+            check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
         print("[prefill-pcc] DONE", flush=True)
     finally:
         ttnn.close_mesh_device(mesh)

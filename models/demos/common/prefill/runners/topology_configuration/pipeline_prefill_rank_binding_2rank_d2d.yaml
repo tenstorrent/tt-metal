@@ -4,8 +4,9 @@
 # but the cross-rank hidden state goes device-to-device over inter-galaxy fabric (a MeshSocket pair)
 # instead of the host/NFS file round-trip. rank 0 (mesh 0) sends to rank 1 (mesh 1); rank 1 receives.
 #
-# Launch on d07u02 + d07u08:
-#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+# Model + run-profile come from PREFILL_MANIFEST, passed at launch:
+#   PREFILL_MANIFEST=models/demos/deepseek_v3_d_p/tt/runners/manifests/deepseek_v3.json \
+#     ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
 #     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_2rank_d2d.yaml \
 #     bh-glx-d07u02:1,bh-glx-d07u08:1
 
@@ -22,14 +23,7 @@ rank_bindings:
 # Connected 2x 8x4 BH-galaxy MGD: one inter-galaxy fabric link (mesh 0 <-> mesh 1).
 mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
 
+# Topology + transport only — model and run-profile (PCC, chunk count, model knobs) come from PREFILL_MANIFEST.
 global_env:
-  PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop
-  # Device-to-device socket transport (needs the connected MGD + 2D fabric below).
-  PREFILL_FABRIC_MODE: "2d"
-
-  # Per-rank KV-cache PCC gate.
-  PREFILL_STANDALONE_PCC: "1"
-
-  # 11 chunks x 5120 = 56320 tokens (full golden trace); max_seq_len auto-derives.
-  PREFILL_STANDALONE_NCHUNKS: "11"
-  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+  PREFILL_STANDALONE: "1"   # standalone (bring-up/pipeline) mode, not the production request loop
+  PREFILL_FABRIC_MODE: "2d"  # D2D socket transport needs FABRIC_2D

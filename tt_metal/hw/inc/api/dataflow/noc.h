@@ -6,7 +6,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "internal/debug/noc_zero_guard.h"
-
 template <typename DSpecT>
 class TensorAccessor;
 
@@ -65,6 +64,8 @@ constexpr bool has_flag(NocOptions opts, NocOptions flag) noexcept {
  * Fields are only inspected when the corresponding NocOptions flag is set:
  *   - vc  : used when NocOptions::CUSTOM_VC is set
  *   - trid: used when NocOptions::TXN_ID is set
+ *           WH/BH: [0, NOC_MAX_TRANSACTION_ID]
+ *           Quasar: [0, USER_TXN_ID_MAX] (Runtime owns [DFB_TXN_ID_BASE, HW_TXN_ID_MAX])
  */
 struct NocOptVals {
     uint32_t vc   = NOC_UNICAST_WRITE_VC;
@@ -159,6 +160,7 @@ public:
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
+            DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             noc_async_read_set_trid(noc_opts.trid, noc_id_);
             while (noc_available_transactions(noc_id_, noc_opts.trid) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2)) {
                 // Busy-wait until sufficient transactions are available for the configured transaction ID.
@@ -217,6 +219,7 @@ public:
         ncrisc_noc_read_set_state<noc_mode, max_page_size <= NOC_MAX_BURST_SIZE, has_flag(opts, NocOptions::CUSTOM_VC)>(
             noc_id_, read_cmd_buf, src_noc_addr, size_bytes, noc_opts.vc);
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
+            DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             noc_async_read_set_trid(noc_opts.trid, noc_id_);
         }
         WAYPOINT("NASD");
@@ -262,6 +265,7 @@ public:
                 max_page_size <= NOC_MAX_BURST_SIZE,
                 "NocOptions::TXN_ID for async_read_with_state requires one-packet mode "
                 "(max_page_size <= NOC_MAX_BURST_SIZE)");
+            DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             noc_async_read_one_packet_with_state_with_trid(
                 0,
                 (uint32_t)get_src_ptr<AddressType::NOC>(src, src_args),
@@ -317,6 +321,7 @@ public:
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
             // TODO (#31535): Need to add check in ncrisc_noc_fast_write_any_len to ensure outstanding transaction
             // register does not overflow
+            DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             WAYPOINT("NAWW");
             auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
             auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
@@ -587,6 +592,7 @@ public:
      * @param trid Transaction ID to check (must match what was passed to async_read<NocOptions::TXN_ID>)
      */
     bool is_read_trid_flushed(uint32_t trid) const {
+        DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, trid);
         return ncrisc_noc_read_with_transaction_id_flushed(noc_id_, trid);
     }
 
@@ -604,6 +610,7 @@ public:
     template <NocOptions opts = NocOptions::DEFAULT>
     void async_read_barrier(const NocOptVals& noc_opts = {}) const {
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
+            DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             noc_async_read_barrier_with_trid(noc_opts.trid, noc_id_);
         } else {
             noc_async_read_barrier(noc_id_);
@@ -624,6 +631,7 @@ public:
     template <NocOptions opts = NocOptions::DEFAULT>
     void async_write_barrier(const NocOptVals& noc_opts = {}) const {
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
+            DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             noc_async_write_barrier_with_trid(noc_opts.trid, noc_id_);
         } else {
             noc_async_write_barrier(noc_id_);
@@ -651,6 +659,7 @@ public:
         } else {  // non-posted
             if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
                 static_assert(noc_mode != DM_DYNAMIC_NOC);  // TODO make an issue for this
+                DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
                 noc_async_write_flushed_with_trid(noc_opts.trid, noc_id_);
             } else {
                 noc_async_writes_flushed(noc_id_);

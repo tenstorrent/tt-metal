@@ -16,10 +16,10 @@ using FlowUid = uint32_t;
 
 struct FlowDescriptor {
     FabricNodeId src_node_id;
-    CoreCoord src_logical_core;
+    tt::tt_metal::CoreCoord src_logical_core;
 
     std::vector<FabricNodeId> dst_node_ids;
-    CoreCoord dst_logical_core;
+    tt::tt_metal::CoreCoord dst_logical_core;
 
     uint32_t link_id = 0;
     uint8_t vc_id = 0;
@@ -270,8 +270,8 @@ struct TestTrafficConfig {
     FabricNodeId src_node_id;
     std::optional<std::vector<FabricNodeId>> dst_node_ids;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
-    std::optional<CoreCoord> src_logical_core;
-    std::optional<CoreCoord> dst_logical_core;
+    std::optional<tt::tt_metal::CoreCoord> src_logical_core;
+    std::optional<tt::tt_metal::CoreCoord> dst_logical_core;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
     uint32_t link_id = 0;  // Link ID for multi-link tests
@@ -290,7 +290,7 @@ struct TestTrafficConfig {
 struct ReceiverCreditInfo {
     FabricNodeId receiver_node_id;
     FabricNodeId sender_node_id;
-    CoreCoord sender_logical_core;
+    tt::tt_metal::CoreCoord sender_logical_core;
     uint32_t sender_noc_encoding;
     uint32_t credit_return_address;
 
@@ -306,7 +306,7 @@ struct TestTrafficSenderConfig {
     std::vector<FabricNodeId> dst_node_ids;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<FabricNodeId> mcast_start_node_id;
-    CoreCoord dst_logical_core;
+    tt::tt_metal::CoreCoord dst_logical_core;
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
     uint32_t dst_noc_encoding;     // TODO: decide if we should keep it here or not

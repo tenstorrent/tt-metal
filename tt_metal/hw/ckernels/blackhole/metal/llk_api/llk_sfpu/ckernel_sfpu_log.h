@@ -34,6 +34,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
@@ -132,6 +133,7 @@ inline void calculate_log(uint log_base_scale_factor) {
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     const float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
     const float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
     // e represents k << 23 rather than k, so pre-fold the 2^(-23) factor into

@@ -127,7 +127,8 @@ Tensor batch_norm(
     auto output_tensor = ttnn::prim::batch_norm(
         input, batch_mean, batch_var, eps, weight, bias, output, memory_config, compute_kernel_config);
 
-    if (training) {
+    // Skip when neither running stat is provided: the return value is discarded.
+    if (training && (running_mean.has_value() || running_var.has_value())) {
         ttnn::prim::running_statistics(
             batch_mean, batch_var, momentum, running_mean, running_var, memory_config, compute_kernel_config);
     }

@@ -36,8 +36,21 @@ package tt.tt_fabric.proto;
 // - chip_id: The chip identifier within that mesh, enumerated in row-major order
 //            based on the mesh's device_topology dimensions
 message LogicalFabricNodeId {
-    uint32 mesh_id = 1;    // Mesh identifier
-    uint32 chip_id = 2;    // Chip identifier within the mesh
+    optional uint32 mesh_id = 1;    // Mesh identifier (mutually exclusive with mesh_id_regex)
+    optional uint32 chip_id = 2;    // Chip identifier within the mesh (mutually exclusive with chip_id_regex)
+
+    // Pattern alternatives to mesh_id / chip_id. When a *_regex string is non-empty it must be
+    // the sole selector for that dimension -- do not also set the corresponding numeric field.
+    // Expanded against the valid domain (instantiated mesh ids for mesh_id_regex; 0..chip_count-1
+    // of the matched mesh for chip_id_regex). Supported syntax:
+    //   - inclusive numeric range   "0-8"        -> 0,1,...,8
+    //   - comma list of the above   "0,2,4-6"    -> 0,2,4,5,6
+    //   - regex (std::regex) match  "\\d*[02468]" -> every even id (matched full-string)
+    // When mesh_id_regex is used, the whole pinning entry is replicated PER matched mesh
+    // (one all-to-all group per mesh), so the per-mesh bijection is preserved. This lets a
+    // single entry stand in for many identical per-mesh pinning blocks.
+    string mesh_id_regex = 3;
+    string chip_id_regex = 4;
 }
 
 // -----------------------------------------------------------------------------
@@ -46,20 +59,47 @@ message LogicalFabricNodeId {
 // - tray_id: The tray identifier from the cluster descriptor
 // - asic_location: The ASIC location within that tray, as defined in the cluster descriptor
 message PhysicalAsicPosition {
-    uint32 tray_id = 1;         // Tray identifier
-    uint32 asic_location = 2;   // ASIC location within the tray
+    optional uint32 tray_id = 1;         // Tray identifier (mutually exclusive with tray_id_regex)
+    optional uint32 asic_location = 2;   // ASIC location within the tray (mutually exclusive with asic_location_regex)
+
+    // Pattern alternatives to tray_id / asic_location. When a *_regex string is non-empty it must be
+    // the sole selector for that dimension -- do not also set the corresponding numeric field.
+    // Expanded against ids 0..255 (cluster-valid positions are filtered later at mapping time).
+    // Supported syntax matches LogicalFabricNodeId: inclusive ranges ("1-4"), comma lists ("2,3,6,7"),
+    // and full-string std::regex matches.
+    string tray_id_regex = 3;
+    string asic_location_regex = 4;
 }
 
 // -----------------------------------------------------------------------------
 // AsicPinning
-// Maps a logical fabric node to a physical ASIC position.
-// Used to constrain which physical ASIC a logical node can be mapped to.
+// Constrains which physical ASIC(s) a logical fabric node may be mapped to.
+//
+// All-to-all semantics: a single AsicPinning entry may list multiple logical
+// fabric nodes AND multiple physical ASIC positions. Any listed logical node may
+// map to any listed physical position (the solver still enforces a bijection, so
+// distinct logical nodes land on distinct ASICs). Listing one of each reproduces
+// the classic one-to-one pin, so existing single-entry textprotos keep working.
+//
+// Example (all 4 corners may land on any of the 4 tray-corner ASICs):
+//   pinnings {
+//     logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+//     logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+//     logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+//     logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+//     physical_asic_position { tray_id: 1 asic_location: 1 }
+//     physical_asic_position { tray_id: 2 asic_location: 1 }
+//     physical_asic_position { tray_id: 3 asic_location: 1 }
+//     physical_asic_position { tray_id: 4 asic_location: 1 }
+//   }
 message AsicPinning {
-    // Logical fabric node to pin
-    LogicalFabricNodeId logical_fabric_node_id = 1;
+    // Logical fabric node(s) to pin. Must be non-empty. A given logical node may
+    // appear in at most one AsicPinning entry across the whole descriptor.
+    repeated LogicalFabricNodeId logical_fabric_node_id = 1;
 
-    // Physical ASIC position where the fabric node should be pinned
-    PhysicalAsicPosition physical_asic_position = 2;
+    // Physical ASIC position(s) the listed fabric node(s) may be pinned to. Must
+    // be non-empty. Any listed node may map to any listed position (all-to-all).
+    repeated PhysicalAsicPosition physical_asic_position = 2;
 }
 
 message MeshGraphDescriptor {

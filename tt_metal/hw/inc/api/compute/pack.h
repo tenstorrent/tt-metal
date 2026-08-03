@@ -20,7 +20,9 @@ namespace ckernel {
 /**
  * Initializes the packer to pack tiles into the specified output circular buffer.
  *
- * Call this function before using `pack_tile` or `pack_tile_block`.
+ * This explicit init is only needed when packing without an op-specific init. `pack_tile` /
+ * `pack_block` do not require it once a preceding op-specific init (`tilize_init`, `reduce_init`,
+ * etc.) has already configured the packer — see the NOTE on `pack_tile`.
  *
  * Return value: None
  *
@@ -96,25 +98,30 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 // clang-format off
 /**
  * Copies a block of tiles from the DEST register buffer starting at a specified index
- * to a specified circular buffer (CB). The DEST register buffer must be in acquired
+ * to a specified circular buffer (CB). This is the uniform block entry point for the pack
+ * op group. The DEST register buffer must be in acquired
  * state via *acquire_dst* call. This call is blocking and is only available on the
  * compute engine. Before calling this function, cb_reserve_back(n) must be called to
- * reserve at least n > 0 tiles in the output CB. Each call to `pack_tile_block` will
+ * reserve at least n > 0 tiles in the output CB. Each call to `pack_block` will
  * copy `ntiles` tiles from the DEST register to the reserved region of the CB, starting
  * from index 0. The internal write pointer in the CB is advanced by `ntiles` after each
  * call, and is reset by another cb_push_back call. Operates in tandem with functions
  * cb_reserve_back and cb_push_back.
  *
  * A typical use case is for the producer to ensure that there are enough tiles available
- * in the buffer via cb_reserve_back, then use pack_tile_block to copy a block of tiles
+ * in the buffer via cb_reserve_back, then use pack_block to copy a block of tiles
  * from the DEST slots to the reserved space in the CB, and finally call cb_push_back to
  * announce visibility of the reserved section of the circular buffer to the consumer.
  *
- * NOTE: pack_tile_block doesn't need explicit initialization function prior to its call. Other op-specific
+ * NOTE: pack_block doesn't need explicit initialization function prior to its call. Other op-specific
  * initialization functions (such as `tilize_init`, `reduce_init`, etc.) ensure proper initialization
  * of the packer. The reason for this stems from the fact that MATH and PACK threads need to be explicitly
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
+ *
+ * NOTE: In the future the block pack must be folded further into a hardware MOP / REPLAY buffer (as
+ * is being done for Quasar) inside llk-lib, without changing this signature. Tracked under the Compute
+ * API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47480.
  *
  * Return value: None
  *
@@ -125,13 +132,32 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
  */
 // clang-format on
-ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
+}
+
+// clang-format off
+/**
+ * @deprecated Renamed to `pack_block()`. This forwarding shim is retained only for backwards
+ * compatibility and will be removed after August 15th, 2026 (see .github/deprecations.json).
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                       | Type     | Valid Range                                          | Required |
+ * |------------|-----------|---------------------------------------------------|----------|------------------------------------------------------|----------|
+ * | Function   | ifrom_dst | The index of the first tile in the DEST register  | uint32_t | Must be less than the size of the DEST register (16) | True     |
+ * | Function   | icb       | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                              | True     |
+ * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
+ */
+// clang-format on
+[[deprecated("Renamed to pack_block(); pack_tile_block will be removed after August 15th, 2026.")]] ALWI void
+pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+    pack_block(ifrom_dst, icb, ntiles);
 }
 
 // clang-format off

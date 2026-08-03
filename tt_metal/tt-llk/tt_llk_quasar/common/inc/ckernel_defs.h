@@ -60,6 +60,9 @@ enum class BinaryOp : std::uint8_t
     GE,
     MAX,
     MIN,
+    QUANT,
+    REQUANT,
+    DEQUANT,
 };
 
 // For instructions that address lower/upper 16 bits of a register

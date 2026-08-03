@@ -93,6 +93,11 @@ void kernel_main() {
             output_mapping_page_size_bytes,
             {.offset_bytes = 0},
             {.page_id = bs, .offset_bytes = 0});
+        // WAR: the next iteration's fill_with_val overwrites output_l1_addr, so the mapping write
+        // must finish reading it as source first. A flush (departed) guarantees the source has been
+        // read into the NoC and preserves remote-completion overlap; landing is drained once after
+        // the loop. Mirrors the reduced-buffer path below.
+        noc.async_writes_flushed();
 
         if (found) {
             data_dfb.pop_front(1);
@@ -107,12 +112,17 @@ void kernel_main() {
                 output_reduced_page_size_bytes,
                 {.offset_bytes = 0},
                 {.page_id = reduce_idx++, .offset_bytes = 0});
-            noc.async_write_barrier();
+            // WAR on reduced_l1_addr, same as the mapping path: flush (source read) is enough here,
+            // final landing is drained after the loop.
+            noc.async_writes_flushed();
             tt::data_movement::common::fill_with_val<uint16_t>(reduced_l1_addr, num_local_experts, 0u);
             reduction_count = 0;
         }
 
         metadata_dfb.pop_front(1);
     }
+    // Final drain: the per-iteration guards above only flush (depart); land all mapping/reduced
+    // writes before the kernel returns so the downstream op can't read not-yet-landed output.
+    noc.async_write_barrier();
     local_experts_dfb.pop_front(1);
 }

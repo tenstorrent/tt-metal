@@ -5,6 +5,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 using namespace sfpi;
 
@@ -12,6 +13,7 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void rand_init(uint32_t seed) {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     init_prng_seed(seed);
 }
 

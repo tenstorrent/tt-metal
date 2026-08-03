@@ -16,10 +16,11 @@
 #include <type_traits>
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
@@ -38,7 +39,7 @@ HostTensor create_simple_host_tensor(const Shape& shape, DataType dtype = DataTy
     auto spec = create_simple_spec(shape, dtype);
     auto buffer = DistributedHostBuffer::create(distributed::MeshShape{1});
     auto topology = TensorTopology();
-    return HostTensor::from_buffer(std::move(buffer), std::move(spec), std::move(topology));
+    return host_tensor_from_buffer_with_topology(std::move(buffer), std::move(spec), std::move(topology));
 }
 
 // Type trait tests verifying HostTensor's semantic constraints
@@ -75,12 +76,11 @@ TEST(HostTensorTest, ConstructionWithSpec) {
 TEST(HostTensorTest, ConstructionWithHostBuffer) {
     Shape shape{2, 32};
     auto spec = create_simple_spec(shape, DataType::FLOAT32);
-    auto topology = TensorTopology();
 
     std::vector<float> data(shape.volume(), 1.0f);
     HostBuffer host_buffer(std::move(data));
 
-    HostTensor tensor = HostTensor::from_buffer(std::move(host_buffer), std::move(spec), std::move(topology));
+    HostTensor tensor = HostTensor::from_buffer(std::move(host_buffer), std::move(spec));
 
     EXPECT_EQ(tensor.logical_shape(), shape);
     EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);
@@ -183,7 +183,7 @@ TEST(HostTensorTest, TensorTopologyAccess) {
     Shape shape{4, 32};
     auto tensor = create_simple_host_tensor(shape);
 
-    const auto& topology = tensor.tensor_topology();
+    const auto& topology = get_tensor_topology(tensor);
     // Default topology should have distribution shape of {1}
     EXPECT_EQ(topology.distribution_shape().dims(), 1);
 }

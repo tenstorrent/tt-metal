@@ -623,6 +623,56 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     def cache_path(self):
         return self.model_args[0].weight_cache_path(ttnn.bfloat16)
 
+    def _chunk_prefill_page_table(self, page_table, *, user_id, model_id=-1, kv_cache=None):
+        """Use a full-attention layer's per-layer table for multi-chunk fill.
+
+        vLLM's legacy ``page_table`` is ``block_tables_per_group[0]`` — the
+        sliding group. Full-attention ``paged_fill_cache`` writes via
+        ``chunk_page_table``, which must be sliced from the *full* group's
+        block IDs at that group's **effective** block_size (the same value
+        ``paged_fill_cache`` / chunked SDPA use). On 31B TP=4 that is 128
+        (HMA-shared buffer declared as sliding ``[4, 64, 256]`` → full view
+        ``eff_bs = 4*64*256/(1*512) = 128``), matching vLLM's unified full-
+        group page-table column stride. Using head_dim-only scaling (32)
+        walks past the allocated columns and fills chunk 2+ from zeros —
+        the 16k garbage cliff. Sliding fill still uses ``layer_page_table``
+        (``cache_position_modulo`` path in ``attention/prefill.py``).
+        """
+        del user_id
+        from models.demos.gemma4.tt.attention.operations import effective_block_size
+
+        model = self.model[model_id]
+        per_layer = getattr(model, "_active_page_tables_per_layer", None)
+        if per_layer is None or kv_cache is None:
+            return super()._chunk_prefill_page_table(page_table, user_id=0, model_id=model_id, kv_cache=kv_cache)
+
+        text_config = getattr(model.hf_config, "text_config", model.hf_config)
+        layer_types = getattr(text_config, "layer_types", None) or []
+        full_idx = next((i for i, lt in enumerate(layer_types) if lt == "full_attention"), None)
+        if full_idx is None or full_idx >= len(per_layer) or per_layer[full_idx] is None:
+            return super()._chunk_prefill_page_table(page_table, user_id=0, model_id=model_id, kv_cache=kv_cache)
+
+        full_pt = per_layer[full_idx]
+        # Persistent / ttnn tensors are device-side; chunk slicing needs a host
+        # torch table. Fall back to legacy if the stash was already converted.
+        if not isinstance(full_pt, torch.Tensor):
+            return super()._chunk_prefill_page_table(page_table, user_id=0, model_id=model_id, kv_cache=kv_cache)
+
+        if full_idx >= len(kv_cache) or kv_cache[full_idx] is None:
+            return super()._chunk_prefill_page_table(page_table, user_id=0, model_id=model_id, kv_cache=kv_cache)
+
+        cache = kv_cache[full_idx][0]
+        attn = model.layers[full_idx].self_attn
+        cfg = attn.config
+        weights = getattr(attn, "weights", None)
+        tp = getattr(getattr(model, "mesh_config", None), "tp", 1) or 1
+        if weights is not None and getattr(weights, "kv_replicated", False):
+            nkv_local = 1
+        else:
+            nkv_local = max(1, int(cfg.num_key_value_heads) // tp)
+        full_block_size = int(effective_block_size(cache, int(cfg.head_dim), nkv_local))
+        return full_pt, full_block_size
+
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         page_tables_per_layer = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
         page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(page_tables_per_layer, kwargs.get("kv_cache"))

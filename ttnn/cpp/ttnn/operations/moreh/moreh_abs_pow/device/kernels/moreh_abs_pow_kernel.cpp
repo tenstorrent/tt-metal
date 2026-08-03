@@ -4,50 +4,31 @@
 #include "api/debug/dprint.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    int i{0};
-    const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
-    const auto Wt = get_arg_val<uint32_t>(i++);
-    const auto origin_w = get_arg_val<uint32_t>(i++);
-    const auto p = get_arg_val<uint32_t>(i++);
-    const bool p_is_negative = get_arg_val<uint32_t>(i++) == 1;
-
-    std::uint8_t input_id{tt::CB::c_in0};
-    const auto cb_x = input_id++;        // input
-    const auto cb_one = input_id++;      // one
-    const auto cb_decimal = input_id++;  // decimal
-    const auto cb_mask_w = input_id++;   // mask_w
-
-    std::uint8_t output_id{tt::CB::c_out0};
-    const auto cb_y = output_id++;  // output
-
-    std::uint8_t intermed_id{tt::CB::c_intermed0};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-    const auto cb_tmp2 = intermed_id++;
-    const auto cb_tmp3 = intermed_id++;
-
-    const auto cb_xabs = cb_tmp0;      // |x|
-    const auto cb_xpow = cb_tmp1;      // |x|^p
-    const auto cb_logx = cb_tmp2;      // log(|x|)
-    const auto cb_exp_lxmd = cb_tmp3;  // exp(log(|x|) * decimal)
+    const auto num_rows_per_core = get_arg(args::num_rows_per_core);
+    const auto Wt = get_arg(args::Wt);
+    const auto origin_w = get_arg(args::origin_w);
+    const auto p = get_arg(args::p);
+    const bool p_is_negative = get_arg(args::p_is_negative) == 1;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
+    // Input/output roles map to the c_in0 / c_out0 DFBs (input == x, output == y).
+    binary_op_init_common(dfb::x, dfb::x, dfb::y);
 
-    DataflowBuffer dfb_x_obj(cb_x);
-    DataflowBuffer dfb_one_obj(cb_one);
-    DataflowBuffer dfb_decimal_obj(cb_decimal);
-    DataflowBuffer dfb_mask_w_obj(cb_mask_w);
-    DataflowBuffer dfb_y_obj(cb_y);
-    DataflowBuffer dfb_xabs_obj(cb_xabs);
-    DataflowBuffer dfb_xpow_obj(cb_xpow);
-    DataflowBuffer dfb_logx_obj(cb_logx);
-    DataflowBuffer dfb_exp_lxmd_obj(cb_exp_lxmd);
+    DataflowBuffer dfb_x_obj(dfb::x);                // input
+    DataflowBuffer dfb_one_obj(dfb::one);            // one
+    DataflowBuffer dfb_decimal_obj(dfb::decimal);    // decimal
+    DataflowBuffer dfb_mask_w_obj(dfb::mask_w);      // mask_w
+    DataflowBuffer dfb_y_obj(dfb::y);                // output
+    DataflowBuffer dfb_xabs_obj(dfb::xabs);          // |x|
+    DataflowBuffer dfb_xpow_obj(dfb::xpow);          // |x|^p
+    DataflowBuffer dfb_logx_obj(dfb::logx);          // log(|x|)
+    DataflowBuffer dfb_exp_lxmd_obj(dfb::exp_lxmd);  // exp(log(|x|) * decimal)
 
     dfb_one_obj.wait_front(onetile);
     dfb_decimal_obj.wait_front(onetile);
@@ -66,11 +47,11 @@ void kernel_main() {
             dfb_xabs_obj.reserve_back(onetile);
 
             copy_tile_init_with_dt(dfb_x_obj);
-            copy_tile(cb_x, 0, dst0);
+            copy_tile(dfb::x, 0, dst0);
 
             if (do_mask_w && (col_idx == Wt - 1)) {
                 copy_tile_init_with_dt(dfb_mask_w_obj);
-                copy_tile(cb_mask_w, 0, dst1);
+                copy_tile(dfb::mask_w, 0, dst1);
 
                 mask_tile_init();
                 mask_tile(dst0, dst1);

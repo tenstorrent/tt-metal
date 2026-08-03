@@ -23,11 +23,11 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     uint32_t inbound_vc_idx,
     uint32_t /*sender_channel_idx*/,
     eth_chan_directions downstream_direction,
-    CoreCoord downstream_noc_xy,
+    tt::tt_metal::CoreCoord downstream_noc_xy,
     bool is_2D_routing) {
     // Track connections per VC for packing
     downstream_edms_connected_by_vc.at(inbound_vc_idx)
-        .push_back({downstream_direction, CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
+        .push_back({downstream_direction, tt::tt_metal::CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
 
     if (is_2D_routing) {
         // Calculate compact index based on downstream_direction relative to my_direction
@@ -69,7 +69,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
 }
 
 void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
-    const SenderWorkerAdapterSpec& adapter_spec, eth_chan_directions /*tensix_direction*/, CoreCoord tensix_noc_xy) {
+    const SenderWorkerAdapterSpec& adapter_spec, eth_chan_directions /*tensix_direction*/, tt::tt_metal::CoreCoord tensix_noc_xy) {
     this->relay_connection_info.noc_xy = tensix_noc_xy;
     this->relay_connection_info.buffer_base_address = adapter_spec.edm_buffer_base_addr;
     this->relay_connection_info.worker_registration_address = adapter_spec.edm_connection_handshake_addr;
@@ -270,10 +270,10 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
  * X and Y have separate uint32s
  */
 uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
-    const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_max_receiver_channels>&
+    const std::array<std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>, builder_config::num_max_receiver_channels>&
         downstream_edms_connected_by_vc,
     uint32_t vc_idx,
-    const std::function<uint32_t(CoreCoord)>& get_noc_ord) const {
+    const std::function<uint32_t(tt::tt_metal::CoreCoord)>& get_noc_ord) const {
     if (!is_2D_routing) {
         // 1D routing: single downstream connection
         if (downstream_edms_connected_by_vc[vc_idx].empty()) {

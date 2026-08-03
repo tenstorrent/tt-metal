@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
@@ -13,7 +13,7 @@
 //
 // Dense RM reduce writer (handles both W reduce and H reduce; branched on REDUCE_DIM).
 //
-// Compute packs one or more output tiles per work unit into cb_id_tile (c_3). The writer extracts
+// Compute packs one or more output tiles per work unit into dfb_id_tile (c_3). The writer extracts
 // the meaningful datums from those tiles and emits them into the corresponding RM output pages.
 //
 // W reduce path (REDUCE_DIM == REDUCE_ROW):
@@ -49,14 +49,14 @@ void reduce_rm_writer() {
     constexpr uint32_t datum_bytes = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 1 : 4>();
 
-    constexpr uint32_t cb_id_tile = tt::CBIndex::c_3;
+    constexpr uint32_t dfb_id_tile = tt::CBIndex::c_3;
     constexpr uint32_t onetile = 1;
 
-    const uint32_t tile_size_bytes = get_tile_size(cb_id_tile);
+    const uint32_t tile_size_bytes = get_tile_size(dfb_id_tile);
     const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb_tile(cb_id_tile);
+    DataflowBuffer dfb_tile(dfb_id_tile);
 
     if constexpr (DIM == ckernel::ReduceDim::REDUCE_ROW) {
         //
@@ -71,21 +71,21 @@ void reduce_rm_writer() {
 
         uint32_t rows_written = 0;
         while (rows_written < num_rows) {
-            cb_tile.wait_front(onetile);
+            dfb_tile.wait_front(onetile);
             const uint32_t rows_this_tile = ((num_rows - rows_written) < tt::constants::TILE_HEIGHT)
                                                 ? (num_rows - rows_written)
                                                 : tt::constants::TILE_HEIGHT;
             for (uint32_t r = 0; r < rows_this_tile; ++r) {
                 const uint32_t tile_scalar_idx = get_tilized_idx(r, 0);
                 noc.async_write(
-                    cb_tile,
+                    dfb_tile,
                     dst_accessor,
                     datum_bytes,
                     {.offset_bytes = tile_scalar_idx * datum_bytes},
                     {.page_id = start_page + rows_written + r, .offset_bytes = 0});
             }
             noc.async_write_barrier();
-            cb_tile.pop_front(onetile);
+            dfb_tile.pop_front(onetile);
             rows_written += rows_this_tile;
         }
     } else {
@@ -121,7 +121,7 @@ void reduce_rm_writer() {
                 wt_in_chunk = outputs_remaining;
             }
 
-            cb_tile.wait_front(wt_in_chunk);
+            dfb_tile.wait_front(wt_in_chunk);
 
             for (uint32_t wt = 0; wt < wt_in_chunk; ++wt) {
                 const uint32_t w_tile_col = wt_in_nc + wt;
@@ -140,7 +140,7 @@ void reduce_rm_writer() {
                     const uint32_t face_valid = (valid_cols - face_col) < face_w ? (valid_cols - face_col) : face_w;
                     const uint32_t src_idx_in_tile = get_tilized_idx(0, face_col);
                     noc.async_write(
-                        cb_tile,
+                        dfb_tile,
                         dst_accessor,
                         face_valid * datum_bytes,
                         {.offset_bytes = wt * tile_size_bytes + src_idx_in_tile * datum_bytes},
@@ -149,7 +149,7 @@ void reduce_rm_writer() {
             }
 
             noc.async_write_barrier();
-            cb_tile.pop_front(wt_in_chunk);
+            dfb_tile.pop_front(wt_in_chunk);
 
             wt_in_nc += wt_in_chunk;
             outputs_remaining -= wt_in_chunk;

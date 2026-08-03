@@ -18,7 +18,7 @@
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
 // under 2D it consumes route_info.dst_chip_id + dst_mesh_id. The 2D fabric_route (EDM index)
-// still has to be recomputed from dest_mesh_ids/dest_chip_ids — see note in writer_dispatch.cpp.
+// still has to be recomputed from dest_mesh_ids/dest_chip_ids — see note in writer_sender_dispatch.cpp.
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG

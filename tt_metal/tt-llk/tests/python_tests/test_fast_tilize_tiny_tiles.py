@@ -4,6 +4,7 @@
 import pytest
 import torch
 from conftest import skip_for_blackhole
+from helpers.device_io import read_from_device
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict, format_tile_sizes
 from helpers.param_config import input_output_formats, parametrize
@@ -19,7 +20,6 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-from ttexalens.tt_exalens_lib import read_from_device
 
 TILE_DIMENSIONS = [16, 32]
 

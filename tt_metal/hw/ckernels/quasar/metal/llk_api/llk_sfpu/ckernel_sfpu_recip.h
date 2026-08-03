@@ -6,28 +6,101 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_ops.h"
+#include "ckernel_trisc_common.h"
+#include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
+// Computes the reciprocal of a floating point value x.
+// max_iter selects the accuracy:
+//   0    -> approximate reciprocal only (sfpi::approx_recip, ~7-bit mantissa)
+//   1/2  -> Newton-Raphson refinement on top of the approximation (near full precision)
+template <int max_iter = 2>
+sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x) {
+    static_assert(max_iter >= 0 && max_iter <= 2, "max_iter must be between 0 and 2");
+
+    // sfpi::approx_recip(x) will return ±0 for x = ±inf or x ≥ ±2**126, and ±inf for x = ±0.
+    sfpi::vFloat y = sfpi::approx_recip(x);
+
+    // Optionally improve the approximation using Newton-Raphson.
+    if constexpr (max_iter > 0) {
+        // Normally, t = 2.0 - x * y, but we negate this (and negate again using y = y * -t later).
+        // When x=0 and y=infinity (and vice versa), t=+NaN regardless of the operand signs.
+        // Negating the meaning of t makes it easier to detect NaN using a trivial sign check t>=0.
+        sfpi::vFloat t = x * y - sfpi::vConstFloatPrgm0;
+
+        if constexpr (max_iter == 2) {
+            sfpi::vFloat y1 = y * -t - 0.0f;
+            // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
+            v_if (t < 0) {
+                t = x * y1 - sfpi::vConstFloatPrgm0;
+                y = y1 * -t - 0.0f;
+            }
+            v_endif;
+        } else {
+            // If t=NaN, then t>=0.  This check cannot be hidden in a SFPNOP slot as it depends on the result of the
+            // preceding SFPMAD.
+            v_if (t < 0) {
+                y = y * -t - 0.0f;
+            }
+            v_endif;
+        }
+    }
+
+    return y;
+}
+
+// Programs vConstFloatPrgm0 = 2.0f, the Newton-Raphson constant read only by the non-approximate path.
+template <bool APPROXIMATION_MODE>
+inline void _init_reciprocal_() {
+    if constexpr (!APPROXIMATION_MODE) {
+        sfpi::vConstFloatPrgm0 = 2.0f;
+    }
+}
+
+/**
+ * @brief Compute the reciprocal (1/x) in-place over a Dest tile.
+ *
+ * Quasar exposes exactly two implementations: an approximate reciprocal from the HW nonlinear
+ * lookup table (sfpi::approx_recip), and a full-precision result that refines the LUT seed with
+ * Newton-Raphson. The LUT is already ~1 ULP once the result lands in a bf16 Dest, so the Newton
+ * path only runs for a 32-bit Dest in non-approximate mode; every bf16 case (and any explicit
+ * approx request) uses the LUT alone.
+ *
+ * @tparam APPROXIMATION_MODE: Force the LUT-only path (skip Newton refinement), values = <true/false>
+ * @tparam EN_32BIT_DEST: is_fp32_dest_acc_en; when true and not APPROXIMATION_MODE, run the
+ *         Newton-Raphson refinement for a full-precision 32-bit Dest result.
+ * @tparam ITERATIONS: Number of SFPU loop iterations over the Dest tile.
+ * @tparam legacy_compat: ABI-parity shim; must be true (enforced by static_assert).
+ * @note Call @ref recip_init with matching template args first — it programs the Newton-Raphson
+ *       constant (vConstFloatPrgm0) that @ref _sfpu_reciprocal_ refines with.
+ */
 template <
     bool APPROXIMATION_MODE,
-    [[maybe_unused]] bool EN_32BIT_DEST,
+    bool EN_32BIT_DEST,
     int ITERATIONS = SFPU_ITERATIONS,
     [[maybe_unused]] bool legacy_compat = true>
 inline void calculate_reciprocal() {
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
-    _calculate_reciprocal_<APPROXIMATION_MODE, ITERATIONS>();
+    constexpr int max_iter = (!EN_32BIT_DEST || APPROXIMATION_MODE) ? 0 : 2;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat val = sfpi::dst_reg[0];  // load x from dest (SFPLOAD)
+        sfpi::dst_reg[0] = _sfpu_reciprocal_<max_iter>(val);
+        sfpi::dst_reg++;
+    }
 }
 
-template <
-    [[maybe_unused]] bool APPROXIMATION_MODE,
-    [[maybe_unused]] bool EN_32BIT_DEST,
-    [[maybe_unused]] bool legacy_compat = true>
+template <bool APPROXIMATION_MODE, [[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool legacy_compat = true>
 void recip_init() {
-    // Kept for backwards compatibility
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
+    llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>();
+    // Program the Newton-Raphson constant the non-approximate reciprocal refines with.
+    _init_reciprocal_<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu

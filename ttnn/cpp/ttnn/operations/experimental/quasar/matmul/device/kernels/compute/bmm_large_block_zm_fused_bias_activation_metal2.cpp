@@ -123,7 +123,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    copy_block(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
@@ -168,7 +168,7 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
-    DPRINT("CMPM start\n");  // DEBUG: matmul layer3 hang
+    DPRINT("MMC start\n");  // DEBUG: stem conv1 Program-B hang
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg(args::is_worker_core) == 1;
@@ -293,7 +293,7 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                DPRINT("CMPM blk {} {}\n", bh, bw);  // DEBUG: matmul layer3 hang
+                DPRINT("MMC bhbw {} {}\n", bh, bw);  // DEBUG: stem conv1 Program-B hang
                 bool enable_reload = false;
 
 #ifdef PACK_RELU
@@ -358,6 +358,7 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
+                            DPRINT("MMC sb{} preacq\n", in0_subblock);  // DEBUG #48552 subblock stall localize
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
@@ -399,10 +400,12 @@ void kernel_main() {
                             }
 
 #endif  // SKIP_COMPUTE
+                            DPRINT("MMC sb{} mmdone\n", in0_subblock);  // DEBUG #48552 matmul_block loop done
 
                             if (last_out) {
                                 tile_regs_commit();
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
+                                DPRINT("MMC sb{} resv_ok\n", in0_subblock);  // DEBUG #48552 out reserve returned
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
                                 apply_activation_from_pack<
@@ -430,14 +433,19 @@ void kernel_main() {
 #endif
 #endif
                                 uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                                pack_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 mm_out_cb.push_back(out_subblock_num_tiles);
 
                             } else {
                                 tile_regs_commit();
+                                // [DEBUG mm_partials TILE_COUNTERS localization] which producer step faults?
+                                // 0xC0FFEE03 = pre-reserve (+block idx next); 04 = reserved; 05 = packed; 06 = pushed.
+                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE03u));
+                                PACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
                                 mm_partials_cb.reserve_back(out_subblock_num_tiles);
+                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE04u));
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -453,16 +461,19 @@ void kernel_main() {
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                                pack_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE05u));
 
                                 tile_regs_release();
                                 mm_partials_cb.push_back(out_subblock_num_tiles);
+                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE06u));
                             }
 
                             in1_index_subblock_offset += out_subblock_w;
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
+                    DPRINT("MMC pack blk={}\n", block);  // DEBUG: all subblock matmul+pack done for this block
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
@@ -498,9 +509,11 @@ void kernel_main() {
 
                     in0_cb.pop_front(in0_block_num_tiles);
                     in1_cb.pop_front(in1_block_num_tiles);
+                    DPRINT("MMC blk_done blk={}\n", block);  // DEBUG: in0/in1 popped, inner-dim block complete
                 }
 
 #ifdef FUSE_BIAS
+                DPRINT("MMC bias\n");  // DEBUG: inner-dim block loop done, entering bias+activation epilogue
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -633,5 +646,9 @@ void kernel_main() {
         bias_cb.pop_front(bias_ntiles);
     }
 #endif
-    DPRINT("CMPM end\n");  // DEBUG: matmul layer3 hang
+    // [#48552] Compute-side finish() REMOVED: it wedged on PACK (TRISC2 stuck at "MMC bias", never reached
+    // "MMC end") — finish() across UNPACK/MATH/PACK isn't well-defined for a role that doesn't drive that CB's
+    // balance, and untilize_mode_out_cb.finish() waits on the output writer. Credit drain-on-exit is kept only
+    // on the DM producer/consumer kernels.
+    DPRINT("MMC end\n");  // DEBUG: stem conv1 Program-B hang
 }

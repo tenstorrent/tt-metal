@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 namespace {
 
 // True if padded shape doesn't divide evenly into shard (or no spec).
-bool is_unevenly_sharded(const TensorSpec& t) {
+bool is_unevenly_sharded(const tt::tt_metal::TensorSpec& t) {
     const auto& shard_spec = t.memory_config().shard_spec();
     if (!shard_spec.has_value()) {
         return true;
@@ -85,7 +85,7 @@ bool is_replication_locally_contained(
 }
 
 bool is_native_repeat_sharding(
-    const TensorSpec& input_spec,
+    const tt::tt_metal::TensorSpec& input_spec,
     const std::optional<MemoryConfig>& output_memory_config,
     int32_t repeat_dim,
     uint32_t num_repeats) {

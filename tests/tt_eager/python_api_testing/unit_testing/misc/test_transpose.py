@@ -680,6 +680,75 @@ def test_transpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size):
     assert device.num_program_cache_entries() == 3
 
 
+def run_transpose_hc_sharded_from_torch(device, torch_input_tensor, grid_size):
+    n, c, h, w = torch_input_tensor.shape
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    # shard config
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(
+        shard_grid, (n * h * c // (grid_size.x * grid_size.y), w), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 1, 2, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    return ttnn.to_torch(tt_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w, grid_size",
+    [
+        # generic path: shard height 288 is neither a multiple nor a divisor of H=224
+        (24, 3, 224, 224, ttnn.CoreGrid(y=8, x=7)),
+        # special case path, one H block per core: shard height 224 == H
+        (16, 4, 224, 224, ttnn.CoreGrid(y=8, x=8)),
+        # special case path, multiple H blocks per core: shard height 4096 == 32 * H
+        (16, 128, 128, 16, ttnn.CoreGrid(y=8, x=8)),
+    ],
+    ids=["generic", "special_case_single_h_block", "special_case_multi_h_block"],
+)
+def test_transpose_hc_sharded_cache_hit_new_input(device, n, c, h, w, grid_size):
+    # #48928: a cache hit rebuilds reader arg0 in closed form, so validate fresh data on every dispatch
+    if grid_size.y > device.core_grid.y:
+        pytest.skip("grid size not for N300")
+    torch.manual_seed(2005)
+    # retain prior tensors so each iteration allocates its input at a new address
+    keep_alive = []
+    expected_cache_entries = None
+    for _ in range(3):
+        torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+        tt_output_tensor = run_transpose_hc_sharded_from_torch(device, torch_input_tensor, grid_size)
+        assert_with_pcc(torch_input_tensor.transpose(1, 2), tt_output_tensor, 0.9999)
+
+        dummy_shape = [1, 1, 32, 32]
+        keep_alive.append(
+            ttnn.from_torch(
+                torch.randn(dummy_shape),
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        )
+        if expected_cache_entries is None:
+            expected_cache_entries = device.num_program_cache_entries()
+        else:
+            assert (
+                device.num_program_cache_entries() == expected_cache_entries
+            ), "transpose must reuse the cached program on a hit"
+
+
 @pytest.mark.parametrize(
     "shape, swap_dims",
     [

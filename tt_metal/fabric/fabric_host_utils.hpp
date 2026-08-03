@@ -11,8 +11,10 @@
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <llrt/tt_cluster.hpp>
+#include <tt_stl/assert.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <set>
+#include <map>
 #include <vector>
 #include <unordered_map>
 #include <queue>
@@ -37,9 +39,17 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy);
 
+// Returns whether a declared torus axis realizes a distinct wrap edge. Use bare
+// has_flag only for declared intent, never to decide realized routing topology.
+inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh_shape, uint32_t axis) {
+    TT_FATAL(mesh_shape.dims() == 2, "Genuine torus-axis query requires a 2D mesh shape, got {}", mesh_shape);
+    TT_FATAL(axis < mesh_shape.dims(), "Torus axis must be within mesh shape {}, got {}", mesh_shape, axis);
+    return has_flag(fabric_type, torus_flag_for_axis(axis)) && is_genuine_torus_dim(mesh_shape[axis]);
+}
+
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides
-// mesh_shape: [rows, cols] - used to detect edge cases where 2-row/2-col torus is equivalent to mesh
+// mesh_shape: [rows, cols], used to compare realized per-axis torus connectivity.
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape);
 
 // Compute maximum 1D hops across all meshes in topology
@@ -106,6 +116,14 @@ PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
 std::optional<PhysicalGroupingDescriptor> try_find_and_load_physical_grouping_descriptor(
     const std::optional<std::filesystem::path>& pgd_path = std::nullopt,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr);
+// Serialize the resolved inter-mesh port assignment to a YAML file (golden-comparable, debug-logged).
+// Builds per-boundary entries "D<chip>ch<chan>(<DIR>)>M<peer_mesh>D<peer_chip>ch<peer_chan>" from the
+// control-plane maps, fully sorted so the output is deterministic and independent of the physical host.
+void serialize_intermesh_port_assignment_to_file(
+    const std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>>& exit_node_directions,
+    const std::map<FabricNodeId, std::unordered_map<chan_id_t, std::pair<FabricNodeId, chan_id_t>>>&
+        intermesh_chan_to_peer,
+    const std::filesystem::path& output_file_path);
 
 }  // namespace tt::tt_fabric
 

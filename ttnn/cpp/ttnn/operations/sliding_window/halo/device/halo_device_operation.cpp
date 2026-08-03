@@ -84,7 +84,7 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     auto padded_output_shape = output_shape;
     padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
     padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape));

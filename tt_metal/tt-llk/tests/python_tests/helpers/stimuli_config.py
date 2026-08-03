@@ -10,11 +10,8 @@ from pathlib import Path
 from typing import ClassVar
 
 import torch
-from ttexalens.tt_exalens_lib import (
-    read_from_device,
-    write_to_device,
-)
 
+from .device_io import read_from_device, write_to_device
 from .format_config import DataFormat
 from .golden_generators import GeneratorProxy, ProxyMode
 from .llk_params import format_tile_sizes
@@ -725,6 +722,120 @@ class StimuliConfig:
             self.sfpu,
             debug_label="Res",
             location=location,
+        )
+
+    def _operand_tile_stride_bytes(self, operand: str, fmt) -> int:
+        """Per-tile L1 stride of an operand, as ``_collect`` computes it.
+
+        Deliberately recomputed rather than reusing ``buf_res_tile_size``: that
+        field honours the ``operand_res_tile_size`` override, while the read path
+        does not. Sharing this helper keeps the region we clear and the region we
+        read byte-for-byte identical.
+        """
+        return calculate_tile_size_bytes(
+            fmt,
+            self.tile_dimensions,
+            format_tile_sizes,
+            use_srcs=self._operand_use_srcs(operand),
+            dest_acc=self._dest_acc_32b,
+        )
+
+    def _collect_raw(self, operand: str, addr: int, fmt, count: int, location) -> bytes:
+        """Read an operand's *meaningful* bytes from L1, without decoding.
+
+        Returns the packed bytes exactly as the packer wrote them, which is the
+        right representation for a bit-identity comparison across repeated runs
+        (decoding to floats would make NaN payloads compare unequal to
+        themselves and hide real determinism issues).
+
+        Only the bytes the kernel actually writes are returned. A tile occupies a
+        full stride in L1, but for the backward-compatible layout the kernel
+        populates just ``num_faces`` faces per tile and leaves the remaining faces
+        untouched. Mirroring ``unpack_res_tiles``, we skip that padding so it
+        can't cause spurious mismatches (the padding retains whatever happened to
+        be in L1 before the run). The padding is skipped by reading each tile's
+        prefix separately rather than reading it and discarding it, which at
+        num_faces 1 and 2 leaves three quarters / half of the bytes on the device.
+        """
+        tile_stride = self._operand_tile_stride_bytes(operand, fmt)
+
+        # Dense / SrcS layouts pack the whole tile densely, so every byte is
+        # meaningful. The backward-compatible layout only writes the first
+        # num_faces faces of each (full-size) tile slot.
+        meaningful_per_tile = (
+            tile_stride
+            if (self.use_dense_tile_dimensions or self._operand_use_srcs(operand))
+            else fmt.num_bytes_per_tile(self.num_faces * self.face_r_dim * FACE_C_DIM)
+        )
+
+        if meaningful_per_tile >= tile_stride:
+            return read_from_device(location, addr, num_bytes=tile_stride * count)
+
+        return b"".join(
+            read_from_device(
+                location, addr + tile * tile_stride, num_bytes=meaningful_per_tile
+            )
+            for tile in range(count)
+        )
+
+    @property
+    def result_buffer_num_bytes(self) -> int:
+        """Size of the result region in L1, including per-tile padding."""
+        return (
+            self._operand_tile_stride_bytes("Res", self.stimuli_res_format)
+            * self.tile_count_res
+        )
+
+    def collect_raw_result_bytes(self, location="0,0") -> bytes:
+        """Raw meaningful bytes of the Res output buffer."""
+        return self._collect_raw(
+            "Res",
+            self.buf_res_addr,
+            self.stimuli_res_format,
+            self.tile_count_res,
+            location,
+        )
+
+    def collect_raw_buffer_c_bytes(self, location="0,0") -> bytes:
+        """Raw meaningful bytes of buffer_C, which some tests use as an output."""
+        if self.buffer_C is None:
+            raise ValueError("buffer_C is not configured")
+        return self._collect_raw(
+            "C",
+            self.buf_c_addr,
+            self.stimuli_C_format,
+            self.tile_count_C,
+            location,
+        )
+
+    @property
+    def input_region_num_bytes(self) -> int:
+        """Bytes spanned by the read-only input operands.
+
+        Operands are laid out contiguously from ``buf_a_addr`` in the order
+        A, B, S, C, Res. buffer_C is excluded because some tests use it as a
+        second *output* (see ``collect_buffer_c_results``), so it legitimately
+        changes during a run and must not be treated as corrupted input.
+        """
+        end = self.buf_c_addr if self.buffer_C is not None else self.buf_res_addr
+        return end - self.buf_a_addr
+
+    def read_input_region(self, location="0,0") -> bytes:
+        """Raw L1 bytes of the input operands, to check they survived a run."""
+        return read_from_device(
+            location, self.buf_a_addr, num_bytes=self.input_region_num_bytes
+        )
+
+    def clear_result_buffer(self, location="0,0", fill_byte: int = 0xA5) -> None:
+        """Overwrite the result region with a sentinel before a re-run.
+
+        Ensures a repeated run genuinely recomputes the output instead of us
+        re-reading stale bytes left in L1 by the previous run.
+        """
+        write_to_device(
+            location,
+            self.buf_res_addr,
+            bytes([fill_byte]) * self.result_buffer_num_bytes,
         )
 
     def collect_buffer_c_results(self, location="0,0"):

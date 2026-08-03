@@ -147,6 +147,8 @@ def test_uniform_seed_distinguishes_cache_entries(device):
       * different seed must change the output    -> guards against the frozen-runtime-arg bug on
         the in-place fast path (only reachable now that resolve_bindings allows input==output).
       * same seed must reproduce the output      -> guards against wrongly re-randomizing.
+      * different from/to range on a hit         -> must NOT grow the cache and must be re-applied
+        (from/to are also hash-excluded and re-derived by override_runtime_arguments).
     """
     device.enable_program_cache()
     device.clear_program_cache()
@@ -168,10 +170,18 @@ def test_uniform_seed_distinguishes_cache_entries(device):
     out_c = ttnn.to_torch(npu).float().clone()
     entries_c = device.num_program_cache_entries()
 
+    ttnn.uniform(npu, 5.0, 10.0, 1234)
+    out_d = ttnn.to_torch(npu).float().clone()
+    entries_d = device.num_program_cache_entries()
+
     assert entries_b == entries_a, "same seed must reuse the cached program"
     assert entries_c == entries_a, "a different seed must NOT add a cache entry -- seed is dynamic, not hashed"
+    assert (
+        entries_d == entries_a
+    ), "a different from/to range must NOT add a cache entry -- range is dynamic, not hashed"
     assert torch.equal(out_a, out_a2), "same seed must reproduce identical output"
     assert not torch.equal(out_a, out_c), "a different seed must change the output (seed re-patched on the fast path)"
+    assert out_d.min() >= 5.0 and out_d.max() < 10.0, "a different from/to range must be re-applied on the cache hit"
 
     device.disable_and_clear_program_cache()
 

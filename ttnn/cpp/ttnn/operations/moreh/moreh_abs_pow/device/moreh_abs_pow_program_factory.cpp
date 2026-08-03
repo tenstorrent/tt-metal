@@ -4,14 +4,16 @@
 
 #include "moreh_abs_pow_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <bit>
 
 namespace ttnn::operations::moreh::moreh_abs_pow {
 
 using namespace tt::tt_metal;
+namespace m2 = tt::tt_metal::experimental;
 
 static constexpr const char* READER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/reader_moreh_abs_pow.cpp";
@@ -20,7 +22,7 @@ static constexpr const char* WRITER_KERNEL_PATH =
 static constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/moreh_abs_pow_kernel.cpp";
 
-ProgramDescriptor MorehAbsPowOperation::create_descriptor(
+ttnn::device_operation::ProgramArtifacts MorehAbsPowOperation::MorehAbsPowProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -73,167 +75,187 @@ ProgramDescriptor MorehAbsPowOperation::create_descriptor(
          num_units_per_core_group_2] = split_work_to_cores(grid, num_units);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                         CircularBuffer Setup
+    //                         DataflowBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
     const uint32_t cb_tile_size = tile_size(cb_data_format);
     const uint32_t intermed_tile_size = tile_size(intermed_data_format);
 
-    const uint32_t in0_t{1};  // input
-    const uint32_t in1_t{1};  // one
-    const uint32_t in2_t{1};  // recip_p_decimal
-    const uint32_t in3_t{1};  // mask_w
+    // Program-scope resource / parameter names (was: magic CB indices c_0..c_27, buffer-address RTAs).
+    const m2::DFBSpecName INPUT_DFB{"input_dfb"};        // c_0: input (x)
+    const m2::DFBSpecName ONE_DFB{"one_dfb"};            // c_1: one
+    const m2::DFBSpecName DECIMAL_DFB{"decimal_dfb"};    // c_2: recip_p_decimal
+    const m2::DFBSpecName MASK_W_DFB{"mask_w_dfb"};      // c_3: mask_w
+    const m2::DFBSpecName OUTPUT_DFB{"output_dfb"};      // c_16: output (y)
+    const m2::DFBSpecName XABS_DFB{"xabs_dfb"};          // c_24: |x|
+    const m2::DFBSpecName XPOW_DFB{"xpow_dfb"};          // c_25: |x|^p
+    const m2::DFBSpecName LOGX_DFB{"logx_dfb"};          // c_26: log(|x|)
+    const m2::DFBSpecName EXP_LXMD_DFB{"exp_lxmd_dfb"};  // c_27: exp(log(|x|) * decimal)
 
-    const uint32_t out0_t{1};  // output
+    const m2::TensorParamName INPUT_TENSOR{"input"};
+    const m2::TensorParamName OUTPUT_TENSOR{"output"};
 
-    const uint32_t im0_t{1};  // |x|
-    const uint32_t im1_t{1};  // log(|x|)
-    const uint32_t im2_t{1};  // exp(log(|x|) * decimal)
-    const uint32_t im3_t{1};  // |x|^p
+    const m2::KernelSpecName READER{"reader"};
+    const m2::KernelSpecName WRITER{"writer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
 
-    ProgramDescriptor desc;
+    // One tile per DFB (legacy total_size = 1 * tile_size). data_format_metadata is required for
+    // DFBs bound to the compute kernel; tile_format_metadata is left unset (legacy CBFormatDescriptor
+    // did not set .tile).
+    auto make_dfb = [](const m2::DFBSpecName& id, uint32_t entry_size, tt::DataFormat fmt) {
+        return m2::DataflowBufferSpec{
+            .unique_id = id,
+            .entry_size = entry_size,
+            .num_entries = 1,
+            .data_format_metadata = fmt,
+        };
+    };
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in0_t * cb_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_0,
-            .data_format = cb_data_format,
-            .page_size = cb_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in1_t * cb_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_1,
-            .data_format = cb_data_format,
-            .page_size = cb_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in2_t * cb_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_2,
-            .data_format = cb_data_format,
-            .page_size = cb_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in3_t * cb_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_3,
-            .data_format = cb_data_format,
-            .page_size = cb_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out0_t * cb_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_16,
-            .data_format = cb_data_format,
-            .page_size = cb_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = im0_t * intermed_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_24,
-            .data_format = intermed_data_format,
-            .page_size = intermed_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = im1_t * intermed_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_25,
-            .data_format = intermed_data_format,
-            .page_size = intermed_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = im2_t * intermed_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_26,
-            .data_format = intermed_data_format,
-            .page_size = intermed_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = im3_t * intermed_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_27,
-            .data_format = intermed_data_format,
-            .page_size = intermed_tile_size,
-        }}},
-    });
+    m2::Group<m2::DataflowBufferSpec> dataflow_buffers = {
+        make_dfb(INPUT_DFB, cb_tile_size, cb_data_format),
+        make_dfb(ONE_DFB, cb_tile_size, cb_data_format),
+        make_dfb(DECIMAL_DFB, cb_tile_size, cb_data_format),
+        make_dfb(MASK_W_DFB, cb_tile_size, cb_data_format),
+        make_dfb(OUTPUT_DFB, cb_tile_size, cb_data_format),
+        make_dfb(XABS_DFB, intermed_tile_size, intermed_data_format),
+        make_dfb(XPOW_DFB, intermed_tile_size, intermed_data_format),
+        make_dfb(LOGX_DFB, intermed_tile_size, intermed_data_format),
+        make_dfb(EXP_LXMD_DFB, intermed_tile_size, intermed_data_format),
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
+    // The reader's / writer's only legacy CTA was the TensorAccessorArgs plumbing; that is now
+    // carried by the TensorBinding, so compile_time_args are empty. The buffer-address RTA arg 0
+    // is likewise replaced by the TensorBinding.
+    m2::KernelSpec reader{
+        .unique_id = READER,
+        .source = READER_KERNEL_PATH,
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = INPUT_DFB, .accessor_name = "in", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = ONE_DFB, .accessor_name = "one", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = DECIMAL_DFB,
+                    .accessor_name = "decimal",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = MASK_W_DFB,
+                    .accessor_name = "mask_w",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            },
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"input_is_dram", "decimal", "num_rows_per_core", "Wt", "tile_offset", "origin_w"}},
+        .hw_config = ttnn::create_reader_datamovement_config(arch),
+    };
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = READER_KERNEL_PATH;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.runtime_args.reserve(num_cores_to_be_used);
-
-    KernelDescriptor::CompileTimeArgs writer_ct_args;
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = WRITER_KERNEL_PATH;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.runtime_args.reserve(num_cores_to_be_used);
+    m2::KernelSpec writer{
+        .unique_id = WRITER,
+        .source = WRITER_KERNEL_PATH,
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = OUTPUT_DFB, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"output_is_dram", "num_rows_per_core", "Wt", "tile_offset"}},
+        .hw_config = ttnn::create_writer_datamovement_config(arch),
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    ComputeConfigDescriptor compute_config{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .math_approx_mode = math_approx_mode,
+    // Faithful reproduction of the legacy ComputeConfigDescriptor, which set only math_fidelity,
+    // fp32_dest_acc_en, and math_approx_mode — leaving dst_full_sync_en at the descriptor default
+    // (false). double_buffer_dest defaults to true (== !dst_full_sync_en), matching legacy. The TTNN
+    // to_compute_hardware_config helper is deliberately NOT used: it would forward the resolved
+    // dst_full_sync_en, which the legacy op never applied.
+    m2::ComputeGen1Config compute_gen1{
+        .fpu_math_fidelity = math_fidelity,
+        .sfpu_precision_mode =
+            math_approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
+        .enable_32_bit_dest = fp32_dest_acc_en,
     };
-
-    // Compute kernel for core_group_1
-    KernelDescriptor compute_desc_1;
-    compute_desc_1.kernel_source = COMPUTE_KERNEL_PATH;
-    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc_1.core_ranges = core_group_1;
-    compute_desc_1.compile_time_args = {num_units_per_core_group_1};
-    compute_desc_1.config = compute_config;
-
-    // Compute kernel for core_group_2 (may be empty)
-    KernelDescriptor compute_desc_2;
-    bool has_core_group_2 = !core_group_2.ranges().empty();
-    if (has_core_group_2) {
-        compute_desc_2.kernel_source = COMPUTE_KERNEL_PATH;
-        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc_2.core_ranges = core_group_2;
-        compute_desc_2.compile_time_args = {num_units_per_core_group_2};
-        compute_desc_2.config = compute_config;
+    // When fp32_dest_acc_en, the intermediate DFBs are Float32 and are consumed by the compute
+    // kernel (self-loop), so the Metal 2.0 validator requires an explicit unpack_modes entry. Legacy
+    // unpack_to_dest_mode was empty (all Default) → UnpackMode::UnpackToSrc.
+    if (fp32_dest_acc_en) {
+        compute_gen1.unpack_modes = {
+            {XABS_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+            {XPOW_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+            {LOGX_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+            {EXP_LXMD_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+        };
     }
+    m2::ComputeHardwareConfig compute_hw = compute_gen1;
+
+    // Compute kernel. The two legacy per-core-group compute descriptors collapse to a single
+    // KernelSpec: they differed only by the CTA {num_units_per_core_group_*}, which the compute
+    // kernel never reads (its loop count is the RTA num_rows_per_core). See METAL2_PORT_PLAN.md.
+    // The compute-only intermediate DFBs (xabs/xpow/logx/exp_lxmd) are self-looped (bound both
+    // PRODUCER and CONSUMER on this one kernel).
+    m2::KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = COMPUTE_KERNEL_PATH,
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = INPUT_DFB, .accessor_name = "x", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = ONE_DFB, .accessor_name = "one", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = DECIMAL_DFB,
+                    .accessor_name = "decimal",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = MASK_W_DFB,
+                    .accessor_name = "mask_w",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB, .accessor_name = "y", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = XABS_DFB, .accessor_name = "xabs", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = XABS_DFB, .accessor_name = "xabs", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = XPOW_DFB, .accessor_name = "xpow", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = XPOW_DFB, .accessor_name = "xpow", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = LOGX_DFB, .accessor_name = "logx", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = LOGX_DFB, .accessor_name = "logx", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = EXP_LXMD_DFB,
+                    .accessor_name = "exp_lxmd",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = EXP_LXMD_DFB,
+                    .accessor_name = "exp_lxmd",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows_per_core", "Wt", "origin_w", "p", "p_is_negative"}},
+        .hw_config = compute_hw,
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
+    m2::KernelRunArgs reader_run{.kernel = READER};
+    m2::KernelRunArgs writer_run{.kernel = WRITER};
+    m2::KernelRunArgs compute_run{.kernel = COMPUTE};
+
+    const uint32_t input_is_dram = static_cast<uint32_t>(is_dram(input));
+    const uint32_t output_is_dram = static_cast<uint32_t>(is_dram(output));
+    const uint32_t decimal_bits = std::bit_cast<uint32_t>(decimal);
+    const uint32_t Wt_u = static_cast<uint32_t>(Wt);
+    const uint32_t origin_w_u = static_cast<uint32_t>(origin_w);
+    const uint32_t p_is_negative_u = static_cast<uint32_t>(p_is_negative);
+
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        m2::NodeCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_units_per_core;
         if (core_group_1.contains(core)) {
@@ -245,41 +267,65 @@ ProgramDescriptor MorehAbsPowOperation::create_descriptor(
         }
 
         // reader
-        reader_desc.emplace_runtime_args(
+        m2::AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
             core,
-            {input.buffer(),
-             static_cast<uint32_t>(is_dram(input)),
-             std::bit_cast<uint32_t>(decimal),
-             num_units_per_core,
-             Wt,
-             tile_offset,
-             origin_w});
+            {{"input_is_dram", input_is_dram},
+             {"decimal", decimal_bits},
+             {"num_rows_per_core", num_units_per_core},
+             {"Wt", Wt_u},
+             {"tile_offset", tile_offset},
+             {"origin_w", origin_w_u}});
 
         // writer
-        writer_desc.emplace_runtime_args(
-            core, {output.buffer(), static_cast<uint32_t>(is_dram(output)), num_units_per_core, Wt, tile_offset});
+        m2::AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
+            core,
+            {{"output_is_dram", output_is_dram},
+             {"num_rows_per_core", num_units_per_core},
+             {"Wt", Wt_u},
+             {"tile_offset", tile_offset}});
 
-        // compute — runtime args go to the correct kernel descriptor
-        KernelDescriptor::CoreRuntimeArgs compute_rt{
-            num_units_per_core, Wt, origin_w, floored_p, static_cast<uint32_t>(p_is_negative)};
-
-        if (core_group_1.contains(core)) {
-            compute_desc_1.runtime_args.emplace_back(core, std::move(compute_rt));
-        } else {
-            compute_desc_2.runtime_args.emplace_back(core, std::move(compute_rt));
-        }
+        // compute
+        m2::AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values,
+            core,
+            {{"num_rows_per_core", num_units_per_core},
+             {"Wt", Wt_u},
+             {"origin_w", origin_w_u},
+             {"p", floored_p},
+             {"p_is_negative", p_is_negative_u}});
 
         tile_offset += num_units_per_core * Wt;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc_1));
-    if (has_core_group_2) {
-        desc.kernels.push_back(std::move(compute_desc_2));
-    }
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Assemble spec + run-args
+    ////////////////////////////////////////////////////////////////////////////
+    m2::ProgramSpec spec{
+        .name = "moreh_abs_pow",
+        .kernels = {reader, writer, compute},
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters =
+            {
+                m2::TensorParameter{.unique_id = INPUT_TENSOR, .spec = input.tensor_spec()},
+                m2::TensorParameter{.unique_id = OUTPUT_TENSOR, .spec = output.tensor_spec()},
+            },
+        .work_units = {m2::WorkUnitSpec{
+            .name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
+    };
 
-    return desc;
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    run_args.tensor_args = {
+        {INPUT_TENSOR, m2::TensorArgument{input.mesh_tensor()}},
+        {OUTPUT_TENSOR, m2::TensorArgument{output.mesh_tensor()}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::operations::moreh::moreh_abs_pow

@@ -32,7 +32,7 @@ struct UntilizeOperationAttributes {
 };
 
 using UntilizeTensorReturnValue = Tensor;
-using UntilizeSpecReturnValue = ttnn::TensorSpec;
+using UntilizeSpecReturnValue = tt::tt_metal::TensorSpec;
 using UntilizeShapeReturnValue = ttnn::Shape;
 
 }  // namespace ttnn::prim

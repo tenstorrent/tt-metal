@@ -30,12 +30,12 @@ void SliceReshardAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
 }
 
-TensorSpec SliceReshardAsyncDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec SliceReshardAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;
     auto shape = input_tensor.logical_shape();
     shape[args.dim] = args.output_dim_shape / args.ring_size;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 

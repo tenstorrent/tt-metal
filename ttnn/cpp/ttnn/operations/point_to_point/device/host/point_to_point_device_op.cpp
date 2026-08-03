@@ -154,7 +154,7 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
     // its fabric query (get_tt_fabric_channel_buffer_size_bytes) requires an initialized
     // fabric context, which a purely local transfer must not depend on.
     if (operation_attributes.send_coord == operation_attributes.receive_coord) {
-        const TensorSpec placeholder_intermediate_spec(Shape{1, 1}, final_output_spec.tensor_layout());
+        const tt::tt_metal::TensorSpec placeholder_intermediate_spec(Shape{1, 1}, final_output_spec.tensor_layout());
         return {placeholder_intermediate_spec, final_output_spec};
     }
 
@@ -172,7 +172,7 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
 
     Shape intermediate_shape{total_packets, packet_page_dim};
 
-    TensorSpec intermediate_spec(intermediate_shape, final_output_spec.tensor_layout());
+    tt::tt_metal::TensorSpec intermediate_spec(intermediate_shape, final_output_spec.tensor_layout());
 
     return {intermediate_spec, final_output_spec};
 }

@@ -30,7 +30,7 @@ struct Conv2dDeviceOperation {
     using operation_attributes_t = Conv2dParams;
     using hashable_operation_attributes_t = Conv2dHashableParams;
     using tensor_args_t = Conv2dInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<Conv2dShardedProgramFactory, Conv2dWidthShardedProgramFactory>;
 

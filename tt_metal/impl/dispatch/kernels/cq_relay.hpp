@@ -14,10 +14,6 @@
 #include "api/debug/waypoint.h"
 #include "noc/noc_parameters.h"
 
-#if !defined(FD_CORE_TYPE)
-#define FD_CORE_TYPE 0
-#endif
-
 #if !defined(FABRIC_2D)
 #define FABRIC_2D 0
 #endif
@@ -25,8 +21,6 @@
 template <uint32_t mux_num_buffers_per_channel, uint32_t mux_channel_buffer_size_bytes, uint32_t header_rb>
 class CQRelayClient {
 private:
-    constexpr static ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
-
     tt::tt_fabric::WorkerToFabricMuxSender<mux_num_buffers_per_channel> edm;
 
 #if ASSERT_ENABLED
@@ -69,7 +63,7 @@ public:
         uint64_t downstream_noc_addr, uint32_t my_dev_id, uint32_t to_dev_id, uint32_t router_direction) {
         WAYPOINT("FMCW");
 #if defined(FABRIC_RELAY)
-        edm.template init<fd_core_type>(
+        edm.template init<programmable_core_type>(
             true /*connected_to_persistent_fabric*/,
             mux_x,
             mux_y,
@@ -79,9 +73,9 @@ public:
             mux_connection_info_address,
             mux_channel_buffer_size_bytes,
             mux_buffer_index_address,
-            (volatile uint32_t* const)get_semaphore<fd_core_type>(worker_flow_control_sem),
-            (volatile uint32_t* const)get_semaphore<fd_core_type>(worker_teardown_sem),
-            get_semaphore<fd_core_type>(worker_buffer_index_sem),
+            (volatile uint32_t* const)get_semaphore<programmable_core_type>(worker_flow_control_sem),
+            (volatile uint32_t* const)get_semaphore<programmable_core_type>(worker_teardown_sem),
+            get_semaphore<programmable_core_type>(worker_buffer_index_sem),
             mux_worker_credits_stream_id,
             StreamId{0}  // my stream id -- As a sender I currently do NOT get acks over stream regs
         );
@@ -116,7 +110,7 @@ public:
     FORCE_INLINE void init_write_state_only(uint64_t downstream_noc_addr) {
 #if !defined(FABRIC_RELAY)
         cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, downstream_cmd_buf>(
-            0, downstream_noc_addr, 0, noc_index);
+            0, downstream_noc_addr, 0, 1, noc_index);
 #endif
     }
 
@@ -134,7 +128,7 @@ public:
 #else
         constexpr uint32_t k_PacketQueueTeardownFlag = 0x80000000;
         noc_semaphore_inc(
-            get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)), k_PacketQueueTeardownFlag, noc_index);
+            get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), k_PacketQueueTeardownFlag, noc_index);
 #endif
     }
 
@@ -216,14 +210,14 @@ public:
     template <uint8_t noc_idx, uint32_t dest_noc_xy, uint32_t dest_sem_id>
     FORCE_INLINE void release_pages(uint32_t n) {
 #if defined(FABRIC_RELAY)
-        auto sem_addr = get_semaphore<fd_core_type>(dest_sem_id);
+        auto sem_addr = get_semaphore<programmable_core_type>(dest_sem_id);
         uint64_t noc_dest_addr = get_noc_addr_helper(dest_noc_xy, sem_addr);
 
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_dest_addr, n});
         tt::tt_fabric::fabric_atomic_inc<mux_num_buffers_per_channel>(edm, packet_header);
 #else
-        noc_semaphore_inc(get_noc_addr_helper(dest_noc_xy, get_semaphore<fd_core_type>(dest_sem_id)), n, noc_idx);
+        noc_semaphore_inc(get_noc_addr_helper(dest_noc_xy, get_semaphore<programmable_core_type>(dest_sem_id)), n, noc_idx);
 #endif
     }
 
@@ -287,7 +281,7 @@ public:
 
         packet_header->to_noc_fused_unicast_write_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                dst_ptr, get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n},
+                dst_ptr, get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)), n},
             length);
 
         tt::tt_fabric::fabric_async_write<mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);

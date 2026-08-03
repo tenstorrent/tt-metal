@@ -15,7 +15,7 @@ namespace {
 
 // True if padded shape doesn't divide evenly into shard, or if the sharded config has no spec.
 // Conservatively true for rank < 2 so callers fall back to interleaved.
-bool is_unevenly_sharded(const TensorSpec& t) {
+bool is_unevenly_sharded(const tt::tt_metal::TensorSpec& t) {
     if (!t.memory_config().is_sharded()) {
         return false;
     }
@@ -70,7 +70,7 @@ bool side_native(const MemoryConfig& mc, Layout layout) {
 }  // namespace
 
 bool is_native_transpose_sharding(
-    const TensorSpec& input_spec, const std::optional<MemoryConfig>& output_memory_config) {
+    const tt::tt_metal::TensorSpec& input_spec, const std::optional<MemoryConfig>& output_memory_config) {
     if (!side_native(input_spec.memory_config(), input_spec.layout())) {
         return false;
     }

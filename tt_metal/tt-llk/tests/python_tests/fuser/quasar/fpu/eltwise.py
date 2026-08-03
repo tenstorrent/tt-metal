@@ -12,7 +12,12 @@ from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
-from helpers.llk_params import AccToDest, EltwiseBinaryReuseDestType, MathOperation
+from helpers.llk_params import (
+    AccToDest,
+    BroadcastType,
+    EltwiseBinaryReuseDestType,
+    MathOperation,
+)
 
 
 class EltwiseFpu(Fpu):
@@ -29,6 +34,7 @@ class EltwiseFpu(Fpu):
         return [
             "llk_math_common.h",
             "llk_math_eltwise_binary.h",
+            "llk_math_eltwise_binary_broadcast.h",
         ]
 
     def golden(
@@ -80,6 +86,15 @@ class EltwiseFpu(Fpu):
         face_c_dim = operation.tile_shape.face_c_dim
         num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
         num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
+
+        if compute_unit.broadcast_type != BroadcastType.None_:
+            broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+            return (
+                f"// Operation {stage}: Eltwise {op} broadcast FPU\n"
+                f"_llk_math_eltwise_binary_broadcast_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}>"
+                f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}});\n"
+            )
+
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
 
@@ -97,6 +112,10 @@ class EltwiseFpu(Fpu):
         block: BlockData,
     ) -> str:
         op = self.operation.cpp_enum_value
+
+        if compute_unit.broadcast_type != BroadcastType.None_:
+            return f"_llk_math_eltwise_binary_broadcast_({block.tile_id_block});\n"
+
         face_r_dim = operation.tile_shape.face_r_dim
         face_c_dim = operation.tile_shape.face_c_dim
         num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim

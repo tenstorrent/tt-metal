@@ -47,6 +47,8 @@ public:
 
     SubDeviceManager* get_default_sub_device_manager() const;
 
+    DeviceAddr get_max_trace_high_water_mark() const;
+
     // Used for caching program state by manager and buffers to check that the required manager is still active
     SubDeviceManagerId get_active_sub_device_manager_id() const;
 

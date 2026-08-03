@@ -373,9 +373,8 @@ void kernel_main() {
                 }
             }
         }
-        // Reset between batches so the counter doesn't overflow across batches.
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
-        out_ready_sem_target = 0;
+        // No per-batch reset: a local reset races the writer's monotonic fabric atomic-inc
+        // (lost signal). Target grows across batches; reset once at kernel exit. See #50793.
 
 #ifdef FUSE_MM_OP_SIGNALER
         mm_op_ready_sem.set(0);

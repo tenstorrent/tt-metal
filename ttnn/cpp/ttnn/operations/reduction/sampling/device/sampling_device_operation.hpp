@@ -19,7 +19,7 @@ namespace ttnn::prim {
 struct SamplingDeviceOperation {
     using operation_attributes_t = SamplingParams;
     using tensor_args_t = SamplingInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<SamplingProgramFactory>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

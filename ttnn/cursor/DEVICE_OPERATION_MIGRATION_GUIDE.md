@@ -601,6 +601,27 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
 }
 ```
 
+### Step 8b: Re-apply hash-excluded values on a cache hit — `override_runtime_arguments`, never `get_dynamic_runtime_args`
+
+A program-cache hit does not rebuild the program, so anything excluded from `compute_program_hash` — a dynamic scalar (RNG seed, `from`/`to`, `lr`/`step`) or a buffer address — must be re-applied to the cached program. Use **`override_runtime_arguments`**. **Never `get_dynamic_runtime_args`**: it is deprecated, and the adapter `static_assert`s if an op declares both.
+
+> **Scope.** This applies to `ProgramFactory` and `ProgramDescriptor` factories. The `WorkloadDescriptor` variant has no `override_runtime_arguments` path yet — the adapter re-applies its hash-excluded values via `get_dynamic_runtime_args` on a cache hit, so a WorkloadDescriptor factory must keep that hook until override support is added there.
+
+```cpp
+static void override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+```
+
+Re-derive **all** per-dispatch state — every per-core runtime arg *and* every tensor-backed buffer address — for the current `attributes`/tensors, from the same builder the cache-miss path uses (share one work-split/args helper so miss and hit stay identical). `override_runtime_arguments` supersedes both legacy hit mechanisms — `get_dynamic_runtime_args` (scalars only) and `resolve_bindings` (addresses only); the framework runs neither when it is present, so re-apply buffer addresses here too or they freeze at the first miss. Write in place with `GetRuntimeArgs(program, kernel_index, core)` (kernel index = push order in the factory).
+
+It is correct by construction — nothing is inferred from `Buffer*` identity, so in-place aliasing (`out == in`) cannot mis-patch — and faster than `get_dynamic_runtime_args`, which built an intermediate arg vector and matched buffers by pointer.
+
+Most ops need none of this: if the only per-dispatch change is tensor addresses, register them as `Buffer*` bindings and the framework re-patches them automatically. Reach for `override_runtime_arguments` only for a hash-excluded scalar the framework cannot track — e.g. `rand`'s per-core seed.
+
 ---
 
 ## Examples
@@ -686,6 +707,7 @@ Use this checklist to ensure all steps are completed:
 3. **Not including values that affect the program structure in hash**: Every parameter that has an effect on program structure must be taken into account in the hash
 4. **Redundant tensors in tensor_args_t**: Do not add redundant arguments like `preallocated_output`, if legacy operation did not handle that explicitly in `create_output_tensors`
 5. **Mesh workload factories not working with `mesh_coords`**: If your operation supports `mesh_coords` filtering, you MUST create a separate mesh workload factory. The infrastructure's `MeshWorkloadFactoryAdapter` will create programs for ALL tensor coordinates, ignoring `mesh_coords`. Only factories that implement `MeshWorkloadFactoryConcept` (and NOT `ProgramFactoryConcept`) will use the direct path that allows coordinate filtering.
+6. **Using `get_dynamic_runtime_args`**: deprecated for `ProgramFactory`/`ProgramDescriptor` factories. Use `override_runtime_arguments` (Step 8b), which re-applies runtime args *and* buffer addresses in place and stays correct under in-place aliasing. Declaring both on one op is a compile error. (Exception: `WorkloadDescriptor` factories have no override path yet and must still use `get_dynamic_runtime_args` — see Step 8b scope note.)
 
 ---
 

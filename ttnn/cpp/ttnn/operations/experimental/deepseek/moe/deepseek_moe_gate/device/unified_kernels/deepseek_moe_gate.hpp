@@ -112,7 +112,7 @@ struct DeepseekMoeGate {
             // ================================================================
 
             // Input indices CB should have the same tile shape as the input CB
-            reconfig_data_format<false, true>(CTArgs::input_indices_cb, CTArgs::bias_cb);
+            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::input_indices_cb, CTArgs::bias_cb);
             // Output indices CB should have the same tile shape as the output CB
             pack_reconfig_data_format<true>(CTArgs::output_cb);
 

@@ -468,11 +468,11 @@
 - name: Galaxy Qwen3-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/tests/test_qwen_accuracy.py
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "ci-token-matching"
   model-name: qwen3-32b-galaxy
   skus:
     wh_galaxy:
-      timeout: 10
+      timeout: 30
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 

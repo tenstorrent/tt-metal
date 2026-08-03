@@ -214,7 +214,7 @@ def run(args, context) -> InspectorData:
     except:
         raise InspectorException(
             f"Inspector unavailable (no live RPC at {rpc_host}:{rpc_port}, no serialized logs at {log_directory}). "
-            "This usually means no Metal workload is currently running — there's nothing to triage.\n"
+            "This usually means no Metal workload is currently running - there's nothing to triage.\n"
             "  If you're debugging a live hang, keep the process alive while running triage in another terminal.\n"
             "  If you're analyzing a past run, point --inspector-log-path at the saved logs."
         )

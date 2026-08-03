@@ -814,11 +814,6 @@ inline void configure_unpack_AB(
 
     // Math ALU_FORMAT_REG
     t6_mutex_acquire(mutex::REG_RMW);
-    std::uint32_t alu_src_format = (0x0 << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT);
-
-    constexpr std::uint32_t mask0 = (1 << (ALU_FORMAT_SPEC_REG_Dstacc_override_SHAMT + 1)) - 1;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT, mask0>(alu_src_format);
-
     alu_config_u alu_payload = {.val = 0};
 
     constexpr std::uint32_t alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;

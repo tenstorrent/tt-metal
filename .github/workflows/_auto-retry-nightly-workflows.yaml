@@ -21,6 +21,7 @@ on:
       - "(Runtime) Sanity Tests"
       - "(Runtime) Performance Tests"
       - "Blaze Models Prefill tests"
+      - "LLK perf"
     types:
       - completed
 

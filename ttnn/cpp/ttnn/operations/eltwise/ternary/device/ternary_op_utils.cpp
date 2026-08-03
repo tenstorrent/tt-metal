@@ -11,11 +11,11 @@
 
 namespace ttnn::operations::ternary {
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
@@ -30,7 +30,8 @@ bool is_uneven(const TensorSpec& t) {
 }
 
 // Check based on input specs and output memory config (two tensors, same shape and memory config).
-static bool is_native_L1_sharding(const TensorSpec& a, const TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
+static bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
     using namespace tt::tt_metal;
     if (a.logical_shape() != b.logical_shape() || a.memory_config() != b.memory_config()) {
         return false;
@@ -67,9 +68,9 @@ static bool is_native_L1_sharding(const TensorSpec& a, const TensorSpec& b, cons
 }
 
 bool is_native_L1_sharding(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
+    const tt::tt_metal::TensorSpec& predicate_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& true_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& false_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using namespace tt::tt_metal;
     if (!output_memory_config.is_sharded()) {

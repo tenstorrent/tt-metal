@@ -8,7 +8,7 @@
 //
 // Mechanically identical to the CircularBuffer helper, with the CB->DFB swap. SFPU variant: no
 // unpacker srca reconfigure here (the downstream binary SFPU op selects each operand before its
-// copy_tile loop). LLK operand ids come from DFBAccessor's `operator uint32_t()`.
+// copy_tile loop). LLK operand ids come from DFBBindingToken's `operator uint32_t()`.
 
 #include "api/compute/common.h"
 #include "api/compute/pack.h"

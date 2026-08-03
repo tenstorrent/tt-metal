@@ -138,7 +138,6 @@ def reset_graph():
 def test_mla_fused_sdpa_matches_composite_forward_and_backward():
     """Compare fused-SDPA MLA against the old composite path for output and parameter gradients."""
     ctx = ttml.autograd.AutoContext.get_instance()
-    ctx.open_device()
 
     try:
         device = ctx.get_device()

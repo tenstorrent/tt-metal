@@ -13,12 +13,18 @@
 namespace ttnn::experimental {
 
 namespace {
-// Matmul ring size the public moe_compute API uses, auto-detected from the architecture:
-// 8 on Blackhole, 12 on Wormhole (one per DRAM bank). bh_ring_size is intentionally not
+// Matmul ring size the public moe_compute API uses, auto-detected from the device.
+// On Blackhole up to one DRAM bank can be fused off, so the live bank count is 7 or 8.
+// On Wormhole harvesting does not affect DRAM banks, so the ring is always 12.
+// One matmul core is used per DRAM-bank-adjacent worker. bh_ring_size is intentionally not
 // exposed on the public API. Single source of truth so the op and its mcast-bbox helper
 // can never disagree about the ring the kernel actually runs.
 uint32_t effective_matmul_ring_size(ttnn::MeshDevice* mesh_device) {
-    return (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? 8u : 12u;
+    if (mesh_device->arch() == tt::ARCH::BLACKHOLE) {
+        return mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default)
+            .size();
+    }
+    return 12u;
 }
 }  // namespace
 
@@ -44,7 +50,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const bool compute_only,
     const std::optional<uint32_t>& num_shared_experts_per_device) {
     // bh_ring_size is intentionally not exposed on the public API; it remains a tunable knob on
-    // the ttnn::prim::moe_compute entry point. The matmul ring is auto-detected from the arch.
+    // the ttnn::prim::moe_compute entry point. The matmul ring is auto-detected from the live
+    // DRAM-bank count (12 on WH, 7/8 on BH).
     const std::optional<uint32_t> bh_ring_size = effective_matmul_ring_size(tilize_input_tensor.device());
     return ttnn::prim::moe_compute(
         tilize_input_tensor,
@@ -76,8 +83,8 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
     const CoreRangeSet& mux_core_range_set) {
-    // Ring is auto-detected from the arch — same source as moe_compute — so the combine core
-    // placement always matches the ring the op actually runs (no caller-supplied value to drift).
+    // Ring is auto-detected from the live DRAM-bank count — same source as moe_compute — so the
+    // combine core placement always matches the ring the op actually runs (no caller-supplied value to drift).
     return ttnn::prim::get_moe_combine_cores(
         mesh_device,
         combine_token_parallel_cores,
@@ -93,8 +100,8 @@ ttnn::CoreCoord get_moe_tilize_drain_core(
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
     const CoreRangeSet& mux_core_range_set) {
-    // Ring is auto-detected from the arch — same source as moe_compute — so the tilize drain
-    // core always matches the ring the op actually runs (no caller-supplied value to drift).
+    // Ring is auto-detected from the live DRAM-bank count — same source as moe_compute — so the
+    // tilize drain core always matches the ring the op actually runs (no caller-supplied value to drift).
     return ttnn::prim::get_moe_tilize_drain_core(
         mesh_device,
         combine_token_parallel_cores,
@@ -110,8 +117,8 @@ ttnn::CoreRange get_moe_worker_mcast_bounding_box(
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
     const CoreRangeSet& mux_core_range_set) {
-    // Ring is auto-detected from the arch — same source as moe_compute — so the bounding box
-    // always matches the ring the op actually runs (no caller-supplied value to drift).
+    // Ring is auto-detected from the live DRAM-bank count — same source as moe_compute — so the
+    // bounding box always matches the ring the op actually runs (no caller-supplied value to drift).
     return ttnn::prim::get_moe_worker_mcast_bounding_box(
         mesh_device,
         combine_token_parallel_cores,

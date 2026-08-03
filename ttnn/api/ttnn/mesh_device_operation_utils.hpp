@@ -59,7 +59,7 @@ TensorReturnValue filter_tensor_shards(
             }
 
             // Create new storage with filtered coords, sharing the device memory
-            return Tensor(tt::tt_metal::DeviceStorage(old_storage, std::move(filtered_coords)));
+            return Tensor(ttnn::DeviceStorage(old_storage, std::move(filtered_coords)));
         },
         tensor_return_value);
 }

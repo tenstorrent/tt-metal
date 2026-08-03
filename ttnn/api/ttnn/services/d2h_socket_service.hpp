@@ -80,11 +80,11 @@ public:
     void read_metadata(ttsl::Span<std::byte> metadata);
 
     void read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<std::byte> metadata = {});
-    void read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byte> metadata = {});
+    void read_from_tensor(ttnn::Tensor& host_tensor, ttsl::Span<std::byte> metadata = {});
     void notify_backing_ready();
     void barrier();
 
-    const Tensor& get_backing_tensor() const;
+    const ttnn::Tensor& get_backing_tensor() const;
     const TensorSpec& get_per_shard_spec() const;
     std::size_t payload_size_bytes() const;
     std::size_t metadata_size_bytes() const;
@@ -151,7 +151,7 @@ private:
 
     std::unique_ptr<ttnn::distributed::TensorToMesh> mapper_;
     std::unique_ptr<ttnn::distributed::MeshToTensor> composer_;
-    Tensor device_tensor_;
+    ttnn::Tensor device_tensor_;
     std::optional<TensorSpec> per_shard_spec_;
 
     std::vector<std::unique_ptr<distributed::D2HSocket>> sockets_;

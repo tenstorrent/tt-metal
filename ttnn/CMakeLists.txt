@@ -96,6 +96,14 @@ add_library(TTNN::Core ALIAS ttnn_core)
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+
+# Descriptor cache-hit fast-path parity check (opt-in via -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK).
+# The #ifdef lives in ttnn/api/ttnn/mesh_device_operation_adapter.hpp, so scope the definition to the
+# ttnn target (PUBLIC so header consumers see it consistently) instead of defining it globally.
+if(ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    target_compile_definitions(ttnn_core PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+endif()
+
 tt_reuse_precompile_headers(ttnn_core TTNN::PCHFull)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
@@ -300,6 +308,9 @@ if(WITH_PYTHON_BINDINGS)
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
     )
+    if(TTNN_BUILD_TESTS)
+        target_compile_definitions(ttnn PRIVATE TTNN_WITH_LAYER_COMPLETION_CONSUMER)
+    endif()
     target_include_directories(
         ttnn
         PUBLIC

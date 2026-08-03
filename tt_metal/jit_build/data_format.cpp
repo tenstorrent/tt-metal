@@ -223,6 +223,15 @@ std::vector<DataFormat> get_unpack_dst_formats(
     return unpack_dst_format;
 }
 
+bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode) {
+    for (const auto mode : unpack_to_dest_mode) {
+        if (mode != tt::tt_metal::UnpackToDestMode::Default) {
+            return true;
+        }
+    }
+    return false;
+}
+
 DataFormat get_single_pack_src_format(
     DataFormat data_format,
     DataFormat unpack_conditional_dst_format,

@@ -197,7 +197,7 @@ def test_kv_cache_write_vs_ref(mesh_device, device_params, layer_kind, seq_len, 
         ccl_manager=ccl_manager,
         mesh_config=mesh_config,
         program_config=MiniMaxM3AttentionProgramConfig(),
-        layer_idx=0,
+        global_layer_idx=0,
         transformation_mats=rope_setup.get_both_trans_mats(),
     )
 

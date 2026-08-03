@@ -48,8 +48,9 @@ def run_resnet_50(
 
 
 # craq-sim runs the functional simulator at ~2.7 KHz, so a full resnet50 sweep (JIT compile + many ops)
-# far exceeds pytest-timeout's 300s default; bump it so the run isn't killed mid-sweep. Set to 0 to disable.
-@pytest.mark.timeout(7200)
+# far exceeds pytest-timeout's 300s default; bump it (>= 4h) so the batch-1 simulator run isn't killed
+# mid-sweep. Set to 0 to disable.
+@pytest.mark.timeout(14400)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",

@@ -8,6 +8,9 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+
+#ifndef LOCAL_COMBINE
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -16,10 +19,12 @@ using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
 using namespace ttnn::operations::ccl::common;
+#endif
 
 // packet size bytes 4352
 namespace detail {
 
+#ifndef LOCAL_COMBINE
 template <
     uint32_t LinearizedMeshCoord,
     uint32_t TokensPerDevice,
@@ -40,6 +45,7 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
         return device_in_group * MeshCols + LinearizedMeshCoord % MeshCols;
     }
 }
+#endif
 
 // output is [select_experts_k ,tokens, hidden]
 template <uint32_t TokensPerDevice>
@@ -113,6 +119,7 @@ public:
     auto operator*() { return idx; }
 };
 
+#ifndef LOCAL_COMBINE
 template <uint8_t NumBuffers, uint8_t NumDirections>
 void mux_channel_writes_flushed(
     const std::array<bool, NumDirections>& directions,
@@ -124,6 +131,7 @@ void mux_channel_writes_flushed(
         }
     }
 }
+#endif
 
 }  // namespace detail
 
@@ -135,15 +143,9 @@ void kernel_main() {
     constexpr uint32_t data_cb_id = get_named_compile_time_arg_val("data_cb_id");
     constexpr uint32_t token_activations_cb_id = get_named_compile_time_arg_val("token_activations_cb_id");
     constexpr uint32_t activations_stride_elm = get_named_compile_time_arg_val("activations_stride_elm");
-    constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
-    constexpr uint32_t num_workers_per_link = get_named_compile_time_arg_val("num_workers_per_link");
     constexpr bool use_init_semaphore = get_named_compile_time_arg_val("use_init_semaphore") == 1;
-    constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
-    constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
-    constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
-    constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
     constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");  // global token size
     constexpr uint32_t source_token_segment_buffer_size_bytes =
@@ -151,6 +153,22 @@ void kernel_main() {
     constexpr uint32_t source_block_size_bytes = get_named_compile_time_arg_val("source_expert_block_size_bytes");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
+    constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
+    constexpr uint32_t compute_cores_per_combine_core =
+        get_named_compile_time_arg_val("compute_cores_per_combine_core");
+    constexpr bool double_buffer_source = get_named_compile_time_arg_val("double_buffer_source") == 1;
+
+#ifdef LOCAL_COMBINE
+    // Single-device local combine: tokens_per_device = global_num_tokens (1 device).
+    constexpr uint32_t tokens_per_device = global_num_tokens;
+    constexpr auto output_ta_args = TensorAccessorArgs<0>();
+#else
+    constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
+    constexpr uint32_t num_workers_per_link = get_named_compile_time_arg_val("num_workers_per_link");
+    constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
+    constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
+    constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
+    constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
     constexpr uint32_t src_chip_id = get_named_compile_time_arg_val("src_chip_id");
     constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
@@ -159,10 +177,6 @@ void kernel_main() {
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
     constexpr uint32_t num_mux_workers_per_link = get_named_compile_time_arg_val("num_mux_workers_per_link");
-    constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
-    constexpr uint32_t compute_cores_per_combine_core =
-        get_named_compile_time_arg_val("compute_cores_per_combine_core");
-    constexpr bool double_buffer_source = get_named_compile_time_arg_val("double_buffer_source") == 1;
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
@@ -183,6 +197,7 @@ void kernel_main() {
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
     const std::array<bool, Num_Directions> directions = DIRECTIONS;
+#endif
 
     size_t rt_arg_count = 0;
     const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
@@ -194,7 +209,6 @@ void kernel_main() {
     const bool is_init_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
 
     Noc noc1_obj(1);
-    CircularBuffer cb_packet_header(packet_header_cb_id);
     CircularBuffer cb_token_counts(token_counts_cb_id);
     CircularBuffer cb_data(data_cb_id);
     CircularBuffer cb_dense_token_maps(dense_token_maps_cb_id);
@@ -207,6 +221,11 @@ void kernel_main() {
     detail::DoubleBuffer<double_buffer_source> db(
         noc1_obj, compute_cores_per_combine_core, compute_sync_semaphore_addr, rt_arg_count);
 
+    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
+
+#ifndef LOCAL_COMBINE
+    CircularBuffer cb_packet_header(packet_header_cb_id);
+
     // rt_arg_count does not get incremented
     MuxSyncCoreArgs sync_args(rt_arg_count);
 
@@ -218,8 +237,6 @@ void kernel_main() {
         fabric_mux_num_buffers_per_channel,
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
-
-    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     for (uint8_t i = 0; i < 3; ++i) {
@@ -244,6 +261,7 @@ void kernel_main() {
             replicate_axis,
             num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
     }
+#endif
 
     cb_token_counts.wait_front(1);
     const uint32_t token_counts_l1_addr = cb_token_counts.get_write_ptr();
@@ -269,6 +287,11 @@ void kernel_main() {
     const uint32_t token_activations_l1_addr = cb_token_activations.get_write_ptr();
     auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
 
+#ifdef LOCAL_COMBINE
+    // Local combine: skip the init semaphore entirely. In single-device mode there is no
+    // cross-device coordination needed; the compute_sync_semaphore and CB waits handle
+    // all necessary synchronization between matmul, reader, and writer.
+#else
     if constexpr (use_init_semaphore) {
         auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
         if (is_init_sync_core) {
@@ -290,6 +313,7 @@ void kernel_main() {
         }
         noc_semaphore_set(init_semaphore_ptr, 0);
     }
+#endif
 
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
@@ -314,6 +338,16 @@ void kernel_main() {
             const uint32_t src_data_l1_addr =
                 src_data_l1_base_addr + *db * source_block_size_bytes + dt * source_token_segment_buffer_size_bytes;
 
+#ifdef LOCAL_COMBINE
+            // Local combine: all writes are local NOC writes (single device).
+            noc1_obj.async_write(
+                CoreLocalMem<uint8_t>(src_data_l1_addr),
+                output_addrgen,
+                source_token_segment_size_bytes,
+                {},
+                {.page_id = output_page_idx, .offset_bytes = dest_token_segment_offset_bytes});
+            noc1_obj.async_writes_flushed();
+#else
             // figure out which device to send data to and routing
             const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
                 linearized_mesh_coord,
@@ -347,6 +381,7 @@ void kernel_main() {
                     alignment,
                     dest_token_segment_offset_bytes);
             }
+#endif
         }
         compute_sync_semaphore_val += compute_cores_per_combine_core;
         ++db;
@@ -360,6 +395,7 @@ void kernel_main() {
 
     noc1_obj.async_write_barrier();
 
+#ifndef LOCAL_COMBINE
     // In order to ensure that the barrier semaphores land after all of the data has arrived we must wait for the mux
     // cores to send off all of their transactions to the EDM.
     detail::mux_channel_writes_flushed<fabric_mux_num_buffers_per_channel, Num_Directions>(
@@ -427,4 +463,5 @@ void kernel_main() {
         noc1_obj.async_write_barrier();
         noc1_obj.async_atomic_barrier();
     }
+#endif
 }

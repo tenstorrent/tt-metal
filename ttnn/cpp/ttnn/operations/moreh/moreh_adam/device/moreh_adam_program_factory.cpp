@@ -261,8 +261,7 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
         }
 
         // f2u_lr (arg 5) and step (arg 10) are excluded from compute_program_hash and are
-        // re-applied on every cache hit via get_dynamic_runtime_args(); the values baked here
-        // are correct for the cache-miss dispatch.
+        // re-derived here on every cache hit via override_runtime_arguments().
         KernelDescriptor::RTArgList reader_rt;
         reader_rt.reserve(14);
         reader_rt.push_back(param_in.buffer());
@@ -292,7 +291,7 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
         writer_desc.emplace_runtime_args(core, writer_rt);
 
         // compute — runtime args go to the correct kernel descriptor.  step is excluded from
-        // the hash and re-applied on cache hits via get_dynamic_runtime_args().
+        // the hash and re-derived on cache hits via override_runtime_arguments().
         KernelDescriptor::CoreRuntimeArgs compute_rt{step};
         if (core_group_1.contains(core)) {
             compute_desc_1.runtime_args.emplace_back(core, std::move(compute_rt));
@@ -313,57 +312,17 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> MorehAdamOperation::get_dynamic_runtime_args(
+void MorehAdamOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*output_tensor*/,
+    tensor_return_value_t& output_tensor,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // lr and step are EXCLUDED from compute_program_hash, so a cache hit never rebuilds the
-    // descriptor and their baked values would otherwise stay frozen.  Re-apply them here.
-    //
-    // MUST mirror create_descriptor() exactly:
-    //   - kernels are pushed reader(0), writer(1), compute_group_1(2), compute_group_2(3).
-    //     compute_group_2 is only pushed (and only reached below) when core_group_2 is non-empty.
-    //   - reader per-core runtime args: [5] = f2u_lr, [10] = step.
-    //   - compute per-core runtime args: [0] = step.
-    //   - writer has no hash-excluded args.
-    // The work-split and the per-core iteration reproduce create_descriptor() by construction.
-    const auto& param_in = tensor_args.param_in;
-    uint32_t num_tiles = param_in.physical_volume() / tt::constants::TILE_HW;
-
-    IDevice* device = param_in.device();
-    auto grid = device->compute_with_storage_grid_size();
-    const auto num_cores_y = grid.y;
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(grid, num_tiles);
-    (void)all_cores;
-    (void)num_tiles_per_core_group_1;
-    (void)num_tiles_per_core_group_2;
-
-    const uint32_t f2u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
-    const uint32_t step = operation_attributes.step;
-
-    constexpr uint32_t kReaderKernelIdx = 0;
-    constexpr uint32_t kComputeGroup1KernelIdx = 2;
-    constexpr uint32_t kComputeGroup2KernelIdx = 3;
-    constexpr uint32_t kReaderLrArgIdx = 5;
-    constexpr uint32_t kReaderStepArgIdx = 10;
-    constexpr uint32_t kComputeStepArgIdx = 0;
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(static_cast<size_t>(num_cores) * 3);
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        dynamic_args.push_back({kReaderKernelIdx, core, kReaderLrArgIdx, f2u_lr});
-        dynamic_args.push_back({kReaderKernelIdx, core, kReaderStepArgIdx, step});
-        if (core_group_1.contains(core)) {
-            dynamic_args.push_back({kComputeGroup1KernelIdx, core, kComputeStepArgIdx, step});
-        } else {
-            dynamic_args.push_back({kComputeGroup2KernelIdx, core, kComputeStepArgIdx, step});
-        }
-    }
-    return dynamic_args;
+    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its per-core
+    // args (incl. hash-excluded lr/step) + tensor-backed CB/buffer addresses to the cached program. No rebuild;
+    // supersedes get_dynamic/resolve_bindings and fixes in-place aliasing (#48928).
+    auto desc = create_descriptor(operation_attributes, tensor_args, output_tensor);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::moreh::moreh_adam

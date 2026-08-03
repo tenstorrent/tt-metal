@@ -669,7 +669,7 @@ class WanTransformer3DModel(Module):
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        guidance_scale: float,
+        guidance_scale: ttnn.Tensor,
         *,
         gather_output: bool = True,
     ) -> ttnn.Tensor:

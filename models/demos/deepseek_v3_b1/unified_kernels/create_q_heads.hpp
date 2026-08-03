@@ -313,7 +313,7 @@ struct CreateQHeads {
             // This ensures proper hardware state between tilize_block calls.
             constexpr uint32_t nope_num_chunks = 2;
             uint32_t nope_chunk = args.nope_tiles / nope_num_chunks;
-            reconfig_data_format_srca<false, true>(args.receiver_in_cb);
+            reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(args.receiver_in_cb);
             pack_reconfig_data_format<true>(args.out_cb);
             tilize_init(args.receiver_in_cb, args.nope_tiles, args.out_cb);
             // For safety

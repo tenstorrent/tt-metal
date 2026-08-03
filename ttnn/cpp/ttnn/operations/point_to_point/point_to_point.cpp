@@ -21,8 +21,8 @@ ttnn::Tensor point_to_point(
     // leave the real output stale (issue #28945 audit). This also matches the ttnn no-op
     // convention (data_movement move/slice return the input for no-ops).
     if (sender_coord == receiver_coord && optional_output_tensor.has_value() &&
-        input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE &&
-        optional_output_tensor->storage_type() == tt::tt_metal::StorageType::DEVICE &&
+        input_tensor.storage_type() == ttnn::StorageType::DEVICE &&
+        optional_output_tensor->storage_type() == ttnn::StorageType::DEVICE &&
         optional_output_tensor->buffer() == input_tensor.buffer()) {
         // Run the op's own validation so an invalid alias call (sharded, out-of-mesh coord,
         // spec/layout/alignment mismatch) is rejected exactly as the device op would — then
@@ -49,7 +49,7 @@ ttnn::Tensor point_to_point(
 
 namespace operations::point_to_point {
 
-ttnn::TensorSpec p2p_compute_intermediate_tensor_spec(
+tt::tt_metal::TensorSpec p2p_compute_intermediate_tensor_spec(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
     const MeshCoordinate& sender_coord,

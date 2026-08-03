@@ -25,7 +25,9 @@
 inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     DataflowBuffer& cb, const uint32_t num_bytes, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
-    for (uint32_t i = 0; i < num_bytes / 2; ++i) {
+    // Round up so a non-4-byte-aligned tail stick is fully filled (the loop-back read consumes all num_bytes).
+    const uint32_t num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; ++i) {
         ptr[i] = val;
     }
 }
@@ -143,6 +145,9 @@ void kernel_main() {
                         input_page_size,
                         size_of_valid_data_in_last_input_page_in_row);
                     noc.async_read_barrier();
+                    // [#48552] invalidate_l1_cache() is a no-op on Quasar DM; the memmove below CPU-reads the
+                    // cb_pad_align slot just NOC-written (reused self-loop scratch) -> discard the stale L2 line.
+                    invalidate_l2_cache_range(cb_pad_align.get_read_ptr(), (size_t)stick_size_bytes);
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
                         (void*)(cb_pad_align.get_read_ptr()),

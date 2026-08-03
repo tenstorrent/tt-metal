@@ -327,7 +327,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d4.up["enable_act_double_buffer"] = True
     parameters.conv_args.d4.up["deallocate_activation"] = True
     parameters.conv_args.d4.up["reshard_if_not_optimal"] = True
-    parameters.conv_args.d4.up["shard_layout"] = None
+    parameters.conv_args.d4.up["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     parameters.conv_args.d4.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d4.conv_block.conv1["act_block_h"] = 32 * 4

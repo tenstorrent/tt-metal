@@ -54,6 +54,12 @@ public:
         // The region's L1 base address is stored in the CRTA at the token-supplied offset.
         // Delegates to the legacy constructor, which takes a raw L1 base address.
         LocalTensorAccessor(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))) {
+        // LocalTensorAccessor is legal only for tensors stored in L1 (SRAM) node-local memory.
+        // Hard error if TensorBindingToken represents a DRAM tensor.
+        static_assert(
+            !tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>::args_t::is_dram,
+            "LocalTensorAccessor requires an L1-resident tensor, but this binding token is for a DRAM "
+            "tensor. A DRAM tensor has no node-local L1 region; use TensorAccessor instead.");
         // ADDR_CRTA_OFFSET is a byte offset; dividing recovers the word index
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");

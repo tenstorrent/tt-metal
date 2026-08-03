@@ -28,7 +28,7 @@ using operation_attributes_t = LayerNormForwardParams;
 using tensor_args_t = LayerNormForwardInputs;
 
 // Output tensor specs and tensors
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 using tensor_return_value_t = std::vector<std::optional<ttnn::Tensor>>;
 
 }  // namespace ttml::metal::ops::layernorm_fw::device
