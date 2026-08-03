@@ -117,7 +117,6 @@ class TtHCACompressor(_TtHCABase):
         sp_axis: int = 0,
         tp_axis: int = 1,
         topology=ttnn.Topology.Linear,
-        ccl_num_links: int | None = None,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
@@ -138,7 +137,7 @@ class TtHCACompressor(_TtHCABase):
         # compressed KV -> needs the CCL object whenever either factor > 1.
         self.ccl_topology = topology
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
-        self.ccl_num_links = (2 if is_blackhole() else 1) if ccl_num_links is None else ccl_num_links
+        self.ccl_num_links = 2 if is_blackhole() else 1  # Blackhole trains 2 fabric routing planes, others 1
 
         # wkv/wgate: contraction(row)-parallel like the sliding wkv -> partial-sum single-head KV/gate,
         # TP all-reduced in forward to a TP-replicated full head_dim.
@@ -338,7 +337,6 @@ class TtHCA(_TtHCABase):
         sp_axis: int = 0,
         tp_axis: int = 1,
         topology=ttnn.Topology.Linear,
-        ccl_num_links: int | None = None,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
@@ -362,7 +360,7 @@ class TtHCA(_TtHCABase):
         # Rides both axes: TP all-reduce (q/kv stems) and SP all-gather (sliding KV in _attention),
         # so the CCL object is needed whenever either factor > 1.
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
-        self.ccl_num_links = (2 if is_blackhole() else 1) if ccl_num_links is None else ccl_num_links
+        self.ccl_num_links = 2 if is_blackhole() else 1  # Blackhole trains 2 fabric routing planes, others 1
 
         # sink pre-divided by scale: SDPA scales BOTH QK and the sink by `scale` internally, but the
         # reference scales only QK -> divide the sink so the kernel's ×scale cancels. Per-head, so it
@@ -426,7 +424,7 @@ class TtHCA(_TtHCABase):
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCA":
         # Forward the mesh/CCL config so the compressor rides the same SP/TP axes as the block.
-        compressor_keys = ("sp_axis", "tp_axis", "topology", "ccl_num_links")
+        compressor_keys = ("sp_axis", "tp_axis", "topology")
         compressor = TtHCACompressor.from_reference(
             device, reference.compressor, config, **{k: kwargs[k] for k in compressor_keys if k in kwargs}
         )
@@ -491,8 +489,17 @@ class TtHCA(_TtHCABase):
         q = ttnn.rms_norm(q, weight=self.q_a_norm_weight, epsilon=self.rms_norm_eps)
         q = ttnn.linear(q, self.wq_b, memory_config=self.memory_config)
 
-        q = ttnn.reshape(q, [batch, seq_len, num_heads_local, self.head_dim])
-        q = ttnn.permute(q, (0, 2, 1, 3))
+        # [B, 1, S, heads*head_dim] -> [B, heads, S, head_dim]. Done as one fused op rather than
+        # reshape+permute: the intermediate [B, S, heads, head_dim] puts heads (16) on dim -2, which
+        # TILE pads to 32 -- the pair cost 1,152 us/chunk where this costs a fraction. num_kv_heads=0
+        # selects the Q-only form (same call MLA makes at mla.py:860).
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            num_heads=num_heads_local,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=self.memory_config,
+        )
         q = ttnn.rms_norm(q, weight=self.q_b_norm_weight, epsilon=self.rms_norm_eps)
 
         nope_dim = self.head_dim - self.rope_head_dim
@@ -651,8 +658,13 @@ class TtHCA(_TtHCABase):
             attention_sink=self.sinks_sdpa,
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-                q_chunk_size=32,
-                k_chunk_size=int(__import__("os").environ.get("HCA_KCHUNK", "32")),
+                # Measured on 8x4, chunk 4096 (Sq/chip 512, Sk 4256). SDPA device time:
+                #   q (at k=32):  32 -> 3,096 us | 64 -> 2,185 | 128 -> 1,205 | 256 -> 2,318 | 512 -> L1 OOM
+                #   k (at q=128): 32 -> 1,205    | 128 ->  994 | 160 -> 1,048 | 192, 256 -> L1 OOM
+                # 128/128 is 3.1x the 32/32 default. Both curves are V-shaped, so the optimum is not
+                # simply the largest that fits in L1 -- 160 fits and is slower than 128.
+                q_chunk_size=128,
+                k_chunk_size=128,
                 exp_approx_mode=False,
             ),
         )
@@ -673,18 +685,28 @@ class TtHCA(_TtHCABase):
         in_per_group = self.num_heads * self.head_dim // self.o_groups
         groups_local = self.o_groups // self.tp_factor
 
-        x = ttnn.permute(attn, (0, 2, 1, 3))  # [B, S, num_heads/tp, head_dim]
-        x = ttnn.reshape(x, [batch, seq_len, groups_local, in_per_group])  # heads folded into whole groups
-        # Group axis must be dim 1 to batch the matmul over it; the matmul broadcasts in1 only when dim0
-        # matches, so fold batch into the row axis instead of relying on a dim-0 broadcast.
-        x = ttnn.permute(x, (2, 0, 1, 3))  # [groups_local, B, S, in_per_group]
-        x = ttnn.reshape(x, [1, groups_local, batch * seq_len, in_per_group])
+        # Every regroup here moves along the LAST axis only. The obvious reshape/permute route puts
+        # groups_local (2) or heads (16) on dim -2, which TILE pads to 32 -- [B, S, 2, 4096] holds
+        # 8.4 MB of data in 134 MB of tiles, and the five ops it took cost 2,594 us/chunk.
+        # nlp_concat_heads is the same call MLA makes at mla.py:1016.
+        x = ttnn.experimental.nlp_concat_heads(attn, memory_config=self.memory_config)  # [B, 1, S, heads*hd]
+        # Group g owns heads [g*heads_per_group, ...), i.e. channels [g*in_per_group, ...) -- so the
+        # group split is a last-axis cut on a tile boundary. Group axis must be dim 1 for the batched
+        # matmul, and dim 0 must be 1 for the weight to broadcast.
+        x = ttnn.concat(
+            [
+                ttnn.slice(x, [0, 0, 0, g * in_per_group], [batch, 1, seq_len, (g + 1) * in_per_group])
+                for g in range(groups_local)
+            ],
+            dim=1,
+        )  # [B, groups_local, S, in_per_group]
 
-        grouped = ttnn.linear(x, self.wo_a, memory_config=self.memory_config)  # [1, groups_local, B*S, o_lora_rank]
+        grouped = ttnn.linear(x, self.wo_a, memory_config=self.memory_config)  # [B, groups_local, S, o_lora_rank]
         o_lora_rank = grouped.shape[-1]
-        grouped = ttnn.reshape(grouped, [groups_local, batch, seq_len, o_lora_rank])
-        grouped = ttnn.permute(grouped, (1, 2, 0, 3))  # [B, S, groups_local, o_lora_rank]
-        grouped = ttnn.reshape(grouped, [batch, 1, seq_len, groups_local * o_lora_rank])
+        grouped = ttnn.concat(
+            [ttnn.slice(grouped, [0, g, 0, 0], [batch, g + 1, seq_len, o_lora_rank]) for g in range(groups_local)],
+            dim=-1,
+        )  # [B, 1, S, groups_local*o_lora_rank]
 
         out = ttnn.linear(grouped, self.wo_b, memory_config=self.memory_config)  # partial-sum [B,1,S,hidden]
 

@@ -25,6 +25,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import (
     DeepseekV4Attention,
+    DeepseekV4HCACache,
     DeepseekV4HCACompressor,
     apply_rotary_pos_emb,
     eager_attention_forward,
@@ -53,37 +54,20 @@ def _flash_config(num_hidden_layers=4):
     )
 
 
-# Mesh configs: seq_len restricted to multiples of 32*sp (SP seq shard must stay
-# tile-aligned). FABRIC_1D for the small TP/SP meshes; FABRIC_2D (+router/RELAXED_INIT) for 8x4.
+# Mesh configs: seq_len restricted to multiples of 32*sp (SP seq shard must stay tile-aligned).
+# No fabric for 1x1 (sp=tp=1 skips every collective); FABRIC_1D for 4x2; FABRIC_2D
+# (+router/RELAXED_INIT) for 8x4.
 _MESH_CONFIGS = [
     pytest.param(
         (1, 1),
         {},
-        1,
         ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
         id="single-1x1",
     ),
     pytest.param(
-        (1, 4),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        1,
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-        id="linear-1x4",
-    ),
-    pytest.param(
-        (2, 4),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        1,
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
-        id="mesh-2x4",
-    ),
-    pytest.param(
         (4, 2),
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        1,
         ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="mesh-4x2",
@@ -95,7 +79,6 @@ _MESH_CONFIGS = [
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         },
-        1,
         ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-mesh-8x4",
@@ -105,11 +88,11 @@ _MESH_CONFIGS = [
 
 @pytest.mark.parametrize("seq_len", [512, 2048, 5120], ids=["seq512", "seq2k", "seq5120"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, topology",
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_query_path_mesh(mesh_device, device_params, num_links, topology, seq_len):
+def test_hca_query_path_mesh(mesh_device, device_params, topology, seq_len):
     """Mesh/TP/SP PCC for TtHCA._q_stem: hidden SP-sharded on seq + TP-sharded on hidden, q gathered
     over TP (heads) and SP (seq), compared against the full unsharded DeepseekV4Attention query path."""
     torch.manual_seed(42)
@@ -134,9 +117,7 @@ def test_hca_query_path_mesh(mesh_device, device_params, num_links, topology, se
         q = ref.q_b_norm(q)
         q_ref = apply_rotary_pos_emb(q, cos, sin)
 
-    tt_model = TtHCA.from_reference(
-        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
-    )
+    tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
     tt_input = ttnn.from_torch(
         hidden.unsqueeze(1),
         device=mesh_device,
@@ -165,11 +146,11 @@ def test_hca_query_path_mesh(mesh_device, device_params, num_links, topology, se
 
 @pytest.mark.parametrize("seq_len", [512, 2048, 5120], ids=["seq512", "seq2k", "seq5120"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, topology",
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_kv_path_mesh(mesh_device, device_params, num_links, topology, seq_len):
+def test_hca_kv_path_mesh(mesh_device, device_params, topology, seq_len):
     """Mesh/TP/SP PCC for TtHCA._kv_stem: single-head KV is contraction-parallel + TP all-reduced
     (TP-replicated) and SP-sharded on seq, compared against the full unsharded sliding KV path."""
     torch.manual_seed(42)
@@ -191,9 +172,7 @@ def test_hca_kv_path_mesh(mesh_device, device_params, num_links, topology, seq_l
         kv = ref.kv_norm(ref.kv_proj(hidden)).view(batch, seq_len, -1, config.head_dim).transpose(1, 2)
         kv_ref = apply_rotary_pos_emb(kv, cos, sin)
 
-    tt_model = TtHCA.from_reference(
-        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
-    )
+    tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
     tt_input = ttnn.from_torch(
         hidden.unsqueeze(1),
         device=mesh_device,
@@ -229,11 +208,11 @@ def test_hca_kv_path_mesh(mesh_device, device_params, num_links, topology, seq_l
 
 @pytest.mark.parametrize("seq_len", [900, 2048, 5120], ids=["seq900-unaligned", "seq2k", "seq5120"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, topology",
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_compressor_mesh(mesh_device, device_params, num_links, topology, seq_len):
+def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
     """Mesh/TP/SP PCC for TtHCACompressor: wkv/wgate contraction-parallel + TP all-reduce, SP-parallel
     window pooling (input host-padded to compress_rate*sp), compressed KV SP-gathered + trimmed to the
     real length. seq_len is the REAL (pre-pad) length; unaligned values exercise the pad + trim path.
@@ -258,9 +237,7 @@ def test_hca_compressor_mesh(mesh_device, device_params, num_links, topology, se
     with torch.no_grad():
         compressed_kv_ref, block_bias_ref = ref(hidden, q_residual, position_ids, past_key_values=None, layer_idx=0)
 
-    tt_model = TtHCACompressor.from_reference(
-        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
-    )
+    tt_model = TtHCACompressor.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
 
     # Host-pad the seq to compress_rate*sp (pre-shard) so each SP shard holds whole compression windows.
     hidden_padded, seq_len_actual = TtHCACompressor.prepare_input(hidden, sp_factor, compress_rate)
@@ -378,11 +355,11 @@ def test_hca_attention(device, seq_len):
 
 @pytest.mark.parametrize("seq_len", [512, 2048, 5120], ids=["seq512", "seq2k", "seq5120"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, topology",
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_attention_mesh(mesh_device, device_params, num_links, topology, seq_len):
+def test_hca_attention_mesh(mesh_device, device_params, topology, seq_len):
     """Mesh/TP/SP PCC for TtHCA._attention: q head(TP)+seq(SP) sharded, sliding_kv SP-sharded (gathered
     inside), compressed_kv replicated, mask SP-sharded, sink TP-sharded. Aligned seq only (padding-awareness
     is a full-block concern). Compared against the full unsharded attention core."""
@@ -424,9 +401,7 @@ def test_hca_attention_mesh(mesh_device, device_params, num_links, topology, seq
         attn_out = apply_rotary_pos_emb(attn_out.transpose(1, 2), cos, -sin).transpose(1, 2)
         attn_ref = attn_out.transpose(1, 2)  # [B, num_heads, S, head_dim]
 
-    tt_model = TtHCA.from_reference(
-        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
-    )
+    tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
 
     ms = tuple(mesh_device.shape)
 
@@ -515,11 +490,11 @@ def test_hca_output(device, seq_len):
 
 @pytest.mark.parametrize("seq_len", [512, 2048, 5120], ids=["seq512", "seq2k", "seq5120"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, topology",
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_output_mesh(mesh_device, device_params, num_links, topology, seq_len):
+def test_hca_output_mesh(mesh_device, device_params, topology, seq_len):
     """Mesh/TP/SP PCC for TtHCA._o_proj: groups partition the heads, so the batched o_a_proj is purely
     local (o_groups/tp groups per chip); o_b_proj is contraction-parallel and TP reduce-scattered, so the
     output lands as [B, 1, S/sp, hidden/tp]. Compared against the full unsharded output path."""
@@ -538,9 +513,7 @@ def test_hca_output_mesh(mesh_device, device_params, num_links, topology, seq_le
         grouped = ref.o_a_proj(grouped).flatten(2)
         out_ref = ref.o_b_proj(grouped)  # [B, S, hidden]
 
-    tt_model = TtHCA.from_reference(
-        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
-    )
+    tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
     ms = tuple(mesh_device.shape)
     attn_tt = ttnn.from_torch(
         attn,
@@ -634,11 +607,11 @@ def test_hca_forward(device, seq_len):
 
 @pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, topology",
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_forward_mesh(mesh_device, device_params, num_links, topology, seq_len):
+def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
     """Full TtHCA block on the mesh for an ARBITRARY prompt length: prepare_input host-pads the seq to
     compress_rate*sp, the block runs SP+TP sharded end to end, and the first seq_len output rows are
     compared against the unpadded DeepseekV4Attention.forward. This is where padding-awareness is proven:
@@ -672,9 +645,7 @@ def test_hca_forward_mesh(mesh_device, device_params, num_links, topology, seq_l
         attn_mask = attn_mask.view(1, 1, seq_len, seq_len).expand(batch, 1, seq_len, seq_len)
         out_ref, _ = ref(hidden, {"compress": (cos, sin)}, position_ids, attn_mask, past_key_values=None)
 
-    tt_model = TtHCA.from_reference(
-        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
-    )
+    tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
 
     hidden_padded, seq_len_actual = TtHCA.prepare_input(hidden, sp_factor, compress_rate)
     logger.debug(f"mesh={tuple(mesh_device.shape)} S_real={seq_len_actual} S_pad={hidden_padded.shape[1]}")
@@ -722,11 +693,11 @@ _CHUNKED_SCENARIOS = [
 
 @pytest.mark.parametrize("name, iters_valid", _CHUNKED_SCENARIOS, ids=[n for n, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, topology",
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_chunked_prefill_mesh(mesh_device, device_params, num_links, topology, name, iters_valid):
+def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, iters_valid):
     """Chunked prefill on the mesh: the prompt is consumed in fixed-width chunks while TtHCAState carries
     the compressed-KV cache and the raw look-back across them.
 
@@ -766,9 +737,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, num_links, topolog
         attn_mask = attn_mask.view(1, 1, total, total).expand(batch, 1, total, total)
         out_ref, _ = ref(hidden, {"compress": (cos, sin)}, position_ids, attn_mask, past_key_values=None)
 
-    tt_model = TtHCA.from_reference(
-        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
-    )
+    tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
     state = tt_model.alloc_state(total)
     ms = tuple(mesh_device.shape)
     logger.debug(f"mesh={ms} scenario={name} iters={iters_valid} total={total}")
@@ -835,3 +804,128 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, num_links, topolog
     assert cache_passed, f"compressed cache mismatch: {cache_msg}"
 
     logger.debug(f"PCC test passed! entries={state.entry_count} program cache stable at {entries_after_first}")
+
+
+class _RefHCACache:
+    """Minimal ``past_key_values`` for driving the reference chunk by chunk: the attention calls
+    ``.update(k, v, layer_idx)`` on the container, the compressor reaches into ``.layers[layer_idx]``."""
+
+    def __init__(self, layer):
+        self.layers = [layer]
+
+    def update(self, key_states, value_states, layer_idx, *args, **kwargs):
+        return self.layers[layer_idx].update(key_states, value_states)
+
+
+def _sliding_mask(q_pos, k_pos, sliding_window):
+    i, j = q_pos.view(-1, 1), k_pos.view(1, -1)
+    allowed = (j <= i) & (i - j < sliding_window)
+    return torch.zeros(i.shape[0], j.shape[1]).masked_fill(~allowed, float("-inf"))
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
+    """Long chunked prefill: 14 full chunks of 4096 = 57,344 tokens, the demo-sized prompt.
+
+    Unlike the short scenarios this drives the torch reference chunk by chunk too, through
+    ``DeepseekV4HCACache``. An unchunked reference is not an option at this length: eager attention
+    (forced, since sinks make V4 eager-only) materializes [1, num_heads, S, S] scores, which is 726 GB
+    at 57K. The short scenarios keep the unchunked reference and are what pins chunked == plain
+    attention; this test only has to show it stays true 14 chunks and 448 compressed entries deep.
+    """
+    torch.manual_seed(42)
+
+    batch = 1
+    chunks = 14  # 14 * 4096 = 57,344 tokens
+    config = _flash_config()
+    config._attn_implementation = "eager"  # sinks: the sdpa interface silently drops s_aux
+    sw = config.sliding_window
+    compress_rate = config.compress_rates["heavily_compressed_attention"]
+    total = _CHUNK_SIZE * chunks
+
+    ref = DeepseekV4Attention(config, layer_idx=0).eval()
+    with torch.no_grad():
+        ref.q_a_norm.weight.uniform_(0.5, 1.5)
+        ref.kv_norm.weight.uniform_(0.5, 1.5)
+        ref.sinks.normal_(0.0, 1.0)
+        ref.compressor.position_bias.normal_(0.0, 0.02)
+        ref.compressor.kv_norm.weight.uniform_(0.5, 1.5)
+
+    hidden = torch.randn(batch, total, config.hidden_size)
+    position_ids = torch.arange(total).unsqueeze(0).expand(batch, -1)
+
+    tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
+    state = tt_model.alloc_state(total)
+    ref_cache = _RefHCACache(DeepseekV4HCACache(config))
+    ms = tuple(mesh_device.shape)
+    logger.debug(f"mesh={ms} chunks={chunks}x{_CHUNK_SIZE} total={total}")
+
+    signpost("HCA_START")
+    kv_actual, entries_after_first = 0, None
+    for it in range(chunks):
+        chunk = hidden[:, kv_actual : kv_actual + _CHUNK_SIZE]
+        chunk_pos = position_ids[:, kv_actual : kv_actual + _CHUNK_SIZE]
+
+        # Reference: same chunk loop. The cache returns [carry | chunk] from update(), so the mask it
+        # needs covers exactly those keys; the compressor's block_bias is cat'd on for the compressed
+        # slots by the reference itself.
+        carry = min(sw - 1, kv_actual)
+        k_pos = torch.cat([torch.arange(kv_actual - carry, kv_actual), chunk_pos[0]])
+        ref_mask = _sliding_mask(chunk_pos[0], k_pos, sw).view(1, 1, _CHUNK_SIZE, -1).expand(batch, 1, -1, -1)
+        with torch.no_grad():
+            cos, sin = ref.compressor.rotary_emb(chunk, position_ids=chunk_pos, layer_type="compress")
+            expected, _ = ref(chunk, {"compress": (cos, sin)}, chunk_pos, ref_mask, past_key_values=ref_cache)
+
+        tt_in = ttnn.from_torch(
+            chunk.unsqueeze(1),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(2, 3)),
+        )
+        out_tt = tt_model(tt_in, chunk_pos, seq_len_actual=_CHUNK_SIZE, state=state)
+        out = ttnn.to_torch(
+            out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
+        ).squeeze(1)
+
+        # Drift is ~0.00044 per chunk against the fp32 reference (same bf16 accumulation the short
+        # chunked test sees at 0.997 over 3 chunks); 0.99 leaves headroom to roughly chunk 21.
+        pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.99)
+        logger.debug(f"  iter {it} (kv_actual={kv_actual} entries={state.entry_count}): PCC {pcc_message}")
+        assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
+
+        cache_entries = mesh_device.num_program_cache_entries()
+        if it == 0:
+            entries_after_first = cache_entries
+        else:
+            assert cache_entries == entries_after_first, (
+                f"chunk {it} added programs ({entries_after_first} -> {cache_entries}); a shape must have "
+                f"changed between chunks"
+            )
+        kv_actual += _CHUNK_SIZE
+    signpost("HCA_END")
+
+    assert state.kv_actual == total
+    assert state.entry_count == total // compress_rate
+
+    # Independent check on the stateful plumbing: 448 entries written at 14 different offsets must match
+    # what a single unchunked compressor pass emits (cheap -- the compressor has no [S, S] anywhere).
+    with torch.no_grad():
+        ref_entries, _ = ref.compressor(
+            hidden, torch.zeros(batch, total, config.q_lora_rank), position_ids, past_key_values=None, layer_idx=0
+        )
+    cache = ttnn.to_torch(
+        state.compressed_kv,
+        mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
+    )[:, :, : state.entry_count]
+    assert cache.shape == ref_entries.shape, f"cache {tuple(cache.shape)} vs ref {tuple(ref_entries.shape)}"
+    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=0.998)
+    logger.debug(f"  compressed cache PCC: {cache_msg}")
+    assert cache_passed, f"compressed cache mismatch: {cache_msg}"
+
+    logger.debug(f"{total} tokens OK: entries={state.entry_count} program cache stable at {entries_after_first}")
