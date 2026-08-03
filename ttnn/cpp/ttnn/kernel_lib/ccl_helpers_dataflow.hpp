@@ -113,6 +113,30 @@
 namespace dataflow_kernel_lib::ccl {
 
 /**
+ * @brief Scope-guard that bridges a kernel's @c uint32_t runtime-arg cursor to the @c size_t& the
+ *        connection builders (@c FabricStreamSender and @c MuxConn ctors) advance, and syncs the
+ *        advanced position back on destruction. Pass @c arg_cursor(arg_idx) straight into the ctor;
+ *        it lets the ctor walk a @c size_t cursor and writes the new position back to @c arg_idx when
+ *        the build expression ends, so the old "copy the cursor out, build, copy it back" idiom can
+ *        no longer drop its final copy-back step (the footgun this removes). A cursor that is already
+ *        @c size_t (e.g. point_to_point's) does not need this — pass it to the ctor directly.
+ * @note Use it as a temporary in the build call (not a named local, which would sync back only at
+ *   end of scope — after later reads of @c arg_idx).
+ */
+class arg_cursor {
+public:
+    FORCE_INLINE explicit arg_cursor(uint32_t& arg_idx) : arg_idx_(arg_idx), idx_(arg_idx) {}
+    arg_cursor(const arg_cursor&) = delete;
+    arg_cursor& operator=(const arg_cursor&) = delete;
+    FORCE_INLINE ~arg_cursor() { arg_idx_ = static_cast<uint32_t>(idx_); }
+    FORCE_INLINE operator size_t&() { return idx_; }
+
+private:
+    uint32_t& arg_idx_;
+    size_t idx_;
+};
+
+/**
  * @brief Direct fabric-connection policy (default). Wraps one FabricConnectionManager and
  *        binds a single forward/backward direction. The arm/send methods are agnostic to the
  *        policy — they call conn_.sender(); a Mux policy (MuxConn<N>, for worker-mux link
