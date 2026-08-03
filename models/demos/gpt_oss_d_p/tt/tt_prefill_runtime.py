@@ -15,11 +15,11 @@ the engine allocates via ``GptOssPrefillAdapter.allocate_kv_cache`` and passes t
 into every call). ``prefill_chunk`` / ``compile`` / ``gather_layer`` / ``kv_cache_pcc_check`` accept
 an optional cache arg that defaults to ``self.kv_cache``.
 
-IMPORTANT (P2 not yet implemented): the GQA cache-READ attention path (``cached_len > 0``) is
-``NotImplementedError`` in ``attention/prefill.py`` (needs the ring/paged chunk-position-aware SDPA).
-So MULTI-chunk prefill fails on the 2nd chunk today. ONE-SHOT prefill (a single chunk covering the
-whole prompt, ``cached_len == 0``) is the supported path and is what the galaxy KV-PCC harness uses.
-The KV-cache WRITE + gather-back are done and validated; only the read-back-for-attention is missing.
+CHUNKED prefill is supported: the SP cache-READ attention path (``cached_len > 0``, chunks 1+) uses the
+ring-joint dense SDPA over the block-cyclic packed KV cache (``attention/dense_sp.py``); chunk 0 /
+one-shot (``cached_len == 0``) uses the gather-Q stand-in. The single-chip (sp==1) cache-read is still
+``NotImplementedError`` (not used on the galaxy). The galaxy KV-PCC harness runs both one-shot and
+multi-chunk.
 """
 
 import json
@@ -205,8 +205,8 @@ class TtPrefillRuntime:
         is the cache write offset (valid prefix already cached); the last chunk's tail may be pad, so
         actual_end < actual_start + chunk_size. Call once per chunk, in order.
 
-        NOTE (P2): actual_start > 0 drives the cache-READ attention path, which is NotImplementedError
-        today (attention/prefill.py). One-shot prefill (actual_start == 0, single chunk) is supported.
+        actual_start > 0 drives the SP ring cache-READ path (chunks 1+, attention/dense_sp.py);
+        actual_start == 0 (first/only chunk) uses the gather-Q stand-in.
         """
         assert self.model_built, "build the model before prefill_chunk()"
         kv = self._resolve_kv(kv_caches)
