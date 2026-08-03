@@ -361,8 +361,11 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
     };
 
     // COMPUTE KERNEL
-    // fp32_dest_acc_en picks the compute source and gates the unpack_modes list below; every other
-    // knob of the resolved config is carried across by to_compute_hardware_config.
+    // fp32_dest_acc_en selects the compute source and gates the unpack_modes list below, so it is
+    // read directly. to_compute_hardware_config carries the four knobs it covers -- math_fidelity,
+    // math_approx_mode, fp32_dest_acc_en and dst_full_sync_en -- into hw_config; packer_l1_acc and
+    // throttle_level are deliberately not translated. ComputeGen1Config has no packer_l1_acc field,
+    // so the value this op resolves for it stays unapplied, as it also was under the descriptor API.
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
     const bool use_sfpu_kernel = fp32_dest_acc_en || any_float32;
 
