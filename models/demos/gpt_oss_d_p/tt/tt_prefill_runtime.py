@@ -167,14 +167,38 @@ class TtPrefillRuntime:
         return kv_caches[0]
 
     def make_chunk_input(self, token_ids: list) -> ttnn.Tensor:
-        """Embed + SP-shard one chunk's token ids -> the model input tensor (consumed by prefill_chunk)."""
+        """Build one chunk's device input for ``prefill_chunk``: the chunk's token IDs as an SP-sharded
+        uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, chunk_size // sp)`` — row r holds the
+        contiguous token slice ``[r*s_local:(r+1)*s_local]``, replicated across the TP cols. This is the
+        SAME per-chip layout the request-mode H2D socket delivers (``H2D_MAPPER_CONFIG`` shards dim 0 on
+        SP + replicates on TP), so standalone and request modes feed one code path; ``prefill_chunk``
+        embeds on device. Mirrors ``minimax_m3/tt_prefill_runtime.py:192-220``."""
         assert len(token_ids) == self.config.chunk_size, (
             f"chunk input must be exactly chunk_size={self.config.chunk_size} tokens (pad the tail), "
             f"got {len(token_ids)}"
         )
-        chunk_tok = torch.tensor(token_ids, dtype=torch.int32).reshape(1, len(token_ids))
-        x_embd, _, _ = self.model.prepare_inputs_prefill(chunk_tok)
-        return x_embd
+        sp = self.config.sp_factor
+        s_local = self.config.chunk_size // sp
+        tok = torch.tensor(token_ids, dtype=torch.int32).reshape(sp, 1, s_local)
+        return ttnn.from_torch(
+            tok,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=self.config.mesh_shape, dims=(self.config.sp_axis, None)
+            ),
+        )
+
+    def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
+        """Embed SP-sharded uint32 tokens into the bf16 hidden state the layers consume. Mirrors the
+        embedding step in ``Model.prepare_inputs_prefill``: bf16 (not bf8) preserves the residual
+        stream's dynamic range."""
+        x = ttnn.embedding(tokens, self.model.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        if len(x.shape) == 3:
+            x = ttnn.unsqueeze_to_4D(x)
+        return x
 
     def compile(self, kv_caches=None) -> None:
         """Warm up the kernels by running one zero-token chunk through prefill_chunk (JIT-compiles)."""
@@ -218,8 +242,13 @@ class TtPrefillRuntime:
             actual_start < actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
+        # Embed the SP-sharded uint32 tokens on device (make_chunk_input / H2D deliver uint32; the model
+        # consumes bf16). The input tensor is freed once embedded.
+        x_embd = self._embed_tokens(input_tensor)
+        ttnn.deallocate(input_tensor)
+
         out = self.model.prefill_forward(
-            input_tensor,
+            x_embd,
             rot_mats_global=self.rope_indexed,  # whole-cache indexed rope (persistent; not deallocated)
             kv_cache=kv,
             cached_len=actual_start,
@@ -228,7 +257,6 @@ class TtPrefillRuntime:
             skip_lm_head=skip_lm_head,
             indexed_rope=True,
         )
-        ttnn.deallocate(input_tensor)
         if skip_lm_head:
             if out is not None:
                 out.deallocate(True)
