@@ -84,7 +84,11 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True
         )
         self.post_attention_layernorm = DeepSeekV4RMSNorm(
-            weights["post_attention_layernorm.weight"], eps, device, cache.file("post_attention_layernorm")
+            weights["post_attention_layernorm.weight"],
+            eps,
+            device,
+            cache.file("post_attention_layernorm"),
+            sharded=True,
         )
         self.attn_hc = DeepSeekV4HyperConnection(
             config, _strip_prefix(weights, "attn_hc"), device, cache=cache.sub("attn_hc")
