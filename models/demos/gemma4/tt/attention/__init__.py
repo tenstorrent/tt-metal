@@ -14,10 +14,12 @@ Supports two layer types:
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, Mode
+from models.demos.gemma4.tt.ccl import cp_degree
 
 from .weights import AttentionWeights, load_attention_weights
 from .kv_cache import init_kv_cache
 from .decode import decode_forward, packed_decode_forward
+from .operations import build_cp_prefill_mask
 from .prefill import flush_deferred_bounded_fills, prefill_forward
 
 
@@ -118,6 +120,10 @@ class Gemma4Attention:
             )
         else:
             self.kv_cache = None
+
+        # CP prefill masks, keyed by local sequence length. Built lazily on first
+        # prefill so the host-side construction lands in warmup, not trace capture.
+        self._cp_mask_cache = {}
 
         # Persistent hot-block staging for the packed-verify loop-free KV write.
         # Allocated lazily by the spec-decode driver (see tt/spec_decode.py);
@@ -247,12 +253,36 @@ class Gemma4Attention:
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
                 sliding_tail_in=getattr(self, "_sliding_prefill_tail", None),
+                cp_attn_mask=self._cp_attn_mask(hidden_states.shape[-2]),
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk.
             self._sliding_prefill_tail = sliding_tail_out
             self._last_kv = kept_kv
             return tt_out
+
+    def _cp_attn_mask(self, local_seq_len):
+        """CP-sharded additive prefill mask for ``local_seq_len`` query rows.
+
+        ``None`` when context parallelism is off, which leaves the existing
+        ``is_causal`` / ``sliding_window_size`` SDPA path untouched.
+
+        Cached per local sequence length: the build does host work, so it must
+        happen during the warmup pass and not again inside a trace capture, where
+        the mask has to be the same persistent device tensor every replay.
+        """
+        if cp_degree(self.mesh_config) <= 1:
+            return None
+        mask = self._cp_mask_cache.get(local_seq_len)
+        if mask is None:
+            mask = build_cp_prefill_mask(
+                self.mesh_device,
+                self.mesh_config,
+                local_seq_len,
+                self.config.sliding_window if self.config.is_sliding else None,
+            )
+            self._cp_mask_cache[local_seq_len] = mask
+        return mask
 
     def _release_sliding_prefill_tail(self, *, clear_persistent: bool = False):
         """Drop the cross-chunk sliding tail for the next prefill's first chunk.
