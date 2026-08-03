@@ -149,8 +149,6 @@ void eth_noc_async_write_barrier() {
  * | src_addr          | Source address in local eth core L1 memory              | uint32_t | 0..256kB | True     |
  * | dst_addr          | Destination address in remote eth core L1 memory        | uint32_t | 0..256kB | True     |
  * | num_bytes         | Size of data transfer in bytes, must be multiple of 16  | uint32_t | 0..256kB | True     |
- * | wait_min          | Packets without a context switch before run_routing()   | uint32_t | Any uint32_t value | False
- * |
  */
 FORCE_INLINE
 void eth_send_bytes(
@@ -158,21 +156,11 @@ void eth_send_bytes(
     uint32_t dst_addr,
     uint32_t num_bytes,
     uint32_t num_bytes_per_send = 16,
-    uint32_t num_bytes_per_send_word_size = 1,
-    uint32_t wait_min = 100) {
+    uint32_t num_bytes_per_send_word_size = 1) {
     uint32_t num_bytes_sent = 0;
-    uint32_t count = 0;
     while (num_bytes_sent < num_bytes) {
-        bool context_switched = internal_::eth_send_packet(
+        internal_::eth_send_packet(
             0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
-        if (context_switched) {
-            count = 0;
-        } else if (count == wait_min) {
-            run_routing();
-            count = 0;
-        } else {
-            count++;
-        }
         num_bytes_sent += num_bytes_per_send;
     }
     erisc_info->channels[0].bytes_sent += num_bytes;
