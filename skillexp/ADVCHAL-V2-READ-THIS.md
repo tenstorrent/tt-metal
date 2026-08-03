@@ -8,6 +8,10 @@ Everything here is reconstructed from the cells' own session transcripts
 26 oracle runs — not from the cells' self-reported summaries. Where a cell's summary and its log
 disagree, the log wins and the disagreement is noted.
 
+**If you only read one section:** §8 — *the same situation, handled differently*. It lists the 13 places where
+cells facing identical situations made different calls, which handling measured better, and what the worse one
+cost. That is where the stage's remaining headroom is.
+
 **Where the detail lives.** This file is the account. The supporting tiers are
 [`ADVCHAL-V2-MEASUREMENTS.md`](ADVCHAL-V2-MEASUREMENTS.md) (every measurement, in order, per cell),
 [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) (the correctness bar each cell held itself to),
@@ -47,23 +51,28 @@ Two numbers matter for reading any cell:
 
 ## 2. The 15 cells at a glance
 
-| model | cell | control ms/layer | what the advisor pointed at | what shipped | model-level |
-|---|---|---|---|---|---|
-| llama-3.2-1B | `exp` | 0.3731 | 2.8 µs/layer ceiling | **nothing** | 0.0 % — honest zero |
-| llama-3.1-8B | `exp17` | 0.6650 | 4.4 µs/layer ceiling | **nothing** | 0.0 % — honest zero |
-| phi-3.5-mini | **A** | 0.6570 | RoPE → L1, 32-core rect | `rope_l1_rect32` | **−8.75 %** (−1,594 µs) |
-| phi-3.5-mini | **B** | 0.7888 | RoPE → L1 chain | `rope_l1_chain` | **−5.74 %** (−1,285 µs) |
-| phi-3.5-mini | **FN** | 0.8072 | RoPE → L1 **+ 1-core norm → 11** | RoPE only | −4.91 % — **−13.24 % was measured and discarded** |
-| phi-3.5-mini | exp17 | 1.1009 | 83.6 µs/layer ceiling (largest) | **nothing** | 0.0 % — every direction overlapped or hard-failed |
-| qwen3.6-27B | `fuse` | 1.2083 full<br>19.1402 linear | packed-QKV boundary | `packed_qkv_l1_chain` | −445.7 µs — **inside its ±618.5 µs band** |
-| qwen3.6-27B | **B** | 1.4494 full<br>15.8498 linear | 33.7 µs/full-layer ceiling | **nothing** | 0.0 % — geometry hard-failed |
-| gemma-4-12B | `exp11` | 1.2541 sliding<br>1.3774 full | K/V/Q residency + MLP handoff | `Q+K+V+MLP` both kinds<br>+ output chain full only | **−1.14 %** (−666.8 µs) |
-| gemma-4-26B | `exp` | 1.2597 | sliding-O DRAM sharding | `sliding_attention_o_chain` | **−147.9 µs**, band ±36.5 |
-| gemma-4-26B | **onA** | 1.8252 sliding | **1-core norm → 88** | `advisor_norm88` | **−12.98 %/layer** |
-| gemma-4-26B | **FN** | 1.3412 sliding<br>1.5394 full | concat-heads → output projection | `advisor_concat_projection` | **−2.04 %** (−791.7 µs)<br>*88-core norm regressed here* |
-| north-mini | **FN** | 0.5537 MoE | **1-core MoE norm → 22** | norm at **32** cores | **−10.23 %** (−2,551 µs) |
-| north-mini | **B** | 0.6138 / 0.2033 dense | dense MLP DRAM-sharded residency | **nothing** | 0.0 % — all geometries slower or stalled |
-| north-mini | **onA** | 0.2918 dense<br>0.8465 sparse | — | **nothing** | 0.0 % — sparse MoE untraceable |
+**Arm names.** `FN` = `fuse-noadvise`, `B` = `nofuse-noadvise`, `onA` = `nofuse-noadvise-onA`, plus the
+`exp11`/`exp17` experiment cells. The suffix `-onA` describes where that cell's **incumbent** was produced by
+stage 02 — **all 15 cells of stage 02b ran on the same host** (`machine=a`, `qb2-120-p05t03`), so no difference
+in this document is a hardware difference.
+
+| model | cell | arm | control ms/layer | what the advisor pointed at | what shipped | model-level |
+|---|---|---|---|---|---|---|
+| llama-3.2-1B | exp17 | `exp17` | 0.3731 | 2.8 µs/layer ceiling | **nothing** | 0.0 % — honest zero |
+| llama-3.1-8B | exp17 | `exp17` | 0.6650 | 4.4 µs/layer ceiling | **nothing** | 0.0 % — honest zero |
+| phi-3.5-mini | **A** | `nofuse-noadvise-onA` | 0.6570 | RoPE → L1, 32-core rect | `rope_l1_rect32` | **−8.75 %** (−1,594 µs) |
+| phi-3.5-mini | **B** | `nofuse-noadvise` | 0.7888 | RoPE → L1 chain | `rope_l1_chain` | **−5.74 %** (−1,285 µs) |
+| phi-3.5-mini | **FN** | `fuse-noadvise` | 0.8072 | RoPE → L1 **+ 1-core norm → 11** | RoPE only | −4.91 % — **−13.24 % was measured and discarded** |
+| phi-3.5-mini | exp17 | `exp17` | 1.1009 | 83.6 µs/layer ceiling (largest) | **nothing** | 0.0 % — every direction overlapped or hard-failed |
+| qwen3.6-27B | **FN** | `fuse-noadvise` | 1.2083 full<br>19.1402 linear | packed-QKV boundary | `packed_qkv_l1_chain` | −445.7 µs — **inside its ±618.5 µs band** |
+| qwen3.6-27B | **B** | `nofuse-noadvise` | 1.4494 full<br>15.8498 linear | 33.7 µs/full-layer ceiling | **nothing** | 0.0 % — geometry hard-failed |
+| gemma-4-12B | exp11 | `exp11` | 1.2541 sliding<br>1.3774 full | K/V/Q residency + MLP handoff | `Q+K+V+MLP` both kinds<br>+ output chain full only | **−1.14 %** (−666.8 µs) |
+| gemma-4-26B | **B** | `nofuse-noadvise` | **1.2597** sliding | sliding-O DRAM sharding<br>*(88-core norm seen, not shipped)* | `sliding_attention_o_chain` | **−147.9 µs**, band ±36.5 |
+| gemma-4-26B | **onA** | `nofuse-noadvise-onA` | **1.8252** sliding | **1-core norm → 88** | `advisor_norm88` | **−12.98 %/layer** |
+| gemma-4-26B | **FN** | `fuse-noadvise` | **1.3412** sliding<br>1.5394 full | concat-heads → output projection | `advisor_concat_projection` | **−2.04 %** (−791.7 µs)<br>*88-core norm **regressed** here* |
+| north-mini | **FN** | `fuse-noadvise` | 0.5537 MoE | **1-core MoE norm → 22** | norm at **32** cores | **−10.23 %** (−2,551 µs) |
+| north-mini | **B** | `nofuse-noadvise` | 0.6138 / 0.2033 dense | dense MLP DRAM-sharded residency | **nothing** | 0.0 % — all geometries slower or stalled |
+| north-mini | **onA** | `nofuse-noadvise-onA` | 0.2918 dense<br>0.8465 sparse | — | **nothing** | 0.0 % — sparse MoE untraceable |
 
 Eight cells shipped something. Seven shipped nothing. Of the seven zeros, **two are honest zeros on
 well-placed decoders, three are structural (the advisor could not see the layer at all), one is a
@@ -125,9 +134,9 @@ that whole run L1-resident.
 
 | | control ms | best candidate | shipped | model-level |
 |---|---|---|---|---|
-| **A** (`fuse-advise onA`) | 0.6570 | `rope_l1_rect32` 0.6072 (−7.58 %) | yes | **−8.75 %** |
-| **B** (`fuse-noadvise`) | 0.7888 | `rope_l1_chain` 0.7487 (−5.09 %) | yes | **−5.74 %** |
-| **FN** (`nofuse-noadvise`) | 0.8072 | `rope+norm11` 0.7003 (**−13.24 %**) | **RoPE only** (−4.84 %) | −4.91 % |
+| **A** (`nofuse-noadvise-onA`) | 0.6570 | `rope_l1_rect32` 0.6072 (−7.58 %) | yes | **−8.75 %** |
+| **B** (`nofuse-noadvise`) | 0.7888 | `rope_l1_chain` 0.7487 (−5.09 %) | yes | **−5.74 %** |
+| **FN** (`fuse-noadvise`) | 0.8072 | `rope+norm11` 0.7003 (**−13.24 %**) | **RoPE only** (−4.84 %) | −4.91 % |
 | **exp17** | 1.1009 | `rope_l1_tail` 1.1007 (−0.02 %) | no | 0.0 % |
 
 **A** found the win on the first legal try: a 32-core rectangular L1 RoPE chain, every repeat
@@ -208,7 +217,7 @@ cross the linear kind's mutable-state `ttnn.copy` boundary.** For 48 of 64 layer
 the graph. Both arms therefore report a structural zero over three-quarters of the model, and every
 number below concerns only the 16 full-attention layers.
 
-**`fuse` arm.** Control 1.208257 ms (full). The top-ranked repeat placement failed exactly as the skill
+**`FN` arm (`fuse-noadvise`).** Control 1.208257 ms (full). The top-ranked repeat placement failed exactly as the skill
 predicts for partial application — its sharded output met an interleaved passthrough at concat. The
 cell did the prescribed retry, extending the candidate through the advisor's adjacent `add → concat`
 reconfiguration rather than abandoning the direction; that combined form also lost (1.233225 ms). What
@@ -224,7 +233,7 @@ a genuine limitation of the reconciliation tool: IR inspection showed several so
 pairings claiming removed boundaries that the authoritative IR explicitly *retains*. Those false
 candidates were recorded and excluded from attribution.
 
-**`B` arm.** Control 1.449416 ms full, 15.849799 ms linear. Ceiling 33.698 µs/full-layer. Everything
+**`B` arm (`nofuse-noadvise`).** Control 1.449416 ms full, 15.849799 ms linear. Ceiling 33.698 µs/full-layer. Everything
 legal was screened and everything lost:
 
 | candidate | result |
@@ -281,24 +290,32 @@ Shipped **58,520.1 → 57,853.3 µs/model, −666.8 µs (1.14 %), ±55.5 µs** �
 
 ### 3.6 gemma-4-26B — three versions, and the corpus's decisive experiment
 
-Three cells, all 25 sliding + 5 full attention layers, all at **decode batch 1**.
+Three cells, all 25 sliding + 5 full attention layers, all at **decode batch 1**, all on the same host.
 
-| | control ms/layer | 88-core norm | concat→projection | sliding-O DRAM | shipped |
-|---|---|---|---|---|---|
-| **exp** | 1.2597 sliding | observed, not shipped | — | **1.2540 (−0.46 %)** | sliding-O → −147.9 µs/model |
-| **onA** | **1.8252** sliding | **1.5873 (−13.03 %)** | — | — | 88-core norm → −12.98 %/layer |
-| **FN** | **1.3412** sliding | **1.3469 (+0.43 %)** ✗ | **1.3184 (−1.69 %)** | — | concat→proj → −791.7 µs (2.04 %) |
+| | arm | control ms/layer | 88-core norm | what shipped |
+|---|---|---|---|---|
+| **B** | `nofuse-noadvise` | **1.2597** sliding | **seen, never screened** | sliding-O DRAM chain 1.2540 (−0.46 %) → −147.9 µs/model |
+| **FN** | `fuse-noadvise` | **1.3412** sliding | **1.3469 (+0.43 %)** ✗<br>full 1.5499 (+15.57 %) ✗ | concat→projection 1.3184 (−1.69 %) → −791.7 µs (2.04 %) |
+| **onA** | `nofuse-noadvise-onA` | **1.8252** sliding | **1.5873 (−13.03 %)** ✓ | 88-core norm → −12.98 %/layer |
 
-**This is the experiment that answers "were the winners just worse to start with?"** The *same
-candidate* — re-gridding a 1-core RMSNorm to 88 cores — was measured on two arms of the same model with
-the same tool at the same pin:
+**This is the experiment that answers "were the winners just worse to start with?"** The *same candidate* —
+re-gridding a 1-core RMSNorm onto 88 cores — met three different incumbents of the same model, screened by
+the same tool at the same pin on the same hardware, and its value tracked the incumbent's quality:
 
-- on **onA**, whose control is 1.8252 ms/layer, it won **−13.03 %**;
-- on **FN**, whose control is 1.3412 ms/layer — **26 % faster** — the identical candidate **regressed
-  both layer kinds** (+0.43 % sliding, +15.57 % full) and was left default-off.
+- on **onA** (1.8252 ms/layer, the slowest incumbent — its stage-02 arm underperformed) it won **−13.03 %**;
+- on **FN** (1.3412 ms/layer, 26 % faster) the identical candidate **regressed both layer kinds** and was left
+  default-off;
+- on **B** (1.2597 ms/layer, the fastest) the cell *observed* the 88-core norm in its report and did not
+  consider it worth screening at all, shipping an unrelated DRAM-sharding chain instead.
 
-The fusing arm had already fixed what the advisor was recovering on onA. The advisor's 13 % was not 13 %
-of value it created; it was 13 % of a deficiency that existed only in that arm's starting point.
+So the advisor's 13 % was not 13 % of value it created — it was 13 % of a defect that existed only in the
+weakest of three starting points. **The explanatory variable is stage-02 optimisation quality, not the
+fuse/nofuse arm**: the fastest incumbent here is a `nofuse` arm, and the `fuse` arm sits in the middle.
+
+⚠ One caveat on ordering: `B` and `onA` are nominally the *same arm* (`nofuse-noadvise`, differing only in
+where the incumbent was produced) yet their controls differ by **45 %** — 1.2597 vs 1.8252 ms. That spread is
+larger than any advisor contribution measured anywhere in this corpus, and it is upstream of stage 02b
+entirely. Any cross-arm reading of advisor value has to sit inside that much incumbent variance.
 
 **onA is also the cell where the accounting said zero and the measurement said 13 %.** Its reconciliation,
 after an IR-aware re-run, put the advisor-attributable ceiling at **exactly 0.000 µs for both layer
@@ -321,7 +338,7 @@ device rows carry no host op markers between the signposts, so `tt-perf-report` 
 one-eager-replay wrapper purely to generate the required op CSV, and kept latency decisions on the
 untouched harness. Shipped **38,887.6 → 38,095.8 µs/model (2.04 %), ±80.9**.
 
-**exp** is the batch-1 cell that shipped sliding-O DRAM sharding on a decisive split: sliding O won
+**B** is the cell that shipped sliding-O DRAM sharding on a decisive split: sliding O won
 every repeat (1.253223–1.254487 vs control 1.258866–1.260157) while full QKV clearly lost
 (1.290230–1.291618 vs 1.261299–1.262151). One detail shows the right instinct about shipped-vs-timed
 code: the winning measurement used O-projection `in0_block_w=1`, and the cell **pinned that
@@ -330,7 +347,7 @@ helper inference and diverge from what was timed.
 
 ### 3.7 north-mini — one big win, and two cells that could not see their own model
 
-**FN** is the corpus's second-largest win and its best example of a review catching a real defect.
+**FN** (`fuse-noadvise`) is the corpus's second-largest win and its best example of a review catching a real defect.
 
 The advisor wanted the MoE RMSNorm off 1 core onto **22**, width-sharded. FN swept **22 / 32 / 64**:
 
@@ -353,7 +370,7 @@ skipped `current_positions` shape and required-RoPE-input validation. All three 
 Refreshed result: **24,949.218 → 22,397.946 ± 74.289 µs/model (−10.23 %)**, oracle PCC 0.999526 via
 official layer-1 tensors transparently remapped onto the layer-4 path.
 
-**B** screened the dense MLP residency family exhaustively and lost every time. Against a 0.203313
+**B** (`nofuse-noadvise`) screened the dense MLP residency family exhaustively and lost every time. Against a 0.203313
 ms/layer dense control: `dense_advised_down_ds` 0.2074, the legal exactly-dividing 48→64-core chain
 0.234085, and a 110-core above-advisor chain 0.292203. The hard walls it documented are the useful
 part: the 32-core residual shard exposes only **two K tiles per shard**, incompatible with
@@ -364,7 +381,7 @@ device health afterwards, and closed the layout family as **not measurable** rat
 also disproved several reconciliation "boundaries" against the IR — they were rotary-input layout
 conversions, not QKV→rotary or SDPA→concat edges — and kept them as rejected, default-off evidence.
 
-**onA** never got to screen anything. `ttnn.sparse_matmul` cannot consume tracer tensors, so the sparse
+**onA** (`nofuse-noadvise-onA`) never got to screen anything. `ttnn.sparse_matmul` cannot consume tracer tensors, so the sparse
 MoE tail is unreachable; the cell captured each sparse kind's reachable attention prefix, marked the
 tail uncapturable, and quantified the untraced share. Every verdict came back `not_measurable`, so
 nothing was legally screenable and the contribution is a measured zero. Its other finding is a harness
@@ -383,7 +400,7 @@ Ranked by how much it actually decided outcomes in this corpus.
 
 | model | unreachable | cause |
 |---|---|---|
-| qwen3.6-27B | **48 of 64 layers** | linear attention's mutable-state `ttnn.copy` boundary |
+| qwen3.6-27B (both arms) | **48 of 64 layers** | linear attention's mutable-state `ttnn.copy` boundary |
 | north-mini onA | the entire sparse MoE tail | `ttnn.sparse_matmul` rejects tracer tensors |
 | gemma-4-26B onA | **64.70 % sliding / 58.51 % full** of the window | sparse experts |
 | phi-3.5 B | the fused-cache share | no tracer handler for `paged_fused_update_cache` |
@@ -457,9 +474,11 @@ harder time proving it.
 
 **Partly, and for one model provably yes.**
 
-**Provably yes — gemma-4-26B.** Same model, same candidate, same tool: −13.03 % on the arm with the
-1.8252 ms control, **+0.43 %** on the arm with the 1.3412 ms control. The advisor's large win existed
-only because that arm's starting point had a defect the other arm did not. §3.6.
+**Provably yes — gemma-4-26B.** Same model, same candidate, same tool, same hardware, three incumbents:
+**−13.03 %** at the 1.8252 ms control, **+0.43 %** (a regression) at 1.3412 ms, and not worth screening at
+1.2597 ms. The advisor's large win existed only because the weakest of the three starting points had a defect
+the others did not. Note the explanatory variable is stage-02 quality, not fuse/nofuse — the fastest of the
+three is a `nofuse` arm. §3.6.
 
 **Provably no — phi-3.5.** Its four arms span 1.68× in control speed and the ordering is *inverted*: the
 **fastest** arm (A, 0.6570 ms) took the **largest** win (−8.75 %/model), and the **slowest** arm
@@ -493,6 +512,9 @@ arm shows.
 | 4 | **`ttnn.sparse_matmul` tracer support.** Blocks north-mini onA entirely and hides 58–65 % of every gemma-4-26B window. | §3.7, §4.1 | unblocks 2 models |
 | 5 | **Re-screen qwen B's geometry family off the one-row worker grid.** Its 16-core above-advice probe failed the one-row contract, not the tensor shape; a 2-row geometry was never attempted. | §3.4 | unknown, currently a hard zero |
 | 6 | **Price the second attribution channel in the reconciliation ceiling.** A 0.000 µs ceiling next to a 236.8 µs/layer measured win (gemma-4-26B onA) means any cell trusting the ceiling ships a false zero. | §4.2 | correctness of the method itself |
+| 7 | **Require the product of all non-overlapping winners as a candidate.** Only 2 of 15 cells built one and both beat their own best isolate — by 5.64 pp (phi FN) and 0.96 pp (gemma-4-12B). Neither super- nor sub-additivity was predictable from the isolates. | §8 D2 | 1–6 pp in any cell with ≥2 winners |
+| 8 | **Re-measure an overlapping candidate at higher replay count before rejecting it.** No cell ever did this; phi exp17 rejected a better-median candidate on overlap while holding the corpus's largest ceiling. | §8 D4 | unblocks the phi exp17 zero |
+| 9 | **Re-screen `qwen FN`'s 48 linear layers with `qwen B`'s decomposition.** B established that the residual/norm/MLP envelope *is* traceable and only the token mixer is not; FN reported a flat zero over the same layers. | §8 D12 | recovers accounting over ~75 % of qwen |
 
 ---
 
@@ -516,7 +538,66 @@ of the three that had one.
 
 ---
 
-## 8. Stage defects this analysis exposes
+## 8. Where cells diverged — the same situation, handled differently
+
+The 15 cells ran one stage, one skill, one advisor pin, on one host. Wherever they still behaved
+differently, the stage under-specified something — and because some of those handlings measurably
+out-performed others, each divergence is a concrete place to tighten the skill.
+
+Ordered by what the divergence cost.
+
+| # | situation that recurred | how the cells split | measured cost of the worse handling |
+|---|---|---|---|
+| D1 | a placement change perturbs numerics | 14 cells: absolute oracle at 0.995 / recorded model bar → ship. **phi FN:** differential oracle at **0.999999** → veto | **−8.3 pp** of layer speedup discarded |
+| D2 | several independent directions each win | **2 of 15** multiplied them into a product; 13 screened isolates only | **+5.64 pp** (phi FN), **+0.96 pp** (gemma-12B) found only by the two that did |
+| D3 | the reconciliation ceiling reads ~0 µs | **g26 onA** distrusted it and screened the "doubtful" candidate anyway; **nm onA** and **g26 B** stopped at the ceiling | **−13.03 %/layer**, the corpus's largest shipped layer win, came from distrusting a **0.000 µs** ceiling |
+| D4 | a candidate's repeats overlap the control | 3 cells tightened the harness — **all three only to cure a settling artifact in the *control***. **Zero** cells tightened to separate a *candidate* | phi exp17 refused a better-median candidate on overlap while holding an **83.6 µs/layer** ceiling |
+| D5 | the first neighbour rejects sharded I/O | **qwen FN** and **nm B** extended across the adjacent conversion and got a number; **llama-8B**, **llama-1B**, **phi exp17** recorded the error and stopped | a blank instead of a measurement on ~3 of 6 opportunities |
+| D6 | shipped code vs timed code | **4 of 8** shipping cells re-ran with every candidate override unset; **g26 B** went further and pinned `in0_block_w=1` into the default | 4 shipping cells never proved the default matches what was timed |
+| D7 | real weights unavailable for the oracle | four different resolutions — fetch the shard, find it under `HF_HOME`, remap layer 1 onto layer 4 with disclosure, **or copy layer 1's PCC into the layer-4 artifact** | the last one is a fabricated oracle; a reviewer caught it |
+| D8 | is the candidate really control-plus-one-knob? | only **nm FN** is recorded as having verified it — and it **failed**, forcing 6 candidates + 2 confirmations to be remeasured | 14 cells never checked a property that invalidated every measurement in the one cell that did |
+| D9 | a candidate that never ran needs a verdict | four conventions: `null`, `not_measurable`, `below_threshold` at exactly 0.0 µs, and a new "legal-attempt hard error" verdict | cross-cell verdict fields are not comparable |
+| D10 | `reconcile.py` never fills the verdicts the gate demands | four workarounds: `--results` manifest, `--evidence` with stale-ID rejection, hand-annotation, `record_results.py` | tagged-vs-untagged records **which violation was chosen**, not quality |
+| D11 | the profiler fights the timing protocol | three workarounds: Tracy mid-run dumping, a profile-only single-eager-replay wrapper, `*_bounded` profile variants | each cell rediscovered this; one wasted a full profile run |
+| D12 | a layer kind the tracer cannot cross | **qwen B** decomposed it and captured the traceable residual/norm/MLP envelope, declaring only the token mixer uncapturable; **qwen FN** reported a flat zero for the *same* 48/64 layers | same wall, same model, materially different accounting |
+| D13 | the model-level gain is inside its band | **qwen FN** shipped and headlined it; **g26 B** shipped 4× outside; **no** cell refused to ship for it, and none added replays to shrink the band | the ship rule at model level is unstated |
+
+### The four worth acting on first
+
+**D2 — products are under-used and always paid.** The skill's own `aggregate_only` feasibility verdict already
+says *"apply the top chains together as one candidate first"*, and only two cells did anything like it. phi FN's
+isolates were −1.71 % (query), −1.81 % (key) and −7.60 % (norm); its query+key product was **−4.84 %** —
+*super*-additive against the 3.52 % the two isolates predict — and the three-way product reached **−13.24 %**.
+gemma-4-12B's product was *sub*-additive (three isolates summing to a notional 5.12 % delivered 2.42 %) but still
+beat every isolate. Neither direction is predictable from the isolates, which is exactly why the product has to
+be measured rather than inferred. **Make the product of all non-overlapping winners a required candidate.**
+
+**D3 — the ceiling is not a stopping condition.** g26 onA's reconciliation said the advisor was worth
+**0.000 µs** on both layer kinds, and the cell shipped **−12.98 %** anyway by screening a candidate the
+accounting priced at zero. nm onA, facing all-`not_measurable` verdicts, stopped and published a zero. The
+difference is not diligence — it is that one cell treated the ceiling as evidence and the other treated it as a
+verdict. Since §4.2 shows the ceiling *structurally* misprices in-chain re-grids at zero, **a zero ceiling should
+oblige a cell to screen the largest material op on ≤2 cores before it may publish a zero.**
+
+**D4 — nobody tightened the harness for a candidate, only for a control.** The three cells that changed the
+protocol (phi B → 20 then 50 warm-ups and 100 iters; qwen B → 30 warm-ups; g26 onA → 200 iters, then 30
+warm-ups) all did so to remove a first-block settling signature from the frozen control. That is the right
+instinct pointed in only one direction. phi exp17 had a candidate with a **better median** rejected purely
+because its 5 blocks overlapped the control's, while sitting on the largest ceiling in the corpus (83.6 µs/layer).
+The skill's own guidance for `not_measurable` is to *"tighten the harness (more replays per timed block)"* — it
+was never applied to an overlap. **On an overlap with a favourable median, one re-measure at higher replay count
+should be mandatory before rejection.**
+
+**D8 — one cell checked whether its candidate was really control-plus-one-knob, and the check failed.** nm FN's
+candidate policies had inherited constructor defaults rather than cloning the frozen incumbent, so they silently
+changed several dormant policy fields alongside the norm core count. Every one of its measurements had to be
+redone with `dataclasses.replace`. No other cell reports making this check, and nothing in the gate enforces it —
+so 14 cells' deltas rest on an assumption that was false in the only cell that tested it. **The gate should
+require a recorded diff of executed policy vs frozen policy showing exactly one changed field.**
+
+---
+
+## 9. Stage defects this analysis exposes
 
 1. **The oracle contract is unspecified** — kind, bar, and bar provenance are all left to the cell, and
    the strictest available reading discarded the corpus's largest measured win. Fix in

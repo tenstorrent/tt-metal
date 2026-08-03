@@ -2,8 +2,8 @@
  {
   "model": "llama-3.2-1B",
   "cell": "llama32-1b",
-  "arm": "exp/dense",
-  "label": "llama32-1b",
+  "arm": "exp17",
+  "label": "llama-3.2-1B",
   "measurements": [
    {
     "label": "incumbent",
@@ -59,8 +59,8 @@
  {
   "model": "llama-3.1-8B",
   "cell": "llama31-8b",
-  "arm": "exp17/dense",
-  "label": "llama31-8b",
+  "arm": "exp17",
+  "label": "llama-3.1-8B",
   "measurements": [
    {
     "label": "incumbent",
@@ -135,7 +135,7 @@
  {
   "model": "phi-3.5-mini",
   "cell": "phiA",
-  "arm": "fuse-advise onA",
+  "arm": "nofuse-noadvise-onA",
   "label": "phi A",
   "measurements": [
    {
@@ -203,7 +203,7 @@
  {
   "model": "phi-3.5-mini",
   "cell": "phiB",
-  "arm": "fuse-noadvise",
+  "arm": "nofuse-noadvise",
   "label": "phi B",
   "measurements": [
    {
@@ -291,7 +291,7 @@
  {
   "model": "phi-3.5-mini",
   "cell": "phiFN",
-  "arm": "nofuse-noadvise",
+  "arm": "fuse-noadvise",
   "label": "phi FN",
   "measurements": [
    {
@@ -497,7 +497,7 @@
   "model": "qwen3.6-27B",
   "cell": "qwen",
   "arm": "fuse-noadvise",
-  "label": "qwen",
+  "label": "qwen FN",
   "measurements": [
    {
     "label": "incumbent",
@@ -982,8 +982,8 @@
  {
   "model": "gemma-4-26B",
   "cell": "gemma4",
-  "arm": "exp (sliding O)",
-  "label": "gemma-4-26B exp",
+  "arm": "nofuse-noadvise",
+  "label": "g26 B",
   "measurements": [
    {
     "label": "incumbent",
@@ -1100,7 +1100,7 @@
  {
   "model": "gemma-4-26B",
   "cell": "g26onA",
-  "arm": "nofuse-noadvise onA",
+  "arm": "nofuse-noadvise-onA",
   "label": "g26 onA",
   "measurements": [
    {
@@ -1373,12 +1373,12 @@
   ],
   "knobs": {},
   "final_message": "Shipped the advisor-derived concat-heads \u2192 output-projection sharded chain. Full-model estimate: **38,887.6 \u00b1 80.9 \u00b5s before \u2192 38,095.8 \u00b1 80.9 \u00b5s after** - Estimated contribution: **791.7 \u00b5s/model (2.04%)** - Sliding: 1.341153 \u2192 1.318449 ms - Full attention: 1.539374 \u2192 1.494548 ms - Every winning repeat beat every incumbent repeat. - Fresh-process confirmations passed. - Real-weight HuggingFace oracle passed above PCC 0.995. - The 88-core norm candidate regressed both layer kinds and remains default-off. - Sharded SDPA output was rejected with the hard GQA constraint. - Final advisor-challenger gate passes cleanly. Artifacts: [advisor_challenger/README.md](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/final.json).",
-  "n_agent_messages": 24
+  "n_agent_messages": 25
  },
  {
   "model": "north-mini",
   "cell": "nmFN",
-  "arm": "nofuse-noadvise",
+  "arm": "fuse-noadvise",
   "label": "nm FN",
   "measurements": [
    {
@@ -1620,7 +1620,7 @@
  {
   "model": "north-mini",
   "cell": "nmB",
-  "arm": "fuse-noadvise",
+  "arm": "nofuse-noadvise",
   "label": "nm B",
   "measurements": [
    {
@@ -1724,7 +1724,7 @@
  {
   "model": "north-mini",
   "cell": "nmOnA",
-  "arm": "fuse-advise onA",
+  "arm": "nofuse-noadvise-onA",
   "label": "nm onA",
   "measurements": [
    {

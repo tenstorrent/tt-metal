@@ -31,6 +31,14 @@ The two columns that matter are on the right. **Δ by kind** splits the per-kind
 | north-mini B | 1 | n/a new | tagged | **no_change** | 3 | real | 613.8 → 613.8 | 28207.3 → 28207.3 | 0.0× (±49.0) | +0.00 % / +0.00 % / +0.00 % | **+0.000 %** | **+0.000 %** |
 | gemma-4-26B onA | 1 | n/a new | tagged | **improved** | 2 | real | 1824.0 → 1587.3 | 54633.6 → 47528.2 | 219.4× (±32.4) | -11.98 % / -13.23 % | **-12.980 %** | **-13.006 %** |
 | north-mini onA | 1 | n/a new | tagged | **no_change** | 1 | real | 291.8 → 291.8 | 39940.8 → 39940.8 | 0.0× (±534.9) | +0.00 % / +0.00 % / +0.00 % | **+0.000 %** | **+0.000 %** |
+| gemma-4-26B FN † | 1 | not recorded | tagged | **improved** | 1 | real | 1341.2 → 1318.4 | 38887.6 → 38095.8 | 9.8× (±80.9) | -2.91 % / -1.69 % | **-1.693 %** | **-2.036 %** |
+
+† **`gemma-4-26B FN` (`fuse-noadvise`) is transcript-derived, not generator-derived.** Its `done` tag
+(`skillexp/done/advchal-v2/fuse-noadvise/google_gemma_4_26b_a4b_it`) exists, but `advchal-v2-data.json` was last
+generated before that tag landed, so the 14 rows above it come from the tags and this row comes from the cell's
+own session log. Re-running the generator will fold it in and supersede this note. Everything else about the cell
+— shipped `advisor_concat_projection`, the 88-core norm regression that kept it default-off, the GQA hard wall —
+is in [`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md) §3.6.
 
 **Complete is not the same as tagged.** Two cells finished their optimization work and passed the gate, but
 carry no `done` tag. Their measurements are as real as any other cell's -- same harness, same non-overlap rule,

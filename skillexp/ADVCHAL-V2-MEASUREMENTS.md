@@ -4,6 +4,10 @@ Every harness measurement recorded by every cell of stage 02b (`$advisor-challen
 the cell ran it, reconstructed from the session transcripts
 (`~/skillexp-logs/p-advchal-v2-*/02-02b-advisor-challenger.jsonl`).
 
+All 15 cells were measured on the **same host** (`machine=a`, `qb2-120-p05t03`); the `-onA` suffix in an
+arm name refers to where that cell's *incumbent* was produced by stage 02, not where 02b ran. So no
+cross-cell difference below is a hardware difference.
+
 This is the **detail tier**. For the readable account of what each cell was doing and why, read
 [`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md).
 
@@ -18,7 +22,7 @@ cell has several layer kinds with different costs (marked ⚠). Read those again
 **149 measurements across 15 cells.**
 
 
-## llama32-1b — llama-3.2-1B, `exp/dense`
+## llama-3.2-1B — llama-3.2-1B, `exp17`
 
 Control: **0.3731 ms/layer**, noise floor 0.146 µs (0.039 % of the layer). ⚠ multiple layer kinds — `vs ctl` spans kinds, compare within a kind only
 
@@ -32,7 +36,7 @@ Control: **0.3731 ms/layer**, noise floor 0.146 µs (0.039 % of the layer). ⚠ 
 > **Cell's own closing summary:** Full-model estimate: **5,672.576 µs before → 5,672.576 µs after, ±2.336 µs**. Measured `$shard-advise` contribution: **0.000 µs/model**. The frozen incumbent remains shipped unchanged. - Incumbent: 0.373080 ms/layer at decode batch 32. - 64-core extended chain: 0.420341 ms, 12.7% slower. - DRAM concat candidate: 0.373237 ms with overlapping repeats; rejected. - SDPA→concat chain: infeasible because paged GQA SDPA rejects sharded output. - Rotary-K DRAM candidate: incompatible with paged cache update. - Advisor agreement with shipped: 258.260 µs/layer, 72.84% of the profiled window. - Advisor-agreed boundaries: 1.320 µs/layer, reported but not credited. - Layer handoff: no DRAM round trip detected. Artifacts: [README.md](/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_2_1b_instruct/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_2_1b_instruct/doc/advisor_challenger/final.json). The requested gate passes in strict mode with no warnings. Candidate knobs remain default-off.
 
 
-## llama31-8b — llama-3.1-8B, `exp17/dense`
+## llama-3.1-8B — llama-3.1-8B, `exp17`
 
 Control: **0.6650 ms/layer**, noise floor 0.697 µs (0.105 % of the layer).
 
@@ -49,7 +53,7 @@ Control: **0.6650 ms/layer**, noise floor 0.697 µs (0.105 % of the layer).
 > **Cell's own closing summary:** Full-model estimate: **20,747.296 µs before → 20,747.296 µs after, ±22.304 µs**. Measured `$shard-advise` contribution: **0.000 µs/model**. The frozen batch-32 incumbent remains shipped unchanged. Key results: - Incumbent: 0.665046 ms/layer; 0.697 µs noise floor. - Advisor ceiling: 4.394 µs/layer, or 140.608 µs/model. - Top boundary candidate: hard error—concat-heads requires sharded input. - Attention regrid removal: +2.536 µs/layer. - MLP regrid removal: +2.635 µs/layer. - Exactly-dividing 64-core candidate: +28.077 µs/layer. - Advisor independently re-derived 76.32% of the measured window. - Strict advisor-challenger gate passes with no warnings. Artifacts are summarized in [README.md](/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_1_8b_instruct/doc/advisor_challenger/README.md), with machine-readable results in [final.json](/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_1_8b_instruct/doc/advisor_challenger/final.json). All losing experimental knobs remain default-off.
 
 
-## phi A — phi-3.5-mini, `fuse-advise onA`
+## phi A — phi-3.5-mini, `nofuse-noadvise-onA`
 
 Control: **0.6570 ms/layer**, noise floor 0.430 µs (0.065 % of the layer). ⚠ multiple layer kinds — `vs ctl` spans kinds, compare within a kind only
 
@@ -63,7 +67,7 @@ Control: **0.6570 ms/layer**, noise floor 0.430 µs (0.065 % of the layer). ⚠ 
 > **Cell's own closing summary:** Shipped the advisor-derived L1 RoPE chain for decode batch 32. - Full-model estimate: **18,210.88 → 16,616.75 µs** - Improvement: **1,594.13 µs/model (8.75%)** - Uncertainty band: **±13.76 µs** - Per-layer: **0.656989 → 0.607172 ms** - Fresh-process confirmation: **0.607902 ms** - Real-weight differential oracle: **PCC 0.9999988** - Batch-32 regression test: **passed**, PCC 0.9999951 - Advisor agreement: **224.287 µs/layer** - Out-of-scope layer handoff: **43.369 µs/model** - Mandatory advisor-challenger gate: **passed** Artifacts and detailed accounting are in [README.md](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/final.json). The shipped implementation is in [optimized_decoder.py](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/tt/optimized_decoder.py).
 
 
-## phi B — phi-3.5-mini, `fuse-noadvise`
+## phi B — phi-3.5-mini, `nofuse-noadvise`
 
 Control: **0.7888 ms/layer**, noise floor 0.433 µs (0.055 % of the layer). ⚠ multiple layer kinds — `vs ctl` spans kinds, compare within a kind only
 
@@ -79,7 +83,7 @@ Control: **0.7888 ms/layer**, noise floor 0.433 µs (0.055 % of the layer). ⚠ 
 > **Cell's own closing summary:** Shipped the advisor-derived RoPE L1-residency chain. - Full-model estimate: **22,392.6 → 21,107.7 µs**, uncertainty **±22.8 µs** - Improvement: **1,284.9 µs/model (5.74%)** - Per-layer: **0.788610 → 0.748458 ms** - All candidate repeats beat all incumbent repeats, including fresh-process confirmation - Real-weight oracle: **PCC 0.998993**, threshold 0.995 - Advisor pin: `618cd4e75d` - Decode/capture batch: 32 - Layer count: `dense: 32` The unrelated down-projection tuning was excluded from advisor attribution. Layer-handoff cost, advisor-agreed boundaries, and tracer-unreachable fused-cache time are reported without screening or attribution. Artifacts: [README.md](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/final.json). The required `02b-advisor-challenger.check.sh` gate passes cleanly with no warnings.
 
 
-## phi FN — phi-3.5-mini, `nofuse-noadvise`
+## phi FN — phi-3.5-mini, `fuse-noadvise`
 
 Control: **0.8072 ms/layer**, noise floor 1.064 µs (0.132 % of the layer). ⚠ multiple layer kinds — `vs ctl` spans kinds, compare within a kind only
 
@@ -117,7 +121,7 @@ Control: **1.1009 ms/layer**, noise floor 1.092 µs (0.099 % of the layer).
 > **Cell's own closing summary:** The audit found one important weakness in the earlier completion claim: the stage ships batch-32 enablement as a prerequisite, so the blanket “a shipped change needs a real-weight oracle” applies even though the advisor contribution itself is zero. The recorded real-weight test was skipped because its pinned cache path was absent. I’m checking for equivalent cached weights elsewhere and will run a real batch-32 oracle if available; otherwise this cannot honestly be marked complete yet.
 
 
-## qwen — qwen3.6-27B, `fuse-noadvise`
+## qwen FN — qwen3.6-27B, `fuse-noadvise`
 
 Control: **19.1402 ms/layer**, noise floor 12.349 µs (0.065 % of the layer). ⚠ multiple layer kinds — `vs ctl` spans kinds, compare within a kind only
 
@@ -193,7 +197,7 @@ Control: **1.2541 ms/layer**, noise floor 1.727 µs (0.138 % of the layer). ⚠ 
 > **Cell's own closing summary:** The skill audit exposed two evidence weaknesses that the gate alone does not catch: generated reconciliation rows were post-annotated with sentinel “measurements” for some unexecuted chains, and the kept candidate lacks its own op-level profile. Those do not meet the contribution method. I’m treating the previous “passed” result as provisional and correcting these gaps rather than leaning on the checker.
 
 
-## gemma-4-26B exp — gemma-4-26B, `exp (sliding O)`
+## g26 B — gemma-4-26B, `nofuse-noadvise`
 
 Control: **1.2597 ms/layer**, noise floor 2.814 µs (0.223 % of the layer). ⚠ multiple layer kinds — `vs ctl` spans kinds, compare within a kind only
 
@@ -214,7 +218,7 @@ Control: **1.2597 ms/layer**, noise floor 2.814 µs (0.223 % of the layer). ⚠ 
 > **Cell's own closing summary:** Shipped the advisor-measured sliding-attention O-projection DRAM sharding. - Full-model estimate: **36,224.1 ± 36.5 µs → 36,076.2 ± 36.5 µs** - Estimated contribution: **−147.9 µs/model** - Sliding incumbent: 1.258866–1.260157 ms - Winner: 1.253223–1.254487 ms - Fresh confirmation: 1.253043–1.253644 ms - Real-weight PCC: 0.998358 prefill, 0.999499 decode; threshold 0.995 - Full-attention QKV candidate rejected: 1.290230–1.291618 ms - All batches were decode/capture/requested batch 1. - Strict advisor-challenger gate passes without warnings. Artifacts: [advisor_challenger README](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/final.json).
 
 
-## g26 onA — gemma-4-26B, `nofuse-noadvise onA`
+## g26 onA — gemma-4-26B, `nofuse-noadvise-onA`
 
 Control: **1.8252 ms/layer**, noise floor 3.349 µs (0.183 % of the layer).
 
@@ -258,7 +262,7 @@ Control: **1.3412 ms/layer**, noise floor 2.804 µs (0.209 % of the layer).
 > **Cell's own closing summary:** Shipped the advisor-derived concat-heads → output-projection sharded chain. Full-model estimate: **38,887.6 ± 80.9 µs before → 38,095.8 ± 80.9 µs after** - Estimated contribution: **791.7 µs/model (2.04%)** - Sliding: 1.341153 → 1.318449 ms - Full attention: 1.539374 → 1.494548 ms - Every winning repeat beat every incumbent repeat. - Fresh-process confirmations passed. - Real-weight HuggingFace oracle passed above PCC 0.995. - The 88-core norm candidate regressed both layer kinds and remains default-off. - Sharded SDPA output was rejected with the hard GQA constraint. - Final advisor-challenger gate passes cleanly. Artifacts: [advisor_challenger/README.md](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/final.json).
 
 
-## nm FN — north-mini, `nofuse-noadvise`
+## nm FN — north-mini, `fuse-noadvise`
 
 Control: **0.1727 ms/layer**, noise floor 0.849 µs (0.492 % of the layer).
 
@@ -287,7 +291,7 @@ Control: **0.1727 ms/layer**, noise floor 0.849 µs (0.492 % of the layer).
 > **Cell's own closing summary:** # Stage Review Verdict: clean-pass ## Required Work - None. ## Other Concerns - None material. ## Hard-Check Gaps - No standalone gate script exists in the advisor-challenger skill. I independently checked the relevant contracts and arithmetic from the artifacts. ## Anomaly Ledger - Observed anomaly: One-core QKV-head work and one-core MoE RMSNorm could previously be read as having the same advisor attribution. Evidence: The README now states that `nlp_create_qkv_heads_decode` agrees with the advisor and is handed to `$optimize`, while the advisor changes MoE RMSNorm from one core to 22-core width sharding. Affected path: Advisor-contribution accounting. Control or comparison: Advisor reports retain QKV heads on one core; reconciliation identifies RMSNorm as `material_ops_on_le_2_cores`, with the measured 22/32/64 sweep. Likely subsystem: Documentation/accounting only. Investigation performed: Compared README claims with reconciliation JSON, advisor reports/IR, decision JSON, measurement records, and implementation diff. Resolution: fixed. - Observed anomaly: Full-attention MoE layer-4 weights were unavailable locally. Evidence: The oracle uses official layer-1 tensors remapped to 
 
 
-## nm B — north-mini, `fuse-noadvise`
+## nm B — north-mini, `nofuse-noadvise`
 
 Control: **0.6138 ms/layer**, noise floor 0.936 µs (0.152 % of the layer). ⚠ multiple layer kinds — `vs ctl` spans kinds, compare within a kind only
 
@@ -305,7 +309,7 @@ Control: **0.6138 ms/layer**, noise floor 0.936 µs (0.152 % of the layer). ⚠ 
 > **Cell's own closing summary:** The audit found one remaining measurement gap: the full DRAM-sharded chain stalled, so I’m isolating it with the already-measurable 32-core down projection after a device-health smoke. Then I’ll regenerate the reconciliations and final zero-contribution report from the complete evidence set.
 
 
-## nm onA — north-mini, `fuse-advise onA`
+## nm onA — north-mini, `nofuse-noadvise-onA`
 
 Control: **0.2918 ms/layer**, noise floor 1.841 µs (0.631 % of the layer). ⚠ multiple layer kinds — `vs ctl` spans kinds, compare within a kind only
 
