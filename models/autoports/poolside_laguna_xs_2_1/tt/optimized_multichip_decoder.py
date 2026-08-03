@@ -48,6 +48,12 @@ class OptimizedMultichipDecoder(MultichipDecoder):
     # ---- construction: build packed gate+up weights, free the separate copies ---- #
     @classmethod
     def from_state_dict(cls, *args, **kwargs):
+        # The base MultichipDecoder builds (and disk-caches, plan Stage 0) the separate
+        # gate/up weights; the packing below is a pure on-device concat/reshard of those
+        # already-loaded tensors, so it inherits the cache automatically. The packed
+        # copies are intentionally NOT separately disk-cached: they are cheap to derive
+        # on device, and the ttnn tensor cache cannot round-trip the _ds copy's custom
+        # width-sharded memory_config anyway (see optimized_decoder._cached_device_tensor).
         dec = super().from_state_dict(*args, **kwargs)
         if not cls.PACK_GATE_UP:
             return dec
@@ -155,7 +161,14 @@ class OptimizedMultichipDecoder(MultichipDecoder):
         wv = ttnn.reshape(dense_local, (1, T, LE))
         wv = ttnn.permute(wv, (0, 2, 1))
         wv = ttnn.reshape(wv, (1, LE, T, 1))
-        routed_local = ttnn.reshape(ttnn.sum(ttnn.mul(down_o, wv), dim=1), (1, 1, T, H))
+        weighted = ttnn.mul(down_o, wv)  # [1, LE, T, H]
+        if self._use_fused_reduce:  # gated (TT_LAGUNA_FUSED_REDUCE=1); PCC-validate before enabling
+            (reduced,) = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                weighted, dim=1, split_size=H, output_memory_config=moe_mem, compute_kernel_config=self._ck_moe
+            )
+            routed_local = ttnn.reshape(reduced, (1, 1, T, H))
+        else:
+            routed_local = ttnn.reshape(ttnn.sum(weighted, dim=1), (1, 1, T, H))
         shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded)
         combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
         return self._reduce(combined)

@@ -1,0 +1,33 @@
+# item 3.1 — keep the serving path source-only. These are run outputs / artifacts, NOT source, and must
+# never land in a commit (the standing pre-commit cleanup TODO). Source docs (*.md), configs (*.json that
+# are inputs, e.g. selected_precision_config.json / context_contract.json), and the small recorded result
+# tables the docs cite (*.tsv) are tracked deliberately; everything below is excluded.
+
+# logs (server, sweeps, validation runs, activity/autonomous traces)
+*.log
+
+# python / runtime scratch
+__pycache__/
+*.pyc
+*.pyo
+
+# vLLM readiness-runner working dir (engine logs, generated configs)
+readiness_vllm/
+
+# tracy / profiler captures
+*.tracy
+tracy/
+profile_log_device*.csv
+ops_perf_results*.csv
+
+# large captured tensors / dumps
+*.pt.tmp
+*.npy
+watcher.log
+
+# agent-eval trajectories (bulky per-turn conversation dumps, >500 KB, exceed the repo large-file limit;
+# the outcomes are captured in the committed preds.json / results.md / report). Regenerable evidence.
+*.traj.json
+# harbor/terminal-bench per-run job dirs + swebench harness run logs (bulky run outputs)
+jobs/
+logs/run_evaluation/

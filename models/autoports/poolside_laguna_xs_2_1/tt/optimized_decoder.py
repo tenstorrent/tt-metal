@@ -342,19 +342,98 @@ def _hf_rope_tables(hf_config, attention_type: str, max_seq_len: int):
     return cos[0].float(), sin[0].float()
 
 
-def _as_tt(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=None):
-    return ttnn.from_torch(
-        t,
+# --------------------------------------------------------------------------- #
+# Device-weight disk cache (plan Stage 0)                                       #
+#                                                                               #
+# Boot re-converts every weight from safetensors on each launch (fp32 upcast,   #
+# torch.stack of the 256 MoE experts across 39 layers, then tilize/shard to     #
+# device — ~18 min). ``ttnn.as_tensor(..., cache_file_name=key)`` writes the    #
+# CONVERTED ttnn tensor to disk once and mmap's it on later boots. Two ttnn     #
+# semantics (verified in ttnn/ttnn/operations/core.py + core/tensor/            #
+# serialization.cpp) drive the design:                                          #
+#   1. On a cache HIT as_tensor only skips the *tilize* — the CALLER has already #
+#      built the torch source. So the expensive source build (esp. the expert   #
+#      torch.stack) is threaded as a THUNK and guarded by an os.path.exists()    #
+#      check here, so a hit truly avoids the stack, not just the tilize.         #
+#   2. load_tensor_flatbuffer places the tensor with the flatbuffer's STORED     #
+#      (DRAM-interleaved) memory_config — a custom width-sharded memory_config   #
+#      is NOT round-tripped. So only the interleaved copy is cached; the "_ds"   #
+#      DRAM-width-sharded copy is derived on-device via to_memory_config (also   #
+#      cheaper: it reshards the already-tilized weight instead of re-tilizing).  #
+# Kill switch: TT_LAGUNA_WEIGHT_CACHE_DISABLE=1 -> plain from_torch path (A/B).  #
+# --------------------------------------------------------------------------- #
+_WEIGHT_CACHE_DISABLE = os.environ.get("TT_LAGUNA_WEIGHT_CACHE_DISABLE", "0") == "1"
+
+
+def _weight_cache_dir() -> str:
+    default = os.path.join(os.path.expanduser("~"), ".cache", "ttnn", "laguna_xs_2_1")
+    d = os.environ.get("TT_LAGUNA_WEIGHT_CACHE", default)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def weight_cache_key(name: str, layer_idx, mesh_tag: str):
+    """Cache basename for a device weight, or ``None`` when caching is disabled.
+
+    ``ttnn.as_tensor`` appends ``_dtype_{DTYPE}_layout_{LAYOUT}.tensorbin``, so the
+    produced filename already encodes the dtype (bfp8/bfp4/bf16) and layout. This
+    base adds everything else that changes the produced bytes: the weight ``name``,
+    the LAYER INDEX, and ``mesh_tag`` (replicate vs shard-dim-N, plus the device
+    count D). Two layers, two dtypes, or two mesh mappings can never collide."""
+    if _WEIGHT_CACHE_DISABLE:
+        return None
+    return os.path.join(_weight_cache_dir(), f"L{layer_idx}_{name}_{mesh_tag}")
+
+
+def _cached_device_tensor(build, *, device, dtype, layout, memory_config, mesh_mapper, cache_key):
+    """``from_torch``-equivalent backed by an on-disk ttnn cache.
+
+    ``build`` is a zero-arg thunk returning the source torch tensor (already in ttnn
+    [in, out] orientation). On a cache HIT the thunk is NOT called — the converted
+    ttnn tensor is mmap'd from disk, skipping BOTH the source build (safetensors
+    upcast + expert torch.stack) and the tilize. On MISS/DISABLED the thunk runs and
+    the result is tilized/sharded (and dumped, unless disabled)."""
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    if cache_key is None:  # disabled / uncacheable -> original path
+        return ttnn.from_torch(
+            build(), dtype=dtype, layout=layout, device=device, memory_config=memory_config, mesh_mapper=mesh_mapper
+        )
+    # Mirror the exact filename as_tensor writes so the existence guard is accurate.
+    full = f"{cache_key}_dtype_{dtype.name}_layout_{layout.name}.tensorbin"
+    if os.path.exists(full):
+        try:
+            return ttnn.load_tensor(full, device=device)  # HIT: no torch build, no tilize
+        except Exception:  # corrupt/stale cache -> fall through and rebuild + overwrite
+            pass
+    return ttnn.as_tensor(
+        build(),
+        device=device,
         dtype=dtype,
         layout=layout,
-        device=device,
-        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
+        mesh_mapper=mesh_mapper,
+        cache_file_name=cache_key,
     )
 
 
-def _linear_w(t, device, dtype=ttnn.bfloat16, memory_config=None):
+def _as_tt(src, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=None, cache_key=None):
+    """``src`` is a torch tensor OR a zero-arg thunk building one (thunk form lets a
+    cache hit skip an expensive source build). Single-chip (no mesh mapper)."""
+    build = src if callable(src) else (lambda: src)
+    return _cached_device_tensor(
+        build,
+        device=device,
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
+        mesh_mapper=None,
+        cache_key=cache_key,
+    )
+
+
+def _linear_w(t, device, dtype=ttnn.bfloat16, memory_config=None, cache_key=None):
     """HF linear weight [out, in] -> ttnn [in, out]."""
-    return _as_tt(t.t().contiguous(), device, dtype, memory_config=memory_config)
+    return _as_tt(lambda: t.t().contiguous(), device, dtype, memory_config=memory_config, cache_key=cache_key)
 
 
 # --------------------------------------------------------------------------- #
@@ -386,6 +465,23 @@ class OptimizedDecoder(LightweightModule):
         self.PREFILL_SDPA_CHUNK = int(
             os.environ.get("TT_LAGUNA_PREFILL_SDPA_CHUNK", OptimizedDecoder.PREFILL_SDPA_CHUNK)
         )
+
+        # Cold-prefill fast path (env-gated, default OFF == current bounded behavior).
+        # _prefill_pipelined re-reads the growing KV prefix from the paged DRAM cache once per
+        # OUTER chunk (chunked_scaled_dot_product_attention, chunk_start_idx=gpos attends to the
+        # full cache [0:gpos+ch]). Total prefix DRAM traffic ~ kv_bytes * seq^2 / (2 * CH), i.e.
+        # inversely proportional to the outer chunk CH. Serving forces TT_LAGUNA_PIPE_CHUNK=2048;
+        # the pre-regression sweep effectively ran CH=8192 (the env knob did not exist yet), so the
+        # 4x-smaller chunk quadrupled the redundant long-context prefix re-read -> ~2.4x slower cold
+        # TTFT at 131072. TT_LAGUNA_PREFILL_FAST=1 restores the larger OUTER chunk
+        # (TT_LAGUNA_PREFILL_FAST_CHUNK, default 8192 == the proven-safe pre-regression size) to cut
+        # that re-read ~4x. It does NOT change the single-shot branch threshold (PIPE_CHUNK) or any
+        # per-op numerics -- only how the >PIPE_CHUNK prefill is sub-chunked. Per-chunk activation
+        # stays bounded to FAST_CHUNK (no full-length allocation), so use only when that width is
+        # memory-safe for the served context (validated <=131072 on P150x4; do NOT enable >131072
+        # without an OOM re-check).
+        self.PREFILL_FAST = os.environ.get("TT_LAGUNA_PREFILL_FAST", "0") == "1"
+        self.PREFILL_FAST_CHUNK = int(os.environ.get("TT_LAGUNA_PREFILL_FAST_CHUNK", 8192))
 
         # Compute-kernel configs (Blackhole). LoFi/HiFi2 for projections; precise for norm/SDPA.
         arch = mesh_device.arch()
@@ -419,6 +515,37 @@ class OptimizedDecoder(LightweightModule):
             k_chunk_size=128,
             exp_approx_mode=False,
         )
+        # Accuracy-safe fast NORMAL-decode SDPA config (Stage 2 fix). Identical to _sdpa_pc EXCEPT
+        # k_chunk_size=64 instead of 128. Root cause of the k128 lossiness (teacher 0.95->0.58, layer PCC
+        # -0.016): k128's last-partial-chunk masking at low non-128-aligned cur_pos, NOT precision. The
+        # long-context SPEED comes from the (unset -> default 16) max_cores_per_head_batch parallel KV
+        # scan, which k64 keeps. _sdpa_pc (k128) is retained for from-scratch prefill + the spec-decode
+        # verify, which REQUIRE k128 (consecutive verify positions must share the chunk path).
+        # Sweep knobs (Stage A): defaults reproduce the shipped config (k64, exp off, max_cores unset ->
+        # ttnn default 16). TT_LAGUNA_DECODE_K / _EXP / _MAXCORES let a config sweep pick the fastest
+        # PCC-safe decode config without a per-run source edit. Leave unset in production.
+        _dec_k = int(os.environ.get("TT_LAGUNA_DECODE_K", "64"))
+        _dec_exp = os.environ.get("TT_LAGUNA_DECODE_EXP", "0") == "1"
+        _dec_mc = os.environ.get("TT_LAGUNA_DECODE_MAXCORES", "")
+        _dec_kwargs = dict(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+            q_chunk_size=32,
+            k_chunk_size=_dec_k,
+            exp_approx_mode=_dec_exp,
+        )
+        if _dec_mc != "":
+            _dec_kwargs["max_cores_per_head_batch"] = int(_dec_mc)
+        self._sdpa_pc_decode = ttnn.SDPAProgramConfig(**_dec_kwargs)
+        # Chunked prefix-cache read (suffix prefill, start_pos>0): chunk_start_idx
+        # must be a multiple of q_chunk_size AND k_chunk_size. start_pos is only
+        # guaranteed a multiple of block_size (64), so keep both <= 64 divisors of
+        # it (128 would FATAL for odd multiples of 64, e.g. K=320).
+        self._sdpa_pc_chunked = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+            q_chunk_size=32,
+            k_chunk_size=64,
+            exp_approx_mode=False,
+        )
         self._sdpa_compute = ttnn.init_device_compute_kernel_config(
             arch,
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -426,6 +553,24 @@ class OptimizedDecoder(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        # DEFAULT ON: apply a decode SDPA program config with the max_cores_per_head_batch=16 parallel
+        # KV scan (the long-context speed: 128k 151.7→36.2 ms/tok, 4.2×). The NORMAL decode uses
+        # self._sdpa_pc_decode (k_chunk=64); the spec-decode verify uses self._sdpa_pc (k_chunk=128).
+        # HISTORY: k_chunk=128 on the normal decode was LOSSY (teacher top1 0.95→0.58, layer PCC -0.016 at
+        # low non-aligned cur_pos — k128 last-partial-chunk masking, not precision); the earlier
+        # "bit-identical greedy" claim was WRONG. Stage-2 fix (2026-07-31) drops the normal decode to k64,
+        # which keeps the max_cores=16 speed without the k128 masking hazard. VALIDATED on device
+        # (2026-08-03, full_model_checks teacher, weight-cache off): k64 teacher top1 = 0.95 (top5/100 = 1.00)
+        # vs k128's 0.58 — see doc/vllm_integration/decode_config_sweep/.
+        # Set TT_LAGUNA_DECODE_SDPA_PC=0 to fall back to the ttnn default decode (k32+exp_approx, max_cores=1,
+        # accurate but slow @long-ctx). See doc/vllm_integration/decode_sdpa_pc_finding.md.
+        self._decode_use_sdpa_pc = os.environ.get("TT_LAGUNA_DECODE_SDPA_PC", "1") == "1"
+        # DEFAULT ON (validated bit-identical greedy tokens vs baseline @B=1 AND @B=32, @4k+128k): fuse MoE
+        # expert-combine reduction (ttnn.sum(dim=1) → deepseek_moe_fast_reduce_nc). TT_LAGUNA_FUSED_REDUCE=0 reverts.
+        self._use_fused_reduce = os.environ.get("TT_LAGUNA_FUSED_REDUCE", "1") == "1"
+        # DEFAULT ON (validated bit-identical @B=1 AND @B=32): fused HF rotate_half decode RoPE
+        # (rotary_embedding_hf). Part of the +~6% combined decode win. TT_LAGUNA_FUSED_ROPE=0 reverts.
+        self._use_fused_rope = os.environ.get("TT_LAGUNA_FUSED_ROPE", "1") == "1"
         # fidelity assignment per matmul group — READ FROM THE POLICY so the selected
         # compute-fidelity config is actually consumed by the measured runtime path
         # (defaults preserve the stage-06 policy: LoFi projections, HiFi2 gate/router).
@@ -450,12 +595,18 @@ class OptimizedDecoder(LightweightModule):
         def g(name):
             return state_dict[name].float()
 
+        def ckey(name):  # single-chip (1x1) mesh tag
+            return weight_cache_key(name, layer_idx, "sc")
+
         def store(key, w_in, k, n, dtype):
             """Store an interleaved copy (``key``, for prefill 2D matmuls) and a
             DRAM-width-sharded copy (``key+"_ds"``, for decode DRAM-sharded matmuls).
-            ``w_in`` is already in ttnn [in, out] orientation."""
-            w[key] = _as_tt(w_in, dev, dtype)
-            w[key + "_ds"] = _as_tt(w_in, dev, dtype, memory_config=_dram_weight_memcfg(k, n, dram_cores))
+            ``w_in`` is already in ttnn [in, out] orientation. Only the interleaved
+            copy is disk-cached; the ``_ds`` copy is derived on-device via
+            to_memory_config (a custom width-sharded memory_config is not preserved
+            through the ttnn tensor cache — see _cached_device_tensor)."""
+            w[key] = _as_tt(w_in, dev, dtype, cache_key=ckey(key))
+            w[key + "_ds"] = ttnn.to_memory_config(w[key], _dram_weight_memcfg(k, n, dram_cores))
 
         q_w = cfg.num_heads * cfg.head_dim
         kv_w = cfg.num_kv_heads * cfg.head_dim
@@ -469,23 +620,47 @@ class OptimizedDecoder(LightweightModule):
         wqkv = torch.cat([wq, wk, wv], dim=1).contiguous()  # [H, qkv_w]
         store("wqkv", wqkv, H, qkv_w, policy.attn_qkv)
         store("wo", g("self_attn.o_proj.weight").t().contiguous(), q_w, H, policy.attn_o)
-        w["wg"] = _linear_w(g("self_attn.g_proj.weight"), dev, policy.attn_gate)
-        w["q_norm"] = _as_tt(g("self_attn.q_norm.weight").reshape(1, 1, 1, cfg.head_dim), dev, policy.qk_norm)
-        w["k_norm"] = _as_tt(g("self_attn.k_norm.weight").reshape(1, 1, 1, cfg.head_dim), dev, policy.qk_norm)
-        w["input_ln"] = _as_tt(g("input_layernorm.weight").reshape(1, 1, 1, H), dev)
-        w["post_ln"] = _as_tt(g("post_attention_layernorm.weight").reshape(1, 1, 1, H), dev)
+        w["wg"] = _linear_w(g("self_attn.g_proj.weight"), dev, policy.attn_gate, cache_key=ckey("wg"))
+        w["q_norm"] = _as_tt(
+            g("self_attn.q_norm.weight").reshape(1, 1, 1, cfg.head_dim), dev, policy.qk_norm, cache_key=ckey("q_norm")
+        )
+        w["k_norm"] = _as_tt(
+            g("self_attn.k_norm.weight").reshape(1, 1, 1, cfg.head_dim), dev, policy.qk_norm, cache_key=ckey("k_norm")
+        )
+        w["input_ln"] = _as_tt(g("input_layernorm.weight").reshape(1, 1, 1, H), dev, cache_key=ckey("input_ln"))
+        w["post_ln"] = _as_tt(g("post_attention_layernorm.weight").reshape(1, 1, 1, H), dev, cache_key=ckey("post_ln"))
 
         if cfg.is_moe:
             E, I = cfg.num_experts, cfg.moe_intermediate
-            w["gate_w"] = _linear_w(g("mlp.gate.weight"), dev, policy.router)  # [H, E]
-            bias = g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E)
-            w["e_bias"] = _as_tt(bias, dev)
-            gate = torch.stack([g(f"mlp.experts.{i}.gate_proj.weight") for i in range(E)])  # [E,I,H]
-            up = torch.stack([g(f"mlp.experts.{i}.up_proj.weight") for i in range(E)])
-            down = torch.stack([g(f"mlp.experts.{i}.down_proj.weight") for i in range(E)])  # [E,H,I]
-            w["exp_gate"] = _as_tt(gate.transpose(1, 2).reshape(1, E, H, I), dev, policy.moe_ff13)
-            w["exp_up"] = _as_tt(up.transpose(1, 2).reshape(1, E, H, I), dev, policy.moe_ff13)
-            w["exp_down"] = _as_tt(down.transpose(1, 2).reshape(1, E, I, H), dev, policy.moe_ff2)
+            w["gate_w"] = _linear_w(g("mlp.gate.weight"), dev, policy.router, cache_key=ckey("gate_w"))  # [H, E]
+            w["e_bias"] = _as_tt(
+                lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E), dev, cache_key=ckey("e_bias")
+            )
+
+            # The 256-expert torch.stack is the dominant boot cost, so build it lazily
+            # inside the cache thunk — a HIT skips the stack (and the safetensors
+            # upcast) entirely, not just the tilize.
+            def _stack(proj):
+                return torch.stack([g(f"mlp.experts.{i}.{proj}.weight") for i in range(E)])
+
+            w["exp_gate"] = _as_tt(
+                lambda: _stack("gate_proj").transpose(1, 2).reshape(1, E, H, I),
+                dev,
+                policy.moe_ff13,
+                cache_key=ckey("exp_gate"),
+            )
+            w["exp_up"] = _as_tt(
+                lambda: _stack("up_proj").transpose(1, 2).reshape(1, E, H, I),
+                dev,
+                policy.moe_ff13,
+                cache_key=ckey("exp_up"),
+            )
+            w["exp_down"] = _as_tt(
+                lambda: _stack("down_proj").transpose(1, 2).reshape(1, E, I, H),
+                dev,
+                policy.moe_ff2,
+                cache_key=ckey("exp_down"),
+            )
             sh_I = cfg.shared_intermediate
             store("sh_gate", g("mlp.shared_expert.gate_proj.weight").t().contiguous(), H, sh_I, policy.shared_ff13)
             store("sh_up", g("mlp.shared_expert.up_proj.weight").t().contiguous(), H, sh_I, policy.shared_ff13)
@@ -496,9 +671,17 @@ class OptimizedDecoder(LightweightModule):
             store("mlp_up", g("mlp.up_proj.weight").t().contiguous(), H, II, policy.dense_ff13)
             store("mlp_down", g("mlp.down_proj.weight").t().contiguous(), II, H, policy.dense_ff2)
 
-        cos, sin = _hf_rope_tables(hf_config, cfg.attention_type, max_seq_len)
-        cos_2d = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
-        sin_2d = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
+        # item 2.4: shared per-attention-kind RoPE tables (build once, reuse) — see MultichipDecoder.
+        rope_tables = kwargs.get("rope_tables")
+        kind = cfg.attention_type
+        if rope_tables is not None and kind in rope_tables:
+            cos_2d, sin_2d = rope_tables[kind]
+        else:
+            cos, sin = _hf_rope_tables(hf_config, kind, max_seq_len)
+            cos_2d = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
+            sin_2d = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
+            if rope_tables is not None:
+                rope_tables[kind] = (cos_2d, sin_2d)
 
         meta = {
             "dram_cores": dram_cores,
@@ -514,6 +697,11 @@ class OptimizedDecoder(LightweightModule):
         blocks_per_user = int(math.ceil(max_seq_len / block_size))
         max_num_blocks = blocks_per_user * max_users
         shape = (max_num_blocks, self.cfg.num_kv_heads, block_size, self.cfg.head_dim)
+        # item 2.6 REVERTED: an on-device zeros alloc (ttnn.zeros bf16 -> typecast BFP8) breaks paged
+        # DECODE reads of the persistent cache (test_decode_pcc PCC 0.5/-0.05 vs 0.995; prefill unaffected
+        # because it writes+reads within one call). ttnn.zeros has no BFP8 support, and a typecast-origin
+        # BFP8 tensor is not a valid in-place paged-cache buffer. Kept as host torch.zeros + from_torch
+        # (the canonical BFP8 cache format) until a native device BFP8-zeros path exists. See work_log.
         k = ttnn.from_torch(
             torch.zeros(shape),
             dtype=dtype,
@@ -705,18 +893,28 @@ class OptimizedDecoder(LightweightModule):
         return q, k, v
 
     # ---- prefill ----------------------------------------------------------- #
-    def _qkv_roped(self, ln, seq, start_pos):
+    def _qkv_roped(self, ln, seq, start_pos, rope=None):
         cfg = self.cfg
         qkv = ttnn.linear(ln, self.w["wqkv"], compute_kernel_config=self._ck_qkv)  # [1,seq,qkv_w] (seq in dim1)
         qkv = ttnn.reshape(qkv, (1, 1, seq, self.meta["qkv_w"]))
-        q, k, v = self._split_qkv(qkv, seq)
-        q = ttnn.permute(q, (0, 2, 1, 3))  # [1,nh,seq,hd]
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        # item 2.5: fused prefill head-split — one op replaces 3x slice + 3x reshape + 3x permute.
+        # Packed wqkv is [all-Q | all-K | all-V] exactly as this op expects; emits q[1,nh,seq,hd],
+        # k/v[1,nkv,seq,hd] — same layout as the old slice+reshape+permute, so per-head RMSNorm (over
+        # head_dim) and _apply_rope downstream are unchanged. Validated: multichip layer PCC 65/65.
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=cfg.num_heads,
+            num_kv_heads=cfg.num_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         q = self._per_head_norm(q, self.w["q_norm"])
         k = self._per_head_norm(k, self.w["k_norm"])
-        cos = self._rope_prefill(start_pos, seq)
-        sin = self._rope_prefill(start_pos, seq, sin=True)
+        if rope is None:  # local fallback (pipelined per-chunk positions, layer PCC tests, direct callers)
+            cos = self._rope_prefill(start_pos, seq)
+            sin = self._rope_prefill(start_pos, seq, sin=True)
+        else:  # item 2.3: model-hoisted shared per-kind context
+            cos, sin = rope
         q = self._apply_rope(q, cos, sin)
         k = self._apply_rope(k, cos, sin)
         return q, k, v
@@ -724,19 +922,27 @@ class OptimizedDecoder(LightweightModule):
     def _cast_fill(self, t, cache_dtype):
         return ttnn.typecast(t, cache_dtype) if t.dtype != cache_dtype else t
 
-    def prefill_forward(self, x_BSH, kv_cache, page_table, *, user_id=0, start_pos=0):
+    @property
+    def _prefill_pipe_chunk(self):
+        """Outer chunk size for _prefill_pipelined. Default == live PIPE_CHUNK (byte-identical to the
+        bounded path, and honours a test/runtime-mutated PIPE_CHUNK). TT_LAGUNA_PREFILL_FAST=1 swaps in
+        the larger PREFILL_FAST_CHUNK to cut the redundant KV-prefix re-read on long cold prefills."""
+        return self.PREFILL_FAST_CHUNK if self.PREFILL_FAST else self.PIPE_CHUNK
+
+    def prefill_forward(self, x_BSH, kv_cache, page_table, *, user_id=0, start_pos=0, rope_mats=None):
         seq = x_BSH.shape[-2]
         if seq > self.PIPE_CHUNK:
             return self._prefill_pipelined(x_BSH, kv_cache, page_table, user_id, start_pos)
         cfg = self.cfg
         residual = x_BSH
         ln = self._rms(x_BSH, self.w["input_ln"])
-        q, k, v = self._qkv_roped(ln, seq, start_pos)
+        q, k, v = self._qkv_roped(ln, seq, start_pos, rope=rope_mats)
         cdt = kv_cache["dtype"]
         ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), page_table, batch_idx=user_id)
         ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), page_table, batch_idx=user_id)
         attn = self._prefill_attention(q, k, v, kv_cache, page_table, user_id, start_pos, seq)
-        attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (1, seq, cfg.num_heads * cfg.head_dim))
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # item 2.5
+        attn = ttnn.reshape(attn, (1, seq, cfg.num_heads * cfg.head_dim))
         attn = self._gate(attn, ln)
         o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)
         h = ttnn.add(residual, o)
@@ -750,7 +956,7 @@ class OptimizedDecoder(LightweightModule):
         seq = x_BSH.shape[-2]
         bs = kv_cache["block_size"]
         cdt = kv_cache["dtype"]
-        CH = (self.PIPE_CHUNK // bs) * bs
+        CH = (self._prefill_pipe_chunk // bs) * bs  # env-gated outer chunk (TT_LAGUNA_PREFILL_FAST)
         win = cfg.sliding_window
         k_tail = v_tail = None
         outs = []
@@ -803,7 +1009,8 @@ class OptimizedDecoder(LightweightModule):
                 tail = min(win - 1, ch)
                 k_tail = ttnn.slice(k, [0, 0, ch - tail, 0], [1, cfg.num_kv_heads, ch, cfg.head_dim])
                 v_tail = ttnn.slice(v, [0, 0, ch - tail, 0], [1, cfg.num_kv_heads, ch, cfg.head_dim])
-            attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (1, ch, cfg.num_heads * cfg.head_dim))
+            attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # item 2.5
+            attn = ttnn.reshape(attn, (1, ch, cfg.num_heads * cfg.head_dim))
             attn = self._gate(attn, ln)
             o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)
             h = ttnn.add(residual, o)
@@ -816,10 +1023,29 @@ class OptimizedDecoder(LightweightModule):
         cfg = self.cfg
         base = {"scale": cfg.scaling, "compute_kernel_config": self._sdpa_compute}
         if seq <= self.PREFILL_SDPA_CHUNK:
-            kw = {"is_causal": True, "program_config": self._sdpa_pc, **base}
+            if start_pos == 0:
+                # From-scratch: the whole sequence is local, so a single
+                # self-contained SDPA over q/k/v is correct and cheapest.
+                kw = {"is_causal": True, "program_config": self._sdpa_pc, **base}
+                if cfg.is_sliding:
+                    kw["sliding_window_size"] = cfg.sliding_window
+                return ttnn.transformer.scaled_dot_product_attention(q, k, v, **kw)
+            # Prefix-cache suffix prefill (start_pos>0): a local SDPA over just the
+            # suffix q/k/v would miss the cached prefix [0:start_pos). Read the paged
+            # cache instead -- K/V for [start_pos:start_pos+seq] were just
+            # paged_fill_cache'd by the caller, [0:start_pos) is the cached prefix.
+            # Works for full and sliding (ttnn chunked SDPA composes with
+            # sliding_window_size). Uses the 64-aligned chunked program config so
+            # chunk_start_idx (a multiple of block_size) is valid.
+            user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
+            kw = {
+                "chunk_start_idx": start_pos,
+                "program_config": self._sdpa_pc_chunked,
+                "compute_kernel_config": self._sdpa_compute,
+            }
             if cfg.is_sliding:
                 kw["sliding_window_size"] = cfg.sliding_window
-            return ttnn.transformer.scaled_dot_product_attention(q, k, v, **kw)
+            return ttnn.transformer.chunked_scaled_dot_product_attention(q, kv_cache["k"], kv_cache["v"], user_pt, **kw)
         CH = self.PREFILL_SDPA_CHUNK
         outs = []
         if not cfg.is_sliding:
@@ -857,7 +1083,7 @@ class OptimizedDecoder(LightweightModule):
         return ttnn.to_layout(ttnn.reshape(sliced, (1, 1, seq, rd)), ttnn.TILE_LAYOUT)
 
     # ---- decode ------------------------------------------------------------ #
-    def decode_forward(self, x_1BH, cur_pos, rope_idx, page_table, kv_cache):
+    def decode_forward(self, x_1BH, cur_pos, rope_idx, page_table, kv_cache, sequential_kv_write=False, rope_mats=None):
         cfg = self.cfg
         B = x_1BH.shape[-2]
         m = ((B + TILE - 1) // TILE) * TILE
@@ -871,14 +1097,29 @@ class OptimizedDecoder(LightweightModule):
         q, k, v = self._split_qkv(qkv, B)
         q = self._per_head_norm(q, self.w["q_norm"])
         k = self._per_head_norm(k, self.w["k_norm"])
-        cos = self._rope_decode(rope_idx, B)
-        sin = self._rope_decode(rope_idx, B, sin=True)
-        q = self._apply_rope(q, cos, sin)
-        k = self._apply_rope(k, cos, sin)
+        # item 2.3: share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
+        # PER LAYER (an L1-sharded cos_sh cannot be hoisted — scratch, clobbered by later layers).
+        if rope_mats is None:  # local fallback (layer PCC tests / direct callers)
+            cos = self._rope_decode(rope_idx, B)
+            sin = self._rope_decode(rope_idx, B, sin=True)
+        else:
+            cos, sin = rope_mats
+        if self._use_fused_rope:  # gated: fused HF rotate_half decode RoPE — see MultichipDecoder.decode_forward
+            cos_sh = self._shard_cossin(cos, B, cfg.rotary_dim)
+            sin_sh = self._shard_cossin(sin, B, cfg.rotary_dim)
+            q = self._fused_rope_decode(q, cos_sh, sin_sh, cfg.num_heads, B)
+            k = self._fused_rope_decode(k, cos_sh, sin_sh, cfg.num_kv_heads, B)
+        else:
+            q = self._apply_rope(q, cos, sin)
+            k = self._apply_rope(k, cos, sin)
         k_sh = self._shard_kv(k, B)
         v_sh = self._shard_kv(v, B)
-        ttnn.experimental.paged_update_cache(kv_cache["k"], k_sh, update_idxs_tensor=cur_pos, page_table=page_table)
-        ttnn.experimental.paged_update_cache(kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table)
+        if sequential_kv_write and B > 1:  # spec-decode verify: serialize shared-block writes (see _seq_kv_write)
+            self._seq_kv_write(kv_cache["k"], k_sh, cur_pos, page_table, B)
+            self._seq_kv_write(kv_cache["v"], v_sh, cur_pos, page_table, B)
+        else:
+            ttnn.experimental.paged_update_cache(kv_cache["k"], k_sh, update_idxs_tensor=cur_pos, page_table=page_table)
+            ttnn.experimental.paged_update_cache(kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table)
         sdpa_kwargs = {
             "cur_pos_tensor": cur_pos,
             "page_table_tensor": page_table,
@@ -887,6 +1128,12 @@ class OptimizedDecoder(LightweightModule):
         }
         if cfg.is_sliding:
             sdpa_kwargs["sliding_window_size"] = cfg.sliding_window
+        if sequential_kv_write:  # spec-decode verify REQUIRES k_chunk=128 (consecutive positions share chunk path)
+            sdpa_kwargs["program_config"] = self._sdpa_pc
+            sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
+        elif self._decode_use_sdpa_pc:  # Stage 2: accuracy-safe fast normal-decode config (k64, max_cores=16)
+            sdpa_kwargs["program_config"] = self._sdpa_pc_decode
+            sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q, kv_cache["k"], kv_cache["v"], **sdpa_kwargs
         )  # [1,B,nh,hd]
@@ -916,6 +1163,98 @@ class OptimizedDecoder(LightweightModule):
             use_height_and_width_as_shard_shape=True,
         )
         return ttnn.to_memory_config(kv, mem)
+
+    def _seq_kv_write(self, cache, kv_sh, cur_pos, page_table, B):
+        """Serialized per-row paged_update_cache for the spec-decode VERIFY batch.
+
+        The B batch rows are candidate tokens sharing ONE user's physical KV blocks (their page-table
+        rows are identical). Because BLOCK_SIZE==TILE==32, consecutive candidate positions fall in the
+        same block-tile, so a single batched paged_update_cache has every row read-modify-write that tile
+        concurrently → last-writer-wins clobbering (KV corruption). Writing each row with its own ordered
+        op serializes the RMW. ``kv_sh`` is the already-batch-sharded [1,B,nkv32,hd] tensor
+        (``_shard_kv`` output — the exact layout paged_update_cache accepts); slice each row from DRAM and
+        reshard onto a single core (the per-user layout the op expects). Mirrors
+        ``models/demos/gemma4/tt/attention/decode.py:147-201``."""
+        nkv32 = ((self.cfg.num_kv_heads + TILE - 1) // TILE) * TILE
+        one_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        single_mem = ttnn.create_sharded_memory_config(
+            shape=(nkv32, self.cfg.head_dim),
+            core_grid=one_core,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        kv_dram = ttnn.to_memory_config(kv_sh, ttnn.DRAM_MEMORY_CONFIG)
+        nk, hd = kv_dram.shape[-2], kv_dram.shape[-1]
+        # Pass block_size + num_kv_heads EXPLICITLY (as gemma4/tt/attention/decode.py does). The kernel
+        # defaults infer geometry from the cache tensor; under TRACE that inference mis-handled a
+        # populated block (the writing row's own position read back wrong — verified via selfcheck),
+        # while fresh-block writes were exact. cache shape = (num_blocks, num_kv_heads, block_size, hd).
+        blk = int(cache.shape[2])
+        nkvh = int(cache.shape[1])
+        for b in range(B):
+            kb = ttnn.slice(kv_dram, [0, b, 0, 0], [1, b + 1, nk, hd])
+            kb = ttnn.to_memory_config(kb, single_mem)
+            pos_b = ttnn.slice(cur_pos, [b], [b + 1])
+            pt_b = ttnn.slice(page_table, [b, 0], [b + 1, page_table.shape[1]])
+            ttnn.experimental.paged_update_cache(
+                cache, kb, update_idxs_tensor=pos_b, page_table=pt_b, block_size=blk, num_kv_heads=nkvh
+            )
+            for t in (kb, pos_b, pt_b):
+                t.deallocate(True)
+        kv_dram.deallocate(True)
+
+    def _shard_batch(self, x, nheads, width, B):
+        """Height-shard [1,B,nheads,width] across B cores (one user's (nheads,width) block/core) — the
+        HEIGHT_SHARDED layout the fused decode RoPE requires. Mirrors _shard_kv."""
+        nh32 = ((nheads + TILE - 1) // TILE) * TILE
+        row = 8
+        core_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord((B - 1) % row, (B - 1) // row))}
+        )
+        mem = ttnn.create_sharded_memory_config(
+            shape=(nh32, width),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        return ttnn.to_memory_config(x, mem)
+
+    def _shard_cossin(self, t, B, rd):
+        """Height-shard [1,B,1,rd] cos/sin across B cores for the fused decode RoPE."""
+        row = 8
+        core_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord((B - 1) % row, (B - 1) // row))}
+        )
+        mem = ttnn.create_sharded_memory_config(
+            shape=(TILE, rd),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        return ttnn.to_memory_config(t, mem)
+
+    def _fused_rope_decode(self, x, cos_sh, sin_sh, nheads, B):
+        """Fused HF rotate_half decode RoPE for one of q/k. Partial rotary (rd<hd, full-attn layers)
+        handled by slicing the rotary lanes, fusing, and concatenating the pass-through — numerically
+        identical to _apply_rope (both HF rotate_half over the same cos/sin)."""
+        cfg = self.cfg
+        rd, hd = cfg.rotary_dim, cfg.head_dim
+        if x.dtype != ttnn.bfloat16:
+            x = ttnn.typecast(x, ttnn.bfloat16)
+        if rd == hd:
+            x_rot, x_pass = x, None
+        else:
+            x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, B, nheads, rd])
+            x_pass = ttnn.slice(x, [0, 0, 0, rd], [1, B, nheads, hd])
+        x_sh = self._shard_batch(x_rot, nheads, rd, B)
+        out_sh = ttnn.experimental.rotary_embedding_hf(x_sh, cos_sh, sin_sh, is_decode_mode=True)
+        out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+        if x_pass is None:
+            return out
+        return ttnn.concat([out, x_pass], dim=-1)
 
     def _rope_decode(self, rope_idx, B, sin=False):
         table = self.sin_2d if sin else self.cos_2d

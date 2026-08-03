@@ -1,0 +1,9 @@
+{
+  "hf_model_id": "poolside/Laguna-XS-2.1",
+  "tokenizer_class": "TokenizersBackend",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "rendering": "tokenizer.apply_chat_template(add_generation_prompt=True) via AIME24 reference",
+  "gen_params": "greedy (top-k k=1 on-device split sampling)",
+  "prompt_source": "models/demos/deepseek_v3/demo/aime_under_8k_prompts.json[0]"
+}

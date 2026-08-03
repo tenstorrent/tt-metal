@@ -35,6 +35,7 @@ compute fidelities, fp32/HiFi4 SDPA. The serving path therefore uses the selecte
 """
 from __future__ import annotations
 
+import os
 import secrets
 from pathlib import Path
 from typing import Optional
@@ -48,8 +49,19 @@ try:
 except ImportError:  # loaded as a standalone module by some tooling
     from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator, _replicate
 
-# HF-advertised context (doc/context_contract.json). Served verbatim; no capability reduction.
-ADVERTISED_MAX_CONTEXT = 262144
+# Advertised context MUST equal servable context (plan item 1.2). The HF config declares 262144, and
+# the decoder addresses pos 262143 in isolation, but the 2026-07-31 P150x4 serving sweep OOMs at ISL
+# 262144 (both OSL 128 and 1024) while ISL 131072 serves — so end-to-end servable on this config is
+# 131072. We advertise only what we can serve; a request for a context we cannot serve would fail an
+# agent session at an unpredictable turn. Restoring 262144 is Tier-2 work (hybrid-KV cuts per-device
+# KV ~5.4 GB→~1.5 GB; shared RoPE frees ~4.7 GB transient) — see doc/context_contract.json
+# ("serving_verified") for the recorded limiting reason.
+HF_CONFIG_MAX_CONTEXT = 262144  # what the HF config declares (not currently servable end-to-end)
+# Default 131072 = verified servable on P150x4 (2026-07-31 sweep). Env-overridable ONLY for context
+# experiments/benchmarks (e.g. measuring exactly ISL 131072 with a 1024-token output needs the KV pool
+# — get_max_tokens_all_users = min(max_model_len, this) — to hold 132096; set both this and --max-model-len).
+# Raising it re-introduces OOM risk (262144 OOM'd); a small bump (~133120) is ~1k above the known-good 131072.
+ADVERTISED_MAX_CONTEXT = int(os.environ.get("TT_LAGUNA_ADVERTISED_CONTEXT", "131072"))
 
 
 class LagunaForCausalLM:
@@ -62,12 +74,35 @@ class LagunaForCausalLM:
     # Capability flags read by the plugin platform hook. On-device sampling is REQUIRED here: the
     # readiness runner enforces ``sample_on_device_mode=all`` and the model serves its canonical
     # traced split-sampling path. Async decode is supported via the read/process split below.
-    # Prefix caching is off (sliding-window model; not implemented/tested).
+    #
+    # Prefix caching: fully plumbed (ttnn chunked SDPA + sliding_window_size, decoder paged-window read
+    # + start_pos-offset suffix fill, plugin suffix-only prefill) and DEFAULT ON (env override
+    # TT_LAGUNA_PREFIX_CACHE, default "1"). Validated: cold parity and full-hit (warm re-send) are
+    # bit-exact vs a no-cache baseline, and cache hits fire (TTFT ~5.97s→0.17s on a long hit).
+    # Partial-hit (cached prefix + new suffix) matches the no-cache baseline for the deterministic head
+    # of generation, then diverges only at a high-entropy token — floating-point non-determinism across
+    # execution paths (suffix-chunk read vs cold pipelined / local-bf16 prefill), the non-bit-exactness
+    # inherent to prefix caching on quantized HW (the GPU norm), not a context error. This is ACCEPTED
+    # non-determinism (partial-hit runs are not bit-reproducible) — see the determinism contract in
+    # README.md (item 1.3) and doc/vllm_integration/prefix_cache_status.md. Set
+    # TT_LAGUNA_PREFIX_CACHE=0 to force the cold path (bit-reproducible, no cache reuse).
+    _PREFIX_CACHE_ENABLED = os.environ.get("TT_LAGUNA_PREFIX_CACHE", "1") == "1"
     model_capabilities = {
-        "supports_prefix_caching": False,
+        "supports_prefix_caching": _PREFIX_CACHE_ENABLED,
+        "supports_prefix_caching_with_sliding_window": _PREFIX_CACHE_ENABLED,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
     }
+
+    # Hybrid KV cache: 10 full-attention + 30 sliding-window(512) layers get DIFFERENT KV specs
+    # (see get_kv_cache_spec). The plugin reads this off the model class (worker.py) to size
+    # sliding-group block headroom; the vLLM hybrid manager then packs full vs sliding into separate
+    # kv_cache_groups and hands the model per-layer block tables (page_tables_per_layer).
+    #
+    # Per-group persistent-page-table threading (prefill + decode trace) + warmup pre-alloc are now
+    # implemented; get_kv_cache_spec emits SlidingWindowSpec(512) for the 30 sliding layers so the
+    # sliding pools shrink ~3.7x. Set False to fall back to the legacy uniform full-cache path.
+    _HYBRID_KV_CACHE_GROUPS_ENABLED = True
 
     def __init__(self, generator: LagunaGenerator, mesh_device, max_batch_size: int, max_model_len: int):
         self.gen = generator
@@ -82,12 +117,19 @@ class LagunaForCausalLM:
         self.D = mesh_device.get_num_devices()
         # Per-batch captured decode trace + persistent device buffers.
         self._decode: dict[int, dict] = {}
+        # Per-K1 captured spec-decode VERIFY trace (batched decode over K+1 candidates, seq KV write).
+        self._verify_dec: dict[int, dict] = {}
         # Persistent prefill buffers (sampling tensors + fixed [1,1,1,H] terminal + B=1 sampler),
         # allocated once BEFORE the decode trace is captured (see warmup_model_prefill).
         self._pf: Optional[dict] = None
         # Persistent prefill page-table buffers keyed by shape (allocate-once, then copy-in), kept
         # SEPARATE from the decode trace's page table so a prefill never overwrites the decode pt.
         self._pf_pt: dict = {}
+        # Hybrid KV: persistent prefill page-table buffers per GROUP ("full"/"sliding"); the 2 groups
+        # have identical shape but different content, so they can't share the shape-keyed _pf_pt.
+        self._pf_pt_groups: dict = {}
+        # Per built-layer group kind ("full"/"sliding"), lazily derived from each decoder's cfg.
+        self._layer_kinds: Optional[list] = None
         # max_num_blocks_per_req, learned from warmup_model_decode; lets prefill warmup pre-allocate
         # the serving-shape page-table buffer before the decode trace is captured.
         self._max_blocks: Optional[int] = None
@@ -137,18 +179,20 @@ class LagunaForCausalLM:
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
-        """Emit a FullAttentionSpec for EVERY layer WITHOUT a sliding-window field.
+        """Emit a HYBRID per-layer spec: ``SlidingWindowSpec(sliding_window=512)`` for the 30
+        sliding-attention layers and ``FullAttentionSpec`` for the 10 full-attention layers, keyed by
+        ``model.layers.{i}.self_attn`` and driven off ``text_config.layer_types``.
 
-        Laguna's HF config sets ``sliding_window=512``; the plugin's default uniform spec
-        (``worker._build_default_kv_cache_spec``) would bake that into the spec, causing vLLM to cap
-        each request's page table to ``sliding_window/block_size`` blocks and collapse positions
-        beyond 512 onto physical block 0 — silently corrupting the cache and defeating the advertised
-        262144 context. Sliding-window correctness for the 30 sliding layers is handled INSIDE the
-        model on the SDPA read side (``paged_scaled_dot_product_attention_decode(sliding_window_size=
-        512)``) over a full paged cache, so every layer needs a full-length cache here. All specs are
-        identical, so vLLM unifies them into a single KV group → single page table (no per-layer
-        routing), exactly the legacy uniform path this adapter's prefill/decode expect."""
-        from vllm.v1.kv_cache_interface import FullAttentionSpec
+        The TT platform opts into vLLM's hybrid KV manager (``platform.support_hybrid_kv_cache() ==
+        True``), so these two spec kinds are packed into separate ``kv_cache_groups`` (NOT collapsed by
+        ``unify_hybrid_kv_cache_specs``). vLLM's ``SlidingWindowManager`` gives the sliding group a
+        SMALLER physical block pool and full-width block tables whose out-of-window entries point at a
+        shared ``null_block`` (absolute ``pos//block_size`` indexing is preserved — no ring remap), so
+        the model's existing paged fill/read (``sliding_window_size=512`` on the SDPA read side) is
+        unchanged; it just indexes a smaller sliding pool. This cuts per-device KV from ~5.4 GB toward
+        ~1.5 GB at full context (30/40 layers windowed to 512), freeing DRAM for larger batches.
+        Per-layer block tables reach the model as ``page_tables_per_layer`` (see prefill/decode)."""
+        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
@@ -159,6 +203,8 @@ class LagunaForCausalLM:
         layer_types = getattr(text_config, "layer_types", None)
         if num_layers is None and layer_types is not None:
             num_layers = len(layer_types)
+        num_layers = int(num_layers)
+        sliding_window = int(getattr(text_config, "sliding_window", 0) or 0)
         num_kv_heads = model_config.get_num_kv_heads(parallel_config)
         head_size = model_config.get_head_size()
         from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
@@ -173,15 +219,36 @@ class LagunaForCausalLM:
             num_kv_heads=num_kv_heads,
             head_size=head_size,
             dtype=dtype,
-        )  # NOTE: no sliding_window — full cache for all layers.
-        return {f"model.layers.{i}.self_attn": FullAttentionSpec(**common) for i in range(int(num_layers))}
+        )
+
+        # A layer is sliding iff layer_types[i] == "sliding_attention". Gated behind
+        # _HYBRID_KV_CACHE_GROUPS_ENABLED, which is currently True (default): the per-group page-table
+        # threading (prefill + decode trace) and warmup pre-alloc have landed, so sliding layers get a
+        # SlidingWindowSpec(512) and their own smaller pool. Setting the flag False falls back to the
+        # legacy uniform FullAttentionSpec for every layer (single KV group / single page table).
+        def _is_sliding(i):
+            return (
+                cls._HYBRID_KV_CACHE_GROUPS_ENABLED
+                and bool(layer_types)
+                and layer_types[i] == "sliding_attention"
+                and sliding_window > 0
+            )
+
+        spec = {}
+        for i in range(num_layers):
+            key = f"model.layers.{i}.self_attn"
+            if _is_sliding(i):
+                spec[key] = SlidingWindowSpec(sliding_window=sliding_window, **common)
+            else:
+                spec[key] = FullAttentionSpec(**common)
+        return spec
 
     @classmethod
     def get_max_tokens_all_users(cls, model_name: str = "", num_devices: int = 1, tt_data_parallel: int = 1, **kwargs):
-        """Total KV-cache token pool. Return the full advertised context so a single request can use
-        the whole 262144-token window (per-device KV ≈5.4 GB at full context, which fits in 34 GB
-        alongside ~5.1 GB weights + trace; see doc/context_contract.json). Bounded by the requested
-        ``max_model_len`` when smaller (e.g. the reduced bring-up target)."""
+        """Total KV-cache token pool. Return the advertised context (131072, the verified-servable
+        limit on P150x4 — see ADVERTISED_MAX_CONTEXT and doc/context_contract.json), so a single
+        request can use the whole advertised window. Bounded by the requested ``max_model_len`` when
+        smaller (e.g. the reduced bring-up target)."""
         max_model_len = kwargs.get("max_model_len")
         if max_model_len:
             return min(int(max_model_len), ADVERTISED_MAX_CONTEXT)
@@ -233,7 +300,110 @@ class LagunaForCausalLM:
             )
         # A cache (re)allocation invalidates captured decode traces (they close over kv buffers).
         self._decode = {}
+        self._verify_dec = {}
         return kv_cache
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        """Hybrid allocation: one paged buffer per attention layer, each sized to ITS group's block
+        budget. ``per_layer_specs`` is the plugin's list of ``(shape, dtype, tensor_idx)`` in model
+        layer-index order; ``shape`` = ``(num_blocks, local_kv_heads, block_size, head_dim)`` with the
+        sliding-window layers already given a smaller ``num_blocks`` by vLLM's hybrid manager. Same
+        BFP8 DRAM/replicated layout as ``allocate_kv_cache``; returns the per-layer dict list consumed
+        by ``LagunaModel.prefill_layers`` / ``decode_layers`` (via ``zip(self.layers, kv_cache)``)."""
+        kv_cache = []
+        for entry in per_layer_specs:
+            shape = tuple(entry[0])
+            num_blocks, local_kv_heads, block_size, head_dim = shape
+            k = ttnn.from_torch(
+                torch.zeros(shape, dtype=torch.float32),
+                dtype=self._kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=_replicate(self.mesh_device),
+            )
+            v = ttnn.from_torch(
+                torch.zeros(shape, dtype=torch.float32),
+                dtype=self._kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=_replicate(self.mesh_device),
+            )
+            kv_cache.append(
+                {
+                    "k": k,
+                    "v": v,
+                    "block_size": int(block_size),
+                    "blocks_per_user": int(num_blocks),
+                    "dtype": self._kv_dtype,
+                }
+            )
+        self._decode = {}
+        self._verify_dec = {}
+        return kv_cache
+
+    # ---- hybrid KV: per-group page-table helpers ---- #
+    def _group_kinds(self):
+        """['full'|'sliding'] per BUILT layer, from each decoder's cfg.is_sliding."""
+        if self._layer_kinds is None:
+            self._layer_kinds = [
+                "sliding" if bool(getattr(dec.cfg, "is_sliding", False)) else "full" for dec in self.model.layers
+            ]
+        return self._layer_kinds
+
+    def _group_reps(self):
+        """{kind: first built-layer index of that kind} — a representative layer per KV group."""
+        reps = {}
+        for i, k in enumerate(self._group_kinds()):
+            reps.setdefault(k, i)
+        return reps
+
+    def _prefill_pt_grouped(self, page_tables_per_layer):
+        """Persistent prefill page-table buffers, ONE per group ("full"/"sliding"), returned as a
+        per-layer list aligned to the built layers. ``page_tables_per_layer[i]`` is layer i's group's
+        host block table; same-group layers share one buffer (2 distinct, same shape/different content).
+        Allocate-once per group+shape, then copy-in (no per-call alloc under the resident decode trace,
+        provided warmup_model_prefill pre-touched every group — which it does)."""
+        kinds = self._group_kinds()
+        bufs = {}
+        for kind, i in self._group_reps().items():
+            pt = torch.as_tensor(page_tables_per_layer[i], dtype=torch.int32)
+            if pt.dim() == 1:
+                pt = pt.reshape(1, -1)
+            buf = self._pf_pt_groups.get(kind)
+            if buf is None or tuple(buf.shape) != tuple(pt.shape):
+                buf = self.gen._rep(torch.zeros(pt.shape, dtype=torch.int32), ttnn.int32)
+                self._pf_pt_groups[kind] = buf
+            ttnn.copy_host_to_device_tensor(self.gen._host(pt, ttnn.int32), buf)
+            bufs[kind] = buf
+        return [bufs[k] for k in kinds]
+
+    def _decode_pt_grouped_alloc(self, page_tables_per_layer):
+        """Allocate the 2 per-group persistent DECODE page-table buffers (BEFORE trace capture) and
+        return (per_layer_list, groups_dict, reps_dict). Both groups share the full-width null-padded
+        shape [B, max_blocks], so the buffers are identical shape / different content."""
+        kinds = self._group_kinds()
+        reps = self._group_reps()
+        groups = {}
+        for kind, i in reps.items():
+            pt = torch.as_tensor(page_tables_per_layer[i], dtype=torch.int32)
+            if pt.dim() == 1:
+                pt = pt.reshape(1, -1)
+            groups[kind] = self.gen._rep(torch.zeros(pt.shape, dtype=torch.int32), ttnn.int32)
+        return [groups[k] for k in kinds], groups, reps
+
+    def _decode_pt_grouped_refresh(self, st, page_tables_per_layer):
+        """Copy each group's host block table into its persistent decode buffer, only when changed."""
+        for kind, i in st["pt_reps"].items():
+            pt_host = torch.as_tensor(page_tables_per_layer[i], dtype=torch.int32)
+            if pt_host.dim() == 1:
+                pt_host = pt_host.reshape(1, -1)
+            last = st["last_pt_host_groups"].get(kind)
+            if last is None or not torch.equal(pt_host, last):
+                ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt_groups"][kind])
+                st["last_pt_host_groups"][kind] = pt_host.clone()
+                self.gen.counters["page_table_refresh"] += 1
 
     # --------------------------------------------------------------------- #
     # Page-table / sampling helpers
@@ -313,21 +483,60 @@ class LagunaForCausalLM:
     #       token (plen-1) never attends to the pad positions, so its logits are exact; the padded
     #       cache slots (plen..L-1) are future positions, overwritten before any decode step reads
     #       them.
-    #   (2) The last-real-token hidden is selected with a FIXED-shape one-hot matmul (the row index
-    #       plen-1 is DATA copied into a persistent selector, not part of the program hash) instead of
-    #       the old `ttnn.slice(h, [0, plen-1, 0], ...)` whose offset baked plen into a new program per
-    #       distinct length. Sampling reuses persistent B=1 buffers (copy-in, no per-call allocation).
+    #   (2) The last-real-token hidden is selected without baking plen into a new program per distinct
+    #       length, and WITHOUT a host round-trip (item 2.2, DONE). `_last_token_shards` builds a tiny
+    #       [1,1,1,L] one-hot on host (1.0 at column plen-1 — the index is DATA, not program shape),
+    #       copies it into a persistent per-bucket-L selector buffer, and runs the fixed-shape matmul
+    #       sel[1,1,1,L] @ h[1,1,L,H] -> [1,1,1,H] to pick row plen-1 on device. In bf16 the one-hot ·
+    #       hidden reproduces the selected row bit-exactly (1.0*x + 0-sum), so greedy output is
+    #       identical. This removes the ~32 MB whole-hidden readback that used to run on EVERY prefill.
+    #       Both the selector buffers (allocated in _prefill_state) and the matmul program (compiled by
+    #       warmup_model_prefill's per-L prefill_forward calls) exist pre-trace, so serving only copies
+    #       the one-hot in and runs a pre-compiled matmul — no alloc/compile under the resident decode
+    #       trace. Sampling likewise reuses persistent B=1 buffers (copy-in, no alloc).
 
     def _prefill_bucket_lens(self):
-        """Supported prefill bucket lengths (powers of two from 128 up to a warm cap, capped by
-        max_model_len). Every request rounds UP to one of these; warmup compiles them all. The cap
-        (``TT_LAGUNA_PREFILL_WARM_CAP``, default 8192 = the decoder single-shot boundary PIPE_CHUNK)
-        bounds warmup cost; prompts beyond it round up to a multiple of the top bucket (pipelined
-        path, whose fixed chunk program the top bucket also warms)."""
+        """Supported prefill bucket lengths (powers of two from 128 up to the SERVABLE context). Every
+        request rounds UP to one of these via ``_bucket_len``, and ``warmup_model_prefill`` compiles
+        EVERY one of them before the decode trace is captured.
+
+        item 1.1 — the ceiling is the servable context ``min(max_model_len, ADVERTISED_MAX_CONTEXT)``,
+        NOT a fixed 8192 cap. The sequence-pipelined prefill tail (``_prefill_pipelined``) reassembles
+        per-chunk outputs with a program whose shape depends on the CHUNK COUNT (``ttnn.concat(outs)``
+        + the per-chunk input ``ttnn.slice``s), so a prompt needing more chunks than any warmed bucket
+        would first-compile that program UNDER the resident decode trace — orders of magnitude slower
+        and trace-corrupting. (Under the old fixed 8192 cap, warmup exercised only 2- and 4-chunk
+        counts, so any prompt ≥16384 tokens compiled a new tail program mid-serve.) Warming the full
+        power-of-two ladder makes every servable prompt run only pre-compiled programs, and keeps
+        ``_bucket_len`` returning a value that is ALWAYS in the warmed set.
+
+        item 2.1 — the ladder floor is 32 (one tile), not 128, so the small cached-suffix prefills that
+        dominate agentic serving (prefix caching hits ~95% of turns; the fresh suffix is typically 8–74
+        tokens) round up to 32/64/128 instead of always 128. That cuts up to ~16× of wasted prefill work
+        on the common turn (plen=8 → bucket 32 = 4× vs 16×; plen=40 → 64; plen=74 → 128). Right-padding
+        stays safe at the smaller buckets: the pad positions are future cache slots (plen..L-1),
+        overwritten before any decode step reads them, and causal attention means the last real token
+        never attends to them — so the last-token logits (and greedy output) are bit-identical.
+
+        ``TT_LAGUNA_PREFILL_WARM_CAP`` may lower the ceiling for fast dev iteration (bounds warmup
+        cost), but any prompt LONGER than the cap then compiles under the trace — a one-time warning is
+        logged. Do NOT set it below max_model_len for serving."""
         import os as _os
 
-        cap = min(int(self.max_model_len), int(_os.environ.get("TT_LAGUNA_PREFILL_WARM_CAP", "8192")))
-        buckets, b = [], 128
+        servable = min(int(self.max_model_len), ADVERTISED_MAX_CONTEXT)
+        cap = servable
+        env = _os.environ.get("TT_LAGUNA_PREFILL_WARM_CAP")
+        if env:
+            cap = min(servable, int(env))
+            if cap < servable and not getattr(type(self), "_warned_warm_cap", False):
+                print(
+                    f"[laguna] WARNING: TT_LAGUNA_PREFILL_WARM_CAP={cap} < servable context {servable}; "
+                    f"prompts longer than {cap} tokens will compile prefill programs under the resident "
+                    f"decode trace (very slow + trace-unsafe, item 1.1). Dev-only knob — unset for serving.",
+                    flush=True,
+                )
+                type(self)._warned_warm_cap = True
+        buckets, b = [], 32  # item 2.1: floor 32 (one tile) to match small cached-suffix prefills
         while b < cap:
             buckets.append(b)
             b *= 2
@@ -338,9 +547,13 @@ class LagunaForCausalLM:
         buckets = self._prefill_bucket_lens()
         for b in buckets:
             if plen <= b:
-                return b
+                return b  # always in the warmed set (top bucket == servable context)
+        # Unreachable for in-contract prompts: the top bucket is the servable context
+        # (min(max_model_len, ADVERTISED_MAX_CONTEXT)), so any plen ≤ max_model_len is caught above.
+        # A prompt beyond that is out of contract (vLLM rejects it); round up as a last-resort guard —
+        # this length is NOT warmed and would compile under the decode trace.
         top = buckets[-1]
-        return ((plen + top - 1) // top) * top  # multiple of the top bucket (warmed pipeline chunk)
+        return ((plen + top - 1) // top) * top
 
     def _prefill_state(self):
         """Allocate (once) the persistent prefill sampling buffers + B=1 sampler. Called from
@@ -362,19 +575,57 @@ class LagunaForCausalLM:
                 torch.zeros([1, 1, 1, self.hidden], dtype=torch.float32), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             ),
         )
+        # item 2.2 — persistent per-bucket-L on-device last-token SELECTOR buffers. Each is a
+        # [1,1,1,L] bf16 (TILE, replicated) one-hot INPUT; the fixed-shape matmul
+        # ``sel[1,1,1,L] @ h[1,1,L,H] -> [1,1,1,H]`` picks the last REAL row (the row index is DATA,
+        # written per prompt via copy_host_to_device_tensor), replacing the ~32 MB host readback of
+        # the whole bucketed hidden that ran on every prefill. Allocated HERE (pre-trace, once, keyed
+        # by L exactly like the ``_pf_pt`` page tables) for EVERY warmed bucket — so at serve time the
+        # selector matmul is a copy-in + pre-compiled matmul with no device allocation / compilation
+        # under the resident decode trace. The matmul program itself is compiled during
+        # ``warmup_model_prefill`` (its per-bucket ``prefill_forward`` calls run ``_last_token_shards``,
+        # which executes this same ``sel @ h`` for each L). bf16 one-hot · bf16 hidden reproduces the
+        # selected row bit-exactly (1.0*x + 0-sum), so greedy output is identical to the readback path.
+        st["sel"] = {
+            L: self.gen._rep(torch.zeros([1, 1, 1, L], dtype=torch.float32), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            for L in self._prefill_bucket_lens()
+        }
         self._pf = st
         return st
 
     def _last_token_shards(self, h, plen, L):
-        """Select the last REAL token's logit shards in a way that is fixed-shape at the terminal.
+        """Select the last REAL token's logit shards with a fixed-shape ON-DEVICE one-hot selector.
 
-        ``h`` is the bucketed prefill output ``[1, L, H]`` (L fixed per bucket, so its readback program
-        is compiled once per bucket by warmup). Read back the replicated hidden, take row ``plen-1`` on
-        host (free), copy it into the persistent ``[1,1,1,H]`` buffer, and run the column-sharded LM
-        head over that fixed shape. The row index is data, not program shape, so no new program
-        compiles per prompt length at serving time. The readback is prefill-only (not the decode perf
-        path); decode never leaves the device."""
+        ``h`` is the bucketed prefill output ``[1, L, H]`` (L fixed per bucket) held on device and
+        REPLICATED across the mesh. item 2.2: instead of reading the whole ``[1,L,H]`` hidden back to
+        host (~32 MB every prefill) to slice row ``plen-1``, build a tiny ``[1,1,1,L]`` one-hot on host
+        (1.0 at column ``plen-1`` — the index is DATA, not program shape), copy it into the persistent
+        per-L selector buffer (a COPY, no allocation), and run the fixed-shape matmul
+        ``sel[1,1,1,L] @ h[1,1,L,H] -> [1,1,1,H]``. bf16 one-hot · bf16 hidden reproduces the selected
+        row bit-exactly (the only nonzero term is ``1.0 * h[plen-1]`` and 1.0 is exact in bf16; every
+        other product is 0), so the column-sharded LM head — and therefore greedy output — is identical
+        to the old readback path. The selector matmul + the ``[1,L,H]->[1,1,L,H]`` reshape are compiled
+        pre-trace by warmup (its ``prefill_forward`` calls run this for every bucket L). Decode never
+        leaves the device; this is prefill-only. Falls back to the host readback if a bucket's selector
+        is somehow missing (shouldn't happen post-warmup) so serving can never crash."""
         st = self._prefill_state()
+        sel = st["sel"].get(L)
+        # item 2.2 selector gated OFF by default: as first implemented it calls ttnn.from_torch(onehot)
+        # per prefill, which ALLOCATES a device buffer under the resident decode trace ("Allocating device
+        # buffers is unsafe", allocator.cpp:123) — trace-unsafe + slow. Needs a trace-safe rewrite (build the
+        # one-hot as a ttnn HOST tensor + copy_host_to_device into the persistent sel; matmul into a
+        # persistent output). Until then, TT_LAGUNA_SELECTOR=1 opts in; default uses the host-readback path.
+        if sel is not None and os.environ.get("TT_LAGUNA_SELECTOR") == "1":
+            onehot = torch.zeros([1, 1, 1, L], dtype=torch.float32)
+            onehot[0, 0, 0, plen - 1] = 1.0
+            src = ttnn.from_torch(
+                onehot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)
+            )
+            ttnn.copy_host_to_device_tensor(src, sel)  # into persistent selector buffer (no alloc)
+            h4 = ttnn.reshape(h, (1, 1, L, self.hidden))  # [1,L,H] -> [1,1,L,H] (leading unit dim)
+            sel_row = ttnn.matmul(sel, h4)  # [1,1,1,L] @ [1,1,L,H] -> [1,1,1,H] == h[plen-1] exactly
+            return self.model.lm_head_shards_decode(sel_row)
+        # Fallback (bucket L not warmed): host readback of the replicated hidden, slice row on host.
         hh = ttnn.to_torch(h, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).reshape(
             -1, L, self.hidden
         )
@@ -403,6 +654,7 @@ class LagunaForCausalLM:
         enable_trace=False,
         sampling_params=None,
         empty_slots=None,
+        page_tables_per_layer=None,
         **kwargs,
     ):
         """One prefill step. ``tokens`` [num_reqs, padded_seq] int32, ``page_table`` [num_reqs, nb].
@@ -415,7 +667,13 @@ class LagunaForCausalLM:
         if tokens.dim() == 1:
             tokens = tokens.unsqueeze(0)
         batch = tokens.shape[0]
-        pt = self._prefill_pt(page_table)  # persistent, shape-keyed (no per-call alloc under trace)
+        # Hybrid KV: per-layer (per-group) page tables when the plugin provides them; else the single
+        # shape-keyed persistent table (legacy uniform path). Both are trace-safe (pre-allocated in
+        # warmup_model_prefill). model.prefill_layers indexes a list per layer, or uses a lone tensor.
+        if page_tables_per_layer is not None:
+            pt = self._prefill_pt_grouped(page_tables_per_layer)
+        else:
+            pt = self._prefill_pt(page_table)  # persistent, shape-keyed (no per-call alloc under trace)
         if prompt_lens is None:
             prompt_lens = [int(tokens.shape[1])] * batch
         starts = [0] * batch if start_pos is None else [int(x) for x in start_pos]
@@ -446,6 +704,257 @@ class LagunaForCausalLM:
             toks = torch.tensor(sampled, dtype=torch.int64).reshape(batch, 1)
             return toks, None
         return torch.stack(last_logits, dim=0)  # [num_reqs, 1, vocab]
+
+    def _row_logits(self, h, row, L, st):
+        """LM-head over a single row of the ON-DEVICE prefill hidden ``h`` ([1,L,H], replicated),
+        selected by the same fixed-shape one-hot matmul as ``_last_token_shards`` (item 2.2): a
+        ``[1,1,1,L]`` one-hot with 1.0 at ``row`` picks that row bit-exactly. Reuses the persistent
+        per-L selector buffer ``st["sel"][L]`` (same L bucket, so the matmul program is already warmed
+        by ``_last_token_shards``). Avoids the ~32 MB whole-hidden readback the verify path used to do.
+        Falls back to a per-row host readback if the bucket's selector is missing (shouldn't happen)."""
+        sel = st["sel"].get(L)
+        if sel is not None and os.environ.get("TT_LAGUNA_SELECTOR") == "1":  # gated off — see _last_token_shards
+            onehot = torch.zeros([1, 1, 1, L], dtype=torch.float32)
+            onehot[0, 0, 0, row] = 1.0
+            src = ttnn.from_torch(
+                onehot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)
+            )
+            ttnn.copy_host_to_device_tensor(src, sel)
+            h4 = ttnn.reshape(h, (1, 1, L, self.hidden))
+            sel_row = ttnn.matmul(sel, h4)  # [1,1,1,H] == h[0, row] exactly
+            return self.model.logits_to_host(self.model.lm_head_shards_decode(sel_row)).reshape(self.vocab)
+        # Fallback: read the hidden back and slice this row on host.
+        hh = ttnn.to_torch(h, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).reshape(
+            -1, L, self.hidden
+        )
+        hrow = hh[0, row].to(torch.float32).reshape(1, 1, 1, self.hidden)
+        hsrc = ttnn.from_torch(
+            hrow, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)
+        )
+        ttnn.copy_host_to_device_tensor(hsrc, st["last_h"])
+        return self.model.logits_to_host(self.model.lm_head_shards_decode(st["last_h"])).reshape(self.vocab)
+
+    def verify_forward(
+        self,
+        tokens,
+        start_pos,
+        page_table=None,
+        kv_cache=None,
+        page_tables_per_layer=None,
+        logit_rows=None,
+        **kwargs,
+    ):
+        """Speculative-decode VERIFY step for ONE request (batch-1 path).
+
+        ``tokens`` is [1, S] processed through the (suffix-)prefill path against the paged KV starting
+        at ``start_pos``. Returns host logits — row j is the next-token distribution given context
+        through position ``start_pos+j`` (i.e. predicts the token at ``start_pos+j+1``), so
+        argmax(row j) is the target-greedy token for that slot.
+
+        **Alignment:** the prefill flash-attention requires ``chunk_start_idx (= start_pos) % 64 == 0``
+        for suffix prefills (``start_pos>0``; q_chunk=32 ∧ k_chunk=64/128 → lcm 64 = the block size,
+        see optimized_decoder.py:418-429). The caller (spec_decode.SpeculativeDecoder) therefore aligns
+        ``start_pos`` down to a 64-boundary and prepends the already-known history tokens for that
+        window; those real tokens rewrite identical KV (idempotent) and only the trailing rows are read.
+
+        ``logit_rows``: optional list of row indices to run the LM head on (in order). Only those rows'
+        logits are returned as ``[len(logit_rows), vocab]`` — the caller asks for just the K+1 trailing
+        rows (anchor + drafts), skipping the vocab projection for the re-fed alignment prefix. ``None``
+        returns all ``S`` rows.
+
+        KV for all S positions is written; rejected-draft positions are overwritten by the next
+        iteration's verify (implicit batch-1 rollback), and the pad/right-fill keeps stale future-KV
+        harmless."""
+        tokens = torch.as_tensor(tokens, dtype=torch.int64).reshape(1, -1)
+        S = int(tokens.shape[1])
+        st = self._prefill_state()
+        pt = (
+            self._prefill_pt_grouped(page_tables_per_layer)
+            if page_tables_per_layer is not None
+            else self._prefill_pt(page_table)
+        )
+        L = self._bucket_len(S)
+        padded = torch.zeros(L, dtype=torch.int64)
+        padded[:S] = tokens[0, :S]
+        tok_tt = self.gen._tokens_to_device(padded)
+        x = self.model.embed_prefill(tok_tt)
+        h = self.model.prefill_layers(x, kv_cache, pt, user_id=0, start_pos=int(start_pos))
+        # item 2.2: select each requested row ON DEVICE (one-hot matmul over the still-resident hidden)
+        # instead of reading the whole [1,L,H] hidden back to host first.
+        rows = list(range(S)) if logit_rows is None else [int(r) for r in logit_rows]
+        logits = torch.stack([self._row_logits(h, r, L, st) for r in rows], dim=0)  # [len(rows), vocab]
+        return logits
+
+    def verify_forward_decode(
+        self,
+        tokens,
+        positions,
+        page_table=None,
+        kv_cache=None,
+        page_tables_per_layer=None,
+        **kwargs,
+    ):
+        """Speculative-decode VERIFY via the batched-DECODE path (gemma4 `ttnn_verify_forward` pattern).
+
+        The ``B = K+1`` candidate tokens ``[anchor, d0, …, d_{K-1}]`` occupy the BATCH dim at consecutive
+        positions ``positions = [P-1, P, …, P-1+K]``, all pointing at the SAME user's KV blocks (the
+        page-table row is replicated B times). One batched decode runs the fast paged-SDPA-**decode**
+        (reads KV in O(1) w.r.t. context, unlike the prefill-path `verify_forward`), with
+        ``sequential_kv_write=True`` so the B rows' shared-block cache writes serialize (no RMW race —
+        see MultichipDecoder._seq_kv_write). Returns host logits ``[B, vocab]``; row j predicts the token
+        at ``positions[j]+1``, so row j's argmax is the target-greedy token for that slot (greedy accept).
+
+        Eager (untraced) — a first correctness/latency vehicle; the traced B=K+1 fast path is a follow-up.
+        """
+        tokens = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1)
+        B = int(tokens.shape[0])
+        pos = torch.as_tensor(positions, dtype=torch.int32).reshape(B)
+        pt_host = torch.as_tensor(page_table, dtype=torch.int32)
+        if pt_host.dim() == 1:
+            pt_host = pt_host.unsqueeze(0)
+        if pt_host.shape[0] == 1 and B > 1:
+            pt_host = pt_host.repeat(B, 1)  # replicate the user's block row across candidates
+        pt = self._page_table_to_device(pt_host)
+        tok_tt = self.gen._rep(tokens.reshape(1, B).to(torch.int32), ttnn.uint32)
+        cur = self.gen._rep(pos, ttnn.int32)
+        ridx = self.gen._rep(pos.reshape(1, B), ttnn.uint32)
+        h = self.model.embed_decode(tok_tt)
+        h = self.model.decode_layers(h, cur, ridx, pt, kv_cache, sequential_kv_write=True)
+        shards = self.model.lm_head_shards_decode(h)
+        logits = self.model.logits_to_host(shards).reshape(B, self.vocab)
+        return logits
+
+    def _capture_verify_decode(self, K1, kv_cache, tokens, pos, pt_host):
+        """Capture ONE spec-decode VERIFY trace at K1=K+1 candidates (batched decode + seq KV write +
+        greedy ON-DEVICE sampler). Fully on-device — the greedy token per row is produced by the same
+        Sampling1D (top-k=1) the model's serving decode uses, so the verify matches what the hardware
+        actually greedy-decodes (NOT host fp32 argmax, which can differ on bf16 near-ties but is never
+        what's served). Persistent I/O buffers bound once; the sampler writes into the persistent `tok`
+        (the buffer the embed reads — the proven _decode_state feedback pattern); capture runs at the real
+        first-call inputs so the compile+capture KV writes are idempotent."""
+        g = self.gen
+        tok = g._rep(torch.zeros([1, 1, 1, K1], dtype=torch.int32), ttnn.uint32)
+        cur = g._rep(torch.zeros([K1], dtype=torch.int32), ttnn.int32)
+        ridx = g._rep(torch.zeros([1, K1], dtype=torch.int32), ttnn.uint32)
+        k = g._rep(torch.ones([K1], dtype=torch.int32), ttnn.uint32)  # greedy: top-k=1
+        p = g._rep(torch.ones([K1], dtype=torch.float32), ttnn.bfloat16)
+        t = g._rep(torch.ones([K1], dtype=torch.float32), ttnn.bfloat16)
+        seeds = g._rep(torch.zeros([K1], dtype=torch.int32), ttnn.uint32)
+        sampler = g._sampler(K1)
+        pt = self._page_table_to_device(pt_host)
+        ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(tokens.reshape(K1, 1), K1), tok)
+        ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), cur)
+        ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), ridx)
+
+        def step():
+            hh = self.model.embed_decode(ttnn.reshape(tok, (1, K1)))
+            hh = self.model.decode_layers(hh, cur, ridx, pt, kv_cache, sequential_kv_write=True)
+            shards = self.model.lm_head_shards_decode(hh)
+            sampler.decode_forward(shards, k=k, p=p, temp=t, seeds=seeds, tt_out_tok=tok)
+
+        step()  # compile (warm program cache)
+        ttnn.synchronize_device(self.mesh_device)
+        tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        step()  # capture
+        ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        st = dict(tid=tid, tok=tok, cur=cur, ridx=ridx, pt=pt)
+        self._verify_dec[K1] = st
+        return st
+
+    def verify_greedy_decode(
+        self, tokens, positions, page_table=None, kv_cache=None, page_tables_per_layer=None, traced=True
+    ):
+        """Greedy batched-DECODE verify → per-row target-greedy token ids ``[K+1]`` (torch int32).
+
+        The fast path for spec-decode: K+1 candidates in the batch dim at consecutive positions run
+        through ONE batched decode (fast paged-decode SDPA, O(1) in context) with race-safe
+        sequential_kv_write and the on-device greedy sampler (top-k=1), so row j's id IS argmax of its
+        logits (= g[j], the target-greedy token for slot j) — no host logit transfer. ``traced=True``
+        replays a captured trace (host dispatch eliminated); the page-table row is constant across
+        iterations (same user blocks), so only tokens+positions refresh per replay."""
+        tokens = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1)
+        K1 = int(tokens.shape[0])
+        pos = torch.as_tensor(positions, dtype=torch.int32).reshape(K1)
+        pt_row = torch.as_tensor(page_table, dtype=torch.int32)
+        if pt_row.dim() == 1:
+            pt_row = pt_row.unsqueeze(0)
+        pt_row = pt_row[:1]  # the single user's block row (replicated below to the batch size used)
+        pt_host = pt_row.repeat(K1, 1) if K1 > 1 else pt_row
+        if not traced:
+            logits = self.verify_forward_decode(tokens, pos, page_table=pt_host, kv_cache=kv_cache)
+            return torch.argmax(logits, dim=-1).to(torch.int32)
+        st = self._verify_dec.get(K1)
+        if st is None:
+            # item 3.2: verify-decode trace for this K1 not pre-captured -> compile+capture in-request.
+            print(
+                f"[laguna] WARNING: lazy spec-decode VERIFY-trace capture for K1={K1} (not pre-warmed) — "
+                f"this step includes compile+capture, not a warm replay. (item 3.2)",
+                flush=True,
+            )
+            st = self._capture_verify_decode(K1, kv_cache, tokens, pos, pt_host)  # lazy fallback
+            return self._read_tokens_host(st["tok"], K1)
+        ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(tokens.reshape(K1, 1), K1), st["tok"])
+        ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), st["cur"])
+        ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), st["ridx"])
+        ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=True)
+        return self._read_tokens_host(st["tok"], K1)  # per-row greedy ids sampled ON DEVICE
+
+    def verify_sampler_eager(self, tokens, positions, page_table=None, kv_cache=None):
+        """DIAGNOSTIC: run the batched decode-verify through the on-device SAMPLER but EAGERLY (no trace
+        capture/replay). Isolates the sampler from the trace: the host-argmax eager path
+        (verify_forward_decode) is known-correct, so if this sampler-eager path also matches it, the
+        sampler is fine and the traced divergence is purely a trace-replay defect; if it diverges here,
+        the on-device sampler is the culprit (model-layer fixable). Returns per-row greedy ids [B]."""
+        tokens = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1)
+        B = int(tokens.shape[0])
+        pos = torch.as_tensor(positions, dtype=torch.int32).reshape(B)
+        pt_host = torch.as_tensor(page_table, dtype=torch.int32)
+        if pt_host.dim() == 1:
+            pt_host = pt_host.unsqueeze(0)
+        if pt_host.shape[0] == 1 and B > 1:
+            pt_host = pt_host.repeat(B, 1)
+        g = self.gen
+        tok = g._rep(torch.zeros([1, 1, 1, B], dtype=torch.int32), ttnn.uint32)
+        cur = g._rep(pos, ttnn.int32)
+        ridx = g._rep(pos.reshape(1, B), ttnn.uint32)
+        k = g._rep(torch.ones([B], dtype=torch.int32), ttnn.uint32)
+        p = g._rep(torch.ones([B], dtype=torch.float32), ttnn.bfloat16)
+        t = g._rep(torch.ones([B], dtype=torch.float32), ttnn.bfloat16)
+        seeds = g._rep(torch.zeros([B], dtype=torch.int32), ttnn.uint32)
+        sampler = g._sampler(B)
+        pt = self._page_table_to_device(pt_host)
+        ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(tokens.reshape(B, 1), B), tok)
+        h = self.model.embed_decode(ttnn.reshape(tok, (1, B)))
+        h = self.model.decode_layers(h, cur, ridx, pt, kv_cache, sequential_kv_write=True)
+        shards = self.model.lm_head_shards_decode(h)
+        sampler.decode_forward(shards, k=k, p=p, temp=t, seeds=seeds, tt_out_tok=tok)
+        return self._read_tokens_host(tok, B)
+
+    def warmup_verify_decode(self, draft_len, kv_cache, num_blocks, block_size=64):
+        """Capture the spec-decode VERIFY trace in the SAFE warmup window (mirrors how the normal decode
+        trace is captured by warmup_model_decode). Capturing lazily mid-serving hangs the mesh.
+
+        Capture at a populated cache + block-internal positions to match serving structure; positions/tokens
+        refresh per replay."""
+        K1 = int(draft_len) + 1
+        if kv_cache is None or K1 in self._verify_dec:
+            return
+        base = 2 * block_size
+        dummy = torch.zeros(base, dtype=torch.int64)
+        ptp = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+        self.prefill_forward(
+            dummy.reshape(1, base),
+            page_table=ptp,
+            kv_cache=kv_cache,
+            prompt_lens=[base],
+            start_pos=[0],
+            sampling_params=None,
+        )
+        pos = torch.arange(base - 1, base - 1 + K1, dtype=torch.int32)
+        tokens = torch.zeros(K1, dtype=torch.int64)
+        pt_host = ptp.repeat(K1, 1)
+        self._capture_verify_decode(K1, kv_cache, tokens, pos, pt_host)
 
     # --------------------------------------------------------------------- #
     # Decode (traced split sampling + async split)
@@ -508,6 +1017,7 @@ class LagunaForCausalLM:
         read_from_device=True,
         sampling_params=None,
         reset_batch=False,
+        page_tables_per_layer=None,
         **kwargs,
     ):
         """One decode step for the whole padded batch.
@@ -528,10 +1038,26 @@ class LagunaForCausalLM:
         if sampling_params is None:
             return self._decode_host_sampling(tokens, pos, page_table, kv_cache, read_from_device)
 
+        hybrid = page_tables_per_layer is not None
         st = self._decode.get(B)
         if st is None:
-            pt_persist = self._page_table_to_device(page_table)
-            st = self._decode_state(B, kv_cache, pt_persist)
+            # item 3.2: the decode trace for this batch B was NOT pre-captured by warmup, so we compile +
+            # capture it now — INSIDE a live request. This is orders of magnitude slower than a warm
+            # replay and is invisible in the served latency unless flagged. Warn so a lazy capture is not
+            # silently mistaken for warm serving (drive warmup_model_decode for every served B to avoid).
+            print(
+                f"[laguna] WARNING: lazy decode-trace capture for batch B={B} inside decode_forward "
+                f"(warmup did not pre-capture this B) — first-token latency for this B includes "
+                f"compile+capture, not a warm replay. (item 3.2)",
+                flush=True,
+            )
+            if hybrid:
+                pt_persist, groups, reps = self._decode_pt_grouped_alloc(page_tables_per_layer)
+                st = self._decode_state(B, kv_cache, pt_persist)
+                st["pt_groups"], st["pt_reps"], st["last_pt_host_groups"] = groups, reps, {}
+            else:
+                pt_persist = self._page_table_to_device(page_table)
+                st = self._decode_state(B, kv_cache, pt_persist)
         tok, cur, ridx, tid, pt = st["tok"], st["cur"], st["ridx"], st["tid"], st["pt"]
 
         # --- sampling params: refresh persistent buffers only when they change ---
@@ -554,11 +1080,15 @@ class LagunaForCausalLM:
             self.gen.counters["pos_refresh"] += 1
 
         # --- page table: copy only when contents changed ---
-        pt_host = torch.as_tensor(page_table, dtype=torch.int32)
-        if st["last_pt_host"] is None or not torch.equal(pt_host, st["last_pt_host"]):
-            ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), pt)
-            st["last_pt_host"] = pt_host.clone()
-            self.gen.counters["page_table_refresh"] += 1
+        if hybrid:
+            # Refresh BOTH per-group persistent buffers (full + sliding) that the trace closed over.
+            self._decode_pt_grouped_refresh(st, page_tables_per_layer)
+        else:
+            pt_host = torch.as_tensor(page_table, dtype=torch.int32)
+            if st["last_pt_host"] is None or not torch.equal(pt_host, st["last_pt_host"]):
+                ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), pt)
+                st["last_pt_host"] = pt_host.clone()
+                self.gen.counters["page_table_refresh"] += 1
 
         ttnn.execute_trace(self.mesh_device, tid, cq_id=0, blocking=read_from_device)
         self.gen.counters["trace_replay"] += 1
@@ -642,7 +1172,12 @@ class LagunaForCausalLM:
         if kv_cache is None or self.already_warmed_up_prefill:
             return None
         self.already_warmed_up_prefill = True
-        self._prefill_state()  # allocate persistent sampling/selector buffers (pre-trace)
+        # Allocate persistent sampling buffers AND the per-bucket-L one-hot selector buffers (item 2.2),
+        # all pre-trace. The selector MATMUL program (sel[1,1,1,L] @ h[1,1,L,H]) + the [1,L,H]->[1,1,L,H]
+        # reshape are compiled for every bucket L by the per-L ``prefill_forward`` calls below, which run
+        # ``_last_token_shards`` (and thus the selector matmul) for each L — so no selector program
+        # first-compiles under the resident decode trace at serving time.
+        self._prefill_state()
         bs = int(kv_cache[0]["block_size"])
         total_blocks = int(kv_cache[0]["blocks_per_user"])
         greedy = None
@@ -659,17 +1194,40 @@ class LagunaForCausalLM:
         # at the serving width makes serving-time prefill compile-free. Single-shot buckets use the
         # table whole (width-agnostic) so this is a no-op for them.
         serve_w = int(self._max_blocks) if self._max_blocks else 0
+        # Hybrid iff the per-layer pools differ (sliding layers got a smaller pool).
+        hybrid = len({int(kv["blocks_per_user"]) for kv in kv_cache}) > 1
         for L in self._prefill_bucket_lens():
             nb = (L + bs - 1) // bs
             if nb > total_blocks:  # cache too small for this bucket (reduced bring-up); skip
                 continue
             w = serve_w if serve_w >= nb else nb
-            pt = torch.zeros((1, w), dtype=torch.int32)
-            pt[0, :nb] = torch.arange(nb, dtype=torch.int32)
             dummy = torch.zeros((1, L), dtype=torch.int64)
-            self.prefill_forward(
-                dummy, page_table=pt, kv_cache=kv_cache, prompt_lens=[L], start_pos=[0], sampling_params=greedy
-            )
+            if hybrid:
+                # Per-layer warmup page tables bounded to EACH layer's pool: block ids beyond a
+                # (small) sliding pool would be OOB, so clamp each layer's real-block count to its
+                # pool. Content is dummy (garbage prefill); only shape + in-bounds indices matter for
+                # compiling the per-group programs and pre-allocating the per-group persistent buffers.
+                ptl = []
+                for kv in kv_cache:
+                    pool = int(kv["blocks_per_user"])
+                    m = min(nb, pool)
+                    t = torch.zeros((1, w), dtype=torch.int32)
+                    t[0, :m] = torch.arange(m, dtype=torch.int32)
+                    ptl.append(t)
+                self.prefill_forward(
+                    dummy,
+                    page_tables_per_layer=ptl,
+                    kv_cache=kv_cache,
+                    prompt_lens=[L],
+                    start_pos=[0],
+                    sampling_params=greedy,
+                )
+            else:
+                pt = torch.zeros((1, w), dtype=torch.int32)
+                pt[0, :nb] = torch.arange(nb, dtype=torch.int32)
+                self.prefill_forward(
+                    dummy, page_table=pt, kv_cache=kv_cache, prompt_lens=[L], start_pos=[0], sampling_params=greedy
+                )
         return None
 
     def warmup_model_decode(
@@ -698,6 +1256,15 @@ class LagunaForCausalLM:
         if B in self._decode:
             return None
         nb = int(num_blocks) if num_blocks else 1
-        pt_persist = self.gen._rep(torch.zeros([B, nb], dtype=torch.int32), ttnn.int32)
-        self._decode_state(B, kv_cache, pt_persist)
+        hybrid = len({int(kv["blocks_per_user"]) for kv in kv_cache}) > 1
+        if hybrid:
+            # Capture the decode trace over the TWO per-group persistent page tables (full + sliding),
+            # both full-width [B, nb] null-padded (dummy zeros → block 0, in-bounds for both pools).
+            ptl = [torch.zeros([B, nb], dtype=torch.int32) for _ in kv_cache]
+            pt_persist, groups, reps = self._decode_pt_grouped_alloc(ptl)
+            st = self._decode_state(B, kv_cache, pt_persist)
+            st["pt_groups"], st["pt_reps"], st["last_pt_host_groups"] = groups, reps, {}
+        else:
+            pt_persist = self.gen._rep(torch.zeros([B, nb], dtype=torch.int32), ttnn.int32)
+            self._decode_state(B, kv_cache, pt_persist)
         return None

@@ -1,0 +1,6 @@
+instances_by_exit_status:
+    InternalServerError:
+    - astropy__astropy-13398
+    - astropy__astropy-13236
+    - astropy__astropy-12907
+    - astropy__astropy-13033

@@ -1,10 +1,20 @@
 {
   "hf_model": "poolside/Laguna-XS-2.1",
   "hf_advertised_context": 262144,
-  "current_supported_context": 262144,
-  "capability_reduction": "none",
-  "limiting_reason": "none",
-  "device": "Blackhole p300c, single 1x1 mesh (chip 0)",
+  "current_supported_context": 131072,
+  "capability_reduction": "advertised serving context lowered 262144 -> 131072 (plan item 1.2): advertised MUST equal servable, and end-to-end serving on the P150x4 config OOMs at 262144.",
+  "limiting_reason": "The 2026-07-31 P150x4 vLLM serving sweep OOMs at ISL 262144 (both OSL 128 and 1024) while ISL 131072 serves (12.1 t/s/u). tt/generator_vllm.py:ADVERTISED_MAX_CONTEXT is now 131072 so the model never accepts a context it cannot serve. See serving_verified. NOTE: the per-stage analytic sections below estimate a ~12 GB/device single-user footprint at 262144 (which would fit); the empirical OOM comes from the serving path's additional pressure (prefill activation peak, vLLM block-pool sizing at max_num_seqs=32, fabric/trace buffers, the [1,seq,H] pipelined-prefill reassembly output at seq=262144) not captured by the single-user analytic. Restoring 262144 is Tier-2 work: hybrid-KV per-device KV 5.4->1.5 GB (already flag-enabled but not re-verified for the full 262144 serve) + shared-RoPE frees ~4.7 GB transient (item 2.4).",
+  "serving_verified": {
+    "mesh": "Blackhole P150x4 (1x4), FABRIC_1D_RING, TP=4/EP=4",
+    "date": "2026-07-31",
+    "tool": "vllm bench serve (.venv_benchmarks_vllm)",
+    "served_isl": [128, 4096, 32768, 65536, 131072],
+    "oom_isl": [262144],
+    "advertised_now": 131072,
+    "hf_config_declares": 262144,
+    "source": "doc/vllm_integration/sweep_vllm.tsv"
+  },
+  "device": "Analytic per-stage capacity below is for a single Blackhole p300c chip (1x1). Serving runs on the P150x4 (1x4) mesh; see serving_verified for the empirically measured limit.",
   "device_dram_total_bytes_per_chip": 34178731008,
   "device_dram_note": "bank_size 4272341376 B x 8 banks = 34.18 GB, from allocator OOM logs (bank_manager.cpp)",
   "prefill": {

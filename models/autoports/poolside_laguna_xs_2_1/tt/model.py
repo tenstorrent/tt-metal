@@ -33,7 +33,7 @@ import torch
 
 import ttnn
 
-from .optimized_decoder import PrecisionPolicy
+from .optimized_decoder import PrecisionPolicy, _cached_device_tensor, weight_cache_key
 from .optimized_multichip_decoder import OptimizedMultichipDecoder
 
 MODEL_ID = "poolside/Laguna-XS-2.1"
@@ -192,6 +192,13 @@ class LagunaModel:
             n = num_layers or total
             layer_indices = list(range(n))
 
+        # item 2.4: build the two (cos,sin) RoPE tables ONCE, keyed by attention kind, threaded into
+        # every layer via this shared dict. The first full-attention layer and the first sliding layer
+        # build+cache their table; all later layers of that kind reuse the SAME device tensors. This
+        # replaces the old "each of 40 layers builds its own, then _dedup_rope frees 38" pattern —
+        # removing the ~4.7 GB transient peak and 38 redundant trust-remote-code table builds. Tables
+        # depend only on (attention_type, max_seq_len, config), so sharing is exact.
+        rope_tables: dict = {}
         layers = []
         for li in layer_indices:
             raw = W.load_layer_tensors(li)
@@ -202,51 +209,55 @@ class LagunaModel:
                 mesh_device=mesh_device,
                 max_seq_len=max_seq_len,
                 policy=precision_policy,
+                rope_tables=rope_tables,
             )
             dec.layer_idx = li
             layers.append(dec)
 
-        # Deduplicate RoPE tables by attention kind to bound device DRAM: all full-attention layers
-        # share one (cos,sin) pair, all sliding layers share another. Tables depend only on
-        # (attention_type, max_seq_len, config), so this is exact.
-        cls._dedup_rope(layers)
-
         # Top-level tensors.
         top = load_top_level_tensors(["model.embed_tokens.weight", "model.norm.weight", "lm_head.weight"])
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
-        embed_w = ttnn.from_torch(
-            top["model.embed_tokens.weight"],  # [V, H]
+        D = mesh_device.get_num_devices()
+        # Top-level weights are disk-cached the same way per-layer weights are (plan Stage 0).
+        # layer_idx="top"; mesh tag encodes the mapping + device count D. See
+        # optimized_decoder._cached_device_tensor / weight_cache_key.
+        embed_w = _cached_device_tensor(
+            lambda: top["model.embed_tokens.weight"],  # [V, H]
+            device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate,
+            cache_key=weight_cache_key("embed_tokens", "top", f"rep_d{D}"),
         )
         H = hf_config.hidden_size
-        norm_w = ttnn.from_torch(
-            top["model.norm.weight"].reshape(1, 1, 1, H),
+        norm_w = _cached_device_tensor(
+            lambda: top["model.norm.weight"].reshape(1, 1, 1, H),
+            device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate,
+            cache_key=weight_cache_key("norm", "top", f"rep_d{D}"),
         )
         # LM head: HF [V, H] -> ttnn [H, V], column-sharded on the vocab dim across the mesh.
         V = hf_config.vocab_size
-        D = mesh_device.get_num_devices()
         assert V % D == 0, f"vocab {V} must divide mesh {D}"
         per_dev_vocab = V // D
-        lm_t = top["lm_head.weight"].t().contiguous()  # [H, V]
         # LM head N (per-device vocab shard) is large, so a plain tiled matmul that fans N across the
         # full compute grid is the right shape here — the DRAM-width-sharded decode-matmul helper
         # (tuned for the K-bound attention/MLP weights) overflows L1 at this N. The plain tiled matmul
         # already saturates DRAM (~73.8% util on 98 cores); BFP8 weights (optimized default) halve the
         # DRAM bytes of this DRAM-bound op for a measured 41.7% LM-head speedup (token-preserving).
-        lm_head_w = ttnn.from_torch(
-            lm_t,
+        # lm_head_dtype (bf16/bfp8) is encoded in the cache filename by ttnn.as_tensor's suffix.
+        lm_head_w = _cached_device_tensor(
+            lambda: top["lm_head.weight"].t().contiguous(),  # [H, V]
+            device=mesh_device,
             dtype=lm_head_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            cache_key=weight_cache_key("lm_head", "top", f"sh1_d{D}"),
         )
         meta = {
             "max_seq_len": max_seq_len,
@@ -256,21 +267,6 @@ class LagunaModel:
             "lm_head_dtype": lm_head_dtype,
         }
         return cls(hf_config, layers, embed_w, norm_w, lm_head_w, None, meta, mesh_device)
-
-    @staticmethod
-    def _dedup_rope(layers):
-        shared = {}
-        for dec in layers:
-            kind = dec.cfg.attention_type
-            if kind not in shared:
-                shared[kind] = (dec.cos_2d, dec.sin_2d)
-            else:
-                cos, sin = shared[kind]
-                if dec.cos_2d is not cos:
-                    ttnn.deallocate(dec.cos_2d)
-                    ttnn.deallocate(dec.sin_2d)
-                    dec.cos_2d = cos
-                    dec.sin_2d = sin
 
     # ---- KV cache / page table (per-layer caches; one shared page table) ---- #
     def alloc_kv_cache(self, max_users, max_seq_len, block_size=32, dtype=None):
@@ -297,16 +293,78 @@ class LagunaModel:
         return ttnn.reshape(emb, (1, 1, tok_1B.shape[-1], self.cfg.hidden))
 
     # ---- forward: layer stack ---------------------------------------------- #
+    def _build_decode_rope(self, rope_idx, B):
+        """item 2.3: compute the two distinct decode RoPE gathers (one per attention kind) ONCE per
+        step, instead of every one of the 40 layers redundantly re-gathering them. Returns
+        {attention_type: (cos, sin)} — the DRAM ``_rope_decode`` output ([1,B,1,rotary_dim] TILE).
+
+        Only the DRAM cos/sin are shared. The L1 HEIGHT-SHARDED form (``_shard_cossin``) is NOT hoisted:
+        L1 is scratch and a shared cos_sh gets clobbered by later layers' activations (measured: teacher
+        top1 0.95->0.58). Each layer shards its own cos_sh from the shared cos in ``decode_forward``.
+        Sharing cos/sin is bit-identical: DRAM-persistent, and item 2.4 shares the source table per kind
+        so a representative layer's gather reproduces every layer's local result exactly."""
+        ctx = {}
+        for dec in self.layers:
+            kind = dec.cfg.attention_type
+            if kind in ctx:
+                continue
+            cos = dec._rope_decode(rope_idx, B)
+            sin = dec._rope_decode(rope_idx, B, sin=True)
+            ctx[kind] = (cos, sin)
+        return ctx
+
+    def _build_prefill_rope(self, start_pos, seq):
+        """item 2.3: compute the two distinct single-shot prefill RoPE contexts (one per attention
+        kind) ONCE. Returns {attention_type: (cos, sin)} ([1,1,seq,rotary_dim] TILE)."""
+        ctx = {}
+        for dec in self.layers:
+            kind = dec.cfg.attention_type
+            if kind in ctx:
+                continue
+            cos = dec._rope_prefill(start_pos, seq)
+            sin = dec._rope_prefill(start_pos, seq, sin=True)
+            ctx[kind] = (cos, sin)
+        return ctx
+
     def prefill_layers(self, hidden_1SH, kv_cache, page_table, *, user_id=0, start_pos=0):
+        # ``page_table`` may be a single tensor (uniform/legacy) OR a per-layer list (hybrid KV: full
+        # vs sliding groups have distinct block tables) — index per layer when a list is given.
+        per_layer = isinstance(page_table, (list, tuple))
+        seq = hidden_1SH.shape[-2]
+        # item 2.3: shared per-kind RoPE for the single-shot prefill (one chunk == whole seq). The
+        # pipelined path (seq > PIPE_CHUNK) chunks internally with per-chunk positions the model can't
+        # precompute, so it keeps computing RoPE locally (rope_mats=None). TT_LAGUNA_NO_ROPE_HOIST=1
+        # forces the per-layer local compute (A/B diagnostic).
+        _no_hoist = os.environ.get("TT_LAGUNA_NO_ROPE_HOIST") == "1"
+        rope_ctx = None if (_no_hoist or seq > self.layers[0].PIPE_CHUNK) else self._build_prefill_rope(start_pos, seq)
         h = hidden_1SH
-        for dec, kv in zip(self.layers, kv_cache):
-            h = dec.prefill_forward(h, kv, page_table, user_id=user_id, start_pos=start_pos)
+        for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
+            pt = page_table[i] if per_layer else page_table
+            rm = rope_ctx[dec.cfg.attention_type] if rope_ctx is not None else None
+            h = dec.prefill_forward(h, kv, pt, user_id=user_id, start_pos=start_pos, rope_mats=rm)
         return h
 
-    def decode_layers(self, hidden_1BH, cur_pos, rope_idx, page_table, kv_cache):
+    def decode_layers(self, hidden_1BH, cur_pos, rope_idx, page_table, kv_cache, sequential_kv_write=False):
+        # ``sequential_kv_write`` serializes the per-row paged_update_cache when the batch rows are
+        # spec-decode candidates sharing ONE user's physical KV blocks (see MultichipDecoder.decode_forward);
+        # off for normal serving (disjoint per-user blocks — no race).
+        per_layer = isinstance(page_table, (list, tuple))
+        B = hidden_1BH.shape[-2]
+        # item 2.3: two distinct decode RoPE gathers (full vs sliding) computed ONCE, threaded per layer.
+        # TT_LAGUNA_NO_ROPE_HOIST=1 forces per-layer local compute (A/B diagnostic).
+        rope_ctx = None if os.environ.get("TT_LAGUNA_NO_ROPE_HOIST") == "1" else self._build_decode_rope(rope_idx, B)
         h = hidden_1BH
-        for dec, kv in zip(self.layers, kv_cache):
-            h = dec.decode_forward(h, cur_pos, rope_idx, page_table, kv)
+        for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
+            pt = page_table[i] if per_layer else page_table
+            h = dec.decode_forward(
+                h,
+                cur_pos,
+                rope_idx,
+                pt,
+                kv,
+                sequential_kv_write=sequential_kv_write,
+                rope_mats=(rope_ctx[dec.cfg.attention_type] if rope_ctx is not None else None),
+            )
         return h
 
     # ---- terminal: final norm + LM head ------------------------------------ #
