@@ -498,7 +498,7 @@ def test_deepseek_host_sampling_applies_dormant_remap_after_success(monkeypatch)
     assert events == ["decode", ("remap", [0])]
 
 
-def test_deepseek_host_sampling_does_not_consume_remap_on_failure(monkeypatch):
+def test_deepseek_host_sampling_does_not_consume_remap_on_failure(monkeypatch, expect_error):
     events = []
     generator = DeepseekV3ForCausalLM.__new__(DeepseekV3ForCausalLM)
     generator.model_run_config_decode = object()
@@ -509,7 +509,7 @@ def test_deepseek_host_sampling_does_not_consume_remap_on_failure(monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("decode")),
     )
 
-    with pytest.raises(RuntimeError, match="decode"):
+    with expect_error(RuntimeError, "decode"):
         generator.decode_forward(
             tokens=torch.zeros((1, 1), dtype=torch.int64),
             start_pos=torch.zeros((1,), dtype=torch.int64),
