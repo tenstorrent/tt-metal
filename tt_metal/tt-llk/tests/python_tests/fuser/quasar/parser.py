@@ -37,9 +37,9 @@ from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
+from .fpu.transpose_dest import TransposeDestFpu
 from .fpu.unary_broadcast import UnaryBroadcastFpu
 from .packer.matmul import MatmulPacker
-from .fpu.transpose_dest import TransposeDestFpu
 from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
@@ -198,7 +198,7 @@ UNPACKER_MAP = {
     "UnaryBroadcastUnpacker": (
         lambda s: UnaryBroadcastUnpacker(),
         [_broadcast_required, _no_transpose, _no_unpack_to_dest],
-    )
+    ),
 }
 
 FPU_MAP = {
@@ -250,6 +250,7 @@ FPU_MAP = {
             _no_broadcast,
             _no_transpose,
             _forced_unpacker("TransposeDestUnpacker"),
+            _only_32x32_tile,
         ],
     ),
     "UnaryBroadcast": (
@@ -262,7 +263,7 @@ FPU_MAP = {
             _only_32x32_tile,
             _forced_unpacker("UnaryBroadcastUnpacker"),
         ],
-    )
+    ),
 }
 
 _l1_acc_format = (
@@ -371,4 +372,11 @@ class OperationSchema(OperationSchemaBase):
     pack: List[PackEntrySchema] = Field(..., min_length=1)
 
     def _arch_validate(self):
-        pass
+        if (
+            self.math
+            and isinstance(self.math[0], FpuMathSchema)
+            and self.math[0].operation == "TransposeDest"
+        ):
+            raise ValueError(
+                "TransposeDest cannot be the first math operation: Dst must already contain data"
+            )
