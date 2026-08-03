@@ -29,9 +29,16 @@ resolved.
 
 ## Current milestone
 
-**M3 complete.** Packing, conditioning, scheduler, and the AdaLN precompute are
-all gated bit-exact on host. No device work yet. Next: **M4 — weight load at
-TP=4/SP=8**, the first step that needs a mesh.
+**M4 complete** — first successful device milestone. Host contracts (M2, M3) and
+the DiT weight load (M4) are all green.
+
+**Milestone order changed by user directive (2026-08-03): the VAEs come next**,
+ahead of the DiT forward and the text encoder. Video VAE decode + encode and
+audio VAE decode + encode, then back to M5/M6/M7. Good call independently: the
+ViT decoder was the plan's largest unknown, and the VAEs gate any visible output.
+
+Revised order: **M8 (VAEs) -> M5 (attention PCC) -> M6 (full DiT forward) ->
+M7 (Qwen3-VL) -> M9 (e2e) -> M10 (trace) -> M11 (canonical) -> M12 (perf + A/B)**.
 
 ## Gate evidence
 
@@ -41,7 +48,7 @@ TP=4/SP=8**, the first step that needs a mesh.
 | 2a | packing bit-exact vs diffusers `minimax-h3` | **PASS** | 48/48 exact checks vs reference across both working points, keyframe and t2va; then `test_packing_minimax_h3.py` **38 passed, 2 skipped** (skips = diffusers branch not installed) |
 | 2b | conditioning + scheduler bit-exact | **PASS** | scheduler: 16/16 exact vs reference incl. full 49-eval rollouts at shift 12.0 and 3.0; conditioning: noise stream + generator advance + fp16 recipe exact. Suite `models/tt_dit/tests/models/minimax_h3/`: **71 passed, 3 skipped** |
 | 3 | AdaLN precompute parity | **PASS** | real checkpoint: 196 (step, layer) projections + all 49 final-layer rows, **0 mismatches**, built in 6.8 s (`~/h3_adaln_build.log`, table at `~/h3_adaln_table.pt`). `test_adaln_precompute_minimax_h3.py` 13 passed; suite now **84 passed, 3 skipped** |
-| 4 | weight load at TP=4/SP=8, shapes/dtypes/fixups | not started | — |
+| 4 | weight load at TP=4/SP=8, shapes/dtypes/fixups | **PASS** | job 225 on the real 4x8 mesh: **4 passed in 90.7 s**, device closed cleanly. Shards read back off the mesh confirm both fixups landed; strict load consumed every key with none missing or unexpected |
 | 5 | attention block PCC >= 0.9995 | not started | — |
 | 6 | full 50-layer forward PCC >= 0.99 @ 960x544 | not started | — |
 | 7 | Qwen3-VL enc (50 layers, unnormalized) + vision tower PCC | not started | — |
@@ -93,6 +100,31 @@ the plan named — `{video,audio}_patch_proj.{weight,bias}`,
 - Build reads the 26 GB once, streaming one block at a time: 6.8 s warm page cache.
 - Rounding-order sensitivity quantified: activating in bf16 instead of fp32 shifts
   modulation by **7.8e-3**.
+
+## Video VAE architecture (read from `FL2VA/video_vae/source/config.json`)
+
+The real arch, which the outer `config.json` hides behind `source_path`:
+
+**Encoder — CNN, causal.** `ch=128`, `ch_mult=[1,2,2,4,4,8]` (so 128 -> 1024),
+`num_res_blocks=2`, `space_down=[2,2,2,2,1,1]` (16x), `time_down=[1,2,2,1,1,1]`
+(4x), `use_3d_conv=true`, `causal_encoder=true`, `padding_mode="reflect"`,
+`use_t_isolated_gn=true` (per-time-slice GroupNorm), `z_channels=24`.
+`pixel_norm_type="imagenet"` — independent confirmation of amendment 8.
+
+**Decoder — a 36-layer ViT, non-causal.** `use_vit_decoder=true`,
+`causal_decoder=false`, `num_layers=36`, `heads=32`, `dim_head=64` (inner 2048),
+`norm_type="rms_norm"` with `norm_affine=true`, `qk_norm_type="rms_norm"` with
+**`qk_norm_affine=false`** (no weight at all), `ffn_use_gated=true` +
+`ffn_activation_fn="silu"` (SwiGLU), 3D RoPE with `rope_dim_ratio=0.75` and
+**`rope_theta=100.0`**, `space_up=[1,2,2,2,2,1]`, `time_up=null`.
+
+This *lowers* the §9 "ViT-decoder primitives missing" risk. The decoder is a
+transformer, so it reuses `layers/linear.py`, `RMSNorm` and the attention
+machinery rather than needing new conv primitives; what `vae_ltx.py` /
+`vae_wan2_1.py` lack is not needed. The encoder is the part that wants the
+existing conv3d/halo infrastructure. Two genuine deltas to watch:
+`qk_norm_affine=false` means the qk norms carry no parameters, and `rope_theta`
+is 100.0 rather than the usual 10000.
 
 ## §9 verdicts
 
@@ -178,21 +210,47 @@ forbidden — it dropped all chips off PCIe on CPLD < 1.16.
 - `pytest.raises` is rejected by the `prefer-expect-error` pre-commit hook; the
   repo requires the `expect_error` fixture from `conftest.py:881`.
 - `pre-commit` needs `python_env/bin` on `PATH` or the commit aborts with
-  "`pre-commit` not found".
+  "`pre-commit` not found". black/autoflake reformat on first run and abort the
+  commit; re-add and re-commit. autoflake will strip an import the module no
+  longer uses even if a *test* reads it through the module — import it from its
+  real home instead.
+- `Module` is an ABC with `forward` abstract, so a parameter-owning container
+  cannot be instantiated for a load-only gate without declaring one.
+- tt_dit's plain `RMSNorm` defaults to **`bias=True`**; every H3 norm is
+  weight-only, so all of them need `bias=False`. `DistributedRMSNorm` asserts
+  `not bias` and is unaffected.
+- The broker appends `tt-metal` to `workspace`, so pass `workspace=/home/kevinmi`,
+  not the repo root.
+- Piping a device job to `tail -N` makes its log empty until exit — the known
+  buffering trap, hit again. Stream to a file, or read the broker's job output.
+
+## Device runs
+
+| Job | What | Result |
+|---|---|---|
+| 222 | M4 first attempt | 3 failed: `Module` ABC needs `forward`. 35 s, clean close |
+| 224 | M4 second attempt | 3 failed: `RMSNorm` bias keys missing. 90 s, clean close |
+| 225 | M4 | **4 passed, 90.7 s**, clean close, JIT cache 100% hits |
+
+Pre-run state for 225: device idle, `device_degraded` empty, no compute processes
+holding the mesh (broker MCP servers only), host `g03blx02`, TT-KMD 2.9.0.
+No hangs, no resets needed.
 
 ## Next step
 
-**M4 — `MiniMaxH3Checkpoint` and weight load at TP=4/SP=8.** Build the
-`Module`/`Parameter` tree and load `FL2VA/transformer` into it, verifying shapes,
-dtypes, and both load-time fixups without running a forward. Skip
-`blocks.*.adaln_proj.*` entirely — M3 replaced it.
+**M8a — video VAE encoder (CNN) on device.** The smaller and better-supported of
+the two halves, and the one FL2VA conditioning needs: keyframe encode is a single
+frame, so none of the 17-frame temporal chunking applies and only the spatial path
+runs. Build `models/tt_dit/models/vae/vae_minimax_h3.py` on the conv3d/halo
+infrastructure `vae_wan2_1.py` and `vae_ltx.py` already use
+(`ContextParallelConv3d`, `layers/conv3d.py`), with
+`VaeHWParallelConfig(height_parallel=(4,0), width_parallel=(8,1))`.
 
-The two fixups, both in `_prepare_torch_state` and both silent if wrong
-(amendments 5 and 6): reorder per-head-interleaved QKV to `[q_all; k_all; v_all]`
-before `ColParallelLinear(chunks=3)`, and swap `fc1`'s `[gate; value]` halves to
-`[value; gate]` *before* `permute_for_swiglu` does the cross-device interleave.
+Gate: encode a keyframe and match the CPU reference's `_encode_clip` moments, then
+the full recipe (sampled posterior at seed 42, fp16 round trip, normalize,
+patchify) against `conditioning.encode_keyframes` — which is already gated, so the
+only new surface is the conv stack. The seed-42 posterior sample stays on host and
+is passed in, per the plan.
 
-Gate: every expected key consumed, no unexpected keys, all 12 fp32 parameters
-still fp32 after load, and per-device shard shapes matching §3.2. First milestone
-needing a mesh — record `tt-smi` and processes before it, and reset proactively if
-mesh state is uncertain.
+Then **M8b** the 36-layer ViT decoder, **M8c** the audio VAE (BigVGAN decode
+first, DAC encode second), before returning to M5.
