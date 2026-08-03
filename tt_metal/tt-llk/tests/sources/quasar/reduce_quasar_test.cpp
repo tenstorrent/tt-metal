@@ -57,14 +57,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
+            const std::uint32_t scale_dvalids_per_tile = 1;
+            const std::uint32_t data_dvalids_per_tile  = num_faces;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
                     // Reduce unpack emits one persistent SrcB scale face,
                     // followed by all SrcA faces for each tile.
-                    _perf_unpack_loop_set_valid<false, true>(1);
-                    _perf_unpack_loop_set_valid<true, false>(num_faces);
+                    perf_unpack_set_srcb_once_then_srca_per_face(scale_dvalids_per_tile, data_dvalids_per_tile);
                 }
             }
         }
@@ -113,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
         if (use_int32_dest_alu)
@@ -146,12 +147,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
+            const std::uint32_t scale_dvalids_per_tile = 1;
+            const std::uint32_t data_dvalids_per_tile  = num_faces;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
-                    _perf_math_loop_clear_valid<true, false>(num_faces);
-                    _perf_math_loop_clear_valid<false, true>(1);
+                    perf_math_clear_srca_per_face_then_srcb_once(data_dvalids_per_tile, scale_dvalids_per_tile);
                 }
             }
         }
@@ -220,12 +222,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);

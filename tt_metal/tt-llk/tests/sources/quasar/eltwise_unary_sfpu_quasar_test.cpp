@@ -41,11 +41,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // same client chain.
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
         }
         else if constexpr (unpack_to_dest)
@@ -97,7 +97,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Quasar's 32-bit A2D datacopy is ELWADD and consumes SrcA
                 // plus the dummy SrcB dvalid emitted by the unpack MOP.
-                _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
+                const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
+                _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(src_handshake_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
@@ -154,12 +155,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // both the datacopy producer and the SFPU producer.
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
+                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -206,7 +207,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_math_loop_clear_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
+                const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
+                _perf_math_loop_clear_valid<true, is_fp32_dest_acc_en>(src_handshake_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
@@ -284,11 +286,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Declare the same dvalid client chain that UNPACK and MATH use.
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
         }
 
