@@ -16,6 +16,9 @@
 
 namespace tt::tt_fabric {
 class TopologyMapper;
+// Defined in tt_metal/fabric/skip_ring_topology.hpp. Held by pointer so the internal ring/domain
+// representation stays out of this public header.
+struct SkipRingTopology;
 
 using RoutingTable =
     std::vector<std::vector<std::vector<RoutingDirection>>>;  // [mesh_id][chip_id][target_chip_or_mesh_id]
@@ -23,13 +26,17 @@ using RoutingTable =
 class RoutingTableGenerator {
 public:
     explicit RoutingTableGenerator(const TopologyMapper& topology_mapper);
-    ~RoutingTableGenerator() = default;
+    ~RoutingTableGenerator();  // out of line: skip_rings_ holds an incomplete type
 
     void dump_to_yaml();
     void load_from_yaml();
 
     RoutingTable get_intra_mesh_table() const { return this->intra_mesh_table_; }
     RoutingTable get_inter_mesh_table() const { return this->inter_mesh_table_; }
+
+    // Ring decomposition of a mesh's skip axis, or nullptr when the mesh declares no skip links.
+    // The type stays incomplete here; only tt_metal/fabric consumers include its definition.
+    const SkipRingTopology* get_skip_rings(MeshId mesh_id) const;
 
     void print_routing_tables() const;
     // Return a list of all exit nodes, across all meshes that are connected to the requested
@@ -49,6 +56,8 @@ private:
 
     RoutingTable intra_mesh_table_;
     RoutingTable inter_mesh_table_;
+    // Per mesh, null when the mesh declares no skip links.
+    std::vector<std::unique_ptr<SkipRingTopology>> skip_rings_;
     std::unordered_map<MeshId, std::vector<FabricNodeId>> mesh_to_exit_nodes_;
     // Direct lookup table: [src_mesh][src_chip][dst_mesh] -> exit chip_id in src_mesh
     std::vector<std::vector<std::vector<ChipId>>> exit_node_lut_;

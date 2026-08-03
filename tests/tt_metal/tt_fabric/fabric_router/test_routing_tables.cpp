@@ -25,6 +25,7 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/skip_ring_topology.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
@@ -2397,15 +2398,15 @@ TEST(SkipLinkRouting, IntraMesh8x4Replay) {
     const auto& t = intra[0];
     ASSERT_EQ(t.size(), 32u);
 
-    // First hops under the strict-shorter policy (take Z only when it shortens the path). chip = row*4+col;
-    // [LINE, RING] with skip edges r2<->r5 per column.
+    // First hops under the ring policy. chip = row*4+col; [LINE, RING] with the span-4 chord r2<->r5
+    // and the span-8 chord r0<->r7 per column, fusing into one ring over rows {0,1,2,5,6,7}.
     using D = RoutingDirection;
     EXPECT_EQ(t[8][20], D::Z);  // skip endpoint
     EXPECT_EQ(t[20][8], D::Z);  // reverse
     EXPECT_EQ(t[4][24], D::S);  // base-then-Z: S toward the skip, Z taken later
     EXPECT_EQ(t[8][24], D::Z);  // skip then S
     EXPECT_EQ(t[8][12], D::S);  // adjacent, no skip
-    EXPECT_EQ(t[8][16], D::S);  // equal-length: stays on ring
+    EXPECT_EQ(t[8][16], D::Z);  // leaf row 4 is entered from its anchor row 5, not through leaf row 3
     EXPECT_EQ(t[0][1], D::E);   // base routing unperturbed
     EXPECT_EQ(t[0][4], D::S);
     EXPECT_EQ(t[8][9], D::E);
@@ -2442,35 +2443,23 @@ std::vector<std::vector<std::vector<tt::tt_fabric::RoutingDirection>>> build_ski
 // Walk the memoryless intra-mesh table for every same-column row pair along the skip (dim-0) axis
 // and assert the deadlock-free invariants of the generated table:
 //   * every route reaches its destination in bounded hops (loop-free / memoryless-consistent),
-//   * it uses at most ONE ring crossover (I5), where a crossover is a base N/S hop between two
-//     express nodes of DIFFERENT chord families (ring containment / I1).
+//   * a leaf is never an intermediate toward a destination outside its own skipped run,
+//   * it uses at most ONE ring crossover, and a crossing into the continuing family is terminal.
+// Ring membership comes from the derived decomposition rather than being re-derived from chord spans,
+// so a member that owns no chord (rows 1 and 14 of the merged 16-row ring) is treated as a member.
 // Consumes only the generated table + mesh graph -> no hardware.
-// merged_single_ring: the column is one merged ring (no dim-0 wrap, ex4+ex8 fused), so there is no
-// ex4<->ex8 crossover to bound -- only reachability + loop-freedom are checked. Otherwise the full
-// disjoint-ring invariants (<=1 crossover, dense->sparse terminal) are enforced.
 void assert_spine_deadlock_free(
     const tt::tt_fabric::MeshGraph& mesh_graph,
     const std::vector<std::vector<std::vector<tt::tt_fabric::RoutingDirection>>>& intra,
     int L0,
-    int row_size,
-    bool merged_single_ring = false) {
+    int row_size) {
     using D = tt::tt_fabric::RoutingDirection;
     const tt::tt_fabric::MeshId mesh{0};
     const auto& conn = mesh_graph.get_intra_mesh_connectivity()[0];
-    const int num_chips = static_cast<int>(conn.size());
 
-    // family[chip] = chord span (0 == no chord). Each express node has exactly one chord.
-    std::vector<int> family(num_chips, 0);
-    for (int u = 0; u < num_chips; ++u) {
-        const int ru = mesh_graph.chip_to_coordinate(mesh, u)[0];
-        for (const auto& [v, edge] : conn[u]) {
-            if (edge.port_direction == D::Z) {
-                const int rv = mesh_graph.chip_to_coordinate(mesh, v)[0];
-                const int d = (ru > rv) ? ru - rv : rv - ru;
-                family[u] = std::min(d, L0 - d);
-            }
-        }
-    }
+    const auto rings = tt::tt_fabric::derive_skip_ring_topology(mesh_graph, mesh);
+    ASSERT_TRUE(rings.has_value()) << "descriptor declares no skip links";
+    const auto row_of = [&](int chip) { return static_cast<int>(mesh_graph.chip_to_coordinate(mesh, chip)[0]); };
     const auto step = [&](int c, D dir) -> int {
         for (const auto& [v, edge] : conn[c]) {
             if (edge.port_direction == dir) {
@@ -2495,23 +2484,30 @@ void assert_spine_deadlock_free(
                         << "non-axis dir on spine route " << src << "->" << dst << " at chip " << cur;
                     const int nxt = step(cur, dir);
                     ASSERT_GE(nxt, 0) << "no neighbor for dir at chip " << cur;
-                    if (!merged_single_ring && dir != D::Z && family[cur] > 0 && family[nxt] > 0 &&
-                        family[cur] != family[nxt]) {
+                    const int cur_row = row_of(cur);
+                    const int nxt_row = row_of(nxt);
+                    // The table must be the ring policy, not merely compatible with it.
+                    EXPECT_EQ(nxt_row, rings->next_row(cur_row, rd))
+                        << "table hop at chip " << cur << " toward " << dst << " disagrees with the ring policy";
+                    // A leaf may only be passed through toward a destination inside its own run.
+                    if (cur != src && rings->is_leaf(cur_row)) {
+                        EXPECT_EQ(rings->leaf_run_of[cur_row], rings->leaf_run_of[rd])
+                            << "leaf row " << cur_row << " used as transit on spine route " << src << "->" << dst;
+                    }
+                    if (!rings->is_leaf(cur_row) && !rings->is_leaf(nxt_row) &&
+                        rings->domain_of[cur_row] != rings->domain_of[nxt_row]) {
                         ++crossovers;
-                        // Directional rule: a dense->sparse crossover (family/span INCREASES, e.g.
-                        // ex4->ex8) is only legal as the terminal delivery hop. Sparse->dense is free.
-                        if (family[nxt] > family[cur]) {
-                            EXPECT_EQ(nxt, dst) << "non-terminal dense->sparse crossover on spine route " << src << "->"
-                                                << dst << " (at chip " << cur << ")";
+                        // Crossing into the continuing family is terminal; the reverse acquires it.
+                        if (rings->domain_of[nxt_row] == rings->continue_src_domain) {
+                            EXPECT_EQ(nxt, dst) << "non-terminal crossing into the continuing family on spine route "
+                                                << src << "->" << dst << " (at chip " << cur << ")";
                         }
                     }
                     cur = nxt;
                     ASSERT_LE(++hops, L0 + 4) << "routing loop on spine route " << src << "->" << dst;
                 }
-                if (!merged_single_ring) {
-                    EXPECT_LE(crossovers, 1)
-                        << "spine route " << src << "->" << dst << " used " << crossovers << " crossovers";
-                }
+                EXPECT_LE(crossovers, 1)
+                    << "spine route " << src << "->" << dst << " used " << crossovers << " crossovers";
             }
         }
     }
@@ -2545,7 +2541,7 @@ TEST(SkipLinkRouting, IntraMesh16x4Merged) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_16x4_mesh_graph_descriptor.textproto", mg);
     ASSERT_EQ(intra.size(), 1u);
     ASSERT_EQ(intra[0].size(), 64u);
-    assert_spine_deadlock_free(*mg, intra, /*L0=*/16, /*row_size=*/4, /*merged_single_ring=*/true);
+    assert_spine_deadlock_free(*mg, intra, /*L0=*/16, /*row_size=*/4);
 }
 
 // 24x4 partial sub-torus (3 quads, NO Y-torus wrap): same merged single-ring regime as 16x4 -- dim-0
@@ -2560,7 +2556,7 @@ TEST(SkipLinkRouting, IntraMesh24x4Merged) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_24x4_mesh_graph_descriptor.textproto", mg);
     ASSERT_EQ(intra.size(), 1u);
     ASSERT_EQ(intra[0].size(), 96u);
-    assert_spine_deadlock_free(*mg, intra, /*L0=*/24, /*row_size=*/4, /*merged_single_ring=*/true);
+    assert_spine_deadlock_free(*mg, intra, /*L0=*/24, /*row_size=*/4);
 }
 
 // 32x4 four-quad galaxy: ex4 + ex8 sub-torus. Deadlock-free routing along the 32-row spine.
@@ -2633,7 +2629,7 @@ TEST_F(ControlPlaneFixture, PhysicalLowering8x4) {
         {4, 24, D::S, false},
         {8, 24, D::Z, false},
         {8, 12, D::S, true},
-        {8, 16, D::S, false},
+        {8, 16, D::Z, false},  // leaf row 4 entered from anchor row 5
         {0, 1, D::E, true},
         {0, 4, D::S, true},
         {8, 9, D::E, true},
@@ -2791,6 +2787,82 @@ TEST_F(ControlPlaneFixture, PhysicalLowering24x4) {
             }
         }
     }
+}
+
+// The canonical logical route query must reconstruct the same path the table walks, and must
+// complete the skip axis before turning onto X. chip = row*4 + col on the 8x4 fixture.
+TEST_F(ControlPlaneFixture, CanonicalRoute8x4) {
+    if (!skip_link_cluster_available()) {
+        GTEST_SKIP() << kNoClusterSkipMsg;
+    }
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(
+        desc_path,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
+
+    const auto node = [](int chip) {
+        return tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(chip)};
+    };
+    const auto chips = [&](const std::vector<tt::tt_fabric::FabricNodeId>& route) {
+        std::vector<int> out;
+        for (const auto& n : route) {
+            out.push_back(static_cast<int>(n.chip_id));
+        }
+        return out;
+    };
+
+    EXPECT_TRUE(control_plane->express_routing_enabled(tt::tt_fabric::MeshId{0}));
+
+    // Rows 0->5 on the single family [0,1,2,5,6,7]: an exact 3-vs-3 tie taking canonical forward,
+    // so the walk is rows 0,1,2 then the span-4 chord to 5.
+    EXPECT_EQ(chips(control_plane->get_canonical_intramesh_route(node(0), node(20))), (std::vector<int>{0, 4, 8, 20}));
+    // Same Y route, then one X hop -- Y must complete before X.
+    EXPECT_EQ(
+        chips(control_plane->get_canonical_intramesh_route(node(0), node(21))), (std::vector<int>{0, 4, 8, 20, 21}));
+    // Destination leaf row 3 is entered from its anchor row 2, never through paired leaf row 4.
+    EXPECT_EQ(chips(control_plane->get_canonical_intramesh_route(node(20), node(12))), (std::vector<int>{20, 8, 12}));
+}
+
+// The §8.2 node/direction predicates on the two-family fixture: ex8 may continue into ex4, the
+// reverse crossing is terminal, and leaves carry no protected ring.
+TEST_F(ControlPlaneFixture, RingPredicates32x4) {
+    if (!skip_link_cluster_available()) {
+        GTEST_SKIP() << kNoClusterSkipMsg;
+    }
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_32x4_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(
+        desc_path,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+
+    using D = tt::tt_fabric::RoutingDirection;
+    using Dim = tt::tt_fabric::RoutingDimension;
+    const auto row = [](int r) {  // column 0
+        return tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(r * 4)};
+    };
+
+    EXPECT_TRUE(control_plane->express_routing_enabled(tt::tt_fabric::MeshId{0}));
+    EXPECT_TRUE(control_plane->has_protected_ring(row(2), Dim::Y));   // ex4 member
+    EXPECT_TRUE(control_plane->has_protected_ring(row(0), Dim::Y));   // ex8 member
+    EXPECT_FALSE(control_plane->has_protected_ring(row(3), Dim::Y));  // leaf
+    EXPECT_TRUE(control_plane->has_protected_ring(row(3), Dim::X));   // X closes at every row
+
+    // Row 0 rides ex8 over its chord to row 7; its S neighbour row 1 is ex4, so that edge is a
+    // crossover and belongs to neither ring.
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(row(0), D::Z));
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(row(0), D::S));
+
+    // Row 2 arrives from row 1 and leaves over the ex4 chord to row 5 -- one orientation, one ring.
+    EXPECT_TRUE(control_plane->are_same_directed_ring_edges(row(2), D::N, D::Z));
+
+    // ex8 -> ex4 may continue; ex4 -> ex8 is terminal.
+    EXPECT_TRUE(control_plane->continuation_allowed(row(1), D::N, D::S));
+    EXPECT_FALSE(control_plane->continuation_allowed(row(0), D::S, D::Z));
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
