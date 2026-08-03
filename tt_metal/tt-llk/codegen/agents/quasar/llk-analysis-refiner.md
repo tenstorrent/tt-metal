@@ -92,8 +92,10 @@ Read, in order:
    - **Optional waveform sections** — a `findings` status and its linked
      `evidence.json` are deterministic positive evidence. Cross-check the
      finding against the failed source and other attempts. `unavailable`,
-     `failed`, and `inconclusive` only record tool availability and must not
-     affect classification or cause escalation.
+     `failed`, and `skipped` mean the tool contributed nothing; `inconclusive`
+     means it ran and no detector matched — which is not evidence about the
+     kernel either. None of the four may affect classification or cause
+     escalation.
 2. **Writer log** — did the writer follow the analysis or improvise? Faithful writer + persistent failure = analysis bug. Either way the refined analysis must be explicit enough that no writer can improvise into the same hole.
 3. **Original analysis** — the thing under evaluation; read end-to-end.
 4. **Failed kernel** — diff-inspect against §6b pseudocode; find where it matched the plan and where it deviated.

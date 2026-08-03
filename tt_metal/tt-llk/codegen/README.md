@@ -37,6 +37,9 @@ prompt. `codegen/scripts/llk_debug.py` is a thin launcher for the implementation
 in the private `llk_code_gen` checkout on Weka. RTL paths, architecture profiles,
 detectors, detailed examples, and FSDB-derived artifacts remain private.
 
+The private tool currently ships signal profiles for **Quasar only**, and
+diagnoses core `gen_y[1].gen_x[0]` unless given an explicit `--scope`.
+
 The launcher uses `/proj_sw/user_dev/llk_code_gen` by default. Set
 `LLK_CODEGEN_PRIVATE_ROOT` when the private repository is mounted elsewhere:
 
@@ -49,12 +52,19 @@ The tester reserves its first three simulator attempts for normal log/source
 debugging. Only after all three fail do attempts 4 and 5 become
 waveform-assisted. For an eligible runtime failure in those late attempts, it
 invokes `codegen/scripts/optional_wave_debug.py`. The bridge enforces this
-boundary, appends its status and deterministic findings to the existing
+boundary, appends its status and deterministic findings to
 `agent_tester_cycleN.md`, and keeps private output below the existing
 `test_logs_cycleN/` directory. It does not add a dashboard step or modify
 `run.json`. Missing private tooling, missing FSDBs, backend errors, and timeouts
 are recorded and remain non-fatal, so normal code generation and refinement
 continue.
+
+Its own tests need `--noconftest`, because the repository-root `conftest.py`
+imports `ttnn`:
+
+```bash
+python -m pytest codegen/scripts/test_optional_wave_debug.py --noconftest
+```
 
 For interactive Claude Code use, invoke
 `/llk-wave-debug /path/to/failure.fsdb failure=hang`. The skill is defined in

@@ -301,11 +301,15 @@ pre-ready `ENV_ERROR`, or sibling-confirmed environment failure.
 
 The bridge uses the existing tester outputs:
 
-- it appends a short section to `{LOG_DIR}/agent_tester_cycle{N}.md`;
+- it appends a short section to `{LOG_DIR}/agent_tester_cycle{N}.md`, creating
+  that file only if you have not written it yet;
 - private raw evidence goes under
   `{LOG_DIR}/test_logs_cycle{N}/wave_debug_attempt{ATTEMPT}/`;
 - it does not add a dashboard step, modify `run.json`, or create a new run-result
   schema.
+
+Diagnosis defaults to Quasar core `gen_y[1].gen_x[0]`. That is the harness core,
+so leave it alone unless the failing test moved — then pass `--scope`.
 
 Map the classified failure to `hang`, `timeout`, `mismatch`, or `unknown`, then
 run:
@@ -334,14 +338,18 @@ missing FSDB, backend failure, timeout, invalid evidence file, or bridge error
 must be recorded and then ignored for control flow. It does not consume a
 simulator attempt, never launches an additional simulator run, and never changes
 `PASS`/`STUCK`/`ENV_ERROR`. The bridge itself enforces the attempt boundary:
-calls with `--attempt 1`, `2`, or `3` return `status=skipped` without touching
+calls with `--attempt` outside 4–5 return `status=skipped` without touching
 waveform inputs or tester output files.
 
 When the status is `findings`, read the listed classification, summary, and
 `evidence.json` before Step 3. Treat it as deterministic positive evidence, but
-still apply the contradiction check. When status is `unavailable`, `failed`, or
-`inconclusive`, continue with R1–R6 exactly as before; absence of waveform
-evidence is not evidence about the kernel.
+still apply the contradiction check.
+
+`findings` and `inconclusive` are the only statuses the private tool itself
+writes into `evidence.json`; `unavailable`, `failed`, and `skipped` are bridge
+statuses with no `evidence.json` behind them — do not go looking for one. For
+any of the four non-`findings` statuses, continue with R1–R6 exactly as before;
+absence of waveform evidence is not evidence about the kernel.
 
 ---
 

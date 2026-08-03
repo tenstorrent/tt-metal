@@ -17,6 +17,9 @@ from typing import Sequence
 
 FSDB_ENV = "LLK_DEBUG_FSDB"
 INSECURE_HOST_KEY_ENV = "LLK_DEBUG_INSECURE_HOST_KEY"
+# Mirrors the private tool's own --host default so FSDB paths are validated
+# against the filesystem the backend will actually read them from.
+HOST_ENVS = ("LLK_DEBUG_HOST", "SSH_MACHINE_NAME")
 SIMULATOR_ATTEMPT_LIMIT = 5
 WAVE_DEBUG_FIRST_ATTEMPT = 4
 _FSDB_PATH = re.compile(r"(/[^\s\"'`]+?\.fsdb)(?=$|[\s\"'`,;:)])")
@@ -32,12 +35,7 @@ class WaveDebugOutcome:
 def wave_debug_eligible(attempt: int) -> bool:
     """Return whether this simulator attempt belongs to the wave-assisted phase."""
 
-    if not 1 <= attempt <= SIMULATOR_ATTEMPT_LIMIT:
-        raise ValueError(
-            "simulator attempt must be between 1 and "
-            f"{SIMULATOR_ATTEMPT_LIMIT}, got {attempt}"
-        )
-    return attempt >= WAVE_DEBUG_FIRST_ATTEMPT
+    return WAVE_DEBUG_FIRST_ATTEMPT <= attempt <= SIMULATOR_ATTEMPT_LIMIT
 
 
 def _single_line(value: object) -> str:
@@ -93,7 +91,17 @@ def _append_tester_log(
         stream.write("\n".join(lines))
 
 
-def _fsdb_from_run_log(run_log: Path) -> str | None:
+def _backend_host(environment: dict[str, str]) -> str | None:
+    """Return the SSH host the private backend will use, or None when local."""
+
+    for name in HOST_ENVS:
+        host = environment.get(name)
+        if host:
+            return host
+    return None
+
+
+def _fsdb_from_run_log(run_log: Path, *, remote: bool) -> str | None:
     if not run_log.is_file():
         return None
     try:
@@ -102,7 +110,9 @@ def _fsdb_from_run_log(run_log: Path) -> str | None:
         return None
     matches = _FSDB_PATH.findall(text)
     for candidate in reversed(matches):
-        if Path(candidate).is_file():
+        # A remote FSDB is never visible locally, so only a local backend can
+        # discriminate between candidates by existence.
+        if remote or Path(candidate).is_file():
             return candidate
     return None
 
@@ -110,16 +120,20 @@ def _fsdb_from_run_log(run_log: Path) -> str | None:
 def _resolve_fsdb(
     requested: str | None, *, run_log: Path, environment: dict[str, str]
 ) -> tuple[str | None, str | None]:
-    candidate = requested or environment.get(FSDB_ENV) or _fsdb_from_run_log(run_log)
+    host = _backend_host(environment)
+    candidate = (
+        requested
+        or environment.get(FSDB_ENV)
+        or _fsdb_from_run_log(run_log, remote=host is not None)
+    )
     if not candidate:
         return None, (
             f"no FSDB was supplied, {FSDB_ENV} is unset, and no existing FSDB "
             f"path was found in {run_log}"
         )
-    path = Path(candidate)
-    if not path.is_file():
+    if host is None and not Path(candidate).is_file():
         return None, f"FSDB does not exist or is not readable: {candidate}"
-    return str(path), None
+    return str(Path(candidate)), None
 
 
 def run_optional_wave_debug(
@@ -131,20 +145,27 @@ def run_optional_wave_debug(
     fsdb: str | None,
     launcher: Path,
     timeout_seconds: int,
+    arch: str | None = None,
+    scope: str | None = None,
     environment: dict[str, str] | None = None,
 ) -> WaveDebugOutcome:
     """Run private diagnosis only during attempts 4-5; always remain fail-open."""
 
     env = dict(os.environ if environment is None else environment)
     if not wave_debug_eligible(attempt):
-        return WaveDebugOutcome(
-            "skipped",
-            (
+        if not 1 <= attempt <= SIMULATOR_ATTEMPT_LIMIT:
+            reason = (
+                f"simulator attempt {attempt} is outside the 1-"
+                f"{SIMULATOR_ATTEMPT_LIMIT} budget; there is no completed "
+                "simulator run to diagnose"
+            )
+        else:
+            reason = (
                 f"attempt {attempt} is in the log/source-only phase; waveform "
                 f"debugging starts after {WAVE_DEBUG_FIRST_ATTEMPT - 1} failed "
                 "simulator attempts"
-            ),
-        )
+            )
+        return WaveDebugOutcome("skipped", reason)
 
     agent_log = log_dir / f"agent_tester_cycle{cycle}.md"
     test_log_dir = log_dir / f"test_logs_cycle{cycle}"
@@ -176,6 +197,12 @@ def run_optional_wave_debug(
         "--output-dir",
         str(output_dir),
     ]
+    # Left unset, the private tool defaults to its Quasar profile and core
+    # gen_y[1].gen_x[0]; any other arch or core must be named explicitly.
+    if arch:
+        command += ["--arch", arch]
+    if scope:
+        command += ["--scope", scope]
     if env.get(INSECURE_HOST_KEY_ENV, "").lower() in {"1", "true", "yes"}:
         command.append("--insecure-host-key")
     command.append(resolved_fsdb)
@@ -278,6 +305,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="unknown",
     )
     parser.add_argument("--fsdb")
+    parser.add_argument(
+        "--arch", help="Override the private tool's default architecture profile"
+    )
+    parser.add_argument(
+        "--scope", help="Override the private tool's default core scope"
+    )
     parser.add_argument("--timeout-seconds", type=int, default=300)
     return parser
 
@@ -294,6 +327,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             fsdb=args.fsdb,
             launcher=launcher,
             timeout_seconds=args.timeout_seconds,
+            arch=args.arch,
+            scope=args.scope,
         )
         print(f"WAVE_DEBUG status={outcome.status} summary={outcome.summary}")
     except Exception as error:

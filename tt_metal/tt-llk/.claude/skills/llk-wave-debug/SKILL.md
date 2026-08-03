@@ -1,6 +1,7 @@
 ---
 name: llk-wave-debug
-description: Diagnose LLK runtime hangs, timeouts, data mismatches, and no-progress failures from VCS FSDB waveforms using deterministic private Weka tooling. Use when an LLK test produces an .fsdb path, the user asks to inspect waves or VCS, or normal log/source debugging cannot localize a Quasar runtime failure. Do not use for compile errors or pre-ready environment failures.
+description: Inspect VCS/FSDB waveforms to localize a Quasar LLK runtime failure. Use when a test hangs, times out, or mismatches and log/source debugging cannot pin the boundary. Quasar only; not for compile errors.
+user_invocable: true
 ---
 
 # /llk-wave-debug — Deterministic LLK waveform diagnosis
@@ -16,23 +17,37 @@ running the deterministic diagnosis.
 /llk-wave-debug diagnose waves from the latest Quasar CodeGen failure
 ```
 
+## Scope
+
+**Quasar only.** The private tool ships signal profiles for `quasar` and
+nothing else; `--arch blackhole` or `--arch wormhole` fails with
+`unsupported architecture ... currently available: quasar`. For a WH/BH runtime
+failure use `/debug-kernel` instead.
+
+Do not invoke this skill for compilation failures, simulator failures before the
+device-ready marker, or confirmed environment failures.
+
 ## Inputs
 
 - Obtain the failing `.fsdb` path from the user, `LLK_DEBUG_FSDB`, or the
   applicable tester `run.log`.
 - Classify the observed failure as `hang`, `timeout`, `mismatch`, or `unknown`.
+- Identify the **core under test**. Diagnosis defaults to scope
+  `gen_y[1].gen_x[0]`; a failure on any other core needs an explicit `--scope`
+  or every signal silently fails to resolve.
 - For a CodeGen run, obtain its `LOG_DIR`, cycle, and simulator-attempt number.
 
-Do not generate a new waveform unless the user explicitly asks for another VCS
-run. Do not invoke this skill for compilation failures, simulator failures
-before the device-ready marker, or confirmed environment failures.
+If the test has not produced an FSDB yet, the sanctioned way to get one is the
+tool's own `capture` subcommand — do not hand-roll a VCS re-run, and do not
+capture at all unless the user explicitly asks for another simulator run.
 
 ## Security boundary
 
 - Keep FSDBs, catalogues, traces, resolved RTL paths, and evidence bundles on
   Weka. Never add them to a tt-metal commit or PR.
 - Keep architecture profiles, signal-resolution rules, and detectors in the
-  private `llk_code_gen` repository. Never copy them into this skill.
+  private `llk_code_gen` repository. Never copy them into this skill — that is
+  why this file names no signal, profile, or detector.
 - Report logical signal names and detector classifications by default. Include
   raw RTL hierarchy only when the user explicitly needs it in a private
   debugging context.
@@ -48,10 +63,16 @@ python codegen/scripts/llk_debug.py --version
 ```
 
 The launcher resolves `/proj_sw/user_dev/llk_code_gen` by default. Use
-`LLK_CODEGEN_PRIVATE_ROOT` only when the private checkout is mounted elsewhere.
+`LLK_CODEGEN_PRIVATE_ROOT` only when the private checkout is mounted elsewhere;
+every path in this skill is then relative to that root instead.
+
 If the launcher or private checkout is unavailable, record the exact error and
 continue ordinary log/source diagnosis. Waveform tooling must not block a
 CodeGen run.
+
+`--version` proves only that the private entry point loads. Use
+`python codegen/scripts/llk_debug.py --help` for the current subcommand list
+rather than assuming the set documented here is complete.
 
 ### 2. Choose the execution path
 
@@ -70,14 +91,17 @@ The tester's fixed policy is attempts 1–3 without waveform tooling, followed b
 waveform-assisted attempts 4–5 only if the first three simulator attempts
 failed. Do not invoke this bridge for attempts 1–3; it independently enforces
 the boundary and returns `status=skipped` without reading an FSDB or writing
-tester artifacts.
+tester artifacts. An `--attempt` outside 1–5 also returns `skipped`.
 
 Omit `--fsdb` when `LLK_DEBUG_FSDB` is set or the existing
-`test_logs_cycleN/run.log` names the waveform. The bridge appends to the
-existing `agent_tester_cycleN.md` and writes private output under
+`test_logs_cycleN/run.log` names the waveform. Pass `--scope` (and `--arch`,
+once more than one is supported) when the failing core is not the default.
+
+The bridge appends to `agent_tester_cycleN.md`, creating it only if the tester
+has not written it yet, and puts private output under
 `test_logs_cycleN/wave_debug_attemptN/`. It deliberately returns zero for
 missing tooling, missing waveforms, backend errors, timeouts, and malformed
-evidence. Read the appended status; do not infer success from the exit code.
+evidence. **Read the appended status; do not infer success from the exit code.**
 
 For an interactive diagnosis outside a CodeGen run, write output to a private
 Weka directory:
@@ -89,21 +113,47 @@ python codegen/scripts/llk_debug.py diagnose \
   "$FSDB"
 ```
 
-The tool uses `LLK_DEBUG_HOST` or the existing `SSH_MACHINE_NAME` when the FSDB
-backend is remote. Do not require a host argument when the current environment
-already resolves the backend. Use `--insecure-host-key` only for an intentionally
-ephemeral internal host.
+`diagnose` writes `evidence.json` (for you) and `evidence.md` (for a human)
+into `--output-dir`, alongside the trace, summary, catalogue, and resolution
+records.
+
+#### Remote FSDBs
+
+The tool reads the FSDB over SSH when `LLK_DEBUG_HOST` or the existing
+`SSH_MACHINE_NAME` is set, and locally otherwise. Do not pass a host argument
+when the environment already resolves the backend. Use `--insecure-host-key`
+only for an intentionally ephemeral internal host.
+
+A remote FSDB is not visible on the local filesystem, so do not "verify" the
+path with `ls` before diagnosing — a remote-mode path that fails a local stat
+is expected, not an error. When a host is set, the tool also needs the Aether
+workspace: `LLK_DEBUG_REMOTE_CWD` or `AETHER_WORKSPACE`, unless it can infer
+one from the FSDB path.
 
 ### 3. Interpret evidence
 
-Read `evidence.json` before proposing a cause:
+Two different status vocabularies are in play. Do not conflate them.
 
-- `status: findings` means one or more registered deterministic detectors
-  matched. Report the highest-severity causal finding first.
-- `status: inconclusive` means no registered detector matched. It is not
+`evidence.json` — written by the private tool, and only ever one of:
+
+- `status: findings` — one or more registered deterministic detectors matched.
+  Report the highest-severity causal finding first.
+- `status: inconclusive` — no registered detector matched. This is **not**
   evidence that the kernel is correct.
-- `unavailable` or `failed` means waveform diagnosis contributed no evidence.
-  Continue normal debugging without changing the tester outcome.
+
+The bridge's tester-log status — a superset that also covers the cases where no
+`evidence.json` exists at all:
+
+| Status | Meaning | What to do |
+|--------|---------|------------|
+| `findings` | Detectors matched; `evidence.json` present | Cross-check, then report |
+| `inconclusive` | Tool ran, nothing matched; `evidence.json` present | Go to step 4 |
+| `unavailable` | No FSDB, or no private checkout/launcher | Continue log/source diagnosis |
+| `failed` | Backend error, timeout, non-zero exit, or unparsable evidence | Read `command.stderr.log`, then continue log/source diagnosis |
+| `skipped` | Attempt outside 4–5 | Nothing to do; not a failure |
+
+For `unavailable`, `failed`, and `skipped` there is no `evidence.json` to read —
+waveform diagnosis contributed nothing, and the tester outcome is unchanged.
 
 Cross-check each finding against the failed kernel, tester log, and capture time
 range. Treat generic PC no-progress or terminal quiescence as an effect unless
@@ -112,16 +162,42 @@ the evidence establishes that it is the earliest causal boundary. Include the
 
 ### 4. Handle an inconclusive result
 
-Use `signals`, `query`, `summarize`, and `compare` only to answer a specific
-unresolved question. Read the private command reference first:
+Read the private command reference before reaching for a subcommand:
 
 ```text
-/proj_sw/user_dev/llk_code_gen/tools/llk_wave_debug/codegen/llk_debug/README.md
+$LLK_CODEGEN_PRIVATE_ROOT/tools/llk_wave_debug/codegen/llk_debug/README.md
 ```
+
+It documents every subcommand, the available signal profiles, and the
+recommended progression for an unfamiliar failure:
+
+```text
+inspect → signals → query/summarize → diagnose
+```
+
+Start with `inspect` — an FSDB truncated by a simulator crash or a size cap
+looks exactly like a quiescent design to the detectors, and only its metadata
+and time range distinguish the two. Then use `signals`, `query`, `summarize`,
+`compare` (passing vs failing run), `utilization` (is the FPU doing anything at
+all), or `detect` (re-run detectors on an existing `trace.json`) to answer one
+specific unresolved question — not to browse.
 
 Prefer logical profiles and names over hard-coded hierarchy. When a new
 invariant is proven, add its detector and synthetic unit trace to the private
 repository; do not extend this skill with signal paths.
+
+## Common failures
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `LLK waveform debugger is not available` (exit 2) | Private checkout absent | Set `LLK_CODEGEN_PRIVATE_ROOT`, or continue without waves |
+| `failed to run fsdbdebug: ... No such file or directory` | Verdi/FSDB toolchain not on `PATH` in local mode | Diagnose from the sim host via `LLK_DEBUG_HOST`/`SSH_MACHINE_NAME`, which sources the toolchain there |
+| `no signals selected or resolved` | Wrong `--scope` for the failing core | Pass the core's actual scope; confirm with `signals` |
+| `unsupported architecture ...` | Non-Quasar arch requested | Out of scope — use `/debug-kernel` |
+| `selection resolved N signals, exceeding --limit` | Too broad a `--match`/profile set | Narrow the selection or raise `--limit` |
+| `--remote-cwd is required when the SSH setup script is relative` | Host set, workspace not inferable | Set `LLK_DEBUG_REMOTE_CWD` or `AETHER_WORKSPACE` |
+| `SSH FSDB command failed` | Host unreachable or toolchain missing there | Verify the host; check `command.stderr.log` |
+| `FSDB does not exist or is not readable` | Local mode, but the FSDB is on the sim host | Set `LLK_DEBUG_HOST`/`SSH_MACHINE_NAME` |
 
 ## Report
 
