@@ -69,10 +69,6 @@ HACK_AHEAD = 2
 #: NOC_0. A real interior optimum: -4.7 / -2.6 / -1.1 % at 3.
 WD_SPLIT = 3
 
-#: Move the UP half of the reduce gather to the reader's NoC, leaving GATE on the writer's, so each
-#: RISC-V owns one accumulator CB outright. -1.45 % on the median.
-SCATTER_NOC_SPLIT = True
-
 #: `/perf-measure` ablation hook: one transport stubbed, all CB scaffolding intact. NOT a
 #: correctness mode — edit this to measure, never to ship. `+`-separated, cumulative.
 ABLATE = ""

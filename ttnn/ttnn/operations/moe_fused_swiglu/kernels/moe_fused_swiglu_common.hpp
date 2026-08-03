@@ -26,6 +26,40 @@ constexpr uint32_t MBOX_M_BLOCKS = 2;  // ceil(M_t / M_BLOCK) — the outer-loop
 constexpr uint32_t MBOX_READY = 3;     // == MAILBOX_MAGIC once words 0..2 are valid
 
 // ---------------------------------------------------------------------------
+// The mailbox handshake. The reader fills words 0..2 and then stamps MAGIC into word 3; the writer
+// and all three compute TRISCs spin on word 3 and only then read 0..2. Written here once because
+// the spin appeared in three files and differed only in how it invalidated the cache line.
+//
+// Raw L1 rather than a CB because the M-block trip count must be identical on all three TRISCs and
+// `cb_wait_front` in a compute kernel is UNPACK-only, so a CB handoff would let MATH and PACK
+// diverge from UNPACK.
+struct Mailbox {
+    uint32_t count, m_t, m_blocks;
+};
+
+//: The reader's publish. The fence orders the three payload words BEFORE the magic, so a peer that
+//: sees the magic sees the payload.
+inline void mailbox_publish(uint32_t addr, uint32_t magic, uint32_t count, uint32_t m_t, uint32_t m_blocks) {
+    volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    mb[MBOX_COUNT] = count;
+    mb[MBOX_M_T] = m_t;
+    mb[MBOX_M_BLOCKS] = m_blocks;
+    asm volatile("fence" ::: "memory");
+    mb[MBOX_READY] = magic;
+}
+
+//: The consumer side. `invalidate` is the dataflow kernels' cache invalidation; compute passes a
+//: plain fence instead, because it must not see the dataflow API.
+template <class Invalidate>
+inline Mailbox mailbox_wait(uint32_t addr, uint32_t magic, Invalidate invalidate) {
+    volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    while (mb[MBOX_READY] != magic) {
+        invalidate();
+    }
+    return Mailbox{mb[MBOX_COUNT], mb[MBOX_M_T], mb[MBOX_M_BLOCKS]};
+}
+
+// ---------------------------------------------------------------------------
 // `m_tiles` — the RUNTIME token tile-rows worked per M-block (op_design.md §3).
 //
 // SINGLE SOURCE OF TRUTH, called from ALL THREE kernels: the reader's x-multicast round count and

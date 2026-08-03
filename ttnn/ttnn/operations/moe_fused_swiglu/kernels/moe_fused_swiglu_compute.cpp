@@ -4,26 +4,22 @@
 // moe_fused_swiglu — COMPUTE.
 //
 // Per M-block, on every one of the HGROUPS x KGROUPS worker cores:
-//   1. fused tilize of the row-major x slice this core injects (bf16 path only);
-//   2. gate matmul and up matmul over the SAME resident x block (one K-block == the whole
-//      per-row K extent, so `in0_policy = WaitAndRetainOnLastBlock` retains it for both and the
-//      kernel pops it once at the end — the "cb_x_tiles consumed twice" contract, and NOT a
-//      second multicast of x);
-//   3. the cross-column reduce + SwiGLU epilogue, in ONE OF TWO SHAPES (MOE_SWIGLU_REDUCE):
-//        `tree`    — the reduce adds funnel whole blocks up a binary tree (in-place FPU add per
-//                    child) and the ROOT alone runs the epilogue: its final gate add carries SiLU on
-//                    the PACKER thread, walked m_eff times, then the SwiGLU multiply through L1;
-//        `scatter` — PERF 2, the default. Every core reduces only its OWN SLICE of the block over all
-//                    KGROUPS contributors and runs the epilogue on that slice, so the epilogue — 85 %
-//                    of the shipped stage's cost, dominated by the 48-tile SFPU SiLU — is
-//                    parallelised KGROUPS ways and the m_eff-call bias walk collapses to one call;
+//   1. fused tilize of the row-major x slice this core injects (bf16 activation path only);
+//   2. gate and up matmuls over the SAME resident x block, interleaved chunk by chunk over the
+//      hidden axis. One K-block == the whole per-row K extent, so `WaitAndRetainOnLastBlock`
+//      retains x for both and the kernel pops it once at the end;
+//   3. the reduce-scatter + SwiGLU epilogue: every core folds only ITS OWN SLICE over all KGROUPS
+//      contributors and runs the epilogue on that slice, so the SFPU SiLU — the dominant cost —
+//      is parallelised KGROUPS ways and the bias walk collapses to one call;
 //   4. the `down` matmul over HGROUPS phase-2 K-blocks with packer L1 accumulation, then the one
 //      genuine dtype boundary (bf16 partials -> bfp8 output).
 //
-// Everything here is a kernel_lib helper. The ONE raw access is the L1 mailbox read of the
-// device-resident token count: the M-block trip count must be identical on all three TRISCs, and
-// `cb_wait_front` in a compute kernel is UNPACK-only, so a CB handoff would let MATH/PACK diverge.
-
+// Everything here is a kernel_lib helper except `fold_dest`, which needs a runtime tile offset that
+// compile-time element specs cannot express. The ONE raw access is the L1 mailbox read of the token
+// count: the M-block trip count must be identical on all three TRISCs, and `cb_wait_front` in a
+// compute kernel is UNPACK-only, so a CB handoff would let MATH and PACK diverge.
+//
+// The measurement behind every choice here is in perf_experiments/DESIGN_NOTES.md.
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -96,53 +92,22 @@ constexpr uint32_t cb_h_slice = CT(CB_H_SLICE);
 constexpr uint32_t TILE_H = 32;
 
 // ---------------------------------------------------------------------------
-// PERF 1 — BLOCKED ELTWISE PASSES.
-//
-// `input(cb)` / `output(cb)` default to per-TILE wait/pop/reserve/push, and `eltwise_chain` only
-// honours a block size when every CB reader uses `Upfront` / `Cumulative` / `None+None` /
-// `PerChunk+PerChunk` (`eltwise_chain.inl:1511`); otherwise it SILENTLY clamps `block_size` to 1
-// (`eltwise_chain.inl:3054`). So the convenient spelling costs one full DEST sync round trip PER
-// TILE against a DEST budget of 8. These specs opt into the chunked lifecycle so the same math runs
-// in `ceil(n / ELTWISE_BLK)` DEST windows instead of `n`.
-//
-// The tail is safe by construction: numeric `EltwiseShape::tiles(n, blk)` uses
-// `BlockTailSync::ValidTiles`, so the last window synchronizes only its valid remainder and the
-// per-CB wait/pop/reserve/push TOTALS are unchanged — which is what the cross-core reduce requires,
-// since the child ships and the parent consumes whole `m_eff * HN_PAD` blocks (6/12/24/48 tiles).
-// ELTWISE_BLK == 1 collapses every one of these back to the pre-Perf-1 shape.
-// `OperandKind::Block` is REQUIRED, not decorative: `is_legal_input_policy_for_kind`
-// (`eltwise_chain.inl:152-172`) admits `PerChunk+PerChunk` only for `Block`. The default `Scalar`
-// kind pins the read to tile 0 and relies on the per-tile POP to advance the CB read pointer — which
-// is precisely the mechanism a chunked lifecycle removes, so the index has to advance with the walk
-// instead. Getting this wrong is a compile error, not a silent wrong answer.
+// BLOCKED ELTWISE PASSES. `input(cb)`/`output(cb)` default to per-TILE lifecycles, and
+// `eltwise_chain` SILENTLY clamps `block_size` to 1 unless every CB uses a compatible policy — so
+// the convenient spelling costs one full DEST sync round trip PER TILE against a budget of 8.
+// These specs opt into the chunked lifecycle; `OperandKind::Block` is required, not decorative
+// (getting it wrong is a compile error, not a wrong answer). See DESIGN_NOTES.md §7.
 constexpr auto blk_in(uint32_t cb) { return input(cb, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block); }
 constexpr auto blk_out(uint32_t cb) { return output(cb, ReservePolicy::PerChunk, PushPolicy::PerChunk); }
 ALWI auto blk_shape(uint32_t n) { return EltwiseShape::tiles(n, ELTWISE_BLK); }
 
-// `dest_acc` — the running sum lives in DEST for the WHOLE fold and is packed to L1 exactly ONCE.
+// `dest_acc` — the running sum lives in DEST for the WHOLE fold, packed to L1 exactly ONCE.
+// `add_tiles_init(IN, IN, acc_to_dest=true)` makes `add_tiles` compute `DEST[dst] += A + B`, so one
+// call folds TWO contributors with no repack between. Worth nc-1 packs, nc-1 re-reads and nc-2
+// inits per DEST window, at no extra L1. See DESIGN_NOTES.md §7.
 //
-// `add_tiles_init(IN, IN, /*acc_to_dest=*/true)` makes `add_tiles` compute
-// `DEST[dst] += A[ta] + B[tb]`, so ONE call folds TWO contributors into the sticky accumulator with
-// no repack between them. See `examples/eltwise_l1_vs_dest_accumulate` for the three places a
-// running sum can live; its caveat — "dest_acc camps the accumulator in DEST, only possible when
-// DEST is otherwise free" — is satisfied here: the slice reduce is a standalone pass, and a slice is
-// at most `DEST_LIMIT` tiles wide.
-//
-// Against the shipped `addchain`, per DEST window this removes:
-//   * `nc - 1` PACKS — addchain writes the running sum back to L1 after EVERY contributor;
-//   * `nc - 1` accumulator RE-READS — addchain unpacks it straight back out of L1 for the next add;
-//   * `nc - 2` re-inits — one `add_tiles_init` covers the whole fold;
-//   * half the remaining calls — two contributors per `add_tiles`, so ceil(nc/2) instead of nc-1.
-// And it costs NO extra L1, which is exactly what made §7's `pack_l1_pair` unaffordable (+102 KB
-// against 10 560 B free). It also cannot hit the packer-L1-accumulate-on-a-block-float correctness
-// bug, because it never L1-accumulates.
-//
-// PRECISION IMPROVES for the same reason: the sum stays in DEST instead of round-tripping a bfp8 CB
-// `nc-1` times.
-//
-// RAW compute API on purpose. `eltwise_chain` cannot express this: it would need one element per
-// contributor, each reading the SAME gather CB at a different tile offset `c * n`, and that offset
-// is RUNTIME (it tracks m_eff) while element specs are compile-time.
+// RAW compute API on purpose: `eltwise_chain` would need one element per contributor reading the
+// same CB at a RUNTIME tile offset, and element specs are compile-time.
 template <uint32_t ACC, uint32_t IN>
 ALWI void fold_dest(uint32_t nc, uint32_t n) {
     cb_wait_front(IN, nc * n);
@@ -160,13 +125,10 @@ ALWI void fold_dest(uint32_t nc, uint32_t n) {
             w = ELTWISE_BLK;
         }
         tile_regs_acquire();
-        // SEED, always — never accumulate onto DEST's entry state. Measured, not defensive: relying
-        // on "DEST is zero after acquire" for the even case produced `inf` in the output with
-        // pcc = 1.000000, i.e. the right pattern scaled by garbage the accumulator picked up.
-        // Parity decides the seed WIDTH so the remainder always pairs up exactly:
-        //   odd  nc -> one `copy_tile`  (DEST  = c0)
-        //   even nc -> one non-accumulating `add_tiles` (DEST = c0 + c1)
-        // Both OVERWRITE DEST, so the fold is independent of what was there.
+        // SEED, always — never accumulate onto DEST's entry state. Measured, not defensive:
+        // relying on "DEST is zero after acquire" produced `inf` at pcc = 1.000000. Parity decides
+        // the seed WIDTH so the remainder pairs up exactly: odd nc -> one `copy_tile`, even nc ->
+        // one non-accumulating `add_tiles`. Both OVERWRITE DEST.
         uint32_t c;
         if (nc & 1u) {
             copy_tile_to_dst_init_short(IN);
@@ -243,15 +205,13 @@ void kernel_main() {
     ActivationInitHelper<KernelActivation::SILU>::init();
 
     // Device-resident token count. All three TRISCs spin here independently so the M-block trip
-    // count is thread-uniform (see the file header). The `fence` is exactly what
-    // `invalidate_l1_cache()` compiles to on Blackhole (risc_common.h) — spelled out here because
-    // that helper lives behind a dataflow-only include.
-    volatile tt_l1_ptr uint32_t* mbox = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
-    while (mbox[moe_fused_swiglu::MBOX_READY] != MAILBOX_MAGIC) {
+    // count is thread-uniform (see the file header). A plain fence stands in for
+    // `invalidate_l1_cache()` — identical on Blackhole, but that helper is dataflow-only.
+    const auto mb = moe_fused_swiglu::mailbox_wait(mailbox_addr, MAILBOX_MAGIC, [] {
         asm volatile("fence" ::: "memory");
-    }
-    const uint32_t m_t = mbox[moe_fused_swiglu::MBOX_M_T];
-    const uint32_t m_blocks = mbox[moe_fused_swiglu::MBOX_M_BLOCKS];
+    });
+    const uint32_t m_t = mb.m_t;
+    const uint32_t m_blocks = mb.m_blocks;
 
     CircularBuffer x_buf(cb_x_tiles);
     CircularBuffer wg_buf(cb_w_gate);
@@ -312,18 +272,10 @@ void kernel_main() {
         }
 
         // ---- 2. gate and up over the same resident x block ----
-        //
-        // PERF 3 — the two matmuls walk the HIDDEN axis in `GU_CHUNKS` chunks, INTERLEAVED
-        // (gate c, up c, gate c+1, ...), so each chunk's matmul runs while the NEXT chunk's bfp4
-        // block is still in DRAM. Chunks are independent full-K matmuls, so there is no
-        // cross-chunk accumulation to pay for; the only thing the split needs is that each chunk
-        // pack into ITS OWN columns of one shared m-major block rather than producing a
-        // chunk-major one, which is what `out_col_offset` + `caller_owns_pack_target` buy. The
-        // block the reduce and the scatter see is byte-identical to the single-call layout.
-        //
-        // INTERLEAVED, not gate-then-up: with gate first, `up`'s whole stream lands during gate's
-        // matmul and only gate's own chunking overlaps anything. Alternating spends both NoCs'
-        // streams under both matmuls.
+        // The two matmuls walk the HIDDEN axis in GU_CHUNKS chunks, INTERLEAVED (gate c, up c,
+        // gate c+1, ...), so each chunk's matmul runs while the next chunk's block is still in
+        // DRAM. Alternating rather than gate-then-up spends both NoCs' streams under both
+        // matmuls. `out_col_offset` + `caller_owns_pack_target` keep the layout m-major.
         {
             MaybeDeviceZoneScope("compute_gateup");
             gate_buf.reserve_back(gu_block_tiles);
@@ -370,12 +322,10 @@ void kernel_main() {
                     NoIn1BaseOffset,
                     /*caller_owns_pack_target=*/true,
                     NoneActivation,
-                    // PERF 3 — RECONFIG ONLY ON THE FIRST CALL OF THE M-BLOCK. Every gate/up chunk
-                    // call has the identical operand formats (in0 bfp8 x, in1 bfp4 weights, out bfp8
-                    // accumulator), so every reconfig after the first is MMIO for a format change
-                    // that never happens. Only chunk 0's gate call follows a different phase (the
-                    // previous M-block's `down`, or the tilize), so only it must reconfig.
-                    // `examples/compute_block_size` measures this family at up to 1.19x.
+                    // RECONFIG ONLY ON THE FIRST CALL OF THE M-BLOCK. Every gate/up chunk call
+                    // has identical operand formats, so every reconfig after the first is MMIO for
+                    // a format change that never happens. Only chunk 0's gate call follows a
+                    // different phase. Measured at up to 1.19x.
                     matmul_config::DataFormatReconfig::NONE>(
                     x_buf,
                     wg_buf,
@@ -433,32 +383,21 @@ void kernel_main() {
             pack_reconfig_l1_acc(0);
         }
 
-        // PERF 2 — MY SLICE of this block's T = m_eff*HN_PAD tile block, from the ONE shared plan in
-        // moe_fused_swiglu_common.hpp. It SHRINKS with the runtime m_eff exactly as every other shape
-        // here does, and it is a pure function of (m_eff, KGROUPS, my_row) — the same three numbers on
-        // every core and every RISC-V, which is what keeps the column's all-to-all deadlock-free.
-        // 0 = an idle core: it still CONTRIBUTES its own partial (the dataflow kernels ship it), it
-        // just owns no slice to reduce.
+        // MY SLICE of this block's m_eff*HN_PAD tiles, from the ONE shared plan in
+        // moe_fused_swiglu_common.hpp — a pure function of (m_eff, KGROUPS, my_row), the same
+        // three numbers on every core and every RISC-V, which is what keeps the all-to-all
+        // deadlock-free. 0 = an idle core: it still contributes its partial, it just owns no
+        // slice to reduce.
         const uint32_t slice_tiles = moe_fused_swiglu::slice_assigned(gu_block_tiles, KGROUPS, my_row);
 
         // ---- 3. cross-column reduce + SwiGLU ----
         {
             MaybeDeviceZoneScope("compute_reduce");
-            // REDUCE-SCATTER, worker side. Every one of the KGROUPS contributors has pushed its
-            // slice of gate and up into slot `row` of my two landing CBs, so the whole reduce is
-            // `slice_tiles` wide instead of the block's full m_eff*HN_PAD — that factor IS the
-            // win, and it is why the SiLU below is one DEST window instead of m_eff of them.
-            //
-            // Contributor 0 SEEDS the accumulator with a `copy`, contributors 1..K-2 accumulate
-            // IN PLACE, and the LAST one folds in with SiLU riding the PACKER thread. The
-            // in-place `add<blk_in(acc), blk_in(in), blk_out(acc)>` is safe for the same reason
-            // the tree's is: `eltwise_chain` pops its inputs in `elem_apply_compute` and reserves
-            // the output only later in `elem_apply_pack`, so a `slice_pages`-deep accumulator
-            // recycles its own pages in ring order. What is NOT safe — and what hung round 1 of
-            // this experiment — is letting a SECOND RISC-V push the same CB: `cb_push_back`
-            // overwrites the shared `tiles_received` word with the PUSHING RISC-V's own local
-            // count, so PACK is the ONLY pusher of cb_slice_gate/cb_slice_up here, and the
-            // dataflow kernels are the only pusher of the landing CBs.
+            // REDUCE-SCATTER, worker side. Every KGROUPS contributor has pushed its slice into
+            // slot `row` of my two landing CBs, so the reduce is `slice_tiles` wide instead of the
+            // whole block — that factor IS the win. PACK must be the ONLY pusher of the slice CBs:
+            // `cb_push_back` writes the shared `tiles_received` word with the pushing RISC-V's own
+            // count, and a second pusher hung round 1 of this experiment.
             if (slice_tiles) {
                 // KGROUPS-1 contributors fold here; the last one rides the SiLU-fused add below.
                 fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, slice_tiles);
