@@ -58,6 +58,10 @@ void kernel_main() {
     matmul_block_init(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
+// Deliberately exercise the deprecated broadcast inits (reconfig-tracking test); suppress the
+// deprecation warnings so they don't clobber CI logs.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(cb_in2, cb_in1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
@@ -79,6 +83,7 @@ void kernel_main() {
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
     sub_tiles_bcast_scalar_init_short(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+#pragma GCC diagnostic pop
     binary_tiles_init<false, EltwiseBinaryType::ELWADD>(cb_in2, cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
