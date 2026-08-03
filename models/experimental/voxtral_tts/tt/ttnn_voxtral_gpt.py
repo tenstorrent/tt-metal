@@ -43,7 +43,7 @@ help, and how far that can go is capped by the hang described at WEIGHT_DTYPE.
 WHERE THE TIME GOES, per decode frame, steady state on one N150 (measure with
 the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
 
-    six linears, weight streaming     ~23.6 ms   AT THE CEILING -- 194 GB/s, and a plain
+    six linears, weight streaming     ~20.3 ms   AT THE CEILING -- 194 GB/s, and a plain
                                                  interleaved matmul cannot do better here.
                                                  Tuned matmul program configs are SLOWER
                                                  (169 vs 193 GB/s on wq). Only fewer BYTES help.
@@ -55,18 +55,17 @@ the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
     everything else                    ~5.3 ms   qkv heads, rope, cache write, sdpa_decode,
                                                  reshapes, residual adds
     ------------------------------------------
-    Block 1 total                      34.8 ms   (Block 2 is now ~31, so Block 1 is the larger
-                                                 half again -- see ttnn_voxtral_flow)
+    Block 1 total                      31.4 ms   (Block 2 is now ~28, so Block 1 is still
+                                                 the larger half -- see ttnn_voxtral_flow)
 
 So the only remaining lever on Block 1 is WEIGHT BYTES, and that is capped by the hang: BFP8 on
 FF1_FF3 is safe, adding FF2 reintroduces it (see WEIGHT_DTYPE). Everything else is small change --
 and the one thing that looked like an exception, a width-sharded RMSNorm worth ~5 ms, failed the
 WER gate; read _norm before trying it again.
 
-UNTESTED AND THE BEST REMAINING IDEA: wqkv and wo have never been tried in BFP8 individually. Only
-three points were ever measured (all-bf16, FF1_FF3-BFP8, all-BFP8), and "adding FF2 brings the hang
-back" pins FF2 alone. Measured at the decode shape, wqkv goes 4.82 -> 2.64 ms per 26 and wo 3.36 ->
-2.20, i.e. ~3.3 ms/frame, IF they clear the hang repro.
+That idea is now spent: wqkv and wo ARE in BFP8 as of the second sweep, worth 3.32 ms/frame with
+no accuracy cost on mean or p90 worst-sample and no hang. w2 is the only weight left in bf16, and
+it is the pinned hang trigger, so the byte lever is finished unless that changes.
 
 TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 
@@ -162,16 +161,25 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
 # ALL-BFP8 is ~5 ms/frame faster and TRIGGERS A CARD-WEDGING HANG in multi-utterance runs, and
 # adding FF2 alone is enough to bring it back (see ttnn_voxtral_pipeline for the full diagnosis).
 #
-#     weights                decode PCC   ms/frame   natural WER   hang?
-#     bf16 (all)               0.99991      45.8         -         no
-#     mixed (this)             0.99991      38.7       0.88%       no
-#     BFP8 (all)               0.99986      33.6      87.39%       HANGS
+#     weights                       decode PCC   ms/step   mean worst-sample   hang?
+#     bf16 (all)                      0.99991     45.8            -             no
+#     bf16 + BFP8 on FF1_FF3          0.999884    34.7          0.86%           no
+#     ... + BFP8 on wqkv, wo (this)   0.999852    31.4          0.86%           no
+#     BFP8 (all, i.e. + w2)           0.99986     33.6            -             HANGS
 #
 # Decode is bandwidth-limited on weight bytes -- the six linears alone reach 194 GB/s, the same
 # ceiling a plain interleaved matmul hits -- so the weight dtype IS the speed. FF1_FF3 is where
 # BFP8 buys most: those two 3072x9216 matrices are about half the layer's bytes.
-WEIGHT_DTYPE = ttnn.bfloat16          # everything except...
-FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # ...FF1 and FF3
+#
+# W2 IS THE ONE THAT HANGS, not BFP8 in general. That distinction cost a long investigation to
+# establish and is worth keeping straight: "all-BFP8 hangs" was true but over-attributed. wqkv and
+# wo were never tried alone until later, and they are FINE -- 3.32 ms/frame, mean and p90
+# worst-sample unchanged, and the documented minimal repro (short gen + 128-bucket decode, then
+# two long gens both landing in the 512 bucket, the second a pure cache hit) runs clean, as does
+# the full 15-case set. w2 has NOT been retried and should not be without the repro to hand.
+WEIGHT_DTYPE = ttnn.bfloat16          # w2 only
+FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
+ATTN_WEIGHT_DTYPE = ttnn.bfloat8_b    # wqkv and wo
 
 
 def interleaved_to_halfsplit(t, n_heads):
@@ -215,6 +223,7 @@ class TtVoxtralGPT:
         self.max_seq_len = max_seq_len
         self.pos = 0
         wd = WEIGHT_DTYPE
+        attnd = ATTN_WEIGHT_DTYPE
         w = state if state is not None else load_backbone_state(ckpt_path)
 
         up = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT,
@@ -235,8 +244,8 @@ class TtVoxtralGPT:
                 # q, k and v fused into ONE weight: one matmul and one weight stream instead of
                 # two, and it is what the decode-native head op expects. Same bytes as the old
                 # wq + wkv pair, so this costs no memory.
-                "wqkv": lin(torch.cat([wq, wk, w[p + "attention.wv"]], dim=0)),
-                "wo": lin(w[p + "attention.wo"]),
+                "wqkv": lin(torch.cat([wq, wk, w[p + "attention.wv"]], dim=0), attnd),
+                "wo": lin(w[p + "attention.wo"], attnd),
                 "w1": lin(w[p + "feed_forward.w1"], ffd),
                 "w2": lin(w[p + "feed_forward.w2"]),
                 "w3": lin(w[p + "feed_forward.w3"], ffd),
