@@ -249,8 +249,10 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffers
 
     auto unsafe = distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id);
     auto buffers_after = mesh_device->allocator()->get_allocated_buffers();
+    std::vector<Buffer*> ordered_buffers_after(buffers_after.begin(), buffers_after.end());
+    std::ranges::sort(ordered_buffers_after, {}, [](const Buffer* buffer) { return buffer->unique_id(); });
     std::vector<size_t> new_buffer_ids;
-    for (auto* buffer : buffers_after) {
+    for (auto* buffer : ordered_buffers_after) {
         if (!buffers_before.contains(buffer)) {
             new_buffer_ids.push_back(buffer->unique_id());
         }

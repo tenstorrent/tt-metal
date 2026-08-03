@@ -48,7 +48,6 @@
 #include "ttnn/graph/graph_serialization.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include <ttnn/tensor/to_string.hpp>
