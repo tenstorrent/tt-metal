@@ -331,14 +331,22 @@ def _run_graph(mesh_device, forward, *, traced, host_input, input_consumed=False
 
         The input allocation sits outside the timer so the eager number is
         comparable to the traced one, whose measured window is replay-only.
+
+        When the graph consumes its input, this mirrors the traced region's
+        ``ttnn.clone`` so that clone's program lands in the cache during warmup.
+        A trace cannot compile new binaries during capture, and the clone only
+        exists on the traced path, so without this the capture aborts with
+        "Cannot load new binaries during trace capture".
         """
         device_input = ttnn.to_device(host_input, device=mesh_device)
+        graph_input = ttnn.clone(device_input) if input_consumed else device_input
         t0 = time.time()
-        output = forward(device_input)
+        output = forward(graph_input)
         ttnn.synchronize_device(mesh_device)
         elapsed = time.time() - t0
-        if not input_consumed:
-            device_input.deallocate(True)
+        # forward() consumed graph_input; device_input is only aliased when there
+        # was no clone, so it always needs releasing here.
+        device_input.deallocate(True)
         return output, elapsed
 
     # ── Warmup: compile every kernel in the graph ──────────────────────────
@@ -503,6 +511,7 @@ def test_prefill_layer(mesh_device, layer_type, chunk, traced, reset_seeds, requ
     layer_state_prefixed = {
         f"model.language_model.layers.{layer_idx}.{key}": value for key, value in layer_state.items()
     }
+    mesh_config = _mesh_config(mesh_device)
     tt_layer = Gemma4DecoderLayer(
         mesh_device=mesh_device,
         hf_config=model_args,
@@ -513,13 +522,12 @@ def test_prefill_layer(mesh_device, layer_type, chunk, traced, reset_seeds, requ
         shared_mlp_dtype=precision.get("shared_mlp", MODEL_DTYPE),
         attention_dtype=precision.get("attention", MODEL_DTYPE),
         tensor_cache_path=cache_root,
-        mesh_config=_mesh_config(mesh_device),
+        mesh_config=mesh_config,
         max_seq_len=chunk,
         max_local_batch_size=1,
     )
     logger.info(f"TT layer {layer_idx} layer_scalar={tt_layer.layer_scalar}")
 
-    mesh_config = _mesh_config(mesh_device)
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(
         mesh_device, text_config, chunk, layer_idx, mesh_config=mesh_config
     )
