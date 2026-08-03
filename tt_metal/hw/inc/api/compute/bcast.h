@@ -26,9 +26,15 @@
 
 namespace ckernel {
 
+// Canonical short init for unary broadcast: programs only the op-specific unpack + math datacopy
+// state. The one-time hardware configuration (unpack/math/pack hw_configure, pack sync/init/dest)
+// must already have been done by compute_kernel_hw_startup(icb, ocb) at the top of the kernel.
 template <BroadcastType bcast_type>
-ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+ALWI void unary_bcast_init(uint32_t icb) {
+    // NOTE: no call_line parameter here — a defaulted call_line would make this 1-arg overload
+    // ambiguous with the [[deprecated]] (icb, ocb) full init below. The sentinel still tracks the
+    // operand; only the source line for this specific call is attributed to bcast.h.
+    state_configure(icb, __builtin_LINE());
 
 #ifndef ARCH_QUASAR
     // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
@@ -37,9 +43,6 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
-
-    // Will configure A & B in similar way
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
 
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(
@@ -50,15 +53,8 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
             false, false /*transpose within 16x16 face*/, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type>(icb)));
     }
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #endif
-
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
 #else
-    UNPACK((llk_unpack_hw_configure(icb)));
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     // 32bit formats require the A2D unpack-to-dest path (SrcB is only 19 bits wide), which is not
     // implemented for Quasar yet; only the B2D path is supported here.
@@ -73,13 +69,20 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
             false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, false /*EN_32BIT_DEST*/, bcast_type>(icb)));
 #endif
-    MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
-
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init()));
 #endif
+}
+
+// Deprecated full init: fused hardware startup + op-specific short init. Superseded by the
+// compute_kernel_hw_startup(icb, ocb) + unary_bcast_init(icb) programming model, mirroring the
+// matmul (#46346) / transpose (#23835) / eltwise (#22943) cleanups under umbrella #22219.
+template <BroadcastType bcast_type>
+[[deprecated(
+    "Use compute_kernel_hw_startup(icb, ocb) once at the top of the kernel, then unary_bcast_init(icb). "
+    "The unary_bcast_init(icb, ocb) full init will be removed after September 15th, 2026 (tt-metal#49924).")]]
+ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+    compute_kernel_hw_startup(icb, ocb);
+    unary_bcast_init<bcast_type>(icb);
 }
 
 template <BroadcastType bcast_type>

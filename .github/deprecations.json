@@ -40,6 +40,14 @@
       "introduced_by_pr": 49119,
       "grace": "30d",
       "owners": ["ncvetkovicTT"]
+    },
+    {
+      "id": "unary-bcast-full-init",
+      "description": "unary_bcast_init(icb, ocb) full hardware-startup init in tt_metal/hw/inc/api/compute/bcast.h superseded by compute_kernel_hw_startup(icb, ocb) once at the top of the kernel + the unary_bcast_init(icb) short init, matching the matmul (#46346) / transpose (#23835) / eltwise (#22943) cleanups under umbrella #22219. The 2-arg [[deprecated]] shim is retained only for backwards compatibility; delete it once all call sites are migrated to compute_kernel_hw_startup + unary_bcast_init(icb).",
+      "files": ["tt_metal/hw/inc/api/compute/bcast.h"],
+      "introduced_by_pr": 49924,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
     }
   ]
 }
