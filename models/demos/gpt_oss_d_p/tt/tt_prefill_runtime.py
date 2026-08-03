@@ -234,7 +234,7 @@ class TtPrefillRuntime:
         """Read one layer's device K/V cache back to NATURAL token order (un-rotating the block-cyclic
         SP layout). Returns (k, v) torch tensors in DEVICE convention: K is Meta-RoPE swizzled over the
         (full) head_dim — the caller reconciles vs the HF golden; V is raw. Shapes:
-        k, v -> [1, num_kv_heads, n_tokens, head_dim]. No index_k (GQA, unlike M3)."""
+        k, v -> [1, num_kv_heads, n_tokens, head_dim]. No index_k (GQA)."""
         kv = self._resolve_kv(kv_caches)
         sp = self.config.sp_factor
         cols = self.config.tp_factor  # KV head c lives on col c

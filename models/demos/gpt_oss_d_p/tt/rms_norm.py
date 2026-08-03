@@ -18,7 +18,7 @@ class RMSNorm(nn.Module):
     def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, mesh_config=None):
         super().__init__()
         # GPT-OSS is a plain RMSNorm (out = x_normed * weight). The Gemma-style (out = x_normed *
-        # (1 + weight)) fold is kept behind use_gemma_norm for parity with M3 but defaults off.
+        # (1 + weight)) fold is kept behind use_gemma_norm but defaults off.
         self.use_gemma_norm = bool(getattr(hf_config, "use_gemma_norm", False))
         if state_dict:
             weight = state_dict["weight"]

@@ -119,7 +119,7 @@ class Model:
         )
 
         # Pad lm_head vocab to padded_vocab_size BEFORE column-parallel sharding so device shard
-        # boundaries match the sampling device-offset strides (see M3 model.py rationale).
+        # boundaries match the sampling device-offset strides.
         sampling_splits = mesh_device.shape[1]
         per_device_padded = compute_per_device_vocab(self.vocab_size, sampling_splits)
         padded_vocab_size = per_device_padded * sampling_splits
@@ -281,7 +281,7 @@ class Model:
 
         RoPE is NOT built here — GPT-OSS prefill uses the on-device indexed rope, which the runtime
         builds once and passes into ``prefill_forward`` as ``rot_mats_global``. Returns
-        ``(tokens_embd, None, None)`` to keep the M3 3-tuple interface.
+        ``(tokens_embd, None, None)`` to keep the 3-tuple interface.
         """
         device = None if trace_enabled else self.mesh_device
 
