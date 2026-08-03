@@ -13,9 +13,8 @@ import torch
 import ttnn
 
 from .config import TimeSeriesTransformerConfig
-from .layers import LayerNorm
-from .ops import linear
-from .weights import LoadResult, load_tensors, to_float_tensor, upload
+from .layers import LayerNorm, Linear
+from .weights import LoadResult, to_float_tensor, upload
 
 
 def sinusoidal_position_encoding(length: int, d_model: int) -> torch.Tensor:
@@ -74,43 +73,6 @@ class SinusoidalPositionalEmbedding:
         return cached
 
 
-class ValueEmbedding:
-    """``TimeSeriesValueEmbedding``: a bias-free projection from feature_size to d_model."""
-
-    def __init__(
-        self,
-        feature_size: int,
-        d_model: int,
-        *,
-        device,
-        dtype: ttnn.DataType,
-        memory_config: Optional[ttnn.MemoryConfig] = None,
-        rng: Optional[torch.Generator] = None,
-    ):
-        self.device = device
-        self.dtype = dtype
-        self.memory_config = memory_config
-        if rng is None:
-            self.weight_torch = torch.zeros((d_model, feature_size), dtype=torch.float32)
-        else:
-            self.weight_torch = torch.randn((d_model, feature_size), generator=rng, dtype=torch.float32) * 0.02
-        self.weight = upload(self.weight_torch, device=device, dtype=dtype)
-
-    def load_hf_state_dict(self, state: Mapping[str, torch.Tensor], *, strict: bool = True) -> LoadResult:
-        return load_tensors(
-            self,
-            state,
-            (("value_projection.weight", "weight"),),
-            device=self.device,
-            dtype=self.dtype,
-            strict=strict,
-            label="value embedding",
-        )
-
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return linear(x, self.weight, None, dtype=self.dtype, memory_config=self.memory_config)
-
-
 class TimeSeriesEmbedding:
     """Encoder/decoder input block: ``layernorm(value_embedding(x) + positions)``."""
 
@@ -125,11 +87,13 @@ class TimeSeriesEmbedding:
     ):
         assert config.feature_size is not None
         self.config = config
-        self.value_embedding = ValueEmbedding(
-            config.feature_size,
+        # HF's TimeSeriesValueEmbedding is a bias-free projection from feature_size to d_model.
+        self.value_embedding = Linear(
             config.d_model,
+            config.feature_size,
             device=device,
             dtype=dtype,
+            use_bias=False,
             memory_config=memory_config,
             rng=rng,
         )
@@ -145,7 +109,9 @@ class TimeSeriesEmbedding:
             [
                 (
                     "value_embedding",
-                    self.value_embedding.load_hf_state_dict(substate(state, "value_embedding"), strict=strict),
+                    self.value_embedding.load_hf_state_dict(
+                        substate(state, "value_embedding.value_projection"), strict=strict
+                    ),
                 ),
                 (
                     "embed_positions",
@@ -169,6 +135,5 @@ class TimeSeriesEmbedding:
 __all__ = [
     "SinusoidalPositionalEmbedding",
     "TimeSeriesEmbedding",
-    "ValueEmbedding",
     "sinusoidal_position_encoding",
 ]

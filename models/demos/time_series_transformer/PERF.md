@@ -147,13 +147,16 @@ heads and the entire domain map were dead weight inside the rollout (-1.8 ms).
 
 | Metric | Stretch target | Measured | Status |
 |---|---:|---:|---|
-| Throughput | 500+ seq/s | **677 seq/s** | **reached** |
+| Throughput | 500+ seq/s | **686 seq/s** | **reached** |
 | Latency | < 20 ms | **17.1 ms** (p95 18.3) | **reached** |
 | 1000 samples | < 2 s | **1.78 s** (performance profile) | **reached** |
 | Context length | up to 2048 | **2048 at 29.8 ms** | **reached** |
 | Series per batch | 100+ | **256 at 356 seq/s** | **reached** |
 
 All five stretch targets are met, with two qualifications worth stating plainly.
+
+Throughput varies by 1-2% run to run (677-686 seq/s observed at batch 64 on the performance
+profile); the figures here come from the run reported under "Runtime profiles" above.
 
 **1000 samples needs the performance profile.** float32 takes 3.43 s; bfloat16 with the flash
 kernel takes 1.78 s. At 1000 rows the cost is device throughput at width rather than host
