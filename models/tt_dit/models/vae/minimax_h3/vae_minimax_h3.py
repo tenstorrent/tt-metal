@@ -2,270 +2,453 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-H3 visual VAE encoder for the FL2VA keyframe path.
+"""Top-level MiniMax-H3 visual VAE: spatial tiling, temporal chunking, encode.
 
-FL2VA conditioning only ever encodes **single frames**, and that collapses the
-whole causal 3D encoder to a 2D one. ``BaseConv3d`` front-pads the temporal axis
-with zeros, so a 3-tap conv on a lone frame sees ``[0, 0, x]`` and reduces to
-``weight[:, :, -1] * x`` -- every temporal tap but the last is multiplied by zero.
-Measured against the reference: rel err 1.5e-07 per conv, bit-exact for k1, and
-1.1e-07 after chaining twelve, so it is fp32 accumulation order and does not
-compound. There is therefore no temporal halo and no cache to carry here.
+MiniMax-H3 ships with **tiling enabled** (``use_tiling = True``,
+``tile_sample_min_{height,width} = 256``, overlap 64). Both ``_encode_clip`` and
+``_decode_clip`` split the frame into 256x256 **pixel** tiles, run the model
+independently per tile, and linearly cross-fade the overlaps. That is not an optional
+memory optimisation -- reproducing the released model requires it -- and it is what
+bounds every work unit:
 
-The T > 1 path, which Ref2VA video references would need, is a separate extension:
-it keeps these weights but restores the temporal taps and the causal halo.
+* the encoder always sees ``(1, 3, 17, 256, 256)`` and emits ``(1, 48, 5, 16, 16)``;
+* the decoder always sees ``(1, 24, 7, 16, 16)``.
 
-Built on :class:`Conv2dViaConv3d` so the convolutions stay on the same
-``ttnn.experimental.conv3d`` path the WAN and LTX VAEs use, which is what makes
-that extension additive rather than a rewrite.
+Because the tiles are independent, the mesh is used **data-parallel over (tile, chunk)
+work units with the weights replicated**, rather than by sharding one tile's H/W. Two
+consequences simplify this port considerably: reflect padding stays a local
+slice-and-concat (``neighbor_pad_async`` has no reflect mode), and GroupNorm statistics
+never need a cross-device reduction.
 
-The encoder runs **unsharded**. It is one frame, once per request -- about 3.7
-TFLOP against a 49-step denoise -- so H/W sharding would buy nothing and would drag
-in a halo exchange that cannot express H3's reflect padding
-(``neighbor_pad_async`` offers only zeros and replicate). Unsharded, reflect is a
-local slice-and-concat. The 36-layer ViT decoder is where sharding earns its keep.
+The tiling and blending stay on host. They are cheap, exactly specified, and porting
+them to device buys nothing until a measurement says otherwise.
 
-Everything is fp32: the whole VAE checkpoint is, and the keyframe encode contract
-depends on it.
+The earlier version of this file was a T=1-only keyframe encoder built on
+``Conv2dViaConv3d``. That class cannot load ``conv_in``: it sizes the weight from the
+*aligned* input-channel count but prepares an unpadded weight, so a 3-channel conv
+fails its ``Parameter`` shape check. The encoder now lives in
+``encoder_minimax_h3.py`` on a ``LTXCausalConv3d``-shaped conv, parameterised by
+``temporal_taps`` so the keyframe path and the clip path are one implementation.
 """
 
 from __future__ import annotations
+
+import json
+import math
+import os
+from pathlib import Path
 
 import torch
 
 import ttnn
 
-from ....layers.audio_ops import Conv2dViaConv3d
-from ....layers.module import Module, ModuleList
-from ....layers.normalization import GroupNorm
+from ....layers.module import Module
+from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
-# GroupNorm settings are fixed by the checkpoint, not configurable.
-MINIMAX_H3_VAE_NUM_GROUPS = 32
-MINIMAX_H3_VAE_NORM_EPS = 1e-6
+DEFAULT_TILE_SIZE = 256
+DEFAULT_TILE_OVERLAP = 64
 
 
-class MiniMaxH3VaeConv(Conv2dViaConv3d):
-    """A keyframe-path conv: the last temporal tap of an H3 ``BaseConv3d``.
+class MiniMaxH3VaeConfig:
+    """The subset of ``vae/config.json`` this port needs, plus the derived geometry.
 
-    Adds ``reflect`` to the padding modes and slices the 5D checkpoint weight down
-    to the 4D one the base class expects.
+    ``clip_length`` (17) is not a multiple of ``temporal_compression_ratio`` (4), which
+    is why the four derived fields exist rather than plain constants: the decoder has to
+    re-derive the implicit leading pad and the overlap that ``token_drop`` leaves behind.
     """
 
-    def __init__(self, in_channels, out_channels, *, kernel_size, stride=1, reflect=True, **kwargs):
-        super().__init__(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding_mode="zeros",
-            **kwargs,
-        )
-        # Reflect is applied here and the conv itself pads by nothing, so the base
-        # class's symmetric zero padding must be switched off.
-        self.reflect = reflect and self.pad_h > 0
-        if self.reflect:
-            self.internal_padding = (0, 0, 0)
+    def __init__(self, **cfg) -> None:
+        self.in_channels = cfg.get("in_channels", 3)
+        self.out_channels = cfg.get("out_channels", 3)
+        self.latent_channels = cfg.get("latent_channels", 24)
+        self.block_out_channels = tuple(cfg.get("block_out_channels", (128, 256, 256, 512, 512, 1024)))
+        self.layers_per_block = cfg.get("layers_per_block", 2)
+        self.spatial_downsample_factors = tuple(cfg.get("spatial_downsample_factors", (2, 2, 2, 2, 1, 1)))
+        self.temporal_downsample_factors = tuple(cfg.get("temporal_downsample_factors", (1, 2, 2, 1, 1, 1)))
+        self.norm_num_groups = cfg.get("norm_num_groups", 32)
+        self.norm_eps = cfg.get("norm_eps", 1e-6)
+        self.decoder_num_layers = cfg.get("decoder_num_layers", 36)
+        self.decoder_num_attention_heads = cfg.get("decoder_num_attention_heads", 32)
+        self.decoder_attention_head_dim = cfg.get("decoder_attention_head_dim", 64)
+        self.decoder_num_register_tokens = cfg.get("decoder_num_register_tokens", 4)
+        self.decoder_ffn_mult = cfg.get("decoder_ffn_mult", 4)
+        self.decoder_rope_theta = cfg.get("decoder_rope_theta", 100.0)
+        self.decoder_rope_dim_ratio = cfg.get("decoder_rope_dim_ratio", 0.75)
+        self.decoder_norm_eps = cfg.get("decoder_norm_eps", 1e-5)
+        self.clip_length = cfg.get("clip_length", 17)
+        self.token_drop = cfg.get("token_drop", 3)
+        self.latents_mean = tuple(cfg.get("latents_mean", ()))
+        self.latents_std = tuple(cfg.get("latents_std", ()))
 
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        weight = state.get("weight")
-        if weight is not None and weight.dim() == 5:
-            # Only the final temporal tap survives a single frame.
-            state["weight"] = weight[:, :, -1].contiguous()
-        super()._prepare_torch_state(state)
+        self.spatial_compression_ratio = math.prod(self.spatial_downsample_factors)
+        self.temporal_compression_ratio = math.prod(self.temporal_downsample_factors)
 
-    def forward(self, x_BHWC: ttnn.Tensor) -> ttnn.Tensor:
-        if self.reflect:
-            x_BHWC = _reflect_pad_hw(x_BHWC, self.internal_pad_h, self.internal_pad_w)
-        return super().forward(x_BHWC)
+        self.frame_pre_padding = (-self.clip_length) % self.temporal_compression_ratio
+        self.tokens_chunk_size = math.ceil(self.clip_length / self.temporal_compression_ratio)
+        self.token_overlap = (-self.token_drop) % self.tokens_chunk_size
+        self.frame_overlap = max(self.token_overlap * self.temporal_compression_ratio - self.frame_pre_padding, 0)
 
-    @property
-    def internal_pad_h(self) -> int:
-        return self.kernel_size[1] // 2
-
-    @property
-    def internal_pad_w(self) -> int:
-        return self.kernel_size[2] // 2
+    @classmethod
+    def from_pretrained(cls, path: str | os.PathLike) -> "MiniMaxH3VaeConfig":
+        cfg = json.loads((Path(path) / "config.json").read_text())
+        return cls(**{k: v for k, v in cfg.items() if not k.startswith("_")})
 
 
-def _reflect_pad_hw(x_BHWC: ttnn.Tensor, pad_h: int, pad_w: int) -> ttnn.Tensor:
-    """Reflect-pad ``(B, H, W, C)`` by ``pad_h`` / ``pad_w``.
+def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tuple[list[int], list[int], list[int]]:
+    """Lay ``tile_size``-wide tiles over ``length``, latent-aligned (reference ``_split_tiles``).
 
-    Reflect excludes the edge itself, so a pad of 1 takes row 1 rather than row 0 --
-    which is exactly where it differs from replicate, and the reason this is not
-    left to the halo op.
+    The tile count is the smallest whose union covers ``length`` with every overlap at
+    least ``min_overlap``; the slack is spread round-robin over the overlaps in whole
+    ``ratio`` steps so each boundary lands on a latent grid point. Note every tile has
+    length exactly ``tile_size`` unless one tile already covers the axis -- which is why
+    the encoder only ever needs one activation shape.
     """
-    for pad, dim in ((pad_h, 1), (pad_w, 2)):
-        if pad <= 0:
-            continue
-        size = x_BHWC.shape[dim]
-        if size < pad + 1:
-            raise ValueError(f"cannot reflect-pad dim {dim} of size {size} by {pad}")
-        leading = [_slice_dim(x_BHWC, dim, index, index + 1) for index in range(pad, 0, -1)]
-        trailing = [_slice_dim(x_BHWC, dim, size - 1 - index, size - index) for index in range(1, pad + 1)]
-        x_BHWC = ttnn.concat([*leading, x_BHWC, *trailing], dim=dim)
-    return x_BHWC
+    if tile_size >= length:
+        return [0], [length], []
+
+    num_tiles = math.ceil(length / tile_size)
+    while tile_size * num_tiles - min_overlap * (num_tiles - 1) - length < 0:
+        num_tiles += 1
+
+    overlaps = [min_overlap] * (num_tiles - 1)
+    remaining = tile_size * num_tiles - sum(overlaps) - length
+    for i in range(remaining // ratio):
+        overlaps[i % (num_tiles - 1)] += ratio
+
+    starts = [0]
+    for i in range(num_tiles - 1):
+        starts.append(starts[-1] + tile_size - overlaps[i])
+    return starts, [tile_size] * num_tiles, overlaps
 
 
-def _slice_dim(x: ttnn.Tensor, dim: int, start: int, stop: int) -> ttnn.Tensor:
-    starts = [0] * len(x.shape)
-    stops = list(x.shape)
-    starts[dim], stops[dim] = start, stop
-    return ttnn.slice(x, starts, stops)
+def blend(a: torch.Tensor, b: torch.Tensor, blend_extent: int, dim: int) -> torch.Tensor:
+    """Linear cross-fade of ``a``'s tail into ``b``'s head along ``dim``."""
+    blend_extent = min(a.shape[dim], b.shape[dim], blend_extent)
+    positions = torch.arange(blend_extent, device=b.device, dtype=b.dtype)
+    shape = [1] * a.ndim
+    shape[dim] = blend_extent
+    weight_a = (1 - positions / blend_extent).view(shape)
+    weight_b = (positions / blend_extent).view(shape)
+
+    slice_a = [slice(None)] * a.ndim
+    slice_a[dim] = slice(-blend_extent, None)
+    slice_b = [slice(None)] * b.ndim
+    slice_b[dim] = slice(0, blend_extent)
+    blended = a[tuple(slice_a)] * weight_a + b[tuple(slice_b)] * weight_b
+
+    if blend_extent == b.shape[dim]:
+        return blended
+    slice_rest = [slice(None)] * b.ndim
+    slice_rest[dim] = slice(blend_extent, None)
+    return torch.cat([blended, b[tuple(slice_rest)]], dim=dim)
 
 
-class MiniMaxH3VaeResnetBlock(Module):
-    """``norm -> silu -> conv -> norm -> silu -> conv``, plus a k1 shortcut when widths differ."""
-
-    def __init__(self, in_channels: int, out_channels: int, *, mesh_device, dtype=ttnn.float32) -> None:
-        super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        norm_kwargs = dict(
-            num_groups=MINIMAX_H3_VAE_NUM_GROUPS,
-            mesh_device=mesh_device,
-        )
-        self.norm1 = GroupNorm(num_channels=in_channels, **norm_kwargs)
-        self.norm2 = GroupNorm(num_channels=out_channels, **norm_kwargs)
-        conv_kwargs = dict(kernel_size=3, mesh_device=mesh_device, dtype=dtype)
-        self.conv1 = MiniMaxH3VaeConv(in_channels, out_channels, **conv_kwargs)
-        self.conv2 = MiniMaxH3VaeConv(out_channels, out_channels, **conv_kwargs)
-        if in_channels != out_channels:
-            self.nin_shortcut = MiniMaxH3VaeConv(
-                in_channels, out_channels, kernel_size=1, reflect=False, mesh_device=mesh_device, dtype=dtype
-            )
-
-    def forward(self, x_BHWC: ttnn.Tensor) -> ttnn.Tensor:
-        h = self.conv1(ttnn.silu(self.norm1(x_BHWC)))
-        h = self.conv2(ttnn.silu(self.norm2(h)))
-        if self.in_channels != self.out_channels:
-            x_BHWC = self.nin_shortcut(x_BHWC)
-        return ttnn.add(h, x_BHWC)
+def stitch_tiles(
+    tiles: list[list[torch.Tensor]], height_overlaps: list[int], width_overlaps: list[int]
+) -> torch.Tensor:
+    """Blend a 2D grid of tiles back into one tensor (reference ``_stitch_tiles``)."""
+    result_rows = []
+    for i, row in enumerate(tiles):
+        result_row = []
+        for j, tile in enumerate(row):
+            if i > 0:
+                tile = blend(tiles[i - 1][j], tile, height_overlaps[i - 1], dim=-2)
+            if j > 0:
+                tile = blend(row[j - 1], tile, width_overlaps[j - 1], dim=-1)
+            if i < len(tiles) - 1:
+                tile = tile[..., : -height_overlaps[i], :]
+            if j < len(row) - 1:
+                tile = tile[..., :, : -width_overlaps[j]]
+            result_row.append(tile)
+        result_rows.append(torch.cat(result_row, dim=-1))
+    return torch.cat(result_rows, dim=-2)
 
 
-class MiniMaxH3VaeDownsample(Module):
-    """Stride-2 spatial conv with H3's asymmetric pre-pad.
+class MiniMaxH3Vae(Module):
+    """Encode path for the H3 visual VAE, tiled and temporally chunked.
 
-    The reference pads only the right and bottom by one before a stride-2 conv whose
-    own spatial padding is zero, so the pad is not centred.
-    """
-
-    def __init__(self, in_channels: int, out_channels: int, *, mesh_device, dtype=ttnn.float32) -> None:
-        super().__init__()
-        self.conv = MiniMaxH3VaeConv(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            stride=2,
-            reflect=False,
-            mesh_device=mesh_device,
-            dtype=dtype,
-        )
-        self.conv.internal_padding = (0, 0, 0)
-
-    def forward(self, x_BHWC: ttnn.Tensor) -> ttnn.Tensor:
-        x_BHWC = _reflect_pad_asymmetric(x_BHWC)
-        return self.conv(x_BHWC)
-
-
-def _reflect_pad_asymmetric(x_BHWC: ttnn.Tensor) -> ttnn.Tensor:
-    """Pad right and bottom by one, reflecting -- the reference's ``(0,1,0,1)``."""
-    height, width = x_BHWC.shape[1], x_BHWC.shape[2]
-    x_BHWC = ttnn.concat([x_BHWC, _slice_dim(x_BHWC, 1, height - 2, height - 1)], dim=1)
-    return ttnn.concat([x_BHWC, _slice_dim(x_BHWC, 2, width - 2, width - 1)], dim=2)
-
-
-class MiniMaxH3VaeEncoder(Module):
-    """The FL2VA keyframe encoder: pixels to ``2 * z_channels`` moments.
-
-    ``forward`` returns the ``[mean, logvar]`` moments. Sampling stays on host so
-    the seed-42 posterior draw the released model conditions on is reproducible
-    bit-for-bit; see ``pipelines/minimax_h3/conditioning.py``.
+    Encoders are built lazily and cached per distinct tile shape. Each carries
+    GroupNorms whose core grid is pinned at construction, so one encoder serves every
+    tile of a given ``(T, H, W)`` -- which, with tiling on, is every tile of the frame.
     """
 
     def __init__(
         self,
+        config: MiniMaxH3VaeConfig,
         *,
-        ch: int = 128,
-        ch_mult: tuple[int, ...] = (1, 2, 2, 4, 4, 8),
-        num_res_blocks: int = 2,
-        space_down: tuple[int, ...] = (2, 2, 2, 2, 1, 1),
-        time_down: tuple[int, ...] = (1, 2, 2, 1, 1, 1),
-        in_channels: int = 3,
-        z_channels: int = 24,
-        double_z: bool = True,
-        mesh_device=None,
-        dtype=ttnn.float32,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.float32,
+        tile_size: int = DEFAULT_TILE_SIZE,
+        tile_overlap: int = DEFAULT_TILE_OVERLAP,
+        use_tiling: bool = True,
     ) -> None:
         super().__init__()
-        num_levels = len(ch_mult)
-        block_mid = [ch * mult for mult in ch_mult]
-        block_in = [block_mid[0], *block_mid[:-1]]
-        self.num_levels = num_levels
-        self.num_res_blocks = num_res_blocks
-        self.z_channels = z_channels
+        self.config = config
+        self.mesh_device = mesh_device
+        self.dtype = dtype
+        self.tile_size = tile_size
+        self.tile_overlap = tile_overlap
+        self.use_tiling = use_tiling
+        self._encoders: dict[tuple[int, int, int, int], MiniMaxH3Encoder3d] = {}
+        self._encoder_state: dict[str, torch.Tensor] | None = None
+        self._decoders: dict[tuple[int, int, int], object] = {}
+        self._decoder_state: dict[str, torch.Tensor] | None = None
 
-        conv_kwargs = dict(mesh_device=mesh_device, dtype=dtype)
-        self.conv_in = MiniMaxH3VaeConv(in_channels, block_in[0], kernel_size=3, **conv_kwargs)
+    def forward(self, *args, **kwargs):
+        """Unused: ``Module`` declares ``forward`` abstract, but this class has two entry points."""
+        raise RuntimeError("use encode() or encode_clip(); MiniMaxH3Vae has no single forward")
 
-        blocks, downsamples = [], []
-        for level in range(num_levels):
-            for index in range(num_res_blocks):
-                blocks.append(
-                    MiniMaxH3VaeResnetBlock(
-                        block_in[level] if index == 0 else block_mid[level],
-                        block_mid[level],
-                        **conv_kwargs,
-                    )
-                )
-            # A level downsamples only when it actually reduces a dimension. With a
-            # single frame `time_down` cannot bite -- stride 2 over a 3-deep
-            # zero-padded axis still selects the one real frame -- but it still
-            # decides whether the level owns a conv at all.
-            if space_down[level] * time_down[level] > 1:
-                downsamples.append((level, MiniMaxH3VaeDownsample(block_mid[level], block_mid[level], **conv_kwargs)))
-        self.blocks = ModuleList(blocks)
-        self.downsample_levels = [level for level, _ in downsamples]
-        self.downsamples = ModuleList([module for _, module in downsamples])
+    def load_encoder_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Hold the encoder ``state_dict`` so lazily-built per-shape encoders can load it.
 
-        self.norm_out = GroupNorm(
-            num_channels=block_mid[-1], num_groups=MINIMAX_H3_VAE_NUM_GROUPS, mesh_device=mesh_device
-        )
-        moments = 2 * z_channels if double_z else z_channels
-        self.conv_out = MiniMaxH3VaeConv(block_mid[-1], moments, kernel_size=3, **conv_kwargs)
-        self.quant_conv = MiniMaxH3VaeConv(moments, moments, kernel_size=1, reflect=False, **conv_kwargs)
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Flatten the checkpoint's per-level nesting onto flat block lists.
-
-        The checkpoint nests as ``encoder.down.<level>.block.<i>.*`` and
-        ``encoder.down.<level>.downsample.conv.*``; ``quant_conv`` sits outside
-        ``encoder.`` entirely.
+        ``quant_conv`` is folded into ``conv_out`` here. The two are adjacent with no
+        nonlinearity between them, so one 1024->48 k3 conv does both and the awkward
+        48-channel 1x1x1 conv disappears entirely.
         """
-        for key in list(state):
-            if key.startswith("encoder."):
-                state[key.removeprefix("encoder.")] = state.pop(key)
+        encoder_state = {k[len("encoder.") :]: v for k, v in state.items() if k.startswith("encoder.")}
+        if not encoder_state:
+            encoder_state = dict(state)
+        quant_weight = state.get("quant_conv.weight")
+        quant_bias = state.get("quant_conv.bias")
+        encoder_state.pop("quant_conv.weight", None)
+        encoder_state.pop("quant_conv.bias", None)
+        if quant_weight is not None and "conv_out.weight" in encoder_state:
+            # (48,48,1,1,1) composed with (48,1024,3,3,3) -> (48,1024,3,3,3)
+            quant_2d = quant_weight.reshape(quant_weight.shape[0], quant_weight.shape[1])
+            encoder_state["conv_out.weight"] = torch.einsum(
+                "oi,ijkmn->ojkmn", quant_2d, encoder_state["conv_out.weight"]
+            )
+            encoder_state["conv_out.bias"] = quant_2d @ encoder_state["conv_out.bias"] + quant_bias
+        self._encoder_state = encoder_state
+        self._is_loaded = True
 
-        for key in list(state):
-            if not key.startswith("down."):
-                continue
-            _, level, kind, rest = key.split(".", 3)
-            level = int(level)
-            if kind == "block":
-                index, tail = rest.split(".", 1)
-                flat = level * self.num_res_blocks + int(index)
-                state[f"blocks.{flat}.{tail}"] = state.pop(key)
-            elif kind == "downsample":
-                flat = self.downsample_levels.index(level)
-                state[f"downsamples.{flat}.{rest}"] = state.pop(key)
+    def _encoder_for(self, num_frames: int, height: int, width: int, temporal_taps: int) -> MiniMaxH3Encoder3d:
+        key = (num_frames, height, width, temporal_taps)
+        if key not in self._encoders:
+            if self._encoder_state is None:
+                raise RuntimeError("call load_encoder_state() before encoding")
+            config = self.config
+            encoder = MiniMaxH3Encoder3d(
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                in_channels=config.in_channels,
+                out_channels=2 * config.latent_channels,
+                block_out_channels=config.block_out_channels,
+                layers_per_block=config.layers_per_block,
+                spatial_downsample_factors=config.spatial_downsample_factors,
+                temporal_downsample_factors=config.temporal_downsample_factors,
+                temporal_taps=temporal_taps,
+                mesh_device=self.mesh_device,
+                dtype=self.dtype,
+            )
+            encoder.load_torch_state_dict(dict(self._encoder_state))
+            self._encoders[key] = encoder
+        return self._encoders[key]
 
-    def forward(self, x_BHWC: ttnn.Tensor) -> ttnn.Tensor:
-        h = self.conv_in(x_BHWC)
-        downsample = 0
-        for level in range(self.num_levels):
-            for index in range(self.num_res_blocks):
-                h = self.blocks[level * self.num_res_blocks + index](h)
-            if level in self.downsample_levels:
-                h = self.downsamples[downsample](h)
-                downsample += 1
-        h = self.conv_out(ttnn.silu(self.norm_out(h)))
-        return self.quant_conv(h)
+    def _run_encoder(self, tile_BCTHW: torch.Tensor, temporal_taps: int) -> torch.Tensor:
+        _, _, num_frames, height, width = tile_BCTHW.shape
+        encoder = self._encoder_for(num_frames, height, width, temporal_taps)
+
+        x = tile_BCTHW.permute(0, 2, 3, 4, 1).contiguous()
+        if x.shape[-1] < encoder.conv_in.in_channels:
+            x = torch.nn.functional.pad(x, (0, encoder.conv_in.in_channels - x.shape[-1]))
+        x_device = ttnn.from_torch(x, dtype=self.dtype, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
+        out = ttnn.to_torch(encoder(x_device)).float()
+        moments = 2 * self.config.latent_channels
+        return out[..., :moments].permute(0, 4, 1, 2, 3).contiguous()
+
+    def encode_clip(self, x_BCTHW: torch.Tensor, *, temporal_taps: int | None = None) -> torch.Tensor:
+        """Encode one temporal clip, spatially tiled -- the reference ``_encode_clip``.
+
+        A keyframe goes through here rather than :meth:`encode`, because a single frame
+        must not be put through the temporal chunking.
+        """
+        if temporal_taps is None:
+            temporal_taps = 1 if x_BCTHW.shape[2] == 1 else 3
+
+        if not self.use_tiling:
+            return self._run_encoder(x_BCTHW, temporal_taps)
+
+        ratio = self.config.spatial_compression_ratio
+        height, width = x_BCTHW.shape[-2], x_BCTHW.shape[-1]
+        y_starts, y_lengths, y_overlaps = split_tiles(height, self.tile_size, self.tile_overlap, ratio)
+        x_starts, x_lengths, x_overlaps = split_tiles(width, self.tile_size, self.tile_overlap, ratio)
+
+        rows = []
+        for y, y_length in zip(y_starts, y_lengths):
+            row = []
+            for x, x_length in zip(x_starts, x_lengths):
+                row.append(self._run_encoder(x_BCTHW[..., y : y + y_length, x : x + x_length], temporal_taps))
+            rows.append(row)
+
+        return stitch_tiles(rows, [o // ratio for o in y_overlaps], [o // ratio for o in x_overlaps])
+
+    def encode(self, x_BCTHW: torch.Tensor) -> torch.Tensor:
+        """Encode a video in ``clip_length``-frame chunks, dropping ``token_drop`` tails.
+
+        Mirrors the reference ``_encode``: the final frame is repeated to reach a whole
+        number of clips, and the trailing ``token_drop`` latent frames are then removed.
+        """
+        clip_length = self.config.clip_length
+        num_frames = x_BCTHW.shape[2]
+        if num_frames % clip_length != 0:
+            pad = x_BCTHW[:, :, -1:].repeat(1, 1, (-num_frames) % clip_length, 1, 1)
+            x_BCTHW = torch.cat([x_BCTHW, pad], dim=2)
+
+        moments = torch.cat(
+            [
+                self.encode_clip(x_BCTHW[:, :, i * clip_length : (i + 1) * clip_length], temporal_taps=3)
+                for i in range(x_BCTHW.shape[2] // clip_length)
+            ],
+            dim=2,
+        )
+        if self.config.token_drop > 0:
+            moments = moments[:, :, : -self.config.token_drop]
+        return moments
+
+    # ---------------------------------------------------------------- decode
+
+    def load_decoder_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Hold the decoder ``state_dict``, folding ``post_quant_conv`` into ``proj_in``.
+
+        The two are adjacent with no nonlinearity, so ``proj_in(post_quant_conv(z))`` is one
+        24->2048 linear and the awkward 24-channel 1x1x1 conv disappears.
+        """
+        decoder_state = {k[len("decoder.") :]: v for k, v in state.items() if k.startswith("decoder.")}
+        if not decoder_state:
+            decoder_state = dict(state)
+        post_weight = state.get("post_quant_conv.weight")
+        post_bias = state.get("post_quant_conv.bias")
+        decoder_state.pop("post_quant_conv.weight", None)
+        decoder_state.pop("post_quant_conv.bias", None)
+        if post_weight is not None and "proj_in.weight" in decoder_state:
+            post_2d = post_weight.reshape(post_weight.shape[0], post_weight.shape[1])
+            decoder_state["proj_in.bias"] = decoder_state["proj_in.weight"] @ post_bias + decoder_state["proj_in.bias"]
+            decoder_state["proj_in.weight"] = decoder_state["proj_in.weight"] @ post_2d
+        self._decoder_state = decoder_state
+
+    def _decoder_for(self, num_frames: int, height: int, width: int):
+        from .decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
+
+        key = (num_frames, height, width)
+        if key not in self._decoders:
+            if self._decoder_state is None:
+                raise RuntimeError("call load_decoder_state() before decoding")
+            decoder = MiniMaxH3ViTDecoder3d(
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                in_channels=self.config.latent_channels,
+                out_channels=self.config.out_channels,
+                patch_size=self.config.spatial_compression_ratio,
+                patch_size_t=self.config.temporal_compression_ratio,
+                num_layers=self.config.decoder_num_layers,
+                num_heads=self.config.decoder_num_attention_heads,
+                head_dim=self.config.decoder_attention_head_dim,
+                num_register_tokens=self.config.decoder_num_register_tokens,
+                ffn_mult=self.config.decoder_ffn_mult,
+                rope_theta=self.config.decoder_rope_theta,
+                rope_dim_ratio=self.config.decoder_rope_dim_ratio,
+                eps=self.config.decoder_norm_eps,
+                mesh_device=self.mesh_device,
+            )
+            decoder.load_torch_state_dict(dict(self._decoder_state))
+            self._decoders[key] = decoder
+        return self._decoders[key]
+
+    def _run_decoder(self, latent_BCTHW: torch.Tensor) -> torch.Tensor:
+        from .decoder_minimax_h3 import unpatchify
+
+        _, _, num_frames, height, width = latent_BCTHW.shape
+        decoder = self._decoder_for(num_frames, height, width)
+        tokens = latent_BCTHW.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1)
+        out = ttnn.to_torch(
+            decoder(ttnn.from_torch(tokens, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT))
+        ).float()
+        return unpatchify(
+            out,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            out_channels=self.config.out_channels,
+            patch_size=self.config.spatial_compression_ratio,
+            patch_size_t=self.config.temporal_compression_ratio,
+        )
+
+    def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
+        """Decode one temporal clip, spatially tiled -- the reference ``_decode_clip``.
+
+        Tiles are laid out in *pixel* space and mapped back onto the latent grid, so the
+        blend extents are pixel-space too (unlike encode, where they are divided down).
+        """
+        if not self.use_tiling:
+            return self._run_decoder(z_BCTHW)
+
+        ratio = self.config.spatial_compression_ratio
+        height, width = z_BCTHW.shape[-2] * ratio, z_BCTHW.shape[-1] * ratio
+        y_starts, y_lengths, y_overlaps = split_tiles(height, self.tile_size, self.tile_overlap, ratio)
+        x_starts, x_lengths, x_overlaps = split_tiles(width, self.tile_size, self.tile_overlap, ratio)
+
+        rows = []
+        for y, y_length in zip(y_starts, y_lengths):
+            row = []
+            for x, x_length in zip(x_starts, x_lengths):
+                tile = z_BCTHW[
+                    ..., y // ratio : y // ratio + y_length // ratio, x // ratio : x // ratio + x_length // ratio
+                ]
+                row.append(self._run_decoder(tile))
+            rows.append(row)
+        return stitch_tiles(rows, y_overlaps, x_overlaps)
+
+    def decode(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
+        """Decode a latent video, mirroring the chunking ``encode`` applied.
+
+        ``token_drop`` removed the tail of every encoded chunk, so consecutive decoded
+        chunks overlap by ``frame_overlap`` pixel frames and are cross-faded. Ported from
+        the reference ``_decode``; the trailing repeated latent frames produce pixel frames
+        that were never asked for and are cut at the end.
+        """
+        config = self.config
+        chunk_size = config.tokens_chunk_size
+        temporal_ratio = config.temporal_compression_ratio
+        chunk_num_frames = chunk_size * temporal_ratio
+
+        num_tokens = z_BCTHW.shape[2] + config.token_drop
+        pad_tokens = (-num_tokens) % chunk_size
+        num_chunks = (num_tokens + pad_tokens) // chunk_size - int(config.token_drop > 0)
+        if pad_tokens > 0:
+            z_BCTHW = torch.cat([z_BCTHW, z_BCTHW[:, :, -1:].repeat(1, 1, pad_tokens, 1, 1)], dim=2)
+
+        decoded, overlap = [], None
+        for i in range(num_chunks):
+            start = i * chunk_size
+            clip = self.decode_clip(z_BCTHW[:, :, start : start + chunk_size + config.token_overlap])
+            for j in range(int(config.token_drop > 0) + 1):
+                frame_start = j * chunk_num_frames
+                chunk = clip[:, :, frame_start : frame_start + chunk_num_frames][:, :, config.frame_pre_padding :]
+                if j == 0:
+                    if overlap is not None:
+                        chunk = blend(overlap, chunk, config.frame_overlap, dim=-3)
+                    decoded.append(chunk)
+                else:
+                    overlap = chunk
+        if overlap is not None:
+            decoded.append(overlap)
+
+        result = torch.cat(decoded, dim=2)
+        if pad_tokens > 0:
+            intra_tail = config.clip_length % temporal_ratio
+            tokens_before_pad = z_BCTHW.shape[2] - pad_tokens
+            pad_frames = sum(
+                intra_tail if intra_tail and (tokens_before_pad + k) % chunk_size == 0 else temporal_ratio
+                for k in range(pad_tokens)
+            )
+            result = result[:, :, :-pad_frames]
+        return result
+
+    def normalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
+        """Apply the per-channel ``latents_mean`` / ``latents_std`` the pipeline expects."""
+        mean = torch.tensor(self.config.latents_mean, dtype=latents.dtype).view(1, -1, 1, 1, 1)
+        std = torch.tensor(self.config.latents_std, dtype=latents.dtype).view(1, -1, 1, 1, 1)
+        return (latents - mean) / std
