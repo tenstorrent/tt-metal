@@ -624,8 +624,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfb) 
 
 // 32 tiles in 4 blocks of 8; BroadcastType::NONE on Quasar. NONE is the pass-through mode: the
 // unpacker leaves the tile in SrcA and math reads it back with A2D (same pairing copy_tile uses),
-// which the ROW/COL/SCALAR test above cannot reach. Kept as its own test because only one config can
-// run per process until #38092 lands, so on Quasar run it under its own --gtest_filter.
+// which the ROW/COL/SCALAR test above cannot reach. Kept as its own TEST_F rather than folded into
+// that sweep because #38092 limits a Quasar device session to a single config and the fixture opens a
+// fresh device per test. It is already matched by the QuasarMeshDeviceSingleCardFixture.* filter in
+// tests/pipeline_reorg/llk_merge_gate_tests.yaml, so it needs no pipeline wiring of its own.
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastNoneQuasarDfb) {
     UnaryBroadcastConfig test_config = {
         .broadcast_dim = BroadcastDim::NONE,
