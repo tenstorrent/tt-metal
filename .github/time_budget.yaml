@@ -415,6 +415,12 @@ models:
     wh_llmbox_perf: 60
     bh_quietbox_2: 30
     bh_p150: 30
+  vllm:
+    wh_galaxy_perf: 430
+    bh_quietbox_2: 310
+    wh_llmbox: 297
+    bh_loudbox: 75
+    wh_n150: 65
 umd:
   unit:
     wh_galaxy_perf: 35
