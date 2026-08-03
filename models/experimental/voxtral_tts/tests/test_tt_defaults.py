@@ -47,9 +47,11 @@ def test_block1_weight_precision_is_mixed():
 
 
 def test_block1_decode_native_is_off():
-    """OFF: 6.6 ms/frame faster, but it drove fixture case 4 into a repetition loop (78/8/183/123
-    frames across seeds vs 45/8/39/69 hand-rolled). Re-measure if case 4 is ever fixed."""
-    assert gpt.DECODE_NATIVE is False, "amplifies case 4 into a repetition loop"
+    """OFF, but provisionally. It is 6.6 ms/frame faster at the same decode PCC. It was turned
+    off after fixture case 4 collapsed with it on -- then case 4 turned out to be unstable in
+    every implementation including the fp32 CPU reference (81/8/57 frames for one word), so it
+    cannot discriminate between implementations. Needs a re-gate excluding case 4."""
+    assert gpt.DECODE_NATIVE is False
 
 
 def test_block2_weights_are_bfp8_but_fidelity_stays_high():
