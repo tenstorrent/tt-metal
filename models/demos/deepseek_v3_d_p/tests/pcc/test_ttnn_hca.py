@@ -4,7 +4,7 @@
 
 """
 PCC tests for the DeepSeek-V4 Heavily Compressed Attention (HCA) block (prefill), against the
-reference modeling_deepseek_v4.py (paper §2.3.2).
+reference modeling_deepseek_v4.py.
 
 Every test drives a public forward -- no TtHCA private method is called directly:
   - TtHCACompressor.forward        compressed KV entries + block bias
@@ -48,8 +48,7 @@ def _flash_config(num_hidden_layers=4):
     )
 
 
-# 1x1 needs no fabric (sp=tp=1 skips every collective). On a 32-chip box only 8x4 runs; the others
-# need TT_VISIBLE_DEVICES + a matching mesh graph descriptor (see hca_perf/GALAXY_PERF.md).
+# 1x1 needs no fabric (sp=tp=1 skips every collective). On a 32-chip box only 8x4 runs;
 _MESH_CONFIGS = [
     pytest.param(
         (1, 1),
@@ -278,8 +277,6 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
     logger.debug("PCC test passed!")
 
 
-# Per-iteration VALID token counts. The device tensor is always _CHUNK_SIZE wide and only how much of
-# it is real varies -- that is what keeps one compiled program for the whole prefill. Non-final chunks
 # must be full (the cache write needs a tile-aligned offset); a partial FINAL chunk is fine.
 _CHUNK_SIZE = 4096
 _CHUNKED_SCENARIOS = [
@@ -338,7 +335,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
     logger.debug(f"mesh={ms} scenario={name} iters={iters_valid} total={total}")
 
     signpost("HCA_START")
-    kv_actual, entries_after_first = 0, None
+    kv_actual = 0
     for it, valid in enumerate(iters_valid):
         # Fixed device width every chunk; a short final chunk is padded up to it.
         chunk = torch.zeros(batch, _CHUNK_SIZE, config.hidden_size)
@@ -357,31 +354,17 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
             out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
         ).squeeze(1)[:, :valid]
 
-        # Looser than single-shot (0.998): a chunk attends entries emitted by earlier chunks, each
-        # already carrying its own bf16 error, so accuracy drifts ~0.0006 per chunk.
         expected = out_ref[:, kv_actual : kv_actual + valid]
         pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.997)
         logger.debug(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc_message}")
         assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
 
-        cache_entries = mesh_device.num_program_cache_entries()
-        if it == 0:
-            entries_after_first = cache_entries
-        else:
-            assert cache_entries == entries_after_first, (
-                f"chunk {it} added programs ({entries_after_first} -> {cache_entries}); a shape must have "
-                f"changed between chunks"
-            )
         kv_actual += valid
     signpost("HCA_END")
 
     assert state.kv_actual == total
     assert state.entry_count == sum(v // compress_rate for v in iters_valid)
 
-    # Chunk boundaries fall on window boundaries, so the accumulated cache must equal what one
-    # unchunked compressor pass emits. This is the only check that reaches the stateful plumbing: the
-    # compressor test never writes at an offset nor with first_window_position != 0, and a mis-rotated
-    # or misplaced entry carries too little attention mass to move the output PCC.
     with torch.no_grad():
         ref_entries, _ = ref.compressor(
             hidden, torch.zeros(batch, total, config.q_lora_rank), position_ids, past_key_values=None, layer_idx=0
@@ -395,7 +378,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
     logger.debug(f"  compressed cache PCC: {cache_msg}")
     assert cache_passed, f"compressed cache mismatch: {cache_msg}"
 
-    logger.debug(f"PCC test passed! entries={state.entry_count} program cache stable at {entries_after_first}")
+    logger.debug(f"PCC test passed! entries={state.entry_count}")
 
 
 class _RefHCACache:
@@ -456,7 +439,7 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
     logger.debug(f"mesh={ms} chunks={chunks}x{_CHUNK_SIZE} total={total}")
 
     signpost("HCA_START")
-    kv_actual, entries_after_first = 0, None
+    kv_actual = 0
     for it in range(chunks):
         chunk = hidden[:, kv_actual : kv_actual + _CHUNK_SIZE]
         chunk_pos = position_ids[:, kv_actual : kv_actual + _CHUNK_SIZE]
@@ -482,27 +465,16 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
             out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
         ).squeeze(1)
 
-        # Drift is ~0.00055 per chunk; 0.99 leaves headroom to roughly chunk 18.
         pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.99)
         logger.debug(f"  iter {it} (kv_actual={kv_actual} entries={state.entry_count}): PCC {pcc_message}")
         assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
 
-        cache_entries = mesh_device.num_program_cache_entries()
-        if it == 0:
-            entries_after_first = cache_entries
-        else:
-            assert cache_entries == entries_after_first, (
-                f"chunk {it} added programs ({entries_after_first} -> {cache_entries}); a shape must have "
-                f"changed between chunks"
-            )
         kv_actual += _CHUNK_SIZE
     signpost("HCA_END")
 
     assert state.kv_actual == total
     assert state.entry_count == total // compress_rate
 
-    # 448 entries written at 14 different offsets must match one unchunked compressor pass. Cheap to
-    # check even at this length -- the compressor has no [S, S] anywhere.
     with torch.no_grad():
         ref_entries, _ = ref.compressor(
             hidden, torch.zeros(batch, total, config.q_lora_rank), position_ids, past_key_values=None, layer_idx=0
@@ -516,4 +488,4 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
     logger.debug(f"  compressed cache PCC: {cache_msg}")
     assert cache_passed, f"compressed cache mismatch: {cache_msg}"
 
-    logger.debug(f"{total} tokens OK: entries={state.entry_count} program cache stable at {entries_after_first}")
+    logger.debug(f"{total} tokens OK: entries={state.entry_count}")

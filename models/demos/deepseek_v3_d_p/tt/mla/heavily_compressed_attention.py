@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """DeepSeek-V4 Heavily Compressed Attention (TTNN prefill).
-
 Mirrors ``DeepseekV4Attention`` in ``reference/deepseek_v4/modeling_deepseek_v4.py``."""
 
 from __future__ import annotations
@@ -47,7 +46,9 @@ class _TtHCABase(LightweightModule):
 
     def _to_tt_linear_weight(self, weight: torch.Tensor, tp_shard_dim: int | None = None):
         # tp_shard_dim indexes the transposed 4D weight [1, 1, in, out]: 2 = contraction (in), 3 = output.
-        torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
+        # Handed over at its source dtype: from_torch quantizes straight to weights_dtype, and a bf16
+        # stop on the way to bfloat8_b would pre-round away what the block exponent could still keep.
+        torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
         mesh_mapper = None
         if self.is_mesh:
             if tp_shard_dim is not None and self.tp_factor > 1:
@@ -69,7 +70,7 @@ class _TtHCABase(LightweightModule):
         if self.is_mesh and mesh_mapper is None:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
         return ttnn.from_torch(
-            x.to(torch.bfloat16),
+            x,
             device=self.device,
             dtype=dtype or self.dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -78,8 +79,7 @@ class _TtHCABase(LightweightModule):
         )
 
     def _cos_sin(self, positions: torch.Tensor, negate_sin: bool = False):
-        """``negate_sin`` gives the conjugate rotation used to undo RoPE on the attention output.
-        SP-sharded on seq to match the query rows it will be applied to."""
+        """``negate_sin`` gives the conjugate rotation used to undo RoPE on the attention output."""
         positions = positions[:1].to(torch.long)
         cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions, layer_type="compress")
         if negate_sin:
@@ -112,8 +112,6 @@ class TtHCACompressor(_TtHCABase):
         tp_axis: int = 1,
         topology=ttnn.Topology.Linear,
         dtype=ttnn.bfloat16,
-        # Matmul weights only. Norms / position_bias / sinks / trans_mat stay bf16 -- they never
-        # enter a matmul, so quantizing them costs accuracy and saves nothing (mirrors mla.py).
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
@@ -131,10 +129,9 @@ class TtHCACompressor(_TtHCABase):
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
-        # Rides both axes -- TP all-reduce for wkv/wgate, SP all-gather for the pooled entries.
         self.ccl_topology = topology
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
-        self.ccl_num_links = 2 if is_blackhole() else 1  # Blackhole trains 2 fabric routing planes, others 1
+        self.ccl_num_links = 2 if is_blackhole() else 1
 
         self.wkv = self._to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
         self.wgate = self._to_tt_linear_weight(gate_proj_weight, tp_shard_dim=2)
@@ -179,7 +176,7 @@ class TtHCACompressor(_TtHCABase):
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
-        batch, seq_len = input_shape[0], input_shape[2]  # seq_len = per-chip S_pad/sp
+        batch, seq_len = input_shape[0], input_shape[2]
         if seq_len_actual is None:
             seq_len_actual = seq_len * self.sp_factor
 
@@ -236,8 +233,6 @@ class TtHCACompressor(_TtHCABase):
             compressed = ttnn.reshape(pooled, [batch, 1, n_windows, self.head_dim])
             compressed = ttnn.rms_norm(compressed, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
 
-            # RoPE only on the trailing rope_head_dim channels (the op caps head_dim at 256). Positions
-            # are GLOBAL window indices, so the arange spans all chips and _cos_sin SP-shards it.
             nope_dim = self.head_dim - self.rope_head_dim
             nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
             rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
@@ -275,8 +270,7 @@ class TtHCACompressor(_TtHCABase):
 
 
 class TtHCAState:
-    """Chunked-prefill state, owned by the caller and passed to ``TtHCA.forward`` (like MLA's
-    ``kvpe_cache``, not hidden in the module).
+    """Chunked-prefill state, owned by the caller and passed to ``TtHCA.forward``.
 
     Both device tensors keep a FIXED shape for the whole prefill and only their contents advance --
     that is what lets one compiled program serve every chunk. The counters say how much is real;
@@ -292,7 +286,7 @@ class TtHCAState:
 class TtHCA(_TtHCABase):
     """HCA block: query/kv stems + compressor + attention core + grouped output projection.
 
-    Block I/O is ``[B, 1, S/sp, hidden/tp]`` in and out, so layers chain without a reshard."""
+    Block I/O is ``[B, 1, S/sp, hidden/tp]``, so layers chain without a reshard."""
 
     def __init__(
         self,
@@ -318,8 +312,6 @@ class TtHCA(_TtHCABase):
         tp_axis: int = 1,
         topology=ttnn.Topology.Linear,
         dtype=ttnn.bfloat16,
-        # Matmul weights only. Norms / position_bias / sinks / trans_mat stay bf16 -- they never
-        # enter a matmul, so quantizing them costs accuracy and saves nothing (mirrors mla.py).
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
@@ -342,7 +334,7 @@ class TtHCA(_TtHCABase):
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
         self.tp_ccl_topology = topology
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
-        self.ccl_num_links = 2 if is_blackhole() else 1  # Blackhole trains 2 fabric routing planes, others 1
+        self.ccl_num_links = 2 if is_blackhole() else 1
 
         # Pre-divided by scale: SDPA scales BOTH QK and the sink internally, the reference scales only
         # QK -- dividing here cancels the kernel's extra multiply. TP-sharded to match the query heads.
@@ -355,8 +347,6 @@ class TtHCA(_TtHCABase):
         else:
             self.sinks_sdpa = self._from_torch(sinks_host)
 
-        # tp_shard_dim=2 shards the contraction (row-parallel, needs an all-reduce after);
-        # tp_shard_dim=3 shards the output (column-parallel, no collective).
         self.wq_a = self._to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2)
         self.wq_b = self._to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
         self.q_a_norm_weight = self._from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
@@ -366,7 +356,7 @@ class TtHCA(_TtHCABase):
 
         # o_a_proj is block-diagonal over o_groups. Groups partition the heads, so a TP chip owns whole
         # groups: keep it as ONE batched weight sharded on the group axis and run a single batched
-        # matmul -- each chip applies only its own groups, no collective.
+        # matmul -- each chip applies only its own groups, no collective
         self.o_groups = int(o_groups)
         in_per_group = self.num_heads * self.head_dim // self.o_groups
         o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0)
@@ -375,7 +365,7 @@ class TtHCA(_TtHCABase):
             o_a_dims = [None, None]
             o_a_dims[self.tp_axis] = 1
             o_a_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=o_a_dims)
-        # Pre-grouped so it skips _to_tt_linear_weight, but it IS a matmul weight -> same dtype.
+
         self.wo_a = self._from_torch(o_a_grouped, mesh_mapper=o_a_mapper, dtype=self.weights_dtype)
         self.wo_b = self._to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
 
@@ -458,9 +448,6 @@ class TtHCA(_TtHCABase):
         q = ttnn.rms_norm(q, weight=self.q_a_norm_weight, epsilon=self.rms_norm_eps)
         q = ttnn.linear(q, self.wq_b, memory_config=self.memory_config)
 
-        # Fused rather than reshape+permute: the intermediate [B, S, heads, head_dim] puts heads on
-        # dim -2, which TILE pads to 32 -- that pair cost 1,152 us/chunk, this costs 112.
-        # num_kv_heads=0 is the Q-only form (same call MLA makes at mla.py:860).
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q,
             num_heads=num_heads_local,
@@ -537,14 +524,13 @@ class TtHCA(_TtHCABase):
         first query); ``carry_len`` is how many raw keys precede it. Built on host and SP-sharded on
         query rows to match q; head-independent, so TP-replicated."""
         t_len = block_bias.shape[-1]
-        raw = carry_len + seq_len  # carry and chunk keys are contiguous in global positions
+        raw = carry_len + seq_len
         i = torch.arange(seq_len).view(-1, 1) + kv_actual
         j = torch.arange(raw).view(1, -1) + (kv_actual - carry_len)
         # j >= 0 drops the carry columns of chunk 0, whose positions do not exist yet.
         allowed = (j >= 0) & (j <= i) & (i - j < self.sliding_window)
         full = torch.full((batch, 1, seq_len, sk_pad), float("-inf"))
         full[..., :raw] = torch.zeros(seq_len, raw).masked_fill(~allowed, float("-inf")).view(1, 1, seq_len, raw)
-        # Padded query rows keep -inf and are discarded downstream.
         full[:, :, : block_bias.shape[2], raw : raw + t_len] = block_bias.to(torch.float32)
         mesh_mapper = None
         if self.is_mesh and self.sp_factor > 1:
@@ -614,10 +600,6 @@ class TtHCA(_TtHCABase):
             attention_sink=self.sinks_sdpa,
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-                # 3.1x the 32/32 default, measured on 8x4 (Sq/chip 512, Sk 4256). Both curves are
-                # V-shaped -- the optimum is NOT the largest that fits: k=160 fits and is slower.
-                #   q (k=32):  32 -> 3,096 us | 64 -> 2,185 | 128 -> 1,205 | 256 -> 2,318 | 512 -> OOM
-                #   k (q=128): 32 -> 1,205    | 128 ->  994 | 160 -> 1,048 | 192+ -> OOM
                 q_chunk_size=128,
                 k_chunk_size=128,
                 exp_approx_mode=False,
@@ -637,20 +619,8 @@ class TtHCA(_TtHCABase):
         in_per_group = self.num_heads * self.head_dim // self.o_groups
         groups_local = self.o_groups // self.tp_factor
 
-        # Regroup with LEADING-axis reshapes only: dims -2/-1 never change, so the tiling is untouched
-        # and both reshapes are metadata-only (~3 us). The obvious reshape/permute route puts
-        # groups_local or heads on dim -2, which TILE pads to 32 -- [B, S, 2, 4096] then holds 8.4 MB
-        # of data in 134 MB of tiles, and the five ops it took cost 2,594 us/chunk.
-        #
-        # nlp_concat_heads reads dim 0 as batch and dim 1 as heads, so feeding it
-        # [groups, heads_per_group, ...] emits one in_per_group-wide row per group in a single call.
-        # That also bounds its L1 circular buffers by in_per_group (a model constant) rather than
-        # heads_local*head_dim (a mesh function) -- the all-heads form needs 4.2 MB at tp=1 and 2.1 MB
-        # at tp=2 against a 1.5 MB budget. MLA calls it on all heads (mla.py:1016) and gets away with
-        # it only because its v_head_dim is 128, not 512.
         x = ttnn.reshape(attn, [groups_local, attn.shape[1] // groups_local, seq_len, self.head_dim])
         x = ttnn.experimental.nlp_concat_heads(x, memory_config=self.memory_config)
-        # Groups must be dim 1 for the batched matmul, and dim 0 must be 1 for the weight to broadcast.
         x = ttnn.reshape(x, [batch, groups_local, seq_len, in_per_group])
 
         grouped = ttnn.linear(x, self.wo_a, memory_config=self.memory_config)  # [B, groups_local, S, o_lora_rank]
@@ -695,12 +665,8 @@ class TtHCA(_TtHCABase):
         compress_rate = self.compressor.compress_rate
         real_len = seq_pad_global if seq_len_actual is None else seq_len_actual
 
-        # One request per call; concurrent users get their own state. MLA assumes the same but only in
-        # a comment, so a batched input there fails silently -- assert instead.
         assert batch == 1, f"HCA prefill expects batch 1, got {batch}"
 
-        # Below one full window there is no compressed KV at all: block_bias would be None and the
-        # attention core would have no compressed columns to mask. Fail here rather than deeper in.
         assert real_len >= compress_rate, (
             f"HCA prefill needs at least one full compression window: got seq_len {real_len} < "
             f"compress_rate {compress_rate}"
