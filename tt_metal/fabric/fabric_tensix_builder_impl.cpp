@@ -1120,21 +1120,20 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
 }
 
 std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_runtime_args(tt::tt_metal::Program& program) const {
-    std::vector<uint32_t> runtime_args;
-    runtime_args.reserve(upstream_routers_noc_x_.size() + upstream_routers_noc_y_.size());
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         TT_FATAL(
             upstream_routers_noc_x_.empty() && upstream_routers_noc_y_.empty(),
             "In UDM mode there should NOT be any upstream routers being set");
     }
-    runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
-    runtime_args.insert(runtime_args.end(), upstream_routers_noc_y_.begin(), upstream_routers_noc_y_.end());
 
     auto config_runtime_args =
         config_->get_run_time_args(local_fabric_node_id_, remote_fabric_node_id_, link_idx_, program, my_core_logical_);
 
-    runtime_args.reserve(runtime_args.size() + config_runtime_args.size());
+    std::vector<uint32_t> runtime_args;
+    runtime_args.reserve(upstream_routers_noc_x_.size() + upstream_routers_noc_y_.size() + config_runtime_args.size());
+    runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
+    runtime_args.insert(runtime_args.end(), upstream_routers_noc_y_.begin(), upstream_routers_noc_y_.end());
     runtime_args.insert(runtime_args.end(), config_runtime_args.begin(), config_runtime_args.end());
     return runtime_args;
 }

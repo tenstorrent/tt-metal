@@ -158,9 +158,13 @@ uint32_t PhysicalGroupingDescriptor::get_grouping_asic_count(const std::string& 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_name(const std::string& grouping_name) const {
     auto name_it = resolved_groupings_cache_.find(grouping_name);
     if (name_it != resolved_groupings_cache_.end()) {
-        std::vector<GroupingInfo> result;
+        size_t total_groupings = 0;
         for (const auto& [type, groupings] : name_it->second) {
-            result.reserve(result.size() + groupings.size());
+            total_groupings += groupings.size();
+        }
+        std::vector<GroupingInfo> result;
+        result.reserve(total_groupings);
+        for (const auto& [type, groupings] : name_it->second) {
             result.insert(result.end(), groupings.begin(), groupings.end());
         }
         return result;
@@ -169,11 +173,18 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_name(cons
 }
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_type(const std::string& grouping_type) const {
-    std::vector<GroupingInfo> result;
+    size_t total_groupings = 0;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         auto type_it = type_map.find(grouping_type);
         if (type_it != type_map.end()) {
-            result.reserve(result.size() + type_it->second.size());
+            total_groupings += type_it->second.size();
+        }
+    }
+    std::vector<GroupingInfo> result;
+    result.reserve(total_groupings);
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        auto type_it = type_map.find(grouping_type);
+        if (type_it != type_map.end()) {
             result.insert(result.end(), type_it->second.begin(), type_it->second.end());
         }
     }
@@ -181,10 +192,16 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_type(cons
 }
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_all_groupings() const {
-    std::vector<GroupingInfo> result;
+    size_t total_groupings = 0;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         for (const auto& [type, groupings] : type_map) {
-            result.reserve(result.size() + groupings.size());
+            total_groupings += groupings.size();
+        }
+    }
+    std::vector<GroupingInfo> result;
+    result.reserve(total_groupings);
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        for (const auto& [type, groupings] : type_map) {
             for (const auto& grouping : groupings) {
                 result.push_back(grouping);
             }

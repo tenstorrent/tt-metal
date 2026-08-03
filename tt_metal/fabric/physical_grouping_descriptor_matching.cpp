@@ -698,7 +698,6 @@ void process_higher_layer_and_recurse(
             if (pgd_type == "MESH") {
                 continue;
             }
-            matches.reserve(matches.size() + pgd_groupings.size());
             for (const auto& pgd_grouping : pgd_groupings) {
                 // PGD grouping must depend on one of the allowed child types
                 bool depends_on_allowed = false;
@@ -1685,7 +1684,6 @@ solve_for_many_groupings_to_psd_heterogeneous(
                 grouping.name,
                 kMaxPlacementsPerGrouping);
         }
-        candidates.reserve(candidates.size() + placements.size());
         for (auto& placement : placements) {
             if (!placement.success) {
                 continue;
@@ -1897,7 +1895,6 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     for (const auto& grouping : groupings) {
         auto flattened = is_flattened(grouping) ? std::vector<GroupingInfo>{grouping}
                                                 : build_flattened_adjacency_mesh(grouping, physical_system_descriptor);
-        flat_meshes.reserve(flat_meshes.size() + flattened.size());
         for (const auto& f : flattened) {
             if (!f.adjacency_graph.get_nodes().empty()) {
                 flat_meshes.push_back(f);
@@ -1915,7 +1912,6 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
             if (it == heterogeneous_results.end()) {
                 continue;
             }
-            placements.reserve(placements.size() + it->second.size());
             for (const auto& result : it->second) {
                 if (result.success) {
                     PsdPlacement placement;
