@@ -57,7 +57,8 @@ bool use_direct_reduce_scatter(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    if (topology != tt::tt_fabric::Topology::Ring) {
+    // The axis has to wrap: Ring on a 1D fabric, Torus on a 2D one.
+    if (!tt::tt_fabric::is_ring_or_torus(topology)) {
         return false;
     }
     // The direct op has no tuning knobs and no compute-kernel config of its own (it derives

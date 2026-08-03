@@ -46,6 +46,29 @@ struct ReduceScatterDirectGeometry {
 ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
     const ReduceScatterMinimalDirectParams& args, const ttnn::Tensor& input_tensor, bool fp32_dest_acc_en);
 
+// Which fabric configurations this op can run on.
+//
+// Every send is a multi-hop unicast to one of the two ring directions, over a
+// RoutingPlaneConnectionManager built as FabricApiType::Linear. The requirement is that the ACTIVE AXIS
+// be a TORUS: it wraps, so every destination is reachable by travelling one direction along a single
+// fabric dimension, with no turn (a plain 2D mesh resolves to Topology::Mesh and is rejected here).
+//
+// The mesh's OTHER extent is irrelevant -- cluster_axis already confines the collective to one axis, so a
+// 2x4 with a torus X axis is four independent 4-rings, each exactly the degenerate case above.
+//
+// What this cannot express, and what the factory rejects with a throw rather than a hang: a logical 1xN
+// VIEW that snakes across a larger physical grid (this 2x4 box opened as 1x8 maps to chips 0,1,2,3,7,6,5,4).
+// There the "ring" mixes X and Y hops, and 2D routing -- which is by DESTINATION NODE, not hop count --
+// cannot be made to follow it. See the factory's direction fix-up for why that matters.
+bool reduce_scatter_direct_fabric_supported(
+    const ttnn::MeshDevice& mesh_device,
+    tt::tt_fabric::FabricConfig fabric_config,
+    tt::tt_fabric::Topology axis_topology);
+
+// Resolves the collective's axis the same way the factory does: the caller's cluster_axis if given,
+// else the last axis with more than one device.
+uint32_t reduce_scatter_direct_active_axis(const ReduceScatterMinimalDirectParams& args);
+
 // Worker-core selection: one core per link, each owning that link's fwd + bwd connection. Factored out
 // so the resolved link count and the core placement are defined in exactly one place.
 uint32_t reduce_scatter_direct_num_links(const ReduceScatterMinimalDirectParams& args, uint32_t chunks_per_slice);

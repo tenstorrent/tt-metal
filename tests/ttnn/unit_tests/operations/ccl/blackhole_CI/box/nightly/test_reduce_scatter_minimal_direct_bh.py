@@ -128,3 +128,57 @@ def test_reduce_scatter_minimal_direct_sharded(
         enable_trace=enable_trace,
         persistent_mode="none",
     )
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("rs_input_dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("rs_input_shape, dim", RS_DIRECT_SHAPES, ids=RS_DIRECT_SHAPE_IDS)
+@pytest.mark.parametrize("persistent_mode", PERSISTENT_MODES)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X, "trace_region_size": 1171456}],
+    indirect=True,
+    ids=["fabric_2d_torus_x"],
+)
+def test_reduce_scatter_minimal_direct_2d_torus(
+    mesh_device,
+    num_links,
+    rs_input_shape,
+    dim,
+    rs_input_dtype,
+    persistent_mode,
+):
+    """2D-fabric coverage. On 2D the op cannot route by hop count -- the fabric routes by DESTINATION
+    NODE -- so the factory re-derives each send's direction from the control plane. This exercises that
+    path; the 1D cases above cannot, since 1D routing is direction-agnostic by construction.
+
+    Mesh orientation matters and is not interchangeable. axis_topology binds a mesh-VIEW axis index to a
+    fabric dimension (axis 1 -> X), while the torus config wraps a PHYSICAL dimension. On this 2x4 box
+    the length-4 ring is the X dimension, so it must be viewed as 2x4 with cluster_axis=1 under TORUS_X.
+    Viewed as 4x2, TORUS_X reports the 4-axis as Linear (the op refuses) and TORUS_Y reports it as Torus
+    while physically wrapping the length-2 dimension -- a wrap that does not exist. The factory now
+    catches that second case with a single-hop neighbour check rather than hanging.
+    """
+    cluster_axis = 1
+    num_devices = mesh_device.shape[cluster_axis]
+    if rs_input_shape[dim] % num_devices:
+        pytest.skip(f"scatter dim {dim} (size {rs_input_shape[dim]}) does not split across {num_devices} devices")
+
+    run_reduce_scatter_minimal_direct_impl(
+        mesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        ttnn.TILE_LAYOUT,
+        RS_DIRECT_DRAM_MEM_CONFIG,
+        RS_DIRECT_DRAM_MEM_CONFIG,
+        num_iters=2,
+        enable_trace=False,
+        cluster_axis=cluster_axis,
+        persistent_mode=persistent_mode,
+    )

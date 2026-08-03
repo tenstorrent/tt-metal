@@ -6,6 +6,7 @@
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -23,6 +24,34 @@ constexpr uint32_t direct_cb_send_id = tt::CBIndex::c_0;    // local input slice
 constexpr uint32_t direct_cb_reduce_id = tt::CBIndex::c_1;  // num_devices blocks per chunk (own + arrivals)
 constexpr uint32_t direct_cb_out_id = tt::CBIndex::c_16;    // reduced result (compute -> writer)
 }  // namespace
+
+bool reduce_scatter_direct_fabric_supported(
+    const ttnn::MeshDevice& mesh_device,
+    tt::tt_fabric::FabricConfig fabric_config,
+    tt::tt_fabric::Topology axis_topology) {
+    if (!::tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        return true;  // 1D fabric: the case the kernels were written for
+    }
+    // See the header: on a 2D fabric the ACTIVE AXIS must be a straight wrapping line of the mesh.
+    // cluster_axis already confines the collective to one axis, so the mesh's other extent is irrelevant
+    // -- a 2x4 with a torus X axis is four independent 4-rings, each exactly the degenerate case the
+    // kernels want. What is NOT allowed is a 1xN logical VIEW that snakes across a larger physical grid:
+    // there the "ring" mixes X and Y hops, and 2D destination-node routing cannot agree with our
+    // hop-count/direction model. A torus axis_topology is precisely the signal that the axis wraps within
+    // its own dimension, so it is the whole test.
+    (void)mesh_device;
+    return ::tt::tt_fabric::is_ring_or_torus(axis_topology);
+}
+
+uint32_t reduce_scatter_direct_active_axis(const ReduceScatterMinimalDirectParams& args) {
+    uint32_t active_axis = 0;
+    for (uint32_t a = 0; a < 2; ++a) {
+        if (args.axis_num_devices[a] > 1) {
+            active_axis = a;
+        }
+    }
+    return args.cluster_axis.value_or(active_axis);
+}
 
 ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
     const ReduceScatterMinimalDirectParams& args, const ttnn::Tensor& input_tensor, bool fp32_dest_acc_en) {
@@ -232,17 +261,15 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
     tt::tt_metal::Program program{};
     auto* mesh_device = input_tensor.device();
 
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config);
-    TT_FATAL(!fabric_is_2d, "reduce_scatter_minimal_direct supports Fabric_1D only");
-
-    uint32_t active_axis = 0;
-    for (uint32_t a = 0; a < 2; ++a) {
-        if (operation_attributes.axis_num_devices[a] > 1) {
-            active_axis = a;
-        }
-    }
-    const uint32_t axis = operation_attributes.cluster_axis.value_or(active_axis);
+    const uint32_t axis = reduce_scatter_direct_active_axis(operation_attributes);
     const auto topology = operation_attributes.axis_topology[axis];
+    TT_FATAL(
+        reduce_scatter_direct_fabric_supported(*mesh_device, operation_attributes.fabric_config, topology),
+        "reduce_scatter_minimal_direct needs a 1D fabric, or a 2D fabric that collapses to one wrapping "
+        "line (torus axis + 1xN/Nx1 mesh); got fabric {} on a {} mesh with axis topology {}",
+        operation_attributes.fabric_config,
+        mesh_device->shape(),
+        topology);
     TT_FATAL(
         tt::tt_fabric::is_ring_or_torus(topology),
         "reduce_scatter_minimal_direct supports Ring topology only (a line would need per-destination "
@@ -403,6 +430,12 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         uint32_t slice;  // destination device == the input slice it wants
         uint32_t conn;   // 0 = forward connection, 1 = backward
         uint32_t hops;
+        // Destination chip/mesh, for 2D fabric. 1D routing takes the distance from the packet header's
+        // hop count, but a 2D fabric routes by DESTINATION NODE, so the header carries a route programmed
+        // with fabric_set_unicast_route (see the writer). Resolved here because only the host knows the
+        // ring's physical layout.
+        uint32_t chip_id;
+        uint32_t mesh_id;
     };
     std::vector<Dest> dests;
     dests.reserve(num_devices - 1);
@@ -413,7 +446,94 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         const uint32_t fwd_hops = (j + num_devices - device_idx) % num_devices;
         const uint32_t bwd_hops = (device_idx + num_devices - j) % num_devices;
         const bool use_fwd = fwd_hops <= bwd_hops;
-        dests.push_back(Dest{j, use_fwd ? 0u : 1u, use_fwd ? fwd_hops : bwd_hops});
+        const uint32_t hops = use_fwd ? fwd_hops : bwd_hops;
+        // Walk `hops` steps in the chosen direction to land on device j's coordinate.
+        const auto dest_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensor, sender_device_coord, use_fwd ? static_cast<int>(hops) : -static_cast<int>(hops), topology, axis);
+        TT_FATAL(dest_coord.has_value(), "ring neighbour {} hops away must exist", hops);
+        const auto dest_node = mesh_device->get_fabric_node_id(*dest_coord);
+        dests.push_back(Dest{
+            j,
+            use_fwd ? 0u : 1u,
+            hops,
+            dest_node.chip_id,
+            static_cast<uint32_t>(*dest_node.mesh_id)});
+    }
+    // On a 2D fabric, WE do not get to choose the direction. The header carries an absolute route from
+    // the routing table (fabric_set_unicast_route -> decode_route_to_buffer), and a packet must be handed
+    // to the router in that route's first-hop direction; push it into the other connection and it enters a
+    // router carrying a foreign route, which hangs. Our ring arithmetic above picks the shorter way round,
+    // which for an even ring's antipode (and anywhere the table breaks a tie the other way) can disagree.
+    // So on 2D, re-derive conn from the fabric's own answer. Purely a direction fix -- `hops` stays as
+    // computed, since 2D ignores it and 1D never reaches this block.
+    if (::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config)) {
+        const auto self_node = mesh_device->get_fabric_node_id(sender_device_coord);
+        const auto fwd_dir = tt::tt_fabric::pipeline_get_forwarding_direction(
+            self_node, mesh_device->get_fabric_node_id(*fwd_coord));
+        const auto bwd_dir = tt::tt_fabric::pipeline_get_forwarding_direction(
+            self_node, mesh_device->get_fabric_node_id(*bwd_coord));
+
+        // The axis_topology we were handed is not trustworthy on its own: it binds a MESH-VIEW axis index
+        // to a fabric dimension (axis 1 -> X, axis 0 -> Y), while a torus fabric config wraps a PHYSICAL
+        // dimension. Open this box's 2x4 as 4x2 and the two disagree -- FABRIC_2D_TORUS_Y makes axis 0
+        // report Torus, but what it physically wraps is the length-2 dimension, not the 4-ring the
+        // collective runs on. The op then believes in a wrap that does not exist and hangs.
+        //
+        // So verify the wrap for real: a ring neighbour must be reachable in ONE hop (an actual cable in
+        // that direction), not by a long way round. Cheap, and it turns that hang into a clear message.
+        auto assert_single_hop = [&](const ttnn::MeshCoordinate& neighbor_coord,
+                                     const std::optional<tt::tt_fabric::RoutingDirection>& dir,
+                                     const char* which) {
+            const auto neighbor = mesh_device->get_fabric_node_id(neighbor_coord);
+            TT_FATAL(
+                dir.has_value(),
+                "reduce_scatter_minimal_direct: no fabric route to the {} ring neighbour (chip {})",
+                which,
+                neighbor.chip_id);
+            const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(self_node, *dir);
+            const auto it = neighbors.find(*neighbor.mesh_id);
+            const bool adjacent =
+                it != neighbors.end() && std::find(it->second.begin(), it->second.end(), neighbor.chip_id) !=
+                                             it->second.end();
+            TT_FATAL(
+                adjacent,
+                "reduce_scatter_minimal_direct: the {} ring neighbour (chip {}) is not one hop away in "
+                "direction {}, so the active axis does not physically wrap even though its topology reports "
+                "as a torus. This happens when the mesh VIEW's axis order does not match the fabric "
+                "dimension the torus config wraps -- e.g. this 2x4 box opened as 4x2 under TORUS_Y. Open "
+                "the mesh so the collective's axis is the dimension the config actually wraps.",
+                which,
+                neighbor.chip_id,
+                static_cast<int>(*dir));
+        };
+        assert_single_hop(*fwd_coord, fwd_dir, "forward");
+        assert_single_hop(*bwd_coord, bwd_dir, "backward");
+
+        for (auto& d : dests) {
+            const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(
+                self_node, tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{d.mesh_id}, d.chip_id));
+            TT_FATAL(
+                dir.has_value(),
+                "no fabric route from this device to ring member {} (chip {}) on a 2D fabric",
+                d.slice,
+                d.chip_id);
+            if (fwd_dir.has_value() && *dir == *fwd_dir) {
+                d.conn = 0;
+            } else if (bwd_dir.has_value() && *dir == *bwd_dir) {
+                d.conn = 1;
+            } else {
+                TT_THROW(
+                    "reduce_scatter_minimal_direct: the fabric routes to ring member {} (chip {}) via direction "
+                    "{}, which is neither of this device's ring-neighbour directions (fwd {}, bwd {}). The ring "
+                    "is not a straight line in one fabric dimension, so destination-node routing cannot follow "
+                    "it.",
+                    d.slice,
+                    d.chip_id,
+                    static_cast<int>(*dir),
+                    fwd_dir.has_value() ? std::to_string(static_cast<int>(*fwd_dir)) : std::string("none"),
+                    bwd_dir.has_value() ? std::to_string(static_cast<int>(*bwd_dir)) : std::string("none"));
+            }
+        }
     }
     std::stable_sort(dests.begin(), dests.end(), [](const Dest& a, const Dest& b) { return a.hops > b.hops; });
     const bool uses_backward = std::any_of(dests.begin(), dests.end(), [](const Dest& d) { return d.conn == 1; });
@@ -428,19 +548,24 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         ++mcast_range[d.conn];
         max_hops[d.conn] = std::max(max_hops[d.conn], d.hops);
     }
-    for (uint32_t c = 0; c < 2; ++c) {
+    // 1D only: on 2D the barrier sends one unicast per peer (reusing the data path's per-destination
+    // routes), so it needs no contiguous hop ranges -- and the direction fix-up above can legitimately
+    // split the destinations in a way these would reject.
+    if (!::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config)) {
+        for (uint32_t c = 0; c < 2; ++c) {
+            TT_FATAL(
+                mcast_range[c] == max_hops[c],
+                "start-barrier multicast assumes direction {}'s destinations are hops 1..{} with no gaps, but the "
+                "{} destinations routed that way reach out to {} hops",
+                c,
+                mcast_range[c],
+                mcast_range[c],
+                max_hops[c]);
+        }
         TT_FATAL(
-            mcast_range[c] == max_hops[c],
-            "start-barrier multicast assumes direction {}'s destinations are hops 1..{} with no gaps, but the "
-            "{} destinations routed that way reach out to {} hops",
-            c,
-            mcast_range[c],
-            mcast_range[c],
-            max_hops[c]);
+            mcast_range[1] == 0 || num_connections == 2,
+            "start barrier would multicast backward on a connection that was never opened");
     }
-    TT_FATAL(
-        mcast_range[1] == 0 || num_connections == 2,
-        "start barrier would multicast backward on a connection that was never opened");
 
     // --- Runtime args ---
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
@@ -506,6 +631,14 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         // Only the aliased path reads these (off it, the sender indexes staging by source directly).
         for (const auto& d : dests) {
             writer_rt.push_back(device_idx < d.slice ? device_idx + 1 : device_idx);
+        }
+        // 2D-fabric route targets, ignored by the 1D path. MUST stay last before the fabric connection
+        // args -- the writer reads conn, hops, block, chip, mesh in exactly this order.
+        for (const auto& d : dests) {
+            writer_rt.push_back(d.chip_id);
+        }
+        for (const auto& d : dests) {
+            writer_rt.push_back(d.mesh_id);
         }
         // Fabric connections, appended last: index 0 = forward neighbour, 1 = backward, both on this
         // worker's own routing plane so the links stay independent.
