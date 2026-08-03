@@ -1,0 +1,9 @@
+layer_idx,layer_type,batch,replay,device_trace_firmware_ns,device_trace_kernel_ns
+0,sliding_attention,1,1,2404273,2403526
+0,sliding_attention,1,2,2403910,2403161
+5,full_attention,1,1,2595150,2594399
+5,full_attention,1,2,2603486,2602744
+0,sliding_attention,32,1,50611244,50610503
+0,sliding_attention,32,2,50646093,50645330
+5,full_attention,32,1,50790018,50789252
+5,full_attention,32,2,50823201,50822436

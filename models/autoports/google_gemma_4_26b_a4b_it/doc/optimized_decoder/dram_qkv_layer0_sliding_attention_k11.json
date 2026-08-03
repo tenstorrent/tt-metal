@@ -1,0 +1,22 @@
+{
+  "dram_cores": 8,
+  "error": "TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 7-9] grow to 2515712 B which is beyond max L1 size of 1572864 B",
+  "in0_block_w": 11,
+  "input_shard_shape": [
+    32,
+    352
+  ],
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "logical_batch": 1,
+  "output_shard_shape": [
+    32,
+    1024
+  ],
+  "status": "l1_capacity_rejected",
+  "tile_padded_rows": 32,
+  "weight_shard_shape": [
+    2816,
+    1024
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "candidate": "replace explicit packed expert slices plus fused-activation multiply with ttnn.geglu",
+  "adaptation": "the decode expert tensor was unsqueezed to 4D after the first 3D attempt hit the operation's rank contract",
+  "best_retained_fused_decode_trace_host_ms_median": 2.456416026689112,
+  "candidate_decode_trace_host_ms_median": 2.45772791095078,
+  "best_retained_fused_prefill_host_ms_median": 401.5205299947411,
+  "candidate_prefill_host_ms_median": 402.31003798544407,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "result": "historical first comparison, superseded by the full 101-replay layer/batch matrix",
+  "superseded_by": "final_vs_composite_geglu_matrix.json and final_vs_alternative_expert_activation_layer*.json"
+}

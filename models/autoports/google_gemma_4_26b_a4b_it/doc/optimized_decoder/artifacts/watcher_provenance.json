@@ -1,0 +1,8 @@
+{
+  "captured_utc": "2026-08-03T13:33:35Z through 2026-08-03T13:34:10Z",
+  "command": "GEMMA4_RANGE_DOWNLOAD=1 TT_METAL_WATCHER=10 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py -k 'optimized_hf_acceptance or optimized_traced_decode_batch1'",
+  "result": "4 passed, 65 deselected; no watcher fault",
+  "optimized_decoder_sha256": "f3f4b741c741c1778633e6afe8a06980354040234c07dbe73628411a05efd550",
+  "test_optimized_decoder_sha256": "6f50e753e6f9b91c9f3ec8f1e60a1ef300c07b096591c5f12511855b30266227",
+  "watcher_log_sha256": "480cdd51be27275bc4061232e9d092929d3a0ed5c6d642caa82b9352f8728b93"
+}

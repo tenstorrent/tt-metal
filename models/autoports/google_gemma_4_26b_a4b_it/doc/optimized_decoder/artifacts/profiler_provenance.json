@@ -1,0 +1,22 @@
+{
+  "device": "Blackhole P300, single-device 1x1 mesh, fixture-selected device 3",
+  "op_profile_sequence_length": 32,
+  "op_profile_reason": "representative topology capture without fixed device marker-buffer overflow; sequence-1024 warmed A/B is the selection authority",
+  "op_profile_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_PROFILE=1 GEMMA4_FUNCTIONAL_DECODER_SEQ_LEN=32 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m tracy -r -p --check-exit-code -o models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/current_raw -m pytest models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_decoder_perf_profile -q",
+  "op_profile_result": "2 passed; four signposted tt-perf-report windows retained",
+  "device_trace_command": "TT_METAL_DEVICE_PROFILER=1 GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_PROFILE=1 GEMMA4_FUNCTIONAL_DECODER_SEQ_LEN=32 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m tracy -v -p --device-trace-profiler -o models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/current_trace_raw -m pytest models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_decoder_perf_profile -q",
+  "device_trace_result": "2 passed; sliding trace kernel 1.287 ms, full trace kernel 1.477 ms",
+  "captured_utc": "2026-08-03T13:32:23Z through 2026-08-03T13:33:28Z",
+  "optimized_decoder_sha256": "f3f4b741c741c1778633e6afe8a06980354040234c07dbe73628411a05efd550",
+  "test_optimized_decoder_sha256": "6f50e753e6f9b91c9f3ec8f1e60a1ef300c07b096591c5f12511855b30266227",
+  "fused_decoder_sha256": "fbdf80a2158b447f69c10c11f27139fa58de73ed0cc69e48153850f79b5a12e0",
+  "test_fused_decoder_sha256": "106c33ac35c4a64d5fdd2e94ec63a8bc5766ecd20b5f3385ce6ce52231617899",
+  "filtered_csv_sha256": {
+    "prefill_sliding_attention_batch1.csv": "3f060c802e31658eaadcb2b3d65f15f9a104884d0f4a648786147d1db96f10cc",
+    "prefill_full_attention_batch1.csv": "be1936141bd3d14d8ba63fff7669513fb649a31cd130217ea9fb52ad6e95d6b6",
+    "decode_sliding_attention_batch1.csv": "75bea2f3f9db31532c88bb943ce9ccbfb386d7263c53b5baf7416d627acbed08",
+    "decode_full_attention_batch1.csv": "355ecaaf30564547dd456411dd38e0b35de3a42745890b7f11d7f4fe711e989d"
+  },
+  "decode_trace_device_sha256": "75f5b2fa1f95350e5a1941843aad853de222e39b641a93f1d78086d09989745a",
+  "raw_logs_retained": false
+}

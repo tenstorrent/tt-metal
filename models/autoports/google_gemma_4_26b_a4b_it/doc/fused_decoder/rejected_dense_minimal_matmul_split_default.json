@@ -1,0 +1,14 @@
+{
+  "batch": 1,
+  "candidate": "dense gate/up packed with default minimal_matmul_split; residual-RMSNorm and GeLU-multiply folds also enabled",
+  "decode_speedup": 0.9879263844906445,
+  "functional_decode_trace_host_ms_median": 3.0095339752733707,
+  "fused_decode_trace_host_ms_median": 3.046313999220729,
+  "functional_prefill_host_ms_median": 680.8738859836012,
+  "fused_prefill_host_ms_median": 681.2395739834756,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "prefill_speedup": 0.999463202060127,
+  "sequence_length": 1024,
+  "verdict": "retry_with_adapted_config_then_reject_or_retain"
+}

@@ -1,0 +1,78 @@
+{
+  "decision": "compare",
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "logical_batch": 1,
+  "rows": [
+    {
+      "cores": 4,
+      "norm_program": "LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=4-1,subblock_w=2,block_h=1,block_w=22,inplace=0,legacy_reduction=0,legacy_rsqrt=0,use_welford=0)",
+      "pcc": 0.9998461656197427,
+      "shard_shape": [
+        32,
+        704
+      ],
+      "status": "passed",
+      "trace_replay_pcc": 1.0,
+      "whole_chain_trace_host_ms_median": 1.3197030639275908,
+      "whole_chain_trace_host_ms_samples": [
+        1.3214469654485583,
+        1.321535906754434,
+        1.3205250725150108,
+        1.3198829255998135,
+        1.3167180586606264,
+        1.314664026722312,
+        1.3208860764279962,
+        1.3178290100768209,
+        1.3191730249673128,
+        1.3210258912295103,
+        1.3153449399396777,
+        1.318430993705988,
+        1.3221979606896639,
+        1.3205750146880746,
+        1.3200840912759304,
+        1.3158359797671437,
+        1.3196730287745595,
+        1.3181809335947037,
+        1.3190519530326128,
+        1.3197030639275908,
+        1.320414012297988
+      ]
+    },
+    {
+      "cores": 8,
+      "norm_program": "LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=8-1,subblock_w=1,block_h=1,block_w=11,inplace=0,legacy_reduction=0,legacy_rsqrt=0,use_welford=0)",
+      "pcc": 0.9998454820128672,
+      "shard_shape": [
+        32,
+        352
+      ],
+      "status": "passed",
+      "trace_replay_pcc": 1.0,
+      "whole_chain_trace_host_ms_median": 1.3070389395579696,
+      "whole_chain_trace_host_ms_samples": [
+        1.3053050497546792,
+        1.304604928009212,
+        1.3041729107499123,
+        1.3069489505141973,
+        1.3093429151922464,
+        1.3069389387965202,
+        1.3109860010445118,
+        1.301508047617972,
+        1.3086620019748807,
+        1.3072489527985454,
+        1.3116070767864585,
+        1.310245948843658,
+        1.3077909825369716,
+        1.3060369528830051,
+        1.3070389395579696,
+        1.3059669872745872,
+        1.3086830731481314,
+        1.3046340318396688,
+        1.30793999414891,
+        1.3054950395599008,
+        1.307430095039308
+      ]
+    }
+  ]
+}

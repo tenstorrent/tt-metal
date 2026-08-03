@@ -1,0 +1,33 @@
+{
+  "bf16_vs_bfp8_decode_pcc": 0.9997825090227034,
+  "cache_dtype": "BFLOAT8_B",
+  "cache_layout": "DRAM_INTERLEAVED",
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "logical_batch": 1,
+  "result": {
+    "decode_trace_host_ms_median": 1.3306409819051623,
+    "decode_trace_host_ms_samples": [
+      1.3233579229563475,
+      1.333005027845502,
+      1.3306409819051623,
+      1.3315730029717088,
+      1.3258419930934906
+    ],
+    "output_shape": [
+      1,
+      1,
+      1,
+      2816
+    ],
+    "prefill_host_ms_median": 239.91789389401674,
+    "prefill_host_ms_samples": [
+      239.8367200512439,
+      239.68537093605846,
+      239.91789389401674,
+      239.9274529889226,
+      240.03147101029754
+    ]
+  },
+  "sequence_length": 1024
+}

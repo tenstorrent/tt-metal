@@ -1,0 +1,43 @@
+{
+  "batch": 32,
+  "decoder_source_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+  "dram_input_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+  "dram_vs_l1_pcc": {
+    "k": 1.0,
+    "q": 1.0,
+    "v": 1.0
+  },
+  "dram_vs_l1_pcc_threshold": 0.9999,
+  "dtype": "bfloat16",
+  "failures": [],
+  "head_dim": 512,
+  "input_shape": [
+    1,
+    1,
+    32,
+    10240
+  ],
+  "kernel_dram_fix_commit": "7aa26e4b1f274867bcea5ff6ea99295f961d89b1",
+  "kernel_dram_fix_verified_ancestor_by_source_review": true,
+  "l1_input_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+  "layer_type": "full_attention",
+  "minimum_torch_pcc": {
+    "dram": {
+      "k": 1.0,
+      "q": 1.0,
+      "v": 1.0
+    },
+    "l1": {
+      "k": 1.0,
+      "q": 1.0,
+      "v": 1.0
+    }
+  },
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "num_kv_heads": 2,
+  "num_q_heads": 16,
+  "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":3}], shape=[32, 512], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+  "program_cache_iterations": 3,
+  "test_source_sha256": "2545f31c2c31196e7e8f5653a4681aa20f0307bce36cf94f4bd0f4e329dd1d49",
+  "torch_pcc_threshold": 0.9999
+}

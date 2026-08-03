@@ -1,0 +1,11 @@
+{
+  "candidate": "keep decode Q/K/V height-sharded across RMSNorm and remove the sharded-to-interleaved-to-sharded round trip",
+  "layer_kinds_attempted": [
+    "sliding_attention",
+    "full_attention"
+  ],
+  "result": "rejected by the RMSNorm device operation before numerical comparison",
+  "exact_error": "Height sharded inputs are not supported.",
+  "source": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:166",
+  "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py::test_fused_rewrites_match_functional_real_weights"
+}
