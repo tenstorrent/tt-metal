@@ -807,9 +807,8 @@ def test_update_padded_kv_cache_metadata_matches_scalar(mesh_device, dtype, layo
 # chip persists only its own 1/tp seq window, so the KV cache is deduplicated across the TP axis.
 # The two mesh axes are linearized into ONE block-cyclic axis of size sp*tp
 # (linear = sp_coord*tp + tp_coord), with per-chip chunk Cl = chunk_local/tp. This is the load-bearing
-# test for the scheme (design doc glm52_kv_cache_tp_sharding.md, sec 8.2): write a server-rotated ramp
-# through an SP x TP case and assert a TP-inner / SP-outer gather + sp*tp remap round-trips to natural
-# order, bit-exact.
+# test for the scheme: write a server-rotated ramp through an SP x TP case and assert a TP-inner /
+# SP-outer gather + sp*tp remap round-trips to natural order, bit-exact.
 # ---------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "mesh_device", [(1, 2), (1, 4), (2, 2), (2, 4)], ids=["1x2", "1x4", "2x2", "2x4"], indirect=True
