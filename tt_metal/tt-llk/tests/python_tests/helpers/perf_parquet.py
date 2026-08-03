@@ -262,7 +262,9 @@ def convert_csvs_to_parquet(
     diagnostics = {"unknown_columns": {}, "coerced_values": {}}
     for path in csv_paths:
         name = _test_name_from_csv(path)
-        df = pd.read_csv(path)
+        # round_trip: the default C float parser is not exact; this preserves
+        # full float64 precision so CSV -> Parquet is lossless.
+        df = pd.read_csv(path, float_precision="round_trip")
         # Drop columns the published table intentionally omits (see
         # perf_wide_schema.DROPPED_COLUMNS), before the unknown-column check so
         # they are not flagged as accidental drift.
@@ -314,6 +316,7 @@ def parquet_to_csvs(parquet_path, out_dir, *, drop_provenance=True, drop_empty=T
         if drop_empty:
             group = group.dropna(axis=1, how="all")
         path = out_dir / f"{safe_stem(test_name)}.csv"
-        group.to_csv(path, index=False)
+        # %.17g round-trips float64 exactly, so Parquet->CSV->Parquet is lossless.
+        group.to_csv(path, index=False, float_format="%.17g")
         written[test_name] = path
     return written
