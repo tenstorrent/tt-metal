@@ -684,6 +684,13 @@ inline void _llk_math_matmul_init_(
         matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // tt-metal#49924 (zero-flag solidification): matmul never sets the Src zero-substitution flag itself, so
+    // re-establish the operand-driven DEFAULT here. A preceding copy_init/unary op may have left UNARY_PRESERVE/MOV_OPS,
+    // and the reconfig_data_format that runs just before this init skips its own reset when formats are unchanged —
+    // without this line the MVMUL would inherit a stale keep-denormals flag (denormal Src results differ).
+    // Mirrors what reduce/transpose/datacopy inits already do.
+    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
 }
 
 /**
