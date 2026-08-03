@@ -21,9 +21,10 @@ from __future__ import annotations
 
 from ....utils.conv3d import _FP32_BLOCKINGS, aligned_channels
 
-T_OUT_BLOCK = 16
+# 16 overshot L1 by 1.26x (1979264 B against 1572864 B) at the widest audio convs.
+T_OUT_BLOCK = 8
 C_OUT_BLOCK = 32
-MAX_C_IN_BLOCK = 256
+MAX_C_IN_BLOCK = 128
 
 
 def _c_in_block(in_channels: int) -> int:
@@ -88,7 +89,16 @@ def register_h3_audio_blockings(**config) -> int:
         for kernel in kernels:
             key = (aligned_channels(in_channels), max(32, out_channels), (kernel, 1, 1))
             blocking = (_c_in_block(in_channels), C_OUT_BLOCK, T_OUT_BLOCK, 1, 1)
-            if key not in _FP32_BLOCKINGS:
+            existing = _FP32_BLOCKINGS.get(key)
+            if existing is None:
                 _FP32_BLOCKINGS[key] = blocking
+                added += 1
+            elif existing[2] > T_OUT_BLOCK:
+                # A few of H3's (C_in, C_out, kernel) triples coincide with LTX's -- e.g.
+                # (128, 64, (4,1,1)) is LTX's ups[3] -- and LTX's tuned T_out_block of 32 is
+                # sized for its tensors, not H3's: at H3's widths it overshoots L1 (1979264 B
+                # against 1572864 B). Cap the temporal block for the shapes H3 actually uses
+                # rather than deferring to an entry tuned for a different model.
+                _FP32_BLOCKINGS[key] = (existing[0], existing[1], T_OUT_BLOCK, existing[3], existing[4])
                 added += 1
     return added
