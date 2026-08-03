@@ -118,8 +118,35 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Build the GPT-OSS model + runtime for this rank. The runtime is stateless w.r.t. the KV
         cache (owns_kv_cache=False): the engine allocated it via allocate_kv_cache and passes it into
-        each call."""
+        each call.
+
+        Weight loading mirrors ``minimax_m3.build_runtime``: on a complete tilized cache pass an empty
+        state_dict (fast path — ~869GB bf16 source never read); otherwise fall back to reading the
+        bf16 source via ``ModelArgs.load_state_dict`` (slow first-run / cache-populate path). The
+        cache-completeness check also verifies the routed-expert bias sidecar, without which
+        ``MLP.__init__`` raises mid-build on a cache-only run.
+        """
+        from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
         from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+        from models.demos.gpt_oss_d_p.tt.runners.adapters.weight_cache import weight_cache_is_complete
+
+        expert_dtype = ttnn.bfloat8_b if os.environ.get("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
+        cache_path = params.weight_cache_path
+        force_load = os.environ.get("GPT_OSS_FORCE_LOAD_WEIGHTS") == "1"
+        cache_only = not force_load and (
+            os.environ.get("GPT_OSS_WEIGHTS_FROM_CACHE") == "1"
+            or weight_cache_is_complete(cache_path, hf_config, params.num_layers, expert_dtype)
+        )
+        if cache_only:
+            logger.info(f"[gpt_oss_d_p] tilized weight cache complete at {cache_path}; loading from cache")
+            state_dict = {}
+        else:
+            model_path = os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default
+            logger.warning(
+                f"[gpt_oss_d_p] weight cache incomplete at {cache_path}; reading bf16 source from {model_path} "
+                f"(slow — populate the cache once to skip this)."
+            )
+            state_dict = ModelArgs.load_state_dict(model_path)
 
         runtime_config = TtPrefillRuntimeConfig(
             num_layers=params.num_layers,
@@ -129,24 +156,16 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             num_users=params.num_users,
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,
-            weight_cache_path=params.weight_cache_path,
+            expert_weight_dtype=expert_dtype,
+            weight_cache_path=cache_path,
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
         )
-        # TODO(P5, engine integration): this builds with state_dict={}, i.e. it relies on a
-        # pre-populated TTNN weight cache (tilized weights + the MLP expert-bias sidecar) and does
-        # NOT fall back to loading real bf16 weights when the cache is incomplete, unlike
-        # minimax_m3's build_runtime (ModelArgs.load_state_dict). The validated path today is the
-        # standalone galaxy harness (tests/galaxy_prefill_kv_pcc.py), which loads real weights. Wire
-        # the bf16 fallback here when the common/prefill engine path is brought up on galaxy. Also
-        # P5: the runner's request-mode H2D supplies SP-sharded uint32 token IDs to prefill_chunk,
-        # which today expects embedded activations (make_chunk_input / trace mode); the request path
-        # needs an in-runtime embed. The validated harness path uses trace mode, so it is unaffected.
         return TtPrefillRuntime(
             mesh_device=mesh_device,
             hf_config=hf_config,
-            state_dict={},
+            state_dict=state_dict,
             config=runtime_config,
         )
 
