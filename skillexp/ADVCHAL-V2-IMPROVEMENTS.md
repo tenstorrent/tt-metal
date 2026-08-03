@@ -37,6 +37,18 @@ assumption the objective does not support. The measured response curves are non-
 in one case the advised value sat at a local *maximum*. The advice is one legal point; the ladder is what
 matters.
 
+## I2a. The win is a threshold, not a gradient — so find the knee, don't chase the peak
+
+Measured on both gemma-4-26B arms and on north-mini: the norm's response to core count is **flat over a wide
+middle** (8→44 cores on gemma varies by 0.2 %) with a **cliff at the bottom** (1 core costs 13.7 %) and a
+mild penalty at the top. Almost all the value is the *first step off one core*; which of the middle rungs you
+land on is worth ~1 pp.
+
+That reframes the search. A cell does not need to find the optimum — it needs to (a) detect that an op is on
+the cliff, and (b) land anywhere in the middle. Detecting the cliff is a *static* check on the shipped graph;
+only the second needs the device. And it explains why the advisor's specific number matters so little: any
+legal middle rung captures nearly the whole win.
+
 ## I3. The searchable set should be computed, not discovered by crashing
 
 Three different mechanisms restrict which grids can run: a shard-padding validation rule, per-model grid
@@ -188,6 +200,24 @@ supported path, and make the gate check that the reconciliation was regenerated 
 
 - **Files:** `scripts/reconcile.py`, `SKILL.md` §3, `check.sh`.
 - **Test:** a cell can produce a gate-passing reconciliation without editing any tool output.
+
+### C1a. Record the incumbent's own grid for the op under test
+
+Two arms of gemma-4-26B use the **same env knob name** with different defaults (`GEMMA4_ADVISOR_NORM_CORES`
+= 88 in one, 8 in the other), so the "88-core candidate" is a 1→88 change in one arm and an 8→88 change in
+the other. Nothing in `final.json` or the measurement records the incumbent's grid for the op being changed,
+so the two deltas look comparable and are not. This cost me a wrong mechanism in a published conclusion
+until I read the source.
+
+**Change.** Require `op_under_test: {name, incumbent_grid, candidate_grid, legal_ladder}` per screened
+candidate. It is the field that makes cross-arm and cross-model comparison meaningful, and it makes the
+"is this op on the cliff?" check (I2a) mechanical.
+
+### C1b. Flag any material op on ≤2 cores as a static precondition
+
+Per I2a the big win is a threshold. `reconcile.py` already knows every op's shipped grid and cost, so it can
+emit **before any device time**: "op X, N µs/layer, on 1 core, legal ladder {…}". That single line is worth
+more than the advisor's recommendation, and in this corpus it would have flagged every double-digit win.
 
 ### C2. Enforce control-plus-one-knob
 

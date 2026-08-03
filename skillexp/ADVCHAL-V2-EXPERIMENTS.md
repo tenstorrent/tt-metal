@@ -1,8 +1,14 @@
 # advchal-v2 — experiments run to test the analysis
 
-Five experiments run on hardware on **2026-08-03, 16:07–16:39 UTC**, after the corpus was complete, to
-test claims the corpus data alone could not settle. Two confirmed a claim, **two refuted hypotheses of my
-own**, and **two found wins the corpus missed** (north-mini −264 µs/model, gemma-4-26B onA −375 µs/model).
+Six experiments run on hardware on **2026-08-03, 16:07–16:47 UTC**, after the corpus was complete, to test
+claims the corpus data alone could not settle.
+
+| | outcome |
+|---|---|
+| confirmed a published claim | E1, E3 |
+| **refuted a hypothesis of mine** | E2, E4 (partly) |
+| **found a win the corpus missed** | E4 (north-mini, −264 µs/model), E5 (gemma-4-26B onA, −375 µs/model) |
+| **corrected the mechanism behind a published conclusion** | E6 |
 
 ## Method
 
@@ -316,3 +322,66 @@ asymmetry in outcome, however, does not depend on that.*
   by grid choice alone: **−264 µs/model** (north-mini) **−375 µs/model** (gemma-4-26B onA).
 - Across the three cells with a low-core reduction, **every one whose ladder had more than one legal rung
   shipped the wrong rung.** Only phi — whose curve is a plateau — happened to ship the best one.
+
+---
+
+## E6 — gemma-4-26B FN: why the "same candidate" regressed, and what it means for §5
+
+**Claim under test.** g26 FN measured the 88-core norm at **+0.43 %** (a regression) while g26 onA measured
+it at **−13.03 %**. I published this as the corpus's cleanest evidence that a large advisor win can be the
+size of the starting point's defect. Was that reading right?
+
+### It was the right conclusion for the wrong reason
+
+Reading g26 FN's source (`tt/optimized_decoder.py:386`):
+
+```python
+# Advisor-challenger candidate knob.  Eight cores remains the frozen
+# incumbent unless the stage explicitly selects another legal grid.
+advisor_norm_cores = int(os.environ.get("GEMMA4_ADVISOR_NORM_CORES", "8"))
+```
+
+**g26 FN's frozen incumbent already places the norm on 8 cores.** So its measurement was **8 → 88**, not
+**1 → 88**. The two arms never ran the same experiment. (g26 onA's knob defaults to 88 and its frozen
+incumbent leaves the norm unsharded — effectively 1 core.)
+
+### The full ladder on g26 FN, sliding attention
+
+`HIDDEN_SIZE = 2816`, so cores must tile-divide 88.
+
+| cores | median ms | vs incumbent 1.318274 |
+|---|---|---|
+| 1 | **cannot run** — `TT_THROW: Statically allocated circular buffers … clash with L1 buffers on core range [0-0 - 0-0]` | — |
+| 2 | 1.364733 | +3.52 % |
+| 4 | 1.330788 | +0.95 % |
+| **8 (frozen incumbent)** | **1.318539 / 1.318274** | — |
+| 11 | 1.317930 | −0.03 % |
+| **22** | **1.316251** | **−0.15 %** (2.0 µs; floors 2.19 / 1.22 µs — **not separated**) |
+| 44 | 1.316590 | −0.13 % |
+| 88 | 1.324489 | +0.47 % |
+
+### Result: §5's conclusion confirmed, and its mechanism corrected
+
+Putting the two arms' ladders side by side:
+
+| cores | 1 | 2 | 4 | 8 | 11 | 22 | 44 | 88 |
+|---|---|---|---|---|---|---|---|---|
+| **onA** (incumbent at 1) | **1.8235** | — | — | — | 1.5736 | 1.5798 | **1.5750** | 1.5875 *(shipped)* |
+| **FN** (incumbent at 8) | can't run | 1.3647 | 1.3308 | **1.3183** | 1.3179 | **1.3163** | 1.3166 | 1.3245 |
+
+**The norm response curve is flat from ~8 to ~44 cores, and essentially all of the available win is in
+getting off 1 core.** onA was on 1 and gained 13.7 %. FN was already on 8 — already on the flat part — and
+has **nothing left that clears its noise floor**.
+
+So the earlier framing ("the same candidate won on the slow arm and regressed on the fast arm, therefore the
+win was the size of the starting point's defect") reaches the right conclusion, but the mechanism is more
+specific and more useful:
+
+- ❌ Not "the two arms responded differently to the same change."
+- ✅ **The two arms had different norm placements to begin with (1 core vs 8 cores), and the entire win is
+  the first step off 1 core.** FN's stage-02 arm had already taken it.
+
+And note the trap this creates for the stage: **the same env knob name means different things in the two
+arms** (`GEMMA4_ADVISOR_NORM_CORES` defaults to 88 in one and 8 in the other), so a cross-arm comparison of
+"the 88-core candidate" is comparing two different deltas. Nothing in the stage records the incumbent's own
+grid for the op under test, which is exactly the field that would have made this visible.

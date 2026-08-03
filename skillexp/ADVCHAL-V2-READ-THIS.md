@@ -8,7 +8,7 @@ without it?
 one class of defect, a reduction stuck on too few cores. Where that defect exists it is worth 6–13 % per
 layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned one.
 
-**Three things the stage got wrong, all measured on hardware afterwards:** it **discarded its own largest
+**Three things the stage got wrong, all measured on hardware afterwards (6 experiments):** it **discarded its own largest
 win** on a contradictory correctness rule (−8.5 pp), and in **both** cells where the grid ladder had more
 than one legal rung it **shipped the wrong rung** (−264 and −375 µs/model). Total left on the table:
 **≈ 4.1 ms/model across three cells.**
@@ -21,7 +21,7 @@ than one legal rung it **shipped the wrong rung** (−264 and −375 µs/model).
 |---|---|
 | **this file** | the account, and pointers |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
-| [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 5 experiments run on hardware to test the analysis |
+| [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 6 experiments run on hardware to test the analysis |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -228,32 +228,38 @@ rejects sharded output; `shard_padded_w … trailing pad must be less than one s
 
 ## 5. Were the winners just worse to start with?
 
-**For gemma-4-26B, provably yes.** Same model, same candidate, same tool, same hardware, three incumbents:
+**For gemma-4-26B, yes — and I measured the mechanism.** Both arms' full norm ladders, same model, same
+tool, same host:
 
-| arm | control ms/layer | the 88-core norm |
-|---|---|---|
-| **B** `nofuse-noadvise` | 1.2597 (fastest) | seen in the report, **never screened** |
-| **FN** `fuse-noadvise` | 1.3412 | **+0.43 % sliding / +15.57 % full — regressed** |
-| **onA** `nofuse-noadvise-onA` | 1.8252 (slowest) | **−13.03 % — shipped** |
+| cores | 1 | 2 | 4 | 8 | 11 | 22 | 44 | 88 |
+|---|---|---|---|---|---|---|---|---|
+| **onA**, incumbent at **1** core | **1.8235** | — | — | — | 1.5736 | 1.5798 | **1.5750** | 1.5875 *(shipped)* |
+| **FN**, incumbent at **8** cores | can't run | 1.3647 | 1.3308 | **1.3183** | 1.3179 | **1.3163** | 1.3166 | 1.3245 |
 
-The win existed only in the weakest starting point. The explanatory variable is **stage-02 optimisation
-quality, not fuse/nofuse** — the fastest of the three is a `nofuse` arm.
+**The curve is flat from ~8 to ~44 cores. Essentially the whole win is the first step off 1 core.** onA was
+on 1 and gained 13.7 %; FN's stage-02 arm had already moved it to 8, and FN has nothing left that clears its
+noise floor.
 
-⚠ `B` and `onA` are nominally the same arm and their controls differ by **45 %**. That spread is larger
-than any advisor contribution measured anywhere in this corpus.
+⚠ **A correction to what I published earlier.** I had framed this as "the same candidate won on the slow arm
+and regressed on the fast arm". The conclusion holds, but the two arms never ran the same experiment: FN's
+frozen incumbent already had the norm on 8 cores, so its measurement was **8 → 88**, not 1 → 88. Worse, the
+*same env knob* defaults to 88 in one arm and 8 in the other — and nothing in the stage records the
+incumbent's own grid for the op under test, which is the one field that would have made this visible.
 
-**For phi-3.5, provably no.** Its four arms span 1.68× in control speed and the ordering is *inverted*: the
-**fastest** arm took the **largest** win (−8.75 %), the **slowest** arm with the **largest** ceiling
-(83.6 µs/layer) shipped **zero**.
+**For phi-3.5, no.** Its four arms span 1.68× in control speed and the ordering is *inverted*: the
+**fastest** arm took the **largest** win (−8.75 %), and the **slowest** arm — with the **largest** ceiling
+(83.6 µs/layer) — shipped **zero**.
 
-**For the llamas, neither.** They were *already correctly placed* — I swept llama-8B's entire achievable
-ladder and nothing beats the default (§E3).
+**For the llamas, neither.** They were *already correctly placed*: I swept llama-8B's entire achievable
+ladder and nothing beats the default.
 
-**So:** the advisor is a **defect finder** more than an optimiser. Its value is non-additive — fix the
-1-core norm upstream and its contribution on that model drops to ~zero, which is exactly what gemma-4-26B FN
-shows.
+**So:** the advisor is a **defect finder** more than an optimiser, and in this corpus the defect is almost
+always "a reduction never got sharded". Its value is therefore **non-additive with upstream work** — fix the
+placement in `$optimize` and the advisor's contribution on that model drops to near zero, which is exactly
+what gemma-4-26B FN demonstrates.
 
----
+⚠ One caveat on all cross-arm reading: `B` and `onA` are nominally the same arm and their controls differ by
+**45 %** — larger than any advisor contribution measured anywhere in this corpus.
 
 ## 6. What we tested on hardware
 
@@ -266,9 +272,10 @@ Four experiments, 2026-08-03 16:07–16:23 UTC, in isolated worktrees using each
 | E3 | Is llama-8B's zero real? | **Confirmed** — whole ladder measured; also found the 60× cross-process floor effect |
 | E4 | Was north-mini's sweep exhausted? | **No** — 16 cores is ~1 pp better; but 44/88 are *illegal*, refuting my other suggestion |
 | E5 | Did gemma-4-26B onA ship the best grid? | **No** — 44 beats the shipped 88 by 12.3 µs/layer on both kinds, at PCC 1.0 |
+| E6 | Why did the same candidate regress on gemma FN? | Its incumbent **already had the norm on 8 cores** — the comparison was 8→88, not 1→88. §5 corrected |
 
-Four experiments, one conclusion: **the grid a cell ships is the grid it was told, not the grid that is
-fastest.**
+One conclusion across E2/E4/E5/E6: **the grid a cell ships is the grid it was told, not the grid that is
+fastest — and the whole win is usually just the first step off one core.**
 
 → [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md)
 
