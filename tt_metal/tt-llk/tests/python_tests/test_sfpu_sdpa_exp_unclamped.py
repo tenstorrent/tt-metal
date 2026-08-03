@@ -23,9 +23,12 @@ bfloat16 there (exp(88.7) ~= 3.3e38 vs bf16 max 3.39e38), so that domain is
 deliberately not swept -- there is no well-defined expected value to compare
 against, and the header explicitly scopes itself to val <= 0.
 
-dest_acc=Yes is not swept: the kernel static_asserts
-`!is_fp32_dest_acc_en` ("upper-unclamped exp variant implemented for bf16 dest
-only").
+`_ckernel_sfpu_exp_accurate_upper_unclamped_` static_asserts `!is_fp32_dest_acc_en`
+("upper-unclamped exp variant implemented for bf16 dest only"), so the DEST is
+always 16-bit: dest_acc=Yes does not compile, and a Float32 input has nowhere to go
+because it would need the 32-bit DEST that assert forbids. Only the output side is
+free, and fp32 output is the tighter of the two since the packer does not round the
+result down on the way to L1.
 """
 
 import torch
@@ -41,6 +44,13 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.utils import passed_test
+
+# Input is pinned to Float16_b: the kernel is bf16-dest only, so anything wider has
+# nowhere to land. Only the pack-side format varies.
+FORMATS = [
+    InputOutputFormat(DataFormat.Float16_b, output_format)
+    for output_format in [DataFormat.Float16_b, DataFormat.Float32]
+]
 
 # bfloat16 bit patterns (upper 16 bits of the fp32 encoding) -- this is what
 # sfpi::sFloat16b() consumes, matching p_sfpu::kCONST_1_FP16B == 0x3F80.
@@ -58,15 +68,15 @@ def _bf16_pattern_to_float(pattern: int) -> float:
 
 
 @parametrize(
+    formats=FORMATS,
     dest_acc=[DestAccumulation.No],
     input_range=INPUT_RANGES,
     scale=[BF16_ONE, BF16_HALF],
     num_tiles=[1, 2],
 )
-def test_sfpu_sdpa_exp_unclamped(dest_acc, input_range, scale, num_tiles):
+def test_sfpu_sdpa_exp_unclamped(formats, dest_acc, input_range, scale, num_tiles):
     torch.manual_seed(0)
 
-    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     torch_format = format_dict[formats.input_format]
 
     # SCALE_EN is only worth compiling when the scale is not the identity; with
