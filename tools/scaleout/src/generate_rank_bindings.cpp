@@ -252,8 +252,6 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     log_logical_multi_mesh_adjacency_histograms(logical_graph);
     log_physical_multi_mesh_adjacency_histograms(physical_graph);
 
-    // Rank-pinning files currently describe the rank space of one MGD. Local mesh ids can overlap between
-    // sub-contexts, so accepting the mesh form for a multi-MGD mapping would be ambiguous.
     if (!rank_pinnings.empty()) {
         if (mesh_graphs.size() != 1) {
             throw std::runtime_error(
@@ -274,6 +272,7 @@ TopologyMappingWithLocalMaps run_topology_mapping(
 
         const auto& local_to_global = per_part_local_to_global_mesh_ids.front();
         for (const ResolvedRankPinning& pinning : resolved_pinnings_out) {
+            // Inter-mesh constraints can force a mesh onto a host but not pick which host-rank lands there.
             const auto& host_ranks_for_mesh = mesh_host_ranks_per_mesh.at(pinning.mesh_id);
             if (host_ranks_for_mesh.size() > 1) {
                 throw std::runtime_error(fmt::format(
@@ -378,14 +377,7 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     return out;
 }
 
-/**
- * @brief Verify the solver honored every rank pinning, then apply the pinned env overrides.
- *
- * The host placement itself is enforced during solving (hard inter-mesh constraints), so the check here is
- * a guard against a mapper regression silently producing a rankfile that contradicts the user's file.
- * TT_VISIBLE_DEVICES is not a solver constraint: it is validated against what discovery found on the host
- * and then overrides the auto-computed value.
- */
+// Post-solve check that pinned hosts landed correctly; apply env_overrides (e.g. TT_VISIBLE_DEVICES).
 void apply_rank_pinning_overrides(
     const PhysicalSystemDescriptor& psd,
     const std::vector<ResolvedRankPinning>& resolved_pinnings,
@@ -839,7 +831,6 @@ int main(int argc, char** argv) {
                 : std::nullopt,
             &psd);
 
-        // Stage: Load the optional rank pinning file (host pins for a subset of ranks)
         std::vector<RankPinning> rank_pinnings;
         if (args.rank_pinning_file_path.has_value()) {
             log_info(tt::LogFabric, "Stage: Loading rank pinning file from: {}", *args.rank_pinning_file_path);
@@ -858,8 +849,7 @@ int main(int argc, char** argv) {
 
             if (!topology.mapping.success) {
                 log_error(tt::LogFabric, "Topology mapping failed: {}", topology.mapping.error_message);
-                // Non-zero ranks skip mapping and wait at the exit barrier below. Returning here would
-                // leave them hung; abort tears down the whole MPI job.
+                // Peers wait on the exit barrier; return would hang them.
                 context->abort(1);
             }
             log_info(tt::LogFabric, "Topology mapping complete");
@@ -1017,8 +1007,7 @@ int main(int argc, char** argv) {
 
     } catch (const std::exception& e) {
         log_error(tt::LogFabric, "Error: {}", e.what());
-        // Rank 0 alone runs topology mapping / pinning validation. A throw there must abort the
-        // communicator; a plain return leaves other ranks blocked on the barrier above.
+        // Peers wait on the exit barrier; return would hang them.
         context->abort(1);
     }
 

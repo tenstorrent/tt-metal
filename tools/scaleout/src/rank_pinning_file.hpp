@@ -17,31 +17,20 @@
 #include <fmt/format.h>
 #include <yaml-cpp/yaml.h>
 
-// Optional user-supplied rank pinning file for Phase 1 (`generate_rank_bindings`).
-//
-// The auto-mapper normally chooses which physical host backs which logical mesh host rank. This file lets
-// a user hard-pin a *subset* of ranks to named hosts; every rank not named here keeps the fully automatic
-// placement. Absence of the file leaves Phase 1 behavior unchanged.
-//
-// Schema (see README_generate_rank_bindings.md):
+// Optional Phase 1 rank pinning YAML. Unlisted ranks stay auto-mapped.
 //
 //   rank_pinnings:
-//     - rank: 0                              # global MPI rank, or...
+//     - rank: 0
 //       host: host-A
 //       env_overrides:
-//         TT_VISIBLE_DEVICES: "0,1,2,3"      # optional
-//     - mesh_id: 1                           # ...the explicit (mesh, host rank) form
+//         TT_VISIBLE_DEVICES: "0,1,2,3"   # optional
+//     - mesh_id: 1
 //       mesh_host_rank: 0
 //       host: host-B
 //
-// Each entry uses exactly one of the two key forms. Parsing and validation happen entirely at the Phase 1
-// level; the resulting constraints are handed to the topology mapper as hard inter-mesh constraints.
+// Each entry uses exactly one of rank: or mesh_id:+mesh_host_rank:.
 
-/**
- * @brief One entry of the pinning file, as written by the user.
- *
- * Either `rank` is set, or both `mesh_id` and `mesh_host_rank` are — never both forms, never neither.
- */
+// Either `rank`, or both `mesh_id` and `mesh_host_rank`.
 struct RankPinning {
     std::optional<int> rank;
     std::optional<int> mesh_id;
@@ -50,23 +39,15 @@ struct RankPinning {
     std::map<std::string, std::string> env_overrides;
 };
 
-/**
- * @brief A pinning after the global rank (if used) has been translated to a (mesh, host rank) pair.
- */
 struct ResolvedRankPinning {
-    int rank = -1;  // global MPI rank this pinning resolves to, for error messages
+    int rank = -1;  // global MPI rank, for error messages
     int mesh_id = 0;
     int mesh_host_rank = 0;
     std::string host;
     std::map<std::string, std::string> env_overrides;
 };
 
-/**
- * @brief The canonical global-rank ordering of (mesh_id, mesh_host_rank) pairs.
- *
- * Index i is global rank i. This mirrors the sort in extract_rank_bindings (mesh_id ascending, then
- * mesh_host_rank), and is derivable from the mesh graph alone -- i.e. before any solving happens.
- */
+// Index i is global rank i. Matches extract_rank_bindings primary sort (mesh_id, then mesh_host_rank).
 using MeshHostRankOrder = std::vector<std::pair<int, int>>;
 
 inline std::vector<RankPinning> parse_rank_pinning_file(const std::string& path) {
@@ -188,17 +169,8 @@ inline std::vector<RankPinning> parse_rank_pinning_file(const std::string& path)
     return pinnings;
 }
 
-/**
- * @brief Translate every `rank:` entry into its (mesh_id, mesh_host_rank) pair.
- *
- * @param pinnings Entries as parsed from the file.
- * @param rank_order Canonical global-rank ordering derived from the mesh graph (index == global rank).
- * @throws std::runtime_error if a global rank is out of range, or if two entries collide on the same
- *         (mesh_id, mesh_host_rank) after translation.
- */
 inline std::vector<ResolvedRankPinning> resolve_rank_pinnings(
     const std::vector<RankPinning>& pinnings, const MeshHostRankOrder& rank_order) {
-    // (mesh_id, mesh_host_rank) -> global rank, for reporting the rank of mesh-form entries.
     std::map<std::pair<int, int>, int> mesh_host_rank_to_global_rank;
     for (std::size_t i = 0; i < rank_order.size(); ++i) {
         mesh_host_rank_to_global_rank.emplace(rank_order[i], static_cast<int>(i));
@@ -257,12 +229,6 @@ inline std::vector<ResolvedRankPinning> resolve_rank_pinnings(
     return resolved;
 }
 
-/**
- * @brief Build the canonical global-rank ordering used by extract_rank_bindings.
- *
- * `mesh_host_ranks_per_mesh` maps mesh id -> its mesh host ranks. The ordering is mesh id ascending, then
- * mesh host rank ascending -- matching the primary and secondary sort keys in extract_rank_bindings.
- */
 inline MeshHostRankOrder build_mesh_host_rank_order(const std::map<int, std::vector<int>>& mesh_host_ranks_per_mesh) {
     MeshHostRankOrder order;
     for (const auto& [mesh_id, host_ranks] : mesh_host_ranks_per_mesh) {
