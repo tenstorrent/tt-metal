@@ -384,15 +384,19 @@ Chains screened against the frozen incumbent and rejected on measurement — the
 ## Could have been tried and was not: a starved op where the sweep stopped at the advised value
 
 The skill is explicit — *never sweep only at or below an advised core count; always measure at least one
-exactly-dividing grid*. These are ops on **≤2 cores** whose only screened candidate was the advised value:
+exactly-dividing grid*. These are ops on **≤2 cores** whose only screened candidate was the advised value.
+
+⚠ **The two phi FN rows are listed for the op inventory only — phi FN did *not* stop at the advised value.**
+It swept 11 / 12 / 24 and every grid beat the control. Its candidate was discarded by the correctness oracle,
+not by the sweep bound. Corrected note at the end of this section.
 
 | model | cell | kind | op | shipped | advised | op µs | % of window | verdict at the advised value |
 |---|---|---|---|---|---|---|---|---|
 | gemma-4-26B | g26 onA | `sliding_attention` | `rms_norm` | **1** | 88 | **44.7** | 2.496 % | below_threshold |
-| phi-3.5 | phi FN | `dense` | `rms_norm` | **1** | 11 | **44.5** | 6.138 % | rejected |
+| phi-3.5 | phi FN | `dense` | `rms_norm` | **1** | 11 | **44.5** | 6.138 % | ⚠ faster (−7.60 %); see note below |
 | gemma-4-26B | g26 B | `sliding_attention` | `rms_norm` | **1** | 88 | **44.5** | 3.687 % | below_threshold |
 | gemma-4-26B | g26 onA | `sliding_attention` | `rms_norm` | **1** | 88 | **44.4** | 2.48 % | below_threshold |
-| phi-3.5 | phi FN | `dense` | `rms_norm` | **1** | 11 | **44.3** | 6.107 % | rejected |
+| phi-3.5 | phi FN | `dense` | `rms_norm` | **1** | 11 | **44.3** | 6.107 % | ⚠ faster (−7.60 %); see note below |
 | gemma-4-26B | g26 B | `full_attention` | `rms_norm` | **1** | 88 | **44.3** | 3.656 % | below_threshold |
 | gemma-4-26B | g26 onA | `full_attention` | `rms_norm` | **1** | 88 | **44.2** | 2.231 % | below_threshold |
 | gemma-4-26B | g26 onA | `full_attention` | `rms_norm` | **1** | 88 | **44.1** | 2.227 % | below_threshold |
@@ -413,18 +417,27 @@ exactly-dividing grid*. These are ops on **≤2 cores** whose only screened cand
 | north-mini | nm onA | `dense_full_attention` | `rms_norm` | **1** | 22 | **26.0** | 9.478 % | not_measurable |
 
 **The 1-core RMSNorm is the corpus's highest-yield op class, and it recurs across models.** Three cells met
-one; two swept above the advised value and won big, one stopped at the advised value and abandoned it:
+one. All three swept it, all three measured a win — and only two shipped it:
 
 | cell | shipped | advised | what it did | result |
 |---|---|---|---|---|
-| north-mini FN | 1 core, 26.1 µs | 22 | swept 22 / **32** / 64 — *"advised 22 and above-advice 64 were slower"* | **−10.23 %** |
-| gemma-4-26B onA | 1 core, ~44 µs ×2 | 88 | took **88** — *"reconciliation exposed material one-core RMSNorm operations advised onto 88 cores"* | **−12.98 %** |
-| phi arm FN | 1 core, 44.3 + 44.5 µs = **12.25 % of window** | 11 | screened **11 only**, measured slower, shipped `advisor_norm_cores: 0` | −4.91 % from RoPE instead |
+| north-mini FN | 1 core, 26.1 µs | 22 | swept 22 / **32** / 64 → 0.5433 / **0.5183** / 0.5733 ms vs 0.5537 control | **−10.23 %** shipped |
+| gemma-4-26B onA | 1 core, ~44 µs ×2 | 88 | took **88** → 1.8240 → 1.5873 ms sliding | **−12.98 %** shipped |
+| phi arm FN | 1 core, 44.3 + 44.5 µs = **12.25 % of window** | 11 | swept **11 / 12 / 24** → 0.7459 / 0.7490 / 0.7485 ms vs 0.8072 control; combined with the RoPE win → **0.7003 ms (−13.24 %)** | **rejected by the correctness oracle**; shipped −4.91 % from RoPE alone |
 
-phi arm FN is the clearest missed opportunity in the experiment: its largest single disagreement, on the one op
-class that paid twice elsewhere, dropped after a sweep bounded above by the advised value — the exact failure
-the skill warns about. Its sibling `phi arm onA` even shipped `restore_geometry: 32-core exact rect`, so the
-grid that works on this model was known within the same corpus.
+> **Corrected 2026-08-03.** This table previously said phi FN "screened **11 only**, measured slower". Both
+> halves were wrong. Its transcript shows `for cores in 11 12 24`, and all three grids were *faster* than the
+> control. The candidate was discarded because phi FN built a **differential** real-weight oracle against the
+> frozen incumbent and set the bar at **0.999999**; the combined candidate came in at PCC 0.9999910667 and was
+> vetoed, while RoPE-only was bitwise identical (PCC 1.0) and shipped. No other cell in the corpus used a bar
+> tighter than 0.995, phi **A** passed its own differential oracle at 0.9999987790 (which would also have failed
+> FN's bar), and phi FN's own shipped real-weight test passes at PCC 0.998902. See
+> [`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md) §3.3 and [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md).
+
+So phi arm FN remains the clearest missed opportunity in the experiment — but the cause is a **stage defect,
+not a bounded sweep**. The sweep did what the skill asks; the oracle contract is what discarded the win. Its
+sibling `phi arm onA` shipped `restore_geometry: 32-core exact rect`, so a grid one dividing step above FN's
+plateau was known within the same corpus and was never tried.
 
 **Why the cells differ, and where they agree.** The advisor's advice is near-identical across a model's cells —
 for phi it advised `rms_norm`→11, `nlp_create_qkv_heads_decode`→22, `neg`/`concat`/`add`→22 in all four,

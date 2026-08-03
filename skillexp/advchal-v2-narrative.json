@@ -1,0 +1,1794 @@
+[
+ {
+  "model": "llama-3.2-1B",
+  "cell": "llama32-1b",
+  "arm": "exp/dense",
+  "label": "llama32-1b",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 0.37308,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.146
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.384725,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.254
+   },
+   {
+    "label": "dense_2_residual_chain_64",
+    "ms": 0.420341,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.605
+   },
+   {
+    "label": "concat_output_dram",
+    "ms": 0.373237,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 6.501
+   }
+  ],
+  "n_measurements": 4,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 0.37308,
+    "floor_us": 0.146
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.384725,
+    "floor_us": 5.254
+   }
+  ],
+  "oracles": [],
+  "knobs": {},
+  "final_message": "Full-model estimate: **5,672.576 \u00b5s before \u2192 5,672.576 \u00b5s after, \u00b12.336 \u00b5s**. Measured `$shard-advise` contribution: **0.000 \u00b5s/model**. The frozen incumbent remains shipped unchanged. - Incumbent: 0.373080 ms/layer at decode batch 32. - 64-core extended chain: 0.420341 ms, 12.7% slower. - DRAM concat candidate: 0.373237 ms with overlapping repeats; rejected. - SDPA\u2192concat chain: infeasible because paged GQA SDPA rejects sharded output. - Rotary-K DRAM candidate: incompatible with paged cache update. - Advisor agreement with shipped: 258.260 \u00b5s/layer, 72.84% of the profiled window. - Advisor-agreed boundaries: 1.320 \u00b5s/layer, reported but not credited. - Layer handoff: no DRAM round trip detected. Artifacts: [README.md](/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_2_1b_instruct/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_2_1b_instruct/doc/advisor_challenger/final.json). The requested gate passes in strict mode with no warnings. Candidate knobs remain default-off.",
+  "n_agent_messages": 9
+ },
+ {
+  "model": "llama-3.1-8B",
+  "cell": "llama31-8b",
+  "arm": "exp17/dense",
+  "label": "llama31-8b",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 0.665046,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.697
+   },
+   {
+    "label": "profile_incumbent",
+    "ms": 0.676665,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.321
+   },
+   {
+    "label": "profile_incumbent",
+    "ms": 0.676888,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.586
+   },
+   {
+    "label": "profile_incumbent",
+    "ms": 0.677647,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.109
+   },
+   {
+    "label": "dense_2_skip_attn_output_reshard",
+    "ms": 0.667582,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.376
+   },
+   {
+    "label": "dense_3_skip_mlp_output_reshard",
+    "ms": 0.66768,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.374
+   },
+   {
+    "label": "dense_geometry_64",
+    "ms": 0.693123,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.608
+   }
+  ],
+  "n_measurements": 7,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 0.665046,
+    "floor_us": 0.697
+   }
+  ],
+  "oracles": [],
+  "knobs": {},
+  "final_message": "Full-model estimate: **20,747.296 \u00b5s before \u2192 20,747.296 \u00b5s after, \u00b122.304 \u00b5s**. Measured `$shard-advise` contribution: **0.000 \u00b5s/model**. The frozen batch-32 incumbent remains shipped unchanged. Key results: - Incumbent: 0.665046 ms/layer; 0.697 \u00b5s noise floor. - Advisor ceiling: 4.394 \u00b5s/layer, or 140.608 \u00b5s/model. - Top boundary candidate: hard error\u2014concat-heads requires sharded input. - Attention regrid removal: +2.536 \u00b5s/layer. - MLP regrid removal: +2.635 \u00b5s/layer. - Exactly-dividing 64-core candidate: +28.077 \u00b5s/layer. - Advisor independently re-derived 76.32% of the measured window. - Strict advisor-challenger gate passes with no warnings. Artifacts are summarized in [README.md](/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_1_8b_instruct/doc/advisor_challenger/README.md), with machine-readable results in [final.json](/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_1_8b_instruct/doc/advisor_challenger/final.json). All losing experimental knobs remain default-off.",
+  "n_agent_messages": 8
+ },
+ {
+  "model": "phi-3.5-mini",
+  "cell": "phiA",
+  "arm": "fuse-advise onA",
+  "label": "phi A",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 0.656989,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.43
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.665007,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.388
+   },
+   {
+    "label": "rope_l1_rect32",
+    "ms": 0.607172,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.86
+   },
+   {
+    "label": "rope_l1_rect32_confirm",
+    "ms": 0.607902,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.518
+   }
+  ],
+  "n_measurements": 4,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 0.656989,
+    "floor_us": 0.43
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.665007,
+    "floor_us": 1.388
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_weights": "real",
+    "oracle_passed": "true"
+   },
+   {
+    "which": "?",
+    "oracle_weights": "real",
+    "oracle_passed": "true"
+   }
+  ],
+  "knobs": {},
+  "final_message": "Shipped the advisor-derived L1 RoPE chain for decode batch 32. - Full-model estimate: **18,210.88 \u2192 16,616.75 \u00b5s** - Improvement: **1,594.13 \u00b5s/model (8.75%)** - Uncertainty band: **\u00b113.76 \u00b5s** - Per-layer: **0.656989 \u2192 0.607172 ms** - Fresh-process confirmation: **0.607902 ms** - Real-weight differential oracle: **PCC 0.9999988** - Batch-32 regression test: **passed**, PCC 0.9999951 - Advisor agreement: **224.287 \u00b5s/layer** - Out-of-scope layer handoff: **43.369 \u00b5s/model** - Mandatory advisor-challenger gate: **passed** Artifacts and detailed accounting are in [README.md](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/final.json). The shipped implementation is in [optimized_decoder.py](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/tt/optimized_decoder.py).",
+  "n_agent_messages": 23
+ },
+ {
+  "model": "phi-3.5-mini",
+  "cell": "phiB",
+  "arm": "fuse-noadvise",
+  "label": "phi B",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 0.788825,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.433
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.798674,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.173
+   },
+   {
+    "label": "rope_l1_chain",
+    "ms": 0.748709,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.196
+   },
+   {
+    "label": "rope_l1_chain_confirm",
+    "ms": 0.748458,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.524
+   },
+   {
+    "label": "incumbent",
+    "ms": 0.789412,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 20,
+    "floor_us": 5.567
+   },
+   {
+    "label": "incumbent",
+    "ms": 0.78861,
+    "blocks": 5,
+    "iters": 100,
+    "warmup": 50,
+    "floor_us": 0.713
+   }
+  ],
+  "n_measurements": 6,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 0.788825,
+    "floor_us": 0.433
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.798674,
+    "floor_us": 3.173
+   },
+   {
+    "label": "incumbent",
+    "ms": 0.789412,
+    "floor_us": 5.567
+   },
+   {
+    "label": "incumbent",
+    "ms": 0.78861,
+    "floor_us": 0.713
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_passed": "true"
+   }
+  ],
+  "knobs": {},
+  "final_message": "Shipped the advisor-derived RoPE L1-residency chain. - Full-model estimate: **22,392.6 \u2192 21,107.7 \u00b5s**, uncertainty **\u00b122.8 \u00b5s** - Improvement: **1,284.9 \u00b5s/model (5.74%)** - Per-layer: **0.788610 \u2192 0.748458 ms** - All candidate repeats beat all incumbent repeats, including fresh-process confirmation - Real-weight oracle: **PCC 0.998993**, threshold 0.995 - Advisor pin: `618cd4e75d` - Decode/capture batch: 32 - Layer count: `dense: 32` The unrelated down-projection tuning was excluded from advisor attribution. Layer-handoff cost, advisor-agreed boundaries, and tracer-unreachable fused-cache time are reported without screening or attribution. Artifacts: [README.md](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/advisor_challenger/final.json). The required `02b-advisor-challenger.check.sh` gate passes cleanly with no warnings.",
+  "n_agent_messages": 19
+ },
+ {
+  "model": "phi-3.5-mini",
+  "cell": "phiFN",
+  "arm": "nofuse-noadvise",
+  "label": "phi FN",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 0.807152,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.064
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.815448,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.271
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.819558,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.532
+   },
+   {
+    "label": "rope_l1_query",
+    "ms": 0.79345,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.68
+   },
+   {
+    "label": "rope_l1_key",
+    "ms": 0.792631,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.013
+   },
+   {
+    "label": "rope_l1_query_key",
+    "ms": 0.768065,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.105
+   },
+   {
+    "label": "rope_l1_query_key_confirm",
+    "ms": 0.767542,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.198
+   },
+   {
+    "label": "norm_11c",
+    "ms": 0.745906,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.527
+   },
+   {
+    "label": "norm_12c",
+    "ms": 0.74901,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.81
+   },
+   {
+    "label": "norm_24c",
+    "ms": 0.748513,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.68
+   },
+   {
+    "label": "rope_l1_query_key_norm_11c",
+    "ms": 0.700267,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.83
+   },
+   {
+    "label": "rope_l1_query_key_profile",
+    "ms": 0.771027,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.665
+   }
+  ],
+  "n_measurements": 12,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 0.807152,
+    "floor_us": 1.064
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.815448,
+    "floor_us": 1.271
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 0.819558,
+    "floor_us": 1.532
+   }
+  ],
+  "oracles": [
+   {
+    "which": "oracle_rope_l1_query_key",
+    "oracle_weights": "real",
+    "oracle_reference": "frozen incumbent with identical real weights and inputs",
+    "oracle_pcc_bar": "0.999999",
+    "oracle_passed": "true",
+    "oracle_message": "1.0"
+   },
+   {
+    "which": "oracle_combined",
+    "oracle_weights": "real",
+    "oracle_reference": "frozen incumbent with identical real weights and inputs",
+    "oracle_pcc_bar": "0.999999",
+    "oracle_passed": "false",
+    "oracle_message": "0.9999910666979231"
+   }
+  ],
+  "knobs": {
+   "ADVISOR_ROPE_L1": [
+    "",
+    "\\\"\"'$candidate",
+    "query_key"
+   ],
+   "ADVISOR_SDPA_CONCAT_L1": [
+    "1"
+   ],
+   "ADVISOR_NORM_CORES": [
+    "11",
+    "\\\"\"'<swept>"
+   ]
+  },
+  "final_message": null,
+  "n_agent_messages": 10
+ },
+ {
+  "model": "phi-3.5-mini",
+  "cell": "phi-exp17",
+  "arm": "exp17",
+  "label": "phi exp17",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 1.100939,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.092
+   },
+   {
+    "label": "profile_incumbent",
+    "ms": 1.107996,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.593
+   },
+   {
+    "label": "rope_l1_tail",
+    "ms": 1.100683,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.642
+   }
+  ],
+  "n_measurements": 3,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 1.100939,
+    "floor_us": 1.092
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_passed": "true"
+   }
+  ],
+  "knobs": {},
+  "final_message": "The audit found one important weakness in the earlier completion claim: the stage ships batch-32 enablement as a prerequisite, so the blanket \u201ca shipped change needs a real-weight oracle\u201d applies even though the advisor contribution itself is zero. The recorded real-weight test was skipped because its pinned cache path was absent. I\u2019m checking for equivalent cached weights elsewhere and will run a real batch-32 oracle if available; otherwise this cannot honestly be marked complete yet.",
+  "n_agent_messages": 11
+ },
+ {
+  "model": "qwen3.6-27B",
+  "cell": "qwen",
+  "arm": "fuse-noadvise",
+  "label": "qwen",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 19.140244,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 12.349
+   },
+   {
+    "label": "incumbent_full_attention",
+    "ms": 1.208257,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.609
+   },
+   {
+    "label": "packed_qkv_l1_chain",
+    "ms": 1.180402,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.155
+   },
+   {
+    "label": "packed_qkv_l1_profile",
+    "ms": 1.192613,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.061
+   },
+   {
+    "label": "packed_qkv_l1_confirm",
+    "ms": 1.181348,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.911
+   },
+   {
+    "label": "incumbent_full_profile_current",
+    "ms": 1.217423,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.482
+   },
+   {
+    "label": "rope_query_c32",
+    "ms": 1.222463,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.886
+   },
+   {
+    "label": "rope_both_c32",
+    "ms": 1.233225,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.957
+   },
+   {
+    "label": "packed_qkv_l1_shipped_confirm",
+    "ms": 1.181132,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.707
+   }
+  ],
+  "n_measurements": 9,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 19.140244,
+    "floor_us": 12.349
+   },
+   {
+    "label": "incumbent_full_attention",
+    "ms": 1.208257,
+    "floor_us": 1.609
+   },
+   {
+    "label": "incumbent_full_profile_current",
+    "ms": 1.217423,
+    "floor_us": 1.482
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_reference": "frozen incumbent packed-QKV decode path",
+    "oracle_weights": "real",
+    "oracle_passed": "true"
+   }
+  ],
+  "knobs": {},
+  "final_message": "Shipped the measured packed-QKV L1 chain in [optimized_decoder.py](/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/optimized_decoder.py:417). Full-model estimate: **938,063.85 \u00b5s \u2192 937,618.16 \u00b5s, \u00b1618.50 \u00b5s**. - Estimated contribution: **\u2212445.69 \u00b5s/model**, inside its uncertainty band. - Full-attention layer: **1.208257 \u2192 1.180402 ms** (`\u22122.31%`). - All 5 candidate repeats beat all 5 incumbent repeats. - Fresh-process confirmation: **1.181348 ms**. - Real checkpoint differential oracle: **PCC 1.0**. - Linear attention: measured contribution **zero** across 48/64 layers because the pinned tracer cannot cross its mutable-state `ttnn.copy` boundary. - Advisor independently matched **67.67%** of the existing full-attention window. Artifacts and detailed accounting are in [README.md](/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/README.md). The advisor-challenger gate passes, and all six optimized-decoder unit tests pass.",
+  "n_agent_messages": 25
+ },
+ {
+  "model": "qwen3.6-27B",
+  "cell": "qwenB",
+  "arm": "nofuse-noadvise",
+  "label": "qwen B",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 1.449416,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.749
+   },
+   {
+    "label": "incumbent_linear_attention",
+    "ms": 15.849799,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.887
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 1.457902,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.512
+   },
+   {
+    "label": "incumbent_profile_trace",
+    "ms": 1.452329,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.376
+   },
+   {
+    "label": "advisor_rope_q_l1",
+    "ms": 1.454418,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.873
+   },
+   {
+    "label": "advisor_rope_k_l1",
+    "ms": 1.453619,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.857
+   },
+   {
+    "label": "advisor_qkv_direct",
+    "ms": 1.450132,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.745
+   },
+   {
+    "label": "advisor_rope_dram",
+    "ms": 1.451615,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.103
+   },
+   {
+    "label": "incumbent_linear_attention",
+    "ms": 15.852625,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 30,
+    "floor_us": 5.795
+   }
+  ],
+  "n_measurements": 9,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 1.449416,
+    "floor_us": 0.749
+   },
+   {
+    "label": "incumbent_linear_attention",
+    "ms": 15.849799,
+    "floor_us": 5.887
+   },
+   {
+    "label": "incumbent_profile",
+    "ms": 1.457902,
+    "floor_us": 2.512
+   },
+   {
+    "label": "incumbent_profile_trace",
+    "ms": 1.452329,
+    "floor_us": 0.376
+   },
+   {
+    "label": "incumbent_linear_attention",
+    "ms": 15.852625,
+    "floor_us": 5.795
+   }
+  ],
+  "oracles": [],
+  "knobs": {},
+  "final_message": "I\u2019m reopening this as incomplete. The current artifacts pass the non-strict gate, but they do not yet prove the requested contribution measurement: candidate chains were relabeled in the reconciliation JSON instead of measured, the linear kind lacks a successful reconciliation, and the headline mixes harness-derived estimates instead of the prescribed per-kind reconciliation method. I\u2019ll correct those rather than treating the current green gate as sufficient.",
+  "n_agent_messages": 26
+ },
+ {
+  "model": "gemma-4-12B",
+  "cell": "gemma4-12b",
+  "arm": "exp11",
+  "label": "gemma-4-12B",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 1.254146,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.727
+   },
+   {
+    "label": "incumbent_full_attention",
+    "ms": 1.37736,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.056
+   },
+   {
+    "label": "sliding_b17_cos_rope_row_major",
+    "ms": 1.248843,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 4.621
+   },
+   {
+    "label": "sliding_b19_sin_rope_row_major",
+    "ms": 1.247417,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.788
+   },
+   {
+    "label": "sliding_b17_b19_rope_row_major",
+    "ms": 1.241302,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.842
+   },
+   {
+    "label": "full_b17_cos_rope_row_major",
+    "ms": 1.366216,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.124
+   },
+   {
+    "label": "full_b19_sin_rope_row_major",
+    "ms": 1.365585,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.287
+   },
+   {
+    "label": "full_b17_b19_rope_row_major",
+    "ms": 1.355792,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.157
+   },
+   {
+    "label": "incumbent",
+    "ms": 1.241523,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.712
+   },
+   {
+    "label": "incumbent_full_attention",
+    "ms": 1.355874,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.381
+   },
+   {
+    "label": "sliding_keep_k_l1_chain",
+    "ms": 1.230848,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.802
+   },
+   {
+    "label": "full_keep_k_l1_chain",
+    "ms": 1.335857,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.053
+   },
+   {
+    "label": "confirm_shipped_sliding",
+    "ms": 1.230469,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.255
+   },
+   {
+    "label": "confirm_shipped_full",
+    "ms": 1.3351,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 4.177
+   },
+   {
+    "label": "shipped_l1_interleaved_sliding",
+    "ms": 1.228846,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.544
+   },
+   {
+    "label": "shipped_l1_interleaved_full",
+    "ms": 1.335905,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.253
+   },
+   {
+    "label": "sliding_keep_v_l1",
+    "ms": 1.232241,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.651
+   },
+   {
+    "label": "sliding_mlp_direct_down",
+    "ms": 1.23516,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.614
+   },
+   {
+    "label": "sliding_k_v_mlp",
+    "ms": 1.223761,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.048
+   },
+   {
+    "label": "full_k_v_mlp",
+    "ms": 1.319763,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.793
+   },
+   {
+    "label": "profile_final_sliding",
+    "ms": 1.238309,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.87
+   },
+   {
+    "label": "sliding_q_l1_extended_sdpa",
+    "ms": 1.234231,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.949
+   },
+   {
+    "label": "full_q_l1_extended_sdpa",
+    "ms": 1.342775,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.178
+   },
+   {
+    "label": "sliding_q_k_v_mlp",
+    "ms": 1.218789,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.765
+   },
+   {
+    "label": "full_q_k_v_mlp",
+    "ms": 1.307986,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.962
+   },
+   {
+    "label": "sliding_grouped_o_l1",
+    "ms": 1.241267,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.778
+   },
+   {
+    "label": "full_grouped_o_l1",
+    "ms": 1.354109,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.487
+   },
+   {
+    "label": "full_q_k_v_mlp_o",
+    "ms": 1.306017,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.372
+   }
+  ],
+  "n_measurements": 28,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 1.254146,
+    "floor_us": 1.727
+   },
+   {
+    "label": "incumbent_full_attention",
+    "ms": 1.37736,
+    "floor_us": 5.056
+   },
+   {
+    "label": "incumbent",
+    "ms": 1.241523,
+    "floor_us": 0.712
+   },
+   {
+    "label": "incumbent_full_attention",
+    "ms": 1.355874,
+    "floor_us": 3.381
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_passed": "true",
+    "oracle_weights": "real"
+   }
+  ],
+  "knobs": {},
+  "final_message": "The skill audit exposed two evidence weaknesses that the gate alone does not catch: generated reconciliation rows were post-annotated with sentinel \u201cmeasurements\u201d for some unexecuted chains, and the kept candidate lacks its own op-level profile. Those do not meet the contribution method. I\u2019m treating the previous \u201cpassed\u201d result as provisional and correcting these gaps rather than leaning on the checker.",
+  "n_agent_messages": 26
+ },
+ {
+  "model": "gemma-4-26B",
+  "cell": "gemma4",
+  "arm": "exp (sliding O)",
+  "label": "gemma-4-26B exp",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 1.25969,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.814
+   },
+   {
+    "label": "incumbent_full_attention",
+    "ms": 1.261661,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.852
+   },
+   {
+    "label": "profile_sliding",
+    "ms": 1.293938,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 4.648
+   },
+   {
+    "label": "profile_full",
+    "ms": 1.296528,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.983
+   },
+   {
+    "label": "profile_sliding_trace",
+    "ms": 1.266636,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 13.159
+   },
+   {
+    "label": "profile_sliding_bounded",
+    "ms": 1.296577,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.31
+   },
+   {
+    "label": "profile_full_bounded",
+    "ms": 1.297142,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.735
+   },
+   {
+    "label": "sliding_attention_o_chain",
+    "ms": 1.253954,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.264
+   },
+   {
+    "label": "full_attention_qkv_chain",
+    "ms": 1.290636,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.387
+   },
+   {
+    "label": "sliding_attention_o_chain_confirm",
+    "ms": 1.253593,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.602
+   },
+   {
+    "label": "profile_candidate_sliding_o",
+    "ms": 1.290949,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.246
+   }
+  ],
+  "n_measurements": 11,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 1.25969,
+    "floor_us": 2.814
+   },
+   {
+    "label": "incumbent_full_attention",
+    "ms": 1.261661,
+    "floor_us": 0.852
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_passed": "false"
+   }
+  ],
+  "knobs": {},
+  "final_message": "Shipped the advisor-measured sliding-attention O-projection DRAM sharding. - Full-model estimate: **36,224.1 \u00b1 36.5 \u00b5s \u2192 36,076.2 \u00b1 36.5 \u00b5s** - Estimated contribution: **\u2212147.9 \u00b5s/model** - Sliding incumbent: 1.258866\u20131.260157 ms - Winner: 1.253223\u20131.254487 ms - Fresh confirmation: 1.253043\u20131.253644 ms - Real-weight PCC: 0.998358 prefill, 0.999499 decode; threshold 0.995 - Full-attention QKV candidate rejected: 1.290230\u20131.291618 ms - All batches were decode/capture/requested batch 1. - Strict advisor-challenger gate passes without warnings. Artifacts: [advisor_challenger README](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/final.json).",
+  "n_agent_messages": 23
+ },
+ {
+  "model": "gemma-4-26B",
+  "cell": "g26onA",
+  "arm": "nofuse-noadvise onA",
+  "label": "g26 onA",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 1.825158,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.349
+   },
+   {
+    "label": "incumbent",
+    "ms": 2.013228,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.939
+   },
+   {
+    "label": "incumbent",
+    "ms": 2.013929,
+    "blocks": 5,
+    "iters": 200,
+    "warmup": 10,
+    "floor_us": 3.543
+   },
+   {
+    "label": "incumbent",
+    "ms": 1.824021,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 30,
+    "floor_us": 0.587
+   },
+   {
+    "label": "advisor_norm88_sliding",
+    "ms": 1.587259,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.766
+   },
+   {
+    "label": "advisor_norm88_full",
+    "ms": 1.77666,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.988
+   },
+   {
+    "label": "advisor_norm88_sliding_confirm",
+    "ms": 1.58737,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 30,
+    "floor_us": 3.467
+   },
+   {
+    "label": "advisor_norm88_full_confirm",
+    "ms": 1.777749,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 30,
+    "floor_us": 1.37
+   },
+   {
+    "label": "advisor_norm88_sliding_profile",
+    "ms": 1.635691,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 25.426
+   },
+   {
+    "label": "advisor_norm88_full_profile",
+    "ms": 1.822835,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 26.299
+   },
+   {
+    "label": "advisor_norm88_sliding_shipped_default",
+    "ms": 1.59868,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 13.301
+   },
+   {
+    "label": "advisor_norm88_full_shipped_default",
+    "ms": 1.77653,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.4
+   }
+  ],
+  "n_measurements": 12,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 1.825158,
+    "floor_us": 3.349
+   },
+   {
+    "label": "incumbent",
+    "ms": 2.013228,
+    "floor_us": 2.939
+   },
+   {
+    "label": "incumbent",
+    "ms": 2.013929,
+    "floor_us": 3.543
+   },
+   {
+    "label": "incumbent",
+    "ms": 1.824021,
+    "floor_us": 0.587
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_passed": "true",
+    "oracle_reference": "real HuggingFace Gemma layer reference used by the frozen incumbent oracle",
+    "oracle_weights": "real"
+   },
+   {
+    "which": "?",
+    "oracle_reference": "HuggingFace Gemma layer reference used by the frozen incumbent",
+    "oracle_weights": "real",
+    "oracle_passed": "true"
+   }
+  ],
+  "knobs": {},
+  "final_message": "Full-model estimate: **54,633.6 \u00b1 32.4 \u00b5s before and after**. `shard-advise` contribution is **0.0 \u00b5s (0.0%)** at decode batch 1. The frozen incumbent remains shipped unchanged. Key evidence: - Layer counts: 25 sliding attention + 5 full attention. - Both reconciliations close at 100%, are not degraded, and report a 0.000 \u00b5s advisor-attributable ceiling. - Sparse experts remain unreachable: 64.70% of the sliding window and 58.51% of the full-attention window. - Advisor-agreed conversion costs\u20147.882 \u00b5s/layer sliding and 8.826 \u00b5s/layer full\u2014were reported but not credited. - Pinned advisor: `618cd4e75d`. - Required gate passes with advisory notices for out-of-scope norm/grid and DRAM-resident optimization opportunities. Artifacts: [advisor_challenger/README.md](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/final.json).",
+  "n_agent_messages": 26
+ },
+ {
+  "model": "gemma-4-26B",
+  "cell": "g26FN",
+  "arm": "fuse-noadvise",
+  "label": "g26 FN",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 1.341153,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.804
+   },
+   {
+    "label": "incumbent",
+    "ms": 1.539374,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.157
+   },
+   {
+    "label": "advisor_norm88_sliding",
+    "ms": 1.346942,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.476
+   },
+   {
+    "label": "advisor_norm88_full",
+    "ms": 1.549943,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.405
+   },
+   {
+    "label": "advisor_concat_projection_sliding",
+    "ms": 1.318449,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.217
+   },
+   {
+    "label": "advisor_concat_projection_full",
+    "ms": 1.494548,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.773
+   },
+   {
+    "label": "advisor_concat_projection_sliding_confirm",
+    "ms": 1.31822,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.864
+   },
+   {
+    "label": "advisor_concat_projection_full_confirm",
+    "ms": 1.494577,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.665
+   },
+   {
+    "label": "shipped_profile_sliding",
+    "ms": 1.351759,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 7.658
+   },
+   {
+    "label": "shipped_profile_full",
+    "ms": 1.528251,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 3.143
+   },
+   {
+    "label": "shipped_default_sliding",
+    "ms": 1.319063,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.573
+   },
+   {
+    "label": "shipped_default_full",
+    "ms": 1.494706,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.992
+   }
+  ],
+  "n_measurements": 12,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 1.341153,
+    "floor_us": 2.804
+   },
+   {
+    "label": "incumbent",
+    "ms": 1.539374,
+    "floor_us": 2.157
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_reference": "HuggingFace google/gemma-4-26B-A4B-it decoder layer",
+    "oracle_weights": "real",
+    "oracle_passed": "true"
+   },
+   {
+    "which": "?",
+    "oracle_reference": "HuggingFace google/gemma-4-26B-A4B-it decoder layer",
+    "oracle_weights": "real",
+    "oracle_passed": "true"
+   }
+  ],
+  "knobs": {},
+  "final_message": "Shipped the advisor-derived concat-heads \u2192 output-projection sharded chain. Full-model estimate: **38,887.6 \u00b1 80.9 \u00b5s before \u2192 38,095.8 \u00b1 80.9 \u00b5s after** - Estimated contribution: **791.7 \u00b5s/model (2.04%)** - Sliding: 1.341153 \u2192 1.318449 ms - Full attention: 1.539374 \u2192 1.494548 ms - Every winning repeat beat every incumbent repeat. - Fresh-process confirmations passed. - Real-weight HuggingFace oracle passed above PCC 0.995. - The 88-core norm candidate regressed both layer kinds and remains default-off. - Sharded SDPA output was rejected with the hard GQA constraint. - Final advisor-challenger gate passes cleanly. Artifacts: [advisor_challenger/README.md](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/README.md) and [final.json](/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/final.json).",
+  "n_agent_messages": 24
+ },
+ {
+  "model": "north-mini",
+  "cell": "nmFN",
+  "arm": "nofuse-noadvise",
+  "label": "nm FN",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 0.172676,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.849
+   },
+   {
+    "label": "incumbent",
+    "ms": 0.578076,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.638
+   },
+   {
+    "label": "incumbent",
+    "ms": 0.553659,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.206
+   },
+   {
+    "label": "advisor_moe_norm_22",
+    "ms": 0.543313,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.75
+   },
+   {
+    "label": "advisor_moe_norm_32",
+    "ms": 0.518711,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.094
+   },
+   {
+    "label": "advisor_moe_norm_64",
+    "ms": 0.573284,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.922
+   },
+   {
+    "label": "advisor_moe_norm_22",
+    "ms": 0.54437,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.302
+   },
+   {
+    "label": "advisor_moe_norm_32",
+    "ms": 0.519707,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.236
+   },
+   {
+    "label": "advisor_moe_norm_64",
+    "ms": 0.575101,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.637
+   },
+   {
+    "label": "confirm_advisor_moe_norm_32",
+    "ms": 0.518259,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.685
+   },
+   {
+    "label": "confirm_advisor_moe_norm_32",
+    "ms": 0.519914,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.765
+   },
+   {
+    "label": "advisor_moe_norm_22",
+    "ms": 0.542856,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.723
+   },
+   {
+    "label": "advisor_moe_norm_32",
+    "ms": 0.518314,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.66
+   },
+   {
+    "label": "advisor_moe_norm_64",
+    "ms": 0.57345,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.522
+   },
+   {
+    "label": "advisor_moe_norm_22",
+    "ms": 0.546536,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 2.63
+   },
+   {
+    "label": "advisor_moe_norm_32",
+    "ms": 0.520053,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.132
+   },
+   {
+    "label": "advisor_moe_norm_64",
+    "ms": 0.575349,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.682
+   },
+   {
+    "label": "confirm_advisor_moe_norm_32",
+    "ms": 0.518986,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.73
+   },
+   {
+    "label": "confirm_advisor_moe_norm_32",
+    "ms": 0.520188,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.333
+   }
+  ],
+  "n_measurements": 19,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 0.172676,
+    "floor_us": 0.849
+   },
+   {
+    "label": "incumbent",
+    "ms": 0.578076,
+    "floor_us": 1.638
+   },
+   {
+    "label": "incumbent",
+    "ms": 0.553659,
+    "floor_us": 1.206
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_reference": "frozen functional-decoder real-weight reference",
+    "oracle_weights": "real",
+    "oracle_passed": "true"
+   },
+   {
+    "which": "?",
+    "oracle_passed": "true"
+   },
+   {
+    "which": "?",
+    "oracle_passed": "true",
+    "oracle_weights": "real",
+    "oracle_reference": "frozen functional-decoder real-weight layer-1 reference"
+   },
+   {
+    "which": "?",
+    "oracle_passed": "true}"
+   },
+   {
+    "which": "?",
+    "oracle_reference": "frozen functional-decoder real-weight reference",
+    "oracle_weights": "real",
+    "oracle_passed": "true}"
+   },
+   {
+    "which": "?",
+    "oracle_reference": "frozen functional-decoder real-weight reference",
+    "oracle_weights": "real",
+    "oracle_passed": "true"
+   },
+   {
+    "which": "?",
+    "oracle_passed": "true",
+    "oracle_reference": "frozen functional-decoder real-weight reference",
+    "oracle_weights": "real"
+   },
+   {
+    "which": "?",
+    "oracle_reference": "frozen functional-decoder real-weight reference",
+    "oracle_weights": "real",
+    "oracle_passed": "true"
+   },
+   {
+    "which": "?",
+    "oracle_reference": "frozen functional-decoder real-weight reference",
+    "oracle_weights": "real",
+    "oracle_passed": "true}"
+   },
+   {
+    "which": "passed",
+    "oracle_passed": "null",
+    "oracle_weights": "null"
+   },
+   {
+    "which": "?",
+    "oracle_passed": "true"
+   }
+  ],
+  "knobs": {},
+  "final_message": "# Stage Review Verdict: clean-pass ## Required Work - None. ## Other Concerns - None material. ## Hard-Check Gaps - No standalone gate script exists in the advisor-challenger skill. I independently checked the relevant contracts and arithmetic from the artifacts. ## Anomaly Ledger - Observed anomaly: One-core QKV-head work and one-core MoE RMSNorm could previously be read as having the same advisor attribution. Evidence: The README now states that `nlp_create_qkv_heads_decode` agrees with the advisor and is handed to `$optimize`, while the advisor changes MoE RMSNorm from one core to 22-core width sharding. Affected path: Advisor-contribution accounting. Control or comparison: Advisor reports retain QKV heads on one core; reconciliation identifies RMSNorm as `material_ops_on_le_2_cores`, with the measured 22/32/64 sweep. Likely subsystem: Documentation/accounting only. Investigation performed: Compared README claims with reconciliation JSON, advisor reports/IR, decision JSON, measurement records, and implementation diff. Resolution: fixed. - Observed anomaly: Full-attention MoE layer-4 weights were unavailable locally. Evidence: The oracle uses official layer-1 tensors remapped to layer 4 and reports PCC 0.999526 against a 0.995 bar. Affected path: Full-attention MoE winner oracle. Control or comparison: Frozen functional-decoder reference using identical remapped official tensors. Likely subsystem: Checkpoint availability, not implementation correctness. Investigation performed: Inspected README, measurement JSON, final JSON, and the explicit real-weight test. Resolution: controlled and transparently disclosed. ## Scope Inspected - Skills: - `.agents/skills/stage-review/SKILL.md` - `.agents/skills/advisor-challenger/SKILL.md` - Artifacts: - Advisor-challenger README and `final.json` - Incumbent, per-kind incumbent, measurement, confirmation, decision, reconciliation, advisor report, and IR artifacts - Executed-policy provenance - Winner profiler paths - Code: - `tt/optimized_decoder.py` - `tests/test_optimized_decoder.py` - Checks re-derived: - Layer counts sum to 49: 1 + 36 + 12. - Device-window estimate: 24,949.218 \u2192 22,397.946 \u00b5s. - Contribution: 2,551.272 \u00b5s. - Conservative band: approximately 74.289 \u00b5s. - Both winning candidate series strictly beat their corresponding incumbent series. - The shipping candidate changes only `advisor_moe_norm_cores`; precision and fidelity remain frozen. - Winning measurements contain per-kind real-weight oracle PCC and profiler provenance. - Rejected 22/64-core knobs and capture-only switch remain default-off. ## Residual Risk - The advisor cannot cover the declared paged-cache/SDPA and sparse-matmul terminal regions. Their untraced shares and attribution limits are explicitly reported, so this does not block this contribution-measurement stage.",
+  "n_agent_messages": 34
+ },
+ {
+  "model": "north-mini",
+  "cell": "nmB",
+  "arm": "fuse-noadvise",
+  "label": "nm B",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 0.613848,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.936
+   },
+   {
+    "label": "incumbent_dense_full_forced_rope",
+    "ms": 0.203313,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.168
+   },
+   {
+    "label": "incumbent_full_no_rope_moe",
+    "ms": 0.612204,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.263
+   },
+   {
+    "label": "profile_dense",
+    "ms": 0.215622,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.807
+   },
+   {
+    "label": "dense_advised_down_ds",
+    "ms": 0.207422,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.489
+   },
+   {
+    "label": "sliding_advice_aggregate_noop",
+    "ms": 0.613792,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.581
+   },
+   {
+    "label": "47:advisor_dense_chain_exact",
+    "ms": 0.234085,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.416
+   },
+   {
+    "label": "postreset_default_verification",
+    "ms": 0.203002,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.458
+   }
+  ],
+  "n_measurements": 8,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 0.613848,
+    "floor_us": 0.936
+   },
+   {
+    "label": "incumbent_dense_full_forced_rope",
+    "ms": 0.203313,
+    "floor_us": 0.168
+   },
+   {
+    "label": "incumbent_full_no_rope_moe",
+    "ms": 0.612204,
+    "floor_us": 1.263
+   }
+  ],
+  "oracles": [
+   {
+    "which": "?",
+    "oracle_passed": "null",
+    "oracle_weights": "real"
+   },
+   {
+    "which": "?",
+    "oracle_passed": "null"
+   }
+  ],
+  "knobs": {},
+  "final_message": "The audit found one remaining measurement gap: the full DRAM-sharded chain stalled, so I\u2019m isolating it with the already-measurable 32-core down projection after a device-health smoke. Then I\u2019ll regenerate the reconciliations and final zero-contribution report from the complete evidence set.",
+  "n_agent_messages": 27
+ },
+ {
+  "model": "north-mini",
+  "cell": "nmOnA",
+  "arm": "fuse-advise onA",
+  "label": "nm onA",
+  "measurements": [
+   {
+    "label": "incumbent",
+    "ms": 0.291849,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 1.841
+   },
+   {
+    "label": "incumbent_sliding_attention_sparse_moe",
+    "ms": 0.846547,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 14.526
+   },
+   {
+    "label": "incumbent_full_attention_sparse_moe",
+    "ms": 0.844453,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 0.847
+   },
+   {
+    "label": "profile_dense_full_attention",
+    "ms": 0.300237,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 5.8
+   },
+   {
+    "label": "profile_dense_full_attention",
+    "ms": 0.300109,
+    "blocks": 5,
+    "iters": 50,
+    "warmup": 10,
+    "floor_us": 6.338
+   }
+  ],
+  "n_measurements": 5,
+  "controls": [
+   {
+    "label": "incumbent",
+    "ms": 0.291849,
+    "floor_us": 1.841
+   },
+   {
+    "label": "incumbent_sliding_attention_sparse_moe",
+    "ms": 0.846547,
+    "floor_us": 14.526
+   },
+   {
+    "label": "incumbent_full_attention_sparse_moe",
+    "ms": 0.844453,
+    "floor_us": 0.847
+   }
+  ],
+  "oracles": [],
+  "knobs": {},
+  "final_message": "Measured `$shard-advise` contribution: **0 \u00b5s**. The incumbent decoder remains unchanged. Full-model decode estimate at batch 1: - Before: **39,940.817 \u00b5s** - After: **39,940.817 \u00b5s** - Uncertainty: **\u00b1534.941 \u00b5s** All three layer kinds were `not_measurable`; their complete advisor-attributable ceilings were below their frozen-control noise floors, so the method prohibited candidate screening. Artifacts: - [README.md](/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/doc/advisor_challenger/README.md) - [final.json](/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/doc/advisor_challenger/final.json) - [incumbent.json](/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/doc/advisor_challenger/incumbent.json) Validation completed: - Advisor pin: `618cd4e75d` - Reconciliation self-tests: passed - Requested gate: passed - Strict gate: passed - Python compilation and `git diff --check`: passed I also corrected reconciliation/gate handling so `not_measurable` cells are recorded as terminal decisions without contradictory screening warnings.",
+  "n_agent_messages": 25
+ }
+]

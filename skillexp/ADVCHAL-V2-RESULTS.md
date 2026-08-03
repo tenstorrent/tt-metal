@@ -1,6 +1,11 @@
 # Stage 02b re-run (`advchal-v2`) — live results
 
-**14 of 9 cells complete.** Generated from the published `skillexp/done/advchal-v2/**` tags, not hand-entered.
+> **Start here instead if you want the account rather than the table:**
+> **[`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md)** — what each of the 15 cells actually did, one test at
+> a time, reconstructed from the session transcripts; what makes a model advisor-compatible; and whether the
+> winners were simply worse to start with. This file is the headline table that feeds it.
+
+**15 cells planned, 15 complete.** Generated from the published `skillexp/done/advchal-v2/**` tags, not hand-entered.
 
 Stage: tt-metal `mvasiljevic/qb2/skillexp/challenger-skill-v2` @ `db00a44`. v1's nine `done/challenger/**` tags are untouched and remain the audit's evidence base.
 
@@ -176,10 +181,23 @@ differs from the shipped one, because the agreement test accepts a **DRAM-sharde
 even when the grids differ. So `12 -> 99, agrees` means *both are DS*, not that 87 cores were left unused. It
 needs an explicit `agreed_on: grid | ds_family` field; without it the data invites exactly the misreading I made.
 
-**The 1-core RMSNorm is the highest-yield op class in the corpus.** Three cells met one. north-mini FN swept
-22/32/64 and took 32 (**-10.23 %**); gemma-4-26B onA took 88 (**-12.98 %**); phi arm FN screened only the
-advised 11, measured it slower, and abandoned the op -- leaving 88.8 us, **12.25 % of its window**, on one core.
-That is the bounded-sweep failure the skill explicitly warns against.
+**The 1-core RMSNorm is the highest-yield op class in the corpus.** Three cells met one, all three measured a
+win, two shipped it. north-mini FN swept 22/32/64 and took 32 (**-10.23 %**); gemma-4-26B onA took 88
+(**-12.98 %**); phi arm FN swept **11/12/24** -- every grid faster than its control -- combined the 11-core norm
+with its RoPE win for **0.8072 -> 0.7003 ms (-13.24 %)**, and then **discarded it on the correctness oracle**,
+shipping RoPE alone for -4.91 %.
+
+> **Corrected 2026-08-03.** This paragraph previously said phi FN "screened only the advised 11, measured it
+> slower, and abandoned the op ... the bounded-sweep failure the skill explicitly warns against." The transcript
+> shows otherwise: `for cores in 11 12 24`, medians 0.7459 / 0.7490 / 0.7485 ms against a 0.8072 ms control. The
+> sweep was compliant. What rejected the win was a **differential** real-weight oracle with the bar set at
+> **0.999999** -- the only such bar in the corpus; every other cell used 0.995 or a recorded model value, phi A
+> passed its own differential oracle at 0.9999987790, and phi FN's shipped real-weight test passes at PCC
+> 0.998902. Full account in [`ADVCHAL-V2-READ-THIS.md`](ADVCHAL-V2-READ-THIS.md) SS3.3 and
+> [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md).
+
+So the corpus's largest measured single win was found and then lost to an **unspecified oracle contract**, which
+is a stage defect rather than a screening failure.
 
 ## Attribution needs two channels, not one
 
