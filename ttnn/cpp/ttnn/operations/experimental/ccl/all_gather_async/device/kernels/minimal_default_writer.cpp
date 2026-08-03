@@ -127,17 +127,15 @@ void kernel_main() {
     const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
 #ifdef USE_WORKER_MUX
     // Build the worker-mux egress: reads the mux runtime-arg block (advancing the cursor) and
-    // waits for the mux endpoint to be ready. The helper takes a size_t& cursor, so bridge the
-    // writer's uint32_t arg_idx through conn_arg_idx and sync it back. Wrapped into the
+    // waits for the mux endpoint to be ready. arg_cursor bridges the writer's uint32_t arg_idx to
+    // the size_t& the ctor advances and syncs it back automatically. Wrapped into the
     // FabricStreamSender below so the arm/send/teardown path is identical to the Direct case.
-    size_t conn_arg_idx = arg_idx;
     MuxConn<fabric_mux_num_buffers_per_channel> mux_conn(
-        conn_arg_idx,
+        arg_cursor(arg_idx),
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address,
         fabric_mux_termination_signal_address,
         num_mux_clients);
-    arg_idx = conn_arg_idx;
 #endif
     const auto& unicast_route_info = (direction == 0) ? forward_unicast_route_info : backward_unicast_route_info;
     const auto& barrier_multicast_route_info =
@@ -168,12 +166,10 @@ void kernel_main() {
     // Wrap the worker-mux egress built above; arm/send/teardown match the Direct case below.
     FabricStreamSender<MuxConn<fabric_mux_num_buffers_per_channel>> sender(mux_conn, /*alignment=*/1);
 #else
-    // Direct egress: build through the helper from the fabric runtime-arg block. The helper
-    // takes a size_t& cursor, so bridge the writer's uint32_t arg_idx and sync it back; the
-    // open is deferred to sender.open() below.
-    size_t conn_arg_idx = arg_idx;
-    FabricStreamSender<> sender(conn_arg_idx, /*is_forward=*/direction == 0, /*alignment=*/1);
-    arg_idx = conn_arg_idx;
+    // Direct egress: build through the helper from the fabric runtime-arg block. arg_cursor bridges
+    // the writer's uint32_t arg_idx to the size_t& the ctor advances and syncs it back; the open is
+    // deferred to sender.open() below.
+    FabricStreamSender<> sender(arg_cursor(arg_idx), /*is_forward=*/direction == 0, /*alignment=*/1);
 #endif
     Noc noc_obj;
     CircularBuffer cb_output(cb_output_id);
