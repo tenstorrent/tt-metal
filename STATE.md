@@ -126,6 +126,71 @@ existing conv3d/halo infrastructure. Two genuine deltas to watch:
 `qk_norm_affine=false` means the qk norms carry no parameters, and `rope_theta`
 is 100.0 rather than the usual 10000.
 
+## M8a design finding: the keyframe encoder is a 2D CNN
+
+FL2VA conditioning only ever encodes **single frames** (T=1), and `BaseConv3d`
+front-pads causally with **zeros**. So a 3-tap temporal conv sees `[0, 0, x]` and
+collapses to `weight[:, :, -1] * x` — every temporal tap but the last is
+multiplied by zero. Verified against the reference `BaseConv3d` for all four shapes
+the encoder uses:
+
+| conv | rel err vs 2D collapse |
+|---|---|
+| k3 pad1 reflect stride1 (`conv_in`, resnet `conv1`/`conv2`) | 1.51e-07 |
+| k3 pad(1,0,0) stride(1,2,2) (`downsample`, space only) | 1.55e-07 |
+| k3 pad(1,0,0) stride(2,2,2) (`downsample`, space+time) | 1.47e-07 |
+| k1 pad0 (`nin_shortcut`, `quant_conv`) | **0.0, bit-exact** |
+
+Chaining 12 of them — the encoder's resnet depth — leaves rel err at 1.13e-07, so
+it is fp32 accumulation order and does not compound.
+
+**Consequence: no conv3d, no temporal halo exchange, and no causal machinery for
+the keyframe path.** M8a is a 2D CNN built on `layers/conv2d.py`, with the kernel
+sliced to `weight[:, :, -1]` as a `_prepare_torch_state` fixup. `time_down` becomes
+irrelevant (stride 2 over a 3-deep zero-padded axis still selects the one real
+frame). Likewise `TemporalIsolatedGroupNorm` at T=1 is plain
+`GroupNorm(num_groups=32, eps=1e-6, affine=True)`.
+
+The T>1 encoder path is only needed for Ref2VA video references, which are out of
+FL2VA scope; it can come later and will need the halo machinery.
+
+### Implementation: conv3d mocking conv2d, per the WAN/LTX pattern
+
+Do **not** use `layers/conv2d.py`. Reuse `WanConv2d`
+(`models/vae/vae_wan2_1.py:733`, "a conv2d implemented with conv3d"), which is
+already HW-parallel over `VaeHWParallelConfig`, does the H/W halo through
+`neighbor_pad_persistent_buffer`, carries `logical_h`/`logical_w` masking, and
+holds weights in the `prepare_conv3d_weights` layout. Its `_prepare_torch_state`
+does `state["weight"].unsqueeze(2)` on a 4D conv2d weight, so H3 slots in by
+slicing `weight[:, :, -1]` first — the same fixup the 2D collapse already needs.
+Staying on the conv3d path also means the T>1 encoder is an extension later rather
+than a rewrite. (`Conv2dViaConv3d` in `layers/audio_ops.py:407` is the same idea
+but single-device, so it is precedent rather than the vehicle.)
+
+**Open gap — reflect padding.** H3 sets `padding_mode="reflect"`;
+`neighbor_pad_async` accepts only `zeros` and `replicate` (per its nanobind doc,
+`neighbor_pad_async_nanobind.cpp:33`). This is narrower than it looks: at interior
+shard boundaries the halo is the neighbour's real data, so the mode is irrelevant
+and `replicate` is already exact there. The two differ only at the **global image
+edges**, and only in the outermost 1 pixel: after a replicate pad the row layout is
+`[x0, x0, x1, ...]` where reflect wants `[x1, x0, x1, ...]`.
+
+Plan: pad with `replicate`, then blend the two global edge rows/cols to their
+reflect values using a per-device edge mask. A per-device mask is sharded *data*,
+so it stays SPMD-uniform in program structure — unlike the §5.2 modulation problem,
+which needed differing op counts. Extending the C++ op with a reflect mode is the
+alternative and touches a primitive WAN and LTX both depend on; prefer the blend.
+Gate it explicitly: a 1-pixel border error is exactly the kind of thing that passes
+PCC and looks like a subtle vignette.
+
+Encoder structure confirmed against the checkpoint (560 tensors, **all fp32**):
+`conv_in(3->128)`, 6 levels x 2 resnets with channels `[128,256,256,512,512,1024]`,
+**3** `nin_shortcut` (levels 1/3/5, where in != out) and **4** `downsample` (levels
+0-3) — exactly matching the derivation from `ch_mult`/`space_down`/`time_down` —
+then `norm_out(1024)` + silu, `conv_out(1024->48)` (so `double_z=true`), and a
+1x1x1 `quant_conv(48->48)`. Only `GroupNorm` needs care on TP: 32 groups / 4
+devices = 8, and 128/256/512/1024 all divide by 4.
+
 ## §9 verdicts
 
 | Risk | Verdict |
@@ -238,19 +303,28 @@ No hangs, no resets needed.
 
 ## Next step
 
-**M8a — video VAE encoder (CNN) on device.** The smaller and better-supported of
-the two halves, and the one FL2VA conditioning needs: keyframe encode is a single
-frame, so none of the 17-frame temporal chunking applies and only the spatial path
-runs. Build `models/tt_dit/models/vae/vae_minimax_h3.py` on the conv3d/halo
-infrastructure `vae_wan2_1.py` and `vae_ltx.py` already use
-(`ContextParallelConv3d`, `layers/conv3d.py`), with
-`VaeHWParallelConfig(height_parallel=(4,0), width_parallel=(8,1))`.
+**M8a — video VAE encoder on device.** Design is settled (above); this is now
+implementation, not research. Write
+`models/tt_dit/models/vae/vae_minimax_h3.py` with:
 
-Gate: encode a keyframe and match the CPU reference's `_encode_clip` moments, then
-the full recipe (sampled posterior at seed 42, fp16 round trip, normalize,
-patchify) against `conditioning.encode_keyframes` — which is already gated, so the
-only new surface is the conv stack. The seed-42 posterior sample stays on host and
-is passed in, per the plan.
+1. An H3 conv wrapping `WanConv2d`, whose `_prepare_torch_state` slices
+   `weight[:, :, -1]` before delegating.
+2. The reflect-edge blend over `replicate` neighbour padding.
+3. `ResnetBlock` = GroupNorm(32, eps=1e-6, affine) + silu + conv, twice, plus a
+   `nin_shortcut` k1 when in != out (levels 1/3/5).
+4. `Downsample` = asymmetric spatial pre-pad `(0,1,0,1)` then stride-2 conv
+   (levels 0-3).
+5. `conv_in(3->128)`, 6 levels x 2 resnets over `[128,256,256,512,512,1024]`,
+   `norm_out` + silu, `conv_out(1024->48)`, `quant_conv(48->48)`.
+6. `VaeHWParallelConfig(height_parallel=(4,0), width_parallel=(8,1))`, fp32
+   throughout — the whole VAE checkpoint is fp32.
+
+Gates, in order: (a) a single H3 conv vs the reference `BaseConv3d` at T=1,
+including the reflect edges — catches the padding gap directly; (b) one
+`ResnetBlock`; (c) the full encoder's moments vs the reference `_encode_clip`,
+`pcc >= 0.999`; (d) end-to-end against the already-gated
+`conditioning.encode_keyframes`, with the seed-42 posterior sample drawn on host
+and passed in.
 
 Then **M8b** the 36-layer ViT decoder, **M8c** the audio VAE (BigVGAN decode
 first, DAC encode second), before returning to M5.
