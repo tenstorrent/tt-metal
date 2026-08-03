@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
+from itertools import zip_longest
 from dataclasses import fields, replace
 from typing import List
 
@@ -249,6 +250,7 @@ class Generator(WarmupForwardMixin):
         sampling_params=None,
         empty_slots=None,
         tt_out_logits_all_users=None,
+        decode_layout=None,
     ):
         # Avoids an infinite loop
         self.already_warmed_up_prefill = True
@@ -366,14 +368,17 @@ class Generator(WarmupForwardMixin):
             )
 
         # Every prefill variant has now compiled and staged its buffers, and nothing is captured yet.
-        # Capture them all, back to back, with no allocation in between.
         #
-        # The decode trace is deliberately not hoisted here. Its input layout depends on the caller's
-        # is_cur_pos_sharded / is_page_table_sharded, which warmup cannot see -- the trace is keyed only on
-        # on_device_logits, so preparing it against the wrong layout would bind the capture to buffers the
-        # real decode never writes. It therefore still compiles in the decode loop, behind these traces.
+        # The decode trace goes first. Its compile pass is the single largest allocator left in the run --
+        # it builds the prefetcher, the CCLs and the sampling module -- so capturing the prefill traces
+        # before it would make every one of those allocations land behind live traces. Hoisting it needs a
+        # layout hint from the caller (see _prepare_and_record_decode_trace); without one it stays lazy and
+        # this is exactly the previous ordering.
+        #
+        # Then the prefill traces, back to back, with no allocation in between.
         if self._defer_trace_recording:
             self._defer_trace_recording = False
+            self._prepare_and_record_decode_trace(decode_layout, page_table, kv_cache)
             self._record_pending_traces()
 
         # trace_id_prefill dict check
@@ -393,6 +398,10 @@ class Generator(WarmupForwardMixin):
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         start_pos: list[int] | None = None,  # Cached prefixes lengths
+        # Decode input layout, so warmup can capture the decode trace before any prefill trace. Keys:
+        # {"is_cur_pos_sharded": bool, "is_page_table_sharded": bool, "on_device_logits": bool}. Omitted
+        # leaves the decode trace lazy -- see _prepare_and_record_decode_trace.
+        decode_layout=None,
     ):
         if getattr(self, "_disable_prefill_tracing", False):
             enable_trace = False
@@ -407,6 +416,7 @@ class Generator(WarmupForwardMixin):
                 None,
                 empty_slots,
                 None,
+                decode_layout=decode_layout,
             )
 
         return_logits = sampling_params is None
@@ -503,7 +513,17 @@ class Generator(WarmupForwardMixin):
         if do_device_sampling and sampling_params is not None:
             seed_values = _as_list(getattr(sampling_params, "seed", None))
             temperature_values = _as_list(getattr(sampling_params, "temperature", None))
-            explicit_seeded_prefill = any(seed is not None for seed in seed_values)
+            # A seed only changes the sampled token where sampling is stochastic. A greedy slot
+            # (temperature == 0) is argmax and never draws from the RNG, so a seed on it must not force
+            # the slot-stable prefill path: that path runs prefill untraced and samples per request,
+            # which allocates the entire prefill graph -- thousands of buffers -- behind live traces on
+            # every prefill, where they can be corrupted on replay. Callers hit this without asking for
+            # it, since a seed default of 0 (rather than None) is enough to look explicitly seeded.
+            # Slots whose temperature is unknown stay conservative and count as seeded.
+            explicit_seeded_prefill = any(
+                seed is not None and not (temp is not None and float(temp) == 0.0)
+                for seed, temp in zip_longest(seed_values, temperature_values)
+            )
             requires_slot_stable_prefill = explicit_seeded_prefill or any(
                 float(temp) == 0.0 for temp in temperature_values if temp is not None
             )
@@ -1233,6 +1253,64 @@ class Generator(WarmupForwardMixin):
             batch_size=prepared["batch_size"],
         )
 
+    def _prepare_and_record_decode_trace(self, decode_layout, page_table, kv_cache):
+        """Compile and capture the decode trace before any prefill trace is recorded.
+
+        The decode compile pass constructs the prefetcher, the decode CCLs and the sampling module. Left
+        where it naturally falls -- the first iteration of the decode loop -- all of that allocates behind
+        every prefill trace captured during warmup, and those buffers can be overwritten on replay. Doing
+        it here puts it ahead of every capture instead.
+
+        ``decode_layout`` must come from the caller. The decode trace is keyed only on ``on_device_logits``,
+        but its input buffers depend on ``is_cur_pos_sharded`` / ``is_page_table_sharded``, which warmup
+        cannot infer; preparing against the wrong layout would bind the capture to buffers the real decode
+        never writes. Callers that do not pass one (the vLLM bridge, among others) keep the previous lazy
+        behaviour. Returns whether the hoist happened.
+        """
+        if decode_layout is None or page_table is None or not kv_cache:
+            return False
+
+        on_device_logits = bool(decode_layout.get("on_device_logits", True))
+        # Decode always runs the full batch -- ttnn_decode_forward asserts B == max_batch_size -- no matter
+        # how many users the caller has, so the mock is sized from the model rather than the page table.
+        batch = self.model.args.max_batch_size
+
+        mock_tokens = torch.zeros(batch, 1, dtype=torch.long)
+        # -1 is the "no user in this slot" marker the demo already pads with, and paged_fused_update_cache
+        # skips those rows. The compile pass therefore runs the real graph without writing mock K/V into
+        # any user's cache.
+        mock_current_pos = torch.full((batch,), -1, dtype=torch.int64)
+
+        decode_page_table = page_table
+        if decode_page_table.shape[0] < batch:
+            padding = torch.zeros(
+                (batch - decode_page_table.shape[0], decode_page_table.shape[1]), dtype=decode_page_table.dtype
+            )
+            decode_page_table = torch.cat([decode_page_table, padding], dim=0)
+
+        self.model.switch_mode("decode")
+        trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
+            mock_tokens,
+            mock_current_pos,
+            page_table=decode_page_table,
+            # Decode unwraps the per-model list; _capture_trace_text is called here directly, so do it here.
+            kv_cache=kv_cache[0],
+            is_cur_pos_sharded=bool(decode_layout.get("is_cur_pos_sharded", False)),
+            is_page_table_sharded=bool(decode_layout.get("is_page_table_sharded", False)),
+            on_device_logits=on_device_logits,
+        )
+        self.trace_ids_decode[on_device_logits] = trace_id
+        self.trace_inputs_decode[on_device_logits] = device_inputs
+        self.trace_output_decode[on_device_logits] = tt_out_tok
+        # The staged inputs are the mock ones, so the first real decode step must reload rather than trust
+        # what is on device.
+        self._decode_inputs_need_reset = True
+
+        # Back to prefill, so the pending prefill traces capture in the mode they were prepared in.
+        self.model.switch_mode("prefill")
+        logger.info(f"Hoisted decode trace capture (on_device_logits={on_device_logits}) ahead of prefill traces")
+        return True
+
     def _record_pending_traces(self):
         """Capture every trace prepared while recording was deferred.
 
@@ -1708,9 +1786,17 @@ class Generator(WarmupForwardMixin):
             sm_bs = seed_manager.max_batch_size
             rank_remap = slot_remap[0:sm_bs]
             seed_manager.apply_slot_remap(rank_remap)
+        if sampling_params is not None:
+            # Normalise every step, not just on reset. The seed view read below has to agree with what
+            # the sampling module was actually configured with; formatting only inside the reset branch
+            # left every later token reading the caller's raw seed, so normalisation (which clears the
+            # seed on greedy rows, where it cannot affect the sampled token) was never observed after
+            # the first step and sampling stayed off its captured trace for the whole run.
+            # Derived from the caller's params each call, so this cannot double-apply.
+            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
-            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
             if active_seed_slots is not None:
                 seed_values = _as_list(getattr(sampling_params, "seed", None))
                 has_active_seed = any(
