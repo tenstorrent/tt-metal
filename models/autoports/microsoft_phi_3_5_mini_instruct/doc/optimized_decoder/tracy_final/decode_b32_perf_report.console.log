@@ -1,0 +1,13 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'OPT_DECODE_B32'.
+Using operations until 'OPT_DECODE_B32_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_decoder/tracy_final/decode_b32_perf_report.csv
+Overall DRAM roofline (modeled ops): 15.8% (81 GB/s)
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PagedFusedUpdateCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_decoder/tracy_final/decode_b32_summary.csv
+Plotting PNG stacked report to models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_decoder/tracy_final/decode_b32_summary.png

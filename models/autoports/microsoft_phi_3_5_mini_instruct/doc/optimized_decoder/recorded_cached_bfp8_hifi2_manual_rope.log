@@ -1,0 +1,229 @@
+2026-07-30 07:55:55.488 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items / 3 deselected / 1 selected
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0] 2026-07-30 07:55:57.026 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-30 07:55:57.026 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-30 07:55:57.027 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-30 07:55:57.027 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-30 07:55:57.028 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-30 07:55:57.028 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-30 07:55:57.032 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-30 07:55:57.110 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-30 07:55:57.110 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-30 07:55:57.110 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-07-30 07:55:57.110 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-30 07:55:57.112 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-30 07:55:57.305 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.396a0000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17551360 B
+--------------------------------------------------------------------------
+2026-07-30 07:55:57.434 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 07:55:57.434 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 07:55:57.434 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-30 07:55:57.434 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-30 07:55:57.434 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:55:57.434 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:55:57.434 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:55:57.434 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:55:57.434 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:55:57.434 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:55:57.434 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:55:57.434 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:55:57.434 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-30 07:55:57.434 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-30 07:55:57.439 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 07:55:57.439 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 07:55:57.439 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 07:55:57.439 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 07:55:57.468 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 07:55:57.507 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-07-30 07:55:58.085 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=99964888264647 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-30 07:55:58.102 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+[transformers] This model config has set a `rope_parameters['original_max_position_embeddings']` field, to be used together with `max_position_embeddings` to determine a scaling factor. Please set the `factor` field of `rope_parameters`with this ratio instead -- we recommend the use of this field over `original_max_position_embeddings`, as it is compatible with most model architectures.
+2026-07-30 07:55:59.699 | INFO     | tracy:signpost:49 - OPT_DECODE_B32
+2026-07-30 07:55:59.709 | INFO     | tracy:signpost:49 - OPT_DECODE_B32_END
+OPT_POLICY name=bfp8_hifi2_kv16_manual_rope values=OptimizationPolicy(attention_weight_dtype=DataType.BFLOAT8_B, gate_up_weight_dtype=DataType.BFLOAT8_B, down_weight_dtype=DataType.BFLOAT8_B, kv_cache_dtype=DataType.BFLOAT16, attention_math_fidelity=MathFidelity.HiFi2, mlp_math_fidelity=MathFidelity.HiFi2, decode_core_grid=(8, 1), qkv_in0_block_w=4, o_proj_in0_block_w=4, gate_up_in0_block_w=4, down_in0_block_w=4, gate_up_split_interleaved=True, separate_gate_up_projections=False, fused_paged_cache_update=True, explicit_decode_sdpa=True, fused_rope=False, prefill_core_grid=(8, 8), prefill_qkv_in0_block_w=1, prefill_o_proj_in0_block_w=1, prefill_gate_up_in0_block_w=1, prefill_down_in0_block_w=1, prefill_qkv_out_block_h=None, prefill_o_proj_out_block_h=None, prefill_gate_up_out_block_h=None, prefill_down_out_block_h=None, prefill_qkv_out_block_w=None, prefill_o_proj_out_block_w=None, prefill_gate_up_out_block_w=None, prefill_down_out_block_w=None)
+ACTIVATION_SOURCE recorded_target path=/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_decoder/activations/layer0_inputs.safetensors key=token_embeddings matching_next_rows=32
+CACHE_SOURCE recorded_target_prefix prefix_length=127 batch=32
+PCC_RESULT path=optimized-perf-decode-bfp8_hifi2_kv16_manual_rope-b32 threshold=0.995 0.9862428648513127
+FAILED2026-07-30 07:55:59.881 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+____________ test_profile_traced_decode[blackhole-32-mesh_device0] _____________
+
+mesh_device = MeshDevice(1x1 grid, 1 devices), batch = 32
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("batch", [1, 32])
+    def test_profile_traced_decode(mesh_device, batch):
+        name, policy = _policy()
+        config = _config()
+        state = _real_state() if os.environ.get("PHI35_REAL_WEIGHTS") == "1" else _synthetic_state(config)
+        decoder = OptimizedDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=batch,
+            max_context=128,
+            policy=policy,
+        )
+        hidden = _input_activations(batch=batch, mode="decode", config=config)
+        tt_hidden = _to_tt_decode(hidden, mesh_device)
+        page_table = _page_table(
+            batch,
+            128,
+            mesh_device,
+            permute=os.environ.get("PHI35_IDENTITY_PAGE_TABLE") != "1",
+        )
+        positions = [127] * batch
+        current_positions = _positions(positions, mesh_device)
+        key_cache, value_cache = decoder.create_paged_kv_cache()
+        recorded_past = None
+        if os.environ.get("PHI35_REAL_WEIGHTS") == "1":
+            prefixes = _recorded_decode_prefixes(batch)
+            _, recorded_past = _reference_prefill(config, state, prefixes)
+            _fill_recorded_reference_cache(
+                past=recorded_past,
+                key_cache=key_cache,
+                value_cache=value_cache,
+                page_table=page_table,
+                mesh_device=mesh_device,
+                fused_rope=policy.fused_rope,
+            )
+            ttnn.synchronize_device(mesh_device)
+            print(f"CACHE_SOURCE recorded_target_prefix prefix_length=127 batch={batch}")
+
+        def decode():
+            return decoder.decode_forward(
+                tt_hidden,
+                key_cache=key_cache,
+                value_cache=value_cache,
+                page_table=page_table,
+                current_positions=current_positions,
+                use_long_rope=False,
+            )
+
+        decode()
+        ttnn.synchronize_device(mesh_device)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        output = decode()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        try:
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            samples = []
+            signpost(f"OPT_DECODE_B{batch}")
+            for _ in range(10):
+                start = time.perf_counter()
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                samples.append(1000 * (time.perf_counter() - start))
+            signpost(f"OPT_DECODE_B{batch}_END")
+            actual = _to_torch_decode(output)
+        finally:
+            ttnn.release_trace(mesh_device, trace_id)
+        reference = (
+            _reference_decode(config, state, hidden, 127, recorded_past)
+            if recorded_past is not None
+            else _reference_decode_zero_prefix(config, state, hidden, positions, use_long=False)
+        )
+        if os.environ.get("PHI35_DIAGNOSTIC_PCC") == "1":
+            for user in range(batch):
+                _, user_pcc = comp_pcc(reference[user].float(), actual[user].float(), 0.995)
+                print(
+                    f"PCC_DIAGNOSTIC policy={name} user={user} {user_pcc} "
+                    f"reference_norm={reference[user].float().norm().item():.8f} "
+                    f"actual_norm={actual[user].float().norm().item():.8f}"
+                )
+        else:
+>           _assert_pcc(f"optimized-perf-decode-{name}-b{batch}", reference, actual)
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py:403:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+label = 'optimized-perf-decode-bfp8_hifi2_kv16_manual_rope-b32'
+reference = tensor([[[-0.0193, -0.0156,  0.0391,  ..., -0.0029, -0.0127, -0.0449]],
+
+        [[-0.0579,  0.0009,  0.0176,  ..., -0...0058, -0.0176]],
+
+        [[ 0.0031,  0.0271,  0.0184,  ...,  0.0166, -0.0684,  0.0413]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[-0.0193, -0.0156,  0.0388,  ..., -0.0022, -0.0131, -0.0461]],
+
+        [[-0.0583,  0.0004,  0.0188,  ..., -0...0198, -0.0082]],
+
+        [[ 0.0264,  0.0109,  0.0013,  ...,  0.0215, -0.0588,  0.0483]]],
+       dtype=torch.bfloat16)
+threshold = 0.995
+
+    def _assert_pcc(label, reference, actual, threshold=0.995):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={label} threshold={threshold} {message}")
+>       assert passed, message
+E       AssertionError: 0.9862428648513127
+E       assert False
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_functional_decoder.py:248: AssertionError
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+1.63s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]
+1.29s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]
+=========================== short test summary info ============================
+FAILED models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]
+======================= 1 failed, 3 deselected in 3.73s ========================
+nanobind: leaked 2 instances!
+ - leaked instance 0x78aab27304c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x78aab2f086a8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function "compute_program_hash"
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "is_sharded"
+ - leaked function "disable_and_clear_program_cache"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-30 07:56:01.675 | info     |    BuildKernels | JIT cache stats: 159/159 hits (100.0%) [159 cached, 82 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-30 07:56:01.675 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-30 07:56:01.689 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-30 07:56:01.689 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-30 07:56:02.254 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-30 07:56:02.254 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-30 07:56:02.254 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

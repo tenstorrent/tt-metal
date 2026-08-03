@@ -1,0 +1,143 @@
+2026-07-30 07:45:10.281 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items / 3 deselected / 1 selected
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0] 2026-07-30 07:45:11.804 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-30 07:45:11.804 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-30 07:45:11.804 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-30 07:45:11.804 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-30 07:45:11.805 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-30 07:45:11.805 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-30 07:45:11.809 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-30 07:45:11.887 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-30 07:45:11.887 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-30 07:45:11.887 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-07-30 07:45:11.887 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-30 07:45:11.889 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-30 07:45:12.124 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.eeff0000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-30 07:45:12.254 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 07:45:12.254 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 07:45:12.254 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-30 07:45:12.254 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-30 07:45:12.254 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:45:12.254 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:45:12.254 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:45:12.254 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:45:12.254 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:45:12.254 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:45:12.254 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:45:12.254 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 07:45:12.254 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-30 07:45:12.254 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-30 07:45:12.259 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 07:45:12.260 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 07:45:12.260 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 07:45:12.260 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 07:45:12.288 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 07:45:12.327 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-07-30 07:45:12.906 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349994 GHz, device_time_at_sync=99410009142933 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-30 07:45:12.922 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+[transformers] This model config has set a `rope_parameters['original_max_position_embeddings']` field, to be used together with `max_position_embeddings` to determine a scaling factor. Please set the `factor` field of `rope_parameters`with this ratio instead -- we recommend the use of this field over `original_max_position_embeddings`, as it is compatible with most model architectures.
+2026-07-30 07:45:13.074 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+2026-07-30 07:45:14.026 | INFO     | tracy:signpost:49 - OPT_DECODE_B32
+2026-07-30 07:45:14.034 | INFO     | tracy:signpost:49 - OPT_DECODE_B32_END
+OPT_POLICY name=bfp8_hifi2_kv16 values=OptimizationPolicy(attention_weight_dtype=DataType.BFLOAT8_B, gate_up_weight_dtype=DataType.BFLOAT8_B, down_weight_dtype=DataType.BFLOAT8_B, kv_cache_dtype=DataType.BFLOAT16, attention_math_fidelity=MathFidelity.HiFi2, mlp_math_fidelity=MathFidelity.HiFi2, decode_core_grid=(8, 1), qkv_in0_block_w=4, o_proj_in0_block_w=4, gate_up_in0_block_w=4, down_in0_block_w=4, gate_up_split_interleaved=True, separate_gate_up_projections=False, fused_paged_cache_update=True, explicit_decode_sdpa=True, fused_rope=True, prefill_core_grid=(8, 8), prefill_qkv_in0_block_w=2, prefill_o_proj_in0_block_w=2, prefill_gate_up_in0_block_w=2, prefill_down_in0_block_w=2, prefill_qkv_out_block_h=None, prefill_o_proj_out_block_h=None, prefill_gate_up_out_block_h=None, prefill_down_out_block_h=None, prefill_qkv_out_block_w=None, prefill_o_proj_out_block_w=None, prefill_gate_up_out_block_w=None, prefill_down_out_block_w=None)
+ACTIVATION_SOURCE recorded_target path=/home/mvasiljevic/tt-metal/models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_decoder/activations/layer0_inputs.safetensors key=prefill_128 distinct_target_rows=32
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=0 0.9999490705394449 reference_norm=4.18727589 actual_norm=4.18687630
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=1 0.9999455652249142 reference_norm=6.52793121 actual_norm=6.46932793
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=2 0.9999245514677263 reference_norm=5.54008722 actual_norm=5.53392410
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=3 0.9999061968047221 reference_norm=8.38774967 actual_norm=8.30286217
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=4 0.9999394427563719 reference_norm=4.11146164 actual_norm=4.11777306
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=5 0.9999578591458467 reference_norm=4.88931513 actual_norm=4.94170904
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=6 0.9998096136233544 reference_norm=7.70769167 actual_norm=7.63983297
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=7 0.9997119087411815 reference_norm=4.11027145 actual_norm=4.07296038
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=8 0.8971979488678553 reference_norm=8.19274521 actual_norm=22.29066849
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=9 0.9932683018839517 reference_norm=4.29302788 actual_norm=4.16104364
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=10 0.8453684958371248 reference_norm=3.91274118 actual_norm=3.31847310
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=11 0.9967957787494994 reference_norm=6.34126997 actual_norm=6.39215755
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=12 0.9957335813245778 reference_norm=4.02298164 actual_norm=4.10247183
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=13 0.9637667882820943 reference_norm=7.71887922 actual_norm=13.24497509
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=14 0.99947758121663 reference_norm=6.62675953 actual_norm=6.69133997
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=15 0.9945548941699849 reference_norm=8.38774967 actual_norm=8.15015221
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=16 0.9982492861126828 reference_norm=4.43083525 actual_norm=4.48596096
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=17 0.9989209442879299 reference_norm=4.91928959 actual_norm=4.89906979
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=18 0.9983152422705561 reference_norm=4.26404953 actual_norm=4.16034126
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=19 0.9407024873267039 reference_norm=7.71887922 actual_norm=12.60373116
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=20 0.9852510102933378 reference_norm=4.84879160 actual_norm=4.60713243
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=21 0.8697749714617781 reference_norm=8.12890625 actual_norm=10.56840611
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=22 0.999734072644308 reference_norm=4.85053587 actual_norm=4.86134863
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=23 0.9996710234625221 reference_norm=4.83878088 actual_norm=4.79369783
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=24 0.9898789673068419 reference_norm=4.65080547 actual_norm=4.41894770
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=25 0.9894956561956675 reference_norm=5.80864429 actual_norm=5.74628496
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=26 0.9882806781740271 reference_norm=5.84221029 actual_norm=5.54247236
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=27 0.9842221635208667 reference_norm=7.28636503 actual_norm=7.22171736
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=28 0.9718601668935922 reference_norm=5.56200981 actual_norm=5.27092791
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=29 0.98140383724749 reference_norm=4.97358608 actual_norm=4.67984915
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=30 0.967820666428897 reference_norm=4.67301798 actual_norm=4.21808720
+PCC_DIAGNOSTIC policy=bfp8_hifi2_kv16 user=31 0.9904727853254283 reference_norm=6.10510921 actual_norm=5.94767046
+PERF_RESULT policy=bfp8_hifi2_kv16 mode=decode batch=32 context=128 trace_replays=10 mean_ms=0.752774 min_ms=0.750126
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+1.33s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]
+1.32s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]
+======================= 1 passed, 3 deselected in 3.44s ========================
+nanobind: leaked 2 instances!
+ - leaked instance 0x789de75386d8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x789de6f5c4c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "num_program_cache_entries"
+ - leaked function ""
+ - leaked function "unpad"
+ - leaked function "to_json"
+ - leaked function "__repr__"
+ - leaked function "extract_shard"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-30 07:45:16.125 | info     |    BuildKernels | JIT cache stats: 107/107 hits (100.0%) [107 cached, 7 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-30 07:45:16.125 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-30 07:45:16.137 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-30 07:45:16.137 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-30 07:45:16.773 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-30 07:45:16.773 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-30 07:45:16.773 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
