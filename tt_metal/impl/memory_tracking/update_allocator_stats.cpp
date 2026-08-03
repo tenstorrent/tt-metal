@@ -5,8 +5,10 @@
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <cassert>
 #include <chrono>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 
 namespace tt::tt_metal {
@@ -15,6 +17,13 @@ namespace tt::tt_metal {
 // Query ONLY locally-allocated CBs (device->get_total_cb_allocated() only counts local CBs)
 // Globally-allocated CBs create L1 Buffers and are already tracked in L1 column
 void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_t pid) {
+    // Lone-caller path: no cross-device dedup, compute normally.
+    std::optional<uint64_t> uncached;
+    update_from_allocator(device, pid, uncached);
+}
+
+void SharedMemoryStatsProvider::update_from_allocator(
+    const Device* device, pid_t pid, std::optional<uint64_t>& cached_cb_allocated) {
     if (!region_ || !device) {
         return;
     }
@@ -35,8 +44,23 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
     }
 
     try {
-        // Query actual LOCALLY-allocated CB usage (globally-allocated CBs are in L1 already)
-        uint64_t cb_allocated = device->get_total_cb_allocated();
+        // Query actual LOCALLY-allocated CB usage (globally-allocated CBs are in L1 already).
+        // On a homogeneous mesh this value is identical across sub-devices, so a caller updating
+        // every sub-device in a loop can compute it once and pass it via cached_cb_allocated: we
+        // fill it on first computation and reuse it thereafter. In debug we recompute and verify
+        // equality, so any future per-device CB layout (which would break the assumption) is
+        // caught rather than silently reported wrong.
+        uint64_t cb_allocated;
+        if (cached_cb_allocated.has_value()) {
+            cb_allocated = *cached_cb_allocated;
+            assert(
+                cb_allocated == device->get_total_cb_allocated() &&
+                "SHM CB-allocated differs across mesh sub-devices; a per-device CB layout must not "
+                "share a cached value (see ProgramImpl::kCbL1LayoutIsDeviceIndependent)");
+        } else {
+            cb_allocated = device->get_total_cb_allocated();
+            cached_cb_allocated = cb_allocated;
+        }
 
         // Update device-wide CB total (query-based, accurate, no accumulation)
         region_->total_cb_allocated.store(cb_allocated, std::memory_order_relaxed);

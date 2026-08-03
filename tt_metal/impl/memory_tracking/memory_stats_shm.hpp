@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <sys/types.h>
@@ -155,6 +156,13 @@ public:
     // device: Device to query (can be nullptr to skip update)
     // pid: Process ID for per-process tracking
     void update_from_allocator(const class Device* device, pid_t pid);
+
+    // Overload for homogeneous-mesh callers that update every sub-device in a loop.
+    // On such a mesh get_total_cb_allocated() returns the same value for every sub-device, so it is
+    // computed at most once and cached via `cached_cb_allocated` (in/out): empty on the first call
+    // (computed and stored), reused on subsequent calls. Result is identical to calling the 2-arg
+    // overload per device; a debug assertion verifies the cross-device equality.
+    void update_from_allocator(const class Device* device, pid_t pid, std::optional<uint64_t>& cached_cb_allocated);
 
     // Get per-chip statistics (for remote device tracking)
     struct ChipInfo {

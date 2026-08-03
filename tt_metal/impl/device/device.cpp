@@ -1116,19 +1116,14 @@ uint64_t Device::get_total_cb_allocated() const {
     // Collect L1 regions per core and merge overlapping addresses
     // This handles cached/traced programs that share the same physical L1 addresses on the same core
 
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> device_regions_per_core;
+    detail::ProgramImpl::CbL1RegionsPerCore device_regions_per_core;
 
     for (const auto* program : active_programs_) {
         size_t num_devices = program->get_num_cb_devices();
 
-        // Get L1 regions per core for this program on this device
-        auto program_regions = program->get_cb_l1_regions_per_core(this->id(), num_devices);
-
-        // Merge into device-wide map
-        for (const auto& [core, regions] : program_regions) {
-            auto& core_regions = device_regions_per_core[core];
-            core_regions.insert(core_regions.end(), regions.begin(), regions.end());
-        }
+        // Append this program's per-core L1 regions directly into the device-wide map
+        // (out-param avoids a per-program temp map + merge copy).
+        program->get_cb_l1_regions_per_core(device_regions_per_core, this->id(), num_devices);
     }
 
     // Merge overlapping regions per core to get actual physical usage
