@@ -10,6 +10,8 @@ PyTorch reference implementation when combining expert outputs back to token pos
 Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -283,7 +285,8 @@ def run_combine(
     else:
         tt_expert_offsets = ttnn.from_torch(
             expert_offsets,
-            mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+            # expert_offsets has to be replicated because every chip needs full dispatch group info.
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             dtype=ttnn.int32,
@@ -295,7 +298,17 @@ def run_combine(
             tt_expert_region_offsets,
             tt_expert_offsets,
         )
-        # TODO [claude]: Call dump_combine_fabric2d_bwinfo() here to log bwinfo.txt for perf analysis.
+        # Telemetry lives in producer L1, so the op has to have finished before it is read.
+        ttnn.synchronize_device(mesh_device)
+        _dump_combine_fabric2d_bwinfo(
+            mesh_device,
+            num_links,
+            axis=sp_axis,
+            expected_workers=num_devices * 2 * num_links,
+            min_payload_tokens=0,
+            token_size_bytes=emb_dim * 2,
+            path=_cmbf2d_bwinfo_path(),
+        )
 
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
@@ -381,6 +394,9 @@ def combine_shape_params():
         shapes = [
             ("pcc", 128, config.NUM_ROUTED_EXPERTS // 16, 4, 4, True),
             ("perf_no_pcc", 640, config.NUM_ROUTED_EXPERTS // 4, 2, 8, False),
+            # Total ISL 5120: seq is per chip, and the 8 chips of a dispatch group hold the sequence
+            # (640 * 8 = 5120). Identical to perf_no_pcc except that the output is checked.
+            ("perf_pcc", 640, config.NUM_ROUTED_EXPERTS // 4, 2, 8, True),
         ]
         for shape_id, seq, num_experts, topk, capacity, run_pcc in shapes:
             params.append(
