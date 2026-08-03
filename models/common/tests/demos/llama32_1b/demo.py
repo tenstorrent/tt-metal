@@ -223,7 +223,7 @@ PERF_TOLERANCE = 0.05
 
 
 def _sampling_bucket() -> str:
-    """Map SAMPLING_MODE to a perf-gate bucket. Non-topk on-device modes (e.g. force-argmax)
+    """Map SAMPLING_MODE to a perf-gate bucket. Non-topk on-device modes (e.g. the greedy fast-path)
     fall into ``on_device_topk`` so they stay gated, never silently un-gated."""
     return "host" if os.environ.get("SAMPLING_MODE", "host").lower() == "host" else "on_device_topk"
 
@@ -730,7 +730,7 @@ def test_llama32_1b(test_config, mesh_device, optimizations):
             # because host argmax and on-device sampling are ~1.7x apart on 1B (on-device pays the
             # slow ttnn.topk). Each per-path N300 target is freshly measured on this base and sits
             # at/above same-box TTTv1 ci-32 for the comparable path (see EXPECTED_METRICS_BATCH32_CI).
-            # Non-topk on-device modes (force-argmax) fall back to the on_device_topk bucket so they
+            # Non-topk on-device modes (greedy fast-path) fall back to the on_device_topk bucket so they
             # stay gated, never silently un-gated; N150/T3K fall back to the short-context constant.
             _bucket = _sampling_bucket()
             expected = EXPECTED_METRICS_BATCH32_CI.get(_bucket, {}).get(
@@ -926,9 +926,9 @@ def _run_perf_benchmark(
 
     # On-device sampling toggle for N150/N300 evidence-gathering (see sampling handoff docs):
     #   host            -> sampling_params=None (host-argmax, the default shipped path)
-    #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
+    #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured GREEDY FAST-PATH full-vocab path
     #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
-    #                      the [*,32] tuples; PERF.md-parity recipe, faster than force-argmax)
+    #                      the [*,32] tuples; PERF.md-parity recipe, faster than the greedy fast-path)
     sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
     _on_device_params = {
         "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
@@ -949,7 +949,7 @@ def _run_perf_benchmark(
         model.model_args.disable_batched_prefill = True
 
     # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling
-    # path (inert on host/force-argmax; gated to the top-k path by _decode_loop_active). This is the
+    # path (inert on host/greedy fast-path; gated to the top-k path by _decode_loop_active). This is the
     # #49282 T3K batch-1 decode-gap fix — it must be active on the perf path for the T3K b1 gate.
     # fast_prefill_last_token: slice the single consumed last-token row on device before readback so the
     # batch-1 host concat/readback moves one row instead of the full [1,1,32,vocab] tile — closes most of

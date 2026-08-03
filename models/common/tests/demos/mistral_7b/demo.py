@@ -562,9 +562,9 @@ def _run_perf_benchmark(model, mesh_device, expected, batch_size, case_name):
 
         # On-device sampling toggle (see the rebase/sampling handoff docs):
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
-        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
+        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured GREEDY FAST-PATH full-vocab path
         #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
-        #                      the [*,32] tuples; PERF.md-parity recipe, faster than force-argmax)
+        #                      the [*,32] tuples; PERF.md-parity recipe, faster than the greedy fast-path)
         sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
         _on_device_params = {
             "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),

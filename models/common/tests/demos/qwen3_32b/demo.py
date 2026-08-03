@@ -535,7 +535,7 @@ def _run_perf_benchmark(model, mesh_device, expected, batch_size, case_name):
         # On-device sampling toggle (see the rebase / sampling handoff docs):
         #   host            -> sampling_params=None (host-argmax; slow — full-vocab all-gather + PCIe
         #                      readback every step; NOT comparable to TTTv1)
-        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
+        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured GREEDY FAST-PATH full-vocab path
         #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
         #                      the [*,32] tuples; PERF.md-parity recipe, faster on >=8-dev meshes)
         # DEFAULT is on_device_topk: on T3K (8 devices) the vocab shards 8-ways and TTTv1 auto-uses

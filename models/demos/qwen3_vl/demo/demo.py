@@ -581,7 +581,7 @@ def test_demo(
         # Start decoding
         iteration = 0
         # Diagnostic A/B toggle (#48037). The actual gibberish fix is on the model side
-        # (Transformer in tt/model.py: force-argmax sampling path + always-refresh + eager sampling),
+        # (Transformer in tt/model.py: greedy fast-path sampling path + always-refresh + eager sampling),
         # which keeps on-device sampling. Setting TT_QWEN_FORCE_HOST_SAMPLING=1 forces host argmax
         # instead: a known-good reference (correct output) but slower (per-step logits read-back),
         # useful to compare against the on-device path locally.

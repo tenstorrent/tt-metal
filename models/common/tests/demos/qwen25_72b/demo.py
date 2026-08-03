@@ -493,7 +493,7 @@ def _run_perf_benchmark(
         # On-device sampling toggle (Qwen2.5-72B runs on T3K where on-device top-k wins; see the
         # rebase handoff crossover table):
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
-        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
+        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured GREEDY FAST-PATH full-vocab path
         #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (PERF.md recipe)
         sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
         _on_device_params = {

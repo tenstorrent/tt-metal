@@ -510,8 +510,8 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        # Diagnostic A/B toggle (#48037). The gibberish fix is enabling the on-device force-argmax
-        # sampling path for the qwen25_vl Transformer (allow_force_argmax via SAMPLING_AG_CONFIG;
+        # Diagnostic A/B toggle (#48037). The gibberish fix is enabling the on-device greedy fast-path
+        # sampling path for the qwen25_vl Transformer (allow_greedy_fastpath via SAMPLING_AG_CONFIG;
         # see tt/model.py), which keeps greedy decode on-device. Setting TT_QWEN_FORCE_HOST_SAMPLING=1
         # forces host argmax instead: a known-good reference (correct output) but slower (per-step
         # logits read-back, fails the wh_llmbox_perf decode target), useful only for local A/B.

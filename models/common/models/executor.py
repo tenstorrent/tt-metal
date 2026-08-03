@@ -243,16 +243,16 @@ def _build_batched_prefill_group(tokens, prompt_lens, page_table, positions, pad
     return folded, group_pt, group_idxs, last_token_idxs
 
 
-def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size, allow_force_argmax=True):
+def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size, allow_greedy_fastpath=True):
     """Build replicated (k, p, temp) device tensors for ``Sampling1D``'s top-k path.
 
     Reuses ``format_sampling_params`` (so temperature inversion, top-p clamping and the
     ``temp==0 -> k=1`` rewrite match TTTv1 / PERF.md exactly), then mirrors TTSampling's
     1D layout: ROW_MAJOR, uint32 k / bfloat16 p / bfloat16 temp, replicated across the mesh.
 
-    Returns ``None`` **only when force-argmax is allowed** and the formatted params reduce to
+    Returns ``None`` **only when greedy fast-path is allowed** and the formatted params reduce to
     greedy (all k==1, p==0, temp==1) — the caller then uses the cheaper full-vocab argmax path.
-    When ``allow_force_argmax`` is False the model has no argmax path, so greedy params must
+    When ``allow_greedy_fastpath`` is False the model has no argmax path, so greedy params must
     still build real tensors and route through the top-k op (k=1 top-k == argmax-via-topk),
     exactly as TTTv1 does for the ``temp=0`` PERF.md recipe — never returning ``None``.
 
@@ -272,7 +272,7 @@ def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size, a
     p = list(fmt.top_p)[:batch_size]
     temp = list(fmt.temperature)[:batch_size]
 
-    if allow_force_argmax and all(kk == 1 for kk in k) and all(pp == 0 for pp in p) and all(tt == 1 for tt in temp):
+    if allow_greedy_fastpath and all(kk == 1 for kk in k) and all(pp == 0 for pp in p) and all(tt == 1 for tt in temp):
         return None
 
     mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -460,10 +460,10 @@ class EagerLLMExecutor:
     def _sampling_decode_forward(self, logits, sampling_params, tt_out_tok=None):
         """Run ``model.sampling`` on device, choosing the path that matches PERF.md.
 
-        Routing depends on the model's ``allow_force_argmax``:
-          * ``allow_force_argmax=True``  — greedy params reducing to (k==1, p==0, temp==1) take
-            the force-argmax full-vocab all-gather path (``decode_forward`` with no k/p/temp).
-          * ``allow_force_argmax=False`` (the 1B/7B recipe) — there is no argmax path, so *every*
+        Routing depends on the model's ``allow_greedy_fastpath``:
+          * ``allow_greedy_fastpath=True``  — greedy params reducing to (k==1, p==0, temp==1) take
+            the full-vocab greedy fast-path all-gather path (``decode_forward`` with no k/p/temp).
+          * ``allow_greedy_fastpath=False`` (the 1B/7B recipe) — there is no argmax path, so *every*
             recipe, greedy included, builds k/p/temp tensors and takes the **top-k op path**:
             per-device ``ttnn.topk`` → barrier-free all-gather of the ``[*,32]`` tuples →
             ``ttnn.sampling``. This mirrors TTTv1, whose ``temp=0`` PERF.md recipe always runs
@@ -481,14 +481,14 @@ class EagerLLMExecutor:
         return self.model.sampling.decode_forward(logits, k=k_tt, p=p_tt, temp=temp_tt, tt_out_tok=tt_out_tok)
 
     def _get_decode_sampling_kpt(self, sampling_params):
-        """Lazily build + cache (k, p, temp) device tensors, or None for force-argmax."""
+        """Lazily build + cache (k, p, temp) device tensors, or None for the greedy fast-path."""
         if getattr(self, "_decode_sampling_kpt_built", False):
             return self._decode_sampling_kpt
         self._decode_sampling_kpt = _build_decode_topk_param_tensors(
             self.mesh_device,
             sampling_params,
             self.model.sampling.config.max_batch_size,
-            allow_force_argmax=self.model.sampling.config.allow_force_argmax,
+            allow_greedy_fastpath=self.model.sampling.config.allow_greedy_fastpath,
         )
         self._decode_sampling_kpt_built = True
         return self._decode_sampling_kpt
@@ -1367,7 +1367,7 @@ class TracedLLMExecutor:
                 trace (generator ``refresh_trace_inputs=False`` + ``_increment_decode_positions_device``).
                 Valid ONLY for free-running greedy/top-k generation, NOT teacher forcing (which injects
                 host tokens every step), so accuracy/teacher-forcing runs must leave this OFF. Also inert
-                on the force-argmax path (``_decode_loop_active`` gates it to the top-k op path).
+                on the greedy fast-path (``_decode_loop_active`` gates it to the top-k op path).
         """
         self.model = model
         self.mesh_device = mesh_device
@@ -1478,12 +1478,12 @@ class TracedLLMExecutor:
         Requires: the opt-in flag, on-device sampling, AND the top-k op path (``ttnn.sampling``),
         whose output is uint32 ``[1,1,1,32]`` on Wormhole/Blackhole — an exact match for the
         persistent token buffer, so it can be fed back in place via ``output_tensor=`` with no
-        realloc. The force-argmax path (``ttnn.argmax`` → uint32 ``[1,1,32]``, rank-3) does NOT
+        realloc. The greedy fast-path (``ttnn.argmax`` → uint32 ``[1,1,32]``, rank-3) does NOT
         match the rank-4 token buffer, so the loop stays off there and falls back to host resupply.
         """
         if not self.ondevice_decode_loop or sampling_params is None or self.model.sampling is None:
             return False
-        # kpt is None only for the force-argmax path; non-None => top-k op path.
+        # kpt is None only for the greedy fast-path; non-None => top-k op path.
         return self._eager._get_decode_sampling_kpt(sampling_params) is not None
 
     def _prepare_prefill_trace_inputs_host(
@@ -2239,7 +2239,7 @@ class TracedLLMExecutor:
         """
         if sampling_params is None or self.model.sampling is None:
             return
-        # k/p/temp param tensors (cached on the eager engine; returns None for force-argmax models).
+        # k/p/temp param tensors (cached on the eager engine; returns None for the greedy fast-path models).
         self._eager._get_decode_sampling_kpt(sampling_params)
         # Sampling1D persistent device buffers (local indices / offsets / seeds / user ids).
         if hasattr(self.model.sampling, "load_device_buffers"):
@@ -2839,7 +2839,7 @@ def run_perf_benchmark(
     # unchanged: the device produces the same tokens; we only read them back deferred,
     # then drain the last one so generated_token_ids is byte-identical to the blocking
     # loop. Pass pipeline_readback=False to A/B back to the blocking readback.
-    # Every other path (host resupply, force-argmax, host sampling) is unaffected —
+    # Every other path (host resupply, greedy fast-path, host sampling) is unaffected —
     # only _decode_loop_active (executor.ondevice_decode_loop + top-k) qualifies.
     _engine = getattr(executor, "_engine", executor)
     _pipeline_readback = (

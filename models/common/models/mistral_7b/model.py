@@ -533,11 +533,11 @@ class Mistral7B(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 max_batch_size=_nearest_32(cfg.max_batch_size),
-                # Clone TTTv1: allow_force_argmax=False for all non-Galaxy meshes (only
+                # Clone TTTv1: allow_greedy_fastpath=False for all non-Galaxy meshes (only
                 # Llama-3.1-8B on TG flips it True; Mistral-7B never does). The greedy recipe
                 # (temp=0, top_k=32, top_p=0.08) routes through the cheap top-k op path, not the
-                # full-vocab force-argmax all-gather. See model_config.py default_sampling_params.
-                allow_force_argmax=False,
+                # full-vocab greedy fast-path all-gather. See model_config.py default_sampling_params.
+                allow_greedy_fastpath=False,
                 pad_to_power_of_2=True,
             )
             if self.supports_on_device_sampling

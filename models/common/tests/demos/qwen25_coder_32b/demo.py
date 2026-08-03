@@ -528,9 +528,9 @@ def _run_perf_benchmark(model, mesh_device, expected, batch_size, case_name):
         # On-device sampling toggle (the model owns its Sampling1D, constructed in __init__; the
         # demo only picks behavior per request):
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
-        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
+        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured GREEDY FAST-PATH full-vocab path
         #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (PERF.md-parity
-        #                      recipe; gathers only the [*,32] tuples, faster than force-argmax)
+        #                      recipe; gathers only the [*,32] tuples, faster than the greedy fast-path)
         # Default to on-device sampling: it is the path these perf gates were measured on and the one
         # TTTv1 uses for its published numbers (host argmax stitches full-vocab logits every step and
         # is ~2x slower on T3K's 8-way 152k vocab). Override with SAMPLING_MODE=host to measure it.

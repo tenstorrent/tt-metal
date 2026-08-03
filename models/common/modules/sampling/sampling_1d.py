@@ -29,6 +29,20 @@ from models.common.sampling.vocab_padding import (
     get_vocab_shard_dims,
 )
 
+# Renamed from "allow_force_argmax" (#51987). from_model_args reads the key with a .get()
+# default, so a SAMPLING_AG_CONFIG still carrying the old key would silently disable the
+# fast-path and surface only as a decode perf regression. Reject it instead.
+_LEGACY_GREEDY_FASTPATH_KEY = "allow_force_argmax"
+
+
+def _reject_legacy_greedy_fastpath_key(ag_cfg) -> None:
+    if _LEGACY_GREEDY_FASTPATH_KEY in ag_cfg:
+        raise ValueError(
+            f"SAMPLING_AG_CONFIG uses the removed key '{_LEGACY_GREEDY_FASTPATH_KEY}'; "
+            "rename it to 'allow_greedy_fastpath'."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Power-of-2 helpers (local copies; keep this TTTv2 module self-contained)
 # ---------------------------------------------------------------------------
@@ -68,7 +82,7 @@ class Sampling1DConfig:
     start_core: Optional[ttnn.CoreCoord] = None  # None → CoreCoord(0,0)
     num_gather_links: int = 1
     sampling_memory_config: Optional[ttnn.MemoryConfig] = None  # None → DRAM_MEMORY_CONFIG
-    allow_force_argmax: bool = False
+    allow_greedy_fastpath: bool = False
     num_argmax_gather_links: Optional[int] = None  # None → same as num_gather_links
     ag_topology: Optional[ttnn.Topology] = None  # None → Topology.Linear
     # Pad each per-device logit shard up to the next power of 2 before ttnn.topk. Big device-perf
@@ -235,7 +249,7 @@ class Sampling1D(LightweightModule):
 
         Args:
             logits: Input logits tensor (sharded across devices)
-            k, p, temp: Per-call sampling parameters. All None + allow_force_argmax → argmax path.
+            k, p, temp: Per-call sampling parameters. All None + allow_greedy_fastpath → argmax path.
                 All provided → top-k sampling path.
             seeds: Optional per-call seed override. If None, uses config seeds buffer.
             tt_out_tok: Optional output tensor to write results to.
@@ -258,10 +272,10 @@ class Sampling1D(LightweightModule):
 
         # Route: argmax or top-k
         if k is None and p is None and temp is None:
-            if cfg.allow_force_argmax:
+            if cfg.allow_greedy_fastpath:
                 return self._sample_argmax(logits, tt_out_tok)
             else:
-                raise ValueError("k/p/temp are all None but allow_force_argmax is False")
+                raise ValueError("k/p/temp are all None but allow_greedy_fastpath is False")
         if k is None or p is None or temp is None:
             raise ValueError("k, p, temp must all be provided, or all be None (for argmax)")
 
@@ -287,14 +301,14 @@ class Sampling1D(LightweightModule):
             output_tensor=tt_out_tok,
             keepdim=False,
         )
-        # Argmax path never emits logprobs (main's contract: force-argmax is disabled whenever
+        # Argmax path never emits logprobs (main's contract: the greedy fast-path is disabled whenever
         # logprobs are requested). Return None unconditionally — do not call the calculator.
         return tt_out_tok, None
 
     def _get_argmax_all_gather_config(self, cluster_axis):
         """Clamp the tuned all-gather config to what the actual submesh supports.
 
-        Port of main's ``_get_force_argmax_all_gather_config`` (#44246): bound num_links to the
+        Port of main's ``_get_greedy_fastpath_all_gather_config`` (#44246): bound num_links to the
         links available on the submesh, and force Linear topology below 8 devices (Ring routing
         like D0→D12 only wraps cleanly on T3K-class 8-device groups).
         """
@@ -655,12 +669,13 @@ class Sampling1D(LightweightModule):
 
         sampling_memory_config = mc.get("DECODE_SAMPLING_INPUT_MEMCFG", ttnn.DRAM_MEMORY_CONFIG)
 
-        allow_force_argmax = False
+        allow_greedy_fastpath = False
         num_argmax_gather_links = num_gather_links
         ag_topology = ttnn.Topology.Linear
         if "SAMPLING_AG_CONFIG" in mc:
             ag_cfg = mc["SAMPLING_AG_CONFIG"]
-            allow_force_argmax = ag_cfg.get("allow_force_argmax", False)
+            _reject_legacy_greedy_fastpath_key(ag_cfg)
+            allow_greedy_fastpath = ag_cfg.get("allow_greedy_fastpath", False)
             num_argmax_gather_links = ag_cfg.get("num_links", num_gather_links)
             ag_topology = ag_cfg.get("topology", ttnn.Topology.Linear)
 
@@ -676,7 +691,7 @@ class Sampling1D(LightweightModule):
             start_core=getattr(args, "start_core", ttnn.CoreCoord(0, 0)),
             num_gather_links=num_gather_links,
             sampling_memory_config=sampling_memory_config,
-            allow_force_argmax=allow_force_argmax,
+            allow_greedy_fastpath=allow_greedy_fastpath,
             num_argmax_gather_links=num_argmax_gather_links,
             ag_topology=ag_topology,
             pad_to_power_of_2=getattr(args, "pad_logits_to_power_of_2", False),
