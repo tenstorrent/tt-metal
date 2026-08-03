@@ -147,6 +147,18 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
         return true;
     }
 
+    // tilize_rm_row_path_wt3_no_column_split: choose_tilize_2d_ncol can only pick a divisor
+    // d >= 2 of Wt with total_ht * d <= grid_cores; for Wt == 3 the only candidate is d == 3, so
+    // once 3 * total_ht > grid_cores the 2D column split is unreachable and create_descriptor
+    // falls through to build_row. build_row is then a structural clone of native's
+    // TilizeMultiCoreDefaultProgramFactory (same 32-stick reader loop, same one-tile-row-per-core
+    // split), so codegen's extra per-core setup (batched-writer priming, deeper CB bookkeeping)
+    // has no transport advantage to offset. Wt == 3 with 3 * total_ht <= grid_cores keeps the
+    // column split and wins, so the bound is exact, not a shape list.
+    if (wt == 3 && 3 * total_ht > grid_cores) {
+        return true;
+    }
+
     const auto& shape = input_tensor.logical_shape();
     std::vector<uint32_t> shape_vec;
     shape_vec.reserve(shape.rank());
