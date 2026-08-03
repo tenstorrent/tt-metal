@@ -14,9 +14,15 @@
  * allocation, 1-D route programming, the stateful set_state/with_state @c UpdateMask dance,
  * flow-controlled fabric writes, and cross-device atomic-inc.
  *
- * This is PURE DATA MOVEMENT: no compute/unpack/math/pack appears here. It covers the fabric
- * egress that point_to_point and all_gather need — unicast writes, <=4-destination scatter writes,
- * unicast atomic-inc, and the line-multicast atomic-inc barrier.
+ * This is PURE DATA MOVEMENT: no compute/unpack/math/pack appears here — but it is NOT restricted
+ * to pure-data-movement OPS. It covers the fabric egress that point_to_point and all_gather need
+ * (unicast writes, <=4-destination scatter writes, unicast atomic-inc, and the line-multicast
+ * atomic-inc barrier), AND the extra egress shapes the reduction and fused collectives (all_reduce,
+ * reduce_scatter, and the fused-collective family) need. Those ops reach the fabric through exactly
+ * the same egress plumbing — their COMPUTE kernels are untouched by this header and their DATAFLOW
+ * kernels are first-class consumers — and what they add is three shapes, all covered below: DUPLEX
+ * egress (one connection driving forward AND backward from a single core), FUSED write+atomic-inc
+ * (payload plus the receiver's semaphore bump in ONE packet), and chip-level MULTICAST of a payload.
  *
  * @par Safety by construction — the call order IS the type progression.
  *   The legal fabric-egress sequence is open(route) -> arm -> issue -> close. Rather than
@@ -31,9 +37,35 @@
  *          | arm_scatter_write(chunk, n)              -> ScatterWriteChannel
  *          | arm_inc(val)                             -> AtomicIncChannel
  *          | arm_multicast_inc(mcast_route, val)      -> MulticastIncChannel
+ *          | arm_fused_write_inc(page_size, val)      -> FusedWriteIncChannel
+ *          | arm_multicast_write(mcast_route, size)   -> MulticastWriteChannel
+ *          | arm_multicast_fused_write_inc(...)       -> MulticastFusedWriteIncChannel
  *          v
  *     <channel handle>               // ARMED: the issue methods, and nothing else.
- *          write() / write_page() | write_scatter() | inc() | multicast_inc()
+ *          write()/write_page() | write_scatter() | inc() | multicast_inc() | write_fused()
+ *
+ *   The DUPLEX tier — what the reduction collectives need — is the SAME progression over a doubled
+ *   egress. One FabricConnectionManager owns both directions; every issue fans out to each
+ *   CONNECTED direction, each with its own route and its own pooled header (a line-end worker has
+ *   only one direction wired and issues to just that one):
+ *
+ *     FabricDuplexSender<ConnT>      // UNOPENED: open(fwd_route, bwd_route).
+ *          | open(fwd, bwd)  -> open_finish() + BIND BOTH DIRECTIONS' ROUTES. The route-pair TYPE
+ *          |                    picks the chip-level cast: a unicast pair yields a Cast::Unicast
+ *          |                    stream, a multicast pair a Cast::Multicast one.
+ *          v
+ *     FabricDuplexStream<Cast, ConnT>  // OPENED: arm_*(...), drain(), close().
+ *          | arm_write(page_size)                     -> DuplexWriteChannel
+ *          | arm_fused_write_inc(page_size, val)      -> DuplexFusedWriteIncChannel
+ *          | arm_scatter_write(chunk, n)              -> DuplexScatterWriteChannel
+ *          | arm_inc(val)                             -> DuplexIncChannel
+ *          v
+ *     <duplex channel handle>        // ARMED: each issue fans out to every connected direction.
+ *          write() | write_with_local_copy() | write_fused() | write_scatter() | inc()
+ *
+ *   Both senders also offer a SPLIT open — open_start() then open_finish(route) — that overlaps the
+ *   connection handshake with unrelated setup (address-generator construction, a local semaphore
+ *   reset); see the method docs. It is the one pairing NOT enforced by the stage types.
  *
  *   What this rules out at compile time:
  *     1. arm or issue before open() — arm_* live only on FabricStream, which only open() yields.
@@ -68,9 +100,13 @@
  * @par Scope.
  *   Shipped + verified: the 1-D UNICAST pattern (point_to_point) and the line-MULTICAST barrier
  *   + 4-chunk SCATTER + final drain layered on the same channels (all_gather_async, PCC-verified
- *   on a Wormhole multi-chip simulator). Built on the LINEAR (1-D) fabric API
- *   (@c tt_metal/fabric/hw/inc/linear/api.h), which the TT-Fabric spec guarantees runs UNCHANGED
- *   on a 2-D (mesh) fabric. Worker-mux is wrapped via the ConnT policy (MuxConn<N>); see below.
+ *   on a Wormhole multi-chip simulator). The DUPLEX + FUSED + MULTICAST-payload tier extends the
+ *   same model to the reduction and fused collectives (all_reduce_async, reduce_scatter_minimal_async),
+ *   exercised + PCC-verified on the multi-chip simulator's 8-chip Blackhole line; the duplex channels
+ *   use the same set_state/with_state stateful writers as the rest of this API. Built on the LINEAR
+ *   (1-D) fabric API (@c tt_metal/fabric/hw/inc/linear/api.h), which the TT-Fabric spec guarantees
+ *   runs UNCHANGED on a 2-D (mesh) fabric. Worker-mux is wrapped via the ConnT policy (MuxConn<N>);
+ *   see below.
  *
  * @par Cross-device coordination is split (intentionally).
  *   The SENDING half of a cross-device sync — a remote atomic-inc — is owned here
@@ -81,11 +117,14 @@
  *   @warning CACHE-REUSE FOOTGUN: programs are cached and GlobalSemaphores reused, so each side
  *     must @c noc_semaphore_set(sem, 0) to re-arm — a SENDER resets BEFORE its outgoing inc, a
  *     RECEIVER after its wait. Missing reset = first run green, second hangs or corrupts.
- *   @note Each arm_* draws a FRESH pooled header that the returned channel owns, so any mix of
+ *   @note Each arm_* draws a FRESH pooled header that the returned channel OWNS, so any mix of
  *     channels may be live at once with no ordering constraint, and arming the same type twice
- *     yields two independent channels. The pool holds several headers per RISC (8 on
- *     Wormhole/Blackhole) and is reset every kernel launch; a stream that arms each channel once
- *     uses at most four, well within budget.
+ *     yields two independent channels. A DUPLEX arm draws one header PER CONNECTED DIRECTION (two
+ *     mid-line, one at a line end), all owned by the returned channel — nothing is cached on the
+ *     stream. The pool holds several headers per RISC (8 on Wormhole/Blackhole) and is reset every
+ *     kernel launch; a stream that arms a couple of channels stays well within budget, but an op
+ *     that arms many distinct channel types at once (especially duplex, which doubles the count)
+ *     should count them.
  *
  * It WRAPS, and does not reinvent, the existing fragmented fabric layer:
  *   - @c FabricConnectionManager (connection + per-direction @c WorkerToFabricEdmSender)
@@ -97,7 +136,13 @@
  *   ring slice-walk (chip_id +/- k mod ring_size), store-and-forward relay, page<->packet
  *   coalescing/segmentation, concat-by-gather_dim output addressing, split-forwarding, address
  *   generation (TensorAccessor/ShardedAddrGen is consumed, never re-wrapped), the local barrier
- *   wait/reset, and the all_gather fuse_op/OpSignaler matmul-fusion hooks.
+ *   wait/reset, and the all_gather fuse_op/OpSignaler matmul-fusion hooks. For the reduction
+ *   collectives it additionally does NOT own: the REDUCTION itself (that is the op's compute kernel —
+ *   this header never touches unpack/math/pack), which slice a worker reduces vs forwards, the
+ *   reduction-worker mcast/semaphore fan-out on the LOCAL chip (a stock local NoC mcast), and the L1
+ *   read cursor. @c write_with_local_copy mirrors one payload to the local chip because the local and
+ *   fabric destinations are the same logical address and splitting them invites drift, but the op
+ *   still advances its own cursor — consistent with the op owning coalescing.
  */
 
 #include "api/dataflow/dataflow_api.h"
