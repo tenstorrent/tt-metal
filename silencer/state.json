@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-02",
+  "last_scan_date": "2026-08-03",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -9,7 +9,8 @@
     "30587963164",
     "30618649345",
     "30675480001",
-    "30765286317"
+    "30765286317",
+    "30789033630"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -18,7 +19,8 @@
     "sanity-tests.yaml",
     "galaxy-unit-tests.yaml",
     "t3000-unit-tests.yaml",
-    "galaxy-sanity.yaml"
+    "galaxy-sanity.yaml",
+    "single-card-demo-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -26,9 +28,9 @@
       "branch": "silencer/matmul-normalize-program-config-2e13238793abc79d",
       "pattern": "allowed_worker_cores not populated / normalize_program_config missing in CCL matmul ops",
       "issue": "#48660",
-      "status": "ci-passed-commented",
+      "status": "closed-by-maintainer",
       "asan_build_run_id": "30501808830",
-      "note": "asan-build ASan ubuntu 24.04 conclusion=success on run 30501808830. Posted confirmation comment on 2026-07-30. Awaiting maintainer review/merge - no further Silencer action needed until reviewed."
+      "note": "Closed/superseded per maintainer action observed this session. No further Silencer action needed."
     },
     {
       "number": 51849,
@@ -56,6 +58,12 @@
       "pattern": "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {} - info log in finalize_dfbs() firing once per programmable-core-type per program (165x in one job sample)",
       "status": "pr-just-opened-dispatch-requested",
       "note": "Demoted log_info->log_debug in tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:1569. Dispatched pr_gate safe-output tool in same turn; that tool's schema (platform only) has no explicit ref/branch input, so as with PR #51849 it is unconfirmed whether the dispatch targets this PR branch or main. Next run: resolve PR number via search_pull_requests, check_runs, and verify which branch the dispatched run actually built."
+    },
+    {
+      "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning",
+      "pattern": "Mismatch between computed/provided mem config warning - 102x repeats, only 2 distinct pairs",
+      "status": "pr-just-opened-dispatch-requested",
+      "note": "Dispatched single-card-demo-tests (stable_diffusion) same turn for validation. Next run: resolve PR number via search_pull_requests and check CI status."
     }
   ],
   "backlog_cursor": {
