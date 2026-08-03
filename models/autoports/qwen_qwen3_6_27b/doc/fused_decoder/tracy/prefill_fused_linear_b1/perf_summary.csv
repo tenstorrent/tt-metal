@@ -1,0 +1,17 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+75.44,MatmulDeviceOperation (in0:dram_interleaved),8078.77,18,Compute,1.45,6.37,4.04,1.46,3.62
+6.52,SliceDeviceOperation (in0:dram_interleaved),697.82,25,TM,,,,,
+5.25,BinaryNgDeviceOperation (in0:dram_interleaved),561.69,29,Compute,,,,,
+2.72,UntilizeWithUnpaddingDeviceOperation (in0:dram_interleaved),291.39,12,TM,,,,,
+2.42,ConcatDeviceOperation (in0:dram_interleaved),259.35,9,TM,,,,,
+1.87,TilizeWithValPaddingDeviceOperation (in0:dram_interleaved),200.53,11,TM,,,,,
+1.64,LayerNormDeviceOperation (in0:dram_interleaved),176.15,3,Compute,,,,,
+1.41,ReshapeViewDeviceOperation (in0:dram_interleaved),151.18,13,Other,,,,,
+0.99,RepeatDeviceOperation (in0:dram_interleaved),106.53,3,Other,,,,,
+0.47,PermuteDeviceOperation (in0:dram_interleaved),50.05,3,TM,,,,,
+0.39,TransposeDeviceOperation (in0:dram_interleaved),42.27,10,TM,,,,,
+0.31,TypecastDeviceOperation (in0:dram_interleaved),33.26,4,TM,,,,,
+0.20,UnaryDeviceOperation (in0:dram_interleaved),20.92,7,Compute,,,,,
+0.19,CopyDeviceOperation (in0:dram_interleaved),20.32,2,DM,,,,,
+0.10,FillPadDeviceOperation (in0:dram_interleaved),10.48,2,TM,,,,,
+0.07,ReduceDeviceOperation (in0:dram_interleaved),7.83,2,Compute,,,,,
