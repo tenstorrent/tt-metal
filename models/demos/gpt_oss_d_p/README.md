@@ -21,9 +21,23 @@ Stacked PRs, bottom-up. **This PR is P6 (chunked prefill via the ring SDPA).**
 - [x] **P2 — KV cache + indexed RoPE** (merged): chunked, block-cyclic, SP-sharded KV cache.
 - [x] **P3 — MoE** (merged): `TtGptOssMoE` over the DeepSeek EP submodules (SwiGLU-OAI + biases, no shared expert).
 - [x] **P4 — model + runtime** (merged): full model, chunked-prefill runtime, and the `common/prefill` adapter.
-- [ ] **P5 — galaxy bring-up**: TP=8 / SP=4 / EP=32 on the 4×8 Blackhole Galaxy (gated on galaxy access).
+- [x] **P5 — galaxy bring-up** (this PR): TP=8 / SP=4 / EP=32 on the 4×8 Blackhole Galaxy — full 36L model, real weights, per-layer KV-cache PCC vs golden.
 - [x] **P6 — ring SDPA** *(this PR)*: the sinks + sliding + halo-CCL ring SDPA (Pavle Josipović's op, #51438) — wires chunks 1+ to the ring cache-read for multi-chunk prefill.
 - [ ] **P7 — unification**: hoist the shared prefill scaffolding (attention output-proj/CCL tail, config, `utils/`) into `common/prefill`.
+
+## Beyond the bring-up stack
+
+P1–P7 above is the **package bring-up**. Functional / perf / scaling work continues beyond it and is
+tracked separately (not part of the P-stack):
+
+- **Perf** — profile the full prefill; chunked (ring cache-read) is ~16× slower than one-shot. (#52000)
+- **Functional sign-off** — top-1 / logits agreement vs HF (KV-cache PCC is only a proxy). (#52002)
+- **CI** — register the galaxy chunked KV-PCC test in the tiered pipeline. (#52003)
+- **Compute config** — a Blackhole `ComputeKernelConfig` (the `WormholeComputeKernelConfig` name is misleading on BH). (#51998)
+- **Long context** — validate at 55k (one-shot OOMs; chunked is required).
+- **Disaggregation** — KV-cache migration prefill→decode (Joe Malone).
+- **Bounded sliding-window KV cache** — window-sized circular buffer for the sliding layers (Pavlo Hilei).
+- **Serving** — multi-user + prefix + padding.
 
 ## Correctness reference
 
