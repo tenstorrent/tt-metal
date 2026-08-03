@@ -20,9 +20,11 @@ just with a nested zone hierarchy instead of two flat regions.
 A matching Tracy *host* zone is emitted too, so the regions also show up as
 nested zones on the host timeline in the Tracy GUI / WASM viewer.
 
-Everything here is OFF unless ``M3_PROFILE_ZONES=1``, in which case ``zone()``
-returns a shared no-op context manager. Signposts are host-only messages (no
-device op, no sync), so an enabled zone does not perturb device timings.
+Everything here is OFF by default: unless ``M3_PROFILE_ZONES=1`` is set, ``zone()``
+returns a shared no-op context manager and nothing is emitted. With the flag set,
+zones at or below ``M3_PROFILE_LEVEL`` become real. Signposts are host-only
+messages (no device op, no sync), so an enabled zone does not perturb device
+timings.
 
 Usage::
 

@@ -41,8 +41,19 @@ COMM_KEYS = (
     "pre_dispatch_allgather",
 )
 MEM_KEYS = ("cache_read", "kv_write", "index_k_write")
-# Parents hold their children's time as well, so they are excluded from any sum over zones.
-PARENTS = ("(layer total)", "attn", "mlp", "mlp/shared_expert", "attn/cache_read")
+
+
+def parent_rels(rels):
+    """Zones in `rels` that actually have a descendant present in THIS capture.
+
+    Parents hold their children's time too, so they must be excluded from any sum over zones — but
+    whether a zone IS a parent depends on the detail level the capture ran at, not on a fixed list.
+    At LEVEL=2 `attn/cache_read` has no children (deshard/slice are LEVEL=3), so it is a leaf and its
+    time has to be counted; a static exclusion list silently dropped it from the totals.
+    """
+    keys = set(rels)
+    return {k for k in keys if any(o != k and o.startswith(k + "/") for o in keys)} | {"(layer total)"}
+
 
 # Layers 0-2 are dense and 3-59 sparse, so a partial build only exercises the de-shard zone at its
 # own layer count — it converts the whole packed cache each time. Everything else is layer-count free.
@@ -131,8 +142,9 @@ def text_report(byclass, acc, acct, csv_path):
             f"{'DRAM%':>6} {'NOC%':>6}  kind",
             f"  {'-'*34} {'-'*9} {'-'*8} {'-'*5} {'-'*8} {'-'*7} {'-'*6} {'-'*6}  {'-'*6}",
         ]
+        parents = parent_rels(rels)
         for rel, v in sorted(rels.items(), key=lambda kv: -kv[1]["ms_per_layer"]):
-            if rel in PARENTS and rel != "(layer total)":
+            if rel in parents and rel != "(layer total)":
                 mark = "  (parent)"
             elif rel == "(layer total)":
                 continue
@@ -181,7 +193,8 @@ def text_report(byclass, acc, acct, csv_path):
 
 def build_html(byclass, summary, acc, acct, csv_path):
     def leaves(cls):
-        return {k: v for k, v in byclass.get(cls, {}).items() if k not in PARENTS}
+        parents = parent_rels(byclass.get(cls, {}))
+        return {k: v for k, v in byclass.get(cls, {}).items() if k not in parents}
 
     def rows(cls):
         return [
@@ -192,6 +205,8 @@ def build_html(byclass, summary, acc, acct, csv_path):
                 round(v["mib_per_layer"], 1),
                 round(v["gbs_mean"]),
                 cat(r),
+                round(v["dram_util"], 1) if v.get("dram_util") is not None else None,
+                round(v["noc_util"], 1) if v.get("noc_util") is not None else None,
             ]
             for r, v in sorted(leaves(cls).items(), key=lambda kv: -kv[1]["ms_per_layer"])
         ]
@@ -201,9 +216,12 @@ def build_html(byclass, summary, acc, acct, csv_path):
     per_zone_dev = defaultdict(dict)
     for (zone, dv), st in acc.stats.items():
         per_zone_dev[zone][dv] = st["ns"] / 1e6
+    # Same leaf rule as the tables: a zone counts here unless a descendant is present in this capture.
+    all_rels = {"/".join(z.split("/")[2:]) for z in per_zone_dev if len(z.split("/")) >= 3}
+    imb_parents = parent_rels(all_rels)
     for zone, per in per_zone_dev.items():
         parts = zone.split("/")
-        if len(parts) < 3 or "/".join(parts[2:]) in PARENTS or len(per) < 8:
+        if len(parts) < 3 or "/".join(parts[2:]) in imb_parents or len(per) < 8:
             continue
         lo, hi = min(per.values()), max(per.values())
         if lo <= 0:

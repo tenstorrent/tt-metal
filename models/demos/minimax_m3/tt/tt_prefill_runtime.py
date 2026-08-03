@@ -92,6 +92,13 @@ class TtPrefillRuntime:
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+        # The KV cache, its slot addressing and gather_layer are all sized by config.num_layers, while
+        # the model builds one layer per entry of layer_indices. If those disagree, a layer addresses
+        # past the per-user cache stride and silently corrupts another slot.
+        assert config.layer_indices is None or len(config.layer_indices) == config.num_layers, (
+            f"layer_indices has {len(config.layer_indices)} entries but num_layers is "
+            f"{config.num_layers}; they size the model and the KV cache respectively and must match"
+        )
 
         self.model_built = False
         self.compiled = False

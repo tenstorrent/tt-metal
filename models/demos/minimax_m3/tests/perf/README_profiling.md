@@ -7,7 +7,7 @@ MLP on the dense layers (0-2), and the full MSA + MoE breakdown on the sparse la
 ## Before the first run
 
 ```bash
-cd $TT_METAL_HOME && git checkout vmelnykov/add_minimax_profile
+cd $TT_METAL_HOME
 ```
 
 Needs: the tilized weight cache at `$HF_MODEL/tensor_cache_bfp8_MeshShape([8, 4])` (without it the run
@@ -238,8 +238,11 @@ pkill -f tools/tracy/serve_wasm.py     # tracy leaves a WASM server on :8080
 
 ## Reference numbers
 
-A healthy `LEVEL=2 LAYERS=6 CACHE=25600` run, real weights, bf4 experts, measured three times across
-two days:
+Sanity references for "does my capture look right", **not** CI targets — they are per-zone kernel
+times from a deliberately partial 6-layer build, so they do not belong in `models/model_targets.yaml`
+(which holds CI-enforced end-to-end model metrics). Nothing validates these; they are here to catch a
+broken capture. A healthy `LEVEL=2 LAYERS=6 CACHE=25600` run, real weights, bf4 experts, measured three
+times across two days:
 
 | | expected |
 |---|---|

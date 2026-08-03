@@ -5,7 +5,8 @@
 # each run goes through `python3 -m tracy` and the zone-profiling harness
 # (models/demos/minimax_m3/tests/perf/profile_prefill.py) instead of the KV-PCC perf harness. The
 # harness warms up (runtime.compile), fills the cache to PROFILE_CACHE tokens un-profiled, then runs
-# ONE final chunk with zone signposts on and a ttnn.ReadDeviceProfiler after every layer.
+# ONE final chunk with zone signposts on; the device profiler is drained per layer BEFORE that chunk
+# and flushed once after it, so the chunk's inter-op gaps stay clean.
 #
 # Output per run: generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv, whose path
 # is printed at the end. Rendering is a separate step (visualize_zones.py) so one capture can be
@@ -17,7 +18,7 @@
 #   LEVEL=1|2|3     zone detail. 1 = attn vs mlp only (~3 zones/layer), 2 = every block that costs
 #                   real time (~20), 3 = everything incl. norms and sub-splits (~35).   [default 2]
 #   LAYERS=N        build/run only the first N layers. Layers 0-2 are dense and 3+ sparse, so N>=4
-#                   covers both classes; 8 gives 5 sparse samples for the per-chip view. [default all 60]
+#                   covers both classes; 8 gives 5 sparse samples for the per-chip view.  [default 6]
 #   LAYER_IDS=a,b   explicit global layer indices instead of the first N. LAYER_IDS=0,3 is the fastest
 #                   useful run: one dense + one sparse layer, ~10 min end to end.
 #   CACHE=N         tokens already cached before the profiled chunk (rounded down to a
@@ -49,6 +50,7 @@ GOLDEN="${GOLDEN_DIR:-/data/philei/models/minimax-m3-prefill-cache/golden}"
 HARNESS="models/demos/minimax_m3/tests/perf/profile_prefill.py"
 VISUALIZE="models/demos/minimax_m3/tests/perf/visualize_zones.py"
 CSVS=()
+FAILED=0
 WORKDIR="${PERF_WORKDIR:-/tmp/m3_prefill_perf_traces}"
 LOGDIR="${LOGDIR:-$TT_METAL_HOME/prefill_profile_logs}"
 REPORTS="${REPORTS:-$TT_METAL_HOME/generated/profiler/reports}"
@@ -56,6 +58,10 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG="$LOGDIR/prefill_profile_${EXPERT_DTYPE}_${STAMP}.log"
 CHUNK="${CHUNK:-${PROFILE_CHUNK:-5120}}"
 export M3_PROFILE_LEVEL="${LEVEL:-${M3_PROFILE_LEVEL:-2}}"
+# Default to 6 layers (3 dense + 3 sparse). Bare `./run_prefill_profile.sh` used to build all 60,
+# which is the configuration that exhausted host RAM and was OOM-killed — a default must not be the
+# one setting the docs warn against. Pass LAYERS=60 explicitly if you really mean it.
+[ -z "${LAYERS:-}" ] && [ -z "${LAYER_IDS:-}" ] && LAYERS=6
 [ -n "${LAYERS:-}" ] && export PROFILE_NUM_LAYERS="$LAYERS"
 [ -n "${LAYER_IDS:-}" ] && export PROFILE_LAYER_IDS="$LAYER_IDS"
 [ -n "${CACHE:-}" ] && PROFILE_CACHE="$CACHE"
@@ -97,6 +103,10 @@ TRACY_OPTS+=(--child-functions "HWCommandQueue_write_buffer,HWCommandQueue_read_
 
 run_cfg () {  # $1=label  $2=cache_tokens
   local label="$1" cache="$2"
+  # Newest CSV before the run. Discovery below must find something strictly newer, otherwise a failed
+  # capture would silently hand back a PREVIOUS run's report as if it were this one.
+  local before; before="$(find "$REPORTS" -name 'ops_perf_results_*.csv' -printf '%T@\n' 2>/dev/null | sort -n | tail -1)"
+  before="${before:-0}"
   # cache capacity the harness will allocate: prefix chunks + the profiled chunk
   local total=$(( (cache / CHUNK + 1) * CHUNK ))
   local trace; trace="$(make_trace "$total")"
@@ -118,16 +128,23 @@ run_cfg () {  # $1=label  $2=cache_tokens
     grep --line-buffered -vE "$DEBUG_FILTER" | tee -a "$LOG"
   local rc=${PIPESTATUS[0]}
   echo "# [$label] exit=$rc" | tee -a "$LOG"
+  if [ "$rc" -ne 0 ]; then
+    echo "# [$label] FAILED (exit $rc) — see $LOG. Not reporting a CSV; any file present is from an" \
+         "earlier run." | tee -a "$LOG"
+    FAILED=1
+    return "$rc"
+  fi
 
   # Report where the CSV landed. Visualization is a separate step on purpose: the capture is the
   # expensive part, and you will want to re-render it more than once.
-  local csv; csv="$(find "$REPORTS" -name 'ops_perf_results_*.csv' -newermt '-6 hours' 2>/dev/null | sort | tail -1)"
+  local csv; csv="$(find "$REPORTS" -name 'ops_perf_results_*.csv' -newermt "@$before" 2>/dev/null | sort | tail -1)"
   if [ -n "$csv" ]; then
     { echo "# [$label] CSV: $csv"
       echo "# [$label] visualize: python3 $VISUALIZE $csv"; } | tee -a "$LOG"
     CSVS+=("$csv")
   else
-    echo "# [$label] WARNING: no ops_perf_results CSV found under $REPORTS" | tee -a "$LOG"
+    echo "# [$label] WARNING: capture exited 0 but produced no new CSV under $REPORTS" | tee -a "$LOG"
+    FAILED=1
   fi
 }
 
@@ -153,5 +170,10 @@ fi
 echo ""
 echo "full log: $LOG"
 echo ""
+if [ "$FAILED" -ne 0 ]; then
+  echo "=================== FAILED ==================="
+  echo "  At least one capture failed — see $LOG"
+  exit 1
+fi
 echo "=================== NEXT STEP ==================="
 for c in "${CSVS[@]}"; do echo "  python3 $VISUALIZE $c"; done
