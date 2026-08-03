@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -26,6 +27,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // expressed in 32-row-aligned page units, identical for both). `cache` and `input` must share
 // layout and dtype: block-float (bfloat8_b/bfloat4_b) is TILE-only; FP8_E4M3 is ROW_MAJOR-only.
 //
+// When `tp_axis` is set, the cache is additionally sharded across that second (TP) axis for GLM-5.2
+// KV dedup: the input is TP-replicated and each chip persists only its own 1/tp seq window. The two
+// axes are linearized into one block-cyclic axis of size sp*tp. nullopt keeps the pure SP-only path.
+//
 // In-place: returns a handle to `cache`. Two call forms (identical results):
 
 // (1) Scalar form (original): per-call `slot_idx`/`kv_actual_global` are host values, passed as
@@ -37,7 +42,8 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t layer_idx,
     uint32_t num_layers,
     uint32_t kv_actual_global,
-    uint32_t cluster_axis);
+    uint32_t cluster_axis,
+    std::optional<uint32_t> tp_axis = std::nullopt);
 
 // (2) Per-element-tensor form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the
 //     writer kernel from two 1-element uint32 DRAM tensors ([1,1,1,1], ROW_MAJOR, replicated across
@@ -52,7 +58,8 @@ ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t cluster_axis);
+    uint32_t cluster_axis,
+    std::optional<uint32_t> tp_axis = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
 
