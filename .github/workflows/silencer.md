@@ -91,19 +91,21 @@ safe-outputs:
     max: 1
   dispatch-workflow:
     # Lets Silencer trigger a fresh `workflow_dispatch` run of the same tracked workflow
-    # it just fixed, aimed at its own PR branch (see *Validating changes via CI*).
+    # it just fixed, aimed at its own PR branch (see *Validating changes via CI*). This
+    # must be able to name ANY workflow Silencer scans, not just pr-gate/merge-gate: a
+    # fix sourced from e.g. galaxy-e2e-tests logs is validated by re-running
+    # galaxy-e2e-tests on the fix branch, not a generic gate — the gates cover only
+    # categories 1-2/4 (see *Scan procedure* step 1), so restricting this list to just
+    # the two gates would leave categories 3/5/6 fixes unvalidated for every
+    # non-gate workflow.
     # The per-call `ref` override this relies on landed in github/gh-aw#49408.
     #
-    # Unlike the *runtime* scan-target list — which is deliberately read out of
-    # `aggregate-workflow-data.yaml` on every run so there is "no parallel list to drift"
-    # (see *Scan procedure* step 1) — this is a COMPILE-TIME allowlist and therefore
-    # cannot be derived dynamically. It MUST be kept in sync BY HAND with the
-    # `workflow_ids` array in `.github/workflows/aggregate-workflow-data.yaml`: when a
-    # workflow is added there, add it here too, or Silencer will be able to fix noise in
-    # it but not validate the fix. Entries are bare filename stems, no extension
-    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). Order below intentionally
-    # mirrors `workflow_ids` so the two lists can be diffed side by side. All 44 are
-    # confirmed to declare a `workflow_dispatch` trigger, which this safe-output requires.
+    # This is a COMPILE-TIME allowlist and cannot be derived dynamically. It is the
+    # single hardcoded list of workflows Silencer tracks — *Scan procedure* step 1 scans
+    # exactly this same list, so there is only one place to update when a tracked
+    # workflow is added or removed. Entries are bare filename stems, no extension
+    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 42 are confirmed to
+    # declare a `workflow_dispatch` trigger, which this safe-output requires.
     workflows:
       - sanity-tests
       - blackhole-sanity-tests
@@ -141,9 +143,7 @@ safe-outputs:
       - single-card-ttnn-models-frequent-tests
       - single-card-demo-tests
       - tt-metal-l2-nightly
-      - ttnn-run-sweeps
       - vllm-model-tests
-      - metal-run-microbenchmarks
       - sanity-tests-debug
       - merge-gate
       - pr-gate
@@ -640,25 +640,18 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
 
 ## Scan procedure (scheduled mode)
 
-1. **Pick runs to scan — from the repo's canonical tracked-workflow list.** The set of
-   workflows the team actively tracks is **not** something you should guess or hardcode here;
-   it is maintained in one place: the `workflow_ids` array in
-   **`.github/workflows/aggregate-workflow-data.yaml`** (the `(triage) Aggregate Workflow
-   Data` pipeline that fetches CI health every 10 minutes). **Read that file at the start of
-   each run and treat its `workflow_ids` list as your scan target set**, so Silencer stays in
-   lock-step with triage as workflows are added or removed — no parallel list to drift:
-   ```bash
-   # Extract the tracked workflow files from the triage config (source of truth).
-   sed -n '/workflow_ids:/,/]/p' .github/workflows/aggregate-workflow-data.yaml \
-     | grep -oE '[A-Za-z0-9_.-]+\.ya?ml' | sort -u > /tmp/silencer/tracked_workflows.txt
-   ```
-   That list currently spans the full tracked CI surface — sanity/e2e/demo/unit/integration/
+1. **Pick runs to scan — from Silencer's fixed tracked-workflow list.** Scan exactly the
+   workflows listed in this workflow's `safe-outputs.dispatch-workflow.workflows` allowlist
+   above (bare filename stems, e.g. `sanity-tests` resolves to
+   `.github/workflows/sanity-tests.yaml`) — one hardcoded list, used for both scanning and
+   dispatch, so there is nothing else to keep in sync. Do not derive this list from any other
+   file. That list spans the full tracked CI surface — sanity/e2e/demo/unit/integration/
    perf/profiler/stress suites across **Blackhole, Galaxy, T3000, and single-card**, the
-   `models-t1/t2/t3` suites, `tt-metal-l2-nightly`, `ttnn-run-sweeps`, `vllm-model-tests`,
-   `metal-run-microbenchmarks`, the `runtime-*` suites, and the `pr-gate` / `merge-gate`
-   gates (which invoke `build-artifact.yaml`, so **host compile / JIT / deprecated-declaration
-   warnings are covered transitively** through the gate logs — you do not need a separate
-   build-only list). For each tracked workflow, enumerate runs with the `github` MCP tool (**not**
+   `models-t1/t2/t3` suites, `tt-metal-l2-nightly`, `vllm-model-tests`, the `runtime-*`
+   suites, and the `pr-gate` / `merge-gate` gates (which invoke `build-artifact.yaml`, so
+   **host compile / JIT / deprecated-declaration warnings are covered transitively** through
+   the gate logs — you do not need a separate build-only list). For each tracked workflow,
+   enumerate runs with the `github` MCP tool (**not**
    `gh run list`, which has no credentials here): `actions_list` with
    `method: "list_workflow_runs"`, `resource_id: "<workflow-file>"`, and
    `workflow_runs_filter: {status: "completed", branch: "main"}`, then `actions_list` with
