@@ -17,17 +17,17 @@ void bind_mix_streams(nb::module_& mod) {
 
         Replaces the per-token Python sequence in ``DeepSeekV4DecoderLayer._mix``
         (models/experimental/deepseek_v4_flash/tt/decoder_layer.py, lines 97-121) with a
-        single composite op call::
+        single fused kernel::
 
-            out         = sublayer_out broadcast over the stream axis        [1, T, hc, D]
-            placement   = post[..,None] * out                                [1, T, hc, D]
-            mixed       = matmul(comb^T, streams)   (transpose_a=True)       [1, T, hc, D]
+            placement   = post[..,None] * sublayer_out[..,None,:]            [1, T, hc, D]
+            mixed       = matmul(comb^T, streams)                            [1, T, hc, D]
             new_streams = (placement + mixed).reshape([B, S, hc, D])
 
-        where ``T == B*S``. The ``comb`` transpose is folded into the matmul
-        (``transpose_a=True``) to drop a separate transpose device op, and the
-        matmul runs at HiFi4 with fp32 destination accumulation (matching the
-        ``_HIFI4`` config used by the eager Python path).
+        where ``T == B*S``. Both terms are single-tile matmuls accumulated into the same
+        destination register, so the step costs one dispatch instead of four. It runs at
+        HiFi4 with fp32 destination accumulation (matching the ``_HIFI4`` config used by
+        the eager Python path). Shapes the kernel does not cover (hc > 32, D not
+        tile-aligned, non-bfloat16 inputs) fall back to the equivalent op sequence.
 
         Args:
             post (ttnn.Tensor): sublayer-output placement weights, [B, S, hc, 1].

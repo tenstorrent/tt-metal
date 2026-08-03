@@ -10,6 +10,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "device/mix_streams_device_operation.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -214,6 +215,14 @@ Tensor mix_streams(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     validate_inputs(post, comb, sublayer_out, streams);
+
+    // Single fused kernel: one device op for the broadcast-multiply, the comb^T matmul
+    // and the add. The composite fallback below still covers the shapes/dtypes the
+    // kernel does not handle (hc > 32, non-tile-aligned D, non-bfloat16 inputs).
+    namespace device = ttnn::operations::experimental::deepseek::mix_streams;
+    if (device::is_fusable(post, comb, sublayer_out, streams)) {
+        return ttnn::prim::mix_streams(post, comb, sublayer_out, streams, memory_config, compute_kernel_config);
+    }
 
     const auto& streams_shape = streams.logical_shape();
     const uint32_t b = static_cast<uint32_t>(streams_shape[0]);

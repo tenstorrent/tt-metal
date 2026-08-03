@@ -3,7 +3,11 @@
 
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_MIX_STREAMS_API_HEADERS mix_streams.hpp)
 
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_MIX_STREAMS_SRCS mix_streams.cpp)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_MIX_STREAMS_SRCS
+    mix_streams.cpp
+    device/mix_streams_device_operation.cpp
+    device/mix_streams_program_factory.cpp
+)
 
 # Registered on the shared `ttnn` Python module target from
 # ttnn/cpp/ttnn/operations/experimental/deepseek/mix_streams/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
