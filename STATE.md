@@ -594,6 +594,22 @@ mesh these divide by up to 32 (768P 5 s decode ~4.6 s, encode ~24.8 s).
 
 ### Next: encoder perf via H/W parallelism + neighbor_pad (user directive)
 
+**Order settled: H/W parallelism BEFORE the blocking sweep.** `get_conv3d_config` keys on
+`h_factor`, `w_factor`, `T`, `H`, `W`, so sharding changes every conv's per-device extent --
+sweeping first would tune shapes that are about to be discarded. Sweep the shapes we ship.
+
+**Done so far:** `reflect_edge_correction` and `edge_mask_pair` in `conv_minimax_h3.py`.
+The index mapping is verified on host: with pad `p`, the reflect value for `padded[p-1-j]`
+is `padded[p+1+j]`, so `[0,0,1,2,3,4,5,5] -> [1,0,1,2,3,4,5,4]` exactly. The blend is
+mask-driven so every device runs identical ops.
+
+**Still to do:** thread `parallel_config: VaeHWParallelConfig` + `ccl_manager` through
+`MiniMaxH3CausalConv3d` (external/internal padding split per `LTXCausalConv3d`, halo via
+`neighbor_pad_persistent_buffer` with `padding_mode="replicate"`, then the correction above);
+switch `MiniMaxH3FrameGroupNorm` to the all-gather/norm/re-partition shape from
+`latent_upsampler_ltx.py:46-82`; thread `logical_h`/`logical_w` through the encoder for the
+mesh-factor pad crop; then sweep.
+
 Two obstacles, both with an existing in-tree precedent, and one measurement question to
 settle first.
 

@@ -225,6 +225,79 @@ def causal_pad_t(x_BTHWC: ttnn.Tensor, pad: int, mesh_device: ttnn.MeshDevice) -
     return ttnn.concat([zeros, x_BTHWC], dim=1)
 
 
+def reflect_edge_correction(
+    padded_BTHWC: ttnn.Tensor,
+    dim: int,
+    pad: int,
+    *,
+    edge_masks: tuple[ttnn.Tensor, ttnn.Tensor] | None,
+) -> ttnn.Tensor:
+    """Turn a ``replicate`` halo pad into a ``reflect`` one at the **global** edges only.
+
+    ``neighbor_pad_async`` offers ``zeros`` and ``replicate`` but not ``reflect``, and H3 pads
+    reflect. That gap is narrower than it looks: at an interior shard boundary the halo *is*
+    the neighbour's real data, so the padding mode never enters and ``replicate`` is already
+    exact. The two differ only in the outermost pixel at the two global image edges -- after
+    a replicate pad of 1 the layout is ``[x0, x0, x1, ...]`` where reflect wants
+    ``[x1, x0, x1, ...]``.
+
+    So the fix is local and data-driven. With a pad of ``p``, ``padded[p]`` is ``x[0]`` and
+    ``padded[p + k]`` is ``x[k]``, so the reflect value for ``padded[p - 1 - j]`` is
+    ``padded[p + 1 + j]``. Blending with a per-device 0/1 mask keeps every device running the
+    **same ops** -- the mask is sharded data, not a branch -- which is what keeps the program
+    SPMD-uniform. ``edge_masks`` is ``(leading, trailing)``; ``None`` means unsharded, where
+    every device owns both global edges.
+
+    A one-pixel border error passes PCC and reads as a faint vignette, so this needs its own
+    gate rather than riding on a whole-encoder PCC number.
+    """
+    if pad <= 0:
+        return padded_BTHWC
+    size = padded_BTHWC.shape[dim]
+    for j in range(pad):
+        for leading in (True, False):
+            target = pad - 1 - j if leading else size - pad + j
+            source = pad + 1 + j if leading else size - pad - 2 - j
+            mask = None if edge_masks is None else edge_masks[0 if leading else 1]
+            target_slice = slice_dim(padded_BTHWC, dim, target, target + 1)
+            source_slice = slice_dim(padded_BTHWC, dim, source, source + 1)
+            if mask is None:
+                corrected = source_slice
+            else:
+                # corrected = target + mask * (source - target); mask is 1 only on the device
+                # that owns this global edge, so interior devices are untouched.
+                corrected = ttnn.add(target_slice, ttnn.mul(ttnn.sub(source_slice, target_slice), mask))
+            before = slice_dim(padded_BTHWC, dim, 0, target) if target > 0 else None
+            after = slice_dim(padded_BTHWC, dim, target + 1, size) if target + 1 < size else None
+            parts = [p for p in (before, corrected, after) if p is not None]
+            padded_BTHWC = ttnn.concat(parts, dim=dim)
+    return padded_BTHWC
+
+
+def edge_mask_pair(
+    mesh_device: ttnn.MeshDevice, factor: int, mesh_axis: int, dtype: ttnn.DataType
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Per-device 0/1 scalars marking which shard owns the leading / trailing global edge.
+
+    Sharded *data*, so :func:`reflect_edge_correction` stays branch-free and every device
+    issues an identical program.
+    """
+    leading = torch.zeros(factor, 1, 1, 1, 1)
+    trailing = torch.zeros(factor, 1, 1, 1, 1)
+    leading[0] = 1.0
+    trailing[-1] = 1.0
+    return tuple(
+        ttnn.from_torch(
+            mask,
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        for mask in (leading, trailing)
+    )
+
+
 def reflect_pad_hw(x_BTHWC: ttnn.Tensor, pad_h: int, pad_w: int) -> ttnn.Tensor:
     """Symmetric reflect pad on H (dim 2) and W (dim 3).
 
