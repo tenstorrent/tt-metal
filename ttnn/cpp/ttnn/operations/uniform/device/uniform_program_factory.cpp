@@ -114,50 +114,32 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     DataType output_dtype = output.dtype();
     auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(out_data_format);
-    const uint32_t intermed_tile_size = tile_size(tt::DataFormat::Float32);
 
-    constexpr uint32_t in_out_num_tiles = 1;
-    constexpr uint32_t intermed_num_tiles = 2;
+    constexpr uint32_t output_num_tiles = 2;
 
-    constexpr uint32_t intermed_cb_id = CBIndex::c_24;
-    constexpr uint32_t dst_cb_id = CBIndex::c_0;
+    constexpr uint32_t output_cb_id = CBIndex::c_24;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     ProgramDescriptor desc;
 
-    // Intermediate CB (Float32)
+    // Keep the SFPU destination in FP32, then let the packer perform the
+    // destination-format conversion while writing this CB. In particular,
+    // FP32-to-BF16 rounding is handled in hardware instead of by a scalar
+    // conversion loop in the writer kernel.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = intermed_num_tiles * intermed_tile_size,
+        .total_size = output_num_tiles * dtype_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = intermed_cb_id,
-            .data_format = tt::DataFormat::Float32,
-            .page_size = intermed_tile_size,
-        }}},
-    });
-
-    // Output CB
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_out_num_tiles * dtype_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = dst_cb_id,
+            .buffer_index = output_cb_id,
             .data_format = out_data_format,
             .page_size = dtype_tile_size,
         }}},
     });
 
     // Writer kernel
-    KernelDescriptor::Defines writer_defines;
-    switch (output_dtype) {
-        case DataType::BFLOAT16: writer_defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
-        case DataType::FLOAT32: writer_defines.emplace_back("OUTPUT_DTYPE_FLOAT32", "1"); break;
-        default: break;
-    }
-
-    KernelDescriptor::CompileTimeArgs writer_ct_args{intermed_cb_id, dst_cb_id};
+    KernelDescriptor::CompileTimeArgs writer_ct_args{output_cb_id};
     TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
@@ -165,7 +147,6 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.defines = std::move(writer_defines);
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.runtime_args.reserve(num_cores_total);
 
@@ -174,7 +155,7 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {intermed_cb_id};
+    compute_desc.compile_time_args = {output_cb_id};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes

@@ -8,7 +8,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
 
     const uint32_t seed = get_arg_val<uint32_t>(0);
     union {
@@ -28,9 +28,9 @@ void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(4);
     const uint32_t end_id = start_id + num_tiles;
 
-    CircularBuffer cb_intermed(intermed_cb_id);
+    CircularBuffer cb_output(output_cb_id);
 
-    init_sfpu(intermed_cb_id, intermed_cb_id);
+    init_sfpu(output_cb_id, output_cb_id);
 
     // The host gives neighbouring cores nearby seeds. start_id is unique for
     // every participating core; an odd Weyl multiplier spreads those related
@@ -38,16 +38,16 @@ void kernel_main() {
     constexpr uint32_t core_seed_multiplier = 0x9E3779B9U;
     rand_tile_init(seed + start_id * core_seed_multiplier);
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_intermed.reserve_back(1);
+        cb_output.reserve_back(1);
 
         tile_regs_acquire();
         rand_tile(0, f2u_lower_bound.u, f2u_scale.u);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, intermed_cb_id, 0);
+        pack_tile(0, output_cb_id, 0);
         tile_regs_release();
 
-        cb_intermed.push_back(1);
+        cb_output.push_back(1);
     }
 }
