@@ -280,9 +280,9 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
 # must be full (the cache write needs a tile-aligned offset); a partial FINAL chunk is fine.
 _CHUNK_SIZE = 4096
 _CHUNKED_SCENARIOS = [
-    ("2x4k", [4096, 4096]),
-    ("3x4k", [4096, 4096, 4000]),
-    ("ragged-tail", [4096, 4096, 3000]),
+    ("2chunk-full", [_CHUNK_SIZE, _CHUNK_SIZE]),
+    ("2chunk-ragged", [_CHUNK_SIZE, 3000]),
+    ("3chunk-ragged", [_CHUNK_SIZE, _CHUNK_SIZE, 3000]),
 ]
 
 

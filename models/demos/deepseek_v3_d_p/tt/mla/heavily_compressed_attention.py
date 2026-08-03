@@ -682,11 +682,12 @@ class TtHCA(_TtHCABase):
             f"compressed cache full: {total_entries} entries > capacity {capacity}; allocate the state "
             f"with a larger max_seq_len"
         )
-        # fill_cache copies whole tiles, so a chunk may only start on a tile boundary -- which means
-        # every non-final chunk must be a multiple of compress_rate * TILE_SIZE tokens.
-        assert state.entry_count % ttnn.TILE_SIZE == 0, (
-            f"compressed cache write offset {state.entry_count} is not tile-aligned; chunk length must be "
-            f"a multiple of compress_rate * TILE_SIZE ({compress_rate * ttnn.TILE_SIZE})"
+        # Checked on tokens, not entry_count: a dropped partial window is invisible there (4097 tokens
+        # still lands on 32 entries) and the next chunk would start at the wrong window position.
+        chunk_align = compress_rate * ttnn.TILE_SIZE
+        assert state.kv_actual % chunk_align == 0, (
+            f"cannot append after a chunk with {state.kv_actual % chunk_align} leftover tokens; only the "
+            f"final chunk may be ragged, non-final chunks must be a multiple of {chunk_align}"
         )
 
         # The rope op matches cos/sin to the tensor seq, so the stems need one position per PADDED row.
