@@ -28,7 +28,7 @@ jobs:
     secrets: inherit
 
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}

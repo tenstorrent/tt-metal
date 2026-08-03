@@ -20,6 +20,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     uint32_t input_e4m3_addr = get_arg_val<uint32_t>(0);
@@ -124,26 +125,29 @@ void kernel_main() {
         cb_scale_bcast_obj.reserve_back(1);
         CoreLocalMem<volatile uint32_t> scratch_mem(scratch);
         CoreLocalMem<volatile uint32_t> page(cb_scale_bcast_obj.get_write_ptr());
-        uint32_t tok_off = 0;  // (token - block_start_row) * scale_aligned_page_bytes
-        uint32_t block_idx_b = block_start_idx;
-        uint32_t s = 0;
-        uint32_t face_base_off = 0;
-        for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
-            uint32_t col0_off = face_base_off;
-            for (uint32_t r = 0; r < face_h; ++r) {
-                if (s < real_in_block) {
-                    uint32_t val = scratch_mem[(tok_off >> 2) + block_idx_b];
-                    page[col0_off >> 2] = val;
-                    ++block_idx_b;
-                    if (block_idx_b >= blocks_per_row) {
-                        block_idx_b = 0;
-                        tok_off += scale_aligned_page_bytes;
+        {
+            DeviceZoneScopedN("build_bcast_operand");
+            uint32_t tok_off = 0;  // (token - block_start_row) * scale_aligned_page_bytes
+            uint32_t block_idx_b = block_start_idx;
+            uint32_t s = 0;
+            uint32_t face_base_off = 0;
+            for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
+                uint32_t col0_off = face_base_off;
+                for (uint32_t r = 0; r < face_h; ++r) {
+                    if (s < real_in_block) {
+                        uint32_t val = scratch_mem[(tok_off >> 2) + block_idx_b];
+                        page[col0_off >> 2] = val;
+                        ++block_idx_b;
+                        if (block_idx_b >= blocks_per_row) {
+                            block_idx_b = 0;
+                            tok_off += scale_aligned_page_bytes;
+                        }
                     }
+                    col0_off += FACE_W_BYTES;
+                    ++s;
                 }
-                col0_off += FACE_W_BYTES;
-                ++s;
+                face_base_off += FACE_ROW_STRIDE_BYTES;
             }
-            face_base_off += FACE_ROW_STRIDE_BYTES;
         }
         cb_scale_bcast_obj.push_back(1);
         cb_input_e4m3_obj.push_back(tiles_per_block);

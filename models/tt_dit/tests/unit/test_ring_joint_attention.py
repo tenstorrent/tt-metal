@@ -84,6 +84,7 @@ def run_ring_joint_sdpa_model_config(
     use_column_major_ccl,
     use_wormhole_compute_kernel_config,
     pcc_threshold=0.999,
+    fp32_dest_acc_en: bool = False,
 ):
     """
     Run ring_joint_scaled_dot_product_attention matching all model-specific
@@ -154,7 +155,7 @@ def run_ring_joint_sdpa_model_config(
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
         )
     else:
         # Wan / Mochi use init_device_compute_kernel_config
@@ -162,7 +163,7 @@ def run_ring_joint_sdpa_model_config(
             submesh.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=False,
         )
 
@@ -328,6 +329,7 @@ def run_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
+    fp32_dest_acc_en: bool = False,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -385,7 +387,7 @@ def run_ring_joint_sdpa(
         submesh.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
 
@@ -580,6 +582,7 @@ def run_test_ring_joint_sdpa(
     dtype,
     pcc_threshold=0.994,
     max_mse=None,
+    fp32_dest_acc_en: bool = False,
 ):
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
     rp_axis, rp_factor, up_axis, up_factor = parallel_config
@@ -623,6 +626,7 @@ def run_test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 

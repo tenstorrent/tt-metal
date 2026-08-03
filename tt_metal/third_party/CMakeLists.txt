@@ -210,3 +210,87 @@ ExternalProject_Add(
     INSTALL_COMMAND
         "" # Suppress default cmake --install: artifacts stay in BINARY_DIR for CI packaging to pick up.
 )
+
+set(_tt_tracy_categories_file "${CMAKE_CURRENT_SOURCE_DIR}/../tools/profiler/tracy_debug_categories.txt")
+set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY
+        CMAKE_CONFIGURE_DEPENDS
+            "${_tt_tracy_categories_file}"
+)
+file(STRINGS "${_tt_tracy_categories_file}" _tt_tracy_categories_raw)
+set(_tt_tracy_categories "")
+foreach(_line IN LISTS _tt_tracy_categories_raw)
+    string(STRIP "${_line}" _line)
+    if(NOT _line STREQUAL "" AND NOT _line MATCHES "^#")
+        list(APPEND _tt_tracy_categories "${_line}")
+    endif()
+endforeach()
+
+set(_tt_tracy_valid
+    ${_tt_tracy_categories}
+    all
+)
+string(REPLACE ";" ", " _tt_tracy_valid_pretty "${_tt_tracy_valid}")
+set_property(
+    CACHE
+        TRACY_DEBUG_CATEGORY
+    PROPERTY
+        STRINGS
+            off
+            ${_tt_tracy_valid}
+)
+
+set(_tt_tracy_selected "")
+if(NOT TRACY_DEBUG_CATEGORY STREQUAL "off")
+    string(REPLACE "," ";" _tt_tracy_selected_raw "${TRACY_DEBUG_CATEGORY}")
+    foreach(_sel IN LISTS _tt_tracy_selected_raw)
+        string(STRIP "${_sel}" _sel)
+        string(TOLOWER "${_sel}" _sel)
+        if(NOT _sel IN_LIST _tt_tracy_valid)
+            message(
+                FATAL_ERROR
+                "Invalid TRACY_DEBUG_CATEGORY entry '${_sel}'; expected off, or a comma-separated list of: ${_tt_tracy_valid_pretty}."
+            )
+        endif()
+        list(APPEND _tt_tracy_selected "${_sel}")
+    endforeach()
+endif()
+
+# We emit the defines into a generated header, not onto TracyClient's PUBLIC (tree-wide) compile line, so
+# changing TRACY_DEBUG_CATEGORY recompiles only TUs including tracy_debug_zones.hpp, not all of TT::Metalium.
+set(_tt_tracy_defs "#pragma once\n")
+set(_idx 0)
+foreach(_cat IN LISTS _tt_tracy_categories)
+    set(_on 0)
+    if("all" IN_LIST _tt_tracy_selected OR "${_cat}" IN_LIST _tt_tracy_selected)
+        set(_on 1)
+    endif()
+    string(TOUPPER "${_cat}" _tok)
+    string(REPLACE "-" "_" _tok "${_tok}")
+    string(APPEND _tt_tracy_defs "#define TT_TRACY_CATEGORY_${_tok} ${_on}\n")
+    string(APPEND _tt_tracy_defs "#define TT_TRACY_CATEGORY_INDEX_${_tok} ${_idx}\n")
+    math(EXPR _idx "${_idx} + 1")
+endforeach()
+
+set(_tt_tracy_generated_dir "${PROJECT_BINARY_DIR}/generated/profiler")
+file(CONFIGURE OUTPUT "${_tt_tracy_generated_dir}/tracy_debug_categories_generated.hpp" CONTENT "${_tt_tracy_defs}")
+# Build-time header; deliberately not exported to the installed SDK.
+target_include_directories(TracyClient PUBLIC "$<BUILD_INTERFACE:${_tt_tracy_generated_dir}>")
+
+unset(_tt_tracy_categories_file)
+unset(_tt_tracy_categories_raw)
+unset(_tt_tracy_categories)
+unset(_tt_tracy_valid)
+unset(_tt_tracy_valid_pretty)
+unset(_tt_tracy_selected)
+unset(_tt_tracy_selected_raw)
+unset(_line)
+unset(_sel)
+unset(_cat)
+unset(_on)
+unset(_tok)
+unset(_idx)
+unset(_tt_tracy_defs)
+unset(_tt_tracy_generated_dir)

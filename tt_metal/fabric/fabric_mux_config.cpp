@@ -260,7 +260,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     ProgramOrDescriptor& mux_program_or_desc,
-    const CoreCoord& mux_logical_core) const {
+    const tt::tt_metal::CoreCoord& mux_logical_core) const {
     std::vector<uint32_t> args;
 
     auto regions_to_clear = get_memory_regions_to_clear();
@@ -279,10 +279,10 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
 }
 
 template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::Program>(
-    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::Program&, const CoreCoord&) const;
+    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::Program&, const tt::tt_metal::CoreCoord&) const;
 
 template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::ProgramDescriptor&, const CoreCoord&) const;
+    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::ProgramDescriptor&, const tt::tt_metal::CoreCoord&) const;
 
 uint8_t FabricMuxConfig::get_num_buffers(FabricMuxChannelType channel_type) const {
     return channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL ? num_buffers_full_size_channel_

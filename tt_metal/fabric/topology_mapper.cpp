@@ -17,6 +17,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -211,7 +212,7 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}),
+    pinning_groups_({}),
     topology_mapping_timeout_(topology_mapping_timeout) {
     // Initialize containers; population will occur during build_mapping
     mesh_host_ranks_.clear();
@@ -227,14 +228,14 @@ TopologyMapper::TopologyMapper(
     const MeshGraph& mesh_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const LocalMeshBinding& local_mesh_binding,
-    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings,
+    const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinning_groups,
     std::chrono::duration<float> topology_mapping_timeout) :
     cluster_(cluster),
     distributed_context_(distributed_context),
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_(fixed_asic_position_pinnings),
+    pinning_groups_(pinning_groups),
     topology_mapping_timeout_(topology_mapping_timeout) {
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
@@ -257,7 +258,7 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}),
+    pinning_groups_({}),
     topology_mapping_timeout_(topology_mapping_timeout) {
     log_debug(
         tt::LogFabric,
@@ -446,35 +447,53 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
 
-        // Build logical and physical adjacency maps
+        // Build logical adjacency, then physical adjacency from rank bindings. When MGD+PGD are available,
+        // attach each mesh's committed PGD MESH grouping pinning onto mesh_pgd_pinnings_ (fast path: keep
+        // asic_id_to_mesh_rank footprints; get_valid_groupings_for_mgd only supplies preferred pinnings).
         auto adjacency_map_logical_multi_mesh =
             ::tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph(mesh_graph_);
-        auto adjacency_map_physical_multi_mesh =
-            ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
-                physical_system_descriptor_, asic_id_to_mesh_rank);
+
+        // Build TopologyMappingConfig pinnings before physical-graph enrichment so PGD<->MGD matching sees them.
+        ::tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
+
+        config.pinnings = pinning_groups_;
+
+        // Append MGD pinnings when available (same many-to-many group shape).
+        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
+            const auto& mgd_pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
+            config.pinnings.insert(config.pinnings.end(), mgd_pinnings.begin(), mgd_pinnings.end());
+        }
+
+        ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph adjacency_map_physical_multi_mesh;
+        // If using an MGD, try and match with PGD to consume preferred pinnings from the PGD for better mapping
+        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
+            auto pgd = ::tt::tt_fabric::try_find_and_load_physical_grouping_descriptor(
+                /*pgd_path=*/std::nullopt, &physical_system_descriptor_);
+            if (pgd.has_value()) {
+                adjacency_map_physical_multi_mesh =
+                    ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                        physical_system_descriptor_,
+                        asic_id_to_mesh_rank,
+                        *pgd,
+                        mesh_graph_.get_mesh_graph_descriptor(),
+                        std::optional{config.pinnings});
+            } else {
+                log_debug(
+                    tt::LogFabric,
+                    "No Physical Grouping Descriptor found; building rank-bound physical graph without PGD "
+                    "preferred pinnings");
+                adjacency_map_physical_multi_mesh =
+                    ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                        physical_system_descriptor_, asic_id_to_mesh_rank);
+            }
+        } else {
+            adjacency_map_physical_multi_mesh =
+                ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                    physical_system_descriptor_, asic_id_to_mesh_rank);
+        }
 
         print_logical_adjacency_map(adjacency_map_logical_multi_mesh);
         print_physical_adjacency_map(adjacency_map_physical_multi_mesh);
-
-        // Build TopologyMappingConfig for multi-mesh solver
-        ::tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
-
-        // Convert pinning constraints from fixed_asic_position_pinnings_ format to config format
-        // fixed_asic_position_pinnings_ is: (FabricNodeId, std::vector<AsicPosition>)
-        // config.pinnings expects: std::vector<(AsicPosition, FabricNodeId)>
-        for (const auto& [fabric_node, positions] : fixed_asic_position_pinnings_) {
-            for (const auto& position : positions) {
-                config.pinnings.emplace_back(position, fabric_node);
-            }
-        }
-
-        // Extract pinnings from MGD and add to config (only if mesh graph descriptor is available)
-        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
-            const auto& pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
-            for (const auto& [pos, fabric_node] : pinnings) {
-                config.pinnings.emplace_back(pos, fabric_node);
-            }
-        }
 
         // Set per-mesh validation modes based on mesh graph policy
         for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {

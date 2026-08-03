@@ -817,7 +817,7 @@ struct SdpaReduceWorker {
         void compute_impl([[maybe_unused]] const ComputeArgs& args) {
             constexpr VectorMode vector_mode = VectorMode::RC_custom;
 
-            reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
+            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
             pack_reconfig_data_format<true>(CTArgs::cb_l_out);
             exp_tile_init<EXP_APPROX_MODE>();
 

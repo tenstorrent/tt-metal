@@ -270,14 +270,14 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
         const auto data_a = ttml::test_utils::make_uniform_vector<float>(a_shape.volume(), -1.0F, 1.0F, seed);
         ttnn::Tensor input_tensor_a = ttnn::Tensor::from_vector(
             data_a,
-            ttnn::TensorSpec(
+            tt::tt_metal::TensorSpec(
                 a_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
             device.get());
 
         const auto data_b = ttml::test_utils::make_uniform_vector<float>(b_shape.volume(), -1.0F, 1.0F, seed + 1);
         ttnn::Tensor input_tensor_b = ttnn::Tensor::from_vector(
             data_b,
-            ttnn::TensorSpec(
+            tt::tt_metal::TensorSpec(
                 b_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
             device.get());
 

@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -30,36 +30,36 @@ void kernel_main() {
     const auto start_tile_idx = tile_offset;
 
     Noc noc;
-    CircularBuffer cb_gamma_grad(cb_id_gamma_grad);
-    CircularBuffer cb_beta_grad(cb_id_beta_grad);
+    DataflowBuffer dfb_gamma_grad(cb_id_gamma_grad);
+    DataflowBuffer dfb_beta_grad(cb_id_beta_grad);
     const auto gamma_grad_tile_bytes = get_tile_size(cb_id_gamma_grad);
     const auto beta_grad_tile_bytes = get_tile_size(cb_id_beta_grad);
 
     for (uint32_t w_idx = 0; w_idx < num_cols_per_core; w_idx++) {
         if (gamma_grad_has_value) {
             // gamma_grad (1, 1, 1, W)
-            cb_gamma_grad.wait_front(onetile);
+            dfb_gamma_grad.wait_front(onetile);
             noc.async_write(
-                cb_gamma_grad,
+                dfb_gamma_grad,
                 gamma_grad_addrg,
                 gamma_grad_tile_bytes,
                 {.offset_bytes = 0},
                 {.page_id = w_idx + start_tile_idx});
             noc.async_write_barrier();
-            cb_gamma_grad.pop_front(onetile);
+            dfb_gamma_grad.pop_front(onetile);
         }  // gamma_grad_has_value
 
         if (beta_grad_has_value) {
             // beta_grad (1, 1, 1, W)
-            cb_beta_grad.wait_front(onetile);
+            dfb_beta_grad.wait_front(onetile);
             noc.async_write(
-                cb_beta_grad,
+                dfb_beta_grad,
                 beta_grad_addrg,
                 beta_grad_tile_bytes,
                 {.offset_bytes = 0},
                 {.page_id = w_idx + start_tile_idx});
             noc.async_write_barrier();
-            cb_beta_grad.pop_front(onetile);
+            dfb_beta_grad.pop_front(onetile);
         }  // beta_grad_has_value
 
     }  // num_cols_per_core loop

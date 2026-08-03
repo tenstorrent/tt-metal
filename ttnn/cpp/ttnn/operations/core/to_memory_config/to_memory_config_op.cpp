@@ -87,7 +87,7 @@ bool can_use_interleaved_to_sharded(
 
     // CB L1 capacity check
     // When the MemoryConfig was created with an nd_shard_spec, the legacy shard_spec is not populated.
-    // Construct the output TensorSpec to get the normalized memory config with the legacy shard_spec.
+    // Construct the output tt::tt_metal::TensorSpec to get the normalized memory config with the legacy shard_spec.
     auto resolved_mem_config = output_mem_config;
     if (!output_mem_config.shard_spec().has_value()) {
         auto output_spec = ttnn::prim::InterleavedToShardedDeviceOperation::compute_output_specs(
@@ -259,6 +259,18 @@ Tensor to_memory_config(
         !output_tensor.has_value()) {
         return tensor;
     }
+
+    // Legacy 2D-grid BLOCK_SHARDED on DRAM is unsupported across ttnn (a 2D block core-grid collides
+    // on DRAM's 1D banks). Reject it at the dispatcher instead of silently falling through to the
+    // ttnn::copy fallback, which produces wrong data. Block-shaped shards on DRAM are supported via
+    // an ND shard spec (ND_SHARDED), which is not caught here.
+    const auto is_dram_block_sharded = [](const std::optional<MemoryConfig>& mem_config) {
+        return mem_config.has_value() && mem_config->memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+               mem_config->buffer_type() == BufferType::DRAM;
+    };
+    TT_FATAL(
+        !is_dram_block_sharded(original_memory_config) && !is_dram_block_sharded(memory_config),
+        "We don't support DRAM block sharding");
     std::vector<std::optional<Tensor>> optional_output_tensors;
     if (output_tensor.has_value()) {
         optional_output_tensors.push_back(output_tensor);

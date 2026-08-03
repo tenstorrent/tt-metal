@@ -16,9 +16,6 @@ name: "Build all Docker images"
 # =============================================================================
 
 env:
-  # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
-  # Acceptable for tool/venv images (built infrequently). For ci-test/dev images (built on every
-  # Dockerfile change), monitor push duration and lower to level 3 if it becomes a bottleneck.
   BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
@@ -288,7 +285,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.llk-needs-build == 'true'
     timeout-minutes: 90
-    runs-on: ${{ inputs.runs-on-large }}
+    runs-on: ${{ inputs.runs-on-large || 'tt-ubuntu-2204-large-stable' }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -350,7 +347,7 @@ jobs:
     name: "Prewarm cache from GHCR via HARBOR"
     needs: [preflight, build-2204, build-2404, build-llk]
     if: always() && !failure() && !cancelled() && inputs.prewarm-harbor && needs.preflight.outputs.harbor-prefix != ''
-    runs-on: ${{ inputs.runs-on-medium }}
+    runs-on: ${{ inputs.runs-on-medium || 'tt-ubuntu-2204-medium-stable' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20

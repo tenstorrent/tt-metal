@@ -32,12 +32,16 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 | `medium` | `tt-smi -r`, `tt-smi -glx_reset`          | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | ~5 min  | Pre-deployment validation |
 | `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2      | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests)   | ~15 min | Final deploy gate |
 
-The `eth_bandwidth` filter is `*TensixDeploymentEthernetBandwidth*` so it
-auto-picks up `BandwidthBidir` once that test gets added to
-`tests/tt_metal/tt_metal/deployment/sources.cmake`. Currently outlogix's
-sources.cmake only compiles `test_eth_bandwidth.cpp` (not the Bidir or
-DataIntegrityDram source files), so the deploy tier only covers what the
-build actually registers.
+The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
+(e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
+`TensixDeploymentEthernet02BandwidthBidir`), so the filters wildcard the
+two-digit index: `eth_link_up` is `*TensixDeploymentEthernet*LinkUp` and
+`eth_bandwidth` is `*TensixDeploymentEthernet*Bandwidth*`. The trailing wildcard
+on `eth_bandwidth` means it runs both `Bandwidth` and `BandwidthBidir`, both of
+which `tests/tt_metal/tt_metal/deployment/sources.cmake` now compiles.
+
+(Filters without the index wildcard match zero tests, so gtest exits 0 and the
+check is silently recorded as PASS without running — avoid that form.)
 
 The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` in
 `diag_runner.py`.
@@ -163,7 +167,7 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
             dm_app_fw_consistent             SKIP   not applicable to Galaxy
             dm_bl_fw_consistent              SKIP   not applicable to Galaxy
   tests          PASS  (25.2s)
-    other:  eth_link_up                      PASS   filter=*TensixDeploymentEthernetLinkUp rc=0 dur=25.2s passed=1 failed=0 log=./logs/eth_link_up.log
+    other:  eth_link_up                      PASS   filter=*TensixDeploymentEthernet*LinkUp rc=0 dur=25.2s passed=1 failed=0 log=./logs/eth_link_up.log
   OVERALL        WARN
 ```
 

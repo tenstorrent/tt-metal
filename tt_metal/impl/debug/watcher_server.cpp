@@ -39,6 +39,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 using namespace tt::tt_metal;
 
@@ -122,13 +123,6 @@ void WatcherServer::Impl::attach_devices() {
         return;
     }
 
-    // TODO: Remove this once NOC sanitization is supported on Quasar in fast dispatch (#45878)
-    if (env_.get_hal().get_arch() == tt::ARCH::QUASAR && rtoptions.get_fast_dispatch()) {
-        log_warning(
-            tt::LogMetal,
-            "Watcher NOC sanitization has been disabled as it is currently not supported on Quasar in fast dispatch.");
-    }
-
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         create_log_file();
@@ -169,11 +163,20 @@ void WatcherServer::Impl::detach_devices() {
         stop_server_ = true;
         stop_server_cv_.notify_all();
 
-        // Wait for the thread to end, with a timeout
+        // Wait for the thread to end. The timeout is used only to emit a diagnostic if the
+        // thread is slow to return (e.g. wedged inside a device read in dump()); we must not
+        // delete a still-joinable std::thread (that calls std::terminate()), nor delete it
+        // while the async join task below is still executing on it (use-after-free). The poll
+        // loop is guaranteed to observe stop_server_ and return once any in-flight dump()
+        // completes, so we block until the join genuinely finishes before deleting.
         auto future = std::async(std::launch::async, &std::thread::join, server_thread_);
         if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-            log_fatal(tt::LogMetal, "Timed out waiting on watcher server thread to terminate.");
+            log_warning(
+                tt::LogMetal,
+                "Watcher server thread is taking longer than 2s to terminate (likely blocked in a device read); "
+                "continuing to wait for it to finish.");
         }
+        future.wait();
         delete server_thread_;
         server_thread_ = nullptr;
     }
@@ -527,6 +530,14 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         const auto& soc_desc = cluster.get_soc_desc(device_id);
         for (const auto& dram_core : soc_desc.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             write_watcher_init_val_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
+        }
+    }
+
+    // Initialize dispatch-engine cores debug values (Quasar only)
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        const auto& soc_desc = cluster.get_soc_desc(device_id);
+        for (const auto& logical_dispatch_core : detail::get_quasar_soc_dispatch_engine_logical_cores(soc_desc)) {
+            write_watcher_init_val_logical(logical_dispatch_core, HalProgrammableCoreType::DISPATCH);
         }
     }
 

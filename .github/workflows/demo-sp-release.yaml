@@ -44,8 +44,8 @@ on:
           - deepseek_unit_tests
           - wan22
           - single_galaxy_deepseek
-          - sp1_deepseek
-          # - sp4_deepseek
+          - sc4_deepseek
+          # - sc16_deepseek
 
   schedule:
     # Run daily at 5 AM UTC
@@ -135,32 +135,32 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
 
-  # todo)) disabled until we get more machines with SP4 SKUs
-  # deepseek-sp4-tests:
-  #   name: "SP4 DeepSeek Tests"
+  # todo)) disabled until we get more machines with SC16 SKUs
+  # deepseek-sc16-tests:
+  #   name: "SC16 DeepSeek Tests"
   #   needs: [build-artifact]
-  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sc16_deepseek' || github.event_name == 'schedule' }}
   #   secrets: inherit
   #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
   #   with:
   #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     sp-config: sp4
+  #     sp-config: sc16
 
-  deepseek-sp1-tests:
-    name: "SP1 DeepSeek Tests"
+  deepseek-sc4-tests:
+    name: "SC4 DeepSeek Tests"
     needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sc4_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-multihost-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sp1-blitz
+      sp-config: sc4-blitz
 
-  # todo)) proven to work by itself but mess up SP1 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
+  # todo)) proven to work by itself but mess up SC4 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
   # deepseek-single-galaxy-tests:w
   #   name: "Single Galaxy DeepSeek Tests"
   #   needs: build-artifact
@@ -171,4 +171,4 @@ jobs:
   #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     sp-config: spsg
+  #     sp-config: sc1

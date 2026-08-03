@@ -11,10 +11,14 @@
 #include "outbound_socket_service_sync_device_operation_types.hpp"
 #include "outbound_socket_service_sync_program_factory.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 class D2DStreamServiceSender;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using D2DStreamServiceSender = ttnn::D2DStreamServiceSender;
 class D2HStreamService;
-}
+}  // namespace tt::tt_metal
 
 namespace ttnn::experimental::prim {
 
@@ -23,16 +27,13 @@ struct OutboundSocketServiceSyncOperation {
     using tensor_args_t = OutboundSocketServiceSyncInputs;
     // The op fills the service-owned backing tensor in place; the (single) output IS
     // that backing tensor (no new allocation).
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<OutboundSocketServiceSyncProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    // Keys the program on (service identity + config), NOT on the per-call input
-    // buffer address (that is a BufferBinding, patched on cache hits).
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -46,7 +47,7 @@ namespace ttnn::prim {
 //   * D2H: {backing+metadata, backing-only, metadata-only}; metadata-only has no payload or
 //     lease. Returns the backing tensor (the record stands in for it in metadata-only).
 ttnn::Tensor outbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceSender& service,
+    const ttnn::D2DStreamServiceSender& service,
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& metadata = std::nullopt);
 

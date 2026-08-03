@@ -393,7 +393,7 @@ sizes:
       wh_n300:
         trace_region_size: 30000000
       wh_llmbox_perf:
-        trace_region_size: 30000000
+        trace_region_size: 30100000
       wh_galaxy_perf:
         trace_region_size: 30000000
       bh_p150:

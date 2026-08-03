@@ -269,7 +269,7 @@ std::vector<::bfloat16> run_tanh_fw_batched(
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device);
     auto result = ttnn::tanh(input_tensor);
     auto output_cpu = ttnn::from_device(result);
     return output_cpu.to_vector<::bfloat16>();

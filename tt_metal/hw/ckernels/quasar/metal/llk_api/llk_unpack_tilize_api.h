@@ -165,10 +165,15 @@ inline void llk_unpack_tilizeA_B(
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
     const std::uint32_t rd_entry_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx;
-    const std::uint32_t tile_row_stride =
-        tensor_shape_A.num_faces_r_dim *
-        tensor_shape_A.face_r_dim;  // used to advance to the next row of tiles in the L1 buffer
-    const std::uint32_t l1_index_a = rd_entry_idx_a * tile_row_stride + tile_index_a;
+    // Compute how many l1_index units fit in one DFB entry.
+    // _llk_unpack_reduce_col_tilizeA_strided_ internally scales
+    // l1_index by num_faces_c_dim, so one l1_index unit = num_faces_c_dim face-rows in L1.
+    const std::uint32_t entry_size_16B = local_dfb_interface_a.entry_size;                           // DFB entry size in 16B
+    const std::uint32_t face_row_16B =                                                               // Buffer Descriptor granularity in 16B
+        SCALE_DATUM_SIZE(unpack_src_format[operandA_id], ckernel::trisc::FACE_C_DIM) >> 4;
+    const std::uint32_t l1_index_per_entry =                                                         // l1_index steps per entry
+        entry_size_16B / (face_row_16B * tensor_shape_A.num_faces_c_dim);
+    const std::uint32_t l1_index_a = rd_entry_idx_a * l1_index_per_entry + tile_index_a;
 
     const std::uint32_t l1_index_b =
         local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;

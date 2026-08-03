@@ -73,6 +73,13 @@ bool grouping_exists(const proto::PhysicalGroupings& proto, const std::string& g
 
 namespace tt::tt_fabric {
 
+GroupingInfo::GroupingInfo() = default;
+GroupingInfo::~GroupingInfo() = default;
+GroupingInfo::GroupingInfo(const GroupingInfo&) = default;
+GroupingInfo::GroupingInfo(GroupingInfo&&) noexcept = default;
+GroupingInfo& GroupingInfo::operator=(const GroupingInfo&) = default;
+GroupingInfo& GroupingInfo::operator=(GroupingInfo&&) noexcept = default;
+
 // Static helper functions to access grouping name and type from proto
 std::string PhysicalGroupingDescriptor::get_grouping_name(const proto::Grouping& grouping) { return grouping.name(); }
 

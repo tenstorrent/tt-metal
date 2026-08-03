@@ -25,6 +25,9 @@ struct SDPAParams {
     // Windowed (block-diagonal) attention: when true, the mask is synthesized on-device from the
     // cu_window_seqlens tensor instead of being read from attn_mask. Implies non-causal.
     bool is_windowed = false;
+    // Chunked/paged geometry overrides (shared with paged decode). See
+    // ttnn::operations::transformer::PagedCacheGeometryOverride.
+    ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
 };
 
 struct SDPAInputs {

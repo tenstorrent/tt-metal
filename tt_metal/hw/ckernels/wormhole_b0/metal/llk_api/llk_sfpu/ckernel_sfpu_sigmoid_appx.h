@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -34,9 +35,9 @@ inline void calculate_sigmoid_appx() {
 }
 
 inline void sigmoid_appx_init() {
-    l_reg[LRegs::LReg0] = vUInt(0x3DFF);
-    l_reg[LRegs::LReg1] = vUInt(0x21D8);
-    l_reg[LRegs::LReg2] = vUInt(0xFF10);
+    l_reg[LRegs::LReg0] = vUInt(static_cast<std::uint16_t>(0x3DFF));
+    l_reg[LRegs::LReg1] = vUInt(static_cast<std::uint16_t>(0x21D8));
+    l_reg[LRegs::LReg2] = vUInt(static_cast<std::uint16_t>(0xFF10));
 }
 
 }  // namespace sfpu

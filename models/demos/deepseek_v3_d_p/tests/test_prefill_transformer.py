@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -44,11 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    create_kv_chunk_address_table_ds,
-    init_kvpe_cache,
-)
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -75,7 +72,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     slice_non_padded,
     tokenize_prompt_to_isl,
 )
-from tests.ttnn.utils_for_testing import assert_equal, comp_pcc
+from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.99
 TRACE_PCC_THRESHOLD = 0.97
@@ -444,9 +441,11 @@ def run_model(
     profiler.end("tt_transformer_creation")
 
     # --- Create external KVPE cache ---
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    has_indexer = resolve_has_indexer(config)
+    cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=cache_format,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=isl_total,
         mesh_shape=mesh_shape,
@@ -454,25 +453,24 @@ def run_model(
         num_kvpe_cache_layers=num_layers,
     )
 
-    # create kv_cache dissagregation table
-    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
-    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
-    lookup_table_config.num_layers = num_layers
-    lookup_table_config.max_sequence_length = isl_total
-    lookup_table_config.num_slots = 1
-    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
-
-    # just create atm for demo purposes, don't actually use it
-    lookup_table = create_kv_chunk_address_table_ds(
-        config=lookup_table_config,
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        seq_len=isl_total,
-        sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
-        chunk_size_bytes=CHUNK_SIZE_BYTES,
-    )
+    # Sparse single-shot is folded onto the block-cyclic path, so (like chunked) it needs the caller-owned,
+    # user-major layer-stacked indexer key cache [num_users*index_cache_layers, 1, T, D_idx]. Unlike the
+    # per-layer KVPE cache, the indexer stride is the COMPACTED full-indexer count (num_full_indexer_layers)
+    # for GLM-5.2 cross-layer reuse — "shared" layers reuse a "full" layer's cache and get no slot of their
+    # own — falling back to num_layers when there is no indexer_types map. Dense variants use no index cache.
+    tt_index_kv_cache = None
+    if has_indexer:
+        index_cache_layers = num_full_indexer_layers(config) or num_layers
+        tt_index_kv_cache = init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=isl_total,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=index_cache_layers,
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
+        )
 
     # --- Shard token_ids to device ---
     # Reshape [1, isl_total] -> [sp_factor, 1, isl_per_chip] for SP sharding
@@ -518,6 +516,7 @@ def run_model(
                 return_intermediates=True,
                 read_profiler=False,
                 temperature=temperature,
+                index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
             if i == 0:
@@ -576,6 +575,7 @@ def run_model(
             return_intermediates=pcc_validation,
             read_profiler=False,
             temperature=temperature,
+            index_kv_cache=tt_index_kv_cache,
         )
         logger.info(f"Starting completion sync on iteration: {i}")
         ttnn.synchronize_device(mesh_device)
@@ -671,7 +671,7 @@ def run_model(
         # Per-layer KVPE PCC comparison — read back from external cache
         if do_return_kv and ref_kvpe_list is not None:
             tt_kvpe_all = ttnn.to_torch(
-                tt_kvpe_cache,
+                tt_kvpe_cache.storage,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
             ).to(torch.bfloat16)
             # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
@@ -709,24 +709,6 @@ def run_model(
                     logger.error(f"{label:<20s}  KVPE PCC comparison failed: {e}")
                     pcc_results.append((f"{label}_kv", -1.0))
                     pcc_results.append((f"{label}_pe", -1.0))
-
-            # Per-layer chunk readback via the address table — verify the table
-            # maps to the same bytes as the gathered cache, chunk by chunk.
-            # Only meaningful when `is_balanced` so `tt_kvpe_all_layers` is
-            # position-continuous (matching the lookup table's position index).
-            if is_balanced:
-                logger.info(f"Starting KV cache table validity check")
-                chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
-                for layer in range(num_layers):
-                    for position in range(0, isl_total, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-                        raw_bytes = lookup_table.read_device_chunk(layer=layer, position=position, slot=0)
-                        chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
-                        chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
-                        expected_chunk = tt_kvpe_all_layers[
-                            layer : layer + 1, :, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, :
-                        ]
-                        assert_equal(chunk_torch, expected_chunk)
-                logger.info(f"KV cache table validity check passed!")
 
         # --- Logits PCC check (last-token logits vs trace reference) ---
         # Trace logits / next-token are products of the full traced model. They are
@@ -860,7 +842,10 @@ def run_model(
             "threshold": threshold,
         }
         write_pcc_summary(summary_result, threshold=threshold)
-        if not os.getenv("GITHUB_ACTIONS") and trace_dir is not None:
+        # PCC plots are opt-in (TT_PREFILL_PCC_PLOTS=1). generate_pcc_plots renders a PNG into trace_dir,
+        # which for a pinned golden is a read-only shared mount (/mnt/models/...) -> PermissionError. Off by
+        # default so trace-backed runs don't crash on artifact write; still skipped under GitHub Actions.
+        if os.getenv("TT_PREFILL_PCC_PLOTS") == "1" and not os.getenv("GITHUB_ACTIONS") and trace_dir is not None:
             generate_pcc_plots(summary_result, output_dir=str(trace_dir))
 
     # Deferred PCC failure check (after timing report)
@@ -1174,7 +1159,7 @@ def test_kimi_prefill_transformer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1"], indirect=True, ids=["glm"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer(
     variant,

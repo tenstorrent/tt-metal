@@ -12,6 +12,12 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        TT_FATAL(
+            operation_attributes.cluster_axis.has_value(),
+            "all_to_all_async_generic on FABRIC_2D requires a cluster_axis");
+    }
+
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& page_size = input_tensor.buffer()->page_size();
     const auto& input_shape = input_tensor.logical_shape();
@@ -112,7 +118,7 @@ AllToAllAsyncGenericDeviceOperation::spec_return_value_t AllToAllAsyncGenericDev
     auto shape = input_tensor.logical_shape();
     shape[operation_attributes.in_dim] *= operation_attributes.num_devices;
     shape[operation_attributes.out_dim] /= operation_attributes.num_devices;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));

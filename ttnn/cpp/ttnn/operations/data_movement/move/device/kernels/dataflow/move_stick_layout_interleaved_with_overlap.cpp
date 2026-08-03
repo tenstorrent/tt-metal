@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -38,13 +38,13 @@ void kernel_main() {
     bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
     uint32_t aligned_page_size = get_arg_val<uint32_t>(25);
 
-    constexpr uint32_t cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     Noc noc;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer dfb(dfb_id);
 
     const auto src_addrgen = TensorAccessor(src_args, src_addr);
     const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);
@@ -55,15 +55,15 @@ void kernel_main() {
     Semaphore<> sem(semaphore_arg);
 
     // read a ublock of tiles from src to CB
-    cb.reserve_back(num_pages);
-    uint32_t l1_write_addr = cb.get_write_ptr();
+    dfb.reserve_back(num_pages);
+    uint32_t l1_write_addr = dfb.get_write_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
         CoreLocalMem<uint32_t> dst(l1_write_addr);
         noc.async_read(src_addrgen, dst, page_size, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
         l1_write_addr += aligned_page_size;
     }
-    cb.push_back(num_pages);
+    dfb.push_back(num_pages);
 
     if (is_controller) {
         sem.wait(control_value);
@@ -84,13 +84,13 @@ void kernel_main() {
         sem.wait(control_value);
     }
 
-    cb.wait_front(num_pages);
-    uint32_t l1_read_addr = cb.get_read_ptr();
+    dfb.wait_front(num_pages);
+    uint32_t l1_read_addr = dfb.get_read_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
         CoreLocalMem<uint32_t> src(l1_read_addr);
         noc.async_write(src, dst_addrgen, page_size, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
         noc.async_write_barrier();
         l1_read_addr += aligned_page_size;
     }
-    cb.pop_front(num_pages);
+    dfb.pop_front(num_pages);
 }
