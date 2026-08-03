@@ -14,7 +14,6 @@ namespace ckernel::sfpu {
 
 constexpr std::uint32_t sfpshft_mod1_arg_imm = 1;
 constexpr std::uint32_t sfpshft_mod1_arg_imm_use_vc = sfpshft_mod1_arg_imm | 4;
-constexpr std::uint32_t sfpand_mod1_use_vb = 1;
 
 template <std::uint32_t DEST>
 inline void rand_prng() {
@@ -83,11 +82,13 @@ inline void rand_row() {
     // Add a rounding bit. Carry out of an all-ones mantissa naturally
     // reaches the adjacent binade, giving boundary values half the
     // rounding basin of interior values.
-    TTI_SFPAND(p_sfpu::LREG5, p_sfpu::LREG7, p_sfpu::LREG4, sfpand_mod1_use_vb);
+    TTI_SFPSHFT((-31) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG4, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
+    // SFPMAD has two-cycle latency. Advance the destination counter in its
+    // dependency slot, then compensate for that early increment in the store.
     dst_reg++;
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, (-2) & 0x3FF);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -99,16 +100,19 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     // Load from param to lreg2
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, from & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
-    TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 1);
 
     make_lane_salt();
     rand_prng<p_sfpu::LREG5>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
 
-#pragma GCC unroll 0
-    for (int d = 0; d < 4; d++) {
-        rand_row();
-        rand_row();
+    // One row fits in the 32-entry replay buffer. Record and execute it once,
+    // then replay it for the remaining rows without scalar loop-control gaps.
+    constexpr std::uint32_t row_instruction_count = 22;
+    TTI_REPLAY(0, row_instruction_count, 1, 1);
+    rand_row();
+#pragma GCC unroll 7
+    for (int d = 1; d < 8; d++) {
+        TTI_REPLAY(0, row_instruction_count, 0, 0);
     }
 }
 }  // namespace ckernel::sfpu
