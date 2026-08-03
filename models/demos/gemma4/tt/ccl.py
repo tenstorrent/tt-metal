@@ -7,6 +7,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.config import Mode
 
 
 def default_num_links():
@@ -239,6 +240,45 @@ class CCLManager:
             self._persistent_rs_out[out_key] = out
             logger.debug(f"CCL persistent RS buffers allocated out={out_shape} inter={inter_shape}")
         return [inter, out]
+
+
+def cp_degree(mesh_config, mode=Mode.PREFILL):
+    """Context-parallel degree along ``mesh_config.sp_axis``; 1 when CP is off.
+
+    CP splits the token dimension across a second mesh axis, so every rank holds
+    ``seq_len / cp`` tokens. The degree lives in the ``sp`` field of the mode
+    config (named for gpt_oss's sequence parallelism, which is the same idea
+    applied to one block).
+    """
+    if mesh_config is None:
+        return 1
+    return max(1, mesh_config.get_config(mode).sp)
+
+
+def ccl_cp_allgather(tensor, mesh_config, ccl_manager, dim, memory_config=None):
+    """All-gather along the context-parallel axis.
+
+    Used to rebuild the whole chunk's K/V from the per-rank sequence shards, so
+    every rank can attend over all keys while owning only its slice of queries.
+
+    The input must be TILE layout. Tile pages are always 64 B aligned, so this
+    takes ttnn's native all_gather; a row-major input whose page is unaligned
+    would silently fall back to composite_all_gather, which deadlocks at high
+    device counts (see docs/superpowers/specs/2026-08-03-gemma4-context-parallel-prefill-design.md).
+    """
+    if cp_degree(mesh_config) <= 1:
+        return tensor
+    assert (
+        tensor.layout == ttnn.TILE_LAYOUT
+    ), f"ccl_cp_allgather requires TILE layout to stay on the native all_gather path, got {tensor.layout}"
+    gathered = ttnn.all_gather(
+        tensor,
+        dim=dim,
+        cluster_axis=mesh_config.sp_axis,
+        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tensor.deallocate(True)
+    return gathered
 
 
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
