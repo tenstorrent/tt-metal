@@ -52,6 +52,7 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Gemma-4-31B | BH QuietBox 2 |
 | Qwen3.6-27B | BH QuietBox 2 |
 | Wan 2.2 | BH SC4 |
+| LTX-2.3 | BH SC1 |
 ## Tier 2 Models
 | Model | Systems |
 |-------|---------|
