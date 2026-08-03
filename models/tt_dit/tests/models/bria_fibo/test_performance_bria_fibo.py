@@ -618,7 +618,7 @@ def test_fibo_encode_device_profile(*, mesh_device):
     comment above for the Tracy command (swap in ::test_fibo_encode_device_profile and the "fibo encode"
     signpost); encode is light, so a small TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT suffices.
     """
-    from models.tt_dit.parallel.config import EncoderParallelConfig
+    from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
     from models.tt_dit.parallel.manager import CCLManager
     from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
 
@@ -630,7 +630,10 @@ def test_fibo_encode_device_profile(*, mesh_device):
         ckpt,
         device=mesh_device,
         ccl_manager=ccl,
-        parallel_config=EncoderParallelConfig.from_tuples(tp=(mesh_device.shape[0], 0), sp=(mesh_device.shape[1], 1)),
+        parallel_config=EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(mesh_device.shape[0], 0),
+            sequence_parallel=ParallelFactor(mesh_device.shape[1], 1),
+        ),
     )
 
     prompt_embeds, hidden_states = _profile_forward(

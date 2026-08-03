@@ -42,7 +42,7 @@ import ttnn
 from models.tt_dit.layers.module import LoadingError
 from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
 from models.tt_dit.models.vae.vae_bria_fibo import WanVAEDecoderAdapter
-from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.bria_fibo.text_encoder import (
     SmolLM3TextEncoderWrapper,
@@ -138,9 +138,9 @@ class BriaFiboPipelineConfig:
         # tests/models/bria_fibo/smollm3/test_smollm3.py::test_smollm3_encoder_sp. On the 4x8 Galaxy this SP=8 x
         # TP=4 layout measured ~12.5 s/encode vs ~23.8 s for SP=4 x TP=8 (test_fibo_encode_perf).
         enc_sp_axis, enc_tp_axis = 1, 0
-        encoder_parallel_config = EncoderParallelConfig.from_tuples(
-            tp=(mesh[enc_tp_axis], enc_tp_axis),
-            sp=(mesh[enc_sp_axis], enc_sp_axis),
+        encoder_parallel_config = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(mesh[enc_tp_axis], enc_tp_axis),
+            sequence_parallel=ParallelFactor(mesh[enc_sp_axis], enc_sp_axis),
         )
 
         # VAE: height/width parallel matched to the physical mesh (mirrors wan's (2,2) BH preset:

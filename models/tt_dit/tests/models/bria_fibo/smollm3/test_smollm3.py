@@ -15,17 +15,6 @@ from models.tt_dit.utils import tensor as tt_tensor
 from models.tt_dit.utils.check import assert_quality
 
 
-def test_encoder_parallel_config_from_tuples():
-    pc = EncoderParallelConfig.from_tuples(tp=(4, 1), sp=(4, 0))
-    assert pc.tensor_parallel == ParallelFactor(4, 1)
-    assert pc.sequence_parallel == ParallelFactor(4, 0)
-
-    # back-compat: from_tuple sets only tensor_parallel, leaves sp None
-    legacy = EncoderParallelConfig.from_tuple((8, 1))
-    assert legacy.tensor_parallel == ParallelFactor(8, 1)
-    assert legacy.sequence_parallel is None
-
-
 def test_smollm3_rope_matches_hf():
     from models.tt_dit.pipelines.bria_fibo.smollm3.model_smollm3 import create_rope_tensors
 
@@ -105,7 +94,10 @@ def test_smollm3_encoder_sp(*, mesh_device, seq, sp_axis):
 
     cfg = SmolLM3Config.from_hf_config(hf.config)
     ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    pc = EncoderParallelConfig.from_tuples(tp=(tp_factor, tp_axis), sp=(sp_factor, sp_axis))
+    pc = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(tp_factor, tp_axis),
+        sequence_parallel=ParallelFactor(sp_factor, sp_axis),
+    )
     enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
     enc.load_torch_state_dict(hf.model.state_dict())
 
@@ -162,7 +154,10 @@ def test_smollm3_sp_bias_cached(*, mesh_device):
     hf = _load_hf_smollm3()
     cfg = SmolLM3Config.from_hf_config(hf.config)
     ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    pc = EncoderParallelConfig.from_tuples(tp=(tp_factor, tp_axis), sp=(sp_factor, sp_axis))
+    pc = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(tp_factor, tp_axis),
+        sequence_parallel=ParallelFactor(sp_factor, sp_axis),
+    )
     enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
     enc.load_torch_state_dict(hf.model.state_dict())
 
@@ -205,8 +200,9 @@ def test_fibo_wrapper_encode(*, mesh_device):
     from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
 
     sp_axis, tp_axis = 1, 0
-    pc = EncoderParallelConfig.from_tuples(
-        tp=(mesh_device.shape[tp_axis], tp_axis), sp=(mesh_device.shape[sp_axis], sp_axis)
+    pc = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_device.shape[tp_axis], tp_axis),
+        sequence_parallel=ParallelFactor(mesh_device.shape[sp_axis], sp_axis),
     )
     try:
         ckpt = snapshot_download(FIBO_PATH, local_files_only=True)
@@ -266,8 +262,9 @@ def test_fibo_wrapper_encode_replay_stable(*, mesh_device):
     from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
 
     sp_axis, tp_axis = 1, 0
-    pc = EncoderParallelConfig.from_tuples(
-        tp=(mesh_device.shape[tp_axis], tp_axis), sp=(mesh_device.shape[sp_axis], sp_axis)
+    pc = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_device.shape[tp_axis], tp_axis),
+        sequence_parallel=ParallelFactor(mesh_device.shape[sp_axis], sp_axis),
     )
     try:
         ckpt = snapshot_download(FIBO_PATH, local_files_only=True)

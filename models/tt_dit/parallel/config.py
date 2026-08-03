@@ -36,18 +36,6 @@ class EncoderParallelConfig(NamedTuple):
     def from_tuple(cls, tp: tuple[int, int]) -> EncoderParallelConfig:
         return cls(tensor_parallel=ParallelFactor(*tp))
 
-    @classmethod
-    def from_tuples(
-        cls,
-        *,
-        tp: tuple[int, int],
-        sp: tuple[int, int] | None = None,
-    ) -> EncoderParallelConfig:
-        return cls(
-            tensor_parallel=ParallelFactor(*tp),
-            sequence_parallel=ParallelFactor(*sp) if sp is not None else None,
-        )
-
 
 class VAEParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
