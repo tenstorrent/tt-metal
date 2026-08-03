@@ -33,9 +33,11 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → ~77 ms/frame, steady-state RTF ~1.0.** Per frame: Block 1 ~35 ms, Block 2
-~42.5 ms, host 0.2 ms. Block 2 is now the LARGER half and is where the next work belongs. Both
-modules carry a "where the time goes" map at the top with the ceiling for each line item.
+**Performance: 83.7 → ~66 ms/frame, steady-state RTF 0.81–0.90 across all 15 cases.** Per frame:
+Block 1 ~34.8 ms, Block 2 ~31 ms, host 0.2 ms. Block 1 is the larger half again. Both modules carry
+a "where the time goes" map at the top with the ceiling for each line item. The last round came
+from two op-count wins in Block 2 (GQA row fold, width-sharded RMSNorm) at WER 0.88%, unchanged;
+§6.6 lists what is measured and still on the table.
 
 **Shipped configuration**, pinned by `tests/test_tt_defaults.py`:
 Block 1 mixed precision (BFP8 on FF1_FF3 only) + decode-native heads; Block 2 BFP8 weights at
@@ -595,6 +597,62 @@ work has since invalidated. If you rebuild it: read trap #1, and remember that B
 must finish ALL warm-ups before EITHER captures, or the second capture hangs.
 Upstream's 47%-from-CUDA-graphs figure does not apply to us: their bottleneck was launch overhead,
 ours is arithmetic. Read trap #1 before touching capture code.
+
+### 6.6 — the optimization sweep: what landed, what failed, what is left
+
+Swept the repo, the TTNN API and the shared branches against our two hot blocks. The framing that
+made the difference: **Block 2 was not weight-read bound, whatever its docstring said.** Its
+velocity net is 349M params at BFP8, so 7 Euler steps stream ~2.6 GB, and at the 194 GB/s Block 1
+demonstrably reaches that is a 13.4 ms floor against a measured 35 ms — 38% of ceiling. The gap is
+OP COUNT (~88 ops per step, 18 of which carry weights). Every win below removes ops, not bytes.
+
+**Landed — 77.6 → ~66 ms/frame, RTF ~0.97 → 0.81–0.90, WER 0.88% unchanged, 15/15 termination:**
+
+| change | where | gain | accuracy |
+|---|---|---|---|
+| **GQA row fold** — reshape q `[B,32,3,d]`→`[B,8,12,d]` instead of `repeat_interleave` on k/v | Block 2 `_block` | **1.40x on the block** | same velocity PCC, same 3/74 codes |
+| **width-sharded RMSNorm** (8x1 grid, fp32 acc intact) | Block 2, 49 calls/frame | 1.46x on the norm+linear pair | velocity PCC 0.9999845 → 0.9999852 |
+
+The row fold is the CFG lesson the module already preached, never applied to GQA: query head *j*
+reads kv head *j//4*, so those 4 heads' 3 tokens stack as 12 ROWS against one kv head. The two
+attention matmuls go batch-32 → batch-8, and rows inside a 32-row tile are free. Proven equivalent
+on host in fp32 (agrees to 6e-07, pure reduction order) — not an approximation.
+
+**Failed the gate — width-sharded RMSNorm in BLOCK 1.** Same 1.46x, ~5 ms/frame, and every cheap
+signal said yes: 0.9999973 per op, decode PCC unmoved at 0.99991. It still cost **WER 0.88% →
+2.06%**. Over 24 real teacher-forced frames the WORST SAMPLE went 1.06% → 1.95% while PCC stayed
+flat. This is the second instance of the trap `_norm` documents — a ~1e-6 per-op difference
+amplified through 26 layers — and PCC hid it both times. **Gate norm changes on worst-sample and
+WER, never on per-op PCC.** Block 2 keeps it because 3 layers give nothing to amplify.
+
+**Measured, not applied, in rough value order:**
+1. **wqkv + wo → BFP8** (Block 1, ~3.3 ms/frame): wqkv 4.82→2.64 ms per 26, wo 3.36→2.20. Only
+   three precision points were ever tested and "adding FF2 brings the hang back" pins FF2 alone —
+   these two have never been tried individually. Needs the hang repro, not just a PCC check.
+2. **sdpa for Block 2's attention** (~4 ms): 1.65x against the row fold's 1.40x. §7 measured 3.7x
+   more differing codes, but that predates BFP8 and one seed here gave 2/74 against the row fold's
+   3/74 — so the penalty may have moved. Needs multi-seed + a WER run, per §7's own condition.
+3. **semantic argmax on device** (~3.0 ms): it is a real `[1,3072]@[3072,8320]` CPU matmul today.
+   `ign/voxtral_opt` does it on device, so the approach is validated. Verify the INDEX matches
+   exactly — it is an argmax, and bf16 could tip a near-tie.
+4. **Re-measure the device trace.** The "trace is slower" verdict was taken when decode was
+   device-bound; ~12 ms of device work has since gone, so the dispatch share is larger.
+5. **Fewer Euler steps** (7→5 removes 28% of the solve). This is a MODEL change, not an
+   implementation one — it needs a listening pass, not just WER.
+6. **Concurrent requests** — the 3-token sequence wastes 26 of 32 tile rows. Throughput, not latency.
+
+**Checked and ruled out** (so nobody re-runs them):
+- `rms_norm(residual_input_tensor=)` returns only the normed value and discards the sum; a pre-norm
+  block needs that sum for the next residual. Post-norm models (BERT) can use it, we cannot.
+- **Feeding sharded activations straight to a matmul is SLOWER** — 8.94 vs 5.32 ms per 26
+  norm+linear pairs, because a DRAM-interleaved weight makes the matmul gather the shards itself.
+  This is why `ign`'s keep-everything-in-L1 approach does not transfer to us as-is.
+- Fused SiLU in Block 2's multiply (`input_tensor_a_activations`): no measurable gain. Block 1
+  already fuses it via `activation="silu"`.
+- `ttnn.deallocate` on every intermediate (ign's style): no gain here.
+- Norm grids 8x2 / 8x4 / 8x8: all slower than 8x1 at our shapes. 8x8 will not even build.
+- Row fold in Block 1 prefill (needs a 4x-tall mask, and prefill is ~1.3% of wall) and in the codec
+  (it is MHA 8/8, no grouping to fold).
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of

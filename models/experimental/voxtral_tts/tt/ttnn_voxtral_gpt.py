@@ -47,16 +47,26 @@ the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
                                                  interleaved matmul cannot do better here.
                                                  Tuned matmul program configs are SLOWER
                                                  (169 vs 193 GB/s on wq). Only fewer BYTES help.
-    rms_norm x2                         6.0 ms   fp32 accumulation is load-bearing; the cheap
-                                                 variant is 2.4x faster and drops model PCC to
-                                                 0.992. Closed.
+    rms_norm x2                         6.0 ms   CLOSED, twice. Dropping fp32 accumulation is
+                                                 2.4x and takes model PCC to 0.992; width-sharding
+                                                 it (which KEEPS fp32 acc) is 1.46x on the
+                                                 norm+linear pair and still failed the WER gate,
+                                                 0.88% -> 2.06%. See _norm.
     everything else                    ~5.3 ms   qkv heads, rope, cache write, sdpa_decode,
                                                  reshapes, residual adds
     ------------------------------------------
-    Block 1 total                      34.9 ms   (Block 2 is 42.5, so Block 2 is the larger half)
+    Block 1 total                      34.8 ms   (Block 2 is now ~31, so Block 1 is the larger
+                                                 half again -- see ttnn_voxtral_flow)
 
 So the only remaining lever on Block 1 is WEIGHT BYTES, and that is capped by the hang: BFP8 on
-FF1_FF3 is safe, adding FF2 reintroduces it (see WEIGHT_DTYPE). Everything else is small change.
+FF1_FF3 is safe, adding FF2 reintroduces it (see WEIGHT_DTYPE). Everything else is small change --
+and the one thing that looked like an exception, a width-sharded RMSNorm worth ~5 ms, failed the
+WER gate; read _norm before trying it again.
+
+UNTESTED AND THE BEST REMAINING IDEA: wqkv and wo have never been tried in BFP8 individually. Only
+three points were ever measured (all-bf16, FF1_FF3-BFP8, all-BFP8), and "adding FF2 brings the hang
+back" pins FF2 alone. Measured at the decode shape, wqkv goes 4.82 -> 2.64 ms per 26 and wo 3.36 ->
+2.20, i.e. ~3.3 ms/frame, IF they clear the hang repro.
 
 TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 
@@ -91,6 +101,7 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 SCALE = HEAD_DIM**-0.5
 Q_WIDTH = N_HEADS * HEAD_DIM          # 4096, deliberately != DIM
 TILE = 32
+
 # Prefill pads its sequence to this. Correctness needs only TILE -- nothing here shards the
 # sequence across the core grid, which is what forced the tt_transformers path to 256.
 #
@@ -276,9 +287,23 @@ class TtVoxtralGPT:
         0.99991 to 0.992, worst sample 1.7% -> 18.9%. Per-op PCC barely moves (0.999993 vs
         0.999996) -- a 3e-6 difference amplified ~100x through 26 layers, because every norm feeds
         the next residual. The fp32 accumulation in the mean-of-squares is load-bearing.
+
+        NOR IS THE SHARDED FORM FREE, which is the less obvious version of the same trap. This op
+        costs ~115 us on a 6 KB tensor -- latency, not arithmetic, one core reducing the row with a
+        DRAM round trip either side. Width-sharding it over 8 cores WITH fp32 accumulation intact
+        makes the norm+linear pair 1.46x (5.32 vs 7.78 ms per 26), which is ~5 ms/frame over 52
+        calls, and it looked free: 0.9999973 against this op, and the decode gate barely moved.
+        It is not free. Over 24 real teacher-forced frames the WORST SAMPLE went 1.06% -> 1.95%
+        while PCC stayed at 0.99991, and end-to-end natural WER went 0.88% -> 2.06%. Same
+        amplification as above, same reason, and PCC hid it both times -- gate norm changes here on
+        worst-sample and WER, never on per-op PCC.
+
+        Block 2 DOES use the sharded form (ttnn_voxtral_flow._norm) and is fine: 3 layers instead
+        of 26, so there is no 100x to amplify into.
         """
         return ttnn.rms_norm(x, weight=gamma, epsilon=NORM_EPS,
                              compute_kernel_config=COMPUTE_CONFIG)
+
 
     # ----------------------------------------------------------------------------
     # PREFILL PATH -- whole prompt at once, fills the KV cache
@@ -318,13 +343,15 @@ class TtVoxtralGPT:
         # bit-identical to permute(0,2,1,3) + reshape, in one dispatch
         return ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, S, Q_WIDTH])
 
-    def _mlp(self, x, w):
-        """Residual + pre-norm SwiGLU. Shared by prefill and decode; only attention differs.
+    def _mlp(self, x, h, w):
+        """Residual + SwiGLU over an ALREADY-NORMED `h`. Shared by prefill and decode.
+
+        `h` is passed in rather than computed here so the norm stays visible at the call site --
+        it is the one op whose form has repeatedly mattered (see _norm).
 
         `activation="silu"` on the FF1 matmul is bit-identical to a separate `ttnn.silu` and one
         dispatch cheaper.
         """
-        h = self._norm(x, w["fn"])
         g = ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG)
         u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG))
         return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG))
@@ -345,7 +372,8 @@ class TtVoxtralGPT:
             ttnn.fill_cache(cache[0], kh, 0)     # update_idx 0, so the tile-alignment rule is moot
             ttnn.fill_cache(cache[1], vh, 0)
         a = self._attend(qh, kh, vh, S, mask)
-        return self._mlp(ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG)), w)
+        x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
+        return self._mlp(x, self._norm(x, w["fn"]), w)
 
     # ----------------------------------------------------------------------------
     # DECODE PATH -- one frame at a time; THIS is the hot loop
@@ -372,7 +400,8 @@ class TtVoxtralGPT:
             qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
             compute_kernel_config=COMPUTE_CONFIG)
         a = ttnn.reshape(ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG), [1, 1, Q_WIDTH])
-        return self._mlp(ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG)), w)
+        x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
+        return self._mlp(x, self._norm(x, w["fn"]), w)
 
     @torch.no_grad()
     def prefill(self, embeds, apply_final_norm=True, last_only=False):
