@@ -1,3 +1,5 @@
+DERIVED FROM: current mcast_pipe API v9, census.txt, kernel_annotations/*, migration_audit/*, hazards_catalog.md, and changelog.md
+
 # Step ★ — API Feasibility (`mcast_pipe`)
 
 > **Current v9 addendum (2026-07-30):** `SenderPipe` now selects its completion
@@ -30,6 +32,109 @@ Intent gave a vague sketch. With the annotated census in hand, this is where the
 takes shape and gets judged: **can a 1–2 helper `Pipe` be built over the `clean`+`refactor` set
 without becoming a config-blob?** (Outliers tagged `defer/raw` are out of scope and do NOT count
 against feasibility.)
+
+---
+
+## Step-D re-entry (2026-08-03) — sort control channel after the ready/done split
+
+> DERIVED FROM: `kernel_annotations/{coordinator,reader,writer}_single_row_multi_core.md`,
+> `migration_audit/data_movement_reduction.md`, current `sort_program_factory.cpp`, and current
+> `mcast_pipe.hpp` / `.inl` API v9. Re-entry at **Step D** because the Step-C re-audit invalidated the
+> old pattern-to-API mapping. This section supersedes only the historical Round-10 statement that sort
+> requires a per-send-varying Pipe ACK and runtime semaphore IDs.
+
+### The corrected design claim
+
+The old deferral treated this whole sequence as one Pipe handshake:
+
+```
+row start:  wait ready == number_of_workers -> broadcast phase
+sub-stage:  broadcast phase -> wait done == Wt/2
+```
+
+That made the different counts and their different positions look like a missing per-send ACK-count
+feature. They are not. The required behavior contains **three independent channels**:
+
+1. coordinator→workers: one multicast phase event;
+2. readers→coordinator: a bounded per-row readiness counter;
+3. writers→coordinator: a bounded per-sub-stage completion counter.
+
+Only channel 1 is the recurring multicast block. Channels 2 and 3 are sort's surrounding phase
+protocol and remain explicit `Semaphore::up` / `wait(N)` / `set(0)` operations. The helper need not
+absorb them to preserve behavior.
+
+### Pattern map onto the current v9 API
+
+| Face / binding | Required behavior | API-v9 formulation | Verdict |
+|---|---|---|---|
+| coordinator | Send one fresh event to every worker at row start and each sub-stage | no-handshake Counter `SenderPipe::send_signal()` from `McastArgs::sender()` | **YES as-is** |
+| reader | Observe every event exactly once, even if events arrive before the next wait | Counter `ReceiverPipe::receive_signal()` (`wait_min` on monotone rounds) from `McastArgs::receiver()` | **YES as-is** |
+| writer | Publish one completion only after its assigned pair's writes land | keep raw/object `done_sem.up(...)` + atomic drain | **not a Pipe face; helper-neutral companion** |
+| host factory | Own rectangle virtualization, fan-out, sem ID, CT/RT packing | `host::Mcast2D` over `all_core_set`, configured with `handshake=false`, `DataReadyMode::Counter`, and adopted semaphore ID 0 | **YES as-is** |
+
+The migration is still a **refactor**, because the factory and two kernels must adopt the shared wire,
+move core-uniform semaphore IDs out of runtime slots, and replace inverted level signaling with a
+monotone counter. None of those changes the helper contract.
+
+### Why Counter, not the historical level flag
+
+The row-start release and the first sub-stage release can be issued back-to-back: there is no
+receiver-consumption ACK between them. Repeating one level value can collapse two events if the second
+write arrives before the reader clears the first. The current raw write barrier proves arrival, not
+that the reader consumed and reset the level.
+
+API v9's existing Counter control path avoids the ambiguity:
+
+```
+sender:   send_signal() -> inc_multicast(+1) -> atomic barrier
+receiver: receive_signal() -> wait_min(++round), no reset
+```
+
+An early event remains encoded in the counter, so every row-start/sub-stage release is observed once.
+This is a supported v9 use-case knob (`DataReadySignal::Counter`), not a new style fork or a proposed
+API addition.
+
+### Factory and lifecycle feasibility
+
+- **Rectangle/fan-out:** `SortProgramFactorySingleRowMultiCore` is selected only beyond the hybrid
+  factory's capacity. Its active branch uses every worker except the bottom-right coordinator; the
+  multicast box is the full grid including that source. `Mcast2D` therefore derives the same
+  EXCLUDE-source fan-out: `area - 1 == number_of_workers`.
+- **Semaphore IDs:** the factory declares IDs `0`, `1`, and `2` as `constexpr`; serializing them into
+  runtime args is changeable ABI layout, not proof that v9 needs runtime semaphore template values.
+- **Lifecycle:** the Counter doorbell stays host-initialized to `0` and is never reset. The `ready`
+  and `done` counters also remain host-initialized because remote worker RISCs increment them; no
+  helper constructor may race those remote writes with a local reset.
+- **Atomic unit:** coordinator + reader + writer + `sort_program_factory.cpp`. The writer may receive
+  coupled ABI cleanup, but it must not be recorded as a migrated helper caller because it will not
+  reference `mcast_pipe`.
+
+### API-shape checks
+
+- No new type, method, argument, knob, loopback mode, or count semantic is needed.
+- The caller states topology through the existing host `Mcast2D`; fan-out stays helper-derived.
+- The multicast semaphore ID becomes compile-time as the current source reality permits.
+- The two op-specific return counters stay outside the helper rather than turning `SenderPipe` into a
+  generic three-channel protocol object.
+
+### Residual proof obligations (not feasibility blockers)
+
+1. **Step G helper coverage:** add a focused multi-iteration, control-only Counter device case for
+   `send_signal()` / `receive_signal()`, including back-to-back sends. Current Counter device coverage
+   is data-bearing. This is a test-only materialization improvement; keep
+   `MCAST_PIPE_API_VERSION=9`.
+2. **Apply Phase 1 mapping:** device-verify the current discovery route for all three sort JIT kernels.
+   Start with one exact `test_sort_long_tensor` parameter, then cover
+   `test_sort_multi_row_multi_core_no_deadlock` at `Ht=2` for both descending values.
+3. **Apply ledger disposition:** coordinator and reader can become pending after plan approval; writer
+   remains a raw/helper-neutral protocol companion even if the atomic commit cleans its ABI.
+
+### Verdict: **FEASIBLE AS CURRENTLY MATERIALIZED (API v9)**
+
+No caller-facing helper change and no API-version bump. Step E has no new style cell to measure or
+re-decide; the existing Counter choice is forced by event-preservation behavior here. Step F only
+needs to refresh the proposal's migration list / stale sort wording. Step G owes the focused
+control-only Counter unit case before handing the `sort-single-row` unit to `apply-dm-helper`.
 
 ---
 

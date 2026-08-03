@@ -225,6 +225,95 @@ def test_coverage(device, variant, rect_name, n_iters, payload_tiles):
     )
 
 
+# ---------- control-only Counter: back-to-back events accumulate without a receiver ACK ----------
+def _run_control_only_counter(device, recv_rect, sender_logical, n_iters):
+    (rx0, ry0), (rx1, ry1) = recv_rect
+    sx, sy = sender_logical
+    num_recv = (rx1 - rx0 + 1) * (ry1 - ry0 + 1)
+
+    recv_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(rx0, ry0), ttnn.CoreCoord(rx1, ry1))])
+    sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(sx, sy), ttnn.CoreCoord(sx, sy))])
+
+    mc = ttnn.Mcast2D(
+        device,
+        recv_crs,
+        ttnn.CoreCoord(sx, sy),
+        ttnn.McastConfig(
+            base_sem_id=0,
+            handshake=False,
+            data_ready=ttnn.McastDataReady.Counter,
+        ),
+    )
+
+    # One 32-byte uint32 row per receiver. Every receiver publishes the last monotone round returned
+    # by receive_signal(); checking all eight words also proves the page was written completely.
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([num_recv, 8]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # generic_op requires at least one input and one output tensor. The control-only kernels do not
+    # read payload data, so this one-tile input exists only to satisfy that host-operation contract.
+    input_tensor = ttnn.from_torch(
+        torch.zeros([1, 1, 32, 32], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cb_result = 0
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=32,
+            core_ranges=recv_crs,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_result, data_format=ttnn.uint32, page_size=32)],
+        )
+    ]
+
+    sender_ct = list(mc.compile_time_args()) + [n_iters]
+    sender_rt = ttnn.RuntimeArgs()
+    sender_rt[sx][sy] = list(mc.runtime_args(ttnn.CoreCoord(sx, sy)))
+    sender_k = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_signal_sender.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=sender_crs,
+        compile_time_args=sender_ct,
+        runtime_args=sender_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    recv_ct = [cb_result] + list(mc.compile_time_args()) + [n_iters]
+    recv_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    recv_rt = ttnn.RuntimeArgs()
+    page_id = 0
+    for ry in range(ry0, ry1 + 1):
+        for rx in range(rx0, rx1 + 1):
+            recv_rt[rx][ry] = [output_tensor.buffer_address(), page_id] + list(mc.runtime_args(ttnn.CoreCoord(rx, ry)))
+            page_id += 1
+    recv_k = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_signal_receiver.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=recv_crs,
+        compile_time_args=recv_ct,
+        runtime_args=recv_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    pd = ttnn.ProgramDescriptor(kernels=[sender_k, recv_k], semaphores=mc.owned_semaphores(), cbs=cbs)
+    output = ttnn.generic_op([input_tensor, output_tensor], pd)
+    torch_out = ttnn.to_torch(output).to(torch.int64)
+    assert torch.equal(torch_out, torch.full((num_recv, 8), n_iters, dtype=torch.int64))
+    logger.info(f"CONTROL-ONLY Counter rect={recv_rect} sender={sender_logical} N={n_iters}: PASS")
+
+
+@pytest.mark.parametrize("rect_name", ["1x2", "1x8"])
+@pytest.mark.parametrize("n_iters", [2, 32])
+def test_control_only_counter(device, rect_name, n_iters):
+    _run_control_only_counter(device, RECTS[rect_name], SENDER, n_iters)
+
+
 # ---------- NoC1 corner-ordering: McastRect must own the per-NoC start/end swap ----------
 # Sender mcasts on NoC1, where the hardware wants start=high-corner / end=low-corner. The rect is
 # passed in CANONICAL (low->high) order regardless of NoC, so a PASS proves the Pipe derives the

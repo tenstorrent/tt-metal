@@ -1,4 +1,17 @@
+DERIVED FROM: current mcast_pipe API v9, api_feasibility.md, hazards_catalog.md, changelog.md, and the persisted on-device bake-off results below
+
 # Step E — Style Bake-off (`mcast_pipe`)
+
+> **Step-E re-entry (2026-08-03) — sort Counter control channel: NO-OP, no device.** The sort
+> coordinator/reader re-audit maps its multicast release event onto the existing no-handshake
+> `DataReadySignal::Counter` `send_signal()` / `receive_signal()` path. Counter is forced here by
+> event preservation: row-start and first-sub-stage releases may be issued back-to-back without a
+> consumer acknowledgement, so two equal level writes could collapse while two counter increments
+> remain observable. This does not reopen F2 as a style choice, change its measured default, or add a
+> topology/dtype/performance cell. The existing F2 result still stands: Flag is the performance
+> default; Counter remains the supported use-case knob for protocols that require monotone events.
+> The missing focused control-only, multi-iteration Counter case belongs to Step G helper coverage,
+> not this bake-off. No re-measure and no helper API-version change.
 
 > **Current v9 completion correction (2026-07-30):** the F1 result below
 > remains valid for remote-only traffic: the receiver's linked flag wait proves

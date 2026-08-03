@@ -1,3 +1,5 @@
+DERIVED FROM: current data_movement/sort + reduction kernels, mcast_pipe API v9, hazards_catalog.md, and reconcile_2026-08-03.md
+
 # Migration audit — data_movement + reduction
 
 Scope: `data_movement/move`, `data_movement/sort`, `reduction/argmax`, `reduction/topk` dataflow kernels.
@@ -10,9 +12,9 @@ Verdict legend: **clean** = drops onto Pipe with no caller-side residue; **refac
 | move/`move_interleaved_with_overlap.cpp` | sem-flag mcast (3 rects) | NO (single shot) | **refactor(med)** | SENDER+RECEIVER barrier handshake. Multi-rectangle dest set + dual-use L1 word (counter & flag). Legacy API. |
 | move/`move_stick_layout_interleaved_with_overlap.cpp` | sem-flag mcast (3 rects) | NO (single shot) | **refactor(med)** | Structural twin of the above; same block, RM data movement. Migrate together. |
 | move/`reader_unary_local_l1_copy_backwards.cpp` | none | — | **defer-raw** | No mcast, no handshake. Not in scope. |
-| sort/`coordinator_single_row_multi_core.cpp` | sem-flag mcast (1 rect) | YES (Ht × substages) | **refactor(med)** | Coordinator SENDER. Two block phases (start + per-substage). Op-specific counts (`Wt/2`). Cross-kernel reset ownership. |
-| sort/`reader_single_row_multi_core.cpp` | none (consumes mcast) | YES | **refactor(med)** | Worker RECEIVER (inverted flag, atomic-barrier inc). Pairs with coordinator. |
-| sort/`writer_single_row_multi_core.cpp` | none | YES | **refactor(low)** | Confirmation-emit only (atomic inc). Return leg of the coordinator counter. |
+| sort/`coordinator_single_row_multi_core.cpp` | sem-flag mcast (1 rect) | YES (Ht × substages) | **refactor(med), v9 candidate** | Coordinator SENDER. Model only the phase broadcast as `Mcast2D` + Counter `send_signal()`; keep the row-ready and per-substage-done exact-count waits/reset as two op-owned semaphores. Host CT/RT packing and signal staging change; no helper API change identified. |
+| sort/`reader_single_row_multi_core.cpp` | none (consumes mcast) | YES | **refactor(med), v9 candidate** | Worker RECEIVER. Counter `receive_signal()` replaces the inverted level flag; the row-ready `up` remains op-owned. Pairs atomically with coordinator/factory. |
+| sort/`writer_single_row_multi_core.cpp` | none | YES | **refactor(low), helper-neutral companion** | Confirmation-emit only (atomic inc) on the now-distinct `done` semaphore. No Pipe face is required, but it stays in the atomic protocol/test unit. Re-audit its census disposition at apply intake rather than claiming a helper migration. |
 | sort/`cross_core_data_exchange_common.hpp` | none (peer-to-peer unicast) | YES | **defer-raw** | All-to-all peer exchange via unicast inc/wait; NO multicast. Incidental, not the block. |
 | sort/`reader_cross_core_data_exchange.cpp` | none | — | **defer-raw** | Uses the peer-exchange helper above; no mcast. |
 | sort/`writer_cross_core_data_exchange.cpp` | none | — | **defer-raw** | Plain write barriers; no mcast. |
@@ -28,12 +30,41 @@ Verdict legend: **clean** = drops onto Pipe with no caller-side residue; **refac
 - Contain a TRUE iterated mcast-block (or its tightly-paired half): **6** — sort coordinator+reader(+writer), argmax multicore, topk reader_final+writer_local.
 - Single-shot mcast-block (handshake, not iterated): **2** — move interleaved + stick.
 - Incidental / no-mcast (defer-raw): **15**.
-- Kernels that actually *emit* a multicast: **4** (move interleaved, move stick, sort coordinator, argmax multicore, topk reader_final = 5 emitters; move counts as 2 files). Emitter files: 5.
+- Kernels that actually *emit* a multicast: **5** — move interleaved, move stick, sort coordinator,
+  argmax multicore, and topk reader_final.
 
 ## Headline blockers
-1. **No data multicast anywhere in this group.** Every multicast is a 4-byte semaphore flag/value. Data fan-in/out is plain interleaved read/write (move), peer unicast (sort exchange), or unicast scatter to a coordinator (argmax, topk). A Pipe that bundles *data + flag* mcast has ZERO call sites here; the demanded primitive is **flag-only multicast + counter/flag handshake**.
+1. **No data multicast anywhere in this group.** Every multicast is a 4-byte semaphore flag/value. Data fan-in/out is plain interleaved read/write (move), peer unicast (sort exchange), or unicast scatter to a coordinator (argmax, topk). API v9 has the required control-only surface (`send_signal` / `receive_signal`); the remaining question is which call sites fit its Flag or Counter staging without forcing unrelated return counters into the Pipe.
 2. **Multi-rectangle destination sets.** move (2-3 rects) and argmax (2 rects, *different loopback modes per rect*) need a dest *set*, not a single rectangle. Helper must accept a list where each entry carries its own INCLUDE/EXCLUDE_SRC, or the call site keeps a loop.
-3. **Cross-kernel reset ownership.** In sort and topk the go/invite flag is reset on the *worker* side while the coordinator emits it; the inbound counter is reset on the coordinator side. A two-sided Pipe (`send`/`receive`) split across separate kernels must pin who resets which slot, or it will double-reset / never-reset.
+3. **Cross-kernel reset ownership.** TopK still has a receiver-init ordering blocker. Sort no longer needs shared level-flag reset ownership if its phase channel is reformulated as API-v9 Counter staging: `inc_multicast` + `wait_min`, with no reset. Its two return counters remain explicitly op-owned and reset only by the coordinator.
 4. **Mixed F1 within a single kernel.** argmax, topk-writer, sort-writer all use `async_write_barrier` for data and `async_atomic_barrier` for the atomic inc. The helper cannot pick one flush globally; flush kind must follow the last op (write vs atomic).
 5. **Mixed F2 within a single kernel.** argmax uses a monotone (no-reset) `start` counter AND a reset `done` counter simultaneously. F2 is per-slot, not per-pipe.
-6. **API era split.** move + sort are legacy free-function (`noc_semaphore_set_multicast`, `get_noc_multicast_addr`); argmax + topk are modern (`Semaphore<>::set_multicast<Mode>`, `Noc`). Migrating legacy kernels means also porting them to the modern Noc/Semaphore types first, raising move/sort cost to *med*.
+6. **API era split narrowed.** Move remains on the legacy free-function API. Sort was ported upstream to `Noc` / `Semaphore<>`, so its old object-API prerequisite is gone; its remaining cost is the host/device wire rewrite and Counter-staging validation.
+
+## Focused sort re-audit after upstream protocol split (2026-08-03)
+
+- **Required behavior:** one coordinator broadcasts an ordered phase event to every worker; readers report
+  per-row readiness, and writers report per-pair completion. Readiness and completion have different
+  expected counts and are independent channels.
+- **Current implementation:** one inverted-polarity level flag carries the phase event; two separate
+  exact-match counters (`ready`, `done`) carry the return legs. The split is semantically significant:
+  folding them together can overshoot an exact wait and deadlock at `Ht >= 2`.
+- **API-v9 formulation:** host `Mcast2D(all_core_set, coordinator, handshake=false,
+  data_ready=Counter, adopted sem id 0)` emits the phase channel. Kernel `McastArgs` constructs a
+  Counter `SenderPipe`/`ReceiverPipe`; coordinator calls `send_signal()`, reader calls
+  `receive_signal()`. The raw ready/done waits and `up`s stay outside the helper.
+- **Why this is not a new helper feature:** runtime rectangle/fan-out, adopted sem IDs, a no-handshake
+  control-only channel, and Counter staging already exist. The changing ready/done counts describe the
+  surrounding sort protocol, not the multicast channel itself.
+- **Residual proof gap:** the helper device suite exercises Counter data sends but has no focused
+  control-only Counter `send_signal`/`receive_signal` case. Add that focused coverage at Step G before
+  production migration; API v9 need not bump for a test-only addition.
+- **Migration unit:** coordinator + reader + writer + `sort_program_factory.cpp`. The writer is a
+  helper-neutral protocol companion. Apply must decide its ledger disposition explicitly rather than
+  marking a file that never references the helper as migrated.
+- **Mapped validation:** use one exact `test_sort_long_tensor` compile case first, then
+  `test_sort_multi_row_multi_core_no_deadlock` (`Ht=2`, both descending values) and confirm all three
+  JIT kernel paths. Current `test_map.json` is discovery-only, so Phase 1 still owes device verification.
+- **Recall sweep:** the whole sort kernel directory contains no additional multicast emitter; only the
+  coordinator calls `set_multicast`. Reader and writer remain in the census solely as tightly-paired
+  protocol halves. No new spelling or census path was found.

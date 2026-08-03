@@ -1,3 +1,5 @@
+DERIVED FROM: migration_audit/{matmul,conv,normalization,transformer_sdpa,data_movement_reduction,ccl_deepseek_examples}.md and current census.txt
+
 # Migration Audit — rolled-up summary (`mcast_pipe`)
 
 Consolidated from 6 per-group audits. The census is the whole-codebase intra-chip mcast+handshake
@@ -49,8 +51,21 @@ block inventory; this is the **pre-migration blocker view**.
    DMArgs) and sdpa `chain_link.hpp` (`ChainLink`). These are the **design templates** for ★ and the
    bake-off baseline. (Both use raw NOC set-state or raw API — the object-API rebuild is this run's job.)
 
-6. **Legacy-API call sites** (move, sort) would need a `Noc`/`Semaphore` port *before* migration —
-   tag refactor with that prerequisite noted.
+6. **Legacy-API prerequisite narrowed to move.** Sort is now on `Noc`/`Semaphore<>`; its upstream
+   ready/done split removes the old single-counter ambiguity. A focused 2026-08-03 re-audit finds its
+   phase broadcast expressible by API-v9 Counter `send_signal`/`receive_signal`, with both return
+   counters left op-owned. It remains `refactor`, not yet `pending`: host/device wire work and focused
+   control-only Counter coverage are still owed. Move still needs an object-API port first.
+
+## Step-C re-entry delta (2026-08-03)
+
+- Re-audited the three churned sort protocol halves; no sort-directory recall miss.
+- Tags and aggregate counts stay unchanged (`refactor`), but the old `DEFER-DESIGN-GAP` rationale no
+  longer holds for coordinator/reader at API v9.
+- Writer is a helper-neutral `done`-counter companion; its census/ledger disposition must be resolved
+  as part of the atomic sort plan.
+- Downstream impact: Step D must re-map the sort pattern against the existing v9 API. Step G owes a
+  focused control-only Counter unit case. No API bump is implied by this Step-C finding.
 
 ## Clean set (the easy wins that prove the API)
 Canonical two-sided P1/C1 pairs: matmul in0/in1 sender+receiver (4), conv weights sender+receiver

@@ -1,37 +1,68 @@
-# reader_single_row_multi_core.cpp (sort)
+DERIVED FROM: current sort coordinator/reader/writer kernels, `sort_program_factory.cpp`, `mcast_pipe.hpp`/`.inl` API v9, the three prior migration logs, and `migration/reconcile_2026-08-03.md`.
+
+# reader_single_row_multi_core.cpp (sort) — API-v9 re-audit
 
 Path: `ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp`
-Role: **worker/RECEIVER** half of the sort handshake (reader side). Iterated over `Ht` and bitonic sub-stages.
-API era: legacy free-function.
 
-## Setup
-- `semaphore_ptr` = coordinator→cores go-flag slot (L40-41).
-- `noc_semaphore_set(semaphore_ptr, VALID)` (L42): initialize go-flag to VALID (worker waits for it to be set to 0 by the coordinator's mcast). Inverted-flag convention.
-- `coordinator_core_addr` = unicast addr of the cores→coordinator counter (L43-44).
+Role: **worker / control-signal receiver**, plus the once-per-row readiness emitter. There is no data multicast in this kernel.
 
-## Block instances (RECEIVER half)
+Current API era: object `Noc` / `Semaphore<>` primitives, but not `mcast_pipe`.
 
-### Block A — per-row ready/start — lines 52-55
-- `noc_semaphore_inc(coordinator_core_addr, 1)` (L52): report "ready" to the coordinator's counter.
-- `noc_async_atomic_barrier()` (L53): **flush the atomic inc** (new spelling — atomic barrier, not write barrier).
-- `noc_semaphore_wait(semaphore_ptr, 0)` (L54): wait for coordinator's mcast go-flag (value 0).
-- `noc_semaphore_set(semaphore_ptr, VALID)` (L55): **reset** go-flag for next round.
+## Required behavior (independent of the current spelling)
 
-### Block B — per-substage start — lines 68-69
-- `noc_semaphore_wait(semaphore_ptr, 0)` (L68): wait for coordinator go.
-- `noc_semaphore_set(semaphore_ptr, VALID)` (L69): reset.
-(Confirmation back to coordinator is emitted by the **writer** kernel, not here.)
+1. Once per row, announce that this reader is ready before waiting for the row-start release.
+2. Do not begin the row or any sub-stage until a fresh coordinator doorbell arrives.
+3. Clear the local doorbell after each receive so the next wait cannot consume a stale signal.
 
-## Mapping to Pipe
-- `Pipe::receive()` = `wait(flag) ; reset(flag)` — the inverted-flag (`wait(0); set(VALID)`) variant.
-- The outbound `inc + atomic_barrier` (Block A only) is the *ready signal* that primes the coordinator's counter — the receiver-priming companion to `send()`.
+It is **not required** that the doorbell value be `0`, that the resting value be `VALID`, or that the semaphore IDs arrive as runtime arguments. Those are properties of the current implementation.
 
-## Forks
-- F1: **atomic barrier** (`noc_async_atomic_barrier`, L53) — distinct from the coordinator's `noc_async_write_barrier`. Because the outbound op is an atomic inc, the correct flush is the atomic barrier. **New fork member / spelling to add to F1.**
-- F2: **flag/level**, inverted polarity (wait for 0, reset to VALID). Coordinator uses normal polarity (set flag to N via mcast). Polarity mismatch is intentional: mcast `set_multicast(sem, addr, N)` writes N into the slot; worker `wait(0)`... HOLE: the value written by `set_multicast` vs the `wait(0)` target needs reconciling (see hazard below).
-- F3: worker is in the coordinator's mcast rectangle (it is a destination). Coordinator is EXCLUDE_SRC relative to workers.
-- KNOB pre_handshake: **dest reused** — single go-flag slot reset every iteration.
+## Current protocol annotation
 
-## HOLEs / hazards
-- **Reset-ownership split across kernels**: worker resets the go-flag (`set(VALID)`), coordinator never does. If the helper owns reset, the two kernels must agree on which side resets.
-- **Polarity/value reconciliation**: coordinator `noc_semaphore_set_multicast(sem, addr, number_of_dest)` broadcasts the *value of `sem`* (whatever the coordinator's local slot holds), while worker `wait(0)`. The `VALID`/`INVALID` constants encode this; the helper must surface flag polarity as a parameter, not hardcode.
+### Setup — lines 56–59
+
+- L57 constructs the coordinator→workers doorbell semaphore.
+- L58 constructs the workers→coordinator **ready** counter. This is no longer shared with writer completion.
+- L59 sets the local doorbell to `VALID`; the current protocol then waits for the coordinator to multicast `0`.
+
+### Row-start phase — lines 61–70
+
+- L67 increments the coordinator's ready counter once for this row.
+- L68 drains the non-posted atomic increment.
+- L69 waits for the coordinator's `0` doorbell.
+- L70 restores `VALID`, clearing the current doorbell under the inverted convention.
+
+### Sub-stage phase — lines 78–84
+
+- L83 waits for a fresh coordinator doorbell.
+- L84 clears it for the next sub-stage.
+- No completion increment occurs here. The writer kernel emits completions only after its output writes have landed.
+
+## Mapping to `mcast_pipe` API v9
+
+The control receive maps without a helper change:
+
+- Construct the no-handshake Counter form of `ReceiverPipe` for the adopted coordinator→workers semaphore (equivalently through the matching `Mcast2D` Counter wire).
+- Keep the once-per-row `ready_sem.up(...)` plus atomic barrier explicit.
+- Replace every `wait(0); set(VALID)` pair with `receive_signal()`, whose Counter form waits for the next monotone round and performs no reset.
+
+`PRE_HANDSHAKE=false` is deliberate. The Pipe's built-in pre-handshake would acknowledge every receive, but sort needs a ready increment only at row start; sub-stage completion is a different signal emitted by the writer. The operation-specific ready leg therefore stays outside the Pipe.
+
+The existing polarity is not a semantic requirement. The stronger v9 mapping adopts the host-initialized `0` cell as a monotone Counter: `receive_signal()` waits for rounds 1, 2, ... with `wait_min`. An early signal remains observable, including when the coordinator emits row-start and first-sub-stage releases back-to-back without a consumption ACK; there is no same-value event collapse or clear/set race.
+
+The runtime semaphore-ID blocker is stale. `sort_program_factory.cpp` declares the doorbell and ready IDs as core-uniform `constexpr` values at L1187–1189 and merely serializes them into runtime args at L1322–1323. Moving those IDs to compile-time kernel inputs is a host/kernel ABI refactor; v9 does not need runtime semaphore IDs.
+
+## Hazards and invariants
+
+- **H3/H6 — fresh signal:** the Counter form uses monotone rounds and needs no worker clear.
+- **H11 — reset ownership:** eliminated for the doorbell by Counter signaling; ready/done bounded counters retain coordinator reset ownership.
+- **Ready ordering:** keep the ready `up()` before the row-start receive. Its atomic barrier is the current explicit drain and is independent of the Pipe's write fence.
+- **Split counters:** reader readiness must target only the ready semaphore. Sending it to the writer-done semaphore would recreate the Ht≥2 exact-match overshoot deadlock.
+- **Lifecycle:** the Counter doorbell remains host-initialized to `0` and is never reset. The coordinator-side ready counter also remains host-initialized because workers write it remotely.
+
+## Verdict
+
+**refactor (medium), migratable with API v9 as the coordinator's paired receiver; no helper redesign required.**
+
+The work is a monotone-control and argument-ABI refactor plus substitution of the existing control receive verb. It should be migrated atomically with the coordinator protocol, not in isolation.
+
+Validation gap to close before apply: there is no focused multi-iteration control-only Counter device test for `send_signal()`/`receive_signal()` in `test_mcast_pipe.py`; current Counter device coverage is data-bearing.
