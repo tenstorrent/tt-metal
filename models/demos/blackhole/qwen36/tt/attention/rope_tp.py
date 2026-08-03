@@ -249,25 +249,66 @@ def apply_interleaved_mrope(freqs, mrope_section):
     return freqs_t
 
 
+_ROPE_DEV_TABLES = {}
+
+
+def _rope_dev_tables(device, rope_dim, n_rows, theta):
+    """ROW_MAJOR [rows, rope_dim] cos/sin tables resident ON DEVICE, built once and grown on demand.
+
+    One table serves both decode (per-user row gather via ttnn.embedding) and prefill (contiguous
+    ttnn.slice), so neither path needs host trig. ROW_MAJOR because ttnn.embedding wants a
+    ROW_MAJOR weight and because slicing it carries no tile-alignment constraint.
+    """
+    key = (id(device), int(rope_dim), float(theta))
+    ent = _ROPE_DEV_TABLES.get(key)
+    if ent is not None and ent["rows"] >= n_rows:
+        return ent["cos"], ent["sin"]
+    rows = max(int(n_rows), 2 * ent["rows"] if ent else 0, 4096)
+    inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
+    freqs = torch.outer(torch.arange(rows).float(), inv_freq)  # [rows, rope_dim/2]
+    emb = torch.cat([freqs, freqs], dim=-1)  # [rows, rope_dim]
+
+    def _mk(t):
+        return ttnn.from_torch(
+            t.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+
+    ent = {"rows": rows, "cos": _mk(emb.cos()), "sin": _mk(emb.sin())}
+    _ROPE_DEV_TABLES[key] = ent
+    return ent["cos"], ent["sin"]
+
+
 def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
     """Return [cos, sin] each [1, B, 1, rope_dim] for the given per-user positions.
 
-    positions: torch.Tensor [B] of int positions. Built on host (small) then
-    replicated to the mesh — matches apply_partial_rope_decode's expected layout.
+    Fully on device: the cos/sin tables are resident (built once, grown on demand) and the
+    per-user rows are fetched with ttnn.embedding, so the only host->device traffic per step is
+    the [B] index vector. A position past the current table end (M-RoPE rope_delta can push
+    rope_pos beyond max_seq_len) grows the table rather than dropping to host trig.
     """
-    inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
-    pos = positions.float()
-    freqs = torch.outer(pos, inv_freq)  # [B, rope_dim/2]
-    emb = torch.cat([freqs, freqs], dim=-1)  # [B, rope_dim]
-    B = positions.shape[0]
-    cos = emb.cos().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
-    sin = emb.sin().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
-    cos_tt = ttnn.from_torch(
-        cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device)
+    B = int(positions.shape[0])
+    pos_i = positions.to(torch.int64).reshape(-1)
+    assert int(pos_i.min()) >= 0, f"negative rope position {int(pos_i.min())}"
+    tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, int(pos_i.max()) + 1, theta)
+    idx = ttnn.from_torch(
+        pos_i.to(torch.int32).reshape(1, B),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
-    sin_tt = ttnn.from_torch(
-        sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device)
-    )
+
+    def _gather(tbl):
+        r = ttnn.embedding(idx, tbl)  # ROW_MAJOR [1, B, rope_dim]
+        r = ttnn.reshape(r, (1, B, 1, rope_dim))  # metadata-only while ROW_MAJOR
+        return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
+
+    cos_tt, sin_tt = _gather(tbl_cos), _gather(tbl_sin)
+    ttnn.deallocate(idx)
     return cos_tt, sin_tt
 
 
@@ -279,9 +320,21 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
     where interleaved-mrope collapses to ordinary 1D RoPE, so the result is independent of
     mrope_section and identical to the pre-M-RoPE behaviour.
     """
-    inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
     if position_ids is None:
-        position_ids = torch.arange(seq_len).view(1, -1)
+        # Text-only: positions are exactly arange(seq_len), i.e. a contiguous prefix of the
+        # RoPE table, so slice it on device instead of recomputing the trig on host and DMAing
+        # a [1,1,seq_len,rope_dim] cos+sin pair across. (t==h==w here, so interleaved-mrope
+        # collapses to ordinary 1D RoPE and mrope_section is irrelevant -- same values.)
+        tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, seq_len, theta)
+
+        def _slice(tbl):
+            r = ttnn.slice(tbl, [0, 0], [seq_len, rope_dim])  # ROW_MAJOR: no tile alignment needed
+            r = ttnn.reshape(r, (1, 1, seq_len, rope_dim))  # metadata-only while ROW_MAJOR
+            return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
+
+        return _slice(tbl_cos), _slice(tbl_sin)
+
+    inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
     if mrope_section is None:
         # Any split works for text (t==h==w); use an even-ish T/H/W partition of rope_dim//2.
         half = rope_dim // 2
