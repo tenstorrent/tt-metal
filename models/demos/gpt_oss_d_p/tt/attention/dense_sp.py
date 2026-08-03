@@ -79,12 +79,22 @@ def dense_sp_attention(
     """
     if write_chunk:
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache_k, tt_k_chunk, slot_idx=slot_idx, layer_idx=layer_idx,
-            num_layers=num_layers, kv_actual_global=kv_actual, cluster_axis=cluster_axis,
+            cache_k,
+            tt_k_chunk,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            kv_actual_global=kv_actual,
+            cluster_axis=cluster_axis,
         )
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache_v, tt_v_chunk, slot_idx=slot_idx, layer_idx=layer_idx,
-            num_layers=num_layers, kv_actual_global=kv_actual, cluster_axis=cluster_axis,
+            cache_v,
+            tt_v_chunk,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            kv_actual_global=kv_actual,
+            cluster_axis=cluster_axis,
         )
 
     # Ring gather-buffer seq: full cache for full-attn layers; compact halo for sliding layers.
@@ -101,8 +111,12 @@ def dense_sp_attention(
         # Persistent ring-gather scratch (once per key/size, reused across layers/chunks). Full-attn
         # layers gather the entire per-device shard (cache_global); sliding layers use a compact halo
         # (_bufseq). logical_n / kv_actual_isl drive causal masking. dtype MUST match the bf8 KV cache.
-        persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer(f"dense_k_{_bufseq}", n_kv, _bufseq, head_dim, ttnn.bfloat8_b),
-        persistent_output_buffer_v=ccl_manager.get_ring_gather_buffer(f"dense_v_{_bufseq}", n_kv, _bufseq, head_dim, ttnn.bfloat8_b),
+        persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer(
+            f"dense_k_{_bufseq}", n_kv, _bufseq, head_dim, ttnn.bfloat8_b
+        ),
+        persistent_output_buffer_v=ccl_manager.get_ring_gather_buffer(
+            f"dense_v_{_bufseq}", n_kv, _bufseq, head_dim, ttnn.bfloat8_b
+        ),
         joint_strategy="rear",
         logical_n=logical_n,
         program_config=program_config,
@@ -128,4 +142,3 @@ def dense_sp_attention(
         sliding_window_size=sliding_window_size,
     )
     return out
-
