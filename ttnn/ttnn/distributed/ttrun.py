@@ -409,7 +409,6 @@ def compute_phase1_cache_fingerprint_full(
             h.update(b"\0")
             desc_path = mock_rank_to_desc[rank]
             h.update(hashlib.sha256(desc_path.read_bytes()).digest())
-    # Fold in the optional rank pinning file so editing it invalidates a cached Phase 1 run dir.
     if rank_pinning_file is not None:
         h.update(b"\0")
         h.update(hashlib.sha256(Path(rank_pinning_file).read_bytes()).digest())
@@ -2524,8 +2523,6 @@ def new_mode_flow(
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} New mode: Mesh Graph Descriptor = {resolved_mgd}")
 
-    # Resolve the optional rank pinning file. Its contents feed the Phase 1 cache fingerprint, so a cached
-    # run dir is not reused when the pinnings change.
     resolved_rank_pinning_file: Optional[Path] = None
     if rank_pinning_file is not None:
         resolved_rank_pinning_file = resolve_path(rank_pinning_file, description="Rank pinning file", must_be_file=True)

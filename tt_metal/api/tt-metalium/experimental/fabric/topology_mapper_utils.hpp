@@ -96,11 +96,8 @@ struct TopologyMappingConfig {
     // Used even when some ASICs have UNSET rank. Default empty.
     std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
 
-    // Optional user-supplied host pinnings from the Phase 1 rank pinning file: logical mesh -> hostname ->
-    // mesh host rank. Only the ranks the user chose to pin appear here; everything else stays fully
-    // auto-mapped. Applied as hard inter-mesh constraints (a pinned logical mesh may only map to physical
-    // meshes whose ASICs live on the named host). Requires hostname_to_asics to be populated. Default empty,
-    // which leaves mapping behavior unchanged.
+    // Phase 1 rank pinning: logical mesh -> hostname -> mesh host rank. Empty = unchanged behavior.
+    // Requires hostname_to_asics. Applied as hard inter-mesh constraints.
     std::map<MeshId, std::map<std::string, MeshHostRankId>> host_rank_pinnings;
 };
 

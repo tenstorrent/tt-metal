@@ -1744,10 +1744,7 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         }
     }
 
-    // User-supplied host pinnings (Phase 1 rank pinning file): a pinned logical mesh may only map to a
-    // physical mesh that actually contains the named host's ASICs. Hard constraints, so an unsatisfiable
-    // pin fails the solve instead of being silently ignored. Unpinned meshes are untouched and keep the
-    // host-cover bias below.
+    // Restrict each pinned logical mesh to physical meshes that contain the named host's ASICs.
     for (const auto& [logical_mesh_id, host_to_rank] : config.host_rank_pinnings) {
         std::set<MeshId> allowed_physical_meshes;
         for (const auto& [hostname, _] : host_to_rank) {
