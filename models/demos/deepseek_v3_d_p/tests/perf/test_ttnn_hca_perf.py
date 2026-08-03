@@ -3,33 +3,52 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Device-perf test for the DeepSeek-V4 HCA compressor (prefill), single WH device.
+Device-perf test for the DeepSeek-V4 HCA block on the 8x4 Blackhole galaxy.
 
-Runs the PCC test under the device profiler and measures the device kernel time of the
-compressor forward — the ops between the HCA_START / HCA_END signposts, excluding the
-one-time weight/input tilize dispatched at construction before HCA_START. Only the two
-projections (kv_proj / gate_proj) are on device today; the baseline grows as more stages
-migrate host->device.
+Runs the full-block forward at the production chunk width (4096 tokens) under the device profiler
+and measures device kernel time between the HCA_START / HCA_END signposts. Weight upload and input
+tilize happen at construction, before HCA_START, and are excluded.
+
+Single-shot rather than chunked on purpose: the op sequence is the same one a chunk executes, minus
+the 128-row carry on the SDPA key axis and the compressed-cache write -- about 3% -- so the number
+tracks per-chunk cost without needing a one-chunk scenario that exercises no cross-chunk state.
+
+The baseline guards the whole block rather than one op, because that is what catches a silent
+undo of any of the tuned constants: q_chunk_size / k_chunk_size (SDPA is ~32% of the block),
+ccl_num_links, or the fused nlp_create_qkv_heads / nlp_concat_heads path. None of those move PCC.
+See hca_perf/GALAXY_PERF.md for the breakdown behind the number.
 """
 
 import pytest
 
-from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_with_merge
+from models.demos.deepseek_v3_d_p.utils.perf_utils import (
+    _is_galaxy_env,
+    adjust_margin_for_ddr_speed,
+    run_model_device_perf_test_with_merge,
+)
 
-_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_compressor"
-_CMD = f"pytest {_TEST_PATH} -k 'b1-seq512'"
+_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_forward_mesh"
+_CMD_8X4 = f"pytest {_TEST_PATH} -k 'seq4096 and 8x4'"
 
 
 @pytest.mark.timeout(0)
-def test_hca_compressor_perf():
+def test_hca_block_perf_galaxy():
+    if not _is_galaxy_env():
+        pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+
+    # 5% rather than the usual 1.5-3%: SDPA alone drifts ~5% run to run. Still far tighter than
+    # what it guards -- reverting q_chunk_size costs +60%, dropping the fused head ops +100%.
+    margin = adjust_margin_for_ddr_speed(0.05)
+
     run_model_device_perf_test_with_merge(
-        command=_CMD,
-        expected_device_perf_ns_per_iteration=271_254,
-        subdir="deepseek_v4_hca_compressor",
-        model_name="deepseek_v4_hca_compressor",
+        command=_CMD_8X4,
+        # Calibrated 2026-08-03 on bh-glx-110-c10u08, FABRIC_2D, 74 device ops.
+        expected_device_perf_ns_per_iteration=3_237_000,
+        subdir="deepseek_v4_hca_block",
+        model_name="deepseek_v4_hca_glx_8x4",
         num_iterations=1,
         batch_size=1,
-        margin=0.03,
+        margin=margin,
         between_signposts=("HCA_START", "HCA_END"),
-        comments="seq512_hca_compressor_prefill",
+        comments="chunk4096_hca_prefill_glx_8x4_ground_truth",
     )
