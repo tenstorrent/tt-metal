@@ -8,40 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-
-// Handles unaligned head/tail with element-sized stores, then writes 4B words in the aligned middle.
-// Assumption: for val_size < 4, 'val' must have the element already replicated into all sub-word
-// positions (e.g. two bfloat16 values packed into a uint32_t).
-template <uint32_t val_size>
-FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
-    static_assert(val_size == 1 || val_size == 2 || val_size == 4, "Unsupported val_size");
-    using IntType =
-        std::conditional_t<(val_size == 1), uint8_t, std::conditional_t<(val_size == 2), uint16_t, uint32_t>>;
-
-    uint32_t end_addr = start_addr + n_bytes;
-    uint32_t start_addr_4B = (start_addr + 0x3) & 0xFFFFFFFC;
-    uint32_t end_addr_4B = end_addr & 0xFFFFFFFC;
-
-    auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_addr_4B);
-    auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(end_addr_4B);
-    for (auto* ptr = start_ptr_4B; ptr < end_ptr_4B; ++ptr) {
-        *ptr = val;
-    }
-
-    if constexpr (val_size < 4) {
-        auto* start_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
-        auto* end_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr);
-        auto* start_ptr_4B_e = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
-        auto* end_ptr_4B_e = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr_4B);
-        IntType val_ = static_cast<IntType>(val);
-        for (auto* ptr = start_ptr; ptr < start_ptr_4B_e; ++ptr) {
-            *ptr = val_;
-        }
-        for (auto* ptr = end_ptr_4B_e; ptr < end_ptr; ++ptr) {
-            *ptr = val_;
-        }
-    }
-}
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(0);
@@ -107,7 +74,8 @@ void kernel_main() {
                 s, dst_mem, block_size, {.page_id = curr_stick_id + k, .offset_bytes = offset}, {.offset_bytes = 0});
 
             if (block_row_size > block_size) {
-                fill_with_val<elem_size>(l1_write_addr + block_size, block_row_size - block_size, pad_value);
+                dataflow_kernel_lib::fill_l1_range<elem_size>(
+                    l1_write_addr + block_size, block_row_size - block_size, pad_value);
             }
 
             // Block before copying data from tmp to cb buffer

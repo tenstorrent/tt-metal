@@ -11,6 +11,7 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
+from models.common.utility_functions import run_for_blackhole
 
 torch.manual_seed(0)
 
@@ -734,3 +735,37 @@ def test_tilize_with_val_padding_unaligned_row_width(device, input_shape, output
 
     torch_golden = pytorch_tilize_with_val_padding(torch_input, output_shape, pad_value)
     assert_equal(torch_golden, torch_output)
+
+
+# FP8_E4M3 is a 1-byte-per-element format, so width=31 → 31 bytes/row, 31 % 4 == 3.
+# This exercises the uint8_t head/tail path in dataflow_kernel_lib::fill_l1_range<1>.
+@run_for_blackhole()
+def test_tilize_with_val_padding_fp8_unaligned_row_width(device):
+    """Single-core FP8_E4M3 tilize_with_val_padding with 1-byte-unaligned row width (issue #51215 bug 4)."""
+    input_shape = [1, 1, 32, 31]
+    output_shape = [1, 1, 32, 32]
+    # Use a nonzero FP8-exact pad value so the padding assertion fails loudly if the
+    # fill is reverted — 0.0 can pass silently when the CB happens to be zeroed.
+    pad_value = 2.0
+
+    torch_input = (torch.rand(input_shape) * 2 - 1).to(torch.float32)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.fp8_e4m3,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    )
+    tt_tiled = ttnn.tilize_with_val_padding(tt_input, output_shape, pad_value, use_multicore=False)
+    tt_untiled = ttnn.untilize(tt_tiled)
+    torch_output = ttnn.to_torch(tt_untiled)
+
+    # Real data region: use tt_input (already quantised to FP8) as the exact golden,
+    # avoiding the lossy float32→FP8→float32 round-trip that weakens PCC detection of
+    # the misaligned-store bug (which clobbers the last real byte of each row).
+    torch_golden = ttnn.to_torch(tt_input)
+    assert_equal(torch_golden, torch_output[..., :31])
+    # Padding column: FP8 2.0 (0x40) round-trips to exactly 2.0.
+    assert torch.all(
+        torch_output[..., 31:] == pad_value
+    ), f"Expected pad_value={pad_value} in padding column, got unique values: {torch_output[..., 31:].unique()}"
