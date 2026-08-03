@@ -214,8 +214,17 @@ def validate_shuffle(task_name: str, tok, thinking: bool, seed: int, samples: Pa
 
 
 def read_completions(server_log: Path):
-    """Group block_ids lines into per-request completions, in arrival order."""
-    requests, current, guard_trips = [], None, 0
+    """Group block_ids lines into per-request completions, in arrival order.
+
+    Also counts ``prefill_rejected``. An unwarmed aligned prefill length ends ONE request with an
+    empty answer while the server stays up, and it emits NO block_ids at all -- so a rejected request
+    is invisible in this arrival-order walk and every question index after it pairs with another
+    question's gold letter, exactly like the smoke-stage offset that produced 60.0% instead of 72.9%.
+    Since ``DG_UPFRONT_STRICT_PREFILL_LENS`` was deleted 2026-08-03 there is no engine-fatal arm to
+    stop the run, so this counter is the only thing standing between a rejection and a published
+    score. It is a hard refusal, not a warning.
+    """
+    requests, current, guard_trips, rejected = [], None, 0, []
     for line in server_log.open(errors="replace"):
         if "ending request at block" in line:
             guard_trips += 1
@@ -229,6 +238,9 @@ def read_completions(server_log: Path):
             ev = json.loads(m.group(1))
         except ValueError:
             continue
+        if ev.get("event") == "prefill_rejected":
+            rejected.append(ev)
+            continue
         if ev.get("event") != "block_ids":
             continue
         if ev.get("block_idx") == 0:
@@ -238,7 +250,7 @@ def read_completions(server_log: Path):
             continue
         current["ids"].extend(ev.get("ids") or [])
         current["blocks"] += 1
-    return requests, guard_trips
+    return requests, guard_trips, rejected
 
 
 def smoke_stage_requests(run_dir: Path) -> int:
@@ -289,7 +301,15 @@ def score(
     if not server_log.exists():
         return f"no server.log under {run_dir}"
 
-    requests, guard_trips = read_completions(server_log)
+    requests, guard_trips, rejected = read_completions(server_log)
+    if rejected:
+        lens = sorted({r.get("cache_len") for r in rejected})
+        return (
+            f"REFUSING TO SCORE: {len(rejected)} request(s) were REJECTED at unwarmed aligned prefill\n"
+            f"length(s) {lens}. A rejected request emits no block_ids, so every question index after it\n"
+            f"pairs with another question's gold letter and the score below would be meaningless.\n"
+            f"Add {lens} to DG_UPFRONT_PREFILL_WARMUP_LENS and re-run."
+        )
     if not requests:
         return (
             "no block_ids lines yet — this run predates the per-block ids audit line, or has not\n"

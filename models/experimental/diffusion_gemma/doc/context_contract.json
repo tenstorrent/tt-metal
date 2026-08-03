@@ -27,9 +27,9 @@
       "DG_DENOISE_EARLY_HALT_WINDOW",
       "DG_DENOISE_FROZEN_PREFIX",
       "DG_DENOISE_REVEAL_MASK",
-      "DG_DENOISE_LAZY_CAPTURE"
+      "DG_DENOISE_LAZY_CAPTURE",
+      "DG_DENOISE_DEVICE_LOOP"
     ],
-    "non_metal_diagnostic": "DG_DENOISE_DEVICE_LOOP remains an optional eager/device-resident diagnostic and is not a traced-serving mode.",
     "required_server_flags": [
       "--generation-config vllm",
       "--max-num-batched-tokens >= largest whole prompt",

@@ -28,8 +28,10 @@ supports_sample_on_device = True
 ```
 
 Do not advertise async decode or vLLM APC until their block-granular contracts
-are implemented and tested. The local `DG_PREFIX_CACHE` prototype is not vLLM
-APC.
+are implemented and tested. The local `DG_PREFIX_CACHE` prototype was DELETED
+2026-07-28 and setting it now does nothing — `tt/serving.py` hard-sets
+`prefill_reused = False`. It was never vLLM APC; general APC belongs in the
+#47488 paged path (`doc/vllm_integration/vllm_native_plan.md`).
 
 ## Current launch contract (2026-07-22)
 

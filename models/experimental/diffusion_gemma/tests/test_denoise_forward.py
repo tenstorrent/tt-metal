@@ -666,48 +666,20 @@ def test_denoise_moe_is_unconditionally_the_concat_path(monkeypatch):
     assert dense_routing.deallocated is True
 
 
-def test_expert_matmuls_opt_into_blackhole_fp32_full_dst_accumulation(monkeypatch):
+def test_all_four_expert_matmuls_take_the_same_kernel_config():
+    """The per-matmul ``expert_compute_kernel_config`` indirection was deleted 2026-08-03 with
+    ``DG_SPARSE_EXPERT_FP32_FULL_SYNC``; every matmul must now take ``ckcfg`` unconditionally, with
+    no ``.device().arch()`` round trip left in the hot path."""
+    import inspect
+
     from models.experimental.diffusion_gemma.tt import concat_moe
 
-    class _Device:
-        def arch(self):
-            return concat_moe.ttnn.Arch.BLACKHOLE
-
-    tensor = SimpleNamespace(device=lambda: _Device())
-    fallback = object()
-    captured = {}
-    concat_moe._EXPERT_FP32_FULL_SYNC_CFG_CACHE.clear()
-    monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "1")
-
-    def fake_init(arch, **kwargs):
-        captured.update(arch=arch, **kwargs)
-        return "accurate-config"
-
-    monkeypatch.setattr(concat_moe.ttnn, "init_device_compute_kernel_config", fake_init)
-    monkeypatch.setattr(concat_moe.ttnn, "MathFidelity", SimpleNamespace(HiFi4="hifi4"))
-
-    assert concat_moe.expert_compute_kernel_config(tensor, fallback) == "accurate-config"
-    assert captured == {
-        "arch": concat_moe.ttnn.Arch.BLACKHOLE,
-        "math_fidelity": "hifi4",
-        "math_approx_mode": False,
-        "fp32_dest_acc_en": True,
-        "packer_l1_acc": False,
-        "dst_full_sync_en": True,
-    }
-
-    monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "0")
-    assert concat_moe.expert_compute_kernel_config(tensor, fallback) is fallback
-
-
-def test_expert_matmuls_keep_wormhole_policy(monkeypatch):
-    from models.experimental.diffusion_gemma.tt import concat_moe
-
-    wormhole = SimpleNamespace(device=lambda: SimpleNamespace(arch=lambda: concat_moe.ttnn.Arch.WORMHOLE_B0))
-    fallback = object()
-    monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "1")
-
-    assert concat_moe.expert_compute_kernel_config(wormhole, fallback) is fallback
+    body = inspect.getsource(concat_moe.concat_experts_forward)
+    assert body.count("compute_kernel_config=ckcfg") == 4, "all four expert matmuls take ckcfg"
+    assert "compute_kernel_config=expert_compute_kernel_config(" not in body, "the indirection is gone"
+    # The module attribute is the structural check: ``default_expert_compute_kernel_config`` survives
+    # and its name contains the deleted one as a substring, so a source grep alone cannot prove this.
+    assert not hasattr(concat_moe, "expert_compute_kernel_config"), "the helper itself is gone"
 
 
 # --- logits adapter -------------------------------------------------------------------------

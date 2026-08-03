@@ -43,8 +43,9 @@ code's own TODO suggests — all identical. 1.44 MB / 0.67 ms is ~2 GB/s, i.e. *
 lever is *fewer* all-reduces, a structural TP change.
 
 At the 2 all-reduces/layer x 30 layers this was written against, that is ~40 ms/step (~15%). **That
-per-layer count predates the concat MoE, which issues one `ccl_allreduce` per layer at
-`concat_moe.py:376` — re-derive the count before quoting ~40 ms/step as current.**
+per-layer count predates the concat MoE, which issues one `ccl_allreduce` per layer in
+`concat_experts_forward()` (`tt/concat_moe.py`) — re-derive the count before quoting ~40 ms/step as
+current.**
 
 ## Terminal argmax + entropy over the 262144 vocab — reduction-op-limited
 

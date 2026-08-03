@@ -143,13 +143,17 @@ def test_invalid_policy_fails_loudly(monkeypatch, expect_error):
         DG.resolve_policy()
 
 
-def test_thresholds_are_overridable_and_validated(monkeypatch, expect_error):
+def test_the_top_frac_threshold_is_consulted_on_every_call(monkeypatch, expect_error):
+    """Tightening DEFAULT_TOP_FRAC must change the verdict on prose that is healthy at 0.5.
+
+    This is what the deleted ``DG_DEGENERACY_TOP_FRAC`` env override used to prove. The threshold is
+    read from the module global inside :func:`is_degenerate`, not bound as a default argument, so
+    ``monkeypatch.setattr`` reaches it — that is the property this test pins.
+    """
     monkeypatch.setenv("DG_DEGENERACY_POLICY", "stop")
-    monkeypatch.setenv("DG_DEGENERACY_TOP_FRAC", "0.02")
+    assert not DG.is_degenerate(DG.block_degeneracy(_prose_like(0))), "prose is healthy at 0.5"
+    monkeypatch.setattr(DG, "DEFAULT_TOP_FRAC", 0.02)
     with expect_error(DG.DegenerateBlockError):
-        DG.check_committed_block(_prose_like(0))
-    monkeypatch.setenv("DG_DEGENERACY_TOP_FRAC", "1.5")
-    with expect_error(ValueError, match="DG_DEGENERACY_TOP_FRAC"):
         DG.check_committed_block(_prose_like(0))
 
 
@@ -242,9 +246,8 @@ def test_answer_followed_by_eos_padding_is_not_degenerate():
     assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), stats
 
 
-def test_the_five_shapes_the_served_run_rejected(monkeypatch):
+def test_the_five_shapes_the_served_run_rejected():
     """Real (distinct, top_frac, max_run) tuples the 07-27 server log printed as degenerate."""
-    monkeypatch.delenv("DG_DEGENERACY_TOP_FRAC", raising=False)
     for content_len, recorded_top_frac in ((18, 0.930), (98, 0.617), (68, 0.734), (73, 0.715), (107, 0.582)):
         tokens = _answer_then_padding(content_len, seed=content_len)
         whole = DG.block_degeneracy(tokens)
@@ -394,7 +397,6 @@ def _run(denoiser, *, retry_noise=None, retry_canvas=None, commits=None):
 
 def test_retry_commits_the_first_clean_attempt(monkeypatch):
     monkeypatch.setenv("DG_DEGENERACY_POLICY", "retry")
-    monkeypatch.setenv("DG_DEGENERACY_RETRIES", "2")
     denoiser = _Denoiser([COLLAPSED, HEALTHY])
     committed = []
     out = _run(
@@ -411,7 +413,6 @@ def test_retry_commits_the_first_clean_attempt(monkeypatch):
 
 def test_retry_exhausted_still_refuses_to_commit(monkeypatch, expect_error):
     monkeypatch.setenv("DG_DEGENERACY_POLICY", "retry")
-    monkeypatch.setenv("DG_DEGENERACY_RETRIES", "2")
     denoiser = _Denoiser([COLLAPSED])
     committed = []
     with expect_error(DG.DegenerateBlockError, match="degenerate committed canvas"):
@@ -460,14 +461,6 @@ def test_stop_and_warn_policies_never_retry(monkeypatch):
         else:
             _run(denoiser, retry_noise=_retry_noise_fn(), retry_canvas=lambda: "canvas-retry")
         assert denoiser.noises == ["noise-0"], f"{policy} must not re-denoise"
-
-
-def test_retries_env_is_validated(monkeypatch, expect_error):
-    monkeypatch.setenv("DG_DEGENERACY_RETRIES", "0")
-    with expect_error(ValueError, match="DG_DEGENERACY_RETRIES"):
-        DG.resolve_retries()
-    monkeypatch.delenv("DG_DEGENERACY_RETRIES")
-    assert DG.resolve_retries() == DG.DEFAULT_RETRIES
 
 
 def test_seeded_noise_factory_varies_by_attempt():

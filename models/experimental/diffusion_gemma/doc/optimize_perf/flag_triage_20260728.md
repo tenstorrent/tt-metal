@@ -40,7 +40,24 @@ Also removed: `return_sharded` from `models/demos/gemma4/tt/model.py`. That para
 
 `DG_MOE_CONCAT`, `DG_SPARSE_MOE`, `DG_ALLOW_DENSE_MOE`, `DG_SPARSE_MOE_TUNED`, `DG_MOE_DISPATCH_FUSED2` and `DG_MOE_FUSED_GATHER` were deleted with the token-gather path in `7417bd7d69d` (2026-07-29); `DG_NORM_FULLCANVAS` was deleted with the full-canvas norm choice on 2026-07-30. Setting any of them now does nothing.
 
-Legacy trace knobs that still appear in dated artifacts and select nothing: `DG_VLLM_TRACE`, `DG_DENOISE_TRACED`, `DG_DENOISE_TRACED_MULTISTEP`, `DG_DENOISE_MULTISTEP_GROUP`, `DG_DENOISE_EARLY_HALT`, `DG_DENOISE_EARLY_HALT_WINDOW`, `DG_DENOISE_FROZEN_PREFIX`, `DG_DENOISE_REVEAL_MASK`, `DG_DENOISE_LAZY_CAPTURE`.
+Legacy trace knobs that still appear in dated artifacts and select nothing: `DG_VLLM_TRACE`, `DG_DENOISE_TRACED`, `DG_DENOISE_TRACED_MULTISTEP`, `DG_DENOISE_MULTISTEP_GROUP`, `DG_DENOISE_EARLY_HALT`, `DG_DENOISE_EARLY_HALT_WINDOW`, `DG_DENOISE_FROZEN_PREFIX`, `DG_DENOISE_REVEAL_MASK`, `DG_DENOISE_LAZY_CAPTURE`, `DG_DENOISE_DEVICE_LOOP` (which `doc/context_contract.json` still advertised as live until 2026-08-03).
+
+### Round 2 — 2026-08-03
+
+Six more deleted, all default-arm-unchanged by construction (nothing in the tree ever set any of them, so every shipped run already took the surviving path). Live source `DG_*` count 33 → 27.
+
+| flag | why |
+|---|---|
+| `DG_SDPA_GRID` | default `device`; the `8x1` pin it could restore is refuted, and the explicit-`<x>x<y>` arm had no user |
+| `DG_SDPA_EXP_APPROX` | it changes the committed sha for no reproducible speedup — and the "+6.8% slower" that justified it is withdrawn (n=2, 14.2% spread inside the on arm alone, rep2-vs-rep2 −0.1%) |
+| `DG_DEGENERACY_TOP_FRAC` | thresholds now read from the module globals inside `is_degenerate`, which is strictly more testable (`monkeypatch.setattr` reaches them; the old default-argument binding did not) |
+| `DG_DEGENERACY_RETRIES` | `DEFAULT_RETRIES` is hard-coded; the attempt count is pinned behaviourally instead of by an env test |
+| `DG_SPARSE_EXPERT_FP32_FULL_SYNC` | its +0.4pp is void twice over (measured on the retired token-gather MoE, against a `0.9296875` baseline the tanh-GeLU fix moved to `0.99609375`), and deleting it takes three `.device().arch()` round trips per MoE call out of the hot path |
+| `DG_UPFRONT_STRICT_PREFILL_LENS` | an opt-in ENGINE-FATAL arm nothing set; every A/B gate drives `demo/serving_smoke.py`, which never reaches `prefill_forward` |
+
+Also removed, both dead rather than deprecated: the 28-line `DG_TERMINAL_SHARDED` design block and its unreferenced `_ARGMAX_TIE_PENALTY` at the end of `tt/sampling.py` (the lever is WITHDRAWN per `.agent/skills/optimize/SKILL.md`, so a source comment arguing for it works against that instruction), and the `use_tuned_prefill_moe` early-`yield` guard in `tt/prefill_moe.py`, which read `if not tanh_gelu and ...` against a hard-coded `tanh_gelu = True` — unreachable for every input combination, a leftover of the 2026-07-28 `DG_GELU_TANH` cut.
+
+**Capability migrated, not dropped.** Deleting `DG_UPFRONT_STRICT_PREFILL_LENS` removed the only way to make an unwarmed prefill length stop a run, and a rejected request emits no `block_ids` — so it is invisible to an arrival-order scorer and shifts every later question onto another question's gold letter. `gate/live_score.py` now REFUSES to publish a score when any `prefill_rejected` event is present, and `gate/block_speed.py` prints the rejected lengths. `prefill_rejected` had zero consumers before this.
 
 ## Two recommendations overruled
 

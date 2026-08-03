@@ -153,9 +153,13 @@ python -u models/experimental/diffusion_gemma/doc/optimize_perf/verify_selfcond_
   divergence the reference fails it against itself.
 - The stage gate stops its entropy minimum at common all-accept and records the raw all-step minimum
   separately.
-- **Opt-in candidate, still live in `tt/concat_moe.py`:** `DG_SPARSE_EXPERT_FP32_FULL_SYNC=1`
-  (Blackhole routed-expert HiFi4 FP32-full-DST) improves seed-0 committed
-  `0.9296875 → 0.93359375` but regresses seed-1 active-step entropy.
+- **`DG_SPARSE_EXPERT_FP32_FULL_SYNC` — DELETED 2026-08-03, and its number was void twice over.**
+  The recorded seed-0 committed gain `0.9296875 → 0.93359375` (+0.4pp, against a seed-1 active-step
+  entropy regression) was measured on the token-gather MoE that was deleted 2026-07-29, AND its
+  `0.9296875` baseline is the pre-tanh-GeLU figure named at line 139 above, which the tanh-GeLU fix
+  moved to `0.99609375` — a +6.6pp correction that swamps the +0.4pp. Nothing in the tree ever set
+  the flag. If Blackhole full-DST FP32 experts are ever revisited, it needs a fresh paired run on the
+  concat MoE, not this row.
 
 ## GPQA measurement traps
 

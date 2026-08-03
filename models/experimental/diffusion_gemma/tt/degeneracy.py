@@ -139,13 +139,7 @@ def _as_id_set(stop_token_ids) -> set:
     return {int(i) for i in stop_token_ids}
 
 
-def is_degenerate(
-    stats: dict,
-    *,
-    top_frac: float = DEFAULT_TOP_FRAC,
-    max_run: int = DEFAULT_MAX_RUN,
-    stop_token_ids=None,
-) -> bool:
+def is_degenerate(stats: dict, *, stop_token_ids=None) -> bool:
     """True when the canvas collapsed onto CONTENT, not when it terminated.
 
     Measured on the CONTENT region — the canvas minus its terminal stop-token run — whenever
@@ -164,6 +158,11 @@ def is_degenerate(
     is the pre-2026-07-28 behaviour and it is deliberately kept for callers that declare no stop
     set, because narrowing it there would silently weaken the gate rather than fix it — the fix is
     for the caller to declare its stop ids (``tt/serving.py`` does).
+
+    The thresholds are read from the module globals on every call, so a test may tighten them with
+    ``monkeypatch.setattr``. They are NOT overridable from the environment: ``DG_DEGENERACY_TOP_FRAC``
+    was deleted 2026-08-03 (nothing in the tree ever set it, so every shipped block already took the
+    ``0.5`` branch), and ``DG_DEGENERACY_MAX_RUN`` went in the 2026-07-28 triage for the same reason.
     """
     benign = _as_id_set(stop_token_ids)
     if benign and stats.get("top_id") in benign:
@@ -173,8 +172,8 @@ def is_degenerate(
             return False
         if stats.get("content_top_id") in benign:
             return False
-        return stats["content_top_frac"] >= top_frac or stats["content_max_run"] >= max_run
-    return stats["top_frac"] >= top_frac or stats["max_run"] >= max_run
+        return stats["content_top_frac"] >= DEFAULT_TOP_FRAC or stats["content_max_run"] >= DEFAULT_MAX_RUN
+    return stats["top_frac"] >= DEFAULT_TOP_FRAC or stats["max_run"] >= DEFAULT_MAX_RUN
 
 
 def resolve_policy() -> str:
@@ -184,53 +183,20 @@ def resolve_policy() -> str:
     return policy
 
 
-def _resolve_float(name: str, default: float) -> float:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    value = float(raw)
-    if not 0.0 < value <= 1.0:
-        raise ValueError(f"{name} must be in (0, 1], got {value}")
-    return value
-
-
-def _resolve_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    value = int(raw)
-    if value <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return value
-
-
+# How many extra denoise attempts the ``retry`` policy may spend on one block. Not overridable from
+# the environment: ``DG_DEGENERACY_RETRIES`` was deleted 2026-08-03 — nothing in the tree set it, and
+# the attempt count is pinned behaviourally by tests/test_degeneracy.py instead.
 DEFAULT_RETRIES = 2
-
-
-def resolve_retries() -> int:
-    """How many extra denoise attempts ``retry`` may spend on one block."""
-    raw = os.environ.get("DG_DEGENERACY_RETRIES")
-    if raw is None or raw == "":
-        return DEFAULT_RETRIES
-    value = int(raw)
-    if value < 1:
-        raise ValueError(f"DG_DEGENERACY_RETRIES must be >= 1, got {value}")
-    return value
 
 
 def evaluate(tokens: torch.Tensor, *, stop_token_ids=None) -> tuple:
     """Return ``(stats, degenerate)`` for a committed canvas, applying no policy.
 
     Split out from :func:`check_committed_block` so the commit path can decide between raising,
-    warning and retrying without re-resolving the thresholds itself.
+    warning and retrying.
     """
     stats = block_degeneracy(tokens, stop_token_ids=stop_token_ids)
-    degenerate = is_degenerate(
-        stats,
-        top_frac=_resolve_float("DG_DEGENERACY_TOP_FRAC", DEFAULT_TOP_FRAC),
-        max_run=DEFAULT_MAX_RUN,
-        stop_token_ids=stop_token_ids,
-    )
+    degenerate = is_degenerate(stats, stop_token_ids=stop_token_ids)
     return stats, degenerate
 
 
@@ -271,12 +237,7 @@ def check_committed_block(
     if policy == "off":
         return {}
     stats = block_degeneracy(tokens, stop_token_ids=stop_token_ids)
-    if not is_degenerate(
-        stats,
-        top_frac=_resolve_float("DG_DEGENERACY_TOP_FRAC", DEFAULT_TOP_FRAC),
-        max_run=DEFAULT_MAX_RUN,
-        stop_token_ids=stop_token_ids,
-    ):
+    if not is_degenerate(stats, stop_token_ids=stop_token_ids):
         return stats
     message = describe(stats, block_idx=block_idx)
     if policy == "warn":

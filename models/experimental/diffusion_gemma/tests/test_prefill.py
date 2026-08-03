@@ -410,9 +410,9 @@ def test_sdpa_q_chunked_falls_back_to_manual_gqa_on_l1_clash(monkeypatch):
             self.deallocated = force
 
         def device(self):
-            # ``_denoise_sdpa_program_config`` queries the device for the SDPA grid
-            # (``DG_SDPA_GRID=device``). A host-only fake has none; ``None`` is the documented
-            # input for that case and ``_resolve_sdpa_grid`` falls back to the historical pin.
+            # ``_denoise_sdpa_program_config`` queries the device for the SDPA grid. A host-only
+            # fake has none; ``None`` is the documented input for that case and
+            # ``_resolve_sdpa_grid`` falls back to the historical pin.
             return None
 
     class _FakeTtnn:

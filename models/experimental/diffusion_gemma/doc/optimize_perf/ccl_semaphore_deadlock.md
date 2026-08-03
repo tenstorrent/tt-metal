@@ -45,8 +45,10 @@ the queue cannot drain, the process waits forever.
 Two consequences worth separating:
 
 - **Latency.** A DiffusionGemma prefill forward issues roughly **90 `all_reduce`s**
-  (3 per layer x 30 layers; the DG denoise call sites are `tt/diffusion_attention.py:491`,
-  `tt/expert_operations.py:53` and `tt/concat_moe.py:376`, and the prefill forward runs the
+  (3 per layer x 30 layers; the DG denoise call sites are `denoise_attention()` in
+  `tt/diffusion_attention.py`, `shared_mlp_forward()` in `tt/expert_operations.py` and
+  `concat_experts_forward()` in `tt/concat_moe.py` — named by symbol because all three line
+  numbers this file used to carry had drifted — and the prefill forward runs the
   shared gemma4 collectives). If those miss, the prefill pays ~90 forced drains. This is the
   leading candidate for the request-13 prefill cliff (`prefill_s` 0.5 -> 12 s), because it is
   shape-independent, block-count-independent, and — decisively — **non-traced-only**: a

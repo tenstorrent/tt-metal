@@ -88,7 +88,7 @@ def install_allreduce_probe(mesh):
     (hash includes the semaphore identity) or stay flat (eviction / invalidation).
 
     Patched at ``ttnn.all_reduce`` rather than at the three DG call sites
-    (diffusion_attention.py:491, expert_operations.py:53, concat_moe.py:376) because the
+    (``denoise_attention``, ``shared_mlp_forward``, ``concat_experts_forward``) because the
     prefill forward runs the shared gemma4 model, whose collectives are not those sites.
     """
     original = ttnn.all_reduce

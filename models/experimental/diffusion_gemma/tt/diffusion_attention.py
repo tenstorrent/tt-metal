@@ -87,10 +87,11 @@ def _is_distinct_buffer(converted, source) -> bool:
 
 
 def _resolve_sdpa_grid(device):
-    """Resolve the SDPA compute grid from ``DG_SDPA_GRID`` (default ``device``).
+    """Resolve the SDPA compute grid from the device's compute-with-storage grid.
 
-    ``device`` takes the full compute-with-storage grid — what ttnn itself picks when no program
-    config is supplied. ``8x1`` reproduces the historical pin; ``<x>x<y>`` pins an explicit grid.
+    That is what ttnn itself picks when no program config is supplied. There is no selector: the
+    ``DG_SDPA_GRID`` override (``device`` / ``8x1`` / ``<x>x<y>``) was deleted 2026-08-03 — nothing
+    in the tree set it to anything but its own default, and the pin it could restore is refuted below.
 
     The pin cost real work. The denoise SDPA issues ``B * NQH * ceil(C / q_chunk)`` work units —
     ``1 * 4 * 8 = 32`` for the 256-token canvas — so an 8-core grid ran 4 serial rounds on a device
@@ -101,38 +102,25 @@ def _resolve_sdpa_grid(device):
     said grid (8,4); the live code is (8,1) — reconcile before build" and it was never reconciled.
 
     Measured 2026-07-27 (30L, traced up-front, canvas 256, reveal_pmax 4096, 3 interleaved reps):
-    **−8.9% traced block latency, committed tokens bit-identical.** Bit-exactness is expected —
-    the grid regroups the Q axis across cores and leaves the flash K-reduction untouched
-    (``k_chunk_size`` unchanged) — and it was confirmed by an identical ``committed_sha256``.
-    See ``doc/optimize_perf/winter_borrow_20260727.md``.
+    **−8.1% traced block latency, committed tokens bit-identical.** Take the figure from the isolated
+    sha-matched arm pair — ``tuned`` 34.369 s/block vs ``tuned + device SDPA grid`` 31.586, both
+    ``committed_sha256`` ``2ac3efcc…``
+    (``doc/optimize_perf/artifacts/winter_arms_20260727_tuned{,grid}_rep{1,2,3}.json``).
+    The −8.8% quoted in ``winter_borrow_20260727.md`` is ``auto``→``tunedgrid``: it spans a
+    ``committed_sha256`` change (``304e8023…``→``2ac3efcc…``) and carries the −0.8% tuned-MoE lever too.
+    Bit-exactness is expected — the grid regroups the Q axis across cores and leaves the flash
+    K-reduction untouched (``k_chunk_size`` unchanged) — and the identical sha confirms it.
 
-    Falls back to the pin when the device cannot be queried, so a mock/None device keeps the
-    previous behaviour instead of raising.
+    Falls back to ``ttnn.CoreCoord(8, 1)`` when the device cannot be queried, so a mock/None device
+    keeps the previous behaviour instead of raising.
     """
-    spec = os.environ.get("DG_SDPA_GRID", "device").strip().lower()
-    if spec == "device":
-        if device is None:
-            return ttnn.CoreCoord(8, 1)
-        try:
-            grid = device.compute_with_storage_grid_size()
-        except Exception:  # mock devices / meta tensors have no compute grid
-            return ttnn.CoreCoord(8, 1)
-        return ttnn.CoreCoord(int(grid.x), int(grid.y))
+    if device is None:
+        return ttnn.CoreCoord(8, 1)
     try:
-        gx, gy = (int(part) for part in spec.split("x", 1))
-    except ValueError as exc:
-        raise ValueError(f"DG_SDPA_GRID must be 'device' or '<x>x<y>', got {spec!r}") from exc
-    return ttnn.CoreCoord(gx, gy)
-
-
-def _sdpa_exp_approx_mode() -> bool:
-    """Whether the SDPA softmax may use the fast exp approximation.
-
-    ttnn's own default is ``true``; DiffusionGemma has always forced ``false``.
-    Kept off by default because it perturbs the softmax and every denoise
-    decision is committed as a clean argmax with no temperature cushion.
-    """
-    return os.environ.get("DG_SDPA_EXP_APPROX", "0").strip().lower() not in ("0", "false", "no", "off")
+        grid = device.compute_with_storage_grid_size()
+    except Exception:  # mock devices / meta tensors have no compute grid
+        return ttnn.CoreCoord(8, 1)
+    return ttnn.CoreCoord(int(grid.x), int(grid.y))
 
 
 def _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, *, device=None):
@@ -151,7 +139,14 @@ def _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, *, device=None)
         compute_with_storage_grid_size=grid,
         q_chunk_size=_largest_tile_divisor(q_seq_len, q_chunk),
         k_chunk_size=_largest_tile_divisor(k_seq_len, k_chunk),
-        exp_approx_mode=_sdpa_exp_approx_mode(),
+        # ttnn defaults this true; DiffusionGemma has always forced false, because the fast exp
+        # perturbs the softmax and every denoise decision is committed as a clean argmax with no
+        # temperature cushion. The ``DG_SDPA_EXP_APPROX`` opt-in was deleted 2026-08-03: turning it
+        # on changed the committed sha (a9ef8efce7a83b3f vs 7b29837d637ec26b) for no reproducible
+        # speedup — on 10.730/9.398 s/block vs off 9.442/9.406, n=2 with 14.2% spread inside the on
+        # arm alone, so rep2-vs-rep2 is −0.1%. The sha change is the finding; the speedup is noise
+        # (doc/optimize_perf/artifacts/dormant_dormant2_20260728_{base,expapx}_rep{1,2}.json).
+        exp_approx_mode=False,
     )
 
 

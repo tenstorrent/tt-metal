@@ -20,7 +20,7 @@
 #     "failed".
 #
 # Usage:
-#   sweep_denoise_arms.sh "base:" "grid:DG_SDPA_GRID=device" "hifi4:DG_SPARSE_MOE_HIFI4=1"
+#   sweep_denoise_arms.sh "base:" "hifi4:DG_SPARSE_MOE_HIFI4=1" "nomoe:DG_SKIP=moe"
 #   UPFRONT=1 REVEAL_PMAX=4096 STEPS=48 sweep_denoise_arms.sh ...
 #
 # An empty env list (``base:``) runs the shipped defaults.

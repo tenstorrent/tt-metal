@@ -251,26 +251,26 @@ def _install_contextual_shared_mlp_forward() -> None:
 def use_tuned_prefill_moe(model):
     """Apply supported DiffusionGemma prefill optimizations in this call context."""
 
+    # The tanh GeLU is UNCONDITIONAL: it is the checkpoint's own activation (``gelu_pytorch_tanh``),
+    # so its ``DG_GELU_TANH`` selector was deleted 2026-07-28 -- the OFF arm was wrong math. That left
+    # a ``tanh_gelu = True`` local behind, which made an early ``yield`` guard here dead code (it read
+    # ``if not tanh_gelu and ...``, i.e. never). Removed 2026-08-03; the per-lever
+    # ``supported_experts is not None`` guards below were already doing the real work.
     tuned = tuned_prefill_moe_enabled()
     ragged = ragged_prefill_moe_enabled()
-    tanh_gelu = True
     supported_experts = _find_supported_experts(model)
-    if not tanh_gelu and ((not tuned and not ragged) or supported_experts is None):
-        yield
-        return
 
     if tuned and supported_experts is not None:
         _install_contextual_builder()
     if ragged and supported_experts is not None:
         _install_contextual_prefill_forward()
         _install_contextual_router_forward()
-    if tanh_gelu:
-        _install_contextual_shared_mlp_forward()
+    _install_contextual_shared_mlp_forward()
     geometry_token = _tuned_geometry_active.set(tuned and supported_experts is not None)
     ragged_token = _ragged_prefill_active.set(ragged and supported_experts is not None)
-    tanh_token = _tanh_gelu_active.set(tanh_gelu)
+    tanh_token = _tanh_gelu_active.set(True)
     try:
-        with use_tanh_expert_activations(tanh_gelu):
+        with use_tanh_expert_activations(True):
             yield
     finally:
         _tanh_gelu_active.reset(tanh_token)

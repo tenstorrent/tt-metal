@@ -910,7 +910,7 @@ def denoise_and_commit_block(
                 "retrying with this factory would redraw identical noise and change nothing. "
                 "Deterministic sources (argmax) cannot support retry by construction."
             )
-        max_attempts = 1 + degeneracy.resolve_retries()
+        max_attempts = 1 + degeneracy.DEFAULT_RETRIES
 
     denoise_s = 0.0
     attempt = 0

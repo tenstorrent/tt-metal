@@ -827,19 +827,26 @@ def _reject_wrapper(generator_vllm, sessions_out):
     return wrapper
 
 
-def test_vllm_upfront_prefill_rejects_the_request_not_the_engine():
+def test_vllm_upfront_prefill_rejects_the_request_not_the_engine(monkeypatch):
     """An unwarmed prefill length must cost ONE request, not the server.
 
     In vLLM V1 an exception out of ``execute_model`` is fatal to EngineCore, so the old ``raise``
     here meant a single out-of-band request emptied every request queued behind it while the eval
     still wrote a normal-looking score. Regression test for that: the call returns a stop-id block,
-    frees the partially built session, and leaves no row registered.
+    keeps the row registered as finished, and emits the ``prefill_rejected`` metric.
+
+    The metric assertion and the ``reset_calls == 0`` assertion were folded in here when
+    ``DG_UPFRONT_STRICT_PREFILL_LENS`` was deleted 2026-08-03. There is no engine-fatal arm left, so
+    ``prefill_rejected`` is the only machine-readable evidence that a sample was lost, and it needs a
+    test that pins its exact payload -- the scorers parse it.
     """
     pytest.importorskip("vllm")
     from models.experimental.diffusion_gemma.tt import generator_vllm
 
     sessions = []
     wrapper = _reject_wrapper(generator_vllm, sessions)
+    metrics = []
+    monkeypatch.setattr(generator_vllm, "_metric", lambda event, **fields: metrics.append((event, fields)))
 
     out = wrapper.prefill_forward(torch.zeros((1, 33), dtype=torch.long))
 
@@ -849,6 +856,9 @@ def test_vllm_upfront_prefill_rejects_the_request_not_the_engine():
     # that raise is engine-fatal too, so dropping the row would just move the crash one step later.
     assert wrapper._sessions == {0: sessions[0]}, "the rejected row must remain registered"
     assert sessions[0].finished is True, "so decode_forward takes its stop-id branch"
+    assert sessions[0].reset_calls == 0, "the rejected row keeps its session until release_request"
+    # Pins that a 33-token prompt rounds UP to aligned 64 and is compared against the warmed set.
+    assert ("prefill_rejected", {"row": 0, "cache_len": 64, "warmed": [32]}) in metrics
 
 
 def test_vllm_decode_after_a_rejected_prefill_does_not_kill_the_engine():
@@ -869,20 +879,6 @@ def test_vllm_decode_after_a_rejected_prefill_does_not_kill_the_engine():
 
     assert out.shape == (1, 4)
     assert torch.equal(out, torch.full((1, 4), 7, dtype=torch.long))
-
-
-def test_vllm_upfront_prefill_strict_mode_still_raises(expect_error, monkeypatch):
-    """The engine-fatal behaviour stays reachable for bit-exactness gates, but only on request."""
-    pytest.importorskip("vllm")
-    from models.experimental.diffusion_gemma.tt import generator_vllm
-
-    monkeypatch.setenv("DG_UPFRONT_STRICT_PREFILL_LENS", "1")
-    sessions = []
-    wrapper = _reject_wrapper(generator_vllm, sessions)
-
-    with expect_error(RuntimeError, match="unseen aligned prefill length 64"):
-        wrapper.prefill_forward(torch.zeros((1, 33), dtype=torch.long))
-    assert sessions[0].reset_calls == 1, "even the fatal path must free its session"
 
 
 # --- vLLM teardown -----------------------------------------------------------

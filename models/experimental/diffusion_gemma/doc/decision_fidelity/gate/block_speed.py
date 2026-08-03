@@ -33,7 +33,7 @@ METRIC = re.compile(r"DG_VLLM_METRIC (\{.*\})\s*$")
 
 def read(path: Path):
     """The metric events, plus the interleaving order needed to find request boundaries."""
-    b0, dec, rel, build, order = [], [], [], None, []
+    b0, dec, rel, rej, build, order = [], [], [], [], None, []
     with path.open(errors="replace") as fh:
         for line in fh:
             m = METRIC.search(line.rstrip())
@@ -52,9 +52,16 @@ def read(path: Path):
                 order.append(("dec", len(dec) - 1))
             elif event == "request_release":
                 rel.append(ev)
+            elif event == "prefill_rejected":
+                # An unwarmed prefill length ends ONE request with an empty answer while the server
+                # stays up (tt/generator_vllm.py). Since DG_UPFRONT_STRICT_PREFILL_LENS was deleted
+                # 2026-08-03 there is no engine-fatal arm left, so this event is the only evidence
+                # that a sample was silently lost -- a speed number computed over the survivors is
+                # not the configuration it claims to measure.
+                rej.append(ev)
             elif event == "model_build":
                 build = ev
-    return b0, dec, rel, build, order
+    return b0, dec, rel, rej, build, order
 
 
 def drop_leading(b0, dec, order, keep: int):
@@ -143,10 +150,17 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="emit the metrics as JSON")
     args = ap.parse_args()
 
-    b0, dec, rel, build, order = read(args.server_log)
+    b0, dec, rel, rej, build, order = read(args.server_log)
     if build:
         print(f"model_build_s {build['model_build_s']:.0f}   trace_region {build.get('trace_region_size_env')}")
     print(f"prefill_block0 events in log: {len(b0)}")
+    if rej:
+        lens = sorted({r.get("cache_len") for r in rej})
+        print(
+            f"  !! {len(rej)} REJECTED prefill(s) at aligned length(s) {lens} -- those requests "
+            f"returned an empty answer. Warm them via DG_UPFRONT_PREFILL_WARMUP_LENS and re-run; "
+            f"the numbers below cover only the requests that were served."
+        )
     if args.expect and len(b0) != args.expect:
         # Not an error: the smoke stage explains a small excess. A SHORTFALL is the false-green signal.
         verb = "excess (smoke stage?)" if len(b0) > args.expect else "SHORTFALL -- engine may have died mid-run"

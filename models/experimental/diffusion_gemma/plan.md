@@ -200,7 +200,7 @@ cliff belongs to the pre-fix `ec5b64b4891` control only. Current pure-prefill ev
 
 | what | state |
 |---|---|
-| `DG_SDPA_GRID=device` | −8.8%, bit-exact — **default flipped** |
+| device-derived denoise SDPA grid | −8.1%, bit-exact (sha-matched pair; the −8.8% was `auto`→`tunedgrid`, which spans a sha change) — **shipped; the `DG_SDPA_GRID` selector was deleted 2026-08-03** |
 | concat MoE (`tt/concat_moe.py`) | −29.9%, fold verified at PCC 0.9999218 — **shipped 2026-07-29 as the ONLY denoise MoE**; `tt/sparse_moe.py` is prefill-only |
 | full-canvas RMSNorm | −20.4%/block on the full 198, commit 2.04 s → 0.37 s — **shipped 2026-07-30** |
 | sliding-layer key retention (`DG_DENOISE_SLIDING_WINDOW`) | **default ON** — repairs 52 of 64 collapsed questions, regresses 1 of 67 clean, and is 1.53× faster |

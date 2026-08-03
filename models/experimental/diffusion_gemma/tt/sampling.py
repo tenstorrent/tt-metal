@@ -410,33 +410,3 @@ def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk
     for part in parts:
         part.deallocate(True)
     return gumbel
-
-
-# ---------------------------------------------------------------------------------------------
-# TP-sharded denoise terminal (DG_TERMINAL_SHARDED) — argmax / global-max / entropy on the
-# per-device vocab shard, skipping the per-step full-vocab all-gather (#47465, path to 100 t/s).
-#
-# The lm_head is column-parallel over vocab (``models/demos/gemma4/tt/model.py::_apply_lm_head``),
-# so each of the ``TP`` devices already holds the SOFTCAPPED shard ``[1,1,S,vocab/TP]`` covering
-# a contiguous, tile-aligned, unpadded vocab block ``[c*per_dev, (c+1)*per_dev)``. With
-# ``return_sharded=True`` the head skips the ~128 MiB/step ``ccl_allgather`` and these helpers do
-# the reduction on the shard + a tiny cross-shard combine:
-#   * argmax/gumbel  — per-shard local max+argmax, add the per-device offset, all-gather the tiny
-#     ``[S,TP]`` candidates, then a global max + lowest-index-among-winners fold. BIT-IDENTICAL to
-#     the replicated ``argmax_last_dim`` (max is a selection, no bf16 accumulation; the tie rule —
-#     lowest global index wins — is preserved via the offset ordering).
-#   * global max     — exact (bf16 max of bf16 values does no rounding, order-independent).
-#   * entropy        — distributed logsumexp with the exact shared max; fp32 per-shard partials +
-#     fp32 all-reduce(SUM). NOT bf16-bit-identical (the 262144-length sum is re-associated as
-#     ``TP`` partials), the same #48291 re-association class the full-canvas norm was held back for
-#     until fp32 partials made it bit-identical (see _norm_compute_kernel_config); decision-gated.
-#
-# Trace-safe: no ``ttnn.full`` / ``zeros_like`` (host writes rejected in trace capture) is used in
-# the combine — the tie fold is a masked-min in fp32; the offset constant is preallocated OUTSIDE
-# capture (``build_vocab_shard_offsets``); all shapes are fixed (``S``, ``TP``, ``per_dev``). The
-# ``all_gather`` / ``all_reduce`` are the same collectives gemma4 traced decode already captures.
-# ---------------------------------------------------------------------------------------------
-
-# Larger than any global vocab index (< 262144) so a non-winning shard's candidate index never
-# wins the cross-shard min; exact-enough in fp32 (its exact value is irrelevant, only its rank).
-_ARGMAX_TIE_PENALTY = 1.0e9

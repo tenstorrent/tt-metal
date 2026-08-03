@@ -192,17 +192,6 @@ def _metric(event: str, **fields) -> None:
     logger.info("DG_VLLM_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
 
 
-def _strict_prefill_lens() -> bool:
-    """Whether an unwarmed prefill length should kill the engine instead of the request.
-
-    Default OFF. A bit-exactness gate legitimately wants the run to stop, because an unwarmed shape
-    means the comparison is no longer the thing it claims to measure -- but a serving deployment
-    wants the server to survive one bad request. Since the raise is engine-fatal, that has to be a
-    choice rather than the default.
-    """
-    return os.environ.get("DG_UPFRONT_STRICT_PREFILL_LENS", "0").strip().lower() in ("1", "true", "yes", "on")
-
-
 def _committed_ids(tokens) -> list:
     """Flat python ids for one committed block, for the DG_VLLM_METRIC block_ids audit line.
 
@@ -809,21 +798,18 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                         f"serve prompts of this length."
                     )
                     _metric("prefill_rejected", row=row, cache_len=cache_len, warmed=sorted(warmed))
-                    if _strict_prefill_lens():
-                        # Bit-exactness gates want the run to stop rather than silently lose a
-                        # sample, since an unwarmed shape invalidates the comparison.
-                        session.reset()
-                        raise RuntimeError(
-                            f"up-front capture cannot serve unseen aligned prefill length {cache_len}; "
-                            f"warm it before capture via DG_UPFRONT_PREFILL_WARMUP_LENS "
-                            f"(configured={sorted(warmed)}). This raise is FATAL to the vLLM engine "
-                            f"and is enabled by DG_UPFRONT_STRICT_PREFILL_LENS=1; unset it to reject "
-                            f"the request instead."
-                        )
+                    # DG_UPFRONT_STRICT_PREFILL_LENS -- the opt-in arm that made this rejection
+                    # engine-fatal for bit-exactness gates -- was deleted 2026-08-03: nothing in the
+                    # tree ever set it, and every A/B gate drives demo/serving_smoke.py, which never
+                    # reaches prefill_forward. The ``prefill_rejected`` metric above is now the ONLY
+                    # machine-readable signal that a sample was lost, so the scorers count it and
+                    # refuse to publish a score when any are present
+                    # (doc/decision_fidelity/gate/live_score.py, gate/block_speed.py).
+                    #
                     # Register the row as an ALREADY-FINISHED session rather than dropping it.
                     # ``decode_forward`` raises when ``_sessions`` is empty, and that raise is just
-                    # as engine-fatal as the one being replaced here -- so a dropped row would move
-                    # the crash one step later instead of removing it. A finished session takes
+                    # as engine-fatal as the historical raise described above -- so a dropped row
+                    # would move the crash one step later instead of removing it. A finished session takes
                     # decode_forward's existing stop-id branch, and release_request cleans it up and
                     # emits the usual request_release line.
                     session.finished = True

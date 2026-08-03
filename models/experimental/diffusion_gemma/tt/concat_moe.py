@@ -119,17 +119,18 @@ TILE = 32
 # way the original quantization was, which is why this reports rather than hides it.
 _RELAYOUT_SAFE_DTYPES = (ttnn.bfloat16, ttnn.float32)
 
-_EXPERT_FP32_FULL_SYNC_CFG_CACHE = {}
-
 
 def default_expert_compute_kernel_config():
     """HiFi2 for the expert matmuls. ``DG_SPARSE_MOE_HIFI4=1`` raises it to HiFi4, which is what
     the gemma4 dense reference (``models/demos/gemma4/tt/experts/prefill.py``) uses.
 
-    On the flag names: ``DG_SPARSE_MOE_HIFI4`` and ``DG_SPARSE_EXPERT_FP32_FULL_SYNC`` say "sparse"
-    because they predate this module — they were the token-gather MoE's knobs and moved here with
-    the expert matmuls when that path was deleted on 2026-07-29. The names are deliberately kept so
-    existing launcher scripts and the recorded runs still address the same thing.
+    On the flag name: ``DG_SPARSE_MOE_HIFI4`` says "sparse" because it predates this module — it was
+    the token-gather MoE's knob and moved here with the expert matmuls when that path was deleted on
+    2026-07-29. The name is deliberately kept so existing launcher scripts
+    (``doc/optimize_perf/sweep_denoise_arms.sh``) and the recorded runs still address the same thing.
+    Its sibling ``DG_SPARSE_EXPERT_FP32_FULL_SYNC`` was deleted 2026-08-03: nothing in the tree set
+    it, and the +0.4pp it recorded is void twice over (measured on the retired token-gather MoE, and
+    against a seed-0 baseline of 0.9296875 that the tanh-GeLU fix has since moved to 0.99609375).
 
     The fidelity gap against that reference is real and is a contributor to the pcc-vs-dense gap,
     but raising it is NOT a net win. **Scope caveat: the numbers below were measured on the retired
@@ -169,28 +170,6 @@ def default_expert_compute_kernel_config():
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
-
-
-def expert_compute_kernel_config(tensor, fallback):
-    # Blackhole half-DST only exposes four FP32 tiles and corrupts the 8-tile subblocks the expert
-    # matmuls emit. Full-DST synchronization preserves the FP32 accumulation fidelity without
-    # changing the BF16 expert outputs. Keep an escape hatch for architecture/performance bisects.
-    arch = tensor.device().arch()
-    if os.environ.get("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "0") != "1" or arch != ttnn.Arch.BLACKHOLE:
-        return fallback
-    key = (id(tensor.device()), arch)
-    config = _EXPERT_FP32_FULL_SYNC_CFG_CACHE.get(key)
-    if config is None:
-        config = ttnn.init_device_compute_kernel_config(
-            arch,
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-            dst_full_sync_en=True,
-        )
-        _EXPERT_FP32_FULL_SYNC_CFG_CACHE[key] = config
-    return config
 
 
 def _free_if_distinct(candidate, source) -> None:
@@ -345,13 +324,13 @@ def concat_experts_forward(experts, expert_input, dense_routing, *, compute_kern
         expert_input,
         concat.gate_cat,
         memory_config=dram,
-        compute_kernel_config=expert_compute_kernel_config(expert_input, ckcfg),
+        compute_kernel_config=ckcfg,
     )
     up = ttnn.matmul(
         expert_input,
         concat.up_cat,
         memory_config=dram,
-        compute_kernel_config=expert_compute_kernel_config(expert_input, ckcfg),
+        compute_kernel_config=ckcfg,
     )
     activated = apply_geglu(gate, up)  # DiffusionGemma's tanh GeLU, not the gemma4 default
     gate.deallocate(True)
@@ -367,7 +346,7 @@ def concat_experts_forward(experts, expert_input, dense_routing, *, compute_kern
         weighted,
         concat.down_cat,
         memory_config=dram,
-        compute_kernel_config=expert_compute_kernel_config(weighted, ckcfg),
+        compute_kernel_config=ckcfg,
     )
     weighted.deallocate(True)
 
