@@ -3717,6 +3717,14 @@ RING_MLA_CHUNKED_MODEL_CONFIGS = {
 # exp_ring_joint_sdpa_program_factory.cpp, where every CB is sized from Sq_chunk_t/Sk_chunk_t/DHt with
 # no num_heads term. The k_chunk_sizes sweep below is how that gets settled by measurement: if 640
 # fits and is fastest at 24 heads, K3's tuned config should carry no cap.
+#
+# THESE CASES ARE 2x4-ONLY IN PRACTICE, and not for a K3-specific reason: open_ring_joint_sdpa_runtime
+# picks FABRIC_1D_RING whenever sp_size > 2, and ring fabric cannot map on an 8x4 Blackhole Galaxy --
+# MeshShape(4,8) opens fine under FABRIC_1D but both (4,8) and (8,4) fail under ring at
+# topology_mapper.cpp:546. The pre-existing kimi50k (K2.6) case fails identically there, so this is a
+# harness/fabric limitation, not a regression. Verified 2026-08-03 on bh-glx-b07u08. The no-cap
+# decision was instead confirmed on Galaxy through the model path -- see mla_config.py's 640 SDPA
+# entry and docs/KIMI_K3_MLA.md §5.3.
 KIMI_K3_HEADS_PER_DEVICE = 24
 RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
     name="kimi_k3",

@@ -57,6 +57,8 @@ at the time of writing (branched off `5700827bc39`).
 >    shape in §3 (`H_loc=24`, `D_loc=1792`, `S_loc=640`); only `ring_size` changes 8→2. Note the
 >    chunked-prefill driver derives `S_loc = chunk_size_global // sp`, so reaching `S_loc=640` at
 >    sp=2 needs `chunk_size_global=1280`, not the default 5120.
+>    **Confirmed on Galaxy (§5.3):** the 8x4 depth curve lands within 4e-5 of the 2x4 one and the KV
+>    cache PCC matches to six decimals, so the equivalence argument is now measured, not just derived.
 
 ## 1. What K2.6 support looks like today
 
@@ -272,6 +274,12 @@ The §4 table above cites `string_to_unary_with_param` as if the two were equiva
 >
 > Every K3 branch is flag-gated on `mla_use_nope` / `mla_use_output_gate`, and the K2.6 / V3 / GLM
 > PCCs are bit-identical before and after.
+>
+> **Mesh coverage.** Developed and measured on a 2x4 Blackhole loudbox; **accuracy re-validated on an
+> 8x4 Blackhole Galaxy on 2026-08-03 — §5.3**, including the 56,320-token depth curve at the native
+> production geometry. Still 2x4-only: the gate epilogue unit test, the MLA weight-cache test, the
+> perf baseline, and the ring-joint SDPA `k_chunk` sweep (that last one blocked by a fabric
+> limitation, not by K3 — see §5.3).
 
 ### 5.1 Accuracy at production depth, and the one config that broke it
 
@@ -285,6 +293,9 @@ identical geometry as a control:
 | Kimi-K2.6 | 0.99808 | ~0.9942 | — | — | — | — | **0.98589** | 0.99282 |
 | K3, as first shipped | 0.99765 | **0.97860 ✗** | — | — | — | — | — | — |
 | **K3, fixed** | 0.99880 | 0.99321 | 0.99025 | 0.98786 | 0.98671 | 0.98606 | **0.98550** | 0.99243 |
+
+(Independently reproduced on an 8x4 Galaxy at the *native* production geometry — 11 chunks of 5,120
+rather than 44 of 1,280. Different chunk size, different ring size, same result. See §5.3.)
 
 As first shipped, K3 **failed the 0.98 threshold at kv_actual=3,840** — 1/14th of production depth.
 A bisect isolated it to a single tuned config:
@@ -383,6 +394,62 @@ measured 397 s at 96 heads, 264 s at 64 heads on a 16-core EPYC without AMX. Eve
 bisect after that is device-time only (~20-40 s). Note the input must be part of the key: the chunked
 driver seeds `hidden` per user, so two users can share a length with different inputs.
 
+### 5.3 Galaxy (8×4) validation
+
+Everything above §5.3 was measured on a 2x4 Blackhole loudbox. Re-run on an 8x4 Blackhole Galaxy
+(`bh-glx-b07u08`, 32 devices, 2026-08-03) — the shipping geometry. **The Galaxy reaches `S_loc=640`
+natively**: `S_loc = chunk_size_global // sp`, so the default 5,120 chunk at sp=8 gives 640 directly,
+where a 2-SP box needs `chunk_size_global=1280` to fake it. The scenario
+`test_mla_chunked_prefill[k3-production-50k+5k-cpu-8x4-fabric2d]` (11 × 5,120 = 56,320) is therefore
+the *native* form of `depth56k-1u`, at the same total token count and the same per-device shapes.
+
+**Depth, 56,320 tokens, FABRIC_2D:**
+
+| kv_actual | 0 | 5,120 | 10,240 | 15,360 | 20,480 | 25,600 | 30,720 | 35,840 | 40,960 | 46,080 | 51,200 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| PCC | 0.99790 | 0.99124 | 0.98932 | 0.98819 | 0.98746 | 0.98690 | 0.98642 | 0.98615 | 0.98593 | 0.98573 | **0.98554** |
+
+11/11 above the 0.98 threshold, monotone, asymptote **0.98554** vs 2x4's 0.98550 at 55,040.
+**KV cache: k_nope 0.999877, k_pe 0.999894** — k_nope matches §5.1's accurate-default figure to six
+decimals, so the `in0_block_w=1` fix is not an artifact of the box it was found on.
+
+**Other 8x4 coverage:**
+
+| | result |
+|---|---|
+| `test_kimi_k3_mla_mm` (all 7 matmuls + `g_proj` unfused) | 8/8, PCC 0.99989–0.99996 |
+| `test_kimi_k3_mla` seq5k `max_sl` | out 0.99790, KVPE 0.99988 / 0.99989; unabsorbed ref 0.99790 (thr 0.995) |
+| `test_kimi_k3_mla` seq25k `max_sl` | out 0.98616, KVPE 0.99986 / 0.99988 |
+| host-only (torch reference, config resolution, both tripwires) | 20/20 |
+
+`kv_a_proj_with_mqa` measures 0.9999216 here — the same value §5.2's sweep records for `ibw=1`.
+
+**seq25k is the thinnest margin observed** (0.98616 against 0.98) and has no Kimi-K2.6 control at the
+same geometry, so it is not yet known whether that is K3-specific or simply what 25k single-shot
+costs. Worth one K2.6 run before reading anything into it.
+
+**Not runnable on 8x4, and why:**
+
+* `test_ring_mla_chunked_accuracy[kimi_k3-q32-k*]` — **blocked by fabric, not by K3.**
+  `open_ring_joint_sdpa_runtime` selects `FABRIC_1D_RING` whenever `sp_size > 2`, and ring fabric
+  cannot map on this Galaxy: `MeshShape(4,8)` opens fine under `FABRIC_1D`, while both `(4,8)` and
+  `(8,4)` fail under ring (`topology_mapper.cpp:546`). The pre-existing `kimi50k` (K2.6) case fails
+  identically, so this predates the K3 work. **F2's conclusion is still validated at 8x4**, just not
+  via that sweep: the depth run above resolves `MLA_SDPA_CONFIG[640]` to the K3 candidate — the
+  catch-all is rejected by `dense_head_cap_non_dsa=64` at 96 heads, the K3 entry carries no cap — so
+  it ran **k_chunk=640 at 24 heads/device on Galaxy**, 11 chunks, no L1 OOM, PCCs above.
+* `test_kimi_k3_gate.py` — parametrized `(2,4)` only. **This is the gap worth closing**: §4.1's
+  layout-B decision turns on the collective, and the AG/RS gap widens 1.7× → 2.7× between FABRIC_1D
+  and FABRIC_2D, so ring size is exactly the variable it is sensitive to.
+* `tests/cache/test_mla_cache.py` K3 case — parametrized `linear-2x4` only.
+* `tests/perf/test_mla_perf.py::test_kimi_k3_mla_chunked_perf_loudbox` — 2x4 only by construction;
+  a Galaxy baseline needs its own test (see that docstring).
+
+**Build note.** This branch is based on `5700827bc39`. A `build_Release` produced from a *newer* main
+emits an include for `experimental/blaze_rt_arg.h`, which does not exist in this tree — the symptom is
+a kernel-JIT `fatal error: ... No such file or directory` before any K3 test runs, not an obvious
+version mismatch. Rebuild after checkout, or rebase.
+
 **F1 — Immediate hard break: `rope_scaling` carries no `"factor"`.** `mla.py:330` unconditionally
 derefs `config.rope_scaling["factor"]` / `["mscale"]`. K3 raises before anything else runs. The fix
 is not just a guard: the correct K3 scale is plain `qk_head_dim**-0.5`, where K2.6 multiplies by
@@ -418,6 +485,11 @@ axes here. **K3's tuned entry therefore carries no cap and uses k=640**, matchin
 
 This makes F2 a one-line config fix rather than the sweep-for-a-safe-smaller-value exercise the
 original text implies — and it was indeed the largest single perf item on the MLA side.
+
+*Galaxy status (§5.3): the sweep above cannot be re-run on 8x4 — that test forces `FABRIC_1D_RING`,
+which does not map there, for K2.6 as much as for K3. The no-cap decision is nonetheless confirmed on
+Galaxy through the model path, which selects this entry and runs k_chunk=640 at 24 heads/device
+cleanly over 56,320 tokens.*
 
 **F3 — `num_heads = 96` silently disables every tuned matmul config.** `_resolve_mm_cfg`
 (`mla.py:579`) drops any config whose declared `num_heads` doesn't match, and all six tuned

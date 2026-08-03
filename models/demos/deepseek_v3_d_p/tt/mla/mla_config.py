@@ -415,6 +415,12 @@ MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][640] = [
         # ranking is INVERTED against depth behaviour, because its error is written to the cache and
         # re-read by every later chunk. Never justify raising this from an op-level PCC; only
         # depth56k-1u decides. Guarded by test_k3_accuracy_pinned_blocking.
+        #
+        # CONFIRMED ON 8x4 GALAXY (2026-08-03) at the native production geometry -- 11 chunks of 5120
+        # (sp=8 gives S_loc=640 directly, no chunk_size_global=1280 needed): KV cache k_nope 0.999877,
+        # the same six decimals this blocking yields on 2x4, and 11/11 output PCCs pass to 0.98554 at
+        # kv_actual=51200. Different chunk size and ring size, same numbers -- so the accuracy of
+        # in0_block_w=1 is a property of the blocking, not of the box it was swept on. See §5.3.
         "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=COMPUTE_GRID,
             in0_block_w=1,
@@ -568,6 +574,13 @@ MLA_SDPA_CONFIG = {
     # (The cap's stated "L1 scales with head count" rationale does not hold — see
     # ttMLA._get_sdpa_program_config and docs/KIMI_K3_MLA.md §0.5.) Accuracy saturates by k=256;
     # 640 matches K2.6's validated tiling.
+    #
+    # CONFIRMED ON 8x4 GALAXY (2026-08-03). Not via the sweep above -- that test forces
+    # FABRIC_1D_RING, which cannot map on Galaxy for any variant (K2.6's kimi50k case fails
+    # identically), so it is 2x4-only in practice. Confirmed instead through the model path, which is
+    # the stronger check anyway: test_mla_chunked_prefill[k3-production-50k+5k-cpu-8x4-fabric2d]
+    # resolves this K3 candidate (the catch-all is rejected by its cap at 96 heads) and runs
+    # k_chunk=640 at 24 heads/device over 11 chunks / 56320 tokens with no L1 OOM. See §5.3.
     640: [
         {
             "q_chunk_size": 32,

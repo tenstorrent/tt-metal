@@ -28,6 +28,13 @@ Both are asserted numerically equivalent, so the choice stays a performance ques
 correctness one.
 
 Per-device geometry matches the op audit: S_loc = 640, tp = 4, H_loc = 24.
+
+COVERAGE GAP -- these tests are parametrized ``(2, 4)`` only and have NOT been run on an 8x4 Galaxy
+(as of 2026-08-03; the rest of the K3 suite has, see docs/KIMI_K3_MLA.md §5.3). The layout-agreement
+claim above is ring-size independent, so correctness is not in question. What IS ring-size dependent
+is the §4.1 layout B-vs-A margin: it is dominated by the collective, and the AG/RS gap widens 1.7x ->
+2.7x between FABRIC_1D and FABRIC_2D. Adding ``(8, 4)`` to the mesh_device parametrize is the cheap
+way to close it -- the ring grows 2 -> 8, which is the axis that decision actually turns on.
 """
 
 import pytest

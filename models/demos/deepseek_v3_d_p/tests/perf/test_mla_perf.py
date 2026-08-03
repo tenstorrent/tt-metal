@@ -104,6 +104,12 @@ def test_kimi_k3_mla_chunked_perf_loudbox():
     asserts the 2x4 measurement on its own terms; a Galaxy ground-truth test needs a Galaxy run to
     calibrate (mirror test_kimi_mla_chunked_perf_galaxy with a 'chunk1280 and k3' or 5120-chunk -k).
 
+    STILL UNCALIBRATED ON GALAXY as of 2026-08-03. K3 ACCURACY has since been validated on an 8x4
+    Galaxy (docs/KIMI_K3_MLA.md 5.3) but perf has not, so this baseline remains 2x4-only. For the
+    Galaxy twin use the DEFAULT 5120 chunk, not 1280: sp=8 makes 5120 land S_loc=640 directly, so
+    '-k "production-50k+5k and k3 and func and 8x4 and fabric2d"' hits the tuned 640 configs
+    natively -- chunk1280 there would give S_loc=160 and miss them entirely.
+
     Measured breakdown at calibration: Matmul 1,430 us / CCL 2,003 us / SDPA 1,709 us / Other 786 us.
     CCL is the largest bucket, and the gate adds one TP all-gather -- worth watching if this regresses.
 
