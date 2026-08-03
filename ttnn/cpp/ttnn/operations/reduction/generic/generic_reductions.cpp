@@ -38,7 +38,25 @@ Tensor reduce(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool fast_and_approximate_mode = false);
+    bool fast_and_approximate_mode = false,
+    const std::optional<Layout>& output_layout = std::nullopt);
+
+// Honor an output-layout request the device path could not satisfy natively (e.g. a tilized reduce
+// asked for ROW_MAJOR); a no-op when the path already emitted the requested layout.
+static Tensor convert_output_layout(const Tensor& tensor, const std::optional<Layout>& output_layout) {
+    if (!output_layout.has_value() || tensor.layout() == *output_layout) {
+        return tensor;
+    }
+    // Untilizing a block-float result would widen it to BFLOAT16; reject rather than silently
+    // returning a dtype the caller did not ask for.
+    TT_FATAL(
+        *output_layout != Layout::ROW_MAJOR || !tt::tt_metal::is_block_float(tensor.dtype()),
+        "output_layout=ROW_MAJOR is not supported for a {} result: block-float formats only exist in "
+        "TILE layout, so honoring the request would silently widen the dtype to BFLOAT16. Reduce to "
+        "TILE and typecast explicitly if a row-major result is needed.",
+        tensor.dtype());
+    return ttnn::to_layout(tensor, *output_layout);
+}
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
@@ -138,7 +156,10 @@ static Tensor reduce_impl(
     // the stage with is_last_in_chain=true packs the final bf16 result.
     bool chain_active = false,
     bool is_last_in_chain = false,
-    bool fast_and_approximate_mode = false) {
+    bool fast_and_approximate_mode = false,
+    // Only forwarded to the single-step W/H/HW dispatch, where the device op can honor it natively.
+    // The multi-axis loop passes std::nullopt for its intermediates and the caller converts.
+    const std::optional<Layout>& output_layout = std::nullopt) {
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.rank();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -277,7 +298,8 @@ static Tensor reduce_impl(
                 sub_core_grids,
                 /*negate=*/false,
                 /*use_row_major_support=*/true,
-                /*fast_and_approximate_mode=*/fast_and_approximate_mode);
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode,
+                output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
@@ -290,7 +312,8 @@ static Tensor reduce_impl(
                 sub_core_grids,
                 /*negate=*/false,
                 /*use_row_major_support=*/true,
-                /*fast_and_approximate_mode=*/fast_and_approximate_mode);
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode,
+                output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Max) {
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
@@ -513,7 +536,8 @@ Tensor reduce(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<Layout>& output_layout) {
     // ttnn.mean does not support integer inputs. Remove once integer AVG is implemented.
     if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
         const auto dt = input_tensor_arg.dtype();
@@ -612,7 +636,8 @@ Tensor reduce(
         sub_core_grids,
         /*chain_active=*/chain_active,
         /*is_last_in_chain=*/chain_active,
-        /*fast_and_approximate_mode=*/fast_and_approximate_mode);
+        /*fast_and_approximate_mode=*/fast_and_approximate_mode,
+        output_layout);
 }
 
 Tensor pool_sum(
@@ -620,16 +645,23 @@ Tensor pool_sum(
     int dim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar) {
-    return reduce_impl<reduction_common::ReduceType::Sum>(
-        input_tensor_arg,
-        ttsl::SmallVector<int>({dim}),
-        /*keepdim=*/true,
-        memory_config_arg,
-        compute_kernel_config,
-        scalar,
-        /*non_height_width_dims=*/{},
-        /*sub_core_grids=*/std::nullopt);
+    float scalar,
+    const std::optional<Layout>& output_layout) {
+    return convert_output_layout(
+        reduce_impl<reduction_common::ReduceType::Sum>(
+            input_tensor_arg,
+            ttsl::SmallVector<int>({dim}),
+            /*keepdim=*/true,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            /*non_height_width_dims=*/{},
+            /*sub_core_grids=*/std::nullopt,
+            /*chain_active=*/false,
+            /*is_last_in_chain=*/false,
+            /*fast_and_approximate_mode=*/false,
+            output_layout),
+        output_layout);
 }
 
 }  // namespace ttnn::operations::reduction
@@ -645,17 +677,21 @@ Tensor sum(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode) {
-    return operations::reduction::reduce<reduction_common::ReduceType::Sum>(
-        input_tensor_arg,
-        dim_arg,
-        keepdim,
-        memory_config_arg,
-        compute_kernel_config,
-        scalar,
-        correction,
-        sub_core_grids,
-        fast_and_approximate_mode);
+    bool fast_and_approximate_mode,
+    const std::optional<Layout>& output_layout) {
+    return operations::reduction::convert_output_layout(
+        operations::reduction::reduce<reduction_common::ReduceType::Sum>(
+            input_tensor_arg,
+            dim_arg,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            correction,
+            sub_core_grids,
+            fast_and_approximate_mode,
+            output_layout),
+        output_layout);
 }
 
 Tensor mean(
@@ -667,17 +703,21 @@ Tensor mean(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode) {
-    return operations::reduction::reduce<reduction_common::ReduceType::Mean>(
-        input_tensor_arg,
-        dim_arg,
-        keepdim,
-        memory_config_arg,
-        compute_kernel_config,
-        scalar,
-        correction,
-        sub_core_grids,
-        fast_and_approximate_mode);
+    bool fast_and_approximate_mode,
+    const std::optional<Layout>& output_layout) {
+    return operations::reduction::convert_output_layout(
+        operations::reduction::reduce<reduction_common::ReduceType::Mean>(
+            input_tensor_arg,
+            dim_arg,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            correction,
+            sub_core_grids,
+            fast_and_approximate_mode,
+            output_layout),
+        output_layout);
 }
 
 Tensor max(

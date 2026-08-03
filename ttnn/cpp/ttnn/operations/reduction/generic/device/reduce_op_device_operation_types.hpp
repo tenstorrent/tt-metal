@@ -28,20 +28,19 @@ struct ReduceParams {
     // kernel, gated by the REDUCE_POST_MUL define. When `post_mul_scaler == 1.0f`, the
     // post-multiplication path is disabled and the existing reduce-only flow runs unchanged.
     float post_mul_scaler{1.0f};
-    // Dense row-major path for **mean only** (generic_reductions dispatches AVG over W/H): host enables only when
-    // constraints match tilized mean (4D, BF16/FLOAT32, interleaved I/O); AVG is lowered to SUM + scaler before
-    // launch. Other ROW_MAJOR reductions tilize and use the standard tile kernels. Exactly one of the two flags
-    // may be set at a time (validated in validate_on_program_cache_miss).
+    // Dense row-major path for sum / mean over W or H (4D BF16/FLOAT32, interleaved I/O; AVG lowered
+    // to SUM + scaler). At most one of the two may be set.
     bool row_major_w_dense_path{false};
     bool row_major_h_dense_path{false};
-    // Accurate fp32 mean: route Float32 SUM through the SFPU (full fp32); set from
-    // ttnn.mean(fast_and_approximate_mode=False).
+    // Accurate fp32: route Float32 SUM through the SFPU (full fp32); set from
+    // ttnn.sum / ttnn.mean(fast_and_approximate_mode=False).
     bool use_sfpu_reduce{false};
-    // H-axis split (RM-H dense path only). 1 = normal H-reduce (output H=1). When >1 the reduce
-    // is segmented into `num_h_slices` contiguous H ranges, each reduced independently, producing a
-    // (N, C, num_h_slices, W) partial tensor that a second H-reduce collapses to (N, C, 1, W).
-    // Lets the op use NC*Wt*num_h_slices cores instead of NC*Wt on tall-H shapes. See reduce_op.cpp.
+    // Number of contiguous H segments to reduce independently (RM-H dense path; 1 = no split).
+    // Spreads a tall-H reduce over more cores, yielding a (N, C, num_h_slices, W) partial.
     uint32_t num_h_slices{1};
+    // Physical layout the op must produce: TILE on the tilized paths, ROW_MAJOR on the dense RM
+    // ones, or TILE from RM-H when num_h_slices == 1.
+    tt::tt_metal::Layout output_layout{tt::tt_metal::Layout::TILE};
 };
 
 }  // namespace ttnn::prim

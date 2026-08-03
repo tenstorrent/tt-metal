@@ -133,8 +133,7 @@ void reduce_rm_reader() {
         // W-branch (where slots 8-10 don't exist) doesn't eagerly instantiate them.
         constexpr uint32_t H_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 8 : 0);
         constexpr uint32_t num_h_slices = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 9 : 0);
-        // Tiles reduced per output work unit == the compute kernel's Ht loop bound. num_h_slices==1
-        // makes slice_Ht == Ht_rm, so a single work unit spans the full H (classic behavior).
+        // Tiles per work unit == the compute kernel's Ht loop bound; == Ht_rm when num_h_slices == 1.
         constexpr uint32_t slice_Ht = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 10 : 0);
 
         // Each owned output tile is one work unit (wt_tiles_per_chunk == 1). Decompose its global id

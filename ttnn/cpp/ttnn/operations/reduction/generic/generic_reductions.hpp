@@ -23,7 +23,8 @@ Tensor pool_sum(
     int dim_arg,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar);
+    float scalar,
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 }  // namespace operations::reduction
 
@@ -37,9 +38,11 @@ Tensor sum(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    // When false (default), fp32 sum reduces on the accurate SFPU path (full fp32); true selects the faster tf32 FPU
-    // path.
-    bool fast_and_approximate_mode = false);
+    // False (default) keeps fp32 sum on the accurate SFPU path; true selects the faster tf32 FPU.
+    bool fast_and_approximate_mode = false,
+    // Layout of the result. std::nullopt (default) is TILE, except a ROW_MAJOR input reduced over
+    // -1/-2 on the dense RM path, which stays ROW_MAJOR. An explicit layout is always honored.
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor mean(
     const Tensor& input_tensor_arg,
@@ -50,9 +53,10 @@ Tensor mean(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    // When false (default), fp32 mean reduces on the accurate SFPU path (full fp32); true selects the faster tf32 FPU
-    // path.
-    bool fast_and_approximate_mode = false);
+    // False (default) keeps fp32 mean on the accurate SFPU path; true selects the faster tf32 FPU.
+    bool fast_and_approximate_mode = false,
+    // See ttnn::sum above.
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor max(
     const Tensor& input_tensor_arg,
