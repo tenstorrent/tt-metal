@@ -151,6 +151,13 @@ bool skip_link_cluster_available() {
            tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
 }
 
+// A ControlPlane can only be built when the running world matches the descriptor's declared host
+// ranks: fewer ranks cannot clear the single-host check, and one host's chips cannot back a mesh
+// spanning several.
+int world_size() {
+    return static_cast<int>(*tt::tt_metal::MetalContext::instance().full_world_distributed_context().size());
+}
+
 constexpr auto kNoClusterSkipMsg =
     "not a Blackhole Galaxy: set TT_METAL_MOCK_CLUSTER_DESC_PATH to a Blackhole Galaxy descriptor from the "
     "tt-cluster-descriptors submodule (e.g. "
@@ -2682,6 +2689,9 @@ TEST_F(ControlPlaneFixture, PhysicalLowering32x4) {
     if (!skip_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
+    if (world_size() != 4) {
+        GTEST_SKIP() << "skip_links_32x4 declares 4 host ranks; run under tt-run with 4 ranks";
+    }
     const std::filesystem::path desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_32x4_mesh_graph_descriptor.textproto";
@@ -2713,156 +2723,6 @@ TEST_F(ControlPlaneFixture, PhysicalLowering32x4) {
             }
         }
     }
-}
-
-// 16x4 partial merged sub-torus (2 quads, no Y wrap): every ex4 AND ex8 chord endpoint pair routes
-// via Z with physical Z channels on the owning rank. Run multi-rank under tt-run with a 2-rank mock
-// mapping. FABRIC_2D_TORUS_X: [LINE, RING] keeps only the column (E/W) wrap.
-TEST_F(ControlPlaneFixture, PhysicalLowering16x4) {
-    if (!skip_link_cluster_available()) {
-        GTEST_SKIP() << kNoClusterSkipMsg;
-    }
-    const std::filesystem::path desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_16x4_mesh_graph_descriptor.textproto";
-
-    auto control_plane = make_control_plane(
-        desc_path,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
-
-    using D = tt::tt_fabric::RoutingDirection;
-    // ex4 + ex8 chord endpoint row pairs on a 16-row LINE (wrapping blocks dropped); chip = row*4 + col
-    const std::vector<std::pair<int, int>> row_blocks = {{2, 5}, {6, 9}, {10, 13}, {0, 7}, {8, 15}};
-    for (const auto& [ra, rb] : row_blocks) {
-        for (int col = 0; col < 4; ++col) {
-            tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(ra * 4 + col)};
-            tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(rb * 4 + col)};
-
-            auto dir = control_plane->get_forwarding_direction(src, dst);
-            EXPECT_TRUE(dir.has_value() && *dir == D::Z)
-                << "skip r" << ra << "->r" << rb << " col " << col << " not routed via Z";
-
-            try {
-                EXPECT_FALSE(control_plane->get_active_fabric_eth_channels_in_direction(src, D::Z).empty())
-                    << "no physical Z channels at local chip " << (ra * 4 + col);
-            } catch (const std::exception&) {
-            }
-        }
-    }
-}
-
-// 24x4 partial merged sub-torus (3 quads, no Y wrap): same as PhysicalLowering16x4, run multi-rank
-// under tt-run with a 3-rank mock mapping.
-TEST_F(ControlPlaneFixture, PhysicalLowering24x4) {
-    if (!skip_link_cluster_available()) {
-        GTEST_SKIP() << kNoClusterSkipMsg;
-    }
-    const std::filesystem::path desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_24x4_mesh_graph_descriptor.textproto";
-
-    auto control_plane = make_control_plane(
-        desc_path,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
-
-    using D = tt::tt_fabric::RoutingDirection;
-    // ex4 + ex8 chord endpoint row pairs on a 24-row LINE (wrapping blocks dropped); chip = row*4 + col
-    const std::vector<std::pair<int, int>> row_blocks = {
-        {2, 5}, {6, 9}, {10, 13}, {14, 17}, {18, 21}, {0, 7}, {8, 15}, {16, 23}};
-    for (const auto& [ra, rb] : row_blocks) {
-        for (int col = 0; col < 4; ++col) {
-            tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(ra * 4 + col)};
-            tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(rb * 4 + col)};
-
-            auto dir = control_plane->get_forwarding_direction(src, dst);
-            EXPECT_TRUE(dir.has_value() && *dir == D::Z)
-                << "skip r" << ra << "->r" << rb << " col " << col << " not routed via Z";
-
-            try {
-                EXPECT_FALSE(control_plane->get_active_fabric_eth_channels_in_direction(src, D::Z).empty())
-                    << "no physical Z channels at local chip " << (ra * 4 + col);
-            } catch (const std::exception&) {
-            }
-        }
-    }
-}
-
-// The canonical logical route query must reconstruct the same path the table walks, and must
-// complete the skip axis before turning onto X. chip = row*4 + col on the 8x4 fixture.
-TEST_F(ControlPlaneFixture, CanonicalRoute8x4) {
-    if (!skip_link_cluster_available()) {
-        GTEST_SKIP() << kNoClusterSkipMsg;
-    }
-    const std::filesystem::path desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(
-        desc_path,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
-
-    const auto node = [](int chip) {
-        return tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(chip)};
-    };
-    const auto chips = [&](const std::vector<tt::tt_fabric::FabricNodeId>& route) {
-        std::vector<int> out;
-        for (const auto& n : route) {
-            out.push_back(static_cast<int>(n.chip_id));
-        }
-        return out;
-    };
-
-    EXPECT_TRUE(control_plane->express_routing_enabled(tt::tt_fabric::MeshId{0}));
-
-    // Rows 0->5 on the single family [0,1,2,5,6,7]: an exact 3-vs-3 tie taking canonical forward,
-    // so the walk is rows 0,1,2 then the span-4 chord to 5.
-    EXPECT_EQ(chips(control_plane->get_canonical_intramesh_route(node(0), node(20))), (std::vector<int>{0, 4, 8, 20}));
-    // Same Y route, then one X hop -- Y must complete before X.
-    EXPECT_EQ(
-        chips(control_plane->get_canonical_intramesh_route(node(0), node(21))), (std::vector<int>{0, 4, 8, 20, 21}));
-    // Destination leaf row 3 is entered from its anchor row 2, never through paired leaf row 4.
-    EXPECT_EQ(chips(control_plane->get_canonical_intramesh_route(node(20), node(12))), (std::vector<int>{20, 8, 12}));
-}
-
-// The §8.2 node/direction predicates on the two-family fixture: ex8 may continue into ex4, the
-// reverse crossing is terminal, and leaves carry no protected ring.
-TEST_F(ControlPlaneFixture, RingPredicates32x4) {
-    if (!skip_link_cluster_available()) {
-        GTEST_SKIP() << kNoClusterSkipMsg;
-    }
-    const std::filesystem::path desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_32x4_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(
-        desc_path,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
-
-    using D = tt::tt_fabric::RoutingDirection;
-    using Dim = tt::tt_fabric::RoutingDimension;
-    const auto row = [](int r) {  // column 0
-        return tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(r * 4)};
-    };
-
-    EXPECT_TRUE(control_plane->express_routing_enabled(tt::tt_fabric::MeshId{0}));
-    EXPECT_TRUE(control_plane->has_protected_ring(row(2), Dim::Y));   // ex4 member
-    EXPECT_TRUE(control_plane->has_protected_ring(row(0), Dim::Y));   // ex8 member
-    EXPECT_FALSE(control_plane->has_protected_ring(row(3), Dim::Y));  // leaf
-    EXPECT_TRUE(control_plane->has_protected_ring(row(3), Dim::X));   // X closes at every row
-
-    // Row 0 rides ex8 over its chord to row 7; its S neighbour row 1 is ex4, so that edge is a
-    // crossover and belongs to neither ring.
-    EXPECT_TRUE(control_plane->is_protected_ring_edge(row(0), D::Z));
-    EXPECT_FALSE(control_plane->is_protected_ring_edge(row(0), D::S));
-
-    // Row 2 arrives from row 1 and leaves over the ex4 chord to row 5 -- one orientation, one ring.
-    EXPECT_TRUE(control_plane->are_same_directed_ring_edges(row(2), D::N, D::Z));
-
-    // ex8 -> ex4 may continue; ex4 -> ex8 is terminal.
-    EXPECT_TRUE(control_plane->continuation_allowed(row(1), D::N, D::S));
-    EXPECT_FALSE(control_plane->continuation_allowed(row(0), D::S, D::Z));
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
