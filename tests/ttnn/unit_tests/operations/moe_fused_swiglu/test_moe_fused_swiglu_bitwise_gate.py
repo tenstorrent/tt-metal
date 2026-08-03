@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CROSS-REVISION bitwise gate — TEMPORARY, delete when the rewrite lands.
+"""CROSS-REVISION bitwise gate, for any change that claims to be SEMANTICALLY EMPTY.
 
-The rewrite's stages 1-3 (delete dead ablations, restructure the host descriptor, restructure
-the kernels) all claim to be *semantically empty*: they remove code the shipped configuration
-never executes and move code that it does. The honest gate for that claim is not PCC and not
-timing — it is that the op returns the SAME BITS before and after.
+Written for the rewrite — deleting dead ablations, restructuring the host, extracting the shared
+transport — where each step removed code the shipped configuration never executes or moved code
+that it does. It is kept because that claim recurs: the honest gate for it is not PCC and not
+timing, it is that the op returns the SAME BITS before and after.
+
+The digest is NOT checked in. It is recorded from whatever revision you are comparing against, so
+a stale one cannot quietly become the baseline.
 
 Timing cannot serve as the gate: this op's per-cell run-to-run band is ~1 %, and session drift
 is the same size, so a 1 % regression and a clean run are indistinguishable in one A/B. Bits
@@ -125,5 +128,6 @@ def test_bitwise(device, emb, capacity, count, input_format, request):
     assert key in store, f"{key} not in the recorded digest ({sorted(store)}); re-record the base revision"
     assert store[key] == digest, (
         f"BITWISE REGRESSION on {key}\n  recorded: {store[key]}\n  now:      {digest}\n"
-        f"The change was supposed to be semantically empty and is not."
+        f"The change was supposed to be semantically empty and is not. If the change was MEANT to\n"
+        f"move the numbers, re-record rather than widening this gate."
     )
