@@ -23,26 +23,6 @@ inline void rand_prng() {
     TTI_SFPMOV(0, prng_source, DEST, sfpmov_mod1_from_special);
 }
 
-inline void mix_uint32_full() {
-    // Thomas Wang's bijective 32-bit mix. Blackhole's direct-source shift
-    // mode expresses this in fifteen instructions without SFPSHFT2.
-    TTI_SFPNOT(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
-    TTI_SFPSHFT(15, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSHFT((-12) & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-    TTI_SFPSHFT(2, p_sfpu::LREG4, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSHFT((-4) & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-    TTI_SFPSHFT(3, p_sfpu::LREG4, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPSHFT(11, p_sfpu::LREG4, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG4, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-}
-
 template <bool APPROXIMATION_MODE>
 inline void rand_init(std::uint32_t seed) {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -51,17 +31,20 @@ inline void rand_init(std::uint32_t seed) {
         seed = 0xFFFFFFFE;
     }
     init_prng_seed(seed);
-    // The hardware initialises its lanes as shifted views of one LFSR. Hash
-    // the first vector once to create a nonlinear, seed-dependent lane salt.
-    // This lets the hot loop use a shorter permutation without exposing that
-    // relationship directly.
-    rand_prng<p_sfpu::LREG5>();
-    mix_uint32_full();
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
-    // Prime the first row here. Every completed row leaves the following
-    // salted word in LREG5, including across successive tile calls.
-    rand_prng<p_sfpu::LREG5>();
-    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
+}
+
+inline void make_lane_salt() {
+    // rand_tile is a shared API and other SFPU operations may clobber every
+    // mutable LREG between calls. Reconstruct a lane-specific salt from the
+    // read-only lane ID at the start of each tile instead of carrying it in an
+    // LREG. This is the conventional xorshift32 transformation.
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG3, 0);
+    TTI_SFPSHFT(13, p_sfpu::LREG3, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPSHFT((-17) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPSHFT(5, p_sfpu::LREG3, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
 }
 
 template <std::uint32_t VALUE, std::uint32_t EXPONENT>
@@ -117,6 +100,10 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, from & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
     TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 1);
+
+    make_lane_salt();
+    rand_prng<p_sfpu::LREG5>();
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
 
 #pragma GCC unroll 0
     for (int d = 0; d < 4; d++) {
