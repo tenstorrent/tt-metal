@@ -885,8 +885,6 @@
   team: models
 
 # ── LTX-2.3 (Black Hole single galaxy, bh_sc1) ───────────────────
-# Full-generation pipeline tests. Single-host bh_sc1 (4x8 ring galaxy); weights pre-staged on
-# /mnt/models, resolved offline (HF_HUB_OFFLINE=1). Routed to the e2e multihost job by SKU.
 - name: TT-DiT LTX-2.3 Pro T2V e2e tests
   cmd: |
     export NO_PROMPT=1
