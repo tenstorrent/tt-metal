@@ -1,12 +1,12 @@
 # advchal-v2 — experiments run to test the analysis
 
-Seven experiments run on hardware on **2026-08-03, 16:07–16:58 UTC**, after the corpus was complete, to test
+Eight experiments run on hardware on **2026-08-03, 16:07–17:03 UTC**, after the corpus was complete, to test
 claims the corpus data alone could not settle.
 
 | | outcome |
 |---|---|
 | confirmed a published claim | E1, E3 |
-| **refuted a hypothesis of mine** | E2, E4 (partly) |
+| **refuted a hypothesis of mine** | E2, E4 (partly), **E8 (refuted one of my own action points)** |
 | **found a win the corpus missed** | E4 (north-mini, −264 µs/model), E5 (gemma-4-26B onA, −375 µs/model), **E7 (gemma-4-26B B, −3,918 µs/model)** |
 | **corrected the mechanism behind a published conclusion** | E6 |
 | **validated a proposed fix by prediction** | E7 — a static, zero-device-time check flagged the cell before the run |
@@ -473,3 +473,49 @@ cannot distinguish "reassociated" from "wrong", and the stage's rule would say *
   (correctness pending), gemma-4-26B onA 0.38 ms, north-mini FN 0.26 ms.
 - **The single cheapest fix in this whole analysis is a static check that needs no device time**, computed
   from data `reconcile.py` already has. See action point **C1b**.
+
+---
+
+## E8 — does tightening the harness rescue an overlapping candidate? No — and it makes the floor worse
+
+**Claim under test (mine).** Action point B3 proposed: *"if a candidate's median beats the control but its
+blocks overlap, re-measure once at ≥4× `ITERS` before recording a rejection."* phi exp17 rejected
+`rope_l1_tail` exactly that way — better median (1.100683 vs 1.100939), overlapping repeats — while holding
+the corpus's largest ceiling (83.6 µs/layer). The skill's own `not_measurable` guidance says to "tighten the
+harness (more replays per timed block)".
+
+### Measured, with `CHALLENGER_WARMUP=20`
+
+| protocol | control | candidate `rope_l1_tail` | floors |
+|---|---|---|---|
+| **5 blocks × 50** (the stage default) | 1.100367 | 1.100293 | 0.708 / 0.447 µs |
+| **9 blocks × 200** (4× replays, 1.8× blocks) | 1.100427 / 1.100372 | 1.100077 / **1.100667** | 1.344 / 2.991 / 2.964 / 2.001 µs |
+
+### Two results, both negative for the proposal
+
+**1. It does not separate.** Under the tightened protocol the candidate's two medians *straddle* the
+control's: 1.100077 < 1.100372 < 1.100667. The effect is genuinely below what this setup resolves at any
+replay count tried. **phi exp17's rejection was correct**, and B3 as written would have spent device time to
+reach the same answer.
+
+**2. Tightening made the noise floor 3–4× *worse*.** Going from 250 replays per measurement (5×50) to 1,800
+(9×200) took the floor from **0.4–0.7 µs to 1.3–3.0 µs**.
+
+That contradicts the reasoning the protocol is built on. `harness_template.py` argues:
+
+> `ITERS >= 50` — Each timed block reports the MEAN of ITERS replays, so the spread between blocks is the
+> spread of means, roughly `sqrt(ITERS)` tighter than single-shot timing.
+
+`sqrt(ITERS)` tightening assumes the noise is i.i.d. within a run. It is not: a longer measurement window
+picks up slow drift (clock, thermal, allocator state), and drift does not average down. **Past some point,
+more replays per block measures the drift instead of the operation.** The corpus's own protocol
+(50 replays/block) appears to sit near the sweet spot; 200 is past it.
+
+### Corrected recommendation
+
+**B3 as originally written is wrong.** Replace it with:
+
+> On an overlap with a favourable median, **do not** assume more replays will resolve it — measured on this
+> hardware, 4× replays made the block spread 3–4× *worse*. Record `not_measurable` with the arithmetic, and
+> report the unrealised ceiling. If you do re-measure, re-measure **more independent processes at the same
+> block size**, not longer blocks — the cross-process term (§E3, 60×) is the one that actually dominates.

@@ -8,7 +8,7 @@ without it?
 one class of defect, a reduction stuck on too few cores. Where that defect exists it is worth 6–13 % per
 layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned one.
 
-**What the stage got wrong**, all measured on hardware afterwards (7 experiments):
+**What the stage got wrong**, all measured on hardware afterwards (8 experiments):
 
 1. It **discarded its own largest win** on a contradictory correctness rule — a candidate that is faster *and
    more accurate* than what shipped (−8.5 pp).
@@ -27,7 +27,7 @@ static check that needs no device time** (§3.8).
 |---|---|
 | **this file** | the account, and pointers |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
-| [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 7 experiments run on hardware to test the analysis |
+| [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -195,7 +195,7 @@ ladder above 22.
 | phi-3.5 B | the fused-cache share | no tracer handler for `paged_fused_update_cache` |
 
 Every structural zero in the corpus is a tracer-coverage zero. qwen's linear layers cost ~13× a full layer,
-so ~91 % of its model time was never advised on. **This is a `$shard-advise`/tt-mlir coverage problem, not
+so **97 % of its model decode time** was never advised on. **This is a `$shard-advise`/tt-mlir coverage problem, not
 a placement problem.**
 
 ### 3.6 A ~0 µs ceiling is not a stopping condition
@@ -205,12 +205,21 @@ chain removes no boundary, so it prices at **0.000 µs**. gemma-4-26B onA record
 layer kinds, screened the candidate anyway, and shipped **−12.98 %**. Two other cells trusted a similar
 ceiling and shipped zeros.
 
-### 3.7 Part of the noise floor is between processes, not within them
+### 3.7 The noise floor is mostly *between* processes — and more replays makes it worse
 
-The first harness process of a session recorded a floor of **11.838 µs**; the identical configuration later
-recorded **0.196 µs** — **60×**, from JIT-cache warmth *across* processes. Per-process warm-up cannot remove
-it, and the stage mandates one process per configuration. A cell whose control ran first carries an inflated
-floor, which directly changes its `feasibility.verdict`.
+Two measured facts about the protocol, both surprising:
+
+| | measured |
+|---|---|
+| The first harness process of a session recorded a floor of **11.838 µs**; the identical configuration later recorded **0.196 µs** | **60×**, from JIT-cache warmth *across* processes |
+| Going from 250 replays/measurement (5×200… i.e. 5 blocks × 50) to 1,800 (9 blocks × 200) | floor got **3–4× worse**: 0.4–0.7 µs → 1.3–3.0 µs |
+
+The protocol justifies `ITERS ≥ 50` by "the spread between blocks is the spread of means, roughly
+`sqrt(ITERS)` tighter". That holds only if the noise is i.i.d. within a run. It isn't — longer windows pick up
+slow drift, and **drift does not average down**. 50 replays/block sits near the sweet spot; 200 is past it.
+
+Consequence: the term worth attacking is the **cross-process** one, and per-process warm-up cannot touch it.
+A cell whose control ran first carries an inflated floor, which directly changes its `feasibility.verdict`.
 
 ### 3.8 One static check, no device time, finds every big win in the corpus
 
@@ -307,6 +316,7 @@ Four experiments, 2026-08-03 16:07–16:23 UTC, in isolated worktrees using each
 | E5 | Did gemma-4-26B onA ship the best grid? | **No** — 44 beats the shipped 88 by 12.3 µs/layer on both kinds, at PCC 1.0 |
 | E6 | Why did the same candidate regress on gemma FN? | Its incumbent **already had the norm on 8 cores** — the comparison was 8→88, not 1→88. §5 corrected |
 | E7 | Can a static check predict which cells have a win? | **Yes** — and the cell it flagged has a **−12.4 %/layer** win it built and never screened |
+| E8 | Does tightening the harness rescue an overlapping candidate? | **No — my own proposal, refuted.** It didn't separate, and made the floor 3–4× worse |
 
 One conclusion across E2/E4/E5/E6: **the grid a cell ships is the grid it was told, not the grid that is
 fastest — and the whole win is usually just the first step off one core.**
@@ -352,11 +362,11 @@ fastest — and the whole win is usually just the first step off one core.**
 | 2 | Ship north-mini's 16-core MoE norm | **−264 µs/model**, ≈ +1 pp |
 | 2b | Ship gemma-4-26B onA's 44-core norm instead of 88 | **−375 µs/model**, at PCC 1.0 |
 | 2c | **Screen gemma-4-26B B's `GEMMA4_OPT_RESIDUAL_SHARD_CORES=22`** (sliding only) | **−3,918 µs/model** — 26× what it shipped. **Correctness needs the real weights** |
-| 3 | Tracer support for qwen's linear-attention `ttnn.copy` boundary | ~91 % of qwen's model time, currently unadvised |
+| 3 | Tracer support for qwen's linear-attention `ttnn.copy` boundary | **97 %** of qwen's model decode time, currently unadvised |
 | 4 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window |
 | 5 | Sweep the legal ladder both sides of the advice in every norm cell | 1–5 pp per affected cell |
 | 6 | Re-screen qwen B's geometry off the one-row worker grid | currently a hard zero |
-| 7 | Re-screen phi exp17's overlapping candidate at higher replay count | its 83.6 µs/layer ceiling is the corpus's largest unrealised |
+| 7 | ~~Re-screen phi exp17's overlapping candidate at higher replay count~~ | **tested and dead** — tightening doesn't separate it (§3.7). Its 83.6 µs/layer ceiling is genuinely unmeasurable here |
 
 What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).
 
@@ -373,3 +383,5 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 | Arm labels (`FN`/`B` inverted) | `FN` = fuse-noadvise, `B` = nofuse-noadvise, from the driver claim lines |
 | gemma-4-26B: "the fusing arm had already fixed it" | The *fastest* arm is a `nofuse` arm. The variable is stage-02 quality |
 | The advisor has a "fewer-cores bias" | Its ordering prefers *more* cores, at level 6 of 7. The low values come from elsewhere — §3.3, open question |
+| qwen's unreachable linear layers are "~91 %" of its model time | **97 %** — recomputed from its own per-kind medians and layer counts |
+| "Re-measure an overlapping candidate at 4× replays" (my proposal) | **Refuted by experiment.** No separation, and the floor got 3–4× worse (§3.7, E8) |

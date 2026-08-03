@@ -70,9 +70,9 @@ be a stopping condition on its own.
 
 ## I4a. Coverage beats placement
 
-Every structural zero in this corpus is a tracer-coverage zero, and the biggest one hides ~91 % of a
-model's time behind a single unhandled op. Placement work on the visible 9 % cannot compete with making
-the other 91 % visible. Coverage is the highest-leverage investment available.
+Every structural zero in this corpus is a tracer-coverage zero, and the biggest one hides **97 %** of a
+model's decode time behind a single unhandled op. Placement work on the visible 3 % cannot compete with making
+the other 97 % visible. Coverage is the highest-leverage investment available.
 
 ## I5. A per-process protocol cannot control a cross-process effect
 
@@ -174,14 +174,22 @@ every isolate.
   disjoint.
 - **Test:** phi FN's rope+norm and gemma-4-12B's `q_k_v_mlp` are both required, not optional.
 
-### B3. Mandate one re-measure at higher replay count before rejecting on overlap
+### B3. On an overlap, add processes — never longer blocks ⚠ *this replaces my earlier proposal, which I tested and refuted*
 
-If a candidate's median beats the control but its blocks overlap, re-measure **once** at ≥4× `ITERS` before
-recording a rejection. Three cells raised replay counts — all only to clean up a *control*, never to
-separate a *candidate*, despite the skill's own `not_measurable` guidance saying to.
+I originally proposed re-measuring an overlapping candidate at ≥4× `ITERS`. **I tested that on phi exp17 and
+it fails twice over** ([`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E8):
 
-- **Test:** phi exp17's `rope_l1_tail` (median 1.100683 vs control 1.100939) either separates or is
-  recorded as genuinely unmeasurable. Its 83.6 µs/layer ceiling is the corpus's largest unrealised.
+- it did **not** separate the candidate — its two tightened medians straddle the control's;
+- it made the noise floor **3–4× worse** (0.4–0.7 µs → 1.3–3.0 µs going from 250 to 1,800 replays).
+
+The protocol's `sqrt(ITERS)` justification assumes i.i.d. noise within a run. It is not i.i.d. — longer
+windows pick up slow drift, and drift does not average down. **50 replays/block appears to be near the sweet
+spot; 200 is past it.**
+
+**Change.** State in `SKILL.md` that more replays per block is *not* a rescue for an overlap, and that the
+term worth attacking is the **cross-process** one (§E3 measured 60×): re-measure more *independent
+processes* at the same block size. And record `not_measurable` with its arithmetic without spending device
+time chasing it.
 
 ### B4. A zero ceiling obliges one screening before a zero may be published
 

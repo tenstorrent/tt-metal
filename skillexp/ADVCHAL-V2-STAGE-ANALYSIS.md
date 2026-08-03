@@ -229,6 +229,11 @@ Three cells raised warm-ups after seeing a settling signature — all three only
 to separate an overlapping **candidate**, even though the skill's own `not_measurable` guidance says to
 "tighten the harness (more replays per timed block)".
 
+**And that guidance is wrong.** Measured on phi exp17: going from 250 replays per measurement to 1,800 made
+the block spread **3–4× worse** (0.4–0.7 µs → 1.3–3.0 µs) and still did not separate the candidate. The
+`sqrt(ITERS)` argument in `harness_template.py` assumes i.i.d. noise within a run; drift is not i.i.d. and
+does not average down. See [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E8.
+
 ### D9. The profiler and the timing protocol conflict, undocumented
 
 Three cells hit three different versions of this and invented three different workarounds: nm onA
