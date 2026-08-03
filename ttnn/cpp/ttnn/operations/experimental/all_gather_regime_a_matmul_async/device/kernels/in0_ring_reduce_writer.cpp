@@ -560,7 +560,11 @@ void kernel_main() {
                 sender.open();
                 volatile tt_l1_ptr uint32_t* my_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_recv_sem_addr);
 
+#if defined(ABLATE_NOGATHER)
+                for (uint32_t r = 1; r < 1u; ++r) {  // ABLATION: no payload, no credits
+#else
                 for (uint32_t r = 1; r <= my_send_rounds; ++r) {
+#endif
                     if (r >= 2) {
                         // This round has to wait for arrival r-1 before it can forward it, so publish that
                         // arrival here rather than in a separate pass -- consumers get it as early as it
@@ -638,6 +642,9 @@ void kernel_main() {
         // Arrivals 1..my_send_rounds-1 were already published inside the send loop (the loop has to wait
         // for them anyway before it can forward). Anything past the last send round has no forwarding
         // work attached to it, so it is picked up here.
+#if defined(ABLATE_NOGATHER)
+        if (false) {  // ABLATION: nothing to report, nobody is waiting
+#else
         if (is_fabric_client) {
             // Start at 1, not my_send_rounds: at a LINE end there is no forwarding work in this
             // direction (send_rounds == 0) and i == 0 would be a spurious report that inflates the
@@ -646,6 +653,7 @@ void kernel_main() {
             for (uint32_t i = tail_lo; i <= my_recv_rounds; ++i) {
                 report_arrival(i);
             }
+#endif
         }
 
         // ---- 4. (the all-or-nothing barrier is gone) ----
@@ -685,6 +693,10 @@ void kernel_main() {
                 // ranks -- so cores whose data has already landed read, forward and start feeding compute
                 // while the remaining shards are still in flight. That is where the overlap comes from.
                 if (k_run_len != 0u && valid_k != 0u) {
+#if defined(ABLATE_NOWAIT)
+                }
+                if (false) {  // ABLATION: consumers do not gate on shard arrival
+#endif
                     // Wait for EVERY source rank this block touches, not just the last one. l / run_len is
                     // the rank in NUMERIC order, but arrival order is local-first then outward, so a higher
                     // numeric rank can land before a lower one -- waiting only on the block's last rank

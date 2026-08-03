@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <cstdlib>
 #include <set>
 #include <string>
 #include <vector>
@@ -665,7 +666,27 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     // ---- Kernel compile defines. wdefs = writer (in0 ring/reduce + fused output); fdefs_compute (below) =
     // compute fusion defines merged into cdefs. The in1 reader takes NO defines. Empty maps => the
     // byte-identical no-fusion compile. ----
+    // ---- Timing ablations (TT_AGMM_ABLATE). These produce WRONG RESULTS on purpose; timing only. ----
+    //   nowait   : the gather runs in full and publishes, but consumers never gate on arrival. The delta
+    //              against the real number is the pure DEPENDENCY STALL.
+    //   nogather : additionally, gather cores stage locally but send nothing. Isolates the matmul + local
+    //              staging floor inside the fused program.
+    //
+    // Measured on medium/tp4/ring/2-link, us per invocation:
+    //   matmul alone ~83   |   nowait 113.2   |   full fused 150.2   |   Phase-0 125.3
+    // i.e. ~30 us is the gather competing for DRAM/NoC bandwidth even when nothing waits on it (overlap
+    // cannot recover that, only a cheaper gather can), and ~37 us is pure stall (recoverable -- removing
+    // it alone would land below Phase-0). Host dispatch time is not evidence either way; this is device
+    // FW duration from the tracy device profiler, per the design spec's requirement.
+    const char* ablate_env = std::getenv("TT_AGMM_ABLATE");
+    const std::string ablate = ablate_env ? ablate_env : "";
     std::map<std::string, std::string> wdefs;
+    if (ablate == "nogather") {
+        wdefs["ABLATE_NOGATHER"] = "1";
+        wdefs["ABLATE_NOWAIT"] = "1";
+    } else if (ablate == "nowait") {
+        wdefs["ABLATE_NOWAIT"] = "1";
+    }
     // Fused fabric all-gather. A PREPROCESSOR define, not just a compile-time arg: the prologue declares a
     // TensorAccessorArgs that only exists when tp > 1, and `if constexpr` does NOT discard an ill-formed
     // branch in a non-template function -- it would still be compiled and fail deduction on the tp == 1 build.
