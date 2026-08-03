@@ -69,6 +69,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
         "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
 
     std::vector<ScalarInfo> scalars;
+    scalars.reserve(config.max_out_nhw_per_core);
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
@@ -151,6 +152,8 @@ Tensor create_scalar_config_tensor(
         default: break;
     }
 
+    scalars_per_core.reserve(num_iterations);
+
     {
         uint32_t nhw_linear = 0;
         uint32_t output_stick_n = 0;
@@ -228,6 +231,7 @@ std::vector<uint32_t> generate_core_starting_indices(
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: repeat_factor = num_cores_x; break;
         default: TT_FATAL(false, "Unsupported shard scheme");
     };
+    starting_indices.reserve(shard_boundaries.size() * repeat_factor);
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
@@ -728,6 +732,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // whenever pool2d uses a split reader. (mpwi has a single input/scalar stream — reader1 is
     // the writer face.)
     const bool has_second_input_cb = cb_sizes.has_split_reader && !return_indices;
+
+    // mandatory: in_scalar_0, clear_value, in_shard, reader_indices, in_0, out
+    constexpr uint32_t num_mandatory_dfbs = 6;
+    dfbs.reserve(
+        num_mandatory_dfbs + (has_second_input_cb ? 2 : 0) + (return_indices ? 9 : 0) +
+        (cb_sizes.has_pre_tilize ? 2 : 0) + (cb_sizes.has_out_idx ? 1 : 0) + (one_scalar_per_core ? 0 : 1));
 
     dfbs.push_back(local_dfb(
         DFB_IN_SCALAR_0, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));
