@@ -1,0 +1,13 @@
+{
+  "candidates": [
+    "fold hidden_1 + hidden_2 into RMSNorm residual_input_tensor",
+    "fold dense gate GeLU into the consuming multiply"
+  ],
+  "functional_decode_trace_host_ms_median": 3.0132,
+  "residual_fold_decode_trace_host_ms_median": 3.0529,
+  "residual_plus_activation_fold_decode_trace_host_ms_median": 3.0377,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "result": "historical combined experiment: residual folding was rejected; dense activation folding was subsequently isolated against current source and rejected for both modes",
+  "superseded_dense_activation_evidence": "isolated_dense_activation_fold_selection.json"
+}

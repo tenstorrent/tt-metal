@@ -1,0 +1,13 @@
+{
+  "candidate": "router RMSNorm + per-channel scale + scalar merge",
+  "controls": [
+    "RMSNorm(weight=router_scale*hidden_scale)",
+    "RMSNorm(None) then mul(router_scale*hidden_scale)"
+  ],
+  "functional_vs_candidate_decode_pcc_sliding": [
+    0.9847575029286749,
+    0.9848235985875103
+  ],
+  "required_equivalence_pcc": 0.99,
+  "result": "rejected: both adapted forms change the routing boundary enough to fail whole-layer equivalence"
+}

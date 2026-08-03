@@ -1,0 +1,19 @@
+{
+  "batch": 1,
+  "current_positions": [
+    32
+  ],
+  "eager_vs_trace_replay_pcc": 1.0,
+  "eager_vs_trace_replay_threshold": 0.9999,
+  "hf_vs_trace_replay_pcc": 0.9998683220309484,
+  "hf_vs_trace_replay_threshold": 0.995,
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "page_table_shape": [
+    1,
+    2
+  ],
+  "repeat_replay_pcc": 1.0,
+  "repeat_replay_threshold": 0.9999
+}

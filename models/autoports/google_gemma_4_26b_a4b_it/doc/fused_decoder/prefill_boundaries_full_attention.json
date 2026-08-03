@@ -1,0 +1,42 @@
+{
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "results": [
+    {
+      "logical_sequence_length": 31,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9980980532042867,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 33,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9986630138081813,
+      "physical_sequence_length": 64,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1025,
+      "page_table": [
+        8,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "pcc": 0.9985082291841136,
+      "physical_sequence_length": 1056,
+      "threshold": 0.995
+    }
+  ]
+}

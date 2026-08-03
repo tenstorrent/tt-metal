@@ -1,0 +1,13 @@
+{
+  "batch": 1,
+  "candidate": "dense gate/up minimal_matmul_split with shape-adapted M/K/N blocks (decode 1/4/8, prefill 4/4/8; subblock 1/2)",
+  "best_retained_fused_decode_trace_host_ms_median": 2.456416026689112,
+  "candidate_decode_trace_host_ms_median": 2.462366013787687,
+  "candidate_prefill_host_ms_median": 401.5912510221824,
+  "best_retained_fused_prefill_host_ms_median": 401.5205299947411,
+  "functional_decode_trace_host_ms_median": 3.0139359878376126,
+  "functional_prefill_host_ms_median": 681.0433439677581,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "result": "rejected: correct and faster than functional, but slower than the best retained fused graph"
+}
