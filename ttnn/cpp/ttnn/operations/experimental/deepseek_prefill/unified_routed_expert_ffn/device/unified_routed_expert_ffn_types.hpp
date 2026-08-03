@@ -9,6 +9,8 @@
 #include <tuple>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -85,6 +87,17 @@ struct UnifiedRoutedExpertFfnParams {
 
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
+    // Optional sub-device to confine the op to. When set, the program's GRID_X x
+    // GRID_Y compute block is placed at the sub-device's worker-core origin
+    // instead of grid origin (0, 0), so the routed expert can overlap the combine
+    // on a disjoint sub-device. std::nullopt => block at (0, 0) (full-grid origin).
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt;
+
+    // Optional: A per-program leader core waits for every other (non-leader)
+    // core's writer to finish, then multicast-increments this semaphore on each
+    // of its cores.
+    std::optional<tt::tt_metal::GlobalSemaphore> global_semaphore = std::nullopt;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "chunk_M_tiles",
         "m_tiles",
@@ -92,10 +105,20 @@ struct UnifiedRoutedExpertFfnParams {
         "read_x_at_offset",
         "x_is_row_major",
         "activation",
-        "fuse_bias");
+        "fuse_bias",
+        "subdevice_id",
+        "global_semaphore");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset, x_is_row_major, activation, fuse_bias);
+            chunk_M_tiles,
+            m_tiles,
+            local_expert_id,
+            read_x_at_offset,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            subdevice_id,
+            global_semaphore);
     }
 };
 

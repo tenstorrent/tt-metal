@@ -119,6 +119,41 @@ def test_valid_inputs_2d_index_first_dim_one(device):
     assert out is not None
 
 
+@pytest.mark.parametrize(
+    "global_shape",
+    [
+        (1, GLOBAL_ROWS, HIDDEN_DIM),
+        (1, 1, GLOBAL_ROWS, HIDDEN_DIM),
+    ],
+)
+def test_valid_global_tensor_leading_singleton_dims(device, global_shape):
+    """global_tensor may carry leading singleton dims; it is treated as effectively
+    2D (rows, hidden) using the last two dims, so no squeeze is required from callers."""
+    g = _make_global(device, shape=global_shape)
+    l = _make_local(device)
+    s = _make_index(device, shape=(NUM_EXPERTS,))
+    c = _make_index(device, shape=(NUM_EXPERTS,))
+    out = _run(g, l, s, c)
+    assert out is not None
+
+
+@pytest.mark.parametrize(
+    "local_shape",
+    [
+        (1, LOCAL_ROWS, HIDDEN_DIM),
+        (1, 1, LOCAL_ROWS, HIDDEN_DIM),
+    ],
+)
+def test_valid_local_tensor_leading_singleton_dims(device, local_shape):
+    """local_tensor may also carry leading singleton dims (same 2D-effective rule)."""
+    g = _make_global(device)
+    l = _make_local(device, shape=local_shape)
+    s = _make_index(device, shape=(NUM_EXPERTS,))
+    c = _make_index(device, shape=(NUM_EXPERTS,))
+    out = _run(g, l, s, c)
+    assert out is not None
+
+
 # ---------------------------------------------------------------------------
 # Global tensor constraints.
 # ---------------------------------------------------------------------------
@@ -133,12 +168,14 @@ def test_global_tensor_wrong_dtype(device, expect_error):
         _run(g, l, s, c)
 
 
-def test_global_tensor_must_be_2d(device, expect_error):
-    g = _make_global(device, shape=(1, GLOBAL_ROWS, HIDDEN_DIM))
+def test_global_tensor_leading_dim_not_one_rejected(device, expect_error):
+    # rank >= 2 is allowed, but every dim beyond the last two must be 1. A leading
+    # dim != 1 means the buffer is not effectively 2D and must be rejected.
+    g = _make_global(device, shape=(2, GLOBAL_ROWS, HIDDEN_DIM))
     l = _make_local(device)
     s = _make_index(device)
     c = _make_index(device)
-    with expect_error(RuntimeError, "global_tensor must be 2D"):
+    with expect_error(RuntimeError, "global_tensor leading dim 0 must be 1"):
         _run(g, l, s, c)
 
 
@@ -165,12 +202,12 @@ def test_local_tensor_wrong_dtype(device, expect_error):
         _run(g, l, s, c)
 
 
-def test_local_tensor_must_be_2d(device, expect_error):
+def test_local_tensor_leading_dim_not_one_rejected(device, expect_error):
     g = _make_global(device)
-    l = _make_local(device, shape=(1, LOCAL_ROWS, HIDDEN_DIM))
+    l = _make_local(device, shape=(2, LOCAL_ROWS, HIDDEN_DIM))
     s = _make_index(device)
     c = _make_index(device)
-    with expect_error(RuntimeError, "local_tensor must be 2D"):
+    with expect_error(RuntimeError, "local_tensor leading dim 0 must be 1"):
         _run(g, l, s, c)
 
 
@@ -484,6 +521,50 @@ def test_insert_2d_indices_matches_torch_slice(device):
     assert_with_pcc(original.float(), out_torch.float(), pcc=0.9999)
 
 
+@pytest.mark.parametrize(
+    "leading_dims",
+    [
+        (1,),
+        (1, 1),
+    ],
+)
+def test_insert_leading_singleton_dims_matches_2d(device, leading_dims):
+    """A global_tensor with leading singleton dims inserts the same slice as the flat
+    2D form, and the in-place result preserves the input rank."""
+    global_rows, local_rows, hidden_dim = 128, 32, 64
+    starts = [0, 32, 64, 96]
+    counts = [32, 32, 32, 32]
+    expert_id = 2
+
+    torch.manual_seed(0)
+    global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+    local_torch = torch.randn(local_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+
+    # global_tensor reshaped to carry leading singleton dims, e.g. (1, 1, rows, hidden).
+    g = _to_tile_bfp8(device, global_torch.reshape(*leading_dims, global_rows, hidden_dim))
+    l = _to_tile_bfp8(device, local_torch)
+    global_q = ttnn.to_torch(g).reshape(global_rows, hidden_dim).clone()
+    local_q = ttnn.to_torch(l)
+    s = _make_index_from_values(device, starts)
+    c = _make_index_from_values(device, counts)
+
+    out = _run(g, l, s, c, global_expert_id=expert_id)
+    out_torch = ttnn.to_torch(out)
+
+    # In-place: the returned tensor keeps the input's (leading-singleton) rank/shape.
+    assert tuple(out_torch.shape) == (*leading_dims, global_rows, hidden_dim)
+    out_2d = out_torch.reshape(global_rows, hidden_dim)
+
+    rows = _ceil_to_tile(counts[expert_id])
+    start = starts[expert_id]
+    expected = global_q.clone()
+    expected[start : start + rows, :] = local_q[:rows, :]
+    torch.testing.assert_close(out_2d.float(), expected.float(), atol=0.0, rtol=0.0)
+    original = global_torch.clone()
+    original[start : start + rows, :] = local_torch[:rows, :]
+    assert_with_pcc(original.float(), out_2d.float(), pcc=0.9999)
+
+
 # ---------------------------------------------------------------------------
 # Stress test: DRAM utilization with a large global tensor.
 #
@@ -586,3 +667,71 @@ def test_insert_stress_dram_utilization_single_expert(device, count):
     torch.testing.assert_close(out_torch[start : start + rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     local_slice = local_torch[:rows, :].float()
     assert_with_pcc(local_slice, out_torch[start : start + rows, :].float(), pcc=0.9999)
+
+
+# ---------------------------------------------------------------------------
+# Sub-device confinement (proof of concept).
+#
+# insert splits work purely by flat core_id / num_cores, so running it on a
+# sub-device's worker cores instead of the full grid must produce identical
+# output. This exercises the `subdevice_id` plumbing end-to-end.
+# ---------------------------------------------------------------------------
+
+
+def _run_insert_on_subdevice(global_tensor, local_tensor, start, counts, sub_core_range_set, *, expert_id):
+    """Run insert confined to `sub_core_range_set`, returning the host output tensor.
+
+    Creates + loads a single-sub-device manager so SubDeviceId(0) resolves to the
+    provided cores, runs the op with subdevice_id=SubDeviceId(0), then restores the
+    default sub-device manager.
+    """
+    device = global_tensor.device()
+    idx_table = _make_identity_idx_table(device)
+    sub_device = ttnn.SubDevice([sub_core_range_set])
+    manager_id = device.create_sub_device_manager([sub_device], 0)
+    try:
+        device.load_sub_device_manager(manager_id)
+        out = ttnn.experimental.deepseek_prefill.insert(
+            global_tensor,
+            local_tensor,
+            start,
+            counts,
+            idx_table,
+            local_expert_id=expert_id,
+            subdevice_id=ttnn.SubDeviceId(0),
+        )
+        ttnn.synchronize_device(device)
+        device.clear_loaded_sub_device_manager()
+        out_host = ttnn.to_torch(out)
+    finally:
+        device.remove_sub_device_manager(manager_id)
+    return out_host
+
+
+def test_insert_subdevice_matches_full_grid(device):
+    starts, counts, expert_id, global_rows, local_rows, hidden_dim = [0, 64, 96, 128], [32, 17, 32, 5], 1, 256, 32, 64
+
+    torch.manual_seed(0)
+    local_torch = torch.randn(local_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+
+    # Full-grid reference: fresh global each run since insert writes in place.
+    global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+    g_full = _to_tile_bfp8(device, global_torch)
+    l_full = _to_tile_bfp8(device, local_torch)
+    s_full = _make_index_from_values(device, starts)
+    c_full = _make_index_from_values(device, counts)
+    out_full = ttnn.to_torch(_run(g_full, l_full, s_full, c_full, global_expert_id=expert_id))
+
+    # Sub-device run: identical inputs, confined to rows [1, grid_y).
+    grid = device.compute_with_storage_grid_size()
+    assert grid.y > 1, "test requires a compute grid with at least 2 rows"
+    sub_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    g_sd = _to_tile_bfp8(device, global_torch)
+    l_sd = _to_tile_bfp8(device, local_torch)
+    s_sd = _make_index_from_values(device, starts)
+    c_sd = _make_index_from_values(device, counts)
+    out_sd = _run_insert_on_subdevice(g_sd, l_sd, s_sd, c_sd, sub_cores, expert_id=expert_id)
+
+    assert out_sd.shape == out_full.shape, f"{out_sd.shape} vs {out_full.shape}"
+    # Sub-device-confined output must be bit-identical to the full-grid output.
+    torch.testing.assert_close(out_sd.float(), out_full.float(), atol=0.0, rtol=0.0)

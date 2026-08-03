@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine {
@@ -27,7 +28,8 @@ ttnn::Tensor combine(
     std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
     bool init_zeros = true,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_combine = false);
+    bool use_fp8_combine = false,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine
 

@@ -7,9 +7,11 @@
 #include <cstdint>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "insert.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::insert::detail {
 
@@ -43,6 +45,8 @@ void bind_insert(nb::module_& mod) {
                 global_expert_idx_table (ttnn.Tensor): 1D tensor (or 2D with first dim == 1)
                     of UINT32, DRAM interleaved, mapping local_expert_id -> global_expert_id.
                 local_expert_id (int): UINT32 scalar index into global_expert_idx_table.
+                subdevice_id (ttnn.SubDeviceId, optional): When set, run the op on this sub-device's
+                    worker cores instead of the full compute grid. Defaults to None (full grid).
 
             Returns:
                 ttnn.Tensor: The same global_tensor handle, now with the slice
@@ -55,7 +59,8 @@ void bind_insert(nb::module_& mod) {
         nb::arg("counts").noconvert(),
         nb::arg("global_expert_idx_table").noconvert(),
         nb::kw_only(),
-        nb::arg("local_expert_id"));
+        nb::arg("local_expert_id"),
+        nb::arg("subdevice_id") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::insert::detail

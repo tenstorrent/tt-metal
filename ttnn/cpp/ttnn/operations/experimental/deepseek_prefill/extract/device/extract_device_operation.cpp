@@ -79,10 +79,20 @@ void ExtractDeviceOperation::validate_on_program_cache_miss(
         "global_tensor must be TILE layout, got {}",
         global_tensor.layout());
     TT_FATAL(is_dram_interleaved(global_tensor), "global_tensor must be DRAM interleaved");
+    // Accept rank >= 2 as long as every leading dim is 1 — we treat the buffer
+    // as effectively 2D (rows, hidden) using logical_shape[-2:]. This lets the
+    // caller pass e.g. (1, 1, rows, hidden) without an explicit squeeze.
     TT_FATAL(
-        global_tensor.logical_shape().rank() == 2,
-        "global_tensor must be 2D, got rank {}",
+        global_tensor.logical_shape().rank() >= 2,
+        "global_tensor must have rank >= 2, got rank {}",
         global_tensor.logical_shape().rank());
+    for (int i = 0; i < static_cast<int>(global_tensor.logical_shape().rank()) - 2; ++i) {
+        TT_FATAL(
+            global_tensor.logical_shape()[i] == 1,
+            "global_tensor leading dim {} must be 1, got {}",
+            i,
+            global_tensor.logical_shape()[i]);
+    }
 
     // start, counts, and global_expert_idx_table share the same static invariants.
     validate_index_tensor(start, "start");
@@ -111,7 +121,7 @@ void ExtractDeviceOperation::validate_on_program_cache_miss(
     // Tile-alignment checks.
     const uint32_t tile_height = tt::constants::TILE_HEIGHT;
     const uint32_t tile_width = tt::constants::TILE_WIDTH;
-    const auto global_rows = global_tensor.logical_shape()[0];
+    const auto global_rows = global_tensor.logical_shape()[-2];
     const auto hidden_dim = global_tensor.logical_shape()[-1];
     TT_FATAL(
         global_rows % tile_height == 0,
@@ -139,12 +149,22 @@ void ExtractDeviceOperation::validate_on_program_cache_hit(
 ExtractDeviceOperation::spec_return_value_t ExtractDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& global_tensor = tensor_args.global_tensor;
-    const auto hidden_dim = global_tensor.logical_shape()[-1];
-    // Output shape: [max_dispatched_tokens_per_expert, hidden_dim], TILE layout,
-    // dtype inherited from global_tensor (BFLOAT8_B or BFLOAT16), DRAM interleaved.
-    // Kernels fill only the first ceil_tile(counts[global_expert_id]) rows/tokens;
-    // the rest is undefined.
-    const ttnn::Shape output_shape({operation_attributes.max_dispatched_tokens_per_expert, hidden_dim});
+    const auto& global_shape = global_tensor.logical_shape();
+    const auto rank = global_shape.rank();
+    const auto hidden_dim = global_shape[-1];
+    // Output shape mirrors global_tensor's rank: the last two dims are
+    // [max_dispatched_tokens_per_expert, hidden_dim] and every leading dim is 1
+    // (global_tensor's leading dims are validated to be 1). So a global tensor of
+    // (1, 1, rows, hidden) yields an output of (1, 1, max_tokens, hidden) — the
+    // extracted per-expert tokens keep the source buffer's rank, which lets the
+    // routed-expert FFN's direct-write path see matching ranks for x and the
+    // shared output without a squeeze. TILE layout, dtype inherited from
+    // global_tensor (BFLOAT8_B or BFLOAT16), DRAM interleaved. Kernels fill only
+    // the first ceil_tile(counts[global_expert_id]) rows/tokens; the rest is undefined.
+    ttnn::SmallVector<uint32_t> output_dims(rank, 1u);
+    output_dims[rank - 2] = operation_attributes.max_dispatched_tokens_per_expert;
+    output_dims[rank - 1] = static_cast<uint32_t>(hidden_dim);
+    const ttnn::Shape output_shape(output_dims);
     const auto mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     return tt::tt_metal::TensorSpec(
@@ -155,6 +175,10 @@ ExtractDeviceOperation::spec_return_value_t ExtractDeviceOperation::compute_outp
 
 ExtractDeviceOperation::tensor_return_value_t ExtractDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Reuse the caller-provided buffer when present, otherwise allocate.
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor.value();
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.global_tensor.device());
 }
@@ -169,16 +193,21 @@ ttnn::Tensor prefill_extract(
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
-    uint32_t max_dispatched_tokens_per_expert) {
+    uint32_t max_dispatched_tokens_per_expert,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<ttnn::Tensor>& optional_output_tensor) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::extract::ExtractDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            .local_expert_id = local_expert_id, .max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert},
+            .local_expert_id = local_expert_id,
+            .max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert,
+            .subdevice_id = subdevice_id},
         OperationType::tensor_args_t{
             .global_tensor = global_tensor,
             .start = start,
             .counts = counts,
-            .global_expert_idx_table = global_expert_idx_table});
+            .global_expert_idx_table = global_expert_idx_table,
+            .optional_output_tensor = optional_output_tensor});
 }
 
 }  // namespace ttnn::prim
