@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -587,6 +588,109 @@ def prepare_attention_bias(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
 # and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L545
+def vision_position_ids(
+    start_position: int,
+    grid_thw: Sequence[int] | torch.Tensor,
+    *,
+    temp_merge_size: int = 1,
+    spatial_merge_size: int = 1,
+    time_interval: int = 1,
+) -> torch.Tensor:
+    """The `(3, num_vision_tokens)` M-RoPE grid of one image or video block, offset by `start_position`.
+
+    The `(t, h, w)` axes carry *different* positions here, unlike a text run where all three share the
+    token index. That divergence is what makes the interleaved layout observable -- see
+    [`create_rope_tensors`].
+
+    The repeat patterns below are load-bearing and mirror the reference exactly; `start_position` is
+    added to the temporal axis only *after* `time_interval` is applied, and order matters.
+    """
+    llm_grid_t = int(grid_thw[0]) // temp_merge_size
+    llm_grid_h = int(grid_thw[1]) // spatial_merge_size
+    llm_grid_w = int(grid_thw[2]) // spatial_merge_size
+
+    position_temporal = torch.arange(llm_grid_t) * time_interval
+    position_width = torch.arange(llm_grid_w) + start_position
+    position_height = torch.arange(llm_grid_h) + start_position
+
+    position_width = position_width.repeat(llm_grid_h * llm_grid_t)
+    position_height = position_height.repeat_interleave(llm_grid_w).repeat(llm_grid_t)
+    position_temporal = position_temporal.repeat_interleave(llm_grid_h * llm_grid_w) + start_position
+
+    return torch.stack([position_temporal, position_height, position_width], dim=0)
+
+
+def mrope_position_ids(
+    mm_token_type_ids: torch.Tensor,
+    *,
+    image_grid_thw: torch.Tensor | None = None,
+    video_grid_thw: torch.Tensor | None = None,
+    spatial_merge_size: int = 2,
+) -> torch.Tensor:
+    """The `(3, batch_size, sequence_length)` M-RoPE grid of a multimodal prompt.
+
+    The sequence is walked as runs of one modality, which is what `mm_token_type_ids` (0 text, 1
+    image, 2 video -- as produced by `Qwen3VLProcessor.create_mm_token_type_ids`) encodes. A text run
+    advances all three axes together by its length; a vision run consumes the next entry of the
+    matching `*_grid_thw` and advances the clock by `max(h, w) // spatial_merge_size`.
+
+    Only the position grid is returned. The reference also produces `mrope_position_deltas`, which
+    exists to re-base positions for cached incremental decoding; the conditioner runs a single
+    prefill with `use_cache=False` and never needs it.
+
+    Padding is not handled: this takes one unpadded sequence per batch item, which is what the
+    conditioner feeds (its attention mask is all ones).
+    """
+    if video_grid_thw is not None:
+        # Timestamps separate the frames of a video, so each frame is its own grid.
+        video_grid_thw = torch.repeat_interleave(video_grid_thw, video_grid_thw[:, 0], dim=0).clone()
+        video_grid_thw[:, 0] = 1
+
+    grid_iters = {
+        1: iter(image_grid_thw) if image_grid_thw is not None else None,
+        2: iter(video_grid_thw) if video_grid_thw is not None else None,
+    }
+
+    batch_size, sequence_length = mm_token_type_ids.shape
+    position_ids = torch.zeros(3, batch_size, sequence_length, dtype=torch.long)
+    for batch_idx in range(batch_size):
+        current_pos = 0
+        runs = []
+        for modality, group in itertools.groupby(enumerate(mm_token_type_ids[batch_idx].tolist()), lambda x: x[1]):
+            group = list(group)
+            runs.append((modality, group[0][0], group[-1][0] + 1))
+
+        segments = []
+        for modality, start_idx, end_idx in runs:
+            if modality == 0:
+                text_len = end_idx - start_idx
+                segments.append(torch.arange(text_len).view(1, -1).expand(3, -1) + current_pos)
+                current_pos += text_len
+            else:
+                if grid_iters[modality] is None:
+                    msg = f"mm_token_type_ids contains modality {modality} but no matching grid was passed"
+                    raise ValueError(msg)
+                grid_thw = next(grid_iters[modality])
+                segments.append(vision_position_ids(current_pos, grid_thw, spatial_merge_size=spatial_merge_size))
+                current_pos += max(int(grid_thw[1]), int(grid_thw[2])) // spatial_merge_size
+        position_ids[:, batch_idx] = torch.cat(segments, dim=1).reshape(3, -1)
+
+    return position_ids
+
+
+def _apply_interleaved_mrope(freqs: torch.Tensor, mrope_section: Sequence[int]) -> torch.Tensor:
+    """Reorganize `(3, batch, seq, head_dim // 2)` freqs from chunked `[TTT..HHH..WWW]` to interleaved
+    `[THWTHW..TT]`, preserving frequency continuity. Returns `(batch, seq, head_dim // 2)`."""
+    freqs_t = freqs[0]
+    for dim, offset in enumerate((1, 2), start=1):  # H, W
+        length = mrope_section[dim] * 3
+        idx = slice(offset, length, 3)
+        freqs_t[..., idx] = freqs[dim, ..., idx]
+    return freqs_t
+
+
+# adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
+# and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L545
 def create_rope_tensors(
     batch_size: int,
     sequence_length: int,
@@ -594,8 +698,27 @@ def create_rope_tensors(
     head_dim: int,
     rope_theta: float,
     mrope_section: Sequence[int],
+    position_ids: torch.Tensor | None = None,
+    interleaved: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if attention_mask is not None:
+    """`(cos, sin)` of shape `(batch, 1, seq, head_dim)` for the decoder's rotary embedding.
+
+    Args:
+        position_ids: `(3, batch, sequence_length)` from [`mrope_position_ids`]. Defaults to the token
+            index shared by all three axes, which is what a text-only prompt needs.
+        interleaved: whether the checkpoint declares `rope_scaling.mrope_interleaved`. The two layouts
+            assign the same *frequency* to each output slot and differ only in which axis's position
+            feeds it, so they coincide exactly while all three axes agree -- i.e. for a text-only
+            prompt, where this flag is a no-op. It becomes observable as soon as `position_ids`
+            carries a vision run.
+    """
+    if position_ids is not None:
+        assert position_ids.shape == (
+            3,
+            batch_size,
+            sequence_length,
+        ), f"position_ids must be (3, {batch_size}, {sequence_length}), got {tuple(position_ids.shape)}"
+    elif attention_mask is not None:
         assert attention_mask.shape == (batch_size, sequence_length)
 
         position_ids = attention_mask.long().cumsum(-1) - 1
@@ -604,10 +727,22 @@ def create_rope_tensors(
     else:
         position_ids = torch.arange(sequence_length).view(1, 1, -1).expand(3, batch_size, -1)
 
+    # `theta ** -x` rather than the reference's `1 / theta ** x`: mathematically identical, one fp32
+    # ulp apart (~1.2e-7 relative), and *not* invisible after the bf16 cast the caller applies -- a few
+    # entries land on the other side of a rounding boundary. Kept as-is so this stays bit-for-bit for
+    # existing callers; the 1-ulp divergence from the reference is already absorbed in the measured PCC.
     inv_freq = rope_theta ** (-torch.arange(0, head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / head_dim)
     inv_freq_expanded = inv_freq[None, None, :, None].float().expand(3, batch_size, -1, 1)
     position_ids_expanded = position_ids[:, :, None, :].float()
     freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
+
+    if interleaved:
+        # The axis selection happens on the freqs, before the duplication and the cos/sin.
+        freqs = _apply_interleaved_mrope(freqs, mrope_section)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        return emb.cos().unsqueeze(1), emb.sin().unsqueeze(1)
+
+    # Chunked: select per contiguous section, after the cos/sin.
     emb = torch.cat((freqs, freqs), dim=-1)
     cos = emb.cos()
     sin = emb.sin()
