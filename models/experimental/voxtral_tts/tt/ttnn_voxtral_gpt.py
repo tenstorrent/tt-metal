@@ -150,10 +150,20 @@ SDPA = set(filter(None, os.environ.get("VOXTRAL_SDPA", "").split(",")))
 # sdpa_decode reads a 32x larger cache and costs 11.86 ms instead of 1.78. B=1 is supported
 # ("respects the unpadded B") and is the only sensible choice here.
 #
-# IN THE MODEL: 34.9 ms/frame against 41.5 for the hand-rolled path, decode PCC 0.99990 against
-# 0.99991 -- so ~6.6 ms for nothing measurable. DEFAULT ON. Set VOXTRAL_GPT_DECODE_NATIVE=0 for
-# the hand-rolled path, which is still the reference implementation for the numerics.
-DECODE_NATIVE = os.environ.get("VOXTRAL_GPT_DECODE_NATIVE", "1") != "0"
+# IN THE MODEL: 34.9 ms/frame against 41.5 for the hand-rolled path, at decode PCC 0.99990
+# against 0.99991 -- ~6.6 ms for nothing visible in the per-block numbers.
+#
+# AND IT IS OFF, because the per-block numbers are not the gate. On the full 15-case run it drove
+# fixture case 4 ("Hello.", the shortest prompt at P=74) into a repetition loop: 78 frames of
+# "i think that s why i m here ..." where the shipped path says "hello". Across seeds 0-3 the
+# frame count went 78/8/183/123 against 45/8/39/69 hand-rolled -- worse in 3 of 4, for one word
+# of reference text.
+#
+# Note what that also says about case 4 generally: it is UNSTABLE on our Block 1 either way
+# (8-183 frames for one word, against a steady 9 from tt_transformers), so this is not purely a
+# decode-native defect -- it is an existing weakness that decode-native amplifies. Fixing case 4
+# is the open quality item; if it is fixed, re-measure this path, because 6.6 ms/frame is real.
+DECODE_NATIVE = os.environ.get("VOXTRAL_GPT_DECODE_NATIVE", "0") == "1"
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
 _QKV_SHARD = ttnn.create_sharded_memory_config(
     (TILE, _QKV_WIDTH // 8), core_grid=ttnn.CoreGrid(y=1, x=8),
