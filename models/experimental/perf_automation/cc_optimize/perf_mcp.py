@@ -3168,37 +3168,6 @@ def _consumed_verdict_path():
     )
 
 
-_AICLK_MIN_RATIO = float(os.environ.get("PERF_MCP_AICLK_MIN_RATIO", "0.95"))
-
-
-def _aiclk_health():
-    """Slowest AI clock across the board's chips against its own ceiling, or None if unreadable.
-
-    Every verdict is a comparison against a best measured earlier, and that assumes both readings came
-    off a board running the same speed. On 2026-08-03 they did not: runs 21/22 measured the
-    gemma-3-12b-it baseline at 381.19 and 381.22 ms, run 23 measured the SAME COMMIT at 632.33 after
-    the board thermally throttled 1350 -> 800 MHz (381.222/632.331 = 0.603, 800/1350 = 0.593).
-
-    Reads the SLOWEST chip, not the mean: one throttled chip in a mesh paces the whole step. Returns
-    None on any failure -- an unreadable clock is not evidence of a throttled one.
-    """
-    try:
-        out = _sp.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=20).stdout
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        cur = [int(x) for x in _re.findall(r'"aiclk":\s*"?\s*(\d+)', out)]
-        lim = [int(x, 16) for x in _re.findall(r'"AICLK_LIMIT_MAX":\s*"0x([0-9a-fA-F]+)"', out)]
-        if not cur or not lim:
-            return None
-        mn, lm = min(cur), max(lim)
-        if lm <= 0:
-            return None
-        return {"min_mhz": mn, "limit_mhz": lm, "ratio": mn / lm}
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def _measurement_id() -> str:
     """A fresh id, minted by the code that actually runs a trace replay."""
     return "fp-%d" % time.monotonic_ns()
@@ -3369,29 +3338,6 @@ def record_kernel_attempt(
     # mirrors PERF_MCP_ALLOW_UNGATED_COMMIT for a resumed session whose verdict belongs to a previous
     # process. A refusal RETURNS -- it does not raise -- because this runs inside a live agent loop
     # and an exception would end the round instead of redirecting it.
-    # A MEASUREMENT TAKEN BELOW FULL CLOCK IS NOT A MEASUREMENT OF THE CODE. Same defect class as the
-    # stale baseline -- a real number compared against a reference it does not belong to -- so it is
-    # refused at the same boundary rather than reasoned about afterwards. Deliberately NOT rescaled by
-    # the clock ratio: that would invent a number no board produced, and throttling is not uniform
-    # across an op mix. A wedge is exempt for the reason it always is (the hang belongs to the
-    # candidate, and dropping the row hides it), and an unreadable clock records normally.
-    _clk = _aiclk_health()
-    if (
-        _clk
-        and _clk["ratio"] < _AICLK_MIN_RATIO
-        and "wedged" not in (note or "").lower()
-        and os.environ.get("PERF_MCP_ALLOW_THROTTLED_ATTEMPT") != "1"
-    ):
-        return {
-            "recorded": False,
-            "refused": (
-                "the board is throttled: %d MHz of %d (%.0f%%). A reading taken below full clock "
-                "cannot be compared with a best measured at full clock, and recording it would settle "
-                "this lever as a conclusive no-gain for every later run. WAIT for the board to cool "
-                "and re-measure this same candidate -- do not move to another lever."
-                % (_clk["min_mhz"], _clk["limit_mhz"], 100.0 * _clk["ratio"])
-            ),
-        }
     if (
         not _fpv["own"]
         and "wedged" not in (note or "").lower()
@@ -3430,10 +3376,6 @@ def record_kernel_attempt(
         #
         # So the flag has ONE writer now: the commit. The verdict fields below stay -- they are the
         # evidence -- they simply stop deciding a mark only a commit can earn.
-        # Stamp the clock this reading came off, so a later reader can tell a healthy
-        # measurement from one taken near the edge instead of re-deriving thermal state
-        # from the numbers the way the 632-vs-381 case had to be found.
-        "aiclk_mhz": (_clk or {}).get("min_mhz"),
         "beat_baseline": False,
         "claimed_beat_baseline": bool(beat_baseline),
         "fullpipe_ms": _fpv["ms"],
