@@ -31,7 +31,6 @@ class DiTParallelConfig(NamedTuple):
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
     sequence_parallel: ParallelFactor | None = None
-    cfg_parallel: ParallelFactor | None = None
 
     @classmethod
     def from_tuple(cls, tp: tuple[int, int]) -> EncoderParallelConfig:
@@ -43,12 +42,10 @@ class EncoderParallelConfig(NamedTuple):
         *,
         tp: tuple[int, int],
         sp: tuple[int, int] | None = None,
-        cfg: tuple[int, int] | None = None,
     ) -> EncoderParallelConfig:
         return cls(
             tensor_parallel=ParallelFactor(*tp),
             sequence_parallel=ParallelFactor(*sp) if sp is not None else None,
-            cfg_parallel=ParallelFactor(*cfg) if cfg is not None else None,
         )
 
 
