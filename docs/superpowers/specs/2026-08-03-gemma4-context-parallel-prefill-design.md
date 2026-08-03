@@ -1,8 +1,49 @@
 # Gemma4 context-parallel prefill on Blackhole Galaxy
 
 **Date:** 2026-08-03
-**Status:** Design approved, not yet implemented
+**Status:** Milestone 1 implemented and passing — single decoder layer, all chunk
+sizes, eager and traced. See Implementation status.
 **Scope:** Prefill only. Decode is disaggregated and runs outside this path.
+
+## Implementation status
+
+Landed on `svuckovic/gemma4-prefill`:
+
+- **Single-layer CP works.** `test_prefill_layer` passes 16/16 on a BH Galaxy at
+  `4x8` (TP=8 x CP=4): sliding and global, chunks 512/1024/2048/4096, eager and
+  traced. PCC 0.9993-0.9999 against HuggingFace, with eager and traced identical
+  in every case. High PCC also confirms the position plumbing lines up — a
+  mismatch between input shard order, mask row sharding, K/V gather order, or the
+  output gather would scramble positions and collapse PCC rather than nudge it.
+- **All-gather path only.** As sequenced below, K/V are gathered across the whole
+  CP axis for every chunk size and both layer types. The halo optimization is
+  *not* implemented; it is a pure performance follow-up, and the fallback rule in
+  "Halo generalization" means correctness never depended on it.
+- **A1 came for free at this milestone.** `test_prefill_layer` runs with
+  `kv_cache=None`, so there is no paged history and every rank's `base_offset` is
+  0 — the scalar-offset problem does not bite until the whole-model path.
+- **Whole-model tests skip under CP.** `test_prefill_layers` and
+  `test_prefill_full` stage a replicated sequence and embed on device, so under CP
+  each rank would hold all `chunk` tokens and the mask/K-V gather would span
+  `cp * chunk`. They skip with an actionable message rather than return nonsense.
+- **Trace bug fixed along the way.** `_run_graph` ran `ttnn.clone` inside
+  `begin_trace_capture` but never during warmup, so capture aborted with "Cannot
+  load new binaries during trace capture" and left the device in capture state,
+  hanging the next test. Pre-existing, unrelated to CP.
+
+Not verified, and worth knowing:
+
+- **No device-level CP=1 regression test was possible on this machine.** `1x8` and
+  `1x4` fail fabric init (partial mesh of a 32-device system: "Ethernet handshake
+  likely failed"), and `1x32` hangs in `all_gather_unicast` inside the TP=32
+  all-reduce — a pre-existing 32-device collective problem this work does not
+  touch. Only the 31B checkpoint is present locally, so a small-model `1x1` control
+  was not available either. CP=1 neutrality therefore rests on a static argument:
+  every new path is gated on `cp_degree(...) > 1`, which is false for any `(1,N)`
+  mesh, and the mappers and readback fall back to the previous behaviour exactly.
+- Physical-axis mapping of the logical `(4,8)` after rotation, and whether
+  `FABRIC_2D` beats a torus variant, are still unmeasured. `FABRIC_2D` does
+  initialize cleanly on all 32 devices.
 
 ## Goal
 
