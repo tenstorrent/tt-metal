@@ -504,8 +504,7 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
                     // ROOT CAUSE (proven via MMBLK-absent + tile-index>obnt localization): on Quasar the plain
                     // `tilize_init` (tilize.h:63-69) does ONLY unpack+math init and omits ALL pack config --
-                    // unlike the non-Quasar branch (:106-108), BH (:60-62), and the reduce variant
-                    // `tilizeA_B_reduce_init` (:118-120), which all call llk_pack_hw_configure(ocb) +
+                    // unlike the non-Quasar branch (:106-108), BH (:60-62), which all call llk_pack_hw_configure(ocb) +
                     // llk_pack_init(ocb). So the tilize's pack BUFFER DESCRIPTOR is never pointed at
                     // tilized_in0 -- it keeps the stale dfb::out base from compute_kernel_hw_startup, and the
                     // tilize packs tilized_in0's tiles into the OUT L1 region -> PACR0_TILE_INC / ERROR_TRISC1
@@ -526,8 +525,7 @@ void kernel_main() {
                     // of phase with PACK -> Risc IB interrupt (0x19) whose faulting tile/core move with DPRINT
                     // latency (a timing race, not OOB: TZCUR showed wr_entry_idx=0/nent=448). This is the
                     // MATH-side partner of the llk_pack_init/llk_pack_dest_init re-issued just below; runs once
-                    // per tilize group, NO per-block hw_configure. Same Quasar gap the pool hit --
-                    // tilizeA_B_reduce_init_short adds llk_math_pack_sync_init for exactly this reason.
+                    // per tilize group, NO per-block hw_configure.
                     // NB: this seeds the MATH side; a RESIDUAL Quasar DEST-handshake race in the per-tile
                     // tilize_block datacopy<->pack loop (ERROR_TRISC1 0x19, fault tile/core move with DPRINT
                     // latency) survives even with correct init -- it is an LLK-team issue, see

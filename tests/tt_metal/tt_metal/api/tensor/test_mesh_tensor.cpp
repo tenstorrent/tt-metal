@@ -44,7 +44,6 @@
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/core_subset_write/tensor.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt_stl/aligned_allocator.hpp>
@@ -460,12 +459,7 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_CopyToHost_Roundtrip) {
         allocate_mesh_tensor_on_device_with_topology(*mesh_device_, spec, get_tensor_topology(host_tensor));
     enqueue_write_tensor(cq, host_tensor, device_tensor);
 
-    auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
-        result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
-    }
-    auto result = host_tensor_from_buffer_with_topology(std::move(result_dhb), spec, TensorTopology{});
-    enqueue_read_tensor(cq, device_tensor, result);
+    auto result = enqueue_read_tensor(cq, device_tensor);
 
     expect_host_tensors_eq(host_tensor, result);
 }
@@ -666,15 +660,8 @@ TEST_F(MeshTensorDeviceTest, UniformCopyToHost_ReusesPinnedMemoryCacheEntries) {
     auto& cq = mesh_device_->mesh_command_queue();
     MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
 
-    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
-        result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
-    }
-    auto result = host_tensor_from_buffer_with_topology(std::move(result_dhb), spec, TensorTopology{});
-
     const size_t entries_before = cache.num_entries();
-    enqueue_read_tensor(cq, device_tensor, result);
+    auto result = enqueue_read_tensor(cq, device_tensor);
     cq.finish();
     EXPECT_EQ(cache.num_entries(), entries_before + shard_count);
 
@@ -756,12 +743,7 @@ TEST_F(MeshTensorDataMovementTest, EnqueueWriteTensor_FilterEmpty_Noop) {
     tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(cq, host_new, device_tensor, empty_filter);
     cq.finish();
 
-    auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
-        result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
-    }
-    auto result = host_tensor_from_buffer_with_topology(std::move(result_dhb), spec, TensorTopology{});
-    enqueue_read_tensor(cq, device_tensor, result);
+    auto result = enqueue_read_tensor(cq, device_tensor);
     expect_host_tensors_eq(host_sentinel, result);
 }
 
@@ -816,12 +798,7 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_CopyToHost_Roundtrip) 
     auto written_coords = non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, device_tensor);
     ASSERT_EQ(written_coords.size(), coords.size());
 
-    auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
-    for (const auto& coord : written_coords) {
-        result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
-    }
-    auto result = host_tensor_from_buffer_with_topology(std::move(result_dhb), spec, TensorTopology{});
-    non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, result, written_coords);
+    auto result = non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, written_coords);
     expect_host_tensors_eq(host_tensor, result);
 }
 
