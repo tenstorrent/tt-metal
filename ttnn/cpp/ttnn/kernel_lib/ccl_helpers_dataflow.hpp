@@ -107,7 +107,6 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
-#include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 namespace dataflow_kernel_lib::ccl {
