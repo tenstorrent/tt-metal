@@ -33,11 +33,11 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → ~66 ms/frame, steady-state RTF 0.81–0.90 across all 15 cases.** Per frame:
-Block 1 ~34.8 ms, Block 2 ~31 ms, host 0.2 ms. Block 1 is the larger half again. Both modules carry
-a "where the time goes" map at the top with the ceiling for each line item. The last round came
-from two op-count wins in Block 2 (GQA row fold, width-sharded RMSNorm) at WER 0.88%, unchanged;
-§6.6 lists what is measured and still on the table.
+**Performance: 83.7 → ~59-62 ms/frame, steady-state RTF 0.74–0.81 on long-form.** Per frame:
+Block 1 ~31.4 ms, Block 2 ~28 ms. Block 1 is the larger half. Both modules carry a "where the time
+goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
+width-sharded RMSNorm in Block 2, qkv fusion) and §6.8 (BFP8 on wqkv/wo, semantic head on device) —
+and §6.7 is the one to read first: it explains why the WER headline cannot gate any of this.
 
 **Shipped configuration**, pinned by `tests/test_tt_defaults.py`:
 Block 1 mixed precision (BFP8 on FF1_FF3 only) + decode-native heads; Block 2 BFP8 weights at
@@ -742,6 +742,58 @@ and worst-sample against the fp32 reference in `tests/tt_gates.py`. They feed bo
 inputs, so no chaotic trajectory is involved. That is what actually caught the Block 1 norm, and
 what correctly cleared the qkv fusion. Use end-to-end WER to catch gross breakage, not to resolve
 a last-bit difference — and if you must, run at least three seeds and compare ranges.
+
+### 6.8 — second sweep, gated deterministically
+
+Run after §6.7 established that end-to-end WER cannot resolve changes this small. Every accuracy
+number below is teacher-forced against the fp32 reference — identical inputs to both builds, no
+generation loop, no chaotic trajectory.
+
+**Rejected — sdpa for Block 2's attention interior.** 1.147x (28.73 → 25.05 ms), and the accuracy
+cost is real: integer codes differing from the fp32 reference go **7/288 → 21/288** over 8
+independent (h, x_0) draws. That is the same ~3x §7 measured before BFP8, so the old rejection
+holds and is now confirmed on a gate that can actually see it. Note an earlier single-draw check
+in this session read 2/74 against the row fold's 3/74 and looked *better* — one draw is worthless.
+
+**Rejected — two tiny-op reductions in Block 2, both worth nothing.**
+- CFG combine as multiply-by-constant + sum instead of 2 slices + 2 multiplies + add: **1.001x**.
+- `inplace=True` on the sharded norm program config: **0.997x**.
+Removing small ops does not help. That is consistent with the trace result (§6.6): the cost is
+device-side per KERNEL, and these ops are already at the per-kernel floor, so deleting a few of
+them changes nothing. Only work that makes kernels BIGGER pays — which is why the qkv fusion did
+and these did not. The same reasoning predicts the `concat([x, x])` idea is also worthless; it was
+not isolated separately.
+
+**Shipped — semantic head on device, 1.49 ms/frame.** Was a host CPU matmul at 2.74 ms; on device
+in fp32 it is 1.25 ms. **fp32 is mandatory**: the output is an INDEX, and over 64 hidden states
+bf16 weights pick a different index on 4 of them while fp32 matches the host answer 64/64. bf16
+would save a further 0.2 ms in exchange for a wrong primary code on ~6% of frames.
+
+**Shipped — wqkv and wo in BFP8 (Block 1), 3.32 ms/frame.** The untested precision point from
+§6.6. It does NOT trigger the hang: the documented minimal repro (short gen + 128-bucket decode,
+long gen + 512-bucket, long gen + 512-bucket as a pure cache hit) runs clean, as does the full
+15-case set. w2 stays bf16 — that one is still the pinned trigger and was not retried.
+
+**A statistics correction that matters for every future decision here.** Worst-sample was being
+read as a MAX over frames, and a max is an unstable order statistic. Over 44 teacher-forced frames
+across two real prompts:
+
+| Block 1 config | ms/step | min PCC | mean ws | p90 ws | max ws |
+|---|---|---|---|---|---|
+| shipped (bf16 + FF BFP8) | 34.67 | 0.999884 | 0.86% | 1.11% | 1.34% |
+| sharded norm only | 29.78 | 0.999867 | 0.92% | 1.16% | **4.28%** |
+| + wqkv BFP8 | 32.51 | 0.999872 | 0.86% | 1.14% | 2.10% |
+| + wqkv and wo BFP8 | 31.35 | 0.999852 | 0.86% | 1.10% | **1.28%** |
+| + sharded norm too | 26.51 | 0.999851 | 0.84% | 1.06% | 1.40% |
+
+The max column is not monotone in how much error is introduced — adding wo on top of wqkv took it
+from 2.10% down to 1.28%. **Use mean and p90; treat max as an anecdote.** On mean/p90 the BFP8
+rows are indistinguishable from shipped, which is why they ship.
+
+This also weakens, without overturning, the §6.6 sharded-norm revert: that call cited max going
+1.06% → 1.95%, and max is the unreliable column. On the stable statistics the sharded norm is
+still worse alone (mean 0.86% → 0.92%), just by less than was claimed. It stays out, but the
+honest reason is "slightly worse on a stable metric for 5 ms", not the dramatic doubling reported.
 
 **Checked and ruled out** (so nobody re-runs them):
 - `rms_norm(residual_input_tensor=)` returns only the normed value and discards the sum; a pre-norm

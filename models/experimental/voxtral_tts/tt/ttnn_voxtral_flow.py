@@ -42,12 +42,13 @@ WHERE THE TIME GOES, per frame, steady state on one N150 (~31 ms of a ~66 ms fra
                                                transformer over 3 tokens, CFG batch-2 folded to 6
                                                rows. Floor is 13.4 ms (2.6 GB at 194 GB/s), so
                                                there is still ~2x of pure op overhead in here.
-    semantic_code                      3.0 ms  [B,8320] masked argmax -- on HOST, and it is a real
-                                               CPU matmul. ign/voxtral_opt does this on device;
-                                               that is the next obvious ~3 ms.
+    semantic_code                      1.25 ms [B,8320] masked argmax, now ON DEVICE in fp32.
+                                               Was 2.74 ms of real host CPU. fp32 is mandatory --
+                                               it produces an INDEX; see semantic_dev.
     host tail (FSQ quantise etc)       0.7 ms
     ------------------------------------------
-    Block 2 total                     ~31 ms   (was 42.5 before the row fold + sharded norm)
+    Block 2 total                     ~28 ms   (42.5 before the row fold, sharded norm,
+                                               qkv fusion and the device semantic head)
 
 The structural problem is the SEQUENCE: 7 steps that each depend on the previous, so none of the
 usual batching tricks apply within a frame. What HAS been tried and rejected: lower math fidelity
@@ -159,7 +160,6 @@ class TtVoxtralFlow:
         self.dtype = DTYPE
         w = load_flow_state(ckpt_path)
         self.inv_freq = w["time_embedding.inv_freq"]          # host: time_embedding
-        self.semantic_host = w["semantic_codebook_output.weight"].float()  # host: masked argmax
         self._sched = {}                     # (batch, n_steps) -> (time tokens, step widths)
         self._cfgbuf = {}                    # batch -> reused [2B,3072] cond++uncond host buffer
 
@@ -169,6 +169,26 @@ class TtVoxtralFlow:
         # shared exponent is a poor fit for a 1-D scale vector. Only matmuls take WEIGHT_DTYPE.
         vec = lambda t: up(t.reshape(1, 1, -1), DTYPE)
         lin = lambda t: up(t.t(), WEIGHT_DTYPE)  # torch [out,in] -> ttnn.linear wants [in,out]
+
+        # SEMANTIC HEAD, ON DEVICE AND IN FP32. This used to be a host matmul -- [1,3072] @
+        # [3072,8320] plus a mask and an argmax -- and it measured 2.74 ms per frame of real CPU
+        # time, ~4% of the frame. On device it is 1.25 ms, so 1.49 ms/frame.
+        #
+        # FP32 IS NOT NEGOTIABLE HERE, unlike everywhere else in this module. The result is an
+        # INDEX, not a value: two close logits ranked the other way round change the semantic code
+        # outright. Measured over 64 hidden states, bf16 weights pick a DIFFERENT index on 4 of
+        # them; fp32 matches the host answer on all 64. bf16 would be 1.04 ms -- 0.2 ms more, for
+        # a wrong primary code on ~6% of frames.
+        #
+        # The mask is additive and prebuilt rather than the host version's two -inf assignments:
+        # -1e9 underflows exp() to zero the same way, and one add is cheaper than two writes.
+        # [EMPTY_AUDIO] is forbidden; [END_AUDIO] is ALLOWED, since that is how generation stops.
+        self.semantic_dev = up(w["semantic_codebook_output.weight"].float().t(), ttnn.float32)
+        _vocab = w["semantic_codebook_output.weight"].shape[0]
+        _mask = torch.zeros(1, 1, _vocab)
+        _mask[:, :, EMPTY_AUDIO_ID] = -1e9
+        _mask[:, :, N_AUDIO_SPECIAL + SEMANTIC_CODEBOOK_SIZE:] = -1e9
+        self.semantic_mask = up(_mask, ttnn.float32)
 
         self.proj = {k: lin(w[f"{k}.weight"]) for k in
                      ("input_projection", "time_projection", "llm_projection",
@@ -328,12 +348,13 @@ class TtVoxtralFlow:
     # Semantic code (host) and the Euler solve (device velocity)
     # ----------------------------------------------------------------------------------
     def semantic_code(self, llm_hidden):
-        """h [B,3072] -> [B,1]. Masked greedy argmax; kept on host, see the module docstring.
-        [EMPTY_AUDIO] is forbidden; [END_AUDIO] is ALLOWED because that is how generation stops."""
-        logits = (llm_hidden.float() @ self.semantic_host.t())
-        logits[:, EMPTY_AUDIO_ID] = -float("inf")
-        logits[:, N_AUDIO_SPECIAL + SEMANTIC_CODEBOOK_SIZE:] = -float("inf")
-        return logits.argmax(dim=-1, keepdim=True)
+        """h [B,3072] -> [B,1]. Masked greedy argmax, on device in fp32 -- see semantic_dev."""
+        B = llm_hidden.shape[0]
+        h = ttnn.from_torch(llm_hidden.reshape(1, B, -1).float().contiguous(),
+                            dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
+        logits = ttnn.add(ttnn.linear(h, self.semantic_dev, compute_kernel_config=COMPUTE_CONFIG),
+                          self.semantic_mask)
+        return ttnn.to_torch(ttnn.argmax(logits, dim=-1)).reshape(B, 1).long()
 
     def _solve(self, x, h, B, n_steps, cfg_alpha):
         """(x0 fp32 [B,1,36], cond++uncond [2B,3072]) -> x fp32 [B,1,36]. PURE DEVICE GRAPH.
