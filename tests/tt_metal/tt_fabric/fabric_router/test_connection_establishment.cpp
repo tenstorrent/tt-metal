@@ -94,87 +94,47 @@ protected:
     ConnectionRegistry registry_;
 
     HostRouter make_mesh_router(RoutingDirection facing, uint32_t id, ZPortRole chip_role, bool enable_vc1) {
-        return HostRouter{
-            FabricNodeId(MeshId{0}, id),
+        const auto archetype = router_archetype(
+            Topology::Mesh,
             facing,
-            router_vc_shape(
-                Topology::Mesh,
-                facing,
-                EdgeCapability::INTRAMESH_CARDINAL,
-                chip_role,
-                /*express_routing_enabled=*/false,
-                enable_vc1 ? &vc1_config_ : nullptr),
-            turn_set_for_router(
-                Topology::Mesh,
-                facing,
-                EdgeCapability::INTRAMESH_CARDINAL,
-                chip_role,
-                /*express_routing_enabled=*/false,
-                enable_vc1,
-                /*enable_mesh_pass_through=*/false)};
+            EdgeCapability::INTRAMESH_CARDINAL,
+            chip_role,
+            /*express_routing_enabled=*/false,
+            enable_vc1 ? &vc1_config_ : nullptr);
+        return HostRouter{FabricNodeId(MeshId{0}, id), facing, archetype.shape, archetype.turns};
     }
 
     HostRouter make_boundary_router(uint32_t id) {
-        return HostRouter{
-            FabricNodeId(MeshId{0}, id),
+        const auto archetype = router_archetype(
+            Topology::Mesh,
             RoutingDirection::Z,
-            router_vc_shape(
-                Topology::Mesh,
-                RoutingDirection::Z,
-                EdgeCapability::INTERMESH,
-                ZPortRole::INTERMESH_BOUNDARY,
-                /*express_routing_enabled=*/false,
-                &vc1_config_),
-            turn_set_for_router(
-                Topology::Mesh,
-                RoutingDirection::Z,
-                EdgeCapability::INTERMESH,
-                ZPortRole::INTERMESH_BOUNDARY,
-                /*express_routing_enabled=*/false,
-                /*enable_vc1=*/true,
-                /*enable_mesh_pass_through=*/false)};
+            EdgeCapability::INTERMESH,
+            ZPortRole::INTERMESH_BOUNDARY,
+            /*express_routing_enabled=*/false,
+            &vc1_config_);
+        return HostRouter{FabricNodeId(MeshId{0}, id), RoutingDirection::Z, archetype.shape, archetype.turns};
     }
 
     HostRouter make_express_mesh_router(RoutingDirection facing, uint32_t id) {
-        return HostRouter{
-            FabricNodeId(MeshId{0}, id),
+        const auto archetype = router_archetype(
+            Topology::Torus,
             facing,
-            router_vc_shape(
-                Topology::Torus,
-                facing,
-                EdgeCapability::INTRAMESH_CARDINAL,
-                ZPortRole::EXPRESS_CHORD,
-                /*express_routing_enabled=*/true,
-                nullptr),
-            turn_set_for_router(
-                Topology::Torus,
-                facing,
-                EdgeCapability::INTRAMESH_CARDINAL,
-                ZPortRole::EXPRESS_CHORD,
-                /*express_routing_enabled=*/true,
-                /*enable_vc1=*/false,
-                /*enable_mesh_pass_through=*/false)};
+            EdgeCapability::INTRAMESH_CARDINAL,
+            ZPortRole::EXPRESS_CHORD,
+            /*express_routing_enabled=*/true,
+            nullptr);
+        return HostRouter{FabricNodeId(MeshId{0}, id), facing, archetype.shape, archetype.turns};
     }
 
     HostRouter make_chord_router(uint32_t id) {
-        return HostRouter{
-            FabricNodeId(MeshId{0}, id),
+        const auto archetype = router_archetype(
+            Topology::Torus,
             RoutingDirection::Z,
-            router_vc_shape(
-                Topology::Torus,
-                RoutingDirection::Z,
-                EdgeCapability::INTRAMESH_EXPRESS,
-                ZPortRole::EXPRESS_CHORD,
-                /*express_routing_enabled=*/true,
-                nullptr),
-            turn_set_for_router(
-                Topology::Torus,
-                RoutingDirection::Z,
-                EdgeCapability::INTRAMESH_EXPRESS,
-                ZPortRole::EXPRESS_CHORD,
-                /*express_routing_enabled=*/true,
-                /*enable_vc1=*/false,
-                /*enable_mesh_pass_through=*/false)};
+            EdgeCapability::INTRAMESH_EXPRESS,
+            ZPortRole::EXPRESS_CHORD,
+            /*express_routing_enabled=*/true,
+            nullptr);
+        return HostRouter{FabricNodeId(MeshId{0}, id), RoutingDirection::Z, archetype.shape, archetype.turns};
     }
 
     // The merged production pass: every direction-matching target in the source turn set is recorded

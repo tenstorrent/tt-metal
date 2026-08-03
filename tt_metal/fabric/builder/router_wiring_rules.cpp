@@ -264,11 +264,14 @@ RouterTurnSet turn_set_for_router(
     EdgeCapability edge_capability,
     ZPortRole z_role,
     bool express_routing_enabled,
-    bool enable_vc1,
-    bool enable_mesh_pass_through) {
+    const IntermeshVCConfig* vc_config) {
     RouterTurnSet turn_set{};
 
     validate_facing_role_consistency(facing, edge_capability, z_role);
+
+    // The VC facts are read off the same config the shape derivation consumes.
+    const bool enable_vc1 = vc_config && vc_config->requires_vc1;
+    const bool enable_mesh_pass_through = vc_config && vc_config->requires_vc1_mesh_pass_through;
 
     // A port with no routing direction gets the boundary template: the full non-self set on VC1,
     // typed from-boundary. Its VC0 senders are fed by the mesh routers' boundary targets on their
@@ -375,6 +378,18 @@ RouterTurnSet turn_set_for_router(
     }
 
     return turn_set;
+}
+
+RouterArchetype router_archetype(
+    Topology topology,
+    RoutingDirection facing,
+    EdgeCapability edge_capability,
+    ZPortRole z_role,
+    bool express_routing_enabled,
+    const IntermeshVCConfig* vc_config) {
+    return RouterArchetype{
+        router_vc_shape(topology, facing, edge_capability, z_role, express_routing_enabled, vc_config),
+        turn_set_for_router(topology, facing, edge_capability, z_role, express_routing_enabled, vc_config)};
 }
 
 }  // namespace tt::tt_fabric

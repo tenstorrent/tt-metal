@@ -19,7 +19,7 @@ using namespace tt::tt_fabric;
  *
  * What the records MEAN (which turns get wired, on which VC, in which sender slot) is the
  * connection maps' and the establishment pass's business; see
- * test_router_connection_mapping.cpp and test_connection_establishment.cpp.
+ * test_router_turn_set.cpp and test_connection_establishment.cpp.
  */
 
 class ConnectionRegistryTest : public ::testing::Test {

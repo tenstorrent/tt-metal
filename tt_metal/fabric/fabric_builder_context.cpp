@@ -85,7 +85,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
             RoutingDirection::Z,
             EdgeCapability::INTERMESH,
             ZPortRole::INTERMESH_BOUNDARY,
-            /*express_routing_enabled=*/false,
+            any_mesh_uses_express,  // inert for the boundary family, but this is the fabric's state
             &intermesh_vc_config_));
         possible_shapes.push_back(router_vc_shape(
             topology,

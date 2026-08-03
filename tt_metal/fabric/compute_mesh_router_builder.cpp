@@ -272,6 +272,15 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     bool will_create_tensix_builder = fabric_tensix_extension_enabled && !location.is_dispatch_link;
     bool downstream_is_tensix_builder = will_create_tensix_builder && fabric_tensix_extension_mux_mode;
 
+    // {express, MUX} is an unsupported combination: the tensix path was never widened for the
+    // five-wide express VC0 (its sender count is still the 2D constant, and the tensix builder's
+    // downstream EDM count is taken without the express flag), so the variant channel map would
+    // index past its end. Fail the configuration with a stated message instead.
+    TT_FATAL(
+        !(downstream_is_tensix_builder && control_plane.express_routing_enabled(local_node.mesh_id)),
+        "Express routing with the tensix MUX extension is not supported: the tensix path is not "
+        "widened for the express VC0");
+
     // Get the appropriate EDM config from builder context
     auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
@@ -291,42 +300,24 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // mappings), an express chord, or nothing. One query with one answer.
     const auto z_role = z_port_role(control_plane, local_node);
 
-    // Create the channel shape EARLY (needed for computing injection flags). The Z-related channel
-    // shapes exist to reach an intermesh Z router, so they are gated on that rather than on the
-    // presence of any Z port.
+    // Create the archetype EARLY (the shape is needed for computing injection flags). The
+    // Z-related channel shapes exist to reach an intermesh Z router, so they are gated on that
+    // rather than on the presence of any Z port. The edge's capability selects the template --
+    // an intermesh Z edge gets the from-boundary fanout, an express chord is wired as ordinary
+    // same-VC cardinal/Z transitions, and everything else gets the legacy set. The direction
+    // selects only the slot arithmetic. The boundary target exists to reach an intermesh Z
+    // router, so it follows the intermesh Z edge rather than the presence of any Z port: on a
+    // chip whose only Z edge crosses a mesh boundary, an express-style Z target would resolve to
+    // the intermesh Z router and leak same-mesh traffic onto the boundary link.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    auto shape = router_vc_shape(
+    const auto archetype = router_archetype(
         topology,
         location.direction,
         edge_capability,
         z_role,
         control_plane.express_routing_enabled(local_node.mesh_id),
         &intermesh_config);
-
-    // Create the turn set (Phase 3): one direction-parameterized derivation for every router.
-    // The edge's capability selects the template -- an intermesh Z edge gets the from-boundary
-    // fanout (the same shape family the shape derives above), an express chord is wired
-    // as ordinary same-VC cardinal/Z transitions, and everything else gets the legacy set. The
-    // direction selects only the slot arithmetic.
-    bool enable_vc1 = intermesh_config.requires_vc1;
-    // EXPERIMENTAL: in pass-through mode, mesh routers also forward VC1 traffic to the local Z
-    // router (the boundary target on VC1) so inter-mesh traffic can traverse intermediate meshes
-    // (A->B->C).
-    bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
-    // The boundary target exists to reach an intermesh Z router, so it follows the intermesh
-    // Z edge rather than the presence of any Z port. An express chord is instead wired as an
-    // ordinary same-VC cardinal/Z transition by the express path. The Z output is only
-    // emitted when this chip actually terminates the chord: on a chip whose only Z edge crosses
-    // a mesh boundary, a Z target would resolve to the intermesh Z router and leak same-mesh
-    // traffic onto the boundary link.
-    RouterTurnSet turns_by_vc = turn_set_for_router(
-        topology,
-        location.direction,
-        edge_capability,
-        z_role,
-        control_plane.express_routing_enabled(local_node.mesh_id),
-        enable_vc1,
-        enable_mesh_pass_through);
+    const auto& shape = archetype.shape;
 
     // Compute injection channel flags at router level BEFORE creating builders
     // Injection semantics are per-VC, so compute for each VC and flatten into router-level vector
@@ -488,8 +479,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         location,
         std::move(edm_builder),
         std::move(tensix_builder_opt),
-        std::move(shape),
-        std::move(turns_by_vc),
+        archetype.shape,
+        archetype.turns,
         downstream_is_tensix_builder,
         std::move(connection_registry)));
 
@@ -673,18 +664,27 @@ std::vector<std::optional<size_t>> ComputeMeshRouterBuilder::get_variant_to_rout
     bool downstream_is_tensix_builder,
     BuilderType builder_type,
     size_t variant_num_sender_channels) {
-    // Walk the shape's (vc, channel) pairs and keep the ones this variant owns. A variant's
-    // internal channel ID and the router's flat channel index are the same number today, so the
-    // map is the identity over the owned channels; the shape carries the flat bases that make it so.
+    // Walk the shape's (vc, channel) pairs and keep the ones this variant owns -- ownership is
+    // decided per VC, so the check hoists out of the channel loop. A variant's internal channel
+    // ID and the router's flat channel index are the same number today, so the map is the
+    // identity over the owned channels; the shape carries the flat bases that make it so.
     std::vector<std::optional<size_t>> variant_to_router_channel_map(variant_num_sender_channels);
 
     for (uint32_t vc = 0; vc < shape.num_vcs; ++vc) {
+        if (builder_type_for_vc(vc, downstream_is_tensix_builder) != builder_type) {
+            continue;
+        }
         for (uint32_t ch = 0; ch < shape.sender_counts[vc]; ++ch) {
-            if (builder_type_for_vc(vc, downstream_is_tensix_builder) != builder_type) {
-                continue;
-            }
             const size_t router_flat_id = shape.flat_sender_id(vc, ch);
-            variant_to_router_channel_map.at(router_flat_id) = router_flat_id;
+            TT_FATAL(
+                router_flat_id < variant_num_sender_channels,
+                "Builder variant {} owns flat channel {} on VC{} but has only {} sender channels: the "
+                "variant's channel space was not widened for this router's shape",
+                static_cast<int>(builder_type),
+                router_flat_id,
+                vc,
+                variant_num_sender_channels);
+            variant_to_router_channel_map[router_flat_id] = router_flat_id;
         }
     }
 

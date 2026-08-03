@@ -27,7 +27,7 @@ namespace tt::tt_fabric {
  * - IntermeshVCConfig factory flags and invalid-query failures.
  *
  * The wiring primitive itself is pinned in test_express_connection_wiring.cpp, and the turn sets
- * built from it in test_router_connection_mapping.cpp.
+ * built from it in test_router_turn_set.cpp.
  */
 
 class RouterWiringRulesTest : public ::testing::Test {};

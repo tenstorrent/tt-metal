@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 
 using namespace tt::tt_fabric;
 
@@ -34,6 +35,11 @@ using namespace tt::tt_fabric;
  */
 
 namespace {
+
+// The two VC configurations the turn-set derivation consumes, spelled as configs rather than
+// booleans -- the same objects the shape derivation takes.
+const IntermeshVCConfig k_full_mesh = IntermeshVCConfig::full_mesh();
+const IntermeshVCConfig k_full_mesh_pass_through = IntermeshVCConfig::full_mesh_with_pass_through();
 
 // The set of directions a router's receiver forwards to on one VC.
 std::set<RoutingDirection> target_directions(const RouterTurnSet& turn_set, uint32_t vc) {
@@ -72,13 +78,13 @@ RoutingDirection opposite_of(RoutingDirection facing) {
 
 }  // namespace
 
-class RouterConnectionMappingTest : public ::testing::Test {};
+class RouterTurnSetTest : public ::testing::Test {};
 
 // ============================================================================
 // 1D: the opposite direction only, regardless of the chip's extra-port role
 // ============================================================================
 
-TEST_F(RouterConnectionMappingTest, Linear1D_WiresOnlyTheOpposite) {
+TEST_F(RouterTurnSetTest, Linear1D_WiresOnlyTheOpposite) {
     // A 1D router's whole turn set is the opposite direction. The extra port plays no role:
     // intermesh connections are rejected upstream for 1D, and get_router_connection_pairs emits
     // no Z pairs, so a boundary or chord target would be unestablishable anyway.
@@ -91,8 +97,7 @@ TEST_F(RouterConnectionMappingTest, Linear1D_WiresOnlyTheOpposite) {
                     EdgeCapability::INTRAMESH_CARDINAL,
                     role,
                     /*express_routing_enabled=*/false,
-                    /*enable_vc1=*/false,
-                    /*enable_mesh_pass_through=*/false);
+                    nullptr);
 
                 const auto& targets = turn_set[0];
                 ASSERT_EQ(targets.size(), 1) << "topology " << static_cast<int>(topology) << " role "
@@ -109,7 +114,7 @@ TEST_F(RouterConnectionMappingTest, Linear1D_WiresOnlyTheOpposite) {
 // Legacy 2D (non-express)
 // ============================================================================
 
-TEST_F(RouterConnectionMappingTest, Legacy2D_WiresEveryNonSelfCardinal) {
+TEST_F(RouterTurnSetTest, Legacy2D_WiresEveryNonSelfCardinal) {
     for (auto topology : {Topology::Mesh, Topology::Torus}) {
         for (auto facing : k_all_cardinals) {
             const auto turn_set = turn_set_for_router(
@@ -118,8 +123,7 @@ TEST_F(RouterConnectionMappingTest, Legacy2D_WiresEveryNonSelfCardinal) {
                 EdgeCapability::INTRAMESH_CARDINAL,
                 ZPortRole::NONE,
                 /*express_routing_enabled=*/false,
-                /*enable_vc1=*/false,
-                /*enable_mesh_pass_through=*/false);
+                nullptr);
 
             EXPECT_EQ(target_directions(turn_set, 0), non_self_cardinals(facing))
                 << "facing " << static_cast<int>(facing);
@@ -128,7 +132,7 @@ TEST_F(RouterConnectionMappingTest, Legacy2D_WiresEveryNonSelfCardinal) {
     }
 }
 
-TEST_F(RouterConnectionMappingTest, Legacy2D_KeepsWiredButUnusedXToYTurns) {
+TEST_F(RouterTurnSetTest, Legacy2D_KeepsWiredButUnusedXToYTurns) {
     // Standing decision: an E/W-facing legacy router is wired into the Y directions even though
     // 2D routing is already dimension-ordered and never uses those turns. Removing them would move
     // downstream counts, stream assignment, and L1 layout on every existing 2D configuration.
@@ -138,8 +142,7 @@ TEST_F(RouterConnectionMappingTest, Legacy2D_KeepsWiredButUnusedXToYTurns) {
         EdgeCapability::INTRAMESH_CARDINAL,
         ZPortRole::NONE,
         /*express_routing_enabled=*/false,
-        /*enable_vc1=*/false,
-        /*enable_mesh_pass_through=*/false);
+        nullptr);
 
     const auto dirs = target_directions(turn_set, 0);
     EXPECT_TRUE(dirs.contains(RoutingDirection::N));
@@ -147,7 +150,7 @@ TEST_F(RouterConnectionMappingTest, Legacy2D_KeepsWiredButUnusedXToYTurns) {
     EXPECT_TRUE(dirs.contains(RoutingDirection::W));
 }
 
-TEST_F(RouterConnectionMappingTest, Legacy2D_BoundaryChipAddsBoundaryTargetOnVC0) {
+TEST_F(RouterTurnSetTest, Legacy2D_BoundaryChipAddsBoundaryTargetOnVC0) {
     // The chip's extra port enters the turn set when it is an intermesh boundary: the three
     // non-self cardinals plus the boundary turn, which stays on VC0.
     for (auto facing : k_all_cardinals) {
@@ -157,8 +160,7 @@ TEST_F(RouterConnectionMappingTest, Legacy2D_BoundaryChipAddsBoundaryTargetOnVC0
             EdgeCapability::INTRAMESH_CARDINAL,
             ZPortRole::INTERMESH_BOUNDARY,
             /*express_routing_enabled=*/false,
-            /*enable_vc1=*/false,
-            /*enable_mesh_pass_through=*/false);
+            nullptr);
 
         auto expected = non_self_cardinals(facing);
         expected.insert(RoutingDirection::Z);
@@ -167,7 +169,7 @@ TEST_F(RouterConnectionMappingTest, Legacy2D_BoundaryChipAddsBoundaryTargetOnVC0
     }
 }
 
-TEST_F(RouterConnectionMappingTest, Legacy2D_VC1MirrorsCardinalsOnly) {
+TEST_F(RouterTurnSetTest, Legacy2D_VC1MirrorsCardinalsOnly) {
     // VC1 forwards the same cardinal set, but the boundary target stays off VC1: feeding the
     // boundary's VC1 sender while it does not service VC1 would create an undrained channel.
     const auto turn_set = turn_set_for_router(
@@ -176,8 +178,7 @@ TEST_F(RouterConnectionMappingTest, Legacy2D_VC1MirrorsCardinalsOnly) {
         EdgeCapability::INTRAMESH_CARDINAL,
         ZPortRole::INTERMESH_BOUNDARY,
         /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true,
-        /*enable_mesh_pass_through=*/false);
+        &k_full_mesh);
 
     EXPECT_EQ(target_directions(turn_set, 1), non_self_cardinals(RoutingDirection::N));
     expect_all_targets_on_vc(turn_set, 1, 1);
@@ -187,7 +188,7 @@ TEST_F(RouterConnectionMappingTest, Legacy2D_VC1MirrorsCardinalsOnly) {
     EXPECT_EQ(target_directions(turn_set, 0), expected_vc0);
 }
 
-TEST_F(RouterConnectionMappingTest, PassThrough_AddsBoundaryTargetOnVC1) {
+TEST_F(RouterTurnSetTest, PassThrough_AddsBoundaryTargetOnVC1) {
     // EXPERIMENTAL pass-through (A->B->C) forwards VC1 traffic to the local boundary as well.
     for (auto topology : {Topology::Mesh, Topology::Torus}) {
         const auto turn_set = turn_set_for_router(
@@ -196,8 +197,7 @@ TEST_F(RouterConnectionMappingTest, PassThrough_AddsBoundaryTargetOnVC1) {
             EdgeCapability::INTRAMESH_CARDINAL,
             ZPortRole::INTERMESH_BOUNDARY,
             /*express_routing_enabled=*/false,
-            /*enable_vc1=*/true,
-            /*enable_mesh_pass_through=*/true);
+            &k_full_mesh_pass_through);
 
         auto expected_vc1 = non_self_cardinals(RoutingDirection::E);
         expected_vc1.insert(RoutingDirection::Z);
@@ -209,7 +209,7 @@ TEST_F(RouterConnectionMappingTest, PassThrough_AddsBoundaryTargetOnVC1) {
     }
 }
 
-TEST_F(RouterConnectionMappingTest, PassThrough_NoEffectWithoutBoundaryPort) {
+TEST_F(RouterTurnSetTest, PassThrough_NoEffectWithoutBoundaryPort) {
     // Pass-through requested on a chip whose extra port is absent or is a chord: there is no
     // boundary to forward to, so no Z target appears on either VC.
     const auto turn_set = turn_set_for_router(
@@ -218,8 +218,7 @@ TEST_F(RouterConnectionMappingTest, PassThrough_NoEffectWithoutBoundaryPort) {
         EdgeCapability::INTRAMESH_CARDINAL,
         ZPortRole::NONE,
         /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true,
-        /*enable_mesh_pass_through=*/true);
+        &k_full_mesh_pass_through);
 
     EXPECT_EQ(target_directions(turn_set, 0), non_self_cardinals(RoutingDirection::E));
     EXPECT_EQ(target_directions(turn_set, 1), non_self_cardinals(RoutingDirection::E));
@@ -229,7 +228,7 @@ TEST_F(RouterConnectionMappingTest, PassThrough_NoEffectWithoutBoundaryPort) {
 // The boundary template (Z-facing router whose edge crosses a mesh boundary)
 // ============================================================================
 
-TEST_F(RouterConnectionMappingTest, BoundaryTemplate_FansOutToEveryMeshDirectionOnVC1) {
+TEST_F(RouterTurnSetTest, BoundaryTemplate_FansOutToEveryMeshDirectionOnVC1) {
     // The boundary's whole shape is its from-boundary VC1 fanout: nothing forwards off its VC0
     // receiver (traffic arriving there crosses over onto these same VC1 downstream senders).
     const auto turn_set = turn_set_for_router(
@@ -238,8 +237,7 @@ TEST_F(RouterConnectionMappingTest, BoundaryTemplate_FansOutToEveryMeshDirection
         EdgeCapability::INTERMESH,
         ZPortRole::INTERMESH_BOUNDARY,
         /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true,
-        /*enable_mesh_pass_through=*/false);
+        &k_full_mesh);
 
     EXPECT_TRUE(turn_set[0].empty());
 
@@ -255,7 +253,7 @@ TEST_F(RouterConnectionMappingTest, BoundaryTemplate_FansOutToEveryMeshDirection
     }
 }
 
-TEST_F(RouterConnectionMappingTest, BoundaryTemplate_Requires2DAndVC1) {
+TEST_F(RouterTurnSetTest, BoundaryTemplate_Requires2DAndVC1) {
     // Its entire shape is the from-boundary VC1 fanout, so without VC1 or on 1D the boundary
     // router cannot be constructed.
     EXPECT_ANY_THROW(turn_set_for_router(
@@ -264,8 +262,7 @@ TEST_F(RouterConnectionMappingTest, BoundaryTemplate_Requires2DAndVC1) {
         EdgeCapability::INTERMESH,
         ZPortRole::INTERMESH_BOUNDARY,
         /*express_routing_enabled=*/false,
-        /*enable_vc1=*/false,
-        /*enable_mesh_pass_through=*/false));
+        nullptr));
 
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Linear,
@@ -273,15 +270,14 @@ TEST_F(RouterConnectionMappingTest, BoundaryTemplate_Requires2DAndVC1) {
         EdgeCapability::INTERMESH,
         ZPortRole::INTERMESH_BOUNDARY,
         /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true,
-        /*enable_mesh_pass_through=*/false));
+        &k_full_mesh));
 }
 
 // ============================================================================
 // The express chord (Z-facing router whose edge is a same-mesh express chord)
 // ============================================================================
 
-TEST_F(RouterConnectionMappingTest, ExpressChord_IsWiredAsAnOrdinaryRoutingDirection) {
+TEST_F(RouterTurnSetTest, ExpressChord_IsWiredAsAnOrdinaryRoutingDirection) {
     // A chord is a Y-axis resource like N/S: it fans out to all four cardinals as ordinary
     // same-VC turns, on VC0 and VC1 alike (a landed carrier can still decode a Z action).
     const auto turn_set = turn_set_for_router(
@@ -290,8 +286,7 @@ TEST_F(RouterConnectionMappingTest, ExpressChord_IsWiredAsAnOrdinaryRoutingDirec
         EdgeCapability::INTRAMESH_EXPRESS,
         ZPortRole::EXPRESS_CHORD,
         /*express_routing_enabled=*/true,
-        /*enable_vc1=*/true,
-        /*enable_mesh_pass_through=*/false);
+        &k_full_mesh);
 
     for (uint32_t vc : {0u, 1u}) {
         // No Z in the set: a router never wires back over its own link.
@@ -300,15 +295,14 @@ TEST_F(RouterConnectionMappingTest, ExpressChord_IsWiredAsAnOrdinaryRoutingDirec
     }
 }
 
-TEST_F(RouterConnectionMappingTest, ExpressChord_RequiresExpressEnabledAnd2D) {
+TEST_F(RouterTurnSetTest, ExpressChord_RequiresExpressEnabledAnd2D) {
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Torus,
         RoutingDirection::Z,
         EdgeCapability::INTRAMESH_EXPRESS,
         ZPortRole::EXPRESS_CHORD,
         /*express_routing_enabled=*/false,
-        /*enable_vc1=*/false,
-        /*enable_mesh_pass_through=*/false));
+        nullptr));
 
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Linear,
@@ -316,11 +310,10 @@ TEST_F(RouterConnectionMappingTest, ExpressChord_RequiresExpressEnabledAnd2D) {
         EdgeCapability::INTRAMESH_EXPRESS,
         ZPortRole::EXPRESS_CHORD,
         /*express_routing_enabled=*/true,
-        /*enable_vc1=*/false,
-        /*enable_mesh_pass_through=*/false));
+        nullptr));
 }
 
-TEST_F(RouterConnectionMappingTest, CardinalCapabilityOnZFacingIsAConfigurationError) {
+TEST_F(RouterTurnSetTest, CardinalCapabilityOnZFacingIsAConfigurationError) {
     // Direction letter and capability disagree: a same-mesh Z edge is an express chord and must
     // carry INTRAMESH_EXPRESS; an ordinary cardinal-capability Z edge cannot exist. Both
     // derivations reject it -- the shape used to silently produce mesh-like counts for it.
@@ -330,8 +323,7 @@ TEST_F(RouterConnectionMappingTest, CardinalCapabilityOnZFacingIsAConfigurationE
         EdgeCapability::INTRAMESH_CARDINAL,
         ZPortRole::NONE,
         /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true,
-        /*enable_mesh_pass_through=*/false));
+        &k_full_mesh));
     EXPECT_ANY_THROW(router_vc_shape(
         Topology::Mesh,
         RoutingDirection::Z,
@@ -345,7 +337,7 @@ TEST_F(RouterConnectionMappingTest, CardinalCapabilityOnZFacingIsAConfigurationE
 // Role/capability cross-check: the two spellings of the chip's extra port must agree
 // ============================================================================
 
-TEST_F(RouterConnectionMappingTest, BoundaryFacingRequiresBoundaryRole) {
+TEST_F(RouterTurnSetTest, BoundaryFacingRequiresBoundaryRole) {
     // A Z-facing intermesh edge means the chip's extra port IS the boundary. Role NONE claims the
     // port is absent and EXPRESS_CHORD claims it is a same-mesh chord -- both impossible chips,
     // and both derivations must refuse to build them.
@@ -357,8 +349,7 @@ TEST_F(RouterConnectionMappingTest, BoundaryFacingRequiresBoundaryRole) {
             EdgeCapability::INTERMESH,
             role,
             /*express_routing_enabled=*/false,
-            /*enable_vc1=*/true,
-            /*enable_mesh_pass_through=*/false));
+            &k_full_mesh));
         EXPECT_ANY_THROW(router_vc_shape(
             Topology::Mesh,
             RoutingDirection::Z,
@@ -369,7 +360,7 @@ TEST_F(RouterConnectionMappingTest, BoundaryFacingRequiresBoundaryRole) {
     }
 }
 
-TEST_F(RouterConnectionMappingTest, ChordFacingRequiresChordRole) {
+TEST_F(RouterTurnSetTest, ChordFacingRequiresChordRole) {
     // The mirror image: a same-mesh Z edge is this chip's express chord, so the role cannot claim
     // the port is absent or is the boundary.
     for (auto role : {ZPortRole::NONE, ZPortRole::INTERMESH_BOUNDARY}) {
@@ -380,8 +371,7 @@ TEST_F(RouterConnectionMappingTest, ChordFacingRequiresChordRole) {
             EdgeCapability::INTRAMESH_EXPRESS,
             role,
             /*express_routing_enabled=*/true,
-            /*enable_vc1=*/false,
-            /*enable_mesh_pass_through=*/false));
+            nullptr));
         EXPECT_ANY_THROW(router_vc_shape(
             Topology::Torus,
             RoutingDirection::Z,
@@ -392,7 +382,7 @@ TEST_F(RouterConnectionMappingTest, ChordFacingRequiresChordRole) {
     }
 }
 
-TEST_F(RouterConnectionMappingTest, CardinalFacingRejectsExpressCapability) {
+TEST_F(RouterTurnSetTest, CardinalFacingRejectsExpressCapability) {
     // An express chord lives on the chip's extra port; a cardinal-facing router cannot carry it,
     // no matter what the chip's role says.
     EXPECT_ANY_THROW(turn_set_for_router(
@@ -401,8 +391,7 @@ TEST_F(RouterConnectionMappingTest, CardinalFacingRejectsExpressCapability) {
         EdgeCapability::INTRAMESH_EXPRESS,
         ZPortRole::EXPRESS_CHORD,
         /*express_routing_enabled=*/true,
-        /*enable_vc1=*/false,
-        /*enable_mesh_pass_through=*/false));
+        nullptr));
     EXPECT_ANY_THROW(router_vc_shape(
         Topology::Torus,
         RoutingDirection::N,
@@ -416,7 +405,7 @@ TEST_F(RouterConnectionMappingTest, CardinalFacingRejectsExpressCapability) {
 // Queries and value semantics
 // ============================================================================
 
-TEST_F(RouterConnectionMappingTest, Queries_OnAbsentVcsReturnEmpty) {
+TEST_F(RouterTurnSetTest, Queries_OnAbsentVcsReturnEmpty) {
     RouterTurnSet empty{};
     EXPECT_TRUE(empty[0].empty());
     EXPECT_TRUE(empty[1].empty());
@@ -427,13 +416,12 @@ TEST_F(RouterConnectionMappingTest, Queries_OnAbsentVcsReturnEmpty) {
         EdgeCapability::INTRAMESH_CARDINAL,
         ZPortRole::NONE,
         /*express_routing_enabled=*/false,
-        /*enable_vc1=*/false,
-        /*enable_mesh_pass_through=*/false);
+        nullptr);
     EXPECT_TRUE(mesh[1].empty()) << "VC1 not enabled";
     EXPECT_TRUE(mesh[2].empty());
 }
 
-TEST_F(RouterConnectionMappingTest, ConnectionTarget_Semantics) {
+TEST_F(RouterTurnSetTest, ConnectionTarget_Semantics) {
     ConnectionTarget target(1, RoutingDirection::Z);
     EXPECT_EQ(target.target_vc, 1);
     ASSERT_TRUE(target.target_direction.has_value());

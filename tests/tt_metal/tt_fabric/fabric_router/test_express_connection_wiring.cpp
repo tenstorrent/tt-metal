@@ -25,7 +25,9 @@ constexpr bool k_express = true;
 constexpr bool k_no_express = false;
 constexpr bool k_vc1 = true;
 constexpr bool k_no_vc1 = false;
-constexpr bool k_no_pass_through = false;
+
+// The VC configuration spelled as a config object -- the same spelling the shape derivation takes.
+const IntermeshVCConfig k_full_mesh = IntermeshVCConfig::full_mesh();
 
 std::set<RoutingDirection> target_directions(const RouterTurnSet& turn_set, uint32_t vc) {
     std::set<RoutingDirection> dirs;
@@ -48,8 +50,7 @@ RouterTurnSet express_mapping(
         capability,
         (has_express_chord) ? ZPortRole::EXPRESS_CHORD : ZPortRole::NONE,
         k_express,
-        enable_vc1,
-        k_no_pass_through);
+        enable_vc1 ? &k_full_mesh : nullptr);
 }
 
 // --- Legal transition set (builder contract section 4.4 wiring policy) ---
@@ -179,8 +180,7 @@ TEST(ExpressConnectionWiringTest, NonExpressWiringIsUnchanged) {
         EdgeCapability::INTRAMESH_CARDINAL,
         ZPortRole::NONE,
         k_no_express,
-        k_vc1,
-        k_no_pass_through);
+        &k_full_mesh);
     EXPECT_EQ(
         target_directions(legacy, 0),
         std::set<RoutingDirection>({RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}));
@@ -198,8 +198,7 @@ TEST(ExpressConnectionWiringTest, IntermeshZTemplateStillAppliesUnderExpress) {
         EdgeCapability::INTRAMESH_CARDINAL,
         ZPortRole::INTERMESH_BOUNDARY,
         k_express,
-        k_vc1,
-        k_no_pass_through);
+        &k_full_mesh);
 
     EXPECT_TRUE(target_directions(mapping, 0).contains(RoutingDirection::Z));
 }
@@ -225,14 +224,14 @@ TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1BoundaryTargetDoesNotAlia
     // With the express Z target dropped, a Y-facing router's VC1 targets are exactly the three
     // cardinals plus the pass-through boundary target -- each direction appearing exactly once, so
     // no target aliases another. This only holds because the chord-less chip drops the Z output.
+    const auto pass_through = IntermeshVCConfig::full_mesh_with_pass_through();
     const auto mapping = turn_set_for_router(
         Topology::Torus,
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_CARDINAL,
         ZPortRole::INTERMESH_BOUNDARY,
         k_express,
-        k_vc1,
-        /*enable_mesh_pass_through=*/true);
+        &pass_through);
 
     std::set<RoutingDirection> used_directions;
     for (const auto& target : mapping[1]) {

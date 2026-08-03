@@ -212,6 +212,9 @@ using RouterTurnSet = std::array<std::vector<ConnectionTarget>, builder_config::
  * - The chip's extra port enters the set only when it has one: an express chord is an ordinary
  *   same-VC target; an intermesh boundary is reached through the boundary target on VC0 (and on
  *   VC1 only in pass-through mode); nothing exists without the port.
+ *
+ * The VC facts arrive as the same IntermeshVCConfig the shape derivation takes, so a caller
+ * cannot spell one fabric two ways (e.g. requires_vc1 for the shape but not for the turn set).
  */
 RouterTurnSet turn_set_for_router(
     Topology topology,
@@ -219,8 +222,26 @@ RouterTurnSet turn_set_for_router(
     EdgeCapability edge_capability,
     ZPortRole z_role,
     bool express_routing_enabled,
-    bool enable_vc1,
-    bool enable_mesh_pass_through);
+    const IntermeshVCConfig* vc_config);
+
+/**
+ * The whole wiring answer for one router archetype: its channel shape and its turn set, derived
+ * together from one fact tuple. Callers that need only one side can call router_vc_shape or
+ * turn_set_for_router directly; callers that need both (the per-router build, test fixtures)
+ * should derive them together so the facts cannot diverge between the two.
+ */
+struct RouterArchetype {
+    RouterVcShape shape;
+    RouterTurnSet turns;
+};
+
+RouterArchetype router_archetype(
+    Topology topology,
+    RoutingDirection facing,
+    EdgeCapability edge_capability,
+    ZPortRole z_role,
+    bool express_routing_enabled,
+    const IntermeshVCConfig* vc_config);
 
 /**
  * Which datamover builder owns a router's sender channels on a VC. With the tensix (MUX)
