@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py",
+    "--kind",
+    "full",
+    "--batch",
+    "1",
+    "--optimized",
+    "--candidate",
+    "final_cum_o_w12",
+    "--steps",
+    "3"
+  ],
+  "batch": 1,
+  "candidate": "final_cum_o_w12",
+  "exit_status": 1,
+  "kind": "full",
+  "result": "fail",
+  "retained_output": [
+    "2026-07-30 11:32:47.909 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1678080 B which is beyond max L1 size of 1572864 B (assert.hpp:104)",
+    "OPTIMIZED_POLICY candidate=final_cum_o_w12 layer_kind=full_attention attention_dtype=DataType.BFLOAT16 cache_dtype=DataType.BFLOAT8_B sdpa_fidelity=MathFidelity.HiFi4 qkv_fidelity=MathFidelity.HiFi2 o_fidelity=MathFidelity.HiFi2 qkv_w=2 o_w=12 gate_w=5 up_w=5 down_w=17 linear_packed=False linear_outer=False linear_recurrent=auto linear_recurrent_fidelity=MathFidelity.HiFi2 linear_recurrent_state_dtype=DataType.FLOAT32 storage_cores=8",
+    "RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception"
+  ],
+  "steps": 3
+}

@@ -1,0 +1,53 @@
+{
+  "batch": 32,
+  "bit_exact": null,
+  "candidate": "linear_state_bfp8",
+  "command_result": "pass",
+  "decode_median_ms": 16.33816909790039,
+  "decode_min_ms": 16.274858004180714,
+  "decode_steps": 8,
+  "pcc": [
+    {
+      "phase": "prefill",
+      "value": 0.9999957671431647
+    },
+    {
+      "phase": "decode_0",
+      "value": 0.9999981371919977
+    },
+    {
+      "phase": "decode_1",
+      "value": 0.9999982452099906
+    },
+    {
+      "phase": "decode_2",
+      "value": 0.999998283067423
+    },
+    {
+      "phase": "decode_3",
+      "value": 0.9999982678154137
+    },
+    {
+      "phase": "decode_4",
+      "value": 0.9999982102300624
+    },
+    {
+      "phase": "decode_5",
+      "value": 0.9999982412829999
+    },
+    {
+      "phase": "decode_6",
+      "value": 0.9999982952937492
+    },
+    {
+      "phase": "decode_7",
+      "value": 0.9999983569641182
+    }
+  ],
+  "prefill_sequence": 5,
+  "real_weights": false,
+  "recurrent_nonzero": 4186186,
+  "recurrent_state_dtype": "DataType.BFLOAT8_B",
+  "repeat_runs": 1,
+  "watcher_enabled": false
+}

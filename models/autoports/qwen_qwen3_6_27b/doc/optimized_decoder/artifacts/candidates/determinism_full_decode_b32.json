@@ -1,0 +1,7 @@
+{
+  "batch": 32,
+  "bit_exact": true,
+  "kind": "full",
+  "mode": "decode",
+  "path": "optimized"
+}
