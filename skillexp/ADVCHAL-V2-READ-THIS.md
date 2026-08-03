@@ -6,8 +6,12 @@ without it?
 
 **The short answer.** The advisor's value is the size of the *placement defect it happens to find* — mostly
 one class of defect, a reduction stuck on too few cores. Where that defect exists it is worth 6–13 % per
-layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned one. The stage measured all
-of this correctly and then **discarded its own largest win on a contradictory correctness rule**.
+layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned one.
+
+**Three things the stage got wrong, all measured on hardware afterwards:** it **discarded its own largest
+win** on a contradictory correctness rule (−8.5 pp), and in **both** cells where the grid ladder had more
+than one legal rung it **shipped the wrong rung** (−264 and −375 µs/model). Total left on the table:
+**≈ 4.1 ms/model across three cells.**
 
 ---
 
@@ -17,7 +21,7 @@ of this correctly and then **discarded its own largest win on a contradictory co
 |---|---|
 | **this file** | the account, and pointers |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
-| [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 4 experiments run on hardware to test the analysis |
+| [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 5 experiments run on hardware to test the analysis |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -101,6 +105,17 @@ candidate however fast it is"*, recommends a differential oracle, and separately
 oracle against the frozen incumbent "cannot fail" — so the only reading that satisfies all three is a bar
 at ≈1.0. Cost: **−3,466 µs/model available, −1,267 µs shipped.**
 
+**And the rule is not applied consistently, because the oracle's *construction* decides the outcome:**
+
+| cell | same class of change | how much it moved a differential PCC | oracle built | outcome |
+|---|---|---|---|---|
+| gemma-4-26B onA | 1 → 88 cores | **0.0177** | absolute, vs HuggingFace, bar 0.995 | **shipped** (−12.98 %) |
+| phi-3.5 FN | 1 → 11 cores | **0.0000089** | differential, vs frozen incumbent, bar 0.999999 | **rejected** |
+
+The cell whose change perturbed the output ~2,000× more shipped it. *(Not a controlled comparison — gemma's
+figure is on synthetic weights, phi's on real, different models. The asymmetry in outcome doesn't depend on
+that.)*
+
 → [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E1, [`STAGE-ANALYSIS`](ADVCHAL-V2-STAGE-ANALYSIS.md) §D1,
 [`ORACLES`](ADVCHAL-V2-ORACLES.md)
 
@@ -144,11 +159,25 @@ so it swept 22 / 32 / 64 and shipped 32. I swept the whole **legal** ladder:
 (≈ **−264 µs/model**) at unchanged accuracy, confirmed in interleaved fresh processes. The curve is
 non-monotonic with a local *maximum* at the advised 22.
 
-Two related refutations of my own earlier claims: **phi** is a plateau from 11 to 48 cores (exact tile
-division buys nothing), and north-mini's 40/44/48/55/88 are **illegal** — so its three points were nearly
-the whole legal ladder above 22.
+**The same is true of the corpus's biggest win.** gemma-4-26B onA shipped **88** cores; its own legal
+ladder is `{11, 22, 44, 88}` and it measured only 88:
 
-→ [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E2, §E4
+| cores | 1 *(frozen)* | 11 | 22 | **44** | **88** *(shipped)* |
+|---|---|---|---|---|---|
+| sliding ms | 1.8235 | 1.5736 | 1.5798 | **1.5750** | 1.5875 |
+| full ms | 2.0127 | — | — | **1.7636** | 1.7760 |
+
+**44 beats 88 by 12.2–12.4 µs/layer on both kinds** (≈ **−375 µs/model**), and is **bit-identical** to the
+shipped configuration on sliding attention (PCC 1.0), so it inherits the oracle 88 already passed.
+
+**Across the three cells with a low-core reduction, every one whose ladder had more than one legal rung
+shipped the wrong rung.** Only phi — a plateau — happened to ship its best.
+
+Two refutations of my own earlier claims: **phi** is a plateau from 11 to 48 cores (exact tile division buys
+nothing), and north-mini's 40/44/48/55/88 are **illegal**, so its three points were nearly the whole legal
+ladder above 22.
+
+→ [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E2, §E4, §E5
 
 ### 3.5 Tracer coverage decides more than placement does
 
@@ -236,6 +265,10 @@ Four experiments, 2026-08-03 16:07–16:23 UTC, in isolated worktrees using each
 | E2 | Should phi have tested the 32-core exactly-dividing grid? | **My hypothesis refuted** — 11→48 is a plateau |
 | E3 | Is llama-8B's zero real? | **Confirmed** — whole ladder measured; also found the 60× cross-process floor effect |
 | E4 | Was north-mini's sweep exhausted? | **No** — 16 cores is ~1 pp better; but 44/88 are *illegal*, refuting my other suggestion |
+| E5 | Did gemma-4-26B onA ship the best grid? | **No** — 44 beats the shipped 88 by 12.3 µs/layer on both kinds, at PCC 1.0 |
+
+Four experiments, one conclusion: **the grid a cell ships is the grid it was told, not the grid that is
+fastest.**
 
 → [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md)
 
@@ -276,6 +309,7 @@ Four experiments, 2026-08-03 16:07–16:23 UTC, in isolated worktrees using each
 |---|---|---|
 | 1 | Ship phi FN's combined candidate under an absolute oracle at the model's own bar | **+8.5 pp** on that cell |
 | 2 | Ship north-mini's 16-core MoE norm | **−264 µs/model**, ≈ +1 pp |
+| 2b | Ship gemma-4-26B onA's 44-core norm instead of 88 | **−375 µs/model**, at PCC 1.0 |
 | 3 | Tracer support for qwen's linear-attention `ttnn.copy` boundary | ~91 % of qwen's model time, currently unadvised |
 | 4 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window |
 | 5 | Sweep the legal ladder both sides of the advice in every norm cell | 1–5 pp per affected cell |

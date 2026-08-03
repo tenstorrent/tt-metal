@@ -1,6 +1,6 @@
 # advchal-v2 — what to change
 
-Derived from the 15-cell corpus, the tt-mlir source at the pin, and four hardware experiments.
+Derived from the 15-cell corpus, the tt-mlir source at the pin, and five hardware experiments.
 Evidence for every claim is in [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) and the files it points to.
 
 **Part 1** is the general ideas — the principles worth arguing about.
@@ -56,7 +56,7 @@ metric that can report zero on a cell with a 13 % win available will produce fal
 Attribution needs a second channel for **in-chain re-grids**, with a direction, and the ceiling must never
 be a stopping condition on its own.
 
-## V4a. Coverage beats placement
+## I4a. Coverage beats placement
 
 Every structural zero in this corpus is a tracer-coverage zero, and the biggest one hides ~91 % of a
 model's time behind a single unhandled op. Placement work on the visible 9 % cannot compete with making
@@ -112,20 +112,30 @@ observation (differential).
   tighter than the model's own test bar without a recorded justification.
 - **Test:** re-run phi FN. The combined candidate must ship. Expected: −13.4 %/layer, −3,466 µs/model,
   PCC 0.99904 vs the incumbent's 0.99890.
+- **The strongest single argument for this change:** gemma-4-26B onA's shipped norm change moves a
+  differential PCC by **0.0177** and shipped (absolute oracle); phi FN's moved it by **0.0000089** and was
+  rejected (differential oracle). The rule as written punishes the *less* perturbing change.
 - **Evidence:** [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E1, [`ORACLES`](ADVCHAL-V2-ORACLES.md).
 
-### A2. Ship the two wins the corpus already has
+### A2. Ship the three wins the corpus already has
 
 - **phi FN**: `advisor_rope_l1="query_key"` + `advisor_norm_cores=11`. Measured −13.39 %/layer; oracle
   under A1 passes.
 - **north-mini FN**: `advisor_moe_norm_cores=16` instead of 32. Measured −5.4 µs/layer (sliding MoE) and
   −5.7 µs/layer (full MoE), ≈ −264 µs/model; PCC 0.99951 vs the model's 0.995 bar.
+- **gemma-4-26B onA**: `GEMMA4_ADVISOR_NORM_CORES=44` instead of 88. Measured −12.2 µs/layer (sliding) and
+  −12.4 µs/layer (full), ≈ −375 µs/model; **bit-identical** to the shipped 88 on sliding (PCC 1.0), so it
+  inherits the real-weight oracle already passed. Also **relax that cell's own `cores % 11 == 0` check** —
+  it is the cell's assumption, not the hardware's; north-mini ran 16- and 32-core norms on the same device.
 - **Test:** the existing per-model real-weight tests, unchanged, plus a fresh-process non-overlap
   confirmation.
 
 ## B. The stage — search
 
-### B1. Emit the legal grid ladder, and sweep both sides of the advice
+### B1. Emit the legal grid ladder, and sweep both sides of the advice ⭐
+
+**Measured value: two of the three cells with a low-core reduction shipped the wrong rung** — north-mini
+(32, best 16) and gemma-4-26B onA (88, best 44). Together ≈ **−639 µs/model** left behind.
 
 **Change.** Replace *"never sweep only at or below an advised core count; always measure at least one
 exactly-dividing grid"* with:

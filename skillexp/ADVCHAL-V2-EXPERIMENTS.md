@@ -1,8 +1,8 @@
 # advchal-v2 — experiments run to test the analysis
 
-Four experiments run on hardware on **2026-08-03, 16:07–16:23 UTC**, after the corpus was complete, to
-test claims that the corpus data alone could not settle. Two confirmed a claim, **one refuted one of my
-own hypotheses**, and one **found a win the corpus missed**.
+Five experiments run on hardware on **2026-08-03, 16:07–16:39 UTC**, after the corpus was complete, to
+test claims the corpus data alone could not settle. Two confirmed a claim, **two refuted hypotheses of my
+own**, and **two found wins the corpus missed** (north-mini −264 µs/model, gemma-4-26B onA −375 µs/model).
 
 ## Method
 
@@ -13,6 +13,7 @@ Isolated git worktrees off the cells' own run branches, so nothing touched any o
 | `/home/mvasiljevic/_exp-wt` | `1527e0a1298` (phi FN run branch) | phi-3.5-mini |
 | `/home/mvasiljevic/_exp-llama` | `fc8f549c3b0` (llama-8B run branch) | llama-3.1-8B |
 | `/home/mvasiljevic/_exp-nm` | `433053a393a` (`skillexp-cell/advchal-v2/nmFN`) | north-mini |
+| `/home/mvasiljevic/_exp-g26` | `ad3ca71d89b` (g26 onA run branch) | gemma-4-26B |
 
 `ttnn` resolved from the built tree (`TT_METAL_HOME=/home/mvasiljevic/tt-metal`), `models.*` from the
 worktree via `PYTHONPATH`. **Each cell's own unmodified `harness.py` was used** — same protocol as the
@@ -229,3 +230,89 @@ exactly-dividing. The rule pointed the sweep in exactly the wrong direction for 
 | north-mini should have tried 44 and 88 cores | **refuted** — both are illegal (`TT_FATAL`) |
 | north-mini's sweep was thorough | **refuted** — 16 cores is 1 pp better and was never tried |
 | "sweep above the advised core count" | **wrong as stated** — the optimum was *below* it. Sweep the whole legal ladder. |
+
+---
+
+## E5 — gemma-4-26B onA: the corpus's biggest win shipped the wrong grid
+
+**Claim under test.** g26 onA shipped a 1→88-core hidden-norm re-grid for −12.98 %/layer, the largest
+shipped layer win in the corpus. Was 88 the best legal grid?
+
+### The legal ladder is four rungs, and the cell measured one
+
+`HIDDEN_SIZE = 2816` = 88 tiles. The cell's own code (`tt/optimized_decoder.py:192-202`) enforces two
+constraints:
+
+1. `HIDDEN_SIZE % cores == 0` **and** `(HIDDEN_SIZE // cores) % TILE_SIZE == 0` → cores must divide 88
+2. `cores % 11 == 0` and `cores // 11 <= 10` → **multiples of 11 only**
+
+So the cell's own legal set is **{11, 22, 44, 88}**, and its error message asserts "88 cores is the maximum
+legal width-sharded grid". It measured **only 88**.
+
+⚠ Constraint 2 is the *cell's* assumption, not the hardware's — north-mini ran 16- and 32-core norms
+successfully on the same device. Without it, {1, 2, 4, 8} are also tile-aligned here.
+
+### Sweep of the cell's own legal ladder — sliding attention
+
+| cores | median ms | vs frozen 1.823508 | floor µs |
+|---|---|---|---|
+| 1 (frozen incumbent) | 1.824282 / **1.823508** | — | 1.354 / 1.163 |
+| 11 | 1.574171 / 1.573104 | −13.72 % | 13.783 / 8.897 |
+| 22 | 1.579826 | −13.35 % | 5.962 |
+| **44** | **1.574985 / 1.575744 / 1.574808** | **−13.62 %** | 0.859 / 3.665 / 1.232 |
+| **88 (shipped)** | 1.587511 / 1.587481 / 1.587275 | −12.94 % | 2.145 / 11.865 / 4.168 |
+
+### Full attention
+
+| cores | median ms | vs frozen 2.012718 |
+|---|---|---|
+| 1 (frozen) | 2.012718 | — |
+| **44** | **1.763661 / 1.763577** | **−12.37 %** |
+| 88 (shipped) | 1.776045 | −11.75 % |
+
+**44 beats the shipped 88 by 12.2 µs/layer (sliding) and 12.4 µs/layer (full)**, with every 44-run below
+every 88-run on both kinds. 11 cores is marginally lower still on sliding but its floors (8.9–13.8 µs) are
+as large as the difference, so **44 is the defensible choice** — tightest floor, cleanest separation.
+
+Model-level: 25 sliding + 5 full layers × ~12.3 µs ≈ **−375 µs/model** beyond what shipped.
+
+### Correctness: 44 is numerically equivalent to what already shipped
+
+The real gemma-4-26B weights are **not on this host** — the HF cache holds `config.json` only (28 KB), and
+the model's real-weight test fails identically for the **shipped 88-core default**, so it is not evidence
+about 44. Using the cell's own synthetic-weight harness state instead:
+
+| comparison | PCC | passes 0.995 |
+|---|---|---|
+| 44 vs shipped 88, sliding | **1.0** | yes |
+| 44 vs shipped 88, full | 0.9999984316907383 | yes |
+| 1-core frozen vs shipped 88, sliding | **0.9822515179837364** | **no** |
+| 1-core frozen vs shipped 88, full | 0.9998214001052961 | yes |
+
+44 is **bit-identical** to the shipped configuration on sliding attention, so it inherits the real-weight
+oracle the cell already passed at PCC 0.999629 / 0.999787.
+
+### The row that indicts the oracle rule
+
+The third row is the important one. **gemma's shipped 1→88 norm change moves a differential PCC by
+0.0177** — enough to fail a 0.995 bar outright. phi FN's 1→11 norm change moved a differential PCC by
+**0.0000089** and was **rejected for it**.
+
+| cell | same class of change | differential PCC movement | oracle built | outcome |
+|---|---|---|---|---|
+| gemma-4-26B onA | 1 → 88 cores | **0.0177** | absolute, vs HuggingFace, bar 0.995 | **shipped** (−12.98 %) |
+| phi-3.5 FN | 1 → 11 cores | **0.0000089** | differential, vs frozen incumbent, bar 0.999999 | **rejected** |
+
+The cell whose change perturbed the output **~2,000× more** shipped it. The cell whose change perturbed it
+least did not. **The oracle construction decided both outcomes; the numerics decided neither.**
+
+*Caveat, stated: gemma's differential is measured on synthetic weights with `BFLOAT8_B` experts and phi's on
+real weights, and they are different models — so the two PCC deltas are not a controlled comparison. The
+asymmetry in outcome, however, does not depend on that.*
+
+### Result
+
+- A **third** cell shipped a grid that is not the best legal grid. Running total of value left on the table
+  by grid choice alone: **−264 µs/model** (north-mini) **−375 µs/model** (gemma-4-26B onA).
+- Across the three cells with a low-core reduction, **every one whose ladder had more than one legal rung
+  shipped the wrong rung.** Only phi — whose curve is a plateau — happened to ship the best one.
