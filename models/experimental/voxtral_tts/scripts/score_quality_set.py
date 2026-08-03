@@ -61,6 +61,34 @@ ADVERSARIAL = re.compile(r"[\U0001F300-\U0001FAFF☀-➿]|[!@#$%^&*()]{3,}|\\[tn
 # scores tens of thousands of percent and swamps 340 good words. It cost real debugging time
 # twice, chasing a port defect that does not exist. Reported separately, like the adversarial set.
 UNSTABLE_MAX_WORDS = 1
+
+# A FOURTH split, inside the natural-text bucket, and the one that matters most for gating.
+#
+# MEASURED: with IDENTICAL CODE, changing only the generation seed, the natural-text headline
+# lands on 1.76% / 2.06% / 0.88% (seeds 0/1/2). That is the ENTIRE range observed across every
+# implementation variant tried in the optimization sweep, endpoints included -- so a single-seed
+# headline cannot distinguish a code change from a reroll, and comparing two builds at one seed
+# is worthless.
+#
+# The reason is the word counts, not the audio. Per case, same code, seeds 0/1/2:
+#     case  7  spanish     6 words    50.0% /  0.0% /  0.0%
+#     case  9  portuguese  6 words     0.0% / 83.3% /  0.0%
+#     case 13  arabic      3 words    33.3% /  0.0% / 33.3%
+#     case  6  german      7 words    28.6% / 28.6% / 28.6%   <- real, reproducible, not noise
+#     cases 2,3 english  125 each      0.0% /  0.0% /  0.0%   <- 250 of the 340 words
+# On a 6-word clip one Whisper disagreement is 17% and three is 50%, so 90 words of short prompts
+# swing the 340-word aggregate by more than a full point while 250 words of English sit at zero.
+#
+# So the headline is split. LONG-FORM is the gate: it is 74% of the corpus, it has been 0.0% in
+# every run ever measured, and a regression there is real. SHORT-PROMPT is reported next to it and
+# is seed noise unless a case moves in the SAME direction across several seeds.
+#
+# For judging a numerical change (a fused matmul, a different norm, a new dtype), prefer the
+# DETERMINISTIC gates instead -- teacher-forced PCC and worst-sample against the fp32 reference in
+# tests/tt_gates.py. Those feed both builds identical inputs, so no trajectory is involved. That
+# is what actually caught the Block 1 sharded-norm regression (worst sample 1.06% -> 1.95%), while
+# this metric said 2.06% for a change that was fine and 2.06% again for one that was not.
+LONGFORM_MIN_WORDS = 20
 # Scripts that pin the language without guessing.
 SCRIPT_LANG = [("ऀॿ", "hindi"), ("؀ۿ", "arabic")]
 # Latin-script languages still need a hint; take it from characteristic words in the fixture text.
@@ -193,6 +221,7 @@ def main():
         raise SystemExit("usage: score_quality_set.py <results.json> [...]")
 
     clean, adv, unstable = [0.0, 0], [0.0, 0], [0.0, 0]
+    longform, shortform = [0.0, 0], [0.0, 0]   # the clean bucket, split by length
     table = []
     for r, lang, hyp in transcribe(rows):
         e, nw = wer(r["text"], hyp)
@@ -204,6 +233,9 @@ def main():
             bucket, kind = clean, ""
         bucket[0] += e * nw
         bucket[1] += nw
+        if bucket is clean:
+            (longform if nw >= LONGFORM_MIN_WORDS else shortform)[0] += e * nw
+            (longform if nw >= LONGFORM_MIN_WORDS else shortform)[1] += nw
         table.append((r, lang, e, nw, kind))
         print(f"\n  case {r['case']:>2} {r['voice']:<16} lang={lang:<11} "
               f"{r['audio_s']:.1f}s / {r['frames']} frames"
@@ -218,7 +250,13 @@ def main():
         print(f"    case {r['case']:>2}  {r['voice']:<16} {lang:<11} WER {e*100:>7.1f}%  "
               f"({nw:>3} words){f'  [{kind}]' if kind else ''}")
     print(f"\n  NATURAL-TEXT WER {clean[0]/max(clean[1],1)*100:.2f}% over {clean[1]} words "
-          f"<- the headline; reference scores 0.0%")
+          f"(reference scores 0.0%) -- split below, and read the split, not this")
+    print(f"    long-form  {longform[0]/max(longform[1],1)*100:6.2f}% over {longform[1]:>3} words "
+          f"<- THE GATE. 0.00% in every run measured; a regression here is real.")
+    print(f"    short      {shortform[0]/max(shortform[1],1)*100:6.2f}% over {shortform[1]:>3} words "
+          f"<- SEED NOISE at this length. Same code, seeds 0/1/2, moved this bucket enough to "
+          f"swing the headline 0.88-2.06%. Only believe a case that moves the same way across "
+          f"several seeds (case 6 does).")
     if adv[1]:
         print(f"  adversarial-text WER {adv[0]/max(adv[1],1)*100:.2f}% over {adv[1]} words "
               f"(emoji/symbol/whitespace texts; the model vocalises them, so there is no "

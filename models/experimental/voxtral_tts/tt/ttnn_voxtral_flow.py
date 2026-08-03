@@ -101,6 +101,8 @@ N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
 # Query heads per KV head (GQA 32/8). See the row fold in _block.
 REP = FM_N_HEADS // FM_N_KV_HEADS
+# Width of the fused q++k++v projection, GQA-aware: 32 q heads + 2 x 8 kv heads.
+_QKV_WIDTH = (FM_N_HEADS + 2 * FM_N_KV_HEADS) * FM_HEAD_DIM
 
 # Math fidelity for the VELOCITY NETWORK. HiFi4 + fp32 destination accumulation is the most
 # expensive setting available and it STAYS: lowering it is a bad trade at this block's shapes.
@@ -178,11 +180,23 @@ class TtVoxtralFlow:
             self.layers.append({
                 "an": vec(w[p + "attention_norm.weight"]),
                 "fn": vec(w[p + "ffn_norm.weight"]),
-                "wq": lin(w[p + "attention.wq.weight"]),
-                # k and v fused into one weight -> one matmul, one weight stream. torch stores
+                # q, k and v fused into ONE weight -> one matmul instead of three. torch stores
                 # Linear as [out, in], so concatenate along dim 0 before the transpose in `lin`.
-                "wkv": lin(torch.cat([w[p + "attention.wk.weight"],
-                                      w[p + "attention.wv.weight"]], dim=0)),
+                #
+                # Fusing q in as well (it used to be its own matmul alongside a fused kv) is worth
+                # 1.449x on this pair -- 2.13 against 3.09 ms per frame -- and it is the same
+                # arithmetic: a linear computes each output column independently, and 4096 is a
+                # multiple of the 32-wide tile, so the BFP8 blocks are unchanged too.
+                #
+                # WHY IT WINS, because it says where the next one is: `wkv` alone is only 2048
+                # wide and measured 73 us, the SAME as the 4096-wide `wq`. There is a fixed cost
+                # of roughly 40-50 us per matmul launch at these shapes, and width past ~4096 is
+                # nearly free. Fusing pays exactly when one of the pair is too narrow to earn its
+                # launch. It does NOT pay otherwise: w1+w3 are 9216 each, and merging them into
+                # 18432 measured 0.998x -- no gain -- and 0.951x once the output split is charged.
+                "wqkv": lin(torch.cat([w[p + "attention.wq.weight"],
+                                       w[p + "attention.wk.weight"],
+                                       w[p + "attention.wv.weight"]], dim=0)),
                 "wo": lin(w[p + "attention.wo.weight"]),
                 "w1": lin(w[p + "feed_forward.w1.weight"]),
                 "w2": lin(w[p + "feed_forward.w2.weight"]),
@@ -204,13 +218,11 @@ class TtVoxtralFlow:
     def _block(self, x, w, B):
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
         h = self._norm(x, w["an"])
-        # k and v share one weight and one matmul; nlp_create_qkv_heads then splits them AND builds
-        # the head layout in a single op -- 3 linears + 6 reshape/permutes become 2 linears + 1 op.
-        q = ttnn.linear(h, w["wq"], compute_kernel_config=COMPUTE_CONFIG)
-        kv = ttnn.linear(h, w["wkv"], compute_kernel_config=COMPUTE_CONFIG)
+        # q, k and v share one weight and one matmul; nlp_create_qkv_heads splits all three AND
+        # builds the head layout in a single op -- given no `input_kv` it reads one fused tensor.
+        qkv = ttnn.linear(h, w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.reshape(q, [B, 1, 3, FM_N_HEADS * FM_HEAD_DIM]),
-            ttnn.reshape(kv, [B, 1, 3, 2 * FM_N_KV_HEADS * FM_HEAD_DIM]),
+            ttnn.reshape(qkv, [B, 1, 3, _QKV_WIDTH]),
             num_heads=FM_N_HEADS, num_kv_heads=FM_N_KV_HEADS,
             transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the CFG fold above, and worth 1.40x

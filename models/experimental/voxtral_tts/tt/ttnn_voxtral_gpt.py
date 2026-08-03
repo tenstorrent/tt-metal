@@ -50,8 +50,8 @@ the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
     rms_norm x2                         6.0 ms   CLOSED, twice. Dropping fp32 accumulation is
                                                  2.4x and takes model PCC to 0.992; width-sharding
                                                  it (which KEEPS fp32 acc) is 1.46x on the
-                                                 norm+linear pair and still failed the WER gate,
-                                                 0.88% -> 2.06%. See _norm.
+                                                 norm+linear pair and still doubles the worst
+                                                 sample, 1.06% -> 1.95%. See _norm.
     everything else                    ~5.3 ms   qkv heads, rope, cache write, sdpa_decode,
                                                  reshapes, residual adds
     ------------------------------------------
@@ -293,10 +293,15 @@ class TtVoxtralGPT:
         DRAM round trip either side. Width-sharding it over 8 cores WITH fp32 accumulation intact
         makes the norm+linear pair 1.46x (5.32 vs 7.78 ms per 26), which is ~5 ms/frame over 52
         calls, and it looked free: 0.9999973 against this op, and the decode gate barely moved.
-        It is not free. Over 24 real teacher-forced frames the WORST SAMPLE went 1.06% -> 1.95%
-        while PCC stayed at 0.99991, and end-to-end natural WER went 0.88% -> 2.06%. Same
-        amplification as above, same reason, and PCC hid it both times -- gate norm changes here on
-        worst-sample and WER, never on per-op PCC.
+        It is not free. Over 24 REAL teacher-forced frames the WORST SAMPLE went 1.06% -> 1.95%
+        while PCC stayed flat at 0.99991. Same amplification as above, same reason, and per-op PCC
+        hid it -- gate norm changes here on worst-sample against the fp32 reference, never on PCC.
+
+        Teacher-forced is the load-bearing word: both builds see IDENTICAL inputs at every step, so
+        no trajectory is involved and the comparison is deterministic. An earlier version of this
+        note also cited natural WER moving 0.88% -> 2.06%. THAT PART WAS WORTHLESS -- the same code
+        at seeds 0/1/2 spans 0.88-2.06% all by itself (score_quality_set.py, LONGFORM_MIN_WORDS).
+        The worst-sample number is the evidence; the WER number was a coin flip.
 
         Block 2 DOES use the sharded form (ttnn_voxtral_flow._norm) and is fine: 3 layers instead
         of 26, so there is no 100x to amplify into.
