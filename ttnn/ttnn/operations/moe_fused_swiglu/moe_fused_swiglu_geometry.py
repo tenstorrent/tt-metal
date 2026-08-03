@@ -119,6 +119,10 @@ SEM_WDSPLIT = SEM_H_FREE + 1  # writer -> reader, SAME core: "my W_down share la
 SEM_COUNT = SEM_WDSPLIT + 1
 NUM_DEVICE_SEMAPHORES = 16
 
+#: NOC_MAX_TRANSACTION_ID. The writer tags phase-2 W_down K-block r with transaction id r+1 so the
+#: reader can be released block by block, which needs one distinct id per block.
+NOC_MAX_TRANSACTION_ID = 15
+
 #: Per-core L1 available to this op's circular buffers, as a default for host-only use. The
 #: descriptor overrides it with the device's own `get_max_worker_l1_unreserved_size()`.
 L1_CB_BUDGET = 1_532_032
@@ -302,7 +306,16 @@ class Blocking:
                 if nxt == self.depth_wd:
                     break
                 self.depth_wd = nxt
-        self.wd_split = max(0, min(8, WD_SPLIT)) if self.depth_wd == hgroups else 0
+        # The W_down NoC split needs BOTH: `depth_wd == hgroups` for the writer's address
+        # derivation (K-block r at a fixed slot), and RESIDENCY, which is what confines every
+        # W_down DRAM read to b == 0 where all slots are free from kernel start. Without residency
+        # the writer would write slots that are live on b > 0 — a race, not a slowdown.
+        self.wd_split = max(0, min(8, WD_SPLIT)) if (self.wd_resident and self.depth_wd == hgroups) else 0
+        if self.wd_split and hgroups > NOC_MAX_TRANSACTION_ID:
+            # Block r takes transaction id r+1, so above this the ids ALIAS and a block would be
+            # published while its bytes are still in flight. Drop the split rather than the
+            # correctness; it is a perf lever, not a requirement.
+            self.wd_split = 0
 
     # -- hn_pad ---------------------------------------------------------------------------
     def _hn_pad_legal(self, hn_pad: int):

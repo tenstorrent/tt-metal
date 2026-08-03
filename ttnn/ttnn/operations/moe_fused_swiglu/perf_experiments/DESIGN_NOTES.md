@@ -297,6 +297,41 @@ args and semaphores, and that base is PROGRAM-SPECIFIC. Measured: a descriptor w
 difference. It is one measurement of a program-specific quantity, so the allocator stays the final
 authority; the margin only makes the common case fail with a useful message.
 
+## 8c. Worker grid
+
+The grid is a `core_grid=` argument, defaulting to the device's full
+`compute_with_storage_grid_size()`. Everything about the op's shape derives from (HGROUPS,
+KGROUPS): the hidden split across COLUMNS, the emb contraction across ROWS, the reduce column
+height, the all-gather round count, and `cb_w_down`'s slot cycle. A grid change moves all of them
+at once, and the failure mode is a HANG, not a wrong number — the collectives only agree while
+every core computes the same plan.
+
+Verified on 11x8 (the graded grid), 11x10 (the device's full grid, i.e. what a caller gets by
+DEFAULT — so testing only 11x8 would leave the default untested) and 8x8, which is the interesting
+one: HGROUPS 8 gives hn_pad 4, 2 chunks, an 8-tall reduce column and 8 all-gather rounds. All three
+clear the bfp4 format floor.
+
+**Two constraints, both now derived rather than assumed:**
+
+* `depth_wd` must DIVIDE hgroups when residency is on or `wd_ahead > 1`. The old code justified
+  `depth_wd == hgroups` with "hgroups is 11 — prime", which is true and useless on any other grid;
+  the predicate is the divisibility, and on a prime hgroups it happens to force the maximum.
+* `WD_SPLIT` needs residency AND `depth_wd == hgroups`. The rewrite briefly checked only the
+  second, which on some grids leaves the writer writing W_down slots that are live on b > 0 — a
+  race, not a slowdown. Both conditions are required.
+
+Also guarded: the trid ring tags K-block r with id r+1, so `hgroups > NOC_MAX_TRANSACTION_ID`
+would alias two blocks onto one id and publish one whose bytes are still in flight. Above that the
+split is dropped, not the correctness.
+
+**Small grids are refused, not attempted.** Fewer cores means a larger `kr_pad` and `ec_max` per
+core, so the per-core working set GROWS as the grid shrinks: at emb 7168 / N 2048 a 4x2 grid needs
+~7.5 MB of CBs against ~1.4 MB available. The op reports the computed numbers and says what
+actually helps — more grid COLUMNS, not fewer, which is the opposite of the intuition.
+
+Non-rectangular and non-origin grids are not expressible: `core_grid` is an (x, y) extent and every
+collective's multicast rectangle derives from a single `CoreRange` at (0, 0).
+
 ## 9. Still open
 
 **Count 512.** After the round-17 wins there is no knob-turn left at 512 (`WD_SPLIT` 4 -> 200.05,
