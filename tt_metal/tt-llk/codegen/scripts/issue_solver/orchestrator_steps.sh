@@ -436,15 +436,15 @@ execute_step_setup_run() {
     CREATE_LOCAL_BRANCH="$(python "$S/state.py" --worktree-dir "$wt" get CREATE_LOCAL_BRANCH)"
     CREATE_PR="$(python "$S/state.py" --worktree-dir "$wt" get CREATE_PR)"
 
-    # --- arch profile + dashboard project id --------------------------------
-    # DASHBOARD_PROJECT_ID: single → <arch>_issue_solver, multi → issue_solver.
+    # --- arch profile + canonical dashboard project id -----------------------
+    # Architecture is run metadata. Single- and multi-arch runs share the same
+    # archive, matching Quasar's one-project/one-root dashboard layout.
     local DASHBOARD_PROJECT_ID TARGET_ARCH TARGET_ARCHES_JSON ARCH_COUNT ARCH_PROFILES_JSON
+    DASHBOARD_PROJECT_ID="issue_solver"
     if [ "$MODE" = "single" ]; then
         TARGET_ARCH="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCH)"
-        DASHBOARD_PROJECT_ID="${TARGET_ARCH}_issue_solver"
         TARGET_ARCHES_JSON="$(python -c "import json,sys; print(json.dumps([sys.argv[1]]))" "$TARGET_ARCH")"
     else
-        DASHBOARD_PROJECT_ID="issue_solver"
         TARGET_ARCHES_JSON="$(python - "$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCHES)" <<'PY'
 import json, sys
 raw = sys.argv[1]
@@ -481,8 +481,10 @@ PY
 )"
 
     # --- log + knowledge roots (resolved against the MAIN checkout) ---------
-    local CODEGEN_LOGS_ROOT LOGS_BASE PR_REVIEW_KNOWLEDGE_DIR MAIN_REPO_ROOT
-    CODEGEN_LOGS_ROOT="${CODEGEN_LOGS_ROOT:-}"
+    # Capture the exported override before declaring the function-local value;
+    # `local CODEGEN_LOGS_ROOT` by itself would shadow and discard it.
+    local configured_logs_root="${CODEGEN_LOGS_ROOT:-}"
+    local CODEGEN_LOGS_ROOT="$configured_logs_root" LOGS_BASE PR_REVIEW_KNOWLEDGE_DIR MAIN_REPO_ROOT
     if [ -z "$CODEGEN_LOGS_ROOT" ]; then
         if [ -d /proj_sw/user_dev/llk_code_gen ]; then
             CODEGEN_LOGS_ROOT="/proj_sw/user_dev/llk_code_gen"

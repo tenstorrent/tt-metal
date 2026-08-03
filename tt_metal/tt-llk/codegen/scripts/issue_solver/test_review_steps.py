@@ -160,6 +160,50 @@ def test_seed_widens_to_multi_when_the_dashboard_adds_an_arch(
     assert "TARGET_ARCH" not in state
 
 
+def test_setup_run_honors_codegen_logs_root_override(worktree, tmp_path):
+    """Local/dev runs must not fall back to the shared dashboard archive."""
+    llk = worktree / "tt_metal" / "tt-llk"
+    (llk / ".codegen_run_state.json").write_text(
+        json.dumps(
+            {
+                "RUN_MODE": "single",
+                "RUN_KIND": "issue",
+                "ISSUE_NUMBER": "123",
+                "ISSUE_TITLE": "storage contract",
+                "ISSUE_BODY": "",
+                "ISSUE_LABELS": "",
+                "ISSUE_COMMENTS": "",
+                "ISSUE_URL": "https://example.test/issues/123",
+                "WORKTREE_BRANCH": "test",
+                "TEST_BACKEND": "ttsim",
+                "CREATE_LOCAL_BRANCH": "no",
+                "CREATE_PR": "no",
+                "TARGET_ARCH": "blackhole",
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_scripts = tmp_path / "scripts"
+    fake_scripts.mkdir()
+    (fake_scripts / "state.py").symlink_to(CODEGEN / "scripts" / "state.py")
+    # Session discovery belongs to a real runner and is unrelated to storage.
+    (fake_scripts / "session_cost.py").symlink_to("/dev/null")
+    logs_root = tmp_path / "logs"
+
+    r = _bash(
+        f'_ORCH_SCRIPTS="{fake_scripts}"\nexecute_step_setup_run',
+        llk,
+        {"CODEGEN_LOGS_ROOT": str(logs_root)},
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    log_dir = Path(_bootstrap(worktree)["LOG_DIR"])
+    state = json.loads((log_dir / "state.json").read_text(encoding="utf-8"))
+    assert log_dir.parent == logs_root / "issue_solver"
+    assert state["CODEGEN_LOGS_ROOT"] == str(logs_root)
+    assert state["DASHBOARD_PROJECT_ID"] == "issue_solver"
+
+
 @pytest.mark.parametrize(
     "drop", ["CODEGEN_SOURCE_RUN_DIR", "CODEGEN_REVIEW_INPUT", "CODEGEN_PR_NUMBER"]
 )
