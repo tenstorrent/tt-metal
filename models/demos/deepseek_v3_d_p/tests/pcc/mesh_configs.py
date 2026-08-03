@@ -34,104 +34,143 @@ shape-only `-k '8x4'` to catch all three families). They are kept out of the bro
 `mesh-RxC` selectors because the column-ring wrap is a single-galaxy (e.g. 110-c78) config.
 """
 
-from typing import NamedTuple, Optional
-
 import pytest
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 
 
-class MeshConfigSpec(NamedTuple):
-    """The raw arguments behind one ALL_MESH_CONFIGS entry.
-
-    Kept as data rather than being baked straight into a pytest.param so that a test needing a
-    VARIANT of the standard list — a different fabric payload, an extra parametrize value — can
-    rebuild the entries instead of hand-copying them. test_prefill_combine.py does exactly that
-    for its cmb1/cmb2 op flag, where the payload is device-wide and so has to be decided when the
-    mesh_device fixture opens the device.
+def _mesh_param(shape, fabric, payload, nlinks, topo, topo_marker, test_id, reliability_mode=None):
+    """Build a single pytest.param for the mesh_device parametrize axis.
 
     `topo_marker` is the CI hardware-class string consumed by the `requires_mesh_topology`
     pytest mark, NOT the test's mesh shape. For example, a (2,2) test uses `topo_marker=
     "mesh-4x2"` because (2,2) and (4,2) both run on the LoudBox "mesh-4x2"-class machine.
     """
-
-    shape: tuple
-    fabric: object
-    nlinks: int
-    topo: object
-    topo_marker: str
-    test_id: str
-    reliability_mode: Optional[object] = None
-
-
-def mesh_device_params(spec, payload):
-    """The `device_params` dict for a spec at a given fabric payload."""
     device_params = {
-        "fabric_config": spec.fabric,
+        "fabric_config": fabric,
         "fabric_router_config": create_fabric_router_config(max_payload_size=payload),
     }
-    if spec.reliability_mode is not None:
-        device_params["reliability_mode"] = spec.reliability_mode
-    return device_params
-
-
-def _mesh_param(spec, payload):
-    """Build a single pytest.param for the mesh_device parametrize axis."""
+    if reliability_mode is not None:
+        device_params["reliability_mode"] = reliability_mode
     return pytest.param(
-        spec.shape,
-        mesh_device_params(spec, payload),
-        spec.nlinks,
-        spec.topo,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=spec.shape, topology=spec.topo_marker),
-        id=spec.test_id,
+        shape,
+        device_params,
+        nlinks,
+        topo,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=topo_marker),
+        id=test_id,
     )
 
 
-_RELAXED = ttnn.FabricReliabilityMode.RELAXED_INIT
-
-# The standard mesh matrix, as data. ALL_MESH_CONFIGS below is this list at the default payload;
-# order and ids are load-bearing (CI -k filters select on them), so append rather than reorder.
-MESH_CONFIG_SPECS = [
+ALL_MESH_CONFIGS = [
     # 2-chip linear
-    MeshConfigSpec((2, 1), ttnn.FabricConfig.FABRIC_1D, 1, ttnn.Topology.Linear, "linear", "linear-2-1link"),
-    MeshConfigSpec((2, 1), ttnn.FabricConfig.FABRIC_1D, 2, ttnn.Topology.Linear, "linear", "linear-2-2link"),
+    _mesh_param(
+        (2, 1), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "linear", "linear-2-1link"
+    ),
+    _mesh_param(
+        (2, 1), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 2, ttnn.Topology.Linear, "linear", "linear-2-2link"
+    ),
     # 4-chip linear
-    MeshConfigSpec((4, 1), ttnn.FabricConfig.FABRIC_1D, 1, ttnn.Topology.Linear, "linear", "linear-4-1link"),
-    MeshConfigSpec((4, 1), ttnn.FabricConfig.FABRIC_1D, 2, ttnn.Topology.Linear, "linear", "linear-4-2link"),
+    _mesh_param(
+        (4, 1), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "linear", "linear-4-1link"
+    ),
+    _mesh_param(
+        (4, 1), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 2, ttnn.Topology.Linear, "linear", "linear-4-2link"
+    ),
     # 4-chip ring
-    MeshConfigSpec((4, 1), ttnn.FabricConfig.FABRIC_1D_RING, 1, ttnn.Topology.Ring, "ring", "ring-4-1link"),
-    MeshConfigSpec((4, 1), ttnn.FabricConfig.FABRIC_1D_RING, 2, ttnn.Topology.Ring, "ring", "ring-4-2link"),
+    _mesh_param(
+        (4, 1), ttnn.FabricConfig.FABRIC_1D_RING, get_max_payload_size(), 1, ttnn.Topology.Ring, "ring", "ring-4-1link"
+    ),
+    _mesh_param(
+        (4, 1), ttnn.FabricConfig.FABRIC_1D_RING, get_max_payload_size(), 2, ttnn.Topology.Ring, "ring", "ring-4-2link"
+    ),
     # 2D mesh topologies
-    MeshConfigSpec((2, 2), ttnn.FabricConfig.FABRIC_1D, 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-2x2"),
-    MeshConfigSpec((4, 2), ttnn.FabricConfig.FABRIC_1D, 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-4x2"),
-    MeshConfigSpec((2, 4), ttnn.FabricConfig.FABRIC_1D, 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-2x4"),
+    _mesh_param(
+        (2, 2), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-2x2"
+    ),
+    _mesh_param(
+        (4, 2), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-4x2"
+    ),
+    _mesh_param(
+        (2, 4), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-2x4"
+    ),
     # 8-chip linear
-    MeshConfigSpec((8, 1), ttnn.FabricConfig.FABRIC_1D, 1, ttnn.Topology.Linear, "linear", "linear-8-1link"),
-    MeshConfigSpec((8, 1), ttnn.FabricConfig.FABRIC_1D, 2, ttnn.Topology.Linear, "linear", "linear-8-2link"),
+    _mesh_param(
+        (8, 1), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "linear", "linear-8-1link"
+    ),
+    _mesh_param(
+        (8, 1), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 2, ttnn.Topology.Linear, "linear", "linear-8-2link"
+    ),
     # 8-chip ring
-    MeshConfigSpec((8, 1), ttnn.FabricConfig.FABRIC_1D_RING, 1, ttnn.Topology.Ring, "ring", "ring-8-1link"),
-    MeshConfigSpec((8, 1), ttnn.FabricConfig.FABRIC_1D_RING, 2, ttnn.Topology.Ring, "ring", "ring-8-2link"),
+    _mesh_param(
+        (8, 1), ttnn.FabricConfig.FABRIC_1D_RING, get_max_payload_size(), 1, ttnn.Topology.Ring, "ring", "ring-8-1link"
+    ),
+    _mesh_param(
+        (8, 1), ttnn.FabricConfig.FABRIC_1D_RING, get_max_payload_size(), 2, ttnn.Topology.Ring, "ring", "ring-8-2link"
+    ),
     # FABRIC_2D variants — every shape with rows>1 AND cols>1 is 2D-eligible.
     # RELAXED_INIT matches the canonical pattern in test_prefill_block.py and is required
     # on BH Galaxy for FABRIC_2D bring-up.
-    MeshConfigSpec(
-        (2, 2), ttnn.FabricConfig.FABRIC_2D, 1, ttnn.Topology.Linear, "mesh-4x2", "fabric2d-mesh-2x2", _RELAXED
+    _mesh_param(
+        (2, 2),
+        ttnn.FabricConfig.FABRIC_2D,
+        get_max_payload_size(),
+        1,
+        ttnn.Topology.Linear,
+        "mesh-4x2",
+        "fabric2d-mesh-2x2",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
-    MeshConfigSpec(
-        (4, 2), ttnn.FabricConfig.FABRIC_2D, 1, ttnn.Topology.Linear, "mesh-4x2", "fabric2d-mesh-4x2", _RELAXED
+    _mesh_param(
+        (4, 2),
+        ttnn.FabricConfig.FABRIC_2D,
+        get_max_payload_size(),
+        1,
+        ttnn.Topology.Linear,
+        "mesh-4x2",
+        "fabric2d-mesh-4x2",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
-    MeshConfigSpec(
-        (4, 2), ttnn.FabricConfig.FABRIC_2D, 2, ttnn.Topology.Linear, "mesh-4x2", "fabric2d-mesh-4x2-2link", _RELAXED
+    _mesh_param(
+        (4, 2),
+        ttnn.FabricConfig.FABRIC_2D,
+        get_max_payload_size(),
+        2,
+        ttnn.Topology.Linear,
+        "mesh-4x2",
+        "fabric2d-mesh-4x2-2link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
-    MeshConfigSpec(
-        (2, 4), ttnn.FabricConfig.FABRIC_2D, 1, ttnn.Topology.Linear, "mesh-4x2", "fabric2d-mesh-2x4", _RELAXED
+    _mesh_param(
+        (2, 4),
+        ttnn.FabricConfig.FABRIC_2D,
+        get_max_payload_size(),
+        1,
+        ttnn.Topology.Linear,
+        "mesh-4x2",
+        "fabric2d-mesh-2x4",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
-    MeshConfigSpec(
-        (8, 4), ttnn.FabricConfig.FABRIC_2D, 1, ttnn.Topology.Linear, "mesh-8x4", "fabric2d-mesh-8x4-1link", _RELAXED
+    _mesh_param(
+        (8, 4),
+        ttnn.FabricConfig.FABRIC_2D,
+        get_max_payload_size(),
+        1,
+        ttnn.Topology.Linear,
+        "mesh-8x4",
+        "fabric2d-mesh-8x4-1link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
-    MeshConfigSpec(
-        (8, 4), ttnn.FabricConfig.FABRIC_2D, 2, ttnn.Topology.Linear, "mesh-8x4", "fabric2d-mesh-8x4-2link", _RELAXED
+    _mesh_param(
+        (8, 4),
+        ttnn.FabricConfig.FABRIC_2D,
+        get_max_payload_size(),
+        2,
+        ttnn.Topology.Linear,
+        "mesh-8x4",
+        "fabric2d-mesh-8x4-2link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
     # 8x4 single-galaxy column ring: FABRIC_2D_TORUS_Y wraps the row axis (mesh dim 0, the
     # 8-long SP axis) into a ring; the column axis (dim 1, 4-wide) stays a line. The SP-axis
@@ -140,45 +179,58 @@ MESH_CONFIG_SPECS = [
     # single_bh_galaxy_torus_y_graph_descriptor.textproto, whose uniform `channels count: 2`
     # gives the RING-closing row-7<->row-0 edge the same 2-link width as the LINE edges
     # (matches the 110-c78 wiring, where that wrap is a normal 2-link on every column).
-    MeshConfigSpec(
+    _mesh_param(
         (8, 4),
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        get_max_payload_size(),
         1,
         ttnn.Topology.Ring,
         "mesh-8x4",
         "fabric2d-torus-y-8x4-1link",
-        _RELAXED,
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
-    MeshConfigSpec(
+    _mesh_param(
         (8, 4),
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        get_max_payload_size(),
         2,
         ttnn.Topology.Ring,
         "mesh-8x4",
         "fabric2d-torus-y-8x4-2link",
-        _RELAXED,
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
     # Experiment: TORUS_XY wraps both axes (different deadlock-dateline placement than
     # TORUS_Y). The dispatch op still rings on cluster_axis=0 (the 8-dim). Probing whether
     # the dateline axis affects the multi-hop-over-wrap dispatch hang.
-    MeshConfigSpec(
+    _mesh_param(
         (8, 4),
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        get_max_payload_size(),
         1,
         ttnn.Topology.Ring,
         "mesh-8x4",
         "fabric2d-torus-xy-8x4-1link",
-        _RELAXED,
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
-    # 2-link TORUS_XY — the CombineFabric2D isolated-fabric experiment develops against this.
-    MeshConfigSpec(
+    _mesh_param(
         (8, 4),
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        get_max_payload_size(),
         2,
         ttnn.Topology.Ring,
         "mesh-8x4",
         "fabric2d-torus-xy-8x4-2link",
-        _RELAXED,
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+    ),
+    _mesh_param(
+        (8, 4),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        get_max_payload_size(64),
+        2,
+        ttnn.Topology.Ring,
+        "mesh-8x4",
+        "fabric2d-torus-xy-8x4-2link-expanded_fabric_payload",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
 ]
 
