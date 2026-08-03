@@ -486,6 +486,57 @@ class Qwen36Model:
         """Generator mode-change hook; no-op (no prefetcher)."""
         return None
 
+    def _rope_from_idx(self, idx):
+        """cos/sin [1, B, 1, rope_dim] gathered ON DEVICE from a [1, B] position index.
+
+        Replaces the old host-computed, host-packed rope pair: the tables are resident (built in
+        prepare_decode_inputs_host, outside any trace) and each step is a ttnn.embedding row fetch.
+        Trace-safe: pure device ops, and the index arrives through the same persistent buffer the
+        packed cos/sin used to, so nothing is baked at capture time.
+        """
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
+
+        rd = self.args.rope_head_dim
+        B = int(idx.shape[-1])
+        tbl_cos, tbl_sin = _rope_dev_tables(self.device, rd, self.args.max_seq_len, self.args.rope_theta)
+
+        def _gather(tbl):
+            r = ttnn.embedding(idx, tbl)  # ROW_MAJOR [1, B, rope_dim]
+            r = ttnn.reshape(r, (1, B, 1, rd))  # metadata-only while ROW_MAJOR
+            return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
+
+        return _gather(tbl_cos), _gather(tbl_sin)
+
+    def _argmax_device(self, logits):
+        """Greedy-sample on device. Returns an int token id, or None if not applicable.
+
+        The host path reads the whole logit row back over PCIe (vocab 248,320 x 2 B ~ 485 KB per
+        token) purely to take an argmax; ttnn.argmax reduces on device so only the winning index
+        crosses the bus. Note the framework's SamplingGenerator cannot be used here: it needs
+        vocab/num_devices <= 64K for the multi-device TopK kernel, and 248,320/2 = 124,160
+        exceeds that, so self.sampling is None on N300. ttnn.argmax has no such limit.
+
+        Pad columns (when the logits are wider than vocab_size) are dropped with an on-device
+        slice rather than by bailing to host: they are unmasked, so an argmax over them could
+        select a pad index.
+        """
+        lg = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)  # ttnn.argmax needs ROW_MAJOR
+        if int(lg.shape[-1]) != int(self.vocab_size):
+            ends = list(lg.shape)
+            ends[-1] = int(self.vocab_size)
+            sliced = ttnn.slice(lg, [0] * len(ends), ends)
+            ttnn.deallocate(lg)
+            lg = sliced
+        idx = ttnn.argmax(lg, dim=-1)
+        ttnn.deallocate(lg)
+        if self.num_devices > 1:
+            # Logits are replicated after the all-gather, so every device agrees; read replica 0.
+            t = ttnn.to_torch(idx, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        else:
+            t = ttnn.to_torch(idx)
+        ttnn.deallocate(idx)
+        return int(t.reshape(-1)[0])
+
     def _lm_head(self, x):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
         Single device: plain matmul."""
@@ -553,7 +604,7 @@ class Qwen36Model:
         cache_path = args.weight_cache_path()
         return cls(device, args, state_dict, tensor_cache_path=cache_path)
 
-    def prefill_tp(self, token_ids, valid_len=None, vision_tokens=None):
+    def prefill_tp(self, token_ids, valid_len=None, vision_tokens=None, return_token=False):
         """Tensor-parallel full-model prefill (num_devices>1). Stateless: runs the
         whole sequence from scratch through the fractured-residual TP layers and
         returns the next-token logits at position valid_len-1.
@@ -601,6 +652,10 @@ class Qwen36Model:
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)  # DistributedNorm on selected row
         logits = self._lm_head(x_last)
+        if return_token:
+            tok = self._argmax_device(logits)
+            ttnn.deallocate(logits)
+            return tok
         # Replicated logits; read one replica -> torch [vocab_size].
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         return lt[0].reshape(-1)[: self.vocab_size]
@@ -610,7 +665,7 @@ class Qwen36Model:
         for layer in self.layers:
             layer.attention.reset_state()
 
-    def decode_tp(self, token_id, pos):
+    def decode_tp(self, token_id, pos, return_token=False):
         """Single-token TP decode at position `pos` (B=1). Uses KV + GDN from prefill/decode."""
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
 
@@ -640,6 +695,10 @@ class Qwen36Model:
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tt)
         x = self._final_norm_decode(x)
         logits = self._lm_head(x)
+        if return_token:
+            tok = self._argmax_device(logits)
+            ttnn.deallocate(logits)
+            return tok
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         return lt[0].reshape(-1)[: self.vocab_size]
 
@@ -651,12 +710,11 @@ class Qwen36Model:
         T = len(prompt_ids)
         T_pad = max(128, _math.ceil(T / 128) * 128)
         padded = prompt_ids + [0] * (T_pad - T)
-        logits = self.prefill_tp(torch.tensor([padded], dtype=torch.long), valid_len=T)
-        nxt = int(torch.argmax(logits).item())
+        # return_token=True samples on device (see _argmax_device) and returns the token id.
+        nxt = self.prefill_tp(torch.tensor([padded], dtype=torch.long), valid_len=T, return_token=True)
         out = [nxt]
         for pos in range(T, T + max_new_tokens - 1):
-            logits = self.decode_tp(nxt, pos)
-            nxt = int(torch.argmax(logits).item())
+            nxt = self.decode_tp(nxt, pos, return_token=True)
             out.append(nxt)
         return out
 
@@ -3225,8 +3283,8 @@ class Qwen36Model:
     # Generator contract — decode
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
-        """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope_packed, page_table_tt)."""
-        from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host
+        """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope_pos_idx, page_table_tt)."""
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
 
         B = tokens.shape[0]
         tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -3241,19 +3299,22 @@ class Qwen36Model:
         # space; post-image text has t==h==w so 1D RoPE at rope_pos is correct). cur_pos_tt below
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
         rope_pos_vec = pos_vec + self.rope.rope_delta
-        if self.num_devices > 1:
-            # TP: rope_tp cos/sin [1,B,1,rope_dim] packed on host.
-            rd = self.args.rope_head_dim
-            inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
-            freqs = torch.outer(rope_pos_vec.float(), inv_freq)  # [B, rd/2], per-user rotation
-            emb = torch.cat([freqs, freqs], dim=-1)
-            cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
-            sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
-            rope_packed = ttnn.from_torch(torch.cat([cos, sin], dim=0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        else:
-            # Single-device decode is B=1 in this port; per-user single-device rope is out of scope.
-            cos_host, sin_host = self.rope.get_cos_sin_host(int(rope_pos_vec[0]))  # HOST ttnn [1,1,rope_head_dim]
-            rope_packed = pack_rope_host(cos_host, sin_host)  # torch-based (host)
+        # The rope slot carries the per-user POSITION INDEX, not host-computed cos/sin: the trig is
+        # done on device in _rope_from_idx() by gathering the resident tables. Same tuple arity and
+        # the same copy_host_to_device path as before, but what crosses the bus per step is a [B]
+        # int32 index instead of a [2,B,1,rope_dim] bf16 cos+sin blob, and no host trig runs at all.
+        # Build the tables here (host side, outside any trace): materialising them lazily inside the
+        # traced forward would be a host write during capture, which TT_FATALs.
+        # Size to max_seq_len, the SAME row count _rope_from_idx() asks for. Sizing to
+        # max(pos)+1 here would leave the table short whenever max_seq_len exceeds the 4096 floor,
+        # and _rope_from_idx would then grow it -- a from_torch (host write) reached from inside
+        # the traced forward, i.e. "TT_FATAL: Writes are not supported during trace capture".
+        # Today that is masked by the warmup forward happening to run first; matching the sizes
+        # makes it correct by construction instead of by luck.
+        _rope_dev_tables(self.device, self.args.rope_head_dim, self.args.max_seq_len, self.args.rope_theta)
+        rope_packed = ttnn.from_torch(
+            rope_pos_vec.to(torch.int32).reshape(1, B), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
         cur_pos_tt = ttnn.from_torch(pos_vec, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         page_table_tt = (
             ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -3283,9 +3344,7 @@ class Qwen36Model:
 
         on_device_logits=True: return the raw vocab-sharded shard for the on-device sampler.
         """
-        from models.demos.blackhole.qwen36.tt.generator_interface import unpack_rope
-
-        cos, sin = unpack_rope(rot_mat_idxs)
+        cos, sin = self._rope_from_idx(rot_mat_idxs)
         if on_device_logits:
             assert self.sampling is not None, "on_device_logits=True but self.sampling is None"
             logits = self._forward_decode(tokens, cos, sin, current_pos, page_table, sharded_lm_head=True)
