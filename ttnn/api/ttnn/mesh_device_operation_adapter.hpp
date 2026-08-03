@@ -650,10 +650,25 @@ public:
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
                     }
-                    // The WorkloadDescriptor variant never rebuilds, so a value a custom hash
-                    // excluded would stay frozen at first miss — re-apply declared dynamic args.
-                    apply_dynamic_runtime_args_if_declared(
-                        program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                    // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
+                    if constexpr (factory_has_override_runtime_arguments()) {
+                        DescriptorFactory::override_runtime_arguments(
+                            program,
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    } else if constexpr (device_op_has_override_runtime_arguments()) {
+                        DeviceOperation::override_runtime_arguments(
+                            program,
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    } else {
+                        apply_dynamic_runtime_args_if_declared(
+                            program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                    }
                 } else if constexpr (has_override_runtime_arguments()) {
                     // ProgramDescriptor variant, op owns its cache-hit re-derivation (the descriptor-era
                     // override_runtime_arguments()): re-apply ALL per-dispatch state — every runtime arg
