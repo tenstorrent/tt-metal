@@ -8,9 +8,11 @@
 #include <array>
 #include <vector>
 #include <thread>
+#include <future>
 
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
+#include "common/executor.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -381,12 +383,24 @@ std::vector<uint32_t> pack_as_bfp_tiles(
 
     // Lambda to process a range of tiles
     auto process_tile_range = [&](int start_tile, int end_tile) -> std::vector<uint32_t> {
+        const int rows_per_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows;
+        const int mantissa_dwords_per_tile = num_float_in_tile / num_mantissas_in_dword;
+        const int exp_dwords_per_tile =
+            exponent_padding ? static_cast<int>(tt::round_up(static_cast<uint32_t>(rows_per_tile), l1_alignment)) /
+                                   num_exponents_in_dword
+                             : rows_per_tile / num_exponents_in_dword;
+
         std::vector<uint32_t> local_result;
+        local_result.reserve(
+            static_cast<size_t>(end_tile - start_tile) * (exp_dwords_per_tile + mantissa_dwords_per_tile));
         std::vector<uint8_t> exponents;
+        exponents.reserve(num_exponents_in_dword);
         std::vector<uint32_t> data;
+        data.reserve(num_mantissas_in_dword);
 
         for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
             std::vector<uint32_t> packed_data;
+            packed_data.reserve(mantissa_dwords_per_tile);
             std::vector<uint8_t> exponents_with_padding;
             exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
 
@@ -396,6 +410,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                 for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                     for (int i = 0; i < subtile_rows; ++i) {
                         std::vector<uint32_t> single_row;
+                        single_row.reserve(subtile_cols);
                         // populate a single row
                         for (int j = 0; j < subtile_cols; ++j) {
                             size_t data_index;
@@ -460,60 +475,62 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         return local_result;
     };
 
-    // Determine number of threads to use
-    // Only use multi-threading if we have enough tiles to justify the overhead
-    constexpr uint32_t MIN_TILES_PER_THREAD = 4;
-    uint32_t max_threads = std::thread::hardware_concurrency();
-    if (max_threads == 0) {
-        max_threads = 1;
+    // Determine how many parallel work items to split the tiles into.
+    // Only parallelize if we have enough tiles to justify the overhead.
+    constexpr uint32_t MIN_TILES_PER_CHUNK = 4;
+    uint32_t max_chunks = std::thread::hardware_concurrency();
+    if (max_chunks == 0) {
+        max_chunks = 1;
     }
-    uint32_t num_threads = std::min(max_threads, num_tiles / MIN_TILES_PER_THREAD);
-    num_threads = std::max(1u, num_threads);
+    uint32_t num_chunks = std::min(max_chunks, num_tiles / MIN_TILES_PER_CHUNK);
+    num_chunks = std::max(1u, num_chunks);
 
-    if (num_threads == 1) {
+    if (num_chunks == 1) {
         // Single-threaded execution
         return process_tile_range(0, num_tiles);
     }
 
-    log_info(
+    log_debug(
         tt::LogAlways,
-        "Converting {} block-float tiles with {} threads ({} tiles/thread)",
+        "Converting {} block-float tiles with {} chunks ({} tiles/chunk)",
         num_tiles,
-        num_threads,
-        num_tiles / num_threads);
-    // Multi-threaded execution
-    std::vector<std::thread> threads;
-    std::vector<std::vector<uint32_t>> thread_results(num_threads);
-    threads.reserve(num_threads);
+        num_chunks,
+        num_tiles / num_chunks);
 
-    uint32_t tiles_per_thread = num_tiles / num_threads;
-    uint32_t remainder = num_tiles % num_threads;
+    std::vector<std::vector<uint32_t>> chunk_results(num_chunks);
+    std::vector<std::shared_future<void>> futures;
+    futures.reserve(num_chunks);
+
+    uint32_t tiles_per_chunk = num_tiles / num_chunks;
+    uint32_t remainder = num_tiles % num_chunks;
 
     uint32_t start_tile = 0;
-    for (uint32_t t = 0; t < num_threads; ++t) {
-        uint32_t tiles_for_this_thread = tiles_per_thread + (t < remainder ? 1 : 0);
-        uint32_t end_tile = start_tile + tiles_for_this_thread;
+    for (uint32_t t = 0; t < num_chunks; ++t) {
+        uint32_t tiles_for_this_chunk = tiles_per_chunk + (t < remainder ? 1 : 0);
+        uint32_t end_tile = start_tile + tiles_for_this_chunk;
 
-        threads.emplace_back(
-            [&, t, start_tile, end_tile]() { thread_results[t] = process_tile_range(start_tile, end_tile); });
+        futures.emplace_back(
+            tt::tt_metal::detail::async([&chunk_results, &process_tile_range, t, start_tile, end_tile]() {
+                chunk_results[t] = process_tile_range(start_tile, end_tile);
+            }));
 
         start_tile = end_tile;
     }
 
-    // Wait for all threads to complete
-    for (auto& thread : threads) {
-        thread.join();
+    // Wait for all chunks to complete. get() also rethrows the first exception raised in any chunk.
+    for (auto& future : futures) {
+        future.get();
     }
 
-    // Concatenate results from all threads
+    // Concatenate results from all chunks
     std::vector<uint32_t> packed_result;
     size_t total_size = 0;
-    for (const auto& result : thread_results) {
+    for (const auto& result : chunk_results) {
         total_size += result.size();
     }
     packed_result.reserve(total_size);
 
-    for (auto& result : thread_results) {
+    for (auto& result : chunk_results) {
         packed_result.insert(packed_result.end(), result.begin(), result.end());
     }
 
