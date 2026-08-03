@@ -321,15 +321,6 @@ public:
     void deallocate_circular_buffers();
 
     // CB tracking for SHM memory reporting.
-    //
-    // Tier-1 perf (guaranteed identical result): the consumer
-    // (Device::get_total_cb_allocated) reduces these regions to a single sum over
-    // cores, which is independent of container type and iteration order. So we
-    //   (1) key by an unordered_map with a strong, collision-free hash instead of
-    //       a std::map (drops O(log n) + red-black node allocation per access), and
-    //   (2) append directly into the caller's map via an out-param, eliminating the
-    //       per-program temporary map and its return/merge copy.
-    // Neither change can alter the computed value.
     struct CbCoreCoordHash {
         size_t operator()(const CoreCoord& c) const noexcept {
             return (static_cast<size_t>(c.x) << 32) ^ static_cast<size_t>(c.y);
@@ -338,7 +329,7 @@ public:
     using CbL1RegionsPerCore =
         std::unordered_map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>, CbCoreCoordHash>;
 
-    // Contract flag: true iff get_cb_l1_regions_per_core() (and therefore
+    // True iff get_cb_l1_regions_per_core() (and therefore
     // Device::get_total_cb_allocated()) is independent of device_id / num_devices.
     //
     // When true, the CB-allocated SHM stat is identical across every sub-device of a homogeneous
@@ -346,9 +337,7 @@ public:
     // once and reuse it (eliminating a redundant ~O(active_programs) rescan per sub-device).
     //
     // IMPORTANT: if you start using device_id or num_devices in get_cb_l1_regions_per_core to
-    // produce per-device / heterogeneous CB layouts, set this to false. The update loops then
-    // fall back to recomputing the stat per device. A debug assertion in
-    // SharedMemoryStatsProvider::update_from_allocator also cross-checks this invariant at runtime.
+    // produce per-device / heterogeneous CB layouts, set this to false.
     static constexpr bool kCbL1LayoutIsDeviceIndependent = true;
 
     void get_cb_l1_regions_per_core(CbL1RegionsPerCore& regions_per_core, int device_id, size_t num_devices) const;

@@ -17,7 +17,6 @@ namespace tt::tt_metal {
 // Query ONLY locally-allocated CBs (device->get_total_cb_allocated() only counts local CBs)
 // Globally-allocated CBs create L1 Buffers and are already tracked in L1 column
 void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_t pid) {
-    // Lone-caller path: no cross-device dedup, compute normally.
     std::optional<uint64_t> uncached;
     update_from_allocator(device, pid, uncached);
 }
@@ -46,10 +45,7 @@ void SharedMemoryStatsProvider::update_from_allocator(
     try {
         // Query actual LOCALLY-allocated CB usage (globally-allocated CBs are in L1 already).
         // On a homogeneous mesh this value is identical across sub-devices, so a caller updating
-        // every sub-device in a loop can compute it once and pass it via cached_cb_allocated: we
-        // fill it on first computation and reuse it thereafter. In debug we recompute and verify
-        // equality, so any future per-device CB layout (which would break the assumption) is
-        // caught rather than silently reported wrong.
+        // every sub-device in a loop can compute it once and pass it via cached_cb_allocated.
         uint64_t cb_allocated;
         if (cached_cb_allocated.has_value()) {
             cb_allocated = *cached_cb_allocated;

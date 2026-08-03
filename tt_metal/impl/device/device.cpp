@@ -1122,7 +1122,6 @@ uint64_t Device::get_total_cb_allocated() const {
         size_t num_devices = program->get_num_cb_devices();
 
         // Append this program's per-core L1 regions directly into the device-wide map
-        // (out-param avoids a per-program temp map + merge copy).
         program->get_cb_l1_regions_per_core(device_regions_per_core, this->id(), num_devices);
     }
 

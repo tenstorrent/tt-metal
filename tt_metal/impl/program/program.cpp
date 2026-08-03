@@ -1518,8 +1518,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         // Report CB allocations for any NEW devices (using cached addresses)
         if (!new_devices.empty() && !this->circular_buffers_.empty()) {
             // Homogeneous mesh: get_total_cb_allocated() is identical across sub-devices, so
-            // compute it once and share it across this per-sub-device update loop
-            // (guarded by kCbL1LayoutIsDeviceIndependent).
+            // compute it once and share it across this per-sub-device update loop.
             std::optional<uint64_t> cached_cb_total;
             for (const IDevice* dev : new_devices) {
                 for (const auto& circular_buffer : this->circular_buffers_) {
@@ -1603,7 +1602,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
 
     // Register program ONLY with NEW devices (prevents duplicate registration).
     // Homogeneous mesh: get_total_cb_allocated() is identical across sub-devices, so compute it
-    // once and share it across this per-sub-device update loop (guarded by the contract flag).
+    // once and share it across this per-sub-device update loop.
     std::optional<uint64_t> cached_cb_total;
     for (const IDevice* dev : new_devices) {
         auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
@@ -1632,7 +1631,6 @@ void detail::ProgramImpl::get_cb_l1_regions_per_core(
     (void)num_devices;  // TODO: Use num_devices for multi-device filtering or layout partitioning when implemented
 
     // For each allocator, iterate through all cores in its CoreRange.
-    // Appends directly into the caller-provided map (no per-program temp map / return copy).
     for (const auto& cb_allocator : cb_allocators_) {
         const auto& l1_regions = cb_allocator.l1_regions;
 
