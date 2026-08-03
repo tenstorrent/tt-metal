@@ -635,11 +635,37 @@ WER, never on per-op PCC.** Block 2 keeps it because 3 layers give nothing to am
 3. **semantic argmax on device** (~3.0 ms): it is a real `[1,3072]@[3072,8320]` CPU matmul today.
    `ign/voxtral_opt` does it on device, so the approach is validated. Verify the INDEX matches
    exactly — it is an argmax, and bf16 could tip a near-tie.
-4. **Re-measure the device trace.** The "trace is slower" verdict was taken when decode was
-   device-bound; ~12 ms of device work has since gone, so the dispatch share is larger.
+4. ~~Re-measure the device trace.~~ **DONE, and the answer is still no** — see below.
 5. **Fewer Euler steps** (7→5 removes 28% of the solve). This is a MODEL change, not an
    implementation one — it needs a listening pass, not just WER.
 6. **Concurrent requests** — the 3-token sequence wastes 26 of 32 tile rows. Throughput, not latency.
+
+**Device tracing, re-measured after the op-count wins — still not worth it, but the reason
+changed.** The old verdict was that tracing COST time (Block 1 -0.7 ms, Block 2 -6 ms/frame). That
+penalty is gone; what is left is a gain too small to bank:
+
+| | untraced | traced | delta |
+|---|---|---|---|
+| Block 1, 26-layer decode step | 34.75 ms | 34.55 ms | +0.20 ms (1.006x) |
+| Block 2, whole 7-step solve | 26.07 ms | 25.91 ms | +0.16 ms (1.006x) |
+
+Both captures are CORRECT: Block 1's PCC and worst-sample are unchanged (0.999893 / 1.06%) and
+Block 2's integer codes are bit-identical to the untraced path. Both were timed with a readback
+every frame, because without one the host runs ahead and pipelines the next frame's dispatch under
+the current frame's device work — which hides exactly the cost a trace removes.
+
+**What this settles: host dispatch is not a bottleneck for either block.** Tracing removes host
+command submission almost entirely, and removing it changes nothing. So Block 2's remaining ~2x gap
+over its 13.4 ms weight-read floor is DEVICE-side per-kernel cost — kernel launch on the cores,
+circular-buffer setup, intermediates round-tripping DRAM — not commands queuing up on the host.
+That is worth knowing before optimizing here: work that only reduces command COUNT will not help;
+work that makes the kernels themselves bigger and fewer will.
+
+0.5% does not justify what tracing costs to keep: `trace_region_size` on every caller, buffers
+addressed by pointer so a fresh upload is silently ignored, a capture ORDER constraint between the
+two blocks (all warm-ups before either capture, or the second hangs), and a reserved scratch cache
+row so the warm-up and capture writes do not corrupt the prompt. Not re-added. The probes are in
+the session scratchpad if this needs re-running after a big change.
 
 **Checked and ruled out** (so nobody re-runs them):
 - `rms_norm(residual_input_tensor=)` returns only the normed value and discards the sum; a pre-norm

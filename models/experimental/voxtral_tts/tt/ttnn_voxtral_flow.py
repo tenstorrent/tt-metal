@@ -55,8 +55,13 @@ usual batching tricks apply within a frame. What HAS been tried and rejected: lo
 trace (correct and bit-identical, but ~6 ms/frame SLOWER -- removed). BFP8 weights ARE on and were
 worth 1.23x. Two ideas still open: sdpa for the attention interior measures 1.65x against the row
 fold's 1.40x but costs accuracy (STATUS.md), and the 3-token sequence wastes 26 of 32 tile rows, so
-CONCURRENT REQUESTS could fill them -- throughput, not latency. Note the trace verdict predates the
-op removals above, so it is worth re-measuring: less device work means a larger dispatch share.
+CONCURRENT REQUESTS could fill them -- throughput, not latency.
+
+The trace was RE-MEASURED after the op removals above and is still not worth it, but the reason
+moved: it used to cost ~6 ms/frame, and now it is +0.16 ms (1.006x) with bit-identical codes. That
+settles something useful for anyone optimizing here -- host dispatch is NOT the bottleneck, so the
+~2x still separating the solve from its 13.4 ms weight-read floor is device-side per-kernel cost.
+Fewer, BIGGER kernels help; merely issuing fewer commands does not. STATUS.md 6.6 has the table.
 
 HOST vs DEVICE. The whole Euler solve -- the 3-layer transformer, the CFG combine and the state
 update -- runs on device, with nothing left in the loop that a trace could not capture. Two things
