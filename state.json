@@ -1,47 +1,39 @@
 {
-  "last_run": "2026-08-01T01:01:19Z",
-  "run_id": "30676744403",
-  "tasks_run": ["task3_fix_issues", "task5_maintain_prs", "task6_stale_prs", "task8_monthly_summary"],
+  "last_run": "2026-08-03T19:04:28Z",
+  "run_id": "30843246194",
+  "tasks_run": ["task2_comment_investigate_no_action", "task3_fix_issues", "task5_maintain_prs_check", "task8_monthly_summary"],
   "monthly_activity_issue": {
-    "number": 50956,
-    "month": "2026-07",
-    "status": "updated"
+    "number": 51865,
+    "month": "2026-08",
+    "status": "updated",
+    "note": "August tracker; July tracker #50956 closed as superseded on a prior run"
   },
-  "issues_labeled": [9364, 9865, 11090, 11873, 12892, 50487, 50684, 50616, 50972, 50973, 50974, 51080, 51133, 51127, 51123, 51294, 51291, 51296, 50828],
-  "issues_commented": [9364, 50897, 50955, 50684, 51083, 51080, 51133, 51137, 51294, 51296],
-  "welcomed_contributors": [50955, 50943, 50897],
+  "issues_labeled": [],
+  "issues_commented": [],
+  "welcomed_contributors": [],
   "stale_pr_actions": {
-    "49800": {"action": "author_nudge", "timestamp": "2026-07-24T06:42:39Z"},
-    "49892": {"action": "codeowners_ping", "timestamp": "2026-07-27T06:54:09Z", "note": "PR closed unmerged 2026-07-31, no longer tracked"},
-    "50525": {"action": "codeowners_ping_by_author", "timestamp": "2026-07-30T06:52:26Z", "note": "author posted detailed benchmark reply 2026-07-30T21:57, within 3-day cadence as of 2026-08-01, no re-nudge needed"},
-    "51024": {"action": "codeowners_ping", "timestamp": "2026-07-28T06:46:32Z"}
+    "51024": {"action": "codeowners_ping", "timestamp": "2026-07-28T06:46:32Z", "note": "merged same day, no longer tracked"},
+    "50525": {"action": "codeowners_ping_by_author", "timestamp": "2026-07-30T06:52:26Z", "note": "not re-checked this run"}
   },
   "backlog_cursor": {
-    "issues": 51296,
-    "last_processed_date": "2026-07-28"
+    "issues": 51420,
+    "last_processed_date": "2026-08-03",
+    "note": "reviewed fresh issues from ~51294 through ~51439; many are internal team epics/CI-auto-triage clusters (Minimax M3, ds_prefill, llk-ai-codegen, CI auto triage) out of scope for manual triage. #51303/#51304 already covered by kinginu's own PR #51138. Next run should continue scanning past 51439 forward."
   },
   "open_prs": [
     {
-      "branch": "repo-assist/fix-issue-51661-fmod-remainder-loop-direction",
-      "pr_number": 51663,
-      "issue": 51661,
-      "title": "fix(sfpu): correct repair-loop direction in fmod/remainder kernels",
-      "created": "2026-07-31T07:20:54Z",
-      "ci_status": "pr-gate run 30612905126 stuck at action_required - needs maintainer workflow approval; other checks (Cycode, RTL Sim CI) passed; commented asking maintainer to approve on 2026-08-01"
-    },
-    {
-      "branch": "repo-assist/fix-issue-51757-moe-routing-remap-precedence",
-      "issue": 51757,
-      "title": "fix(ttnn): parenthesize moe_routing_remap cluster-axis TT_FATAL",
-      "created": "2026-08-01T01:01:19Z",
-      "ci_status": "queued - check pr-gate runs on next repo-assist run"
+      "branch": "repo-assist/fix-issue-51420-rsqrt-legacy-compat",
+      "issue": 51420,
+      "title": "fix(ttnn): use non-legacy rsqrt in fused_rms_minimal compute kernel",
+      "created": "2026-08-03",
+      "ci_status": "queued - check pr-gate/build-artifact run on next repo-assist run"
     }
   ],
   "closed_or_merged_prs": [
-    {"pr_number": 51111, "merged_at": "2026-07-28T19:35:44Z", "note": "repeat_program_factory_last_dim precedence fix"},
-    {"pr_number": 51024, "merged_at": "2026-07-28T08:25:41Z", "note": "not a repo-assist PR; fixed issue #51294 (cb_id typo), authored by amahmudTT"},
-    {"pr_number": 49892, "merged_at": null, "note": "closed unmerged 2026-07-31 (bounty PR for LiquidAI/LFM2.5-VL-1.6B, #45087); no longer needs tracking"}
+    {"pr_number": 51663, "merged_at": "2026-08-03T00:02:44Z", "note": "fmod/remainder repair-loop direction fix, merged by blozano-tt"},
+    {"pr_number": 51809, "merged_at": null, "note": "closed unmerged - superseded by human PR #51686 which more thoroughly fixed the same moe_routing_remap issue (#51757/#51860); correct outcome, no further action"},
+    {"pr_number": 51111, "merged_at": "2026-07-28T19:35:44Z", "note": "repeat_program_factory_last_dim precedence fix"}
   ],
-  "next_tasks": ["task1_triage", "task2_comment", "task4_improvements", "task7_welcome"],
-  "notes": "2026-08-01: Investigated backlog for fixable issues. Found and fixed issue #51757 (moe_routing_remap TT_FATAL operator-precedence bug - ternary/equality dead check, matches known bug class from parent issue #51214). Opened PR (repo-assist/fix-issue-51757-moe-routing-remap-precedence). Checked PR #51663 (fmod/remainder fix): pr-gate run 30612905126 stuck at action_required since 2026-07-31, all other checks (Cycode SAST/secrets/license/deps, RTL Sim CI) passed - posted a comment asking maintainer to approve the pending workflow run. Confirmed PR #49892 was closed (not merged) on 2026-07-31 - removed from active tracking, no further nudge needed. Checked PR #50525: author blozano-tt posted detailed 2-vs-4-thread OMP benchmark data on 2026-07-30T21:57 answering reviewer nsextonTT's question - well within 3-day nudge cadence (only ~1.8 days since last repo-assist action), skipped re-nudge since author/reviewer are actively engaging. Did not run task1/2/4/7 this run - focus was on task3 fix + task5 CI checks + task6 stale-PR review + task8. Next run should prioritize resuming task1/2 triage from cursor 51296 forward - saw many new issues since (51742 Quasar max_pool2d PCC flake, 51757-fixed, 51694 pytest marker issue, 51691 doc task, plus a wave of 'CI auto triage' auto-filed test-failure issues 51749-51808 which are likely auto-generated/low-value for manual triage - should evaluate whether these need repo-assist attention or are handled by a separate bot pipeline)."
+  "next_tasks": ["task1_triage", "task2_comment", "task4_improvements", "task6_stale_prs", "task7_welcome"],
+  "notes": "2026-08-03: Verified terminal states of both PRs tracked in memory (51663 merged, 51809 closed-superseded by #51686 - correct, no duplicate). Investigated Task2 candidates #51303/#51304 (quantize/dequantize rounding bugs, reporter kinginu) - both covered by kinginu's own PR #51138 (confirms closes #51303; #51304 rounding fix scope overlaps same PR) - skipped commenting, no redundant noise added. Investigated #51420 (fused_rms_minimal hardcoded rsqrt_tile<true> legacy-compat vs decomposed rms_norm's legacy_rsqrt=false default) - confirmed root cause directly against tt_metal/hw/inc/api/compute/eltwise_unary/rsqrt.h and layernorm_types.hpp, fixed by dropping <true> template arg to match library/decomposed-path defaults. Opened ready-for-review PR (Closes #51420). Noted maintainer PR #51791 (blozano-tt, still open/unmerged) proposes tightening Task2 instructions to require verified/attributed claims for bug root-causes and benchmark numbers - kept language hedged and cited concrete file:line evidence in this run's PR body accordingly. Did not get to task1 (labeling)/task4/task6/task7 this run due to time - next run should resume Task1/2 triage past cursor #51420, re-check task6 stale PRs (#50525 not re-checked), and attempt task7 welcome scan. Fresh issues #51294-51439 include many internal-team epics/CI-auto-triage clusters (Minimax M3, ds_prefill, llk-ai-codegen, CI auto triage) - low value for manual repo-assist triage/comments, confirmed again this run; #51297 (disk cache design proposal) and #51354 (per-core buffer address bug, well-documented by esmalTT) are candidates worth a look next run but not yet acted on."
 }
