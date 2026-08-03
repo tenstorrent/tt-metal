@@ -716,6 +716,51 @@ class SAMPLING_LEGACY_COMPAT(TemplateParameter):
         return f"constexpr bool SAMPLING_LEGACY_COMPAT = {str(self.legacy_compat).lower()};"
 
 
+@dataclass
+class MOE_GATE_TOPK(TemplateParameter):
+    """Compile-time configuration of the generic MoE-gate top-k SFPU entry.
+
+    Mirrors the template parameter list of
+    ``ckernel::sfpu::_generic_moe_gate_topk_<normalize, num_selected_experts,
+    num_total_experts, zero_tail, full_sort>``.
+    """
+
+    num_selected_experts: int = 8
+    num_total_experts: int = 256
+    normalize: bool = True
+    zero_tail: bool = False
+    full_sort: bool = True
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int MOE_GATE_NUM_SELECTED_EXPERTS = {self.num_selected_experts};",
+            f"constexpr int MOE_GATE_NUM_TOTAL_EXPERTS = {self.num_total_experts};",
+            f"constexpr bool MOE_GATE_NORMALIZE = {str(self.normalize).lower()};",
+            f"constexpr bool MOE_GATE_ZERO_TAIL = {str(self.zero_tail).lower()};",
+            f"constexpr bool MOE_GATE_FULL_SORT = {str(self.full_sort).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
+    """``eps`` / ``scale`` for the MoE-gate normalize step, as raw fp32 bit patterns.
+
+    Both are decoded on device via ``Converter::as_float``, so emitting the bit
+    patterns keeps the kernel and the torch golden exactly aligned.
+    """
+
+    eps_bits: int = 0x00000000  # 0.0f
+    scale_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t MOE_GATE_EPS_BITS = {self.eps_bits}u;",
+            f"constexpr std::uint32_t MOE_GATE_SCALE_BITS = {self.scale_bits}u;",
+        ]
+        return "\n".join(lines)
+
+
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
