@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "uniform_device_operation.hpp"
+#include "uniform_range.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::uniform {
@@ -16,6 +17,7 @@ void UniformDeviceOperation::validate_inputs(
         tensor_args.input.dtype() == DataType::BFLOAT16 || tensor_args.input.dtype() == DataType::FLOAT32,
         "Uniform: Input tensor must be Float32 or Bfloat16");
     TT_FATAL(operation_attributes.from < operation_attributes.to, "Uniform: from param must be < to");
+    detail::make_output_range(operation_attributes.from, operation_attributes.to, tensor_args.input.dtype());
 }
 
 void UniformDeviceOperation::validate_on_program_cache_miss(

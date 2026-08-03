@@ -203,6 +203,36 @@ def test_uniform_respects_narrow_fp32_range(device):
     assert torch.unique(data).numel() > 1
 
 
+@pytest.mark.parametrize("low, high", [(-2.0, -1.0), (1.001, 2.0)])
+def test_uniform_respects_bfloat16_ranges(device, low, high):
+    npu = ttnn.from_torch(
+        torch.zeros((256, 256), dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    ttnn.uniform(npu, low, high, 17)
+    data = ttnn.to_torch(npu).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+    assert torch.unique(data).numel() > 1
+
+
+def test_uniform_rejects_range_without_bfloat16_value(device, expect_error):
+    npu = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    with expect_error(RuntimeError, "contains no value representable"):
+        ttnn.uniform(npu, 1.001, 1.002, 17)
+
+
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 2, 4, 70, 40]],

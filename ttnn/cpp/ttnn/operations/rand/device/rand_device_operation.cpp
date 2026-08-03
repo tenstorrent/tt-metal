@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rand_device_operation.hpp"
+#include "ttnn/cpp/ttnn/operations/uniform/device/uniform_range.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <memory>
@@ -12,6 +13,8 @@ namespace ttnn::operations::rand {
 void RandDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(operation_attributes.from < operation_attributes.to, "Rand: `from` argument must be < `to` argument");
+    ttnn::operations::uniform::detail::make_output_range(
+        operation_attributes.from, operation_attributes.to, operation_attributes.dtype);
 }
 
 void RandDeviceOperation::validate_on_program_cache_miss(

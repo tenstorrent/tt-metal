@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "rand_device_operation.hpp"
+#include "ttnn/cpp/ttnn/operations/uniform/device/uniform_range.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::rand {
@@ -191,18 +192,21 @@ ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
     };
     compute_desc.runtime_args.reserve(num_cores_total);
 
-    const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
-    const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to);
+    const auto output_range = ttnn::operations::uniform::detail::make_output_range(
+        operation_attributes.from, operation_attributes.to, output_dtype);
+    const uint32_t lower_bound_bits = std::bit_cast<uint32_t>(output_range.lower_bound);
+    const uint32_t upper_bound_bits = std::bit_cast<uint32_t>(output_range.upper_bound);
 
     const auto layout = rand_core_layout(ws);
     for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
         const auto& [core, units_per_core, tile_offset] = layout[i];
         const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
 
-        // seed/from/to are DYNAMIC (omitted from the cache key / attribute_names): baked here for the
+        // seed/range bounds are DYNAMIC (omitted from the cache key / attribute_names): baked here for the
         // cache-miss build, and re-applied on every cache hit via override_runtime_arguments().
         compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, from_bits, to_bits, tile_offset, units_per_core});
+            core,
+            KernelDescriptor::CoreRuntimeArgs{seed, lower_bound_bits, upper_bound_bits, tile_offset, units_per_core});
 
         // Register the output address as a Buffer* binding so rand takes the fast cache-hit path
         // (real program caching) with the address correctly re-patched each dispatch.
@@ -228,8 +232,10 @@ void RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
     constexpr uint32_t compute_kernel_idx = 1;
 
     const auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
-    const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
-    const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to);
+    const auto output_range = ttnn::operations::uniform::detail::make_output_range(
+        operation_attributes.from, operation_attributes.to, output.dtype());
+    const uint32_t lower_bound_bits = std::bit_cast<uint32_t>(output_range.lower_bound);
+    const uint32_t upper_bound_bits = std::bit_cast<uint32_t>(output_range.upper_bound);
     const uint32_t out_addr = output.buffer()->address();
 
     const auto layout = rand_core_layout(ws);
@@ -239,8 +245,8 @@ void RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
 
         auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, compute_kernel_idx, core);
         compute_args[0] = seed;
-        compute_args[1] = from_bits;
-        compute_args[2] = to_bits;
+        compute_args[1] = lower_bound_bits;
+        compute_args[2] = upper_bound_bits;
         compute_args[3] = tile_offset;
         compute_args[4] = units_per_core;
 

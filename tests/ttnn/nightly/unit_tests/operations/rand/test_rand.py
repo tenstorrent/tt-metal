@@ -273,6 +273,21 @@ def test_rand_respects_narrow_fp32_ranges(device, low, high):
     assert torch.unique(data).numel() > 1
 
 
+@pytest.mark.parametrize("low, high", [(-2.0, -1.0), (1.001, 2.0)])
+def test_rand_respects_bfloat16_ranges(device, low, high):
+    data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.bfloat16, low=low, high=high, seed=17)).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+    assert torch.unique(data).numel() > 1
+
+
+def test_rand_rejects_range_without_bfloat16_value(device, expect_error):
+    with expect_error(RuntimeError, "contains no value representable"):
+        ttnn.rand((32, 32), device=device, dtype=ttnn.bfloat16, low=1.001, high=1.002, seed=17)
+
+
 def test_rand_all_ones_seed_does_not_lock_prng(device):
     data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.float32, seed=0xFFFFFFFF)).float()
 
@@ -389,27 +404,27 @@ def test_rand_invalid_args(device):
     Passing invalid args should raise TypeError.
     """
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected list or tuple
         ttnn.rand(5, device=device)
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected positive dim values
         ttnn.rand([2, -1], device=device)
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected ttnn.LAYOUT type
         ttnn.rand([2, 2], device=device, layout="ROW_MAJOR")
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected  ttnn.MemoryConfig type
         ttnn.rand([2, 2], device=device, memory_config="DRAM")
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected  ttnn.Device type
         ttnn.rand([2, 2], device="WORMHOLE")
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected  ttnn.DataType type
         ttnn.rand([2, 2], device=device, dtype="ttnn.bfloat16")
 
