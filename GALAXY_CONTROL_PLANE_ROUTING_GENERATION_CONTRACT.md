@@ -376,16 +376,25 @@ One direct derivation of the assessment's endpoint-only rule is:
 3. A node is a leaf candidate when it is interior to such a walk and is not an endpoint of any
    retained express edge.
 4. Every other required Y node is a transit candidate.
-5. In the ordinary-Y graph, leaf candidates must form adjacent two-node pairs.
-6. Each leaf must have exactly:
-   - one ordinary edge to its paired leaf; and
-   - one ordinary edge to a transit candidate.
-7. The unique adjacent transit candidate is that leaf's anchor.
-8. Any extra leaf adjacency, missing pair, shared ambiguity, or non-unique anchor fails synthesis.
+5. In the ordinary-Y graph, leaf candidates form maximal runs of consecutive nodes. A run is bounded
+   by exactly two transit candidates, one at each end.
+6. Each leaf has ordinary edges to its neighbours within its run; the run's first and last node each
+   have one ordinary edge to a bounding transit candidate.
+7. A run's two bounding transit candidates are its anchors. The supported fixtures produce runs of
+   length two, where each leaf has exactly one adjacent anchor and one paired leaf. Longer runs are
+   possible: declaring only the wide pattern on the quad geometry skips six rows per block.
+8. A run not bounded by a transit candidate at both ends, or a run spanning the whole axis, fails
+   synthesis.
 
-A leaf remains a legal source or destination. It is never a Y-transit node. The direct edge between a
-paired leaf pair is legal only for that pair's source/destination route. Anchor edges are terminal
+A leaf remains a legal source or destination. It is never a Y-transit node. The ordinary edges inside
+a run are legal only for routes whose destination lies inside that run. Anchor edges are terminal
 attachments, not protected-ring edges.
+
+TODO: for a run longer than two, which of its two anchors a route enters by is not settled. The
+current implementation takes the end nearer the destination leaf, which keeps the choice a function of
+the destination alone and so keeps destination-keyed routing suffix-consistent. Check through
+experimentation whether a better tie-breaking rule exists, particularly for the leaf equidistant from
+both anchors.
 
 The minimum-span rule is closed for the four supported fixtures. A future topology in which the
 leaf-forming class is not the minimum-span class is outside the initial policy and must not be
@@ -412,6 +421,18 @@ The required arrangement depends on cardinal end-wrap intent:
 - **Cardinal end wrap absent:** produce exactly one system-spanning family over the union of all
   express classes. It contains every retained express edge and may select ordinary base edges needed
   to close the cycle.
+
+On a LINE axis the union of the classes can still close into a ring: each class's chords chain together
+through ordinary connectors, and a widest-class chord returns the walk to its start. What cannot close
+is a single class on its own, since its chords form a chain whose ends are the axis ends with no
+ordinary edge joining them. That is why the arrangement is one spanning family rather than one family
+per class.
+
+Other covers of the transit set exist; per-block families, using only the express edges inside each
+widest-class block, also form simple cycles. Selecting by class is a design preference for a hierarchy
+of nested ring families -- narrower classes inside wider ones, as the wrap-present branch produces --
+over many peer ring domains. Fewer domains mean fewer cross-family transitions to order and prove, and
+on a LINE axis the spanning family needs none at all.
 
 At the arrangement level:
 
@@ -614,15 +635,19 @@ For a one-family arrangement, only rule 1 is needed between transit nodes.
 
 Apply leaf handling around the non-leaf route:
 
-1. Paired leaves use their direct ordinary edge.
-2. A source leaf first takes its unique edge to its anchor, unless the destination is its paired leaf.
-3. A destination leaf is reached from its anchor by the final ordinary edge.
-4. Two non-paired leaves use source leaf to source anchor, the canonical non-leaf route, then
-   destination anchor to destination leaf.
-5. No route may use a leaf as an intermediate node.
+1. Leaves in one run use that run's own ordinary edges, stepping toward the destination.
+2. A source leaf whose destination lies outside its run leaves by one of the run's anchors.
+3. A destination leaf is entered from one of its run's anchors and reached by stepping inward.
+4. Leaves in different runs use rule 2, the canonical non-leaf route, then rule 3.
+5. No route may traverse a leaf run from one anchor to the other.
 
-Leaf-anchor and paired-leaf edges remain non-ring attachments even though they are Y edges; they do
-not inherit Y-ring domain membership or protected-ring BFC treatment.
+A run together with the express edge that bypasses it forms a cycle that is not a protected domain,
+and rule 5 is what keeps a route from closing it. For a run of length two, rules 1-3 reduce to the
+paired-leaf edge and each leaf's single adjacent anchor, and rule 5 to never using a leaf as a
+Y-transit node.
+
+Anchor edges and the ordinary edges inside a leaf run remain non-ring attachments even though they are
+Y edges; they do not inherit skip ring domain membership or protected-ring BFC treatment.
 
 ### 5.4 Complete Y before X
 
@@ -782,7 +807,8 @@ Validation also requires:
 - no repeated route state;
 - no immediate canonical U-turn;
 - no forbidden edge use;
-- no route with more than the allowed cross-domain transition count;
+- no route with more than one cross-domain transition per axis, the most the two-family policy in
+  §4.8 permits;
 - terminal landing correctness;
 - stable deterministic tie behavior;
 - ordinary and express output identity preserved through physical mapping;
@@ -930,18 +956,24 @@ to derive them. They are not production node arrays, class names, or dimension-d
 For one fixed X:
 
 ```text
-ordinary Y ring:
-0↔1↔2↔3↔4↔5↔6↔7↔0
+ordinary:
+0↔1↔...↔7
 
-express:
+span-4 express:
 2↔5
+
+span-8 express:
+0↔7
 ```
 
-The express span is:
+The express spans are:
 
 ```text
 base hops from 2 to 5 = 3
 express span          = 3 + 1 = 4
+
+base hops from 0 to 7 = 7
+express span          = 7 + 1 = 8
 ```
 
 Derived output:
@@ -949,11 +981,11 @@ Derived output:
 ```text
 forward:
 0 → 1 → 2 → 5 → 6 → 7 → 0
-S   S   Z   S   S   S
+S   S   Z   S   S   Z
 
 reverse:
 0 → 7 → 6 → 5 → 2 → 1 → 0
-N   N   N   Z   N   N
+Z   N   N   Z   N   N
 ```
 
 Leaves and anchors:
