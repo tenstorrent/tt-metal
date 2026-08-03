@@ -20,6 +20,8 @@ Test-id naming convention
 - Production IDs are `fabric2d-torus-xy-8x4-{1,2}link`.
 """
 
+from typing import NamedTuple, Optional
+
 import pytest
 
 import ttnn
@@ -118,7 +120,6 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (4, 1),
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        get_max_payload_size(),
         1,
         "ring",
         "fabric2d-torus-y-4x1-1link",
@@ -127,7 +128,6 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (4, 1),
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        get_max_payload_size(),
         2,
         "ring",
         "fabric2d-torus-y-4x1-2link",
@@ -163,15 +163,14 @@ ALL_MESH_CONFIGS = [
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
     # 2-link TORUS_XY — the CombineFabric2D isolated-fabric experiment develops against this.
-    _mesh_param(
+    MeshConfigSpec(
         (8, 4),
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        get_max_payload_size(),
         2,
         ttnn.Topology.Ring,
         "mesh-8x4",
         "fabric2d-torus-xy-8x4-2link",
-        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+        _RELAXED,
     ),
 ]
 
