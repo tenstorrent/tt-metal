@@ -212,7 +212,7 @@ Two measured facts about the protocol, both surprising:
 | | measured |
 |---|---|
 | The first harness process of a session recorded a floor of **11.838 µs**; the identical configuration later recorded **0.196 µs** | **60×**, from JIT-cache warmth *across* processes |
-| Going from 250 replays/measurement (5×200… i.e. 5 blocks × 50) to 1,800 (9 blocks × 200) | floor got **3–4× worse**: 0.4–0.7 µs → 1.3–3.0 µs |
+| Going from 250 replays per measurement (5 blocks × 50) to 1,800 (9 blocks × 200) | floor got **3–4× worse**: 0.4–0.7 µs → 1.3–3.0 µs |
 
 The protocol justifies `ITERS ≥ 50` by "the spread between blocks is the spread of means, roughly
 `sqrt(ITERS)` tighter". That holds only if the noise is i.i.d. within a run. It isn't — longer windows pick up
