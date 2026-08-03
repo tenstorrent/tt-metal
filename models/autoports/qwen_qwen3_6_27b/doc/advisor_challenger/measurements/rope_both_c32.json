@@ -1,0 +1,32 @@
+{
+  "label": "rope_both_c32",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    1.2326564453542233,
+    1.2337302789092064,
+    1.23661320656538,
+    1.232931762933731,
+    1.2332245148718357
+  ],
+  "median_ms": 1.2332245148718357,
+  "noise_floor_ms": 0.003956761211156845,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one full-attention decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-08-03T08:40:38+00:00",
+  "shipped_policy": {
+    "optimization_policy": "bfp4_all_dram_w8"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/final_w8_{full,linear}_b32/perf_report.csv",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

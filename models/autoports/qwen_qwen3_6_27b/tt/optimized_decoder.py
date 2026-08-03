@@ -12,6 +12,7 @@ and fidelity actually used by each material projection group.
 from __future__ import annotations
 
 import math
+import os
 import types
 from dataclasses import dataclass
 
@@ -414,12 +415,52 @@ class OptimizedDecoder(FusedDecoder):
         kwargs["compute_kernel_config"] = self.compute_kernel_config
         kwargs["dtype"] = ttnn.bfloat16
         output = ttnn.linear(activation, weight, **kwargs)
+        if weight_name == "packed_qkv":
+            output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
         if weight_name == "packed_linear_inputs" and output.is_sharded():
             # Beta/decay are much narrower than one projection shard.
             # Cross once before exact slicing; recurrent math remains in its
             # original dedicated layouts.
             output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
         return output
+
+    def _partial_rope_decode(self, tensor, current_positions):
+        """Default-off reproduction hook for the rejected advisor repeat placements."""
+        scope = os.environ.get("QWEN_ADVISOR_ROPE_REPEAT_SCOPE", "")
+        cores = int(os.environ.get("QWEN_ADVISOR_ROPE_REPEAT_CORES", "0"))
+        heads = int(tensor.shape[2])
+        selected = scope == "both" or (scope == "query" and heads == self.num_heads) or (
+            scope == "key" and heads == self.num_kv_heads
+        )
+        if not selected or cores <= 0:
+            return super()._partial_rope_decode(tensor, current_positions)
+
+        rotary_dim = int(self.head_dim * float(self.hf_config.partial_rotary_factor))
+        rotary, passthrough = tensor[..., :rotary_dim], tensor[..., rotary_dim:]
+        cos = ttnn.embedding(current_positions, self.rope["cos"], layout=ttnn.TILE_LAYOUT)
+        sin = ttnn.embedding(current_positions, self.rope["sin"], layout=ttnn.TILE_LAYOUT)
+        cos = ttnn.transpose(ttnn.unsqueeze_to_4D(cos), 1, 2)[:, : self.batch, :, :]
+        sin = ttnn.transpose(ttnn.unsqueeze_to_4D(sin), 1, 2)[:, : self.batch, :, :]
+        grid_width, grid_height = min(cores, 11), math.ceil(cores / 11)
+        ranges = {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_width - 1, grid_height - 2))}
+        ranges.add(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, grid_height - 1),
+                ttnn.CoreCoord((cores - 1) % grid_width, grid_height - 1),
+            )
+        )
+        repeat_memory = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(ttnn.CoreRangeSet(ranges), (32, rotary_dim), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        cos = ttnn.repeat(cos, [1, 1, heads, 1], memory_config=repeat_memory)
+        sin = ttnn.repeat(sin, [1, 1, heads, 1], memory_config=repeat_memory)
+        rotary = ttnn.add(ttnn.multiply(rotary, cos), ttnn.multiply(self._rotate_half(rotary), sin))
+        rotary = ttnn.to_memory_config(rotary, ttnn.L1_MEMORY_CONFIG)
+        return ttnn.to_memory_config(
+            ttnn.concat([rotary, passthrough], dim=-1), self.decode_attention_memory_config
+        )
 
     @staticmethod
     def _optimized_decode_concat(tensors, *args, **kwargs):

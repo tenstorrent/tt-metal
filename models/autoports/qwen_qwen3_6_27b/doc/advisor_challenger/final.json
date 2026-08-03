@@ -1,0 +1,42 @@
+{
+  "outcome": "improved",
+  "changed": true,
+  "changed_precision": false,
+  "incumbent_ms": 1.2082573398947716,
+  "final_ms": 1.1811316758394241,
+  "repeats_ms": [1.1805596016347408, 1.1821225844323635, 1.1811316758394241, 1.1822670511901379, 1.1810030415654182],
+  "winning_repeats_ms": [1.1805596016347408, 1.1821225844323635, 1.1811316758394241, 1.1822670511901379, 1.1810030415654182],
+  "confirmed_fresh_process": true,
+  "confirmation_ms": 1.1811316758394241,
+  "winning_config": {"full_attention_packed_qkv_output": "one L1-interleaved conversion before four slices", "linear_attention": "unchanged"},
+  "oracle": "real-weight differential full-attention decode oracle",
+  "oracle_scope": "batch-32 layer 3, shipped candidate against frozen incumbent at PCC 0.998843",
+  "oracle_reference": "frozen incumbent packed-QKV decode path",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "oracle_pcc": 1.0,
+  "rejected_knobs": ["query RoPE repeats height-sharded on 32/48/64 cores (default-off)", "key RoPE repeats height-sharded on 32/48/64 cores (default-off)", "combined query+key RoPE repeats on 32 cores (default-off)"],
+  "iterations": [
+    {"trigger": "initial reconciliation ranked RoPE repeat placement above the floor", "chains": ["full_attention:6", "full_attention:7", "full_attention:12", "full_attention:13"], "measured_ms": 1.2224629148840904, "oracle_passed": false},
+    {"trigger": "IR inspection exposed packed-QKV-to-slices as a doubtful advisor-directed L1 chain despite soft pairing assigning zero removable boundary time", "reranked_from": "reconciliation_full_attention_current.json", "chains": ["full_attention:1"], "measured_ms": 1.1811316758394241, "oracle_passed": true},
+    {"trigger": "winner shipped, freshly profiled, and reconciled again", "reranked_from": "perf/packed_qkv_l1_shipped/perf_report.csv", "chains": ["full_attention:1"], "measured_ms": 1.1811316758394241, "oracle_passed": true}
+  ],
+  "combination": {
+    "best_set": ["packed_qkv_l1_chain"],
+    "measured_sets": [
+      {"set": ["incumbent"], "measured_ms": 1.2082573398947716, "repeats_ms": [1.2093397788703442, 1.208399422466755, 1.2082573398947716, 1.2079169042408466, 1.207730546593666], "oracle_passed": true},
+      {"set": ["packed_qkv_l1_chain"], "measured_ms": 1.1811316758394241, "repeats_ms": [1.1805596016347408, 1.1821225844323635, 1.1811316758394241, 1.1822670511901379, 1.1810030415654182], "oracle_passed": true}
+    ]
+  },
+  "model_estimate": {
+    "before_us": 935214.5163684692,
+    "after_us": 934780.5057435837,
+    "band_us": 618.496,
+    "per_kind": {
+      "linear_attention": {"before_us": 918731.7323684692, "after_us": 918731.7323684692, "layers": 48, "reachable_by_advisor": false},
+      "full_attention": {"before_us": 16482.784, "after_us": 16048.773375114441, "layers": 16, "reachable_by_advisor": true}
+    },
+    "method": "sum incumbent-profile window x layer count; apply measured per-layer winner delta x 16; sum per-kind uncertainty linearly",
+    "inside_uncertainty_band": true
+  }
+}

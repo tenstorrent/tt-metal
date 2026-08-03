@@ -1,0 +1,32 @@
+{
+  "label": "packed_qkv_l1_profile",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    1.1928034760057926,
+    1.1930615827441216,
+    1.1926129087805748,
+    1.192178651690483,
+    1.1900010146200657
+  ],
+  "median_ms": 1.1926129087805748,
+  "noise_floor_ms": 0.0030605681240558624,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one full-attention decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-08-03T08:26:46+00:00",
+  "shipped_policy": {
+    "optimization_policy": "bfp4_all_dram_w8"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/final_w8_{full,linear}_b32/perf_report.csv",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}
