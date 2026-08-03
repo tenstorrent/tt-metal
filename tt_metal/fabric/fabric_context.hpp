@@ -81,6 +81,12 @@ public:
     // from 4 -> 5, so the shared EDM config must reserve the 5th VC0 sender channel.
     bool has_any_intra_mesh_z_router(const ControlPlane& control_plane) const;
 
+    // Mesh-level check: true if ANY node in the given mesh has an intra-mesh Z edge (sub-torus skip
+    // link). This is the granularity at which the skip-link indexed ABI is selected: every router in
+    // the mesh runs the same decode, since Z-laden packet maps transit chips that have no Z edge of
+    // their own.
+    bool has_intra_mesh_z_in_mesh(const ControlPlane& control_plane, MeshId mesh_id) const;
+
     // Check if a fabric node has an INTER-mesh Z neighbor (galaxy Z router bridging two meshes): a
     // RoutingDirection::Z edge in inter-mesh connectivity. This is the precise signal for inter-mesh Z
     // router presence; unlike has_z_router_on_device (which is true for ANY active Z eth channel, including

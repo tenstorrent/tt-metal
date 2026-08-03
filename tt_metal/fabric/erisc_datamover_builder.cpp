@@ -1312,6 +1312,28 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["IS_INTERMESH_ROUTER_ON_EDGE"] = is_intermesh_router_on_edge;
     named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
 
+    // --- Skip-link ABI args (only when this router's mesh selected the indexed 2D ABI) ---
+    // Must stay in agreement with the FABRIC_SKIP_LINKS_ENABLED define emission in
+    // ComputeMeshRouterBuilder::create_kernel: the kernel reads these named args only under that
+    // define, and a missing arg fails the compile.
+    if (fabric_context.has_intra_mesh_z_in_mesh(control_plane, this->local_fabric_node_id.mesh_id)) {
+        const auto mesh_shape = control_plane.get_mesh_graph().get_mesh_shape(this->local_fabric_node_id.mesh_id);
+        named_args["MESH_Y_SIZE"] = mesh_shape[0];
+        named_args["MESH_X_SIZE"] = mesh_shape[1];
+        // All-zero ingress flags are correct for intramesh-only-facing routers. A boundary-facing
+        // router needs a per-VC ingress derivation that is not implemented yet — fail instead of
+        // silently never re-encoding landings.
+        TT_FATAL(
+            !is_intermesh_router_on_edge,
+            "Skip-link mesh with an intermesh-facing router (M{}D{}): "
+            "IS_RECEIVER_CHANNEL_*_INTERMESH_INGRESS derivation is not implemented",
+            *this->local_fabric_node_id.mesh_id,
+            this->local_fabric_node_id.chip_id);
+        for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
+            named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = 0;
+        }
+    }
+
     // --- Sender channel per-channel arrays (always emit MAX entries; 0 for unused) ---
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         const bool has_static_peer =
