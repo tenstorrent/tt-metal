@@ -45,27 +45,52 @@ from models.demos.llvc.tt.state_io import load_llvc_config_and_model
 
 
 # --------------------------------------------------------------------- metrics
-def per_frame_pcc(a: torch.Tensor, b: torch.Tensor, frame_len: int) -> torch.Tensor:
-    """Per-frame Pearson correlation between two waveforms, chunked into ``frame_len``.
+def per_frame_pcc(a: torch.Tensor, b: torch.Tensor, frame_len: int, *, energy_gate_db: float = -40.0):
+    """Per-frame Pearson correlation over *voiced* frames (token-level accuracy).
 
-    A single global PCC can hide localised divergence; correlating each output
-    frame (one hop of ``L`` samples) gives a token-level accuracy distribution.
+    A single global PCC can hide localised divergence, so each decoder output hop
+    (``frame_len = L`` samples) is correlated separately. Near-silent frames are
+    excluded: their values are dominated by bf16 rounding noise, which decorrelates
+    a 16-sample window even when the audible signal matches. A frame counts as
+    voiced when its reference RMS is within ``energy_gate_db`` of the file's
+    loudest frame. Returns ``(corr_over_voiced, voiced_count, total_count)``.
     """
     x = a.flatten().float()
     y = b.flatten().float()
     n = min(x.numel(), y.numel())
     n -= n % frame_len
     if n == 0:
-        return torch.ones(1)
+        return torch.ones(1), 1, 1
     x = x[:n].reshape(-1, frame_len)
     y = y[:n].reshape(-1, frame_len)
     xv = x - x.mean(dim=1, keepdim=True)
     yv = y - y.mean(dim=1, keepdim=True)
     denom = xv.norm(dim=1) * yv.norm(dim=1)
-    corr = (xv * yv).sum(dim=1) / (denom + 1e-8)
-    # Frames where both sides are silent (denom==0) are a perfect match.
-    corr = torch.where(denom == 0, torch.ones_like(corr), corr)
-    return corr.clamp(-1.0, 1.0)
+    corr = ((xv * yv).sum(dim=1) / (denom + 1e-8)).clamp(-1.0, 1.0)
+
+    ref_rms = y.pow(2).mean(dim=1).sqrt()
+    thresh = ref_rms.max().clamp_min(1e-8) * (10.0 ** (energy_gate_db / 20.0))
+    voiced = ref_rms >= thresh
+    if int(voiced.sum()) == 0:
+        voiced = torch.ones_like(voiced)
+    return corr[voiced], int(voiced.sum()), int(voiced.numel())
+
+
+def si_sdr_db(est: torch.Tensor, ref: torch.Tensor) -> float:
+    """Scale-invariant signal-to-distortion ratio (dB) of TTNN output vs reference.
+
+    A robust, scale-independent waveform-fidelity number that (unlike a 16-sample
+    PCC) is not thrown off by silence or a constant gain difference.
+    """
+    e = est.flatten().float()
+    r = ref.flatten().float()
+    n = min(e.numel(), r.numel())
+    e, r = e[:n] - e[:n].mean(), r[:n] - r[:n].mean()
+    alpha = (e * r).sum() / r.pow(2).sum().clamp_min(1e-8)
+    target = alpha * r
+    noise = e - target
+    ratio = target.pow(2).sum() / noise.pow(2).sum().clamp_min(1e-8)
+    return float(10.0 * torch.log10(ratio.clamp_min(1e-8)))
 
 
 def global_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -147,12 +172,16 @@ def try_speaker_similarity(converted_paths: list[str], target_ref_paths: list[st
 def try_dnsmos(converted_paths: list[str], sample_rate: int) -> dict | None:
     """Non-intrusive DNSMOS audio-quality score of the converted speech."""
     try:
+        # torchmetrics may be installed while its DNSMOS sub-deps (librosa /
+        # onnxruntime / requests) are not; that surfaces at *construction*, not
+        # import, so both must be inside the guard.
         from torchmetrics.audio.dnsmos import DeepNoiseSuppressionMeanOpinionScore
-    except ImportError:
-        logger.warning("DNSMOS skipped: install `torchmetrics[audio]` + `onnxruntime` + `librosa` to enable.")
+
+        metric = DeepNoiseSuppressionMeanOpinionScore(fs=sample_rate, personalized=False)
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.warning("DNSMOS skipped ({}): install torchmetrics[audio] + onnxruntime + librosa + requests.", exc)
         return None
 
-    metric = DeepNoiseSuppressionMeanOpinionScore(fs=sample_rate, personalized=False)
     import soundfile as sf
 
     ovrl = []
@@ -181,6 +210,8 @@ def run_eval(args: argparse.Namespace, *, device: ttnn.Device) -> dict:
     rtfs, latencies = [], []
     frame_corrs = []
     global_pccs = []
+    si_sdrs = []
+    voiced_total, frame_total = 0, 0
 
     for fname in files:
         audio = _load_audio(fname, sr)
@@ -190,9 +221,12 @@ def run_eval(args: argparse.Namespace, *, device: ttnn.Device) -> dict:
         with torch.no_grad():
             ref_out = reference(wav)
         tt_ns = model(wav)
-        corr = per_frame_pcc(tt_ns, ref_out, hop)
+        corr, n_voiced, n_frames = per_frame_pcc(tt_ns, ref_out, hop)
         frame_corrs.append(corr)
+        voiced_total += n_voiced
+        frame_total += n_frames
         global_pccs.append(global_pcc(tt_ns, ref_out))
+        si_sdrs.append(si_sdr_db(tt_ns, ref_out))
 
         # streaming conversion: RTF/latency + saved audio for the quality evals
         stream_out, rtf, latency = model.stream(audio, chunk_factor=args.chunk_factor)
@@ -203,11 +237,12 @@ def run_eval(args: argparse.Namespace, *, device: ttnn.Device) -> dict:
         source_paths.append(fname)
         converted_paths.append(out_path)
         logger.info(
-            "[{}] RTF={:.3f} latency={:.2f}ms per_frame_pcc_mean={:.4f}",
+            "[{}] RTF={:.3f} latency={:.2f}ms voiced_frame_pcc={:.4f} si_sdr={:.1f}dB",
             os.path.basename(fname),
             rtf,
             latency,
             corr.mean().item(),
+            si_sdrs[-1],
         )
 
     mean_rtf = sum(rtfs) / len(rtfs)
@@ -222,10 +257,12 @@ def run_eval(args: argparse.Namespace, *, device: ttnn.Device) -> dict:
         "decoder_throughput": decoder_throughput(mean_rtf, sr, hop),
         "token_level_accuracy_vs_reference": {
             "global_pcc_mean": sum(global_pccs) / len(global_pccs),
-            "per_frame_pcc_mean": all_corr.mean().item(),
-            "per_frame_pcc_min": all_corr.min().item(),
-            "frac_frames_pcc_above_0.9": (all_corr > 0.9).float().mean().item(),
-            "max_abs_frame_pcc_gap": (1.0 - all_corr.min().item()),
+            "si_sdr_db_mean": sum(si_sdrs) / len(si_sdrs),
+            "voiced_frame_pcc_mean": all_corr.mean().item(),
+            "voiced_frame_pcc_min": all_corr.min().item(),
+            "frac_voiced_frames_pcc_above_0.9": (all_corr > 0.9).float().mean().item(),
+            "voiced_frames": voiced_total,
+            "total_frames": frame_total,
         },
     }
 
@@ -258,9 +295,11 @@ def _write_markdown(report: dict, path: str) -> None:
         f"| Decoder throughput | {thr['achieved_frames_per_s']:.0f} frames/s ({thr['speed_vs_realtime']:.2f}× real-time) |",
         f"| Real-time frame rate needed | {thr['realtime_frames_per_s']:.0f} frames/s |",
         f"| Token-level accuracy (global PCC) | {tok['global_pcc_mean']:.4f} |",
-        f"| Token-level accuracy (per-frame PCC mean) | {tok['per_frame_pcc_mean']:.4f} |",
-        f"| Per-frame PCC min | {tok['per_frame_pcc_min']:.4f} |",
-        f"| Frames with PCC > 0.9 | {tok['frac_frames_pcc_above_0.9'] * 100:.1f}% |",
+        f"| Token-level accuracy (SI-SDR) | {tok['si_sdr_db_mean']:.1f} dB |",
+        f"| Voiced-frame PCC (mean) | {tok['voiced_frame_pcc_mean']:.4f} |",
+        f"| Voiced-frame PCC (min) | {tok['voiced_frame_pcc_min']:.4f} |",
+        f"| Voiced frames with PCC > 0.9 | {tok['frac_voiced_frames_pcc_above_0.9'] * 100:.1f}% |",
+        f"| Voiced / total frames | {tok['voiced_frames']} / {tok['total_frames']} |",
     ]
     if "content_preservation_wer" in report:
         lines.append(
