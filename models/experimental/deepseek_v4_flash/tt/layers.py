@@ -358,6 +358,7 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
         # through DRAM-interleaved. ``ttnn.rms_norm`` requires a sharded output to
         # match the input's memory layout, so passing the input's own config is the
         # documented contract; for DRAM-interleaved inputs this is the default anyway.
+        assert x.is_sharded(), "input must be sharded"
         return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps, memory_config=x.memory_config())
 
 
@@ -370,4 +371,5 @@ def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
     # See ``DeepSeekV4RMSNorm.forward``: keep the output in the input's (sharded)
     # layout instead of dropping to DRAM-interleaved, so the next op avoids a
     # sharded->DRAM->sharded round-trip.
+    assert x.is_sharded(), "input must be sharded"
     return ttnn.rms_norm(x, epsilon=eps, memory_config=x.memory_config())
