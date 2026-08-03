@@ -11,6 +11,18 @@ Paste the block below as the first message in a fresh session on the new machine
 > comprehensive unit tests and measured performance. VAEs only — the denoising
 > transformer and text encoder are explicitly out of scope.
 >
+> The work lives on branch **`kevinmi/minimax-h3-vae`** in `tenstorrent/tt-metal`.
+> Check it out before anything else, and commit and push there — never to `main` or
+> another branch:
+>
+> ```bash
+> git fetch origin kevinmi/minimax-h3-vae
+> git checkout kevinmi/minimax-h3-vae
+> ```
+>
+> It is based on `origin/cglagovich/minimax-h3` (`42ecb2e0339`), which owns the
+> canonical folder structure. Any PR targets `kevinmi/minimax-h3-vae`.
+>
 > Start by reading, in this order:
 >
 > 1. `models/tt_dit/models/MiniMaxH3_VAE_PLAN.md` — the plan. Source of truth for
@@ -31,8 +43,7 @@ Paste the block below as the first message in a fresh session on the new machine
 > when mesh state is in doubt. `tt-smi -r` is forbidden. Details in the plan's §6.
 >
 > Work one component at a time and do not move on until its gate passes with
-> evidence saved. Correctness before performance. All commits go on
-> `kevinmi/minimax-h3-vae`.
+> evidence saved. Correctness before performance.
 
 ---
 
