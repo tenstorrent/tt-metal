@@ -325,3 +325,24 @@ def test_round_trip_parquet_csv_parquet(tmp_path):
     d1 = t1.to_pandas().sort_values(key).reset_index(drop=True)
     d2 = t2.to_pandas().sort_values(key)[d1.columns].reset_index(drop=True)
     pd.testing.assert_frame_equal(d1, d2)
+
+
+def test_round_trip_preserves_float_precision(tmp_path):
+    # a std with many significant digits must survive Parquet -> CSV -> Parquet exactly
+    df = pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            "tile_cnt": [4, 4],
+            "mean(MATH_ISOLATE)": [1.0, 2.0],
+            "std(L1_TO_L1)": [0.6324555320336759, 0.7071067811865476],
+        }
+    )
+    b1 = tmp_path / "b1.parquet"
+    write_run_batch({"perf_a": df}, b1, **_RUN_PROV)
+    back = parquet_to_csvs(b1, tmp_path / "back")
+    b2 = tmp_path / "b2.parquet"
+    convert_csvs_to_parquet([str(p) for p in back.values()], b2, **_RUN_PROV)
+
+    v1 = sorted(pq.read_table(b1).to_pandas()["std(L1_TO_L1)"].dropna())
+    v2 = sorted(pq.read_table(b2).to_pandas()["std(L1_TO_L1)"].dropna())
+    assert v1 == v2  # bit-exact, not just close
