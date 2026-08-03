@@ -118,8 +118,17 @@ void ReduceScatterMinimalDirectDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.dim >= 0 && args.dim < rank, "Resolved scatter dim {} out of range for {}D input", args.dim, rank);
     TT_FATAL(args.num_devices > 1, "reduce_scatter collective requires num_devices > 1, got {}", args.num_devices);
 
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
-    TT_FATAL(!fabric_is_2d, "reduce_scatter_minimal_direct supports Fabric_1D ring only, not Fabric_2D");
+    // Fabric gate -- see reduce_scatter_direct_fabric_supported. NOTE this runs only on a program-cache
+    // miss, and is skipped entirely under fast runtime mode, so the factory repeats it as the backstop.
+    const uint32_t fabric_axis = reduce_scatter_direct_active_axis(args);
+    TT_FATAL(
+        reduce_scatter_direct_fabric_supported(
+            *input_tensor.device(), args.fabric_config, args.axis_topology[fabric_axis]),
+        "reduce_scatter_minimal_direct needs a 1D fabric, or a 2D fabric whose ACTIVE AXIS wraps (a torus "
+        "axis); got fabric {} on a {} mesh with axis topology {}",
+        args.fabric_config,
+        input_tensor.device()->shape(),
+        args.axis_topology[fabric_axis]);
     TT_FATAL(
         input_tensor.logical_shape()[args.dim] % args.num_devices == 0,
         "scatter dim {} (size {}) must be divisible by num_devices {}",

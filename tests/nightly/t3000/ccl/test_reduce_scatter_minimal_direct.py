@@ -90,12 +90,13 @@ def run_reduce_scatter_minimal_direct_impl(
         )
 
     # The op reads its topology from the hardware rather than taking it as an argument, and hard-fails
-    # on anything but a ring. Ask what this placement actually resolves to and skip if the devices along
-    # cluster_axis do not wrap -- a partial row/column is a line, not a small ring.
+    # on anything that does not wrap. Ask what this placement actually resolves to and skip if the devices
+    # along cluster_axis do not -- a partial row/column is a line, not a small ring. A 2D-fabric torus axis
+    # reports Torus rather than Ring, and is equally valid: both mean the axis wraps.
     usable_topology = ttnn.get_usable_topology(tt_input_tensor_mesh_list[0], cluster_axis=cluster_axis)
-    if usable_topology != ttnn.Topology.Ring:
+    if usable_topology not in (ttnn.Topology.Ring, ttnn.Topology.Torus):
         pytest.skip(
-            f"reduce_scatter_minimal_direct is Ring-only; {num_devices} device(s) on cluster_axis "
+            f"reduce_scatter_minimal_direct needs an axis that wraps; {num_devices} device(s) on cluster_axis "
             f"{cluster_axis} of mesh {tuple(mesh_device.shape)} resolve to {usable_topology}"
         )
 

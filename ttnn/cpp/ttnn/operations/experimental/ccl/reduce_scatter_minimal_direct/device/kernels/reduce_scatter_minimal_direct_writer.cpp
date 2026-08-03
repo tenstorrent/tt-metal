@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <type_traits>
 
 // Brings the fabric linear-api headers + the `fabric_api` alias + PacketHeaderPool.
 #include "cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_common.hpp"
@@ -80,6 +81,12 @@ void kernel_main() {
     ai += num_dests;
     const size_t dest_block = ai;  // our block index inside that destination's reduce group (aliased path)
     ai += num_dests;
+    // Destination chip/mesh per destination -- only read on a 2D fabric, which routes by destination
+    // node rather than by hop count. See set_route_2d below.
+    const size_t dest_chip = ai;
+    ai += num_dests;
+    const size_t dest_mesh = ai;
+    ai += num_dests;
     size_t arg_for_fab = ai;  // fabric connection args are appended last
 
     auto output_acc = TensorAccessor(output_args, output_addr);  // tiled (page = tile_bytes)
@@ -114,6 +121,20 @@ void kernel_main() {
 
     const uint64_t arrival_noc_addr = safe_get_noc_addr(peer_core_x, peer_core_y, arrival_sem, 0);
 
+    // 1D routing takes the distance straight from the packet header's hop count, so a header is ready to
+    // send once set_state has stamped num_hops on it. A 2D fabric instead routes by DESTINATION NODE:
+    // set_state leaves the route empty (it only fills it in the RoutingPlaneConnectionManager overloads),
+    // so the route has to be programmed onto each header for each destination. Keyed on the header type,
+    // exactly as the all_gather FabricWriter does it, so the 1D path compiles to nothing.
+    auto set_route_2d = [&](volatile PACKET_HEADER_TYPE* hdr, uint32_t dst) {
+        if constexpr (std::is_base_of_v<tt::tt_fabric::HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
+            fabric_set_unicast_route(
+                reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(hdr),
+                static_cast<uint16_t>(get_arg_val<uint32_t>(dest_chip + dst)),
+                static_cast<uint16_t>(get_arg_val<uint32_t>(dest_mesh + dst)));
+        }
+    };
+
     // MEASURED: deferring open_finish past the header setup is worth nothing on its own (the handshake
     // already overlaps the reader's first input read, which runs on another RISC); the win on this axis came
     // from the SPLIT CLOSE at the end. Kept deferred anyway since it cannot hurt.
@@ -138,24 +159,45 @@ void kernel_main() {
     if constexpr (needs_init_sync) {
         auto init_pkt = PacketHeaderPool::allocate_header(1);
         const uint64_t init_noc_addr = safe_get_noc_addr(peer_core_x, peer_core_y, init_sem, 0);
-        // Connection 0 = forward, 1 = backward; a range is 0 only when that connection is not open.
-        if (fwd_mcast_range > 0) {
-            fabric_api::fabric_multicast_noc_unicast_atomic_inc(
-                &fabric_connection.get(0).sender,
-                init_pkt,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u},
-                /*start_distance=*/1,
-                fwd_mcast_range);
-            noc.async_writes_flushed();  // on the wire before the header is re-patched below
-        }
-        if (bwd_mcast_range > 0) {
-            fabric_api::fabric_multicast_noc_unicast_atomic_inc(
-                &fabric_connection.get(1).sender,
-                init_pkt,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u},
-                /*start_distance=*/1,
-                bwd_mcast_range);
-            noc.async_writes_flushed();
+        if constexpr (std::is_base_of_v<tt::tt_fabric::HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
+            // 2D: a multicast would need fabric_set_mcast_route (a mcast START node plus per-direction hop
+            // counts), and on a torus it is not obvious the wrap is even expressible. The barrier is one
+            // atomic inc per peer, once per invocation, and only on the non-persistent path -- so just
+            // reuse the per-destination unicast routes the data path already programs correctly. Same
+            // set_state -> set route -> with_state idiom as the payload loop below.
+            for (uint32_t dst = 0; dst < num_dests; ++dst) {
+                auto* sender = &fabric_connection.get(get_arg_val<uint32_t>(dest_conn + dst)).sender;
+                fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
+                    UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val |
+                    UnicastAtomicIncUpdateMask::Flush>(
+                    init_pkt,
+                    static_cast<uint8_t>(get_arg_val<uint32_t>(dest_hops + dst)),
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u});
+                set_route_2d(init_pkt, dst);
+                fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
+                    sender, init_pkt);
+                noc.async_writes_flushed();  // on the wire before the header is re-patched for the next dst
+            }
+        } else {
+            // Connection 0 = forward, 1 = backward; a range is 0 only when that connection is not open.
+            if (fwd_mcast_range > 0) {
+                fabric_api::fabric_multicast_noc_unicast_atomic_inc(
+                    &fabric_connection.get(0).sender,
+                    init_pkt,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u},
+                    /*start_distance=*/1,
+                    fwd_mcast_range);
+                noc.async_writes_flushed();  // on the wire before the header is re-patched below
+            }
+            if (bwd_mcast_range > 0) {
+                fabric_api::fabric_multicast_noc_unicast_atomic_inc(
+                    &fabric_connection.get(1).sender,
+                    init_pkt,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u},
+                    /*start_distance=*/1,
+                    bwd_mcast_range);
+                noc.async_writes_flushed();
+            }
         }
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_sem), (invocation + 1) * num_dests);
     }
@@ -178,6 +220,8 @@ void kernel_main() {
                 0u,   // semaphore dst (patched per packet)
                 1u},  // increment 1 (flush defaults true: payload lands before the inc is applied)
             /*packet_size_bytes=*/0);
+        set_route_2d(data_pkt, dst);
+        set_route_2d(fused_pkt, dst);
 
         uint32_t tiles_done = 0;
         for (uint32_t k = 0; k < chunk_count; ++k) {
