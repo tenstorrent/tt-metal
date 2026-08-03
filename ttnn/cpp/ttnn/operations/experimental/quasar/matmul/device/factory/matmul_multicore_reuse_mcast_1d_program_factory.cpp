@@ -2012,6 +2012,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
+    non_idle_cores_vec.reserve(subdevice_cores.ranges().size());
     for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
         if (intersection.empty()) {
@@ -2194,8 +2195,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
     std::vector<tt::tt_metal::CBHandle> cb_outputs;
+    cb_outputs.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> output_cb_indices;
+    output_cb_indices.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> interm_cb_indices;
+    interm_cb_indices.reserve(out_buffers.size());
 
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // interm0
@@ -2489,7 +2493,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             uint32_t banks_in_first_col = num_banks / 2;
 
             std::vector<std::pair<uint32_t, uint32_t>> first_col_anchors;   // (y, bank_id)
+            first_col_anchors.reserve(banks_in_first_col);
             std::vector<std::pair<uint32_t, uint32_t>> second_col_anchors;  // (y, bank_id)
+            second_col_anchors.reserve(num_banks - banks_in_first_col);
 
             for (uint32_t bank = 0; bank < num_banks; ++bank) {
                 const auto& core = optimal_dram_workers[bank];
@@ -2538,6 +2544,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
