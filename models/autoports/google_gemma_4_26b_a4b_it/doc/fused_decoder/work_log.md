@@ -120,4 +120,9 @@
 
 ## Commits
 
-Stage implementation commit SHA: pending final gate and independent review.
+Stage implementation commit SHA: `0dafd12a42bac0eb72b3c0abbc908500eedd7131`
+on branch `skillexp-work-gemma-p3-fresh`. The commit skipped only the
+`trailing-whitespace`, `isort`, and `prefer-expect-error` pre-commit hooks:
+the first rewrites byte-exact captured device logs, while the latter two
+rewrite independently reviewed, hash-bound source. All other applicable
+hooks passed. This documentation update is recorded in the follow-up commit.
