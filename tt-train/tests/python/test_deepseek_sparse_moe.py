@@ -248,6 +248,41 @@ class TestSparseVsDenseMoE:
         except AssertionError as exc:
             raise AssertionError(f"input gradient (x.grad): {exc}") from exc
 
+    def test_shared_expert_single_device(self):
+        """n_shared_experts > 0 at EP size 1 must not ask for a mesh axis.
+
+        Regression: SparseMoEEP defaults its axis name to "tp" when none is
+        resolved, and MoE.__init__ used to hand that name to the shared MLP
+        whenever moe_type == "sparse_ep" — without checking the mesh actually
+        has the axis. On one device that raised
+        ``RuntimeError: Mesh has no axis named 'tp'``. Every other test in this
+        file uses n_shared_experts=0, so the branch was never built.
+        """
+        B, S, dim, moe_inter_dim, E, K = (2, 32, 64, 64, 4, 2)
+        cfg = _Cfg(
+            dim=dim,
+            moe_inter_dim=moe_inter_dim,
+            n_routed_experts=E,
+            n_activated_experts=K,
+            n_shared_experts=1,
+        )
+        dense = MoE(cfg)
+        sparse = SparseMoEEP(cfg)
+        assert sparse.shared_experts is not None
+        _copy_moe_weights(dense, sparse)
+
+        x_dense = _make_input(B=B, S=S, dim=cfg.dim, seed=SEED)
+        x_sparse = _make_input(B=B, S=S, dim=cfg.dim, seed=SEED)
+
+        ttnn.synchronize_device(_device())
+        out_dense = dense(x_dense)
+        out_sparse = sparse(x_sparse)
+        ttnn.synchronize_device(_device())
+
+        out_d = ttnn.to_torch(out_dense.get_value()).float()
+        out_s = ttnn.to_torch(out_sparse.get_value()).float()
+        assert_with_pcc(out_d, out_s, pcc=0.99)
+
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

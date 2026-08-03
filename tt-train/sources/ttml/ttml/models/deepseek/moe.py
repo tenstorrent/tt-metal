@@ -202,7 +202,11 @@ class MoE(AbstractModuleBase):
         # Shared expert(s). If MoE is running EP-sharded, shard the shared MLP
         # across the same axis so it stops being a fully-replicated FFN
         # duplicating weights, optimizer state, and compute on every chip.
-        shared_axis = moe_axis_name if ep_sharded else None
+        # Guard on has_axis, not ep_sharded: ep_sharded stays True in the
+        # EP-size-1 case (no mesh, or no such axis), where the routed experts
+        # fall back to D == 1 above. Sharding the shared MLP there would ask
+        # ColumnParallelLinear for a mesh axis that does not exist.
+        shared_axis = moe_axis_name if has_axis else None
         if config.n_shared_experts > 0:
             self.shared_experts = DeepSeekMLP(
                 config.dim,
