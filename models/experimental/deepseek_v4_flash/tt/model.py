@@ -60,7 +60,7 @@ def _env_pipeline_group_size() -> int:
     """``DEEPSEEK_V4_PIPELINE_GROUP_SIZE``: devices per pipeline group (see
     :func:`plan_layer_placement`). Unset (or <= 0) means "one group spanning every
     device", i.e. plain round-robin over the whole mesh."""
-    raw = os.environ.get("DEEPSEEK_V4_PIPELINE_GROUP_SIZE", "2")
+    raw = os.environ.get("DEEPSEEK_V4_PIPELINE_GROUP_SIZE", "1")
     try:
         pgs = int(raw)
     except ValueError:

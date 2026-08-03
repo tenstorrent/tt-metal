@@ -22,7 +22,13 @@ namespace ttnn::experimental::deepseek::mix_streams {
 //     mixed      = matmul(comb^T, streams)                                [1, T, hc, D]
 //     new_streams = placement + mixed   reshaped back to [B, S, hc, D]
 //
-// where ``T == B*S``. When ``streams`` is WIDTH_SHARDED along D the matmul uses
+// where ``T == B*S``. This runs as a single device op (``ttnn::prim::mix_streams``):
+// one kernel computes both terms as two single-tile matmuls accumulated into the same
+// destination register, so the whole step costs one dispatch instead of four.
+//
+// The composite fallback below is kept for the shapes the kernel does not cover
+// (hc > 32, D not tile-aligned, non-bfloat16 inputs). In that path, when ``streams``
+// is WIDTH_SHARDED along D the matmul uses
 // ``MatmulMultiCoreReuseMultiCast1DProgramConfig(gather_in0=True)`` so the
 // width-sharded residual stays in L1 (``comb`` is transposed and resharded to
 // the same grid; gather_in0 does not support ``transpose_a``). The interleaved
