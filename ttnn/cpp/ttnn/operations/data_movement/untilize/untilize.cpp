@@ -103,8 +103,10 @@ ttnn::Tensor untilize(
     using ttnn::operations::data_movement::untilize_codegen::is_demoted;
     using ttnn::operations::data_movement::untilize_codegen::parse_implementation;
     using ttnn::operations::data_movement::untilize_codegen::supported_by_codegen;
+    using ttnn::operations::data_movement::untilize_codegen::supported_execution_controls;
 
     const auto selector = parse_implementation(implementation);
+    const bool controls_ok = supported_execution_controls(use_multicore, sub_core_grids);
 
     // Route on the same normalized (squeeze_from_ND_to_4D'd) attributes untilize_native applies
     // via build_ndiml_untilize -- otherwise a logical-rank>4 input reaches supported_by_codegen /
@@ -115,6 +117,11 @@ ttnn::Tensor untilize(
 
         if (selector == ImplementationSelector::Codegen) {
             TT_FATAL(
+                controls_ok,
+                "ttnn.untilize(implementation='codegen') cannot honour use_multicore=false or "
+                "sub_core_grids -- every codegen factory places work over the full "
+                "compute-with-storage grid. Use implementation='native' (or 'auto') for these.");
+            TT_FATAL(
                 supported_by_codegen(normalized_input, output_mem_config),
                 "ttnn.untilize(implementation='codegen') invoked for a case not supported by the codegen "
                 "implementation (requires TILE-layout, interleaved (non-sharded) input and output, dtype "
@@ -122,7 +129,8 @@ ttnn::Tensor untilize(
                 "width within the L1 chunking threshold)");
             return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);
         }
-        if (selector == ImplementationSelector::Auto && supported_by_codegen(normalized_input, output_mem_config) &&
+        if (selector == ImplementationSelector::Auto && controls_ok &&
+            supported_by_codegen(normalized_input, output_mem_config) &&
             !is_demoted(normalized_input, output_mem_config)) {
             return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);
         }

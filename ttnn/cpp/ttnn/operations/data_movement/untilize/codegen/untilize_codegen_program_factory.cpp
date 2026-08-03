@@ -17,6 +17,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "untilize_codegen_device_operation.hpp"
+#include "untilize_codegen_supported.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -29,8 +30,8 @@ namespace {
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/untilize/codegen/kernels";
 constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbOut = tt::CBIndex::c_16;
-constexpr uint32_t kSeqIdentity = 0;       // mirrors common/templates/sequencers.h SEQ_IDENTITY
-constexpr uint64_t kUsableL1 = 1'400'000;  // mirrors codegen builder_utils.USABLE_L1
+constexpr uint32_t kSeqIdentity = 0;  // mirrors common/templates/sequencers.h SEQ_IDENTITY
+using ttnn::operations::data_movement::untilize_codegen::kUsableL1;
 
 using RtArg = std::variant<uint32_t, Buffer*>;
 using RtArgs = std::vector<RtArg>;

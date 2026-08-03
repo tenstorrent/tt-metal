@@ -50,6 +50,7 @@ file(
     transpose/device/kernels/*.cpp
     untilize/device/kernels/*.cpp
     untilize/codegen/kernels/*.cpp
+    untilize/codegen/kernels/*.h
     untilize_with_unpadding/device/kernels/*.cpp
 )
 target_sources(

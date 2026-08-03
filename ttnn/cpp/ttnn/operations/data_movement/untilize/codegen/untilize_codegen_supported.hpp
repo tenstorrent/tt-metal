@@ -4,12 +4,19 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
+
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 
 namespace ttnn::operations::data_movement::untilize_codegen {
+
+// Mirrors codegen builder_utils.USABLE_L1: the CB budget every codegen builder plans against.
+// Shared with the program factory so the gate and the factory cannot disagree about what fits.
+constexpr uint64_t kUsableL1 = 1'400'000;
 
 enum class ImplementationSelector { Auto, Native, Codegen };
 
@@ -21,6 +28,13 @@ ImplementationSelector parse_implementation(const std::string& implementation);
 // result for this (input, output_mem_config) case. Consulted by the free function's forced
 // "codegen" branch and by prim::untilize_codegen's validate -- never gated on performance.
 bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
+
+// Every codegen builder places work over the full compute-with-storage grid and has no
+// single-core variant, so it can honour neither of the native op's core-placement controls.
+// False means the case must go to native (under "auto") or be rejected outright (under a forced
+// "codegen"). Separate from supported_by_codegen() because these are free-function attributes:
+// the codegen prim carries no such fields, so its validate has nothing to check.
+bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids);
 
 // Perf-only: true for the enumerated set of in-scope cases where codegen is correct but does
 // not beat native on device. Consulted ONLY by the free function's "auto" branch, alongside
