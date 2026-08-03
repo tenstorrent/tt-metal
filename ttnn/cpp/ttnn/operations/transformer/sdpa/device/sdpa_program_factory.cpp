@@ -936,6 +936,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         uint32_t chains_skipped = 0;
         // Track injector physical X columns for DRAM channel spreading
         std::vector<uint32_t> injector_phys_x;
+        injector_phys_x.reserve(head_segments.size());
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             auto& segments = head_segments[head_id];
@@ -981,6 +982,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
             // Break on conflict (core already in a different chain).
             std::vector<std::size_t> chain_order;
+            chain_order.reserve(segments.size());
             for (std::size_t step = 0; step < segments.size(); ++step) {
                 std::size_t idx = (start + step) % segments.size();
                 const auto& seg = segments[idx];
@@ -1135,6 +1137,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             uint32_t ref_q_chunks;
         };
         std::vector<McastCandidate> candidates;
+        candidates.reserve(head_segments.size());
         bool all_eligible = true;
         uint32_t total_multi_core_chains = 0;
 
@@ -1146,6 +1149,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
             // Collect chain core indices that actually participate in this head's chain
             std::vector<uint32_t> chain_core_indices;
+            chain_core_indices.reserve(segments.size());
             for (const auto& seg : segments) {
                 if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
                     core_chain_info[seg.core_idx].batch == (head_id / NQH) &&

@@ -437,6 +437,7 @@ void MeshGraph::initialize_from_mgd(
             host_shape[1]);
 
         std::vector<MeshHostRankId> mesh_host_ranks_values;
+        mesh_host_ranks_values.reserve(host_shape.mesh_size());
         uint32_t next_rank = 0;
         for (const auto& host_coord : MeshCoordinateRange(host_shape)) {
             mesh_host_ranks_values.push_back(MeshHostRankId{next_rank++});

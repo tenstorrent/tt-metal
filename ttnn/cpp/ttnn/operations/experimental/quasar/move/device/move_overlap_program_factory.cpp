@@ -35,6 +35,8 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
     TT_ASSERT(logical_controller == logical_zero);
 
     std::vector<CoreRange> logical_core_ranges;
+    // splitting the controller-containing range adds one range to the input set
+    logical_core_ranges.reserve(all_cores.ranges().size() + 1);
     auto split_core_range_containing_controller = [&](const CoreRange& controller_core_range) {
         TT_ASSERT(controller_core_range.start_coord == logical_controller);
         CoreRange right_block(

@@ -173,6 +173,7 @@ void DispatchKernelInitializer::init_device_command_queues() {
     }
 
     std::vector<std::shared_future<void>> events;
+    events.reserve(devices_.size());
     for (auto* dev : devices_) {
         if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
             continue;

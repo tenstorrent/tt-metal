@@ -217,17 +217,18 @@ public:
             auto distributed_buffer = make_distributed_host_buffer();
             auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
             std::vector<MeshCoordinate> buffer_coords;
+            buffer_coords.reserve(distribution_shape_.mesh_size());
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
                 const auto mapped_coord = remap_fn(coord);
                 buffer_coords.push_back(mapped_coord);
                 distributed_buffer.emplace_shard(mapped_coord, [&b = replicated_buffer]() { return b; });
             }
 
-            const auto tensor_topology =
-                tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
+            auto tensor_topology =
+                tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, std::move(buffer_coords));
 
-            return Tensor(
-                tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), tensor_spec, tensor_topology));
+            return Tensor(tt::tt_metal::HostTensor::from_buffer(
+                std::move(distributed_buffer), tensor_spec, std::move(tensor_topology)));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -348,6 +349,7 @@ private:
         std::unordered_map<XTensorViewKey, tt::tt_metal::HostBuffer> converted_buffers;
 
         std::vector<MeshCoordinate> buffer_coords;
+        buffer_coords.reserve(sharded_xtensor_views.size());
         size_t num_views_with_value = 0;
         for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
             if (!xtensor_view.has_value()) {
@@ -396,11 +398,11 @@ private:
         const auto actual_distribution_shape =
             (distribution_shape_.dims() == 1) ? MeshShape(num_views_with_value) : distribution_shape_;
 
-        const auto tensor_topology =
-            tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
+        auto tensor_topology =
+            tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, std::move(buffer_coords));
 
-        return Tensor(
-            tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), shard_spec, tensor_topology));
+        return Tensor(tt::tt_metal::HostTensor::from_buffer(
+            std::move(distributed_buffer), shard_spec, std::move(tensor_topology)));
     }
 
     // Mesh parameters. `mesh_device_view_` is empty when constructed from a `MeshShape` only.

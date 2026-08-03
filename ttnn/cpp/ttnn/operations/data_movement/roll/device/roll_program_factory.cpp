@@ -438,6 +438,7 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
     auto build_runtime_args_dram_rm = [&](uint32_t dst_core_idx, const std::vector<RollTransferDesc>& descs) {
         // Collect unique source shards (at most 2) and assign them to staging slots 0/1.
         std::vector<uint32_t> src_shards;
+        src_shards.reserve(2);
         std::unordered_map<uint32_t, uint32_t> src_to_slot;
         for (const auto& td : descs) {
             if (!src_to_slot.contains(td.src_dram_shard_idx)) {

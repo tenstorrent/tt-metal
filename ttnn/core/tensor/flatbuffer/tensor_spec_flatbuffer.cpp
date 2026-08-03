@@ -10,16 +10,18 @@ namespace ttnn {
 
 CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(core_range_set->ranges()->size());
     for (const auto* range : *core_range_set->ranges()) {
         ranges.emplace_back(
             tt::tt_metal::CoreCoord{range->start()->x(), range->start()->y()}, tt::tt_metal::CoreCoord{range->end()->x(), range->end()->y()});
     }
-    return CoreRangeSet{ranges};
+    return CoreRangeSet{std::move(ranges)};
 }
 
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& core_range_set) {
     std::vector<flatbuffers::Offset<flatbuffer::CoreRange>> range_offsets;
+    range_offsets.reserve(core_range_set.ranges().size());
     for (const auto& range : core_range_set.ranges()) {
         auto start = flatbuffer::CreateCoreCoord(builder, range.start_coord.x, range.start_coord.y);
         auto end = flatbuffer::CreateCoreCoord(builder, range.end_coord.x, range.end_coord.y);
