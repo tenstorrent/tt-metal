@@ -226,65 +226,13 @@ jobs:
             ' || true
 
           run_cluster_validation() {
-            local attempt="$1"
-            local output_path="/tmp/cluster_validation_logs/run_${GITHUB_RUN_ID}_attempt_${attempt}"
-            mkdir -p "$output_path"
             mpirun --pernode --tag-output \
               /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
               --send-traffic \
               --hard-fail \
               --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
               --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-              --num-iterations 5 \
-              --output-path "$output_path"
-          }
-
-          wait_for_devices_ready() {
-            mpirun --pernode --tag-output bash -lc '
-              for i in 1 2 3 4 5 6; do
-                snapshot=$(tt-smi --snapshot_no_tty --snapshot 2>/dev/null) || snapshot="{}"
-                count=$(printf "%s" "$snapshot" | jq -r "(.device_info // []) | length" 2>/dev/null | head -n1)
-                count=${count:-0}
-                if [ "$count" -ge 32 ] 2>/dev/null; then
-                  echo "$(hostname): devices ready (${count} chips) on attempt ${i}"
-                  exit 0
-                fi
-                echo "$(hostname): devices not ready on attempt ${i}/6 (tt_devices=${count})"
-                sleep 10
-              done
-              exit 1
-            '
-          }
-
-          # Per exabox health_check RESET_PLAN medium (SYS-4365): -r then -glx_reset.
-          # -r alone can leave UMD reading 0xffffffff until -glx_reset runs.
-          reset_galaxy_cards() {
-            local r_ok=false glx_ok=false
-
-            echo "--- Step 1/2: tt-smi -r (PCIe reset) ---"
-            if mpirun --pernode --tag-output tt-smi -r; then
-              r_ok=true
-            else
-              echo "WARNING: tt-smi -r failed"
-            fi
-
-            echo "--- Sleeping 15s between PCIe and Galaxy reset ---"
-            sleep 15
-
-            echo "--- Step 2/2: tt-smi -glx_reset (Galaxy tray reset) ---"
-            if mpirun --pernode --tag-output tt-smi -glx_reset; then
-              glx_ok=true
-            else
-              echo "WARNING: tt-smi -glx_reset failed"
-            fi
-
-            if [ "$glx_ok" = true ]; then
-              return 0
-            fi
-            if [ "$r_ok" = true ]; then
-              echo "WARNING: -glx_reset failed after -r; chips may read 0xffffffff"
-            fi
-            return 1
+              --num-iterations 5
           }
 
           for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
@@ -292,33 +240,25 @@ jobs:
             reset_success=false
             validation_success=false
 
-            echo "--- Resetting cards (tt-smi -r, then tt-smi -glx_reset) ---"
-            if reset_galaxy_cards; then
+            echo "--- Resetting cards with tt-smi ---"
+            if mpirun --pernode tt-smi -glx_reset; then
               reset_success=true
             else
-              echo "WARNING: Galaxy reset sequence failed on attempt $attempt"
+              echo "WARNING: Reset failed on attempt $attempt"
             fi
 
             if [ "$reset_success" = true ]; then
-              echo "--- Sleeping 60s after reset for ARC/firmware to settle ---"
-              sleep 60
+              echo "--- Sleeping 5s after reset to allow links/services to settle ---"
+              sleep 5
 
-              echo "--- Waiting for devices to be ready before cluster validation ---"
-              if ! wait_for_devices_ready; then
-                echo "WARNING: Devices not ready on attempt $attempt"
-                reset_success=false
-              fi
-            fi
-
-            if [ "$reset_success" = true ]; then
               echo "--- Running cluster validation ---"
-              if run_cluster_validation "$attempt"; then
+              if run_cluster_validation; then
                 validation_success=true
               else
                 echo "WARNING: Validation failed on attempt $attempt"
               fi
             else
-              echo "WARNING: Skipping validation because reset/device readiness failed on attempt $attempt"
+              echo "WARNING: Skipping validation because reset failed on attempt $attempt"
             fi
 
             if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
@@ -327,8 +267,8 @@ jobs:
             fi
 
             if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
-              echo "Sleeping 60s before retry..."
-              sleep 60
+              echo "Sleeping 30s before retry..."
+              sleep 30
             fi
           done
 
