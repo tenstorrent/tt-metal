@@ -1759,6 +1759,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         use_trace=use_trace,
     )
 
+
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
