@@ -51,11 +51,10 @@ _CONV_FIDELITY_BF16 = ttnn.MathFidelity.HiFi2
 _CONV_FIDELITY_FP32 = ttnn.MathFidelity.HiFi4
 
 # Full double-buffering (activations + weights) for the INTERLEAVED convs — the ones NOT kept in an
-# L1-resident resblock chain (stage-0 resblocks, conv_pre/post, ups, conds). A per-stage config sweep
-# measured -27% device time on stage 0 from this alone, bit-exact (PCC 1.0). The interleaved path has
-# L1 room for the extra circular buffers; the sharded chains do NOT (they're deliberately L1-tight, so
-# _shard_plan drops the double buffer there — enabling it would clash), so this is scoped to non-sharded
-# convs only. Bit-exact: double-buffering changes how the conv streams data, not the math.
+# L1-resident resblock chain (stage-0 resblocks, conv_pre/post, ups). A per-stage config sweep
+# measured -27% device time on stage 0 from this alone, bit-exact (PCC 1.0). Fits the profiled
+# short decode; on P150, long demo lengths switch to an L1-safe streaming config inside TtConv1d
+# (see needs_vocoder_l1_safe). Sharded-chain blocks keep their own L1-tight tuning (no DB).
 _INTERLEAVED_CONV_DB = {"enable_act_double_buffer": True, "enable_weights_double_buffer": True}
 
 TILE = 32

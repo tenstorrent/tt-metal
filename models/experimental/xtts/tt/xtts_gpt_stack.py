@@ -15,6 +15,7 @@ from models.common.lightweightmodule import LightweightModule
 
 from models.experimental.xtts.reference.xtts_gpt_block import LAYER_NORM_EPS, NUM_LAYERS
 from models.experimental.xtts.tt.xtts_gpt_block import NEG_INF, TtXttsGptBlock, _to_device, sharded_decode_ln
+from models.experimental.xtts.tt.xtts_device import prefill_act_memory_config
 
 
 class TtXttsGptStack(LightweightModule):
@@ -86,9 +87,8 @@ class TtXttsGptStack(LightweightModule):
         forward and discards the returned K/V — the block has no separate full-forward."""
         for block in self.blocks:
             x, _, _ = block.forward_prefill(x)  # full causal block; drop the prompt K/V
-        y = ttnn.layer_norm(
-            x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        mem = prefill_act_memory_config(self.device, int(x.shape[-2]))
+        y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS, memory_config=mem)
         ttnn.deallocate(x)
         return y
 
@@ -99,8 +99,7 @@ class TtXttsGptStack(LightweightModule):
         for block in self.blocks:
             x, k, v = block.forward_prefill(x)
             kv.append((k, v))
-        y = ttnn.layer_norm(
-            x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        mem = prefill_act_memory_config(self.device, int(x.shape[-2]))
+        y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS, memory_config=mem)
         ttnn.deallocate(x)
         return y, kv

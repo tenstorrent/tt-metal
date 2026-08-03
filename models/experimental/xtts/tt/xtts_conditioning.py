@@ -356,6 +356,32 @@ def _perm_qkv_out(t):
     return t[idx]
 
 
+def _clamp_gx(preferred_gx, grid_x, nt):
+    """Fit preferred 2D grid width onto the device (P150 is 11x10; larger BH may use gx=12/13)."""
+    max_gx = max(1, min(int(preferred_gx), int(grid_x)))
+    for gx in range(max_gx, 0, -1):
+        if nt % gx == 0:
+            return gx
+    return max_gx
+
+
+def _1d_grid_covering(n_tiles, grid):
+    """Smallest (gx, gy) with gx<=grid.x, gy<=grid.y and gx*gy >= n_tiles."""
+    max_x, max_y = int(grid.x), int(grid.y)
+    best = None
+    for gy in range(1, max_y + 1):
+        for gx in range(1, max_x + 1):
+            cores = gx * gy
+            if cores < n_tiles:
+                continue
+            key = (cores, abs(gx - gy), gx * gy)
+            if best is None or key < best[0]:
+                best = (key, gx, gy)
+    if best is None:
+        return max_x, max_y
+    return best[1], best[2]
+
+
 def _mm_2d(grid, mt, kt, nt, gx=8, ibw=None, fp32_acc=False):
     """2D (block) multicast matmul program config for an ``[Mt, Kt] x [Kt, Nt]`` tile shape.
 
@@ -377,7 +403,10 @@ def _mm_2d(grid, mt, kt, nt, gx=8, ibw=None, fp32_acc=False):
     belong in DRAM, so it is not used.
 
     ``gy`` is chosen per call from the actual mel length: the conditioning module is built once but
-    sees several sequence lengths, and per_core_M must cover Mt."""
+    sees several sequence lengths, and per_core_M must cover Mt.
+
+    ``gx`` is clamped to ``grid.x`` (prefer a divisor of ``nt``) so pins work on P150 (11x10)."""
+    gx = _clamp_gx(gx, grid.x, nt)
     gy = max(1, min(mt, grid.y))
     per_core_m, per_core_n = -(-mt // gy), -(-nt // gx)
     # out_subblock_h * out_subblock_w must fit the DEST register budget, each dividing its per_core
@@ -451,10 +480,12 @@ class TtXttsConditioning(LightweightModule):
         # ``matmul.cpp`` applies the activation as a SEPARATE ``unary_chain`` op whenever no
         # ``core_grid``/program config pins the grid, which showed up as a 3.57 us ``UnaryDeviceOperation``
         # on [1, 32, 2752], twice a pass. Put GELU in the program config's ``fused_activation`` instead
-        # and the standalone op disappears. Nt=86 with Mt=1, so this mirrors what ttnn's auto choice
-        # already reached (86 cores, per_core_N=1) — the grid is 13x7=91 to cover 86.
+        # and the standalone op disappears. Nt=86 with Mt=1 — was hard-coded 13x7=91 (large BH only);
+        # on P150 (11x10) that TT_FATALs, so pick the smallest device-fitting grid covering Nt.
+        _ff_nt = 2752 // 32  # 86 output tiles
+        _ff_gx, _ff_gy = _1d_grid_covering(_ff_nt, self.device.compute_with_storage_grid_size())
         self._ff_gate_mm = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(13, 7),
+            compute_with_storage_grid_size=ttnn.CoreCoord(_ff_gx, _ff_gy),
             in0_block_w=FF_GATE_IBW,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -467,7 +498,7 @@ class TtXttsConditioning(LightweightModule):
         # The GEGLU VALUE matmul is the same [1024, 2752] shape with no activation, and pinning the gate
         # turned out to be worth ~3 us/call beyond just removing the GELU op, so it gets the same config.
         self._ff_val_mm = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(13, 7),
+            compute_with_storage_grid_size=ttnn.CoreCoord(_ff_gx, _ff_gy),
             in0_block_w=FF_GATE_IBW,
             out_subblock_h=1,
             out_subblock_w=1,

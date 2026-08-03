@@ -34,6 +34,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.xtts.tt.xtts_device import needs_vocoder_l1_safe
 
 # The vocoder's conditioning-bias fold (TtConv1d.forward) prepares the combined bias on HOST via
 # ttnn.from_device — a device->host READ that is fatal inside a ttnn trace capture. It is the faster
@@ -87,6 +88,17 @@ def _interleaved(x: ttnn.Tensor, shape, *, row_major: bool) -> ttnn.Tensor:
 # convs' circular buffers. The profiled decode lengths (latent_len<=32) sit at 32-48KB/core and
 # stay sharded; longer sequences (the demo) exceed this and fall back to the interleaved path.
 _SHARD_L1_BUDGET_BYTES = 48 * 1024
+
+
+def _is_l1_circular_buffer_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return (
+        "circular buffer" in msg
+        or "beyond max l1" in msg
+        or "clash" in msg
+        or "l1_small" in msg
+        or ("not enough space" in msg and "l1" in msg)
+    )
 
 
 def _shard_height(device, nhw: int) -> int:
@@ -230,10 +242,14 @@ class TtConv1d(LightweightModule):
         # ``activation`` (e.g. leaky_relu) is fused onto the conv output (post-bias),
         # so ``conv(x, activation=leaky_relu) == leaky_relu(conv(x))`` — used to fold
         # HiFi-GAN's between-conv activations into the producing conv.
+        # ``config_tensors_in_dram``: same as TtConv2d — halo/reader index tensors default to
+        # L1_SMALL and are cached per program; the HiFi-GAN resblock chain OOMs the 64 KB
+        # L1_SMALL region on long P150 utterances (need ~1.5 KB/bank with <1 KB free).
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=weights_dtype,
             deallocate_activation=False,
             activation=activation,
+            config_tensors_in_dram=True,
             **({"enable_act_double_buffer": act_double_buffer} if act_double_buffer is not None else {}),
         )
         # Optional per-conv scheduling overrides (perf-only Conv1dConfig fields: act_block_h_override,
@@ -248,6 +264,20 @@ class TtConv1d(LightweightModule):
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=packer_l1_acc,
         )
+        self._l1_safe = False  # flipped for long interleaved shapes / CB OOM retry
+
+    def _enable_l1_safe_config(self) -> None:
+        """Streaming config that fits P150 L1 on long interleaved activations (bit-exact)."""
+        cfg = self.conv_config
+        if hasattr(cfg, "enable_act_double_buffer"):
+            cfg.enable_act_double_buffer = False
+        if hasattr(cfg, "enable_weights_double_buffer"):
+            cfg.enable_weights_double_buffer = False
+        if hasattr(cfg, "act_block_h_override"):
+            cfg.act_block_h_override = 32
+        if hasattr(cfg, "config_tensors_in_dram"):
+            cfg.config_tensors_in_dram = True
+        self._l1_safe = True
 
     def forward(self, x: ttnn.Tensor, cond_bias: ttnn.Tensor | None = None, keep_sharded: bool = False) -> ttnn.Tensor:
         batch_size, input_length, _ = x.shape
@@ -266,26 +296,42 @@ class TtConv1d(LightweightModule):
             combined = ttnn.to_layout(ttnn.add(self._raw_bias_fp32, cond_bias), ttnn.ROW_MAJOR_LAYOUT)
             bias_tensor = ttnn.from_device(combined)
             ttnn.deallocate(combined)
-        out, out_length, [weight, bias] = ttnn.conv1d(
-            input_tensor=x,
-            weight_tensor=self.tt_weight,
-            bias_tensor=bias_tensor,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            device=self.device,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            dilation=self.dilation,
-            groups=self.groups,
-            batch_size=batch_size,
-            input_length=input_length,
-            dtype=self.activations_dtype,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
+
+        # P150 only: long interleaved HiFi-GAN activations overflow ~1.5 MB L1 under the short-
+        # decode DB / auto act_block_h config. Larger BH grids keep DB. CB-OOM retry is universal.
+        if not keep_sharded and (self._l1_safe or needs_vocoder_l1_safe(self.device, input_length)):
+            self._enable_l1_safe_config()
+
+        def _conv1d():
+            return ttnn.conv1d(
+                input_tensor=x,
+                weight_tensor=self.tt_weight,
+                bias_tensor=bias_tensor,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                device=self.device,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                dilation=self.dilation,
+                groups=self.groups,
+                batch_size=batch_size,
+                input_length=input_length,
+                dtype=self.activations_dtype,
+                conv_config=self.conv_config,
+                compute_config=self.compute_config,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
+
+        try:
+            out, out_length, [weight, bias] = _conv1d()
+        except Exception as e:
+            if keep_sharded or self._l1_safe or not _is_l1_circular_buffer_error(e):
+                raise
+            self._enable_l1_safe_config()
+            out, out_length, [weight, bias] = _conv1d()
+
         self.tt_weight = weight
         if not fold:  # bias is the (prepared) base bias — cache it; when folding it is the combined bias
             self.tt_bias = bias

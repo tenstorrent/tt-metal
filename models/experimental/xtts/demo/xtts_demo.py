@@ -138,7 +138,10 @@ def _take_on_device(sd, ref_decoder_full, wrapped, cond_wav, spk_wav, args, seed
     HiFi-GAN vocoder exhausts L1_SMALL when several full generations share one device, so
     best-of-N isolates each take on its own device (same reason the tests use a per-test
     device fixture). Returns ``(wav_np, codes, dt)``."""
-    device = ttnn.open_device(device_id=0, l1_small_size=65536)
+    from models.experimental.xtts.tt.xtts_device import recommended_l1_small_size
+
+    # P150 long vocodes need a larger L1_SMALL reservation (halo/config + other small allocs).
+    device = ttnn.open_device(device_id=0, l1_small_size=recommended_l1_small_size())
     try:
         tt = TtXtts(device, sd, ref_decoder_full)
         spk_wav_tt = ttnn.from_torch(
@@ -155,38 +158,75 @@ def _take_on_device(sd, ref_decoder_full, wrapped, cond_wav, spk_wav, args, seed
 
 def main():
     ap = argparse.ArgumentParser(description="XTTS-v2 on-device text-to-speech demo")
+    # Default: short 3-sentence prompt sized for P150. Pass --long for the 20-sentence stress text.
+    _TEXT_SHORT = (
+        "Voice synthesis has come a long way, and modern systems can already generate "
+        "natural sounding speech with remarkable accuracy. "
+        "Hey, how are you doing today? "
+        "Thank you for listening to Tenstorrent text to speech on device."
+    )
+    _TEXT_LONG = (
+        "Voice synthesis has come a long way, and modern systems can already generate "
+        "natural sounding speech with remarkable accuracy. "
+        "Hey, how are you doing today? "
+        "I hope you are having a great day, and that this little demo sounds clear and friendly. "
+        "Thank you for listening to Tenstorrent text to speech on device. "
+        "This demo runs the full XTTS pipeline on a Blackhole accelerator. "
+        "First the model reads the reference voice and builds a speaker embedding. "
+        "Then it conditions on your text and produces a stream of audio codes. "
+        "Those codes are decoded by a neural vocoder into a waveform you can play. "
+        "Longer prompts help us see how latency and memory scale with length. "
+        "Please listen carefully for clarity, pacing, and any odd artifacts. "
+        "We want the speech to stay intelligible even across many sentences. "
+        "Prosody should rise and fall in a way that feels conversational. "
+        "Short pauses between ideas can make the delivery easier to follow. "
+        "If something cuts off early, that usually means the stop token fired too soon. "
+        "If the tail invents extra words, the minimum token floor may be too aggressive. "
+        "Tuning temperature and nucleus sampling changes how bold the phrasing feels. "
+        "A calm speaking rate is often better for demos than a rushed one. "
+        "Hardware constraints like L1 size matter more as the utterance grows. "
+        "Still, the goal is simple: clear speech from text on real silicon. "
+        "This closing line marks the end of our twenty sentence stress test."
+    )
     ap.add_argument(
         "--text",
-        # "can already" (not "can now"): "can now" is a /n/#/n/ nasal collision the vocoder
-        # merges into "cannow/cannot" — "already" starts with a vowel and transcribes cleanly (CER 0.008).
-        default="Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey how are you doing?",
+        default=None,
+        help="Prompt to speak. Default is a short 3-sentence P150-friendly text; "
+        "omit this and pass --long for the 20-sentence stress prompt.",
+    )
+    ap.add_argument(
+        "--long",
+        action="store_true",
+        help="Use the 20-sentence stress prompt (and a larger max_tokens). Ignored if --text is set.",
     )
     ap.add_argument(
         "--ref-audio",
-        default="reference.wav",
-        help="local WAV path or HF sample name (e.g. en_sample.wav) that sets the voice.",
+        default="en_sample.wav",
+        help="local WAV path or HF sample under coqui/XTTS-v2/samples/ (e.g. en_sample.wav).",
     )
     ap.add_argument(
         "--min-tokens",
         type=int,
-        default=0,
-        help="STOP-suppression floor in audio codes. 0 (default) = disabled, matches HF. "
-        "-1 = auto (~2x the wrapped text length). Raise it if a LONG prompt is only partly "
-        "spoken; leave it at 0 for short prompts, where a floor makes the model ramble.",
+        default=-1,
+        help="STOP-suppression floor in audio codes. 0 = disabled. "
+        "-1 (default) = auto: 1.5x wrapped length (short), 2.0x with --long. "
+        "Too high invents a trailing word; too low can cut off early.",
     )
     args = ap.parse_args()
 
-    # Only --text / --ref-audio / --min-tokens are exposed; everything else is fixed to the tuned
-    # XTTS-v2 defaults so the demo runs full-model-traced with no other knobs.
+    if args.text is None:
+        args.text = _TEXT_LONG if args.long else _TEXT_SHORT
+
+    # Only --text / --ref-audio / --min-tokens / --long are exposed; everything else is fixed to the
+    # tuned XTTS-v2 defaults so the demo runs full-model-traced with no other knobs.
     args.lang = "en"
     args.ref_seconds = 30  # conditioning window (coqui gpt_cond_len)
     args.spk_seconds = 8  # speaker-embedding window (device mel frontend caps long audio)
-    args.max_tokens = 400  # cap on audio codes (sampling usually stops earlier)
-    # args.min_tokens comes from --min-tokens. It stays 0 by default because a floor is only right
-    # for *long* prompts. Greedy, on this reference text (96 wrapped tokens, needs ~196 codes):
-    # 0 stops at 152 codes and transcribes at CER 0.151, cut after "remarkable accuracy"; -1
-    # (floor 192) reaches 181 codes at CER 0.000. On a short prompt it inverts -- "Hello from
-    # Tenstorrent." goes CER 0.273 -> 0.591, the floor forcing 12 extra codes of invented tail.
+    # Short P150 default (~3 sentences) needs ~200 codes; --long / custom long text needs more.
+    args.max_tokens = 2500 if args.long else 600
+    # args.min_tokens comes from --min-tokens. Auto (-1) scales with wrapped length.
+    # Greedy, on the short reference text (needs ~196 codes): 0 stops early (CER 0.151); -1
+    # reaches full utterance (CER 0.000). On a very short prompt a floor can invent a tail.
     args.num_outputs = 1  # single take (coqui num_gpt_outputs=1)
     args.temperature = 0.65  # sampling temperature (0 = greedy); 0.65 = cleanest single take
     args.top_k = 50
@@ -218,11 +258,13 @@ def main():
         wrapped = F.pad(wrapped, (0, pad), value=STOP_TEXT_TOKEN)
     logger.info(f"text: {clean_text!r} -> {wrapped.shape[1]} tokens (wrapped/padded)")
 
-    # Resolve the STOP-suppression floor. Auto (-1) scales with the text (~2x the wrapped length),
-    # clamped below max-tokens, so a longer prompt is protected from stopping short while a short one
-    # isn't forced to ramble. 0 disables (HF default).
+    # Resolve the STOP-suppression floor. Auto (-1) scales with the text so a long prompt is
+    # protected from stopping mid-sentence. Too high a floor forces extra codes after the natural
+    # end — heard as a stray trailing word (often "and"). Short P150 default uses 1.5x; --long
+    # keeps 2.0x. 0 disables (HF default).
     if args.min_tokens < 0:
-        args.min_tokens_resolved = min(int(2.0 * wrapped.shape[1]), args.max_tokens - 1)
+        mult = 2.0 if args.long else 1.5
+        args.min_tokens_resolved = min(int(mult * wrapped.shape[1]), args.max_tokens - 1)
     else:
         args.min_tokens_resolved = min(args.min_tokens, args.max_tokens - 1)
     logger.info(f"min audio codes before STOP allowed: {args.min_tokens_resolved} (0 = disabled)")

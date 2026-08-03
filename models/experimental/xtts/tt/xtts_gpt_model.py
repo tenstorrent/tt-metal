@@ -33,6 +33,7 @@ from models.experimental.xtts.reference.xtts_gpt_block import (
     NUM_LAYERS,
 )
 from models.experimental.xtts.tt.xtts_gpt_block import _mm_1d_config, _to_device, _to_device_w8, sharded_decode_ln
+from models.experimental.xtts.tt.xtts_device import prefill_act_memory_config
 from models.experimental.xtts.tt.xtts_gpt_stack import TtXttsGptStack
 
 ###############################debugging###############################
@@ -349,19 +350,19 @@ class TtXttsGptModel(LightweightModule):
         print(
             f"[TtXttsGptModel._embed_dev] ids_tt={list(ids_tt.shape)} tok_weight={list(tok_weight.shape)} pos_weight={list(pos_weight.shape)}"
         )
-        seq = ids_tt.shape[1]
-        pos_tt = ttnn.slice(
-            self._text_pos_full, [0, 0], [1, seq], memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # [1, seq] uint32, device slice (L1)
+        seq = int(ids_tt.shape[1])
+        # P150: long text embeddings go to DRAM (see prefill_act_memory_config); larger BH stays L1.
+        mem = prefill_act_memory_config(self.device, seq)
+        pos_tt = ttnn.slice(self._text_pos_full, [0, 0], [1, seq], memory_config=mem)  # [1, seq] uint32, device slice
         # Gather both embeddings in ROW_MAJOR, add there, then a SINGLE tilize to TILE (folds the two
         # per-embedding TilizeWithValPadding ops into one — same trick as decode_on_device).
-        tok = ttnn.embedding(ids_tt, tok_weight, memory_config=ttnn.L1_MEMORY_CONFIG)  # ROW_MAJOR
-        pos = ttnn.embedding(pos_tt, pos_weight, memory_config=ttnn.L1_MEMORY_CONFIG)  # ROW_MAJOR
+        tok = ttnn.embedding(ids_tt, tok_weight, memory_config=mem)  # ROW_MAJOR
+        pos = ttnn.embedding(pos_tt, pos_weight, memory_config=mem)  # ROW_MAJOR
         ttnn.deallocate(pos_tt)
         emb = ttnn.to_layout(
-            ttnn.add(tok, pos, memory_config=ttnn.L1_MEMORY_CONFIG),
+            ttnn.add(tok, pos, memory_config=mem),
             ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=mem,
         )
         ttnn.deallocate(tok)
         ttnn.deallocate(pos)
@@ -376,11 +377,10 @@ class TtXttsGptModel(LightweightModule):
             f"[TtXttsGptModel.prefill_on_device] text_ids_tt={list(text_ids_tt.shape)} cond_latents={list(cond_latents.shape) if cond_latents is not None else None}"
         )
         text_emb = self._embed_dev(text_ids_tt, self.text_emb_weight, self.text_pos_weight)
-        # concat output is L1; cond_latents is read straight from wherever the caller put it (no extra
-        # reshard/Copy op — a DRAM in0 here is fine, it's a one-time read).
-        prefix = ttnn.concat(
-            [cond_latents, text_emb], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # [1, n_cond+text, hidden]
+        # P150 long prompts: DRAM prefix so residuals don't clash LN CBs; larger BH keeps L1.
+        prefix_len = int(cond_latents.shape[1]) + int(text_emb.shape[1])
+        prefix_mem = prefill_act_memory_config(self.device, prefix_len)
+        prefix = ttnn.concat([cond_latents, text_emb], dim=1, memory_config=prefix_mem)  # [1, n_cond+text, hidden]
         ttnn.deallocate(text_emb)
         prompt_ln, kv = self.stack.forward_prefill(prefix)  # per-layer (k, v) [1, heads, prompt_len, head_dim]
         ttnn.deallocate(prompt_ln)

@@ -23,6 +23,7 @@ from models.experimental.xtts.reference.xtts_hifi_decoder import (
     SR_SCALE,
     build_linear_interp_matrix,
 )
+from models.experimental.xtts.tt.xtts_device import resample_matrix_memory_config
 from models.experimental.xtts.tt.xtts_hifigan import TtHifiganGenerator
 
 TILE = 32
@@ -56,15 +57,16 @@ class TtLatentUpsampler(LightweightModule):
             m1 = build_linear_interp_matrix(length_in, LATENT_SCALE)  # [4T, T]
             m2 = build_linear_interp_matrix(m1.shape[0], SR_SCALE)  # [L_out, 4T]
             matrix = m2 @ m1  # [L_out, T]
-            # Keep this small per-length constant resident in L1 (it is matmul in0; the profiler
-            # flagged it as DRAM-interleaved). Cached once per length and reused, so the L1 cost is
-            # paid once and every upsample matmul then reads in0 from L1 instead of DRAM.
+            # Keep short resample matrices in L1 (matmul in0). On P150, large ones go to DRAM so
+            # they do not compete with vocoder conv CBs; larger BH keeps a higher L1 budget.
+            nbytes = int(matrix.numel()) * 4  # fp32
+            mem = resample_matrix_memory_config(self.device, nbytes)
             self._matrix_cache[length_in] = ttnn.from_torch(
                 matrix,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 dtype=ttnn.float32,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=mem,
             )
         return self._matrix_cache[length_in]
 

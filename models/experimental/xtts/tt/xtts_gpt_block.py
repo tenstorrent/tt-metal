@@ -27,6 +27,7 @@ from models.experimental.xtts.reference.xtts_gpt_block import (
     NUM_HEADS,
 )
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.xtts.tt.xtts_device import prefill_act_memory_config
 
 NEG_INF = -1e30  # additive attention-mask fill for masked-out (future) positions
 
@@ -53,6 +54,7 @@ NEG_INF = -1e30  # additive attention-mask fill for masked-out (future) position
 _BFP4_WEIGHTS: set[str] = set()
 L1 = ttnn.L1_MEMORY_CONFIG  # keep activations in L1 (weights stay in DRAM); the profiler flags the
 # decode matmuls' input-0 as DRAM-resident — an L1 activation avoids that per-matmul DRAM read.
+DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
 def _to_device(torch_tensor, device):
@@ -153,6 +155,11 @@ def _mm_1d_config(device, m, k, n, fused_activation=None):
         ncols = math.ceil(nt / pcn)
         cx = min(gx, ncols)
         cy = math.ceil(ncols / cx)
+        if cy > gy:
+            cy = gy
+            cx = min(gx, math.ceil(ncols / cy))
+            pcn = math.ceil(nt / (cx * cy))
+            osw = 2 if pcn % 2 == 0 else 1
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(cx, cy),
             in0_block_w=ibw,
@@ -221,7 +228,7 @@ class TtXttsGptBlock(LightweightModule):
         self.mlp_c_proj_weight = _w("mlp.c_proj.weight")
         self.mlp_c_proj_bias = _to_device_bias(state_dict[prefix + "mlp.c_proj.bias"], device)
 
-    def _qkv(self, x):  # [b, s, hidden] -> q, k, v each [b, heads, s, head_dim]
+    def _qkv(self, x, memory_config=L1):  # [b, s, hidden] -> q, k, v each [b, heads, s, head_dim]
         # Split the [b, s, 3*hidden] c_attn output (GPT-2 [Q|K|V] block layout) into per-head Q, K, V.
         # ttnn.experimental.nlp_create_qkv_heads is measurably faster than the transformer-namespace
         # split_query_key_value_and_split_heads wrapper (~43 vs ~63 us/call at decode shape, identical
@@ -233,28 +240,30 @@ class TtXttsGptBlock(LightweightModule):
             self.attn_c_attn_weight,
             bias=self.attn_c_attn_bias,
             program_config=_mm_1d_config(self.device, x.shape[-2], x.shape[-1], self.attn_c_attn_weight.shape[-1]),
-            memory_config=L1,
+            memory_config=memory_config,
         )
         b, s, three_h = qkv.shape
         qkv = ttnn.reshape(qkv, (b, 1, s, three_h))
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=NUM_HEADS, transpose_k_heads=False)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv, num_heads=NUM_HEADS, transpose_k_heads=False, memory_config=memory_config
+        )
         ttnn.deallocate(qkv)
         return q, k, v
 
-    def _attn_out(self, attn):  # [b, heads, s, head_dim] -> [b, s, hidden]
-        out = ttnn.transformer.concatenate_heads(attn, memory_config=L1)  # fused permute + reshape
+    def _attn_out(self, attn, memory_config=L1):  # [b, heads, s, head_dim] -> [b, s, hidden]
+        out = ttnn.transformer.concatenate_heads(attn, memory_config=memory_config)  # fused permute + reshape
         ttnn.deallocate(attn)
         proj = ttnn.linear(
             out,
             self.attn_c_proj_weight,
             bias=self.attn_c_proj_bias,
             program_config=_mm_1d_config(self.device, out.shape[-2], out.shape[-1], self.attn_c_proj_weight.shape[-1]),
-            memory_config=L1,
+            memory_config=memory_config,
         )
         ttnn.deallocate(out)
         return proj
 
-    def _mlp(self, x):
+    def _mlp(self, x, memory_config=L1):
         """c_fc (+ GELU fused into the matmul epilogue) -> c_proj. Consumes ``x``."""
         # c_fc fuses BOTH bias and GELU into the matmul epilogue via the program_config's
         # fused_activation. (GELU, False) == the old activation="gelu" (string "gelu" maps to
@@ -270,7 +279,7 @@ class TtXttsGptBlock(LightweightModule):
                 self.mlp_c_fc_weight.shape[-1],
                 fused_activation=(ttnn.UnaryOpType.GELU, False),
             ),
-            memory_config=L1,
+            memory_config=memory_config,
         )
         ttnn.deallocate(x)
         out = ttnn.linear(
@@ -278,7 +287,7 @@ class TtXttsGptBlock(LightweightModule):
             self.mlp_c_proj_weight,
             bias=self.mlp_c_proj_bias,
             program_config=_mm_1d_config(self.device, h.shape[-2], h.shape[-1], self.mlp_c_proj_weight.shape[-1]),
-            memory_config=L1,
+            memory_config=memory_config,
         )
         ttnn.deallocate(h)
         return out
@@ -287,18 +296,18 @@ class TtXttsGptBlock(LightweightModule):
         """DECODE layer-norm via the shared width-sharded kernel (``sharded_decode_ln``). Consumes ``x``."""
         return sharded_decode_ln(x, weight, bias, self.device)
 
-    def _residual_ffn(self, x, sharded=False):
+    def _residual_ffn(self, x, sharded=False, memory_config=L1):
         """Shared post-attention half: ``x + mlp(ln_2(x))``. Consumes and replaces ``x``.
         ``sharded`` routes ln_2 through the width-sharded decode kernel (see ``_ln``)."""
         h = (
             self._ln(x, self.ln_2_weight, self.ln_2_bias)
             if sharded
             else ttnn.layer_norm(
-                x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS, memory_config=L1
+                x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS, memory_config=memory_config
             )
         )
-        m = self._mlp(h)  # consumes h
-        y = ttnn.add(x, m, memory_config=L1)
+        m = self._mlp(h, memory_config=memory_config)  # consumes h
+        y = ttnn.add(x, m, memory_config=memory_config)
         ttnn.deallocate(x)
         ttnn.deallocate(m)
         return y
@@ -311,16 +320,17 @@ class TtXttsGptBlock(LightweightModule):
         (returned for the cache); every other intermediate is deallocated. Also serves the
         full teacher-forced pass (callers that want only the hidden state take ``[0]``)."""
         # print(f"[TtXttsGptBlock.forward_prefill] layer={self.layer_idx} x={list(x.shape)}")
-        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
-        q, k, v = self._qkv(h)
+        mem = prefill_act_memory_config(self.device, int(x.shape[-2]))
+        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS, memory_config=mem)
+        q, k, v = self._qkv(h, memory_config=mem)
         ttnn.deallocate(h)
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, memory_config=L1)
+        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, memory_config=mem)
         ttnn.deallocate(q)  # k, v kept for the cache
-        ao = self._attn_out(attn)
-        xa = ttnn.add(x, ao, memory_config=L1)
+        ao = self._attn_out(attn, memory_config=mem)
+        xa = ttnn.add(x, ao, memory_config=mem)
         ttnn.deallocate(x)
         ttnn.deallocate(ao)
-        return self._residual_ffn(xa), k, v
+        return self._residual_ffn(xa, memory_config=mem), k, v
 
     def forward_decode(self, x, k_cache, v_cache, onehot, add_mask, write_idx=None):
         """DECODE — one of the block's two forwards. One token over a FIXED-size KV cache
