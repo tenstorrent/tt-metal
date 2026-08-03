@@ -2,22 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Device-perf test for the DeepSeek-V4 HCA block on the 8x4 Blackhole galaxy.
+"""Device-perf for the HCA block at the production chunk width (4096 tokens) on the 8x4 galaxy.
 
-Runs the full-block forward at the production chunk width (4096 tokens) under the device profiler
-and measures device kernel time between the HCA_START / HCA_END signposts. Weight upload and input
-tilize happen at construction, before HCA_START, and are excluded.
+Single-shot rather than chunked on purpose: the op sequence is the one a chunk executes, minus the
+128-row carry and the cache write (~3%), so the number tracks per-chunk cost without a one-chunk
+scenario that would exercise no cross-chunk state.
 
-Single-shot rather than chunked on purpose: the op sequence is the same one a chunk executes, minus
-the 128-row carry on the SDPA key axis and the compressed-cache write -- about 3% -- so the number
-tracks per-chunk cost without needing a one-chunk scenario that exercises no cross-chunk state.
-
-The baseline guards the whole block rather than one op, because that is what catches a silent
-undo of any of the tuned constants: q_chunk_size / k_chunk_size (SDPA is ~32% of the block),
-ccl_num_links, or the fused nlp_create_qkv_heads / nlp_concat_heads path. None of those move PCC.
-See hca_perf/GALAXY_PERF.md for the breakdown behind the number.
-"""
+Guards the whole block rather than one op, because that is what catches a silent undo of the tuned
+constants -- q_chunk_size / k_chunk_size, ccl_num_links, the fused head ops. None of those move PCC.
+Breakdown behind the number: hca_perf/GALAXY_PERF.md."""
 
 import pytest
 

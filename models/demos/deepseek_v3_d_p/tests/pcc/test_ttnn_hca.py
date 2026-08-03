@@ -31,10 +31,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtH
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# Real (pre-pad) prompt lengths. Used by the single-device tests directly and by the full-block mesh
-# test through prepare_input, which pads each up to compress_rate*sp -- so ragged values are fine on
-# both and exercise the pad + trim + mask path. Mesh tests that shard a tensor DIRECTLY (the stems,
-# attention, o_proj) cannot use these: an SP shard needs seq divisible by 32*sp.
+# Real (pre-pad) prompt lengths. prepare_input pads each up to compress_rate*sp, so the ragged ones
+# exercise the pad + trim + mask path.
 _SHAPES = [128, 130, 256, 260, 300, 512, 513, 1024, 2048, 4095, 4096, 5120]
 
 
@@ -50,9 +48,8 @@ def _flash_config(num_hidden_layers=4):
     )
 
 
-# Mesh configs: seq_len restricted to multiples of 32*sp (SP seq shard must stay tile-aligned).
-# No fabric for 1x1 (sp=tp=1 skips every collective); FABRIC_1D for 4x2; FABRIC_2D
-# (+router/RELAXED_INIT) for 8x4.
+# 1x1 needs no fabric (sp=tp=1 skips every collective). On a 32-chip box only 8x4 runs; the others
+# need TT_VISIBLE_DEVICES + a matching mesh graph descriptor (see hca_perf/GALAXY_PERF.md).
 _MESH_CONFIGS = [
     pytest.param(
         (1, 1),
@@ -89,10 +86,8 @@ _MESH_CONFIGS = [
     indirect=["mesh_device", "device_params"],
 )
 def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
-    """Mesh/TP/SP PCC for TtHCACompressor: wkv/wgate contraction-parallel + TP all-reduce, SP-parallel
-    window pooling (input host-padded to compress_rate*sp), compressed KV SP-gathered + trimmed to the
-    real length. seq_len is the REAL (pre-pad) length; unaligned values exercise the pad + trim path.
-    Compared against the full unpadded DeepseekV4HCACompressor."""
+    """TtHCACompressor against the unpadded reference. seq_len is the REAL pre-pad length, so the
+    unaligned value exercises the pad + trim path."""
     torch.manual_seed(42)
 
     batch = 1
@@ -115,7 +110,6 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
 
     tt_model = TtHCACompressor.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
 
-    # Host-pad the seq to compress_rate*sp (pre-shard) so each SP shard holds whole compression windows.
     hidden_padded, seq_len_actual = TtHCACompressor.prepare_input(hidden, sp_factor, compress_rate)
     tt_input = ttnn.from_torch(
         hidden_padded.unsqueeze(1),
@@ -128,13 +122,12 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
     signpost("HCA_START")
     compressed_kv_tt, block_bias_tt = tt_model(tt_input, position_ids, seq_len_actual=seq_len_actual)
     signpost("HCA_END")
-    # compressed_kv is fully replicated (SP-gathered + TP-replicated): take a single replica.
+    # Fully replicated (SP-gathered + TP-replicated): take a single replica.
     compressed_kv_out = ttnn.to_torch(
         compressed_kv_tt,
         mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
     )
-    # The block is one entry per PADDED window (a fixed width, so a short chunk adds no program); only
-    # the leading seq_len_actual/compress_rate are real, which is what the reference emits.
+    # One entry per PADDED window; only the leading t_real are real, which is what the reference emits.
     t_real = seq_len_actual // compress_rate
     assert compressed_kv_out.shape[2] == hidden_padded.shape[1] // compress_rate, "expected untrimmed block"
     compressed_kv_out = compressed_kv_out[:, :, :t_real]
@@ -156,15 +149,11 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
 
 @pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
 def test_hca_forward(device, seq_len):
-    """
-    Full TtHCA block (prefill, single-shot) PCC against DeepseekV4Attention.forward:
-    hidden -> query/kv stems + compressor + attention core + grouped output projection
-    -> [B, S, hidden].
+    """Single-shot TtHCA.forward against DeepseekV4Attention.forward.
 
-    Single device, so this is the only test that runs _o_proj with all 64 heads on one chip --
-    the shape whose nlp_concat_heads L1 footprint is largest. Keep it: the mesh tests shard the
-    heads down to 16 and would not catch a head-count-dependent circular-buffer blowup.
-    """
+    Single device, so this is the only test that runs _o_proj with all 64 heads on one chip -- the
+    shape whose nlp_concat_heads L1 footprint is largest. Keep it: the mesh tests shard the heads
+    down to 16 and would not catch a head-count-dependent circular-buffer blowup."""
     torch.manual_seed(42)
     batch = 1
     config = _flash_config()
@@ -225,10 +214,8 @@ def test_hca_forward(device, seq_len):
     indirect=["mesh_device", "device_params"],
 )
 def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
-    """Full TtHCA block on the mesh for an ARBITRARY prompt length: prepare_input host-pads the seq to
-    compress_rate*sp, the block runs SP+TP sharded end to end, and the first seq_len output rows are
-    compared against the unpadded DeepseekV4Attention.forward. This is where padding-awareness is proven:
-    pad-derived compressed entries are trimmed and pad key/query rows are masked out."""
+    """Single-shot TtHCA.forward, SP+TP sharded, for an ARBITRARY prompt length. This is where padding
+    awareness is proven: pad-derived compressed entries get trimmed and pad rows masked out."""
     torch.manual_seed(42)
 
     batch = 1
@@ -291,11 +278,9 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
     logger.debug("PCC test passed!")
 
 
-# Chunked-prefill scenarios as per-iteration VALID token counts. The device tensor is always
-# _CHUNK_SIZE wide; only how much of it is real varies -- that is what keeps one compiled program for the
-# whole prefill. Non-final chunks must be full: the compressed-cache write copies whole tiles, so its
-# offset (entry_count) has to stay a multiple of TILE_SIZE, i.e. chunk_valid % (compress_rate*32) == 0.
-# A partial FINAL chunk is fine, nothing follows it.
+# Per-iteration VALID token counts. The device tensor is always _CHUNK_SIZE wide and only how much of
+# it is real varies -- that is what keeps one compiled program for the whole prefill. Non-final chunks
+# must be full (the cache write needs a tile-aligned offset); a partial FINAL chunk is fine.
 _CHUNK_SIZE = 4096
 _CHUNKED_SCENARIOS = [
     ("2x4k", [4096, 4096]),
@@ -311,15 +296,12 @@ _CHUNKED_SCENARIOS = [
     indirect=["mesh_device", "device_params"],
 )
 def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, iters_valid):
-    """Chunked prefill on the mesh: the prompt is consumed in fixed-width chunks while TtHCAState carries
-    the compressed-KV cache and the raw look-back across them.
+    """Chunked prefill with TtHCAState carried across chunks.
 
-    The reference is NOT chunked -- it runs once over the whole prompt and each chunk's output is compared
-    against the matching slice (the pattern test_mla uses). Comparing against a chunked reference could
-    hide a shared misconception; this way the chunked implementation has to reproduce plain attention.
-
-    Also asserts no program is added after the first chunk: every chunk must present identical shapes.
-    """
+    The reference is deliberately NOT chunked: it runs once over the whole prompt and each chunk is
+    compared against the matching slice, so the chunked path has to reproduce plain attention rather
+    than agree with a reference that shares its assumptions. Also asserts no program is compiled after
+    the first chunk."""
     torch.manual_seed(42)
 
     batch = 1
@@ -375,15 +357,13 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
             out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
         ).squeeze(1)[:, :valid]
 
-        # Looser than the single-shot block (0.998): a chunk attends compressed entries emitted by
-        # earlier chunks, each already carrying its own bf16 error, so accuracy drifts ~0.0006 per chunk
-        # against the fp32 reference. Still far stricter than the 0.98 test_mla holds chunked prefill to.
+        # Looser than single-shot (0.998): a chunk attends entries emitted by earlier chunks, each
+        # already carrying its own bf16 error, so accuracy drifts ~0.0006 per chunk.
         expected = out_ref[:, kv_actual : kv_actual + valid]
         pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.997)
         logger.debug(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc_message}")
         assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
 
-        # Shapes are identical every chunk, so nothing may be compiled after the first one.
         cache_entries = mesh_device.num_program_cache_entries()
         if it == 0:
             entries_after_first = cache_entries
@@ -398,11 +378,10 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
     assert state.kv_actual == total
     assert state.entry_count == sum(v // compress_rate for v in iters_valid)
 
-    # The accumulated cache must hold what an unchunked compressor would emit for the whole prompt: the
-    # chunk boundaries fall on window boundaries, so both compress the same token windows. This is the
-    # only check on the stateful plumbing the compressor test cannot reach -- it never writes at an
-    # offset and always runs with first_window_position=0, so a mis-rotated or misplaced chunk would
-    # only show up here (its share of the attention mass is too small to move the output PCC much).
+    # Chunk boundaries fall on window boundaries, so the accumulated cache must equal what one
+    # unchunked compressor pass emits. This is the only check that reaches the stateful plumbing: the
+    # compressor test never writes at an offset nor with first_window_position != 0, and a mis-rotated
+    # or misplaced entry carries too little attention mass to move the output PCC.
     with torch.no_grad():
         ref_entries, _ = ref.compressor(
             hidden, torch.zeros(batch, total, config.q_lora_rank), position_ids, past_key_values=None, layer_idx=0
@@ -443,14 +422,12 @@ def _sliding_mask(q_pos, k_pos, sliding_window):
     indirect=["mesh_device", "device_params"],
 )
 def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
-    """Long chunked prefill: 14 full chunks of 4096 = 57,344 tokens, the demo-sized prompt.
+    """14 chunks of 4096 = 57,344 tokens, the demo-sized prompt.
 
-    Unlike the short scenarios this drives the torch reference chunk by chunk too, through
-    ``DeepseekV4HCACache``. An unchunked reference is not an option at this length: eager attention
-    (forced, since sinks make V4 eager-only) materializes [1, num_heads, S, S] scores, which is 726 GB
-    at 57K. The short scenarios keep the unchunked reference and are what pins chunked == plain
-    attention; this test only has to show it stays true 14 chunks and 448 compressed entries deep.
-    """
+    The reference is chunked here, unlike the short scenarios. An unchunked one is not an option at
+    this length: eager attention (forced, since sinks make V4 eager-only) materializes
+    [1, num_heads, S, S] scores = 726 GB at 57K. The short scenarios are what pin chunked == plain
+    attention; this test only shows it stays true 14 chunks and 448 entries deep."""
     torch.manual_seed(42)
 
     batch = 1
@@ -484,9 +461,8 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
         chunk = hidden[:, kv_actual : kv_actual + _CHUNK_SIZE]
         chunk_pos = position_ids[:, kv_actual : kv_actual + _CHUNK_SIZE]
 
-        # Reference: same chunk loop. The cache returns [carry | chunk] from update(), so the mask it
-        # needs covers exactly those keys; the compressor's block_bias is cat'd on for the compressed
-        # slots by the reference itself.
+        # The reference cache returns [carry | chunk] from update(), so the mask must cover exactly
+        # those keys; the reference cats its own block_bias on for the compressed slots.
         carry = min(sw - 1, kv_actual)
         k_pos = torch.cat([torch.arange(kv_actual - carry, kv_actual), chunk_pos[0]])
         ref_mask = _sliding_mask(chunk_pos[0], k_pos, sw).view(1, 1, _CHUNK_SIZE, -1).expand(batch, 1, -1, -1)
@@ -506,8 +482,7 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
             out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
         ).squeeze(1)
 
-        # Drift is ~0.00044 per chunk against the fp32 reference (same bf16 accumulation the short
-        # chunked test sees at 0.997 over 3 chunks); 0.99 leaves headroom to roughly chunk 21.
+        # Drift is ~0.00055 per chunk; 0.99 leaves headroom to roughly chunk 18.
         pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.99)
         logger.debug(f"  iter {it} (kv_actual={kv_actual} entries={state.entry_count}): PCC {pcc_message}")
         assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
@@ -526,8 +501,8 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
     assert state.kv_actual == total
     assert state.entry_count == total // compress_rate
 
-    # Independent check on the stateful plumbing: 448 entries written at 14 different offsets must match
-    # what a single unchunked compressor pass emits (cheap -- the compressor has no [S, S] anywhere).
+    # 448 entries written at 14 different offsets must match one unchunked compressor pass. Cheap to
+    # check even at this length -- the compressor has no [S, S] anywhere.
     with torch.no_grad():
         ref_entries, _ = ref.compressor(
             hidden, torch.zeros(batch, total, config.q_lora_rank), position_ids, past_key_values=None, layer_idx=0
