@@ -18,7 +18,8 @@ targets, mkdir targets. The handful of call sites that hand a checkpoint-derived
 path straight to ``open`` write the same join-and-check out inline instead, so the
 constraint is visible in the same function as the read (see
 ``weights._read_weight_index``, ``model_config.load_config``,
-``demo_i2i._checkpoint_json``). Keep the two in step if this logic changes.
+``tokenizer.hunyuan_tokenizer.load_config``, ``demo_i2i._checkpoint_json``). Keep the
+two in step if this logic changes.
 """
 
 from __future__ import annotations
