@@ -125,10 +125,9 @@ WEIGHT_DTYPE = ttnn.bfloat8_b
 class TtVoxtralFlow:
     """Block 2 on device. __call__(h) -> audio_codes torch [B,37] int64."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE, weight_dtype=None):
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT):
         self.device = device
-        self.dtype = dtype
-        weight_dtype = weight_dtype or WEIGHT_DTYPE or dtype
+        self.dtype = DTYPE
         w = load_flow_state(ckpt_path)
         self.inv_freq = w["time_embedding.inv_freq"]          # host: time_embedding
         self.semantic_host = w["semantic_codebook_output.weight"].float()  # host: masked argmax
@@ -138,9 +137,9 @@ class TtVoxtralFlow:
         up = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT,
                                          device=device)
         # RMSNorm gammas stay at the ACTIVATION dtype: 3072 values is no bandwidth, and a per-block
-        # shared exponent is a poor fit for a 1-D scale vector. Only matmuls take weight_dtype.
-        vec = lambda t: up(t.reshape(1, 1, -1), dtype)
-        lin = lambda t: up(t.t(), weight_dtype)   # torch [out,in] -> ttnn.linear wants [in,out]
+        # shared exponent is a poor fit for a 1-D scale vector. Only matmuls take WEIGHT_DTYPE.
+        vec = lambda t: up(t.reshape(1, 1, -1), DTYPE)
+        lin = lambda t: up(t.t(), WEIGHT_DTYPE)  # torch [out,in] -> ttnn.linear wants [in,out]
 
         self.proj = {k: lin(w[f"{k}.weight"]) for k in
                      ("input_projection", "time_projection", "llm_projection",

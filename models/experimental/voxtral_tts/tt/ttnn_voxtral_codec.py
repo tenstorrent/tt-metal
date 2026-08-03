@@ -49,11 +49,11 @@ halves the largest tensor (the attention bias). fp32 attention is slightly bette
 (0.81% vs 1.16%) but is 2.5x worse on synthetic at T=469 and ~5% slower, and synthetic is
 deliberately the conservative gate.
 
-bf16 WEIGHTS are BAD; the knob exists only for experiments. On their own they fall below the 0.999
-PCC gate at T=469, and they no longer buy speed (44 vs 46 ms) -- an earlier sweep showed ~20%, but
-that was conv weight PREPARATION cost, since hoisted out of the per-call path. WARNING: bf16+bf16
-measures 1.93% worst-sample against a 2.00% gate, i.e. 3.5% of margin, for a ~1% speed gain. Do
-not enable it without re-running the real-speech fixture.
+bf16 WEIGHTS are BAD and there is no longer a knob for them. On their own they fall below the
+0.999 PCC gate at T=469, and they do not buy speed either (44 vs 46 ms) -- an earlier sweep showed
+~20%, but that was conv weight PREPARATION cost, since hoisted out of the per-call path. And
+bf16+bf16 measures 1.93% worst-sample against a 2.00% gate, i.e. 3.5% of margin, for a ~1% gain.
+If you want to re-open this, re-run the real-speech fixture, not just the synthetic one.
 
 Made no difference: keeping the small per-channel tensors (RMSNorm / QK-norm weights, LayerScale)
 in fp32 while matmul weights are bf16 -- PCC 0.999512 either way, so the bf16 loss is in the matmul
@@ -187,8 +187,8 @@ SCALE = CODEC_HEAD_DIM**-0.5
 # inf-inf -> NaN, so use a large finite negative instead: exp() underflows to exactly 0,
 # and it is unambiguous against real ALiBi values (which reach only about -16).
 MASK_NEG = -1e9
-# bf16 for the attention interior + its bias: measured best-PCC AND faster, and halves the
-# largest tensor. See the sweep in the module docstring.
+# bf16 for the attention interior + its bias: measured best-PCC AND faster, and halves the largest
+# tensor. Everything OUTSIDE attention stays DTYPE. See the sweep in the module docstring.
 ATTN_DTYPE = ttnn.bfloat16
 # Chunked attention -- see OPTIMIZATIONS #2/#3. `slab` MUST be tile-aligned: TILE_LAYOUT pads every
 # dim to 32, so a slab of 272 would silently become 288 and waste a row and column of tiles.
@@ -214,26 +214,25 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 class TtVoxtralCodecDecoder:
     """On-device codec decoder. __call__(codes [1,37,T] int64) -> waveform torch [1,1,T*1920]."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT, weight_dtype=DTYPE, attn_dtype=ATTN_DTYPE,
-                 slab=SLAB, chunk_min=CHUNK_MIN, bucket=BUCKET):
-        """`weight_dtype` / `attn_dtype` exist so the precision question can be MEASURED rather
-        than inherited. Activations outside attention are always fp32."""
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, slab=SLAB, chunk_min=CHUNK_MIN, bucket=BUCKET):
+        """Precision is not a parameter: fp32 weights, fp32 activations outside attention, bf16
+        inside it. That combination was measured against the other three (module docstring) and the
+        losers were deleted rather than left switchable."""
         self.device = device
-        self.attn_dtype = attn_dtype
         self.slab = slab  # attention chunk width; see the SLAB constant for why 512
         self.chunk_min = chunk_min  # chunk only when S exceeds this; None = never chunk
         self.bucket = bucket  # round T up to this multiple before decoding; None = off
         # With PRE-PREPARED weights the op can no longer infer weights_dtype from a host tensor,
         # so it must be stated explicitly -- and the SAME config must go to prepare_* and to the
         # conv call, or the prepared layout will not match what the kernel expects.
-        self.conv_cfg = ttnn.Conv1dConfig(weights_dtype=weight_dtype)
-        self.convt_cfg = ttnn.Conv2dConfig(weights_dtype=weight_dtype)
+        self.conv_cfg = ttnn.Conv1dConfig(weights_dtype=DTYPE)
+        self.convt_cfg = ttnn.Conv2dConfig(weights_dtype=DTYPE)
         w = load_codec_state(ckpt_path)  # weight_norm already folded by the reference loader
 
-        dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
         vec = lambda t: dev(t.reshape(1, 1, -1))  # [C] -> [1,1,C] so it broadcasts over length
         lin = lambda t: dev(t.t())  # torch Linear [out,in] -> ttnn.linear wants [in,out]
-        host = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype)  # conv weights stay on host
+        host = lambda t: ttnn.from_torch(t.contiguous(), dtype=DTYPE)  # conv weights stay on host
 
         self.semantic_host = w["semantic_embedding"].float()  # host gather; see _quantizer_host
 
@@ -328,9 +327,9 @@ class TtVoxtralCodecDecoder:
         take an identical kwarg set and differ only in the weight layout they expect
         (ConvTranspose1d's [in,out,k] is IOHW; Conv1d's [out,in,k] is OIHW).
 
-        `input_dtype` is the ACTIVATION dtype (always fp32 here), NOT the weight dtype. Passing
-        weight_dtype prepared a layout for bf16 activations while the real activations were fp32,
-        which silently produced PCC 0.008."""
+        `input_dtype` is the ACTIVATION dtype (always DTYPE here), NOT the weight dtype. Back when
+        weights were switchable, passing the WEIGHT dtype here prepared a layout for bf16
+        activations while the real activations were fp32, and silently produced PCC 0.008."""
         fn = ttnn.prepare_conv_transpose2d_weights if transpose else ttnn.prepare_conv_weights
         return fn(
             weight_tensor=w_host, input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -348,7 +347,7 @@ class TtVoxtralCodecDecoder:
     # normal case and is why it stays small (4.2 MB) at any utterance length.
     # ----------------------------------------------------------------------------------
     def _attn_bias(self, S, window):
-        key = (S, window, self.attn_dtype)
+        key = (S, window, ATTN_DTYPE)
         if key not in self._bias_cache:
             pos = torch.arange(S)
             rel = (pos.unsqueeze(0) - pos.unsqueeze(1)).float()  # rel[i,j] = j - i
@@ -356,7 +355,7 @@ class TtVoxtralCodecDecoder:
             bias = bias.masked_fill(rel.unsqueeze(0) > 0, MASK_NEG)  # causal
             bias = bias.masked_fill((rel < -window).unsqueeze(0), MASK_NEG)  # window
             self._bias_cache[key] = ttnn.from_torch(
-                bias.unsqueeze(0).contiguous(), dtype=self.attn_dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+                bias.unsqueeze(0).contiguous(), dtype=ATTN_DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device
             )
         return self._bias_cache[key]
 
@@ -414,7 +413,7 @@ class TtVoxtralCodecDecoder:
         return ttnn.slice(out, [0, 0, 0, 0], [1, 1, out.shape[2] - trim, channels])
 
     def _attention_slab(self, q, k, v, bias):
-        """Attention with an additive pre-softmax bias, in `attn_dtype`. [1,H,S,d] -> [1,H,S,d].
+        """Attention with an additive pre-softmax bias, in ATTN_DTYPE. [1,H,S,d] -> [1,H,S,d].
 
 Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention, which was
         measured and rejected. sdpa DOES accept an arbitrary additive mask (`attn_mask` with
@@ -449,17 +448,16 @@ Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention, which was
         its windowed path measured only 1.22x faster than this chunking and cannot express ALiBi at
         all (PCC 0.64 without it).
 
-        Hand-rolling also keeps `numeric_stable=True` on the softmax. Runs in bf16 by default
-        (attn_dtype) -- see the PRECISION table in the module docstring."""
-        if self.attn_dtype != DTYPE:
-            c = lambda t: ttnn.typecast(t, self.attn_dtype)
-            q, k, v = c(q), c(k), c(v)  # the BIAS is already cached in attn_dtype -- never cast the
-            #                            big tensor per call, which is what made an earlier A/B slower
+        Hand-rolling also keeps `numeric_stable=True` on the softmax. Runs in ATTN_DTYPE (bf16) --
+        see the PRECISION table in the module docstring."""
+        c = lambda t: ttnn.typecast(t, ATTN_DTYPE)
+        q, k, v = c(q), c(k), c(v)  # the BIAS is already cached in ATTN_DTYPE -- never cast the big
+        #                             tensor per call, which is what made an earlier A/B slower
         scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
         scores = ttnn.add(ttnn.multiply(scores, SCALE), bias)
         attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
         out = ttnn.matmul(attn, v, compute_kernel_config=COMPUTE_CONFIG)
-        return ttnn.typecast(out, DTYPE) if self.attn_dtype != DTYPE else out
+        return ttnn.typecast(out, DTYPE)
 
     def _zeros(self, H, pad, d):
         key = (H, pad, d)

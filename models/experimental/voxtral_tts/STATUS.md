@@ -39,7 +39,8 @@ modules carry a "where the time goes" map at the top with the ceiling for each l
 
 **Shipped configuration**, pinned by `tests/test_tt_defaults.py`:
 Block 1 mixed precision (BFP8 on FF1_FF3 only) + decode-native heads; Block 2 BFP8 weights at
-HiFi4 + fp32 accumulation; device traces implemented but off; no program-cache clearing.
+HiFi4 + fp32 accumulation; no device traces (measured, removed -- see §6); no program-cache
+clearing. There are no runtime toggles: every rejected alternative was deleted.
 
 ### THE ONE THING THAT WILL WASTE YOUR TIME: fixture case 4
 
@@ -434,7 +435,31 @@ and OFF: at equal window it is 0.7 ms SLOWER, because decode here is device-boun
 host-dispatch bound. Tracing Block 1 AND Block 2 together also works now and is bit-identical
 (0 differing codes of 2849) after fixing the capture ORDER — all warm-ups before any capture —
 but costs ~6 ms/frame, so both stay off. The `ign/voxtral_p150_qb2` branch reports decode as
-dispatch-bound; that is Blackhole, and it does not transfer to this N150.
+dispatch-bound; that is Blackhole, and it does not transfer to this N150 — see §6.5.
+
+### 6.5 — `ign/voxtral_p150_qb2`, measured
+
+Their code will NOT run on our tree (`TT_THROW: Only L1 buffers can have an associated circular
+buffer!`; they sit ~1100 commits back). So their tt-metal was built from their own commit into
+`/localdev/lserbedzija/ign_build`, with a separate python env at `/localdev/lserbedzija/ign_venv`
+that layers our site-packages WITHOUT our ttnn editable-install finder — that finder is a meta-path
+hook and wins over PYTHONPATH, which is why the obvious `PYTHONPATH=` approach silently kept using
+our ttnn. Their build runs fine on this Wormhole N150 (8x8 grid).
+
+    pytest models/experimental/voxtraltts/tests/perf/test_e2e_performant.py -q -s -k F128
+    HF_MODEL=<our weights dir>   # their loader takes the same Mistral-native layout
+
+**Result: 598.1 ms/frame, 1.67 frames/s over 128 decode steps** (build 24 s, warm-up 121 s), against
+our 77.6. No spills, no host fallbacks, trace+1CQ, weights all-BFP8.
+
+READ THAT WITH THE CAVEAT IT DESERVES. Their branch targets a Blackhole P150 — bigger grid, more
+DRAM, and a config tuned for it. This measures THEIR CODE ON OUR CARD, which answers "could we just
+adopt theirs on N150" (no) and NOT "is their P150 work slow" (unmeasured; we have no P150).
+
+Two things it does settle. Their own comment calls the acoustic FM core "the 78%/step bottleneck",
+which independently reproduces our Block 2 finding on a different implementation. And their Block 1
+runs ALL-BFP8 — the exact config that hangs for us — without hanging, which is more evidence the
+hang is a tt-metal-version property rather than something about our weights.
 
 **Still open:** prefill beyond ~1024 tokens would need chunked prefill. batch=1 only.
 
@@ -561,10 +586,13 @@ on the grounds that a 3-token sequence means tiny ops. A tile is 32x32, so every
 of work for 3 useful tokens against 3072x9216 weights. Upstream's 47%-from-CUDA-graphs does not
 apply — their bottleneck was launch overhead.
 
-Tracing is now **on unconditionally** for both blocks, no flag -- that ~6% is worth the one cost it
-imposes, which is that every caller must open the device with a `trace_region_size` (use
-`ttnn_voxtral_pipeline.open_device`). Read trap #1 before touching capture code, and note that
-Block 1 and Block 2 must complete ALL warm-ups before EITHER captures (`_prepare_traces`).
+**Tracing is GONE from both blocks -- deleted, not disabled.** Both captures were built, proven
+bit-identical, and measured on this N150: Block 1's decode trace showed no win, and Block 2's was
+~6 ms/frame SLOWER. Under the no-toggles rule a dormant second path is not worth its weight, so the
+capture machinery went with them (`git show 5beef54ad3c` for Block 1's, `d0653e476a6` for the
+removal). The earlier "~6% from tracing" figure came from a device-bound A/B that the decode-native
+work has since invalidated. If you rebuild it: read trap #1, and remember that Block 1 and Block 2
+must finish ALL warm-ups before EITHER captures, or the second capture hangs.
 Upstream's 47%-from-CUDA-graphs figure does not apply to us: their bottleneck was launch overhead,
 ours is arithmetic. Read trap #1 before touching capture code.
 
@@ -609,5 +637,5 @@ each line item; read those before optimizing anything.
 - **Report the ttnn hang upstream** (§6, Block 1). A silent hang needing a board reset is their
   bug regardless of what we feed it, and we have a ~90 s repro.
 - **Prefill beyond ~1024 tokens** needs chunked prefill.
-- A **real comparison against `ign/voxtral_p150_qb2`** — theirs is Blackhole P150 on a larger 4B
-  variant, so none of the published numbers are like-for-like with ours.
+- A **like-for-like comparison against `ign/voxtral_p150_qb2` on THEIR hardware** — see below for
+  what we could and could not settle.
