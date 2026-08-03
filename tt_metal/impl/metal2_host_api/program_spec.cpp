@@ -2076,6 +2076,7 @@ std::vector<KernelCouplingGroup> BuildDMKernelCouplingGroups(
     // Iterate dm_kernels in given order to preserve a deterministic per-class member order.
     std::unordered_map<size_t, size_t> root_to_group_idx;
     std::vector<KernelCouplingGroup> groups;
+    groups.reserve(dm_kernels.size());
     for (size_t i = 0; i < dm_kernels.size(); ++i) {
         const size_t r = find(i);
         auto [it, inserted] = root_to_group_idx.try_emplace(r, groups.size());
@@ -2115,6 +2116,7 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     // num_threads uniformity is enforced upstream, so same-role compute kernels get identical masks
     // without any coupling-group machinery).
     std::vector<const KernelSpec*> dm_kernels;
+    dm_kernels.reserve(spec.kernels.size());
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             dm_kernels.push_back(&kernel);
