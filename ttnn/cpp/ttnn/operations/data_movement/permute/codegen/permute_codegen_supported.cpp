@@ -4,6 +4,8 @@
 
 #include "permute_codegen_supported.hpp"
 
+#include <array>
+
 #include <tt_stl/assert.hpp>
 
 #include "permute_codegen_device_operation.hpp"
@@ -63,22 +65,40 @@ bool supported_by_codegen(const Tensor& input_tensor, const ttsl::SmallVector<ui
 }
 
 bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& dims) {
-    // Ungeneralized demotions (perf-only, "auto" gate): phase-7 measurement found no predicate
-    // relating device/attrs to these regressions, so each branch is an exact
-    // (shape, dims, dtype) regression example from permute.yaml's perf-demoted ledger. None of
-    // these match the "left-out-for-now" fused-WH scope=out condition (all have NC < 6 or
-    // dims[-1] != rank-2), so they are genuine in-scope perf demotions, not mis-scoped cases.
+    // UNGENERALIZED demotions (perf-only, consulted by the "auto" selector alone). Measurement
+    // found no predicate over the normalized attributes or the device's alignment relating these
+    // regressions to each other, so this is the enumerated floor rather than a condition: one
+    // exact (rank, shape, dims, dtype) branch per ledger entry. Each entry was cross-checked
+    // against permute.yaml's scope=out conditions and is genuinely in-scope -- none is bfloat8_b,
+    // and every one either has dims[-1] != rank-2 or an outer NC below _PERMUTE_FUSED_MIN_NC, so
+    // none is served by the fused-WH builder this port does not implement. They therefore still
+    // return true from supported_by_codegen() and remain runnable under a forced
+    // implementation="codegen" call.
     struct DemotedCase {
-        std::initializer_list<uint32_t> shape;
-        std::initializer_list<uint32_t> dims;
+        uint32_t rank;
+        std::array<uint32_t, PermuteCodegenDeviceOperation::kMaxDims> shape;
+        std::array<uint32_t, PermuteCodegenDeviceOperation::kMaxDims> dims;
         DataType dtype;
     };
-    static const DemotedCase kDemoted[] = {
-        {{1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::FLOAT32},
-        {{1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::INT32},
-        {{1, 4, 96, 128}, {3, 2, 0, 1}, DataType::INT32},
-        {{2, 3, 4, 32, 64}, {4, 0, 2, 3, 1}, DataType::INT32},
-        {{2, 3, 64, 96}, {3, 2, 1, 0}, DataType::FLOAT32},
+    static constexpr DemotedCase kDemoted[] = {
+        {5, {1, 2, 3, 64, 96}, {2, 1, 4, 3, 0}, DataType::BFLOAT16},
+        {5, {1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::BFLOAT16},
+        {5, {1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::FLOAT32},
+        {5, {1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::INT32},
+        {5, {1, 2, 3, 64, 96}, {2, 3, 4, 0, 1}, DataType::FLOAT32},
+        {5, {1, 2, 3, 64, 96}, {4, 0, 2, 3, 1}, DataType::FLOAT32},
+        {5, {1, 2, 3, 64, 96}, {4, 0, 2, 3, 1}, DataType::INT32},
+        {4, {1, 4, 96, 128}, {1, 3, 2, 0}, DataType::FLOAT32},
+        {4, {1, 4, 96, 128}, {3, 2, 0, 1}, DataType::INT32},
+        {5, {2, 3, 4, 32, 64}, {4, 0, 2, 3, 1}, DataType::INT32},
+        {4, {2, 3, 64, 96}, {1, 3, 2, 0}, DataType::FLOAT32},
+        {4, {2, 3, 64, 96}, {3, 2, 0, 1}, DataType::FLOAT32},
+        {3, {2, 96, 128}, {0, 2, 1}, DataType::FLOAT32},
+        {3, {2, 96, 128}, {1, 2, 0}, DataType::FLOAT32},
+        {3, {2, 96, 128}, {2, 0, 1}, DataType::FLOAT32},
+        {3, {3, 64, 96}, {0, 2, 1}, DataType::FLOAT32},
+        {3, {3, 64, 96}, {2, 0, 1}, DataType::FLOAT32},
+        {2, {96, 64}, {1, 0}, DataType::FLOAT32},
     };
 
     const auto& shape = input_tensor.logical_shape();
@@ -88,26 +108,14 @@ bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& d
     }
     const DataType dtype = input_tensor.dtype();
     for (const auto& demoted : kDemoted) {
-        if (demoted.shape.size() != rank || demoted.dtype != dtype) {
+        if (demoted.rank != rank || demoted.dtype != dtype) {
             continue;
         }
         bool matches = true;
-        uint32_t i = 0;
-        for (uint32_t dim : demoted.shape) {
-            if (shape[i] != dim) {
+        for (uint32_t i = 0; i < rank; ++i) {
+            if (shape[i] != demoted.shape[i] || dims[i] != demoted.dims[i]) {
                 matches = false;
                 break;
-            }
-            ++i;
-        }
-        if (matches) {
-            i = 0;
-            for (uint32_t d : demoted.dims) {
-                if (dims[i] != d) {
-                    matches = false;
-                    break;
-                }
-                ++i;
             }
         }
         if (matches) {
