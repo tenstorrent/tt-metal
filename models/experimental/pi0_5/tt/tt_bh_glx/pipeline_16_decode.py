@@ -958,7 +958,7 @@ class Pi0_5GLX16DecodePipeline:
         are consumed and stage the next chunk on CQ1."""
         ttnn.execute_trace(self.prefill_mesh, self._prefill_trace_id, cq_id=0, blocking=False)
 
-    def _socket_chunk_denoise(self) -> "torch.Tensor":
+    def _socket_chunk_denoise(self, noise_host=None) -> "torch.Tensor":
         """Fully-traced KV handoff + denoise, NO host sync. Assumes
         _socket_chunk_prefill already dispatched the prefill trace on CQ0 — which now
         includes the KV concat + socket SEND as its tail. Here: replay the per-chip
@@ -966,7 +966,13 @@ class Pi0_5GLX16DecodePipeline:
         its head (step-7 merge) and continues into the N denoise steps. All
         non-blocking; the traced recv waits for the traced send via the socket, and
         rerun()'s replay_loop drains stage0 (transitively gating every stage's recv).
-        No eager concat/send and no synchronize_device barriers on the hot path."""
+        No eager concat/send and no synchronize_device barriers on the hot path.
+
+        noise_host (optional) is a pre-tilized host noise tensor from
+        _stage_noise_hosts(); with it the reseed is a bare H2D write instead of a
+        per-chunk host tilize + device alloc + eager copy."""
+        if noise_host is not None:
+            return self._driver.rerun(None, noise_host=noise_host)
         return self._driver.rerun(self._build_noise_torch())
 
     def _run_socket_chunk(self) -> "torch.Tensor":
@@ -1042,23 +1048,57 @@ class Pi0_5GLX16DecodePipeline:
 
         times_ms: List[float] = []
         last_actions = None
-        for i in range(iters):
-            t0 = _time.perf_counter()
-            # CQ0 waits until CQ1 finished staging this iter's inputs.
+        if _mesh_pipeline_enabled():
+            # 2CQ + MESH PIPELINE. The two overlaps are orthogonal and compose:
+            #   CQ1  hides the host->device INPUT transfer behind CQ0 compute (~0.6 ms).
+            #   mesh pipelining hides the whole PREFILL STAGE behind the previous chunk's DENOISE,
+            #        because prefill (row 0) and denoise (row 1) are disjoint 8-chip groups.
+            # Serially the per-chunk wall is prefill + denoise; pipelined it is max(prefill, denoise).
+            #
+            # Ordering vs the plain 2CQ loop: prefill(i+1) is dispatched BEFORE blocking on
+            # denoise(i). pixel_values_buf / lang_tokens_buf are single-buffered, so CQ1 must not
+            # stage chunk i+2 until prefill(i+1) has consumed chunk i+1 -- that is what op_event
+            # enforces, exactly as before, just one chunk further ahead.
+            #
+            # The KV landing pad is likewise single-buffered, and is safe for the reason the 1CQ path
+            # documents: send_direct_async's sender spins on the receiver advertising its destination
+            # tensor, so chunk i+1's send parks at the handshake until denoise(i+1) posts its recv --
+            # it cannot overtake denoise(i).
             ttnn.wait_for_event(0, write_event)
-            self._socket_chunk_prefill()  # prefill trace on CQ0 (non-blocking)
-            op_event = ttnn.record_event(mesh, 0)  # prefill trace has consumed the inputs
+            self._socket_chunk_prefill()
+            op_event = ttnn.record_event(mesh, 0)
+            for i in range(iters):
+                t0 = _time.perf_counter()
+                if i + 1 < iters:
+                    hn_pix, hn_lang = host_chunks[i + 1]
+                    ttnn.wait_for_event(1, op_event)
+                    ttnn.copy_host_to_device_tensor(hn_pix, self.pixel_values_buf, cq_id=1)
+                    ttnn.copy_host_to_device_tensor(hn_lang, self.lang_tokens_buf, cq_id=1)
+                    write_event = ttnn.record_event(mesh, 1)
+                    # Dispatch the NEXT chunk's prefill now so it computes under this chunk's denoise.
+                    ttnn.wait_for_event(0, write_event)
+                    self._socket_chunk_prefill()
+                    op_event = ttnn.record_event(mesh, 0)
+                last_actions = self._socket_chunk_denoise()
+                times_ms.append((_time.perf_counter() - t0) * 1000.0)
+        else:
+            for i in range(iters):
+                t0 = _time.perf_counter()
+                # CQ0 waits until CQ1 finished staging this iter's inputs.
+                ttnn.wait_for_event(0, write_event)
+                self._socket_chunk_prefill()  # prefill trace on CQ0 (non-blocking)
+                op_event = ttnn.record_event(mesh, 0)  # prefill trace has consumed the inputs
 
-            # Stage next iter's inputs on CQ1, overlapped with CQ0 sockets + denoise.
-            if i + 1 < iters:
-                hn_pix, hn_lang = host_chunks[i + 1]
-                ttnn.wait_for_event(1, op_event)
-                ttnn.copy_host_to_device_tensor(hn_pix, self.pixel_values_buf, cq_id=1)
-                ttnn.copy_host_to_device_tensor(hn_lang, self.lang_tokens_buf, cq_id=1)
-                write_event = ttnn.record_event(mesh, 1)
+                # Stage next iter's inputs on CQ1, overlapped with CQ0 sockets + denoise.
+                if i + 1 < iters:
+                    hn_pix, hn_lang = host_chunks[i + 1]
+                    ttnn.wait_for_event(1, op_event)
+                    ttnn.copy_host_to_device_tensor(hn_pix, self.pixel_values_buf, cq_id=1)
+                    ttnn.copy_host_to_device_tensor(hn_lang, self.lang_tokens_buf, cq_id=1)
+                    write_event = ttnn.record_event(mesh, 1)
 
-            last_actions = self._socket_chunk_denoise()  # sockets + streamed denoise -> actions
-            times_ms.append((_time.perf_counter() - t0) * 1000.0)
+                last_actions = self._socket_chunk_denoise()  # sockets + streamed denoise -> actions
+                times_ms.append((_time.perf_counter() - t0) * 1000.0)
 
         if last_actions is None:
             raise RuntimeError("iters must be >= 1")
@@ -1103,6 +1143,12 @@ class Pi0_5GLX16DecodePipeline:
             h_lang = ttnn.from_torch(lang_tokens.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             host_chunks.append((h_pix, h_lang))
 
+        # HOST: pre-tilize every chunk's noise draw here, mirroring the pixel/lang
+        # pre-staging above. rerun() otherwise does a from_torch_pi05 (host tilize +
+        # L1 alloc) plus an eager ttnn.copy per chunk, all on the timed path ahead of
+        # the denoise trace replay; pre-staged it collapses to one H2D write.
+        noise_hosts = [self._driver.stage_noise_host(self._build_noise_torch()) for _ in range(iters)]
+
         times_ms: List[float] = []
         last_actions = None
         if _mesh_pipeline_enabled():
@@ -1141,7 +1187,7 @@ class Pi0_5GLX16DecodePipeline:
                     ttnn.copy_host_to_device_tensor(hn_pix, self.pixel_values_buf)
                     ttnn.copy_host_to_device_tensor(hn_lang, self.lang_tokens_buf)
                     self._socket_chunk_prefill()
-                last_actions = self._socket_chunk_denoise()
+                last_actions = self._socket_chunk_denoise(noise_hosts[i])
                 times_ms.append((_time.perf_counter() - t0) * 1000.0)
         else:
             for i in range(iters):
@@ -1149,7 +1195,8 @@ class Pi0_5GLX16DecodePipeline:
                 hi_pix, hi_lang = host_chunks[i]
                 ttnn.copy_host_to_device_tensor(hi_pix, self.pixel_values_buf)
                 ttnn.copy_host_to_device_tensor(hi_lang, self.lang_tokens_buf)
-                last_actions = self._run_socket_chunk()
+                self._socket_chunk_prefill()
+                last_actions = self._socket_chunk_denoise(noise_hosts[i])
                 times_ms.append((_time.perf_counter() - t0) * 1000.0)
 
         if last_actions is None:
