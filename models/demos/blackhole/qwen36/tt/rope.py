@@ -218,8 +218,30 @@ class Qwen36RoPESetup:
         return emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)
 
     def get_prefill_rot_mats(self, start, length):
-        """ttnn cos/sin [1, length, head_dim] (replicated) for SEQUENCE positions [start, start+length),
-        M-RoPE-aware. Drop-in for the prefill sites that previously called get_rot_mats(arange(...))."""
+        """ttnn cos/sin [1, length, head_dim] (replicated) for SEQUENCE positions [start, start+length).
+
+        Text-only: the positions are the contiguous range [start, start+length), a slice of the
+        cos/sin tables already resident on device, so the rotation never touches host trig. The
+        tables are ROW_MAJOR, so the slice has no tile-alignment constraint (any start/length
+        works) and they grow on demand.
+
+        The M-RoPE branch below is a DIFFERENT ALGORITHM, not a fallback for this one: a
+        multimodal token's rotation comes from its 3D (t,h,w) position, which an absolute 1D table
+        structurally cannot represent, so it uses the per-request table staged by
+        build_request_rope(). It is unreachable for text-only inference.
+        """
+        if self._req_cos is None:
+            from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
+
+            tbl_cos, tbl_sin = _rope_dev_tables(self.device, self.head_dim, start + length, self.theta)
+
+            def _slice(tbl):
+                r = ttnn.slice(tbl, [start, 0], [start + length, self.head_dim])  # ROW_MAJOR
+                r = ttnn.reshape(r, (1, length, self.head_dim))  # metadata-only while ROW_MAJOR
+                return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
+
+            return _slice(tbl_cos), _slice(tbl_sin)
+
         cos_t, sin_t = self.prefill_cos_sin_torch(start, length)
         cos = ttnn.from_torch(
             cos_t.unsqueeze(0),
