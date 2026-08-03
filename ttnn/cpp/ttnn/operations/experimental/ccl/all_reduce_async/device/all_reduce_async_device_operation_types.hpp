@@ -5,6 +5,7 @@
 #pragma once
 #include <tt_stl/reflection.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <tuple>
@@ -58,8 +59,9 @@ struct AllReduceAsyncParams {
     // Add attributes method for reflection
     auto attributes() const {
         using ttsl::reflection::Attribute;
+        constexpr std::size_t kNumAttributes = 9;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(9);
+        attrs.reserve(kNumAttributes);
 
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
