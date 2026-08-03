@@ -12,7 +12,7 @@
 # is printed at the end. Rendering is a separate step (visualize_zones.py) so one capture can be
 # re-rendered without paying for it again.
 #
-# Usage:  LEVEL=1 LAYERS=8 CACHE=25600 ./run_prefill_profile.sh
+# Usage:  LEVEL=1 LAYERS=8 CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
 #
 # Flags (all optional, all env vars):
 #   LEVEL=1|2|3     zone detail. 1 = attn vs mlp only (~3 zones/layer), 2 = every block that costs
@@ -33,7 +33,10 @@
 set -uo pipefail
 
 # --- config (override via env) ---
-export TT_METAL_HOME="${TT_METAL_HOME:-/home/vmelnykov/tt-metal}"
+# Repo root from this script's own path (…/models/demos/minimax_m3/scripts/x.sh -> 4 levels up), so the
+# script is portable across checkouts and users instead of hard-coding one person's home.
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$_SCRIPT_DIR/../../../.." && pwd)}"
 export TT_MESH_GRAPH_DESC_PATH="${TT_MESH_GRAPH_DESC_PATH:-$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto}"
 export HF_MODEL="${HF_MODEL:-/mnt/models/MiniMaxAI/MiniMax-M3-ref}"
 export EXPERT_DTYPE="${EXPERT_DTYPE:-bf4}"
@@ -67,6 +70,20 @@ export M3_PROFILE_LEVEL="${LEVEL:-${M3_PROFILE_LEVEL:-2}}"
 [ -n "${CACHE:-}" ] && PROFILE_CACHE="$CACHE"
 [ -n "${SKIP_PREFIX:-}" ] && export PROFILE_SKIP_PREFIX="$SKIP_PREFIX"
 
+# Source of the tokens the synthetic traces are tiled from. Defined before the preflight below, which
+# checks it exists.
+SRC_TRACE="${SRC_TRACE:-$GOLDEN/longbook_qa_eng_prefill_56320_nopad/metadata.json}"
+
+# Preflight: fail here with something actionable rather than several minutes into a run.
+die () { echo "ERROR: $*" >&2; exit 1; }
+[ -d "$TT_METAL_HOME" ]          || die "TT_METAL_HOME does not exist: $TT_METAL_HOME"
+[ -f "$TT_METAL_HOME/$HARNESS" ] || die "harness not found: $TT_METAL_HOME/$HARNESS (is TT_METAL_HOME right?)"
+[ -f "$TT_METAL_HOME/python_env/bin/activate" ] || \
+  die "no venv at $TT_METAL_HOME/python_env — run ./create_venv.sh first"
+[ -d "$HF_MODEL" ]               || die "HF_MODEL does not exist: $HF_MODEL (set HF_MODEL=<weights dir>)"
+[ -f "$SRC_TRACE" ]              || die "source trace not found: $SRC_TRACE (set GOLDEN_DIR or SRC_TRACE)"
+command -v tt-smi >/dev/null     || die "tt-smi not on PATH — needed to reset the galaxy between runs"
+
 cd "$TT_METAL_HOME"
 # shellcheck disable=SC1091
 source python_env/bin/activate
@@ -76,7 +93,6 @@ mkdir -p "$WORKDIR" "$LOGDIR"
 # --- synthesize a trace with REAL tokens TILED from a long golden (identical to run_prefill_perf.sh:
 # the harness reads only metadata.json's token_ids). Real tokens matter here: MoE routing is
 # content-dependent, so random ids would flatten the expert load imbalance. ---
-SRC_TRACE="${SRC_TRACE:-$GOLDEN/longbook_qa_eng_prefill_56320_nopad/metadata.json}"
 make_trace () {  # $1 = n_tokens ; prints the synthesized trace dir on stdout
   local n="$1" dir="$WORKDIR/synthetic_$1"
   mkdir -p "$dir"
@@ -118,7 +134,13 @@ run_cfg () {  # $1=label  $2=cache_tokens
     echo "#   $(date '+%Y-%m-%d %H:%M:%S')"
     echo "############################################################"
   } | tee -a "$LOG"
-  tt-smi -glx_reset
+  # A failed reset leaves the galaxy in whatever state the previous run left it; profiling through
+  # that produces numbers nobody can trust, so skip the config instead of pretending.
+  if ! tt-smi -glx_reset; then
+    echo "# [$label] SKIPPED: tt-smi -glx_reset failed" | tee -a "$LOG"
+    FAILED=1
+    return 1
+  fi
   env PROFILE_CHUNK="$CHUNK" PROFILE_CACHE="$cache" PREFILL_TRACE_DIR="$trace" \
     ${PROFILE_NUM_LAYERS:+PROFILE_NUM_LAYERS="$PROFILE_NUM_LAYERS"} \
     ${PROFILE_LAYER_IDS:+PROFILE_LAYER_IDS="$PROFILE_LAYER_IDS"} \

@@ -31,7 +31,7 @@ around the round-robin slice corruption (see attention/prefill.py). That is ~60x
 layer needs; this zone measures the real cost.
 
 Tokens come from a REAL golden trace's metadata.json (tiled to length, exactly like
-run_prefill_perf.sh's make_trace): MoE expert routing is content-dependent, so random token ids would
+scripts/run_prefill_perf.sh's make_trace): MoE expert routing is content-dependent, so random token ids would
 give an unrealistically uniform expert load and mis-measure dispatch / experts_mm / combine.
 
 Env:
@@ -54,8 +54,8 @@ Env:
 Prefer the wrapper, which handles the venv, tt-smi -glx_reset, trace synthesis and logging the same
 way run_prefill_perf.sh does:
 
-  ./run_prefill_profile.sh                    # both 5k@25k and 5k@55k
-  PROFILE_CACHE=25600 ./run_prefill_profile.sh
+  ./models/demos/minimax_m3/scripts/run_prefill_profile.sh                    # both 5k@25k and 5k@55k
+  PROFILE_CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
 
 Manual equivalent:
   cd $TT_METAL_HOME && source python_env/bin/activate && export PYTHONPATH=$TT_METAL_HOME
@@ -113,13 +113,14 @@ def load_tokens(n: int):
 
     Real tokens, not random ones: MoE routing is content-dependent, so the expert load imbalance (and
     with it the dispatch / experts_mm / combine cost) is only realistic with real text. Tiling matches
-    run_prefill_perf.sh's make_trace, so a profile is comparable to the perf sweep's numbers.
+    scripts/run_prefill_perf.sh's make_trace, so a profile is comparable to the perf sweep's numbers.
     """
     trace_dir = os.environ.get("PREFILL_TRACE_DIR")
     if not trace_dir:
         raise SystemExit(
             "ERROR: set PREFILL_TRACE_DIR to a golden trace dir (a metadata.json with token_ids).\n"
-            "       Use ./run_prefill_profile.sh, which synthesizes one the same way run_prefill_perf.sh does."
+            "       Use models/demos/minimax_m3/scripts/run_prefill_profile.sh, which synthesizes\n"
+            "       one the same way run_prefill_perf.sh does."
         )
     src = json.load(open(Path(trace_dir) / "metadata.json"))["token_ids"]
     assert src, f"source trace {trace_dir} has no tokens"

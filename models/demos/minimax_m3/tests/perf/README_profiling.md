@@ -19,7 +19,7 @@ falls back to the ~869 GB bf16 source read), a golden trace to tile tokens from 
 **1. Capture.** Prints the CSV path when it finishes.
 
 ```bash
-LEVEL=2 LAYERS=6 CACHE=25600 ./run_prefill_profile.sh
+LEVEL=2 LAYERS=6 CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
 ```
 
 **2. View.** Renders the report and serves it — `--open` prints a URL you can click.
@@ -84,7 +84,7 @@ Suppressing a zone never loses time — its ops are charged to the nearest enclo
 level accounts for 100% of the chunk, just in fewer buckets. Levels also buy headroom against Tracy's
 32K source-location cap on long captures.
 
-The wrapper follows `run_prefill_perf.sh` conventions: venv activate, `tt-smi -glx_reset` per run, real
+The wrapper follows `scripts/run_prefill_perf.sh` conventions: venv activate, `tt-smi -glx_reset` per run, real
 tokens tiled from a long golden trace, `LOGURU_LEVEL=INFO` + DEBUG filter, logs in
 `prefill_profile_logs/`.
 
@@ -92,10 +92,10 @@ tokens tiled from a long golden trace, `LOGURU_LEVEL=INFO` + DEBUG filter, logs 
 
 | purpose | command | time |
 |---|---|---|
-| smoke test the pipeline | `LEVEL=1 LAYER_IDS=0,3 CACHE=5120 SKIP_PREFIX=1 ./run_prefill_profile.sh` | ~4 min |
-| quick iteration on compute | `LEVEL=2 LAYER_IDS=0,3 CACHE=25600 ./run_prefill_profile.sh` | ~10 min |
-| **standard: 3 dense + 3 sparse** | `LEVEL=2 LAYERS=6 CACHE=25600 ./run_prefill_profile.sh` | **~20 min** |
-| collectives + per-chip imbalance | `LEVEL=2 LAYERS=8 CACHE=25600 ./run_prefill_profile.sh` | ~33 min |
+| smoke test the pipeline | `LEVEL=1 LAYER_IDS=0,3 CACHE=5120 SKIP_PREFIX=1 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh` | ~4 min |
+| quick iteration on compute | `LEVEL=2 LAYER_IDS=0,3 CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh` | ~10 min |
+| **standard: 3 dense + 3 sparse** | `LEVEL=2 LAYERS=6 CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh` | **~20 min** |
+| collectives + per-chip imbalance | `LEVEL=2 LAYERS=8 CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh` | ~33 min |
 
 Compute zones (`ring_joint_sdpa`, `sparse_sdpa`, the matmuls) reproduce to within a few percent at any
 layer count. The collectives (`moe_reduce`, `combine`, `dispatch`) swing a lot between individual
@@ -185,7 +185,7 @@ not currently installed on the lab box:
 ```bash
 git clone https://github.com/tenstorrent/tt-npe && cd tt-npe   # see its quick-start for the build
 source tt-npe/ENV_SETUP                                        # puts npe_analyze_noc_trace_dir on PYTHONPATH
-NOC_TRACES=1 LEVEL=2 LAYERS=6 CACHE=25600 ./run_prefill_profile.sh
+NOC_TRACES=1 LEVEL=2 LAYERS=6 CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
 ```
 
 Without it, `NOC_TRACES=1` still collects NoC traces during the run — paying the overhead and the disk
@@ -208,7 +208,7 @@ measurement. So the chunk's ops must all fit in the buffer at once; that is what
 means the device idles waiting for dispatch — an 8-layer chunk measured 5 061 ms against ~180 ms
 unprofiled. `DEVICE KERNEL DURATION` and `DEVICE FW DURATION` are on-device and unaffected;
 `OP TO OP LATENCY` is not, and the report excludes it. Latency numbers come from
-`run_prefill_perf.sh`.
+`scripts/run_prefill_perf.sh`.
 
 **Tracy caps a trace at 32K source locations.** Each zone entry allocates one, as does each ttnn op.
 A long capture will hit it and silently start dropping zones — use a lower `LEVEL`, fewer `LAYERS`, or
