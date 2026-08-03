@@ -36,7 +36,7 @@ on:
         required: false
         type: number
         default: 60
-        description: "Seconds without dispatch progress before tt-triage fires on the hung rank(s). 0 disables hang detection."
+        description: "Seconds without dispatch progress before tt-triage fires on the hung rank(s). 0 or less disables hang detection (the runtime treats any non-positive duration as no timeout)."
 
 permissions:
   id-token: write
@@ -352,7 +352,7 @@ jobs:
       # TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE inside the hung rank, then throws. Armed here
       # rather than job-wide so the cluster-validation loop above is unaffected.
       - name: 🧯 Enable tt-triage on hang
-        if: ${{ inputs.hang-detection-timeout != 0 }}
+        if: ${{ inputs.hang-detection-timeout > 0 }}
         timeout-minutes: 5
         env:
           TEST_NAME: ${{ matrix.test-group.name }}
