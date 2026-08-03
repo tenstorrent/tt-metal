@@ -3,10 +3,9 @@
 
 """Voxtral-TTS Block 1 (3.4B AR backbone) on TTNN, ours rather than `tt_transformers`.
 
-This is the DEFAULT Block 1 (`ttnn_voxtral_pipeline.BACKBONE_IMPL`). `ttnn_voxtral_backbone.py`,
-the `tt_transformers` wrapper it replaces, is kept runnable for bisection --
-`VOXTRAL_BACKBONE=tt_transformers` -- but is no longer on the shipping path. The rationale for
-owning this is in STATUS.md's Block 1 section.
+Block 1, ours. It replaced a `models/tt_transformers` wrapper, which is gone -- see git history
+if you need it (`tt/ttnn_voxtral_backbone.py`, removed once this beat it on every metric). The
+rationale for owning this is in STATUS.md's Block 1 section.
 
 Measured against the fp32 CPU reference on REAL prompts (never random ones -- STATUS.md trap #12),
 with `tt_transformers` on the same metric for comparison:
@@ -23,7 +22,7 @@ WEIGHT_DTYPE and ttnn_voxtral_pipeline.CLEAR_PROGRAM_CACHE.
 
 The decode gap against tt_transformers (0.99991 vs 0.981) is real and reproduces at every weight
 dtype we tried, so it is not ours to explain -- but note it is NOT caused by sdpa_decode, which is
-nearly free here (see SDPA).
+nearly free at these shapes.
 
 Mirrors `voxtral_backbone_ref._layer` op-for-op. Structurally this is Block 2's `_block` plus
 three things -- RoPE, a causal mask, and a KV cache -- so what Block 2 already proved carries over
@@ -90,161 +89,51 @@ Q_WIDTH = N_HEADS * HEAD_DIM          # 4096, deliberately != DIM
 KV_WIDTH = N_KV_HEADS * HEAD_DIM      # 1024
 TILE = 32
 # Prefill pads its sequence to this. TILE is all correctness needs -- unlike the `tt_transformers`
-# path, nothing here shards the sequence across the core grid (see ttnn_voxtral_backbone's
-# PREFILL_MULTIPLE=256). 128 is a SHAPE-CHURN choice, not a hardware one: every distinct padded
+# path, nothing here shards the sequence across the core grid, which is what forced ITS 256.
+# 128 is a SHAPE-CHURN choice, not a hardware one: every distinct padded
 # length is a distinct set of kernels, and a first-time compile costs ~6 s against ~1.3 s for a
 # warm prefill. At 32 the 15 fixture prompts want 11 distinct shapes; at 128 they want 3, and the
 # extra attention work on the padding is a fraction of one prefill that happens once per utterance.
 PREFILL_MULTIPLE = 128
-# Decode attends over the cache rounded UP to this, with the overshoot masked off. Same reasoning
-# as PREFILL_MULTIPLE and it matters far more, because decode runs hundreds of times per utterance
-# and the window grows as it goes: at TILE the kernel shape changes every 32 frames, and each new
-# shape is a fresh compile. That is visible in the raw step times -- 552 ms at pos=96 and 1212 ms
-# at pos=224 against 52 ms either side, which are exactly the 32-boundaries. A 490-frame paragraph
-# crosses ~30 of them. At 256 it crosses 2, and the price is attending to at most 255 masked
-# positions: attention is ~4 ms of a ~34 ms step at L=224, so the overshoot costs ~2% and buys back
-# tens of seconds. It also leaves few enough distinct shapes for device tracing to be feasible.
-DECODE_WINDOW = 256
-# Pin decode to ONE window for every step instead of bucketing up as `pos` grows, so the whole
-# generation has a single decode kernel shape. REQUIRED for tracing -- a captured graph has fixed
-# shapes -- and otherwise not worth it, since attention then covers the full window every step.
-# Set via VOXTRAL_GPT_WINDOW to a TILE multiple >= the longest prompt+generation you will run.
-FIXED_WINDOW = int(os.environ.get("VOXTRAL_GPT_WINDOW", "0"))
-
-# Device trace of the decode step, via VOXTRAL_GPT_TRACE=1. Capture the 26 layers once, replay
-# per frame against persistent buffers. Correct (decode PCC 0.99982 traced vs 0.99985 eager) but
-# NOT a speed win here: at equal window it measures 0.7 ms SLOWER, because Block 1 decode on this
-# N150 is device-bound, not host-dispatch bound. Its value is as an ENABLER -- a replayed step
-# makes no per-frame device allocations, which is what blocks Block 2's trace (see
-# ttnn_voxtral_flow.USE_TRACE).
-#
-# Read trap #1 before touching capture: an exception escaping an open capture wedges the card for
-# the rest of the process, and only a tt-smi board reset recovers it.
-USE_TRACE = os.environ.get("VOXTRAL_GPT_TRACE", "0") == "1"
-TRACE_REGION_SIZE = 64 * 1024 * 1024
-
-# ttnn's fused attention instead of the hand-rolled interior, via VOXTRAL_SDPA=prefill,decode.
-# A module global rather than a constructor arg so one process can A/B it without reloading 13 GB.
-#
-# MEASURED CHEAP, correcting a long-standing assumption. STATUS.md 4.1 treats sdpa as costly, and
-# tt_transformers' sdpa_decode path scores 0.981 -- but that is their number on their stack. On
-# ours: decode PCC 0.999851 hand-rolled vs 0.999817 sdpa, and sdpa is marginally FASTER. The 4.1
-# penalty does not appear at Block 1's shapes. Left off only because hand-rolled is still the most
-# accurate and we understand its numerics; the door is open and the cost is now known.
-#
-# sdpa_decode wants q as [1, b, nh, dh] (heads in dim 2, not dim 1) and takes k/v as the WHOLE
-# cache [b, nkv, s, dh] with cur_pos_tensor, which is our cache layout exactly -- so it replaces
-# the slice, transpose, two matmuls, softmax and reshape with one op and needs no mask.
-SDPA = set(filter(None, os.environ.get("VOXTRAL_SDPA", "").split(",")))
-
-# DECODE-NATIVE HEAD LAYOUT, via VOXTRAL_GPT_DECODE_NATIVE=1. ttnn has decode-specific head ops
-# that work in [1, batch, n_heads, head_dim] instead of our [1, n_heads, seq, head_dim], and at
-# batch 1 they line up with everything downstream for free: nlp_create_qkv_heads_decode emits q
-# exactly as sdpa_decode wants it and k/v exactly as paged_update_cache wants them, already
-# sharded -- so the permute and the hand-rolled L1 shard both disappear, and so do the cache slice
-# and the mask (sdpa_decode bounds the cache with cur_pos instead).
-#
-# Measured in isolation over 26 layers: the qkv path drops 7.73 -> 5.47 ms (create_qkv_heads alone
-# 2.58 -> 0.55), and sdpa_decode over the whole 1024 cache is 1.78 ms against ~3.9 for slice plus
-# hand-rolled attention. BATCH MATTERS: these ops document B=32, and B=32 works, but then
-# sdpa_decode reads a 32x larger cache and costs 11.86 ms instead of 1.78. B=1 is supported
-# ("respects the unpadded B") and is the only sensible choice here.
-#
-# IN THE MODEL: 34.9 ms/frame against 41.5 for the hand-rolled path, at decode PCC 0.99990
-# against 0.99991 -- ~6.6 ms for nothing visible in the per-block numbers.
-#
-# AND IT IS OFF, because the per-block numbers are not the gate. On the full 15-case run it drove
-# fixture case 4 ("Hello.", the shortest prompt at P=74) into a repetition loop: 78 frames of
-# "i think that s why i m here ..." where the shipped path says "hello". Across seeds 0-3 the
-# frame count went 78/8/183/123 against 45/8/39/69 hand-rolled -- worse in 3 of 4, for one word
-# of reference text.
-#
-# BUT READ THIS BEFORE TRUSTING THAT REASONING. Case 4 turns out to be unstable in EVERY
-# implementation, including the fp32 CPU reference, which has no device and no precision loss:
-#
-#     fp32 CPU reference                      81 /  8 / 57
-#     tt_transformers + bf16 flow (baseline)   9 /  8 / 72 / 88 / 55 / 118
-#     tt_transformers + bfp8 flow             28 /  8 / 159 / 129
-#     ours mixed/bfp8 (shipped)               45 /  8 / 39 / 69
-#     ours bf16/bf16                         108 /  8 / 34 / 54
-#     ours decode-native                      78 /  8 / 183 / 123
-#
-# 9 frames is the right answer and the baseline's famous "9" was seed 0 only. So case 4 measures
-# the MODEL on a one-word prompt with 74 tokens of voice conditioning, not the port -- and it
-# cannot discriminate between implementations. Turning this path off on the strength of it was a
-# weak call: on the other 14 cases the two configurations are statistically indistinguishable.
-# ON. 6.6 ms/frame for a decode PCC of 0.99990 against 0.99991, and re-gated properly after a
-# false alarm: it was briefly reverted when case 4 collapsed with it on, but case 4 is chaotic in
-# EVERY implementation including the fp32 CPU reference (see score_quality_set's model-unstable
-# bucket), so it cannot compare implementations. The one case that then differed between the two
-# 15-case runs was case 6 -- and across 6 seeds both paths give the IDENTICAL WER pattern
-# (0.0 / 28.6 / 28.6 / 28.6 / 0.0 / 0.0), i.e. case 6 is bimodal and the runs simply landed on
-# opposite sides. Quality-equivalent, measurably faster.
-DECODE_NATIVE = os.environ.get("VOXTRAL_GPT_DECODE_NATIVE", "1") != "0"
-_QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
-_QKV_SHARD = ttnn.create_sharded_memory_config(
-    (TILE, _QKV_WIDTH // 8), core_grid=ttnn.CoreGrid(y=1, x=8),
-    strategy=ttnn.ShardStrategy.WIDTH, orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True)
-# rotary_embedding_hf's decode mode requires cos/sin SHARDED as well as the input
-# ("Cos must be sharded in decode mode"), one tile row on one core at batch 1.
-_ROPE_SHARD = ttnn.create_sharded_memory_config(
-    (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)
-
-# L1 shard for paged_update_cache's input (one tile row on one core). Only the traced path needs
-# that op; see `_write_cache`.
-_DECODE_SHARD = ttnn.create_sharded_memory_config(
-    (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)
-# None of these may leave the tile grid: prefill's mask and decode's cache slice are cut at these
-# boundaries, and a ragged one would silently misalign them rather than raise.
-assert PREFILL_MULTIPLE % TILE == 0 and DECODE_WINDOW % TILE == 0
-assert FIXED_WINDOW % TILE == 0, f"VOXTRAL_GPT_WINDOW must be a multiple of {TILE}"
-
-# RMSNorm is 2 of the ~29 ops in a decode layer but 6 ms of Block 1's 41.5 ms/frame, because
-# passing this compute config costs 115 us against 48 us for ttnn's own default -- 2.4x, on a
-# 6 KB tensor. Whether the default is SAFE is a separate question from whether it is fast: it
-# leaves PCC essentially unchanged (0.999993 vs 0.999996 against fp64) but makes the worst single
-# element 4-8x worse (0.16 vs 0.037), which is precisely the shape of error PCC hides (trap #9).
-#
-# MEASURED AND REJECTED. At the MODEL level the cheap norm costs far more than its per-op PCC
-# suggests: decode PCC 0.99991 -> 0.992 and worst sample 1.7% -> 18.9%, for 3.5 ms/frame. A 3e-6
-# per-op difference became a 100x model-level one through 26 layers, because every layer's norm
-# feeds the next layer's residual. The fp32 accumulation in the mean-of-squares is load-bearing.
-# Kept as a flag only so the result is reproducible; do not ship it.
-_FASTNORM = os.environ.get("VOXTRAL_GPT_FASTNORM", "0") == "1"
-
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
 DTYPE = ttnn.bfloat16
-# WEIGHT PRECISION, and the default is load-bearing for correctness, not just speed.
+
+# Decode runs in ttnn's DECODE-NATIVE head layout, [1, batch, heads, head_dim], and these are the
+# memory configs those ops demand. At batch 1 the layout lines everything up for free:
+# nlp_create_qkv_heads_decode emits q exactly as sdpa_decode wants it and k/v exactly as
+# paged_update_cache wants them, already sharded -- so there is no permute, no hand-built shard,
+# no cache slice and no attention mask (sdpa_decode bounds the cache with cur_pos instead).
+# Worth 6.6 ms/frame over a hand-rolled interior, at the same decode PCC.
+_QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
+_QKV_SHARD = ttnn.create_sharded_memory_config(
+    (TILE, _QKV_WIDTH // 8), core_grid=ttnn.CoreGrid(y=1, x=8),
+    strategy=ttnn.ShardStrategy.WIDTH, orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True)
+# rotary_embedding_hf's decode mode requires cos/sin sharded as well as the input
+# ("Cos must be sharded in decode mode"), one tile row on one core at batch 1.
+_ROPE_SHARD = ttnn.create_sharded_memory_config(
+    (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)
+
+# WEIGHT PRECISION -- load-bearing for CORRECTNESS, not just speed.
 #
-# "mixed" (the default) puts BFP8 on FF1_FF3 only and bf16 elsewhere -- exactly tt_transformers'
-# precision_override. ALL-BFP8 is faster still but TRIGGERS A CARD-WEDGING HANG in multi-utterance
-# runs (see ttnn_voxtral_pipeline.CLEAR_PROGRAM_CACHE) and also drives fixture case 4 into a
-# repetition loop. Both disappear with mixed:
+# BFP8 on FF1_FF3 only, bf16 everywhere else: exactly tt_transformers' precision_override.
+# ALL-BFP8 is ~5 ms/frame faster and TRIGGERS A CARD-WEDGING HANG in multi-utterance runs, and
+# adding FF2 alone is enough to bring it back (see ttnn_voxtral_pipeline for the full diagnosis).
 #
-#     weights                decode PCC   ms/step   natural WER   hang?
+#     weights                decode PCC   ms/frame   natural WER   hang?
 #     bf16 (all)               0.99991      45.8         -         no
-#     mixed (default)          0.99991      38.7       0.88%       no
+#     mixed (this)             0.99991      38.7       0.88%       no
 #     BFP8 (all)               0.99986      33.6      87.39%       HANGS
 #
 # Decode is bandwidth-limited on weight bytes -- the six linears alone reach 194 GB/s, the same
 # ceiling a plain interleaved matmul hits -- so the weight dtype IS the speed. FF1_FF3 is where
 # BFP8 buys most: those two 3072x9216 matrices are about half the layer's bytes.
-#
-# Set with VOXTRAL_GPT_WEIGHTS=bf16|mixed|bfp8. NOTE that "mixed" is TWO settings; the first
-# version of the CLI flag set only WEIGHT_DTYPE and silently ran plain bf16.
-_W = os.environ.get("VOXTRAL_GPT_WEIGHTS", "mixed")
-WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b,
-                "mixed": ttnn.bfloat16, "mlp": ttnn.bfloat16}.get(_W, None)
-# Which linears take BFP8 when the base is bf16. "mixed" = FF1_FF3 only (tt_transformers' set);
-# "mlp" additionally puts FF2 in BFP8, which is where the remaining weight bytes are.
-FF_WEIGHT_DTYPE = ttnn.bfloat8_b if _W in ("mixed", "mlp") else None
-FF2_WEIGHT_DTYPE = ttnn.bfloat8_b if _W == "mlp" else None
+WEIGHT_DTYPE = ttnn.bfloat16          # everything except...
+FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # ...FF1 and FF3
 
 
 def interleaved_to_halfsplit(t, n_heads):
@@ -280,14 +169,11 @@ class TtVoxtralGPT:
         difference between comfortable and swapping.
 
         `max_seq_len` sizes the KV cache: 2 x n_layers x 8 x max_seq x 128 bf16, i.e. 218 MB at
-        2048. Pass 0 to skip it (prefill-only harnesses; `step` then raises). It is rounded up to a
-        DECODE_WINDOW multiple so the clamp in `step` always lands on an aligned window.
+        2048. Pass 0 to skip it (prefill-only harnesses; `step` then raises).
         """
         self.device = device
         self.dtype = dtype
         self.n_layers = n_layers
-        if max_seq_len:
-            max_seq_len = -(-max_seq_len // DECODE_WINDOW) * DECODE_WINDOW
         self.max_seq_len = max_seq_len
         self.pos = 0
         self._dec_trace = None      # (tid, x_in, cos_in, sin_in, mask_in, pos_t, out, L, host)
@@ -316,7 +202,7 @@ class TtVoxtralGPT:
                 "wqkv": lin(torch.cat([wq, wk, w[p + "attention.wv"]], dim=0)),
                 "wo": lin(w[p + "attention.wo"]),
                 "w1": lin(w[p + "feed_forward.w1"], ffd),
-                "w2": lin(w[p + "feed_forward.w2"], FF2_WEIGHT_DTYPE or wd),
+                "w2": lin(w[p + "feed_forward.w2"]),
                 "w3": lin(w[p + "feed_forward.w3"], ffd),
             })
         self._assert_shapes()
@@ -358,9 +244,14 @@ class TtVoxtralGPT:
                                                      compute_kernel_config=COMPUTE_CONFIG)
 
     def _norm(self, x, gamma):
-        """RMSNorm. See _FASTNORM for why the compute config is optional here."""
-        if _FASTNORM:
-            return ttnn.rms_norm(x, weight=gamma, epsilon=NORM_EPS)
+        """RMSNorm.
+
+        The compute config is NOT optional. Dropping it makes this op 2.4x faster (48 us against
+        115 on a 6 KB tensor, ~3.5 ms/frame over 26 layers) and takes the MODEL from decode PCC
+        0.99991 to 0.992, worst sample 1.7% -> 18.9%. Per-op PCC barely moves (0.999993 vs
+        0.999996) -- a 3e-6 difference amplified ~100x through 26 layers, because every norm feeds
+        the next residual. The fp32 accumulation in the mean-of-squares is load-bearing.
+        """
         return ttnn.rms_norm(x, weight=gamma, epsilon=NORM_EPS,
                              compute_kernel_config=COMPUTE_CONFIG)
 
@@ -394,11 +285,6 @@ class TtVoxtralGPT:
         continuing to mean what our mask assumes.
         """
         rep = N_HEADS // N_KV_HEADS
-        if "prefill" in SDPA:
-            # GQA native: k/v go in unexpanded, and is_causal replaces our explicit mask.
-            a = ttnn.transformer.scaled_dot_product_attention(
-                qh, kh, vh, is_causal=True, scale=SCALE, compute_kernel_config=COMPUTE_CONFIG)
-            return ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, S, Q_WIDTH])
         kr, vr = ttnn.repeat_interleave(kh, rep, dim=1), ttnn.repeat_interleave(vh, rep, dim=1)
         s = ttnn.matmul(qh, ttnn.transpose(kr, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
         s = ttnn.add(ttnn.multiply(s, SCALE), mask)
@@ -440,70 +326,12 @@ class TtVoxtralGPT:
     # DECODE PATH -- one frame at a time; THIS is the hot loop
     # Two interiors: _layer_step_native (default, ttnn decode-native ops) and _layer_step (hand-rolled reference).
     # ----------------------------------------------------------------------------
-    def _pos_tensor(self, pos, pos_t):
-        """The write/read position as a DEVICE tensor. Under trace it is the persistent buffer the
-        capture bound; eager makes one per step."""
-        return pos_t if pos_t is not None else ttnn.from_torch(
-            torch.tensor([pos], dtype=torch.int32), device=self.device)
+    def _layer_step(self, x, w, cos, sin, cache, pos_t):
+        """One decode position. x [1,1,3072] -> same, against `cache` written up to `pos_t`.
 
-    def _write_cache(self, cache, kh, vh, pos, pos_t):
-        """Append this position's k/v in place. Two paths, and the difference is not cosmetic:
-
-        `ttnn.update_cache` takes a PYTHON INT, which a device trace would bake into the captured
-        graph -- every replay would then rewrite the same row. `paged_update_cache` takes a device
-        tensor instead, but wants the decode head layout [1, batch, n_kv, d] (it asserts
-        input.shape[1] == cache.shape[0]) and an L1-SHARDED input, which we build by hand here;
-        the other implementations get both free from `nlp_create_qkv_heads_decode`.
-        """
-        if pos_t is None:
-            ttnn.update_cache(cache[0], kh, pos)
-            ttnn.update_cache(cache[1], vh, pos)
-            return
-        sh = lambda t: ttnn.to_memory_config(ttnn.permute(t, (0, 2, 1, 3)), _DECODE_SHARD)
-        ttnn.experimental.paged_update_cache(cache[0], sh(kh), update_idxs_tensor=pos_t)
-        ttnn.experimental.paged_update_cache(cache[1], sh(vh), update_idxs_tensor=pos_t)
-
-    def _attend_decode(self, qh, cache, pos, pos_t, mask, L):
-        """One query position against the cache -> merged [1,1,4096].
-
-        THE GQA FOLD, and it is Block 2's batched-matmul lesson again. Attention over 32 heads is a
-        batch-32 matmul whose every element is one tile row of work, so cost is 32x per-element
-        overhead: q@kT and a@v measured 79 and 158 us against 2 us of arithmetic. GQA is 32/8, so
-        the 4 query heads sharing a kv group fold into that group's ROW dimension -- batch 8, M=4,
-        still one tile row. Over 26 layers: q@kT 2.06 -> 0.56 ms, a@v 4.11 -> 1.05, and
-        `repeat_interleave` (4.82 ms expanding k/v 8->32) disappears because k/v stay at 8.
-
-        The reshapes are real tile relayouts, not views, at 16 us each against the ~9 ms they buy.
-        [1,32,1,d] -> [1,8,4,d] is valid because head h uses kv group h//4 and heads are
-        contiguous, so group g lands exactly on rows 4g..4g+3; the merge back is the same identity
-        read the other way, which is why `nlp_concat_heads` is not needed.
-        """
-        if "decode" in SDPA:
-            # k/v are the WHOLE cache; cur_pos_tensor bounds it, so no slice and no mask.
-            o = ttnn.transformer.scaled_dot_product_attention_decode(
-                ttnn.permute(qh, (0, 2, 1, 3)), cache[0], cache[1],
-                cur_pos_tensor=self._pos_tensor(pos, pos_t), scale=SCALE,
-                compute_kernel_config=COMPUTE_CONFIG)
-            return ttnn.reshape(o, [1, 1, Q_WIDTH])
-        rep = N_HEADS // N_KV_HEADS
-        ks = ttnn.slice(cache[0], [0, 0, 0, 0], [1, N_KV_HEADS, L, HEAD_DIM])
-        vs = ttnn.slice(cache[1], [0, 0, 0, 0], [1, N_KV_HEADS, L, HEAD_DIM])
-        qg = ttnn.reshape(qh, [1, N_KV_HEADS, rep, HEAD_DIM])
-        s = ttnn.matmul(qg, ttnn.transpose(ks, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
-        # mask is [1,1,1,L]: one row, which is the only row this op reads. See `_attend`.
-        a = ttnn.scale_mask_softmax_in_place(s, SCALE, mask, numeric_stable=True,
-                                             compute_kernel_config=COMPUTE_CONFIG)
-        return ttnn.reshape(ttnn.matmul(a, vs, compute_kernel_config=COMPUTE_CONFIG),
-                            [1, 1, Q_WIDTH])
-
-    def _layer_step_native(self, x, w, cos, sin, cache, pos, pos_t):
-        """Decode layer in ttnn's DECODE-NATIVE head layout. See DECODE_NATIVE.
-
-        Everything here is [1, batch, heads, head_dim] rather than [1, heads, seq, head_dim], and
-        at batch 1 the pieces fit together with no glue: create_qkv_heads_decode emits q the way
-        sdpa_decode wants it and k/v the way paged_update_cache wants them, ALREADY SHARDED. So
-        this path has no permute, no hand-built L1 shard, no cache slice and no mask -- sdpa_decode
-        bounds the cache with cur_pos instead.
+        Head layout is [1, batch, heads, head_dim] here, not prefill's [1, heads, seq, head_dim] --
+        see _QKV_SHARD for why that makes the whole interior glue-free. `pos_t` is a DEVICE tensor
+        because paged_update_cache and sdpa_decode both take the position that way.
         """
         qkv = ttnn.linear(self._norm(x, w["an"]), w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
         qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
@@ -519,18 +347,6 @@ class TtVoxtralGPT:
             qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
             compute_kernel_config=COMPUTE_CONFIG)
         a = ttnn.reshape(ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG), [1, 1, Q_WIDTH])
-        return self._mlp(ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG)), w)
-
-    def _layer_step(self, x, w, cos, sin, cache, pos, mask, L, pos_t=None):
-        """One decode position. x [1,1,3072] -> same, against `cache` filled to `pos`.
-
-        The new k/v go into the cache in place, then the [0, L) window is attended with the tail
-        beyond `pos` masked off. L is a DECODE_WINDOW multiple, so the slice is tile-aligned and
-        the stale rows it drags in are exactly what `mask` kills.
-        """
-        qh, kh, vh = self._qkv(x, w, 1, cos, sin)
-        self._write_cache(cache, kh, vh, pos, pos_t)
-        a = self._attend_decode(qh, cache, pos, pos_t, mask, L)
         return self._mlp(ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG)), w)
 
     @torch.no_grad()
@@ -576,155 +392,32 @@ class TtVoxtralGPT:
 
     def prefill_last(self, embeds):
         """[1,P,3072] -> hidden of the LAST position [1,1,3072]. The pipeline's entry point; it is
-        all Block 2 ever sees, and `ttnn_voxtral_backbone` exposes the same name."""
+        all Block 2 ever sees."""
         return self.prefill(embeds, last_only=True)
-
-    # ----------------------------------------------------------------------------
-    # DEVICE TRACE of the decode step -- correct, OFF by default (see USE_TRACE)
-    # ----------------------------------------------------------------------------
-    def _decode_graph(self, x, cos, sin, mask, L, pos_t):
-        """The captured region: 26 layers + final norm, reading ONLY device tensors.
-
-        Nothing host-side may appear in here -- one host op makes the whole step untraceable.
-        `pos_t` is a device tensor precisely so the cache write position is not a Python constant.
-        """
-        for i, w in enumerate(self.layers):
-            x = self._layer_step(x, w, cos, sin, self.caches[i], None, mask, L, pos_t=pos_t)
-        return ttnn.rms_norm(x, weight=self.norm, epsilon=NORM_EPS,
-                             compute_kernel_config=COMPUTE_CONFIG)
-
-    def decode_window(self, prompt_len=0):
-        """The window `step` will attend over. Tracing needs it CONSTANT for the whole
-        generation, so it demands FIXED_WINDOW rather than the growing bucketed one."""
-        if not FIXED_WINDOW:
-            raise RuntimeError("tracing the decode step needs one fixed window; "
-                               "set VOXTRAL_GPT_WINDOW >= prompt+generation length")
-        if prompt_len >= FIXED_WINDOW:
-            raise ValueError(f"prompt of {prompt_len} does not fit the pinned window "
-                             f"{FIXED_WINDOW}")
-        return min(self.max_seq_len, FIXED_WINDOW)
-
-    def warmup_decode(self, L):
-        """Allocate the persistent inputs and run ONE eager pass. Allocates; capture must not.
-
-        Split from `capture_decode` on purpose. Allocating a device buffer while ANY trace is live
-        corrupts that trace, so with more than one block traced every warm-up has to finish before
-        the first capture starts -- see `ttnn_voxtral_pipeline._prepare_traces`.
-        """
-        if self._dec_trace is not None:
-            return
-        host = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
-                                                 layout=ttnn.TILE_LAYOUT)
-        dev = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
-                                                layout=ttnn.TILE_LAYOUT, device=self.device)
-        # THE WARM-UP AND THE CAPTURE BOTH EXECUTE THE GRAPH, so both WRITE the KV cache at
-        # whatever pos_t says. This runs after prefill has filled the cache, so pointing them at
-        # row 0 corrupts the prompt's first position -- measured, and it drags decode from PCC
-        # 0.9998 to 0.86 with no error anywhere. Aim them at the last cache row instead, which
-        # `step` is barred from ever reaching.
-        self._warm = dict(
-            x_in=dev(torch.zeros(1, 1, DIM)),
-            cos_in=dev(torch.zeros(1, 1, 1, HEAD_DIM)),
-            sin_in=dev(torch.zeros(1, 1, 1, HEAD_DIM)),
-            mask_in=dev(torch.zeros(1, 1, 1, L), ttnn.bfloat16),
-            pos_t=ttnn.from_torch(torch.tensor([self.max_seq_len - 1], dtype=torch.int32),
-                                  device=self.device),
-            L=L, host=host)
-        b = self._warm
-        self._decode_graph(b["x_in"], b["cos_in"], b["sin_in"], b["mask_in"], L, b["pos_t"])
-        ttnn.synchronize_device(self.device)
-
-    def capture_decode(self, L):
-        """Capture the decode step. Allocates NOTHING outside the trace region -- call after every
-        block's warm-up. `end_trace_capture` is in a `finally`: an exception escaping an open
-        capture wedges the card for the rest of the process (trap #1)."""
-        if self._dec_trace is not None:
-            return self._dec_trace
-        self.warmup_decode(L)
-        b = self._warm
-        tid = ttnn.begin_trace_capture(self.device, cq_id=0)
-        try:
-            out = self._decode_graph(b["x_in"], b["cos_in"], b["sin_in"], b["mask_in"], L,
-                                     b["pos_t"])
-        finally:
-            ttnn.end_trace_capture(self.device, tid, cq_id=0)
-        ttnn.synchronize_device(self.device)
-        self._dec_trace = (tid, b["x_in"], b["cos_in"], b["sin_in"], b["mask_in"], b["pos_t"],
-                           out, L, b["host"])
-        return self._dec_trace
-
-    def release_trace(self):
-        """Drop the captured decode trace. Anything that ALLOCATES -- notably the next prefill --
-        must happen with no trace live, so the pipeline releases around utterance boundaries."""
-        if self._dec_trace is not None:
-            ttnn.release_trace(self.device, self._dec_trace[0])
-            self._dec_trace = None
-            self._warm = None
-
-    def _step_traced(self, embed, cosb, sinb, m, pos, L):
-        """Refresh the captured inputs IN PLACE, replay, read the captured output.
-
-        In place is not a style choice: the trace holds these buffers' ADDRESSES, so uploading a
-        fresh tensor would be silently ignored and the previous frame replayed.
-        """
-        tid, x_in, cos_in, sin_in, mask_in, pos_t, out, Lc, host = self.capture_decode(L)
-        if Lc != L:
-            raise RuntimeError(f"decode trace captured at window {Lc} but this step wants {L}; "
-                               f"tracing needs one fixed window (set VOXTRAL_GPT_WINDOW)")
-        cp = ttnn.copy_host_to_device_tensor
-        cp(host(embed.reshape(1, 1, DIM)), x_in)
-        cp(host(cosb.reshape(1, 1, 1, HEAD_DIM)), cos_in)
-        cp(host(sinb.reshape(1, 1, 1, HEAD_DIM)), sin_in)
-        cp(host(m, ttnn.bfloat16), mask_in)
-        cp(ttnn.from_torch(torch.tensor([pos], dtype=torch.int32)), pos_t)
-        ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
-        return ttnn.to_torch(out).float().reshape(1, 1, DIM)
 
     @torch.no_grad()
     def step(self, embed):
         """embed torch [1,1,3072] (one frame) -> hidden torch [1,1,3072]. Advances self.pos.
 
-        Mirrors `IncrementalBackbone.step`: no causal mask is needed between positions -- every
-        cached position is in the past -- but the 32-tile rounding of the cache slice IS masked.
+        Mirrors `IncrementalBackbone.step`. No causal mask and no cache slice: every cached
+        position is in the past, and sdpa_decode reads the whole cache bounded by `pos_t`.
         """
         if not self.caches:
             raise RuntimeError("step() needs a KV cache; construct with max_seq_len > 0")
-        # -1: the last cache row is reserved as the trace capture's scratch target (see
-        # `_capture_decode`), so no real position may ever land on it.
-        if self.pos >= self.max_seq_len - 1:
-            raise ValueError(f"KV cache full at {self.max_seq_len - 1} usable positions")
+        if self.pos >= self.max_seq_len:
+            raise ValueError(f"KV cache full at {self.max_seq_len} positions")
         pos = self.pos
-        if FIXED_WINDOW:
-            # One shape for the whole generation. See FIXED_WINDOW.
-            if pos >= FIXED_WINDOW:
-                raise ValueError(f"pos {pos} past the pinned window {FIXED_WINDOW}; "
-                                 f"raise VOXTRAL_GPT_WINDOW")
-            L = min(self.max_seq_len, FIXED_WINDOW)
-        else:
-            # Smallest bucketed window holding pos. Bucketed, not just tile-aligned -- see
-            # DECODE_WINDOW.
-            L = min(self.max_seq_len, (pos + DECODE_WINDOW) // DECODE_WINDOW * DECODE_WINDOW)
         cosb, sinb = rope_tables(1, offset=pos)
-        m = torch.zeros(1, 1, 1, L)
-        m[..., pos + 1:] = float("-inf")                 # the stale tail of the rounded-up slice
-        if USE_TRACE:
-            self.pos = pos + 1
-            return self._step_traced(embed, cosb, sinb, m, pos, L)
         up = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
                                               layout=ttnn.TILE_LAYOUT, device=self.device)
-        cos = up(cosb.reshape(1, 1, 1, HEAD_DIM))
-        sin = up(sinb.reshape(1, 1, 1, HEAD_DIM))
-        mask = up(m, ttnn.bfloat16)
+        # cos/sin sharded: rotary_embedding_hf's decode mode requires it. pos on device: both
+        # paged_update_cache and sdpa_decode take the position as a tensor.
+        cos = ttnn.to_memory_config(up(cosb.reshape(1, 1, 1, HEAD_DIM)), _ROPE_SHARD)
+        sin = ttnn.to_memory_config(up(sinb.reshape(1, 1, 1, HEAD_DIM)), _ROPE_SHARD)
+        pos_t = ttnn.from_torch(torch.tensor([pos], dtype=torch.int32), device=self.device)
         x = up(embed.reshape(1, 1, DIM))
-        pos_t = self._pos_tensor(pos, None) if DECODE_NATIVE else None
-        if DECODE_NATIVE:
-            cos = ttnn.to_memory_config(cos, _ROPE_SHARD)
-            sin = ttnn.to_memory_config(sin, _ROPE_SHARD)
         for i, w in enumerate(self.layers):
-            if DECODE_NATIVE:
-                x = self._layer_step_native(x, w, cos, sin, self.caches[i], pos, pos_t)
-            else:
-                x = self._layer_step(x, w, cos, sin, self.caches[i], pos, mask, L)
+            x = self._layer_step(x, w, cos, sin, self.caches[i], pos_t)
         x = ttnn.rms_norm(x, weight=self.norm, epsilon=NORM_EPS,
                           compute_kernel_config=COMPUTE_CONFIG)
         self.pos = pos + 1
@@ -859,17 +552,7 @@ def main():
     ap.add_argument("--cases", default="0,2", help="prompt_fixture.json indices")
     ap.add_argument("--layers", type=int, default=N_LAYERS)
     ap.add_argument("--steps", type=int, default=8, help="decode steps for --gate decode")
-    ap.add_argument("--weights", default="", choices=("", "bf16", "bfp8", "mixed", "mlp"),
-                    help="weight dtype override; default follows WEIGHT_DTYPE")
     args = ap.parse_args()
-
-    global WEIGHT_DTYPE, FF_WEIGHT_DTYPE, FF2_WEIGHT_DTYPE
-    if args.weights:
-        WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b,
-                        "mixed": ttnn.bfloat16}[args.weights]
-        # "mixed" is TWO settings; forgetting the second silently runs plain bf16.
-        FF_WEIGHT_DTYPE = ttnn.bfloat8_b if args.weights in ("mixed", "mlp") else None
-        FF2_WEIGHT_DTYPE = ttnn.bfloat8_b if args.weights == "mlp" else None
 
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device
 

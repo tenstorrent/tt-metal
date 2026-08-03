@@ -31,26 +31,33 @@ The end-to-end question is not any of those PCCs -- it is the WER of the decoded
 that is what a listener gets. Full 15-case fixture, free-running: natural-text WER 0.88% over 341
 words, 15/15 natural [END_AUDIO]. `compare_codes()` below is the finer-grained probe.
 
-PERFORMANCE, steady state on one N150, case 2 (468 frames, 37.4 s of audio, first 30 discarded):
+PERFORMANCE, steady state on one N150, case 2 (448 frames, first 30 discarded):
 
-    Block 1 decode      41.5 ms/frame   44.2%
-    Block 2 flow        52.4 ms/frame   55.7%
+    Block 1 decode      34.9 ms/frame   45.0%
+    Block 2 flow        42.5 ms/frame   54.8%
     host embed_frame     0.2 ms/frame    0.2%
-    TOTAL               94.0 ms/frame   = 0.094 s/frame
-    prefill 1.1 s once; Block 3 codec 2.5 s once (6.8% of the audio duration)
-    RTF 1.27 end to end, 1.18 steady state   (RTF = generation / audio, lower is better)
+    TOTAL               77.6 ms/frame   = 0.0776 s/frame
+    prefill ~1.1 s once; Block 3 codec ~2.5 s once (~7% of the audio duration)
+    RTF 0.969 steady state, 1.115 end to end   (RTF = generation / audio, lower is better)
 
-A frame is 80 ms of audio at 12.5 Hz, so RTF = ms_per_frame / 80. For scale, the
-ign/voxtral_p150_qb2 branch's perf test targets 0.10 s/frame -- but on Blackhole P150 and on a
-larger model variant (4B / 32 layers against our 3.4B / 26), so treat it as a rough waypoint and
-not a like-for-like comparison.
+A frame is 80 ms of audio at 12.5 Hz, so RTF = ms_per_frame / 80.
 
-BLOCK 2 IS NOW THE LARGER HALF (55.7%), so it is where the next optimization should go. Block 1
-has already had its big structural wins (the GQA row fold, mixed-precision weights) and sits at
-194 GB/s on its linears, which is the measured ceiling for a plain interleaved matmul here.
+BLOCK 2 IS THE LARGER HALF and is where the next work belongs: 35 of its 42.5 ms is 7 SEQUENTIAL
+Euler steps, each a 3-layer transformer over 3 tokens, so every matmul does 32 tile rows of work
+for 6 useful ones. Block 1 has had its structural wins (the GQA row fold, mixed-precision weights,
+the decode-native head layout) and its linears run at 194 GB/s -- the measured ceiling for a plain
+interleaved matmul on this part, confirmed by hand-tuned program configs coming out SLOWER.
+
+The one structural idea left is throughput, not latency: a 3-token sequence wastes 26 of 32 tile
+rows and nothing in ONE utterance can fill them (Euler steps are sequential, frames are
+autoregressive), but CONCURRENT REQUESTS fit exactly.
+
+No comparison against ign/voxtral_p150_qb2 is available: their published figures are Blackhole
+P150 on a larger 4B/32-layer variant, their 0.10 s/frame is a test threshold rather than an
+achievement, and their RTF 0.7 is a four-card mesh. Running their code here was tried and their
+tt-metal is ~1100 commits behind ours, so it does not load.
 """
 
-import os
 import time
 
 import torch
@@ -59,142 +66,59 @@ import ttnn
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as backbone
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT, END_AUDIO_ID
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import CFG_ALPHA, TtVoxtralFlow
 
 FRAME_RATE = 12.5
-
-# Clear ttnn's program cache each utterance. DEFAULT OFF -- it is no longer needed, because the
-# hang it worked around has a known root cause that the default weight config now avoids.
-#
-# THE HANG, for the record. A multi-utterance run used to hang inside Block 3's decode and take
-# the card down with it (recovery needs a tt-smi board reset). It required ALL FIVE of these at
-# once, and removing any one avoids it:
-#     all-BFP8 weights in Block 1    <- the one we control; "mixed" avoids it
-#     Block 2 in the loop            raw Block 1 steps alone: completes
-#     Block 3 on device              codec on CPU: completes
-#     >= 2 distinct codec buckets    one bucket everywhere: completes
-#     a generation BETWEEN two same-bucket decodes
-# Minimal repro under all-BFP8, ~90 s: short gen + 128-bucket decode, long gen, 512-bucket decode,
-# long gen, 512-bucket decode -- the last is a pure cache HIT and hangs.
-#
-# tt_transformers never sees it because it uses this same mixed precision (BF16 for WQKV/WO/FF2/
-# KV_CACHE, BFP8 only for FF1_FF3). It was never about sdpa, paged attention, tracing or shapes.
-#
-# Measured and ELIMINATED, so none of these get retried: memory (flat, 8 GB free at the hang);
-# program-cache COUNT (576 entries over 4 buckets completes, while we died at 310-341 and
-# tt_transformers lives at 329); Block 3 length/content; a Block 1 leak (1400 steps clean); and
-# every distinctive Block 1 op -- slice, fused softmax, GQA fold, paged_update_cache, a pinned
-# decode window, device trace, sdpa_decode, and sdpa on both prefill and decode.
-#
-# Keep the switch: it is the escape hatch if all-BFP8 is ever wanted for its extra ~5 ms/step, and
-# the underlying ttnn failure (a silent hang, not an error) is still unfixed upstream.
-CLEAR_PROGRAM_CACHE = os.environ.get("VOXTRAL_CLEAR_PCACHE", "0") != "0"
 
 # L1 scratch every caller needs: the codec's convs fail with "bank size is 0 B" without it.
 L1_SMALL_SIZE = 65536
 
 
-def open_device(device_id=0, extra_trace_bytes=0):
-    """Open a device configured for whatever THIS build needs, so no caller has to know.
+def open_device(device_id=0):
+    """Open a device configured the way every entry point here needs it."""
+    return ttnn.open_device(device_id=device_id, l1_small_size=L1_SMALL_SIZE)
 
-    Tracing is per-block and opt-in, and a trace region must be requested when the device is
-    opened -- there is no way to add one later. Getting that wrong is a confusing failure at
-    capture time, far from the `ttnn.open_device` call that caused it, so the decision lives here
-    rather than in each script.
-    """
-    from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
-    from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
 
-    kw = {"l1_small_size": L1_SMALL_SIZE}
-    need = extra_trace_bytes
-    if gpt.USE_TRACE:
-        need += gpt.TRACE_REGION_SIZE
-    if flow.USE_TRACE:
-        need += flow.TRACE_REGION_SIZE
-    if need:
-        kw["trace_region_size"] = need
-    return ttnn.open_device(device_id=device_id, **kw)
-
-# Which Block 1 to run. "gpt" is OURS (tt/ttnn_voxtral_gpt.py) and is the default;
-# "tt_transformers" is the older wrapper, kept runnable for bisection with
-# VOXTRAL_BACKBONE=tt_transformers (it needs HF_MODEL; see scripts/export_backbone_hf.py).
+# A HANG THAT SHAPED THE SHIPPED CONFIG, recorded because the workaround is gone and the trigger
+# is still live in ttnn. Multi-utterance runs used to hang inside Block 3's decode and take the
+# card down with it (recovery needs a tt-smi board reset). It required FIVE things at once:
 #
-# Measured against the fp32 CPU reference on real prompts, and end to end on all 15 fixture cases:
-#                          ours (mixed W)    tt_transformers
-#     prefill last pos       0.999881          0.999564
-#     decode step            0.99991           0.981
-#     decode ms/step         38.7              48
-#     natural-text WER       0.88%             1.17%
-#     termination            15/15             15/15
-BACKBONE_IMPL = os.environ.get("VOXTRAL_BACKBONE", "gpt")
+#     all-BFP8 weights in Block 1    <- the one we control; the mixed default avoids it
+#     Block 2 in the loop            raw Block 1 steps alone: completes
+#     Block 3 on device              codec on CPU: completes
+#     >= 2 distinct codec buckets    one bucket everywhere: completes
+#     a generation BETWEEN two same-bucket decodes
+#
+# Minimal repro under all-BFP8, ~90 s: short gen + 128-bucket decode, long gen, 512-bucket decode,
+# long gen, 512-bucket decode -- the last is a pure cache HIT and hangs. tt_transformers never saw
+# it because it uses the same mixed precision we now do.
+#
+# Measured and ELIMINATED, so none of these get retried: memory (flat, 8 GB free at the hang);
+# program-cache COUNT (576 entries over 4 buckets completes, while we died at 310-341 and
+# tt_transformers lived at 329); Block 3 length/content; a Block 1 leak (1400 steps clean); and
+# every distinctive Block 1 op. The underlying ttnn failure -- a silent hang rather than an
+# error -- is unreported upstream and still unexplained.
 
 
 class TtVoxtralPipeline:
     """All three blocks on device. generate(embeds) -> frames; decode(frames) -> waveform."""
 
-    def __init__(self, device, hf_dir=None, ckpt_path=DEFAULT_CKPT, max_seq_len=1024,
-                 backbone_impl=None):
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, max_seq_len=1024):
         self.device = device
         # embed_frame is a host gather, so it needs the backbone's audio embedding table. Load it
         # BEFORE the backbone and hand the same dict over: our Block 1 would otherwise load its own
         # ~13 GB fp32 copy of the same file.
         self.wb = backbone.load_backbone_state(ckpt_path)
-        self.backbone_impl = backbone_impl or BACKBONE_IMPL
-        if self.backbone_impl == "gpt":
-            from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT
-
-            self.backbone = TtVoxtralGPT(device, state=self.wb, max_seq_len=max_seq_len)
-        elif self.backbone_impl == "tt_transformers":
-            from models.experimental.voxtral_tts.tt.ttnn_voxtral_backbone import TtVoxtralBackbone
-
-            self.backbone = TtVoxtralBackbone(device, hf_dir=hf_dir, max_seq_len=max_seq_len)
-        else:
-            raise ValueError(f"unknown backbone {self.backbone_impl!r}; "
-                             f"expected 'gpt' or 'tt_transformers'")
+        self.backbone = TtVoxtralGPT(device, state=self.wb, max_seq_len=max_seq_len)
         self.flow = TtVoxtralFlow(device, ckpt_path=ckpt_path)
         self.codec = TtVoxtralCodecDecoder(device, ckpt_path=ckpt_path)
-
-    def _prepare_traces(self, prompt_len, cfg_alpha):
-        """Warm up EVERY traced block, then capture them all. Order is the whole point.
-
-        Allocating a device buffer while a trace is live corrupts that trace. Capturing lazily --
-        each block on its own first call, inside the generation loop -- means block B's warm-up
-        allocates after block A is already captured, and the result is a HANG in A's first replay
-        (observed exactly there: a py-spy dump parked in Block 1's post-`execute_trace` readback).
-        So: prefill first (it allocates), then all warm-ups, then all captures, then nothing but
-        replays. Traces are released at the end of the utterance because the NEXT prefill
-        allocates again.
-        """
-        from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
-        from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
-
-        if not (gpt.USE_TRACE or flow.USE_TRACE):
-            return
-        if gpt.USE_TRACE:
-            self.backbone.warmup_decode(self.backbone.decode_window(prompt_len))
-        if flow.USE_TRACE:
-            self.flow.warmup_trace(1, flow.N_DECODING_STEPS, cfg_alpha)
-        if gpt.USE_TRACE:
-            self.backbone.capture_decode(self.backbone.decode_window(prompt_len))
-        if flow.USE_TRACE:
-            self.flow.capture_trace(1, flow.N_DECODING_STEPS, cfg_alpha)
-
-    def _release_traces(self):
-        from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
-        from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
-
-        if gpt.USE_TRACE and hasattr(self.backbone, "release_trace"):
-            self.backbone.release_trace()
-        if flow.USE_TRACE:
-            self.flow.release_traces()
 
     @torch.no_grad()
     def generate(self, embeds, max_frames=150, cfg_alpha=CFG_ALPHA, seed=0, verbose=True):
         """prompt embeds [1,P,3072] -> frames [T,37] int64 (offset applied, [END_AUDIO] excluded)."""
         if seed is not None:
             torch.manual_seed(seed)
-        if CLEAR_PROGRAM_CACHE:
-            self.device.clear_program_cache()
         t0 = time.perf_counter()
         # Only the last position conditions the first frame, matching the reference's
         # IncrementalBackbone.prefill which returns x[:, -1:]. Both backbones expose this as
@@ -203,8 +127,6 @@ class TtVoxtralPipeline:
         t_prefill = time.perf_counter() - t0
         if verbose:
             print(f"[pipeline] prefill P={embeds.shape[1]} in {t_prefill:.2f}s")
-
-        self._prepare_traces(embeds.shape[1], cfg_alpha)
 
         frames, t0 = [], time.perf_counter()
         stopped = False
@@ -225,7 +147,6 @@ class TtVoxtralPipeline:
             print(f"[pipeline] hit max_frames={max_frames} without [END_AUDIO]")
         if not frames:
             raise RuntimeError("model emitted [END_AUDIO] on the first frame -- nothing to decode")
-        self._release_traces()
         return torch.cat(frames, dim=0), t_prefill, time.perf_counter() - t0
 
     @torch.no_grad()
