@@ -60,6 +60,7 @@ class TtCombineModule(LightweightModule):
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
         fp8_output: bool = False,
+        cmb_version: int = 1,
     ):
         """
         Initialize combine module with configuration parameters.
@@ -93,6 +94,7 @@ class TtCombineModule(LightweightModule):
         self.memory_config = memory_config
         self.init_zeros = init_zeros
         self.fp8_output = fp8_output
+        self.cmb_version = cmb_version
 
     def forward(
         self,
@@ -100,6 +102,7 @@ class TtCombineModule(LightweightModule):
         dispatched_metadata: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor,
         expert_region_offsets: ttnn.Tensor,
+        expert_offsets: ttnn.Tensor = None,
     ):
         """
         Route expert-processed tokens back to origin devices and accumulate weighted contributions.
@@ -140,21 +143,40 @@ class TtCombineModule(LightweightModule):
                 f"fp8_output=True requires dispatched_buffer in TILE_LAYOUT (got {dispatched_buffer.layout})"
             )
 
-        output = ttnn.experimental.deepseek_prefill.combine(
-            dispatched_buffer,
-            dispatched_metadata,
-            expert_token_counts,
-            expert_region_offsets,
-            dispatch_group_size=self.dispatch_group_size,
-            experts_per_chip=self.experts_per_chip,
-            num_experts_per_tok=self.num_experts_per_tok,
-            seq_len_per_chip=self.seq_len_per_chip,
-            cluster_axis=self.cluster_axis,
-            num_links=self.num_links,
-            topology=self.topology,
-            memory_config=self.memory_config,
-            init_zeros=self.init_zeros,
-            use_fp8_combine=self.fp8_output,
-        )
+        if self.cmb_version == 1:
+            output = ttnn.experimental.deepseek_prefill.combine(
+                dispatched_buffer,
+                dispatched_metadata,
+                expert_token_counts,
+                expert_region_offsets,
+                dispatch_group_size=self.dispatch_group_size,
+                experts_per_chip=self.experts_per_chip,
+                num_experts_per_tok=self.num_experts_per_tok,
+                seq_len_per_chip=self.seq_len_per_chip,
+                cluster_axis=self.cluster_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+                memory_config=self.memory_config,
+                init_zeros=self.init_zeros,
+                use_fp8_combine=self.fp8_output,
+            )
+        else:
+            output = ttnn.experimental.deepseek_prefill.combine_fabric2d(
+                dispatched_buffer,
+                dispatched_metadata,
+                expert_token_counts,
+                expert_region_offsets,
+                expert_offsets,
+                dispatch_group_size=self.dispatch_group_size,
+                experts_per_chip=self.experts_per_chip,
+                num_experts_per_tok=self.num_experts_per_tok,
+                seq_len_per_chip=self.seq_len_per_chip,
+                cluster_axis=self.cluster_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+                memory_config=self.memory_config,
+                init_zeros=self.init_zeros,
+                use_fp8_combine=self.fp8_output,
+            )
 
         return output
