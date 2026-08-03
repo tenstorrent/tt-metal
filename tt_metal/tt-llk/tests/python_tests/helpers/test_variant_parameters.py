@@ -555,6 +555,58 @@ class IS_MAX_OP(TemplateParameter):
         return f"constexpr bool IS_MAX_OP = {str(self.is_max_op).lower()};"
 
 
+@dataclass
+class SFPU_SCALE_EN(TemplateParameter):
+    """Compile-time SCALE_EN flag for SFPU kernels that optionally pre-scale their input.
+
+    Pairs with ``SFPU_UNARY_SCALAR``, which carries the scale itself. Kernels in the
+    exp family take the scale as a *bfloat16* bit pattern (e.g. 0x3F80 for 1.0f,
+    ``p_sfpu::kCONST_1_FP16B``), not an fp32 one.
+    """
+
+    scale_en: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_SCALE_EN = {str(self.scale_en).lower()};"
+
+
+@dataclass
+class SOFTMAX_K(TemplateParameter):
+    """Number of valid lanes ``k`` for the softmax_k SFPU entry (``_softmax_k_<k>``).
+
+    ``k`` counts values per row inside face 0's 16 columns; columns >= k must be
+    exactly 0.0 in DEST (the kernel's predication treats 0.0 as padding).
+    """
+
+    k: int = 16
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SOFTMAX_K = {self.k};"
+
+
+@dataclass
+class SAMPLING_OP(TemplateParameter):
+    """Select which ckernel_sfpu_sampling.h entry point the sampling test drives.
+
+    Emits ``#define SAMPLING_OP_<NAME>`` consumed by ``sfpu_sampling_test.cpp``.
+    """
+
+    op: str = "recip_scalar"
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SAMPLING_OP_{self.op.upper()}"
+
+
+@dataclass
+class SAMPLING_LEGACY_COMPAT(TemplateParameter):
+    """``legacy_compat`` template argument of ``calculate_sampling_recip_scalar``."""
+
+    legacy_compat: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SAMPLING_LEGACY_COMPAT = {str(self.legacy_compat).lower()};"
+
+
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
