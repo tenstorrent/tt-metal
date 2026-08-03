@@ -12,6 +12,16 @@ using namespace sfpi;
 
 namespace ckernel::sfpu {
 
+constexpr std::uint32_t sfpshft_mod1_arg_imm = 1;
+constexpr std::uint32_t sfpshft_mod1_arg_imm_use_vc = sfpshft_mod1_arg_imm | 4;
+
+template <std::uint32_t DEST>
+inline void rand_prng() {
+    constexpr std::uint32_t prng_source = 9;
+    constexpr std::uint32_t sfpmov_mod1_from_special = 8;
+    TTI_SFPMOV(0, prng_source, DEST, sfpmov_mod1_from_special);
+}
+
 template <bool APPROXIMATION_MODE>
 inline void rand_init(std::uint32_t seed) {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -20,15 +30,15 @@ inline void rand_init(std::uint32_t seed) {
 
 template <std::uint32_t VALUE, std::uint32_t NEXT>
 inline void rand_row() {
-    TTI_SFPSHFT((-12) & 0xFFF, VALUE, p_sfpu::LREG4, 5);
+    TTI_SFPSHFT((-12) & 0xFFF, VALUE, p_sfpu::LREG4, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG4, VALUE, 0);
     TTI_SFPMUL24(VALUE, p_sfpu::LREG6, p_sfpu::LCONST_0, VALUE, sfpi::SFPMUL24_MOD1_LOWER);
-    TTI_SFPMOV(0, 9, NEXT, 8);
-    TTI_SFPSHFT((-11) & 0xFFF, VALUE, p_sfpu::LREG4, 5);
+    rand_prng<NEXT>();
+    TTI_SFPSHFT((-11) & 0xFFF, VALUE, p_sfpu::LREG4, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG4, VALUE, 0);
     TTI_SFPMUL24(VALUE, p_sfpu::LREG7, p_sfpu::LCONST_0, VALUE, sfpi::SFPMUL24_MOD1_LOWER);
     TTI_SFPIADD(0, p_sfpu::LREG3, NEXT, sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSHFT((-12) & 0xFFF, VALUE, p_sfpu::LREG4, 5);
+    TTI_SFPSHFT((-12) & 0xFFF, VALUE, p_sfpu::LREG4, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG4, VALUE, 0);
 
     TTI_SFPSETMAN(0, p_sfpu::LCONST_1, VALUE, 0);
@@ -50,20 +60,20 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     // bijective.
     constexpr std::uint32_t mix_constant_0 = 0x5BD1E995 & 0x7FFFFF;
     constexpr std::uint32_t mix_constant_1 = 0x27D4EB2D & 0x7FFFFF;
-    TT_SFPLOADI(p_sfpu::LREG6, 10, mix_constant_0 & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG6, 8, mix_constant_0 >> 16);
-    TT_SFPLOADI(p_sfpu::LREG7, 10, mix_constant_1 & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG7, 8, mix_constant_1 >> 16);
+    TT_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, mix_constant_0 & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, mix_constant_0 >> 16);
+    TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, mix_constant_1 & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, mix_constant_1 >> 16);
 
     // Load scale param to lreg1
-    TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
+    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, scale & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, scale >> 16);
 
     // Load from param to lreg2
-    TT_SFPLOADI(p_sfpu::LREG2, 10, from & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG2, 8, from >> 16);
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, from & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
 
-    TTI_SFPMOV(0, 9, p_sfpu::LREG0, 8);
+    rand_prng<p_sfpu::LREG0>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
 
 #pragma GCC unroll 0
