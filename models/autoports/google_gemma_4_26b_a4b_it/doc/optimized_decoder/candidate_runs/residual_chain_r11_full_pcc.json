@@ -1,0 +1,76 @@
+{
+  "pcc_layer5_full_attention_shared0.json": {
+    "decode_current_pos": 32,
+    "decode_pcc": 0.9907660411171085,
+    "decode_threshold": 0.995,
+    "layer_idx": 5,
+    "layer_type": "full_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "optimized_stage_provenance": {
+      "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+      "exact_command": "AutoFix coherent residual chain R11 full-attention real weights",
+      "hardware": {
+        "arch": "Blackhole P300C",
+        "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      },
+      "optimized_decoder_sha256": "cf5960b09b066d6a0584da3b5fca689191bcc08b4599c392328431b39e4b3f24",
+      "optimized_test_sha256": "e508a5db434159fe164b8f75ebb3e2152591f542655725fedc1b8ad744d914b9",
+      "resolved_policy": {
+        "constructor_defaults": {
+          "activation_dtype": "DataType.BFLOAT16",
+          "attention_math_fidelity": "MathFidelity.HiFi4",
+          "attention_weight_dtype": "None",
+          "dense_decode_dram_sharded": "False",
+          "dram_in0_block_w": "None",
+          "dram_sharded_roles": "()",
+          "expert_decode_input_l1": "True",
+          "expert_down_in0_block_w": "11",
+          "expert_down_out_subblock_w": "None",
+          "expert_down_per_core_n": "2",
+          "expert_gate_in0_block_w": "11",
+          "expert_gate_math_fidelity": "MathFidelity.LoFi",
+          "expert_gate_out_subblock_w": "None",
+          "expert_gate_per_core_n": "2",
+          "expert_math_fidelity": "MathFidelity.LoFi",
+          "expert_weight_dtype": "DataType.BFLOAT8_B",
+          "full_attention_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_weight_dtype": "DataType.BFLOAT8_B",
+          "packed_dense_gate_up": "True",
+          "prefill_expert_chunk_size": "32",
+          "prefill_expert_down_in0_block_w": "11",
+          "prefill_expert_gate_in0_block_w": "44",
+          "prefill_expert_per_core_n": "2",
+          "prefill_expert_tail_in0_block_w": "1",
+          "prefill_expert_tail_per_core_n": "11",
+          "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+          "prefill_routed_active": "True",
+          "residual_shard_cores": "0",
+          "tensor_cache_path": "None",
+          "weight_dtype": "DataType.BFLOAT16"
+        },
+        "environment_overrides": {
+          "GEMMA4_OPT_CANDIDATE_ID": "residual_chain_r11_full_pcc",
+          "GEMMA4_OPT_EXACT_COMMAND": "AutoFix coherent residual chain R11 full-attention real weights",
+          "GEMMA4_OPT_RESIDUAL_SHARD_CORES": "11"
+        }
+      }
+    },
+    "pcc_results": [
+      {
+        "passed": true,
+        "pcc": 0.9983365844383894,
+        "threshold": 0.995
+      },
+      {
+        "passed": false,
+        "pcc": 0.9907660411171085,
+        "threshold": 0.995
+      }
+    ],
+    "prefill_pcc": 0.9983365844383894,
+    "prefill_threshold": 0.995,
+    "sequence_length": 32,
+    "shared_physical_cache": false
+  }
+}

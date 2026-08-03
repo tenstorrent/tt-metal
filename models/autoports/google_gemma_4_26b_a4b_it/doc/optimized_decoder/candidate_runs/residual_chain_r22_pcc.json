@@ -1,0 +1,75 @@
+{
+  "pcc_layer0_sliding_attention_shared1.json": {
+    "decode_current_pos": 32,
+    "decode_pcc": 0.9946942076281482,
+    "decode_threshold": 0.995,
+    "layer_idx": 0,
+    "layer_type": "sliding_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "optimized_stage_provenance": {
+      "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+      "exact_command": "AutoFix coherent residual chain R22 final-source real-weight sliding",
+      "hardware": {
+        "arch": "Blackhole P300C",
+        "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      },
+      "optimized_decoder_sha256": "65b056190713620ff6d2297c54e9a57fbee9839b91f6f7d7f17b2f240103e417",
+      "optimized_test_sha256": "4649ccef44427818a5ea5e1750b555263256e72f8b70cf7429f001128a369379",
+      "resolved_policy": {
+        "constructor_defaults": {
+          "activation_dtype": "DataType.BFLOAT16",
+          "attention_math_fidelity": "MathFidelity.HiFi4",
+          "attention_weight_dtype": "None",
+          "dense_decode_dram_sharded": "False",
+          "dram_in0_block_w": "None",
+          "expert_decode_input_l1": "True",
+          "expert_down_in0_block_w": "11",
+          "expert_down_out_subblock_w": "None",
+          "expert_down_per_core_n": "2",
+          "expert_gate_in0_block_w": "11",
+          "expert_gate_math_fidelity": "MathFidelity.LoFi",
+          "expert_gate_out_subblock_w": "None",
+          "expert_gate_per_core_n": "2",
+          "expert_math_fidelity": "MathFidelity.LoFi",
+          "expert_weight_dtype": "DataType.BFLOAT8_B",
+          "full_attention_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_weight_dtype": "DataType.BFLOAT8_B",
+          "packed_dense_gate_up": "True",
+          "prefill_expert_chunk_size": "32",
+          "prefill_expert_down_in0_block_w": "11",
+          "prefill_expert_gate_in0_block_w": "44",
+          "prefill_expert_per_core_n": "2",
+          "prefill_expert_tail_in0_block_w": "1",
+          "prefill_expert_tail_per_core_n": "11",
+          "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+          "prefill_routed_active": "True",
+          "residual_shard_cores": "0",
+          "tensor_cache_path": "None",
+          "weight_dtype": "DataType.BFLOAT16"
+        },
+        "environment_overrides": {
+          "GEMMA4_OPT_CANDIDATE_ID": "residual_chain_r22_pcc",
+          "GEMMA4_OPT_EXACT_COMMAND": "AutoFix coherent residual chain R22 final-source real-weight sliding",
+          "GEMMA4_OPT_RESIDUAL_SHARD_CORES": "22"
+        }
+      }
+    },
+    "pcc_results": [
+      {
+        "passed": true,
+        "pcc": 0.9986308113487989,
+        "threshold": 0.995
+      },
+      {
+        "passed": false,
+        "pcc": 0.9946942076281482,
+        "threshold": 0.995
+      }
+    ],
+    "prefill_pcc": 0.9986308113487989,
+    "prefill_threshold": 0.995,
+    "sequence_length": 32,
+    "shared_physical_cache": true
+  }
+}

@@ -1,0 +1,5 @@
+layer_idx,layer_type,batch,host_warmed_ms,device_warmup_fw_ms,device_measured_fw_ms,device_measured_kernel_ms,raw_device_csv
+0,sliding_attention,1,3.038073999050539,2.991288,2.991334,2.990590,decode_trace_device_current.csv
+0,sliding_attention,32,68.96911800140515,68.878780,68.860171,68.859431,decode_trace_device_current.csv
+5,full_attention,1,3.203970001777634,3.176921,3.176711,3.175946,decode_trace_device_current.csv
+5,full_attention,32,68.72255799680715,68.649723,68.628382,68.627647,decode_trace_device_current.csv
