@@ -42,7 +42,7 @@ from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
-DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark")
+DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731")
 DEFAULT_WEIGHT_DTYPE = ttnn.bfloat4_b
 DEFAULT_BLOCK_SIZE = 32
 
