@@ -43,7 +43,7 @@ void PermuteCodegenDeviceOperation::validate_on_program_cache_miss(
         "PermuteCodegen: only ROW_MAJOR is supported by the codegen port");
     ttsl::SmallVector<uint32_t> dims(attributes.dims.begin(), attributes.dims.begin() + attributes.rank);
     TT_FATAL(
-        supported_by_codegen(tensor_args.input_tensor, dims),
+        supported_by_codegen(tensor_args.input_tensor, dims, attributes.output_mem_config),
         "PermuteCodegen: call does not satisfy supported_by_codegen()");
 }
 

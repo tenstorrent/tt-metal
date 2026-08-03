@@ -219,19 +219,22 @@ ttnn::Tensor permute(
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
-    if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
+    // Parsed before the no-op shortcut so an invalid selector is rejected on every call, and so a
+    // forced "codegen" request is not silently answered by the shortcut's memory-config copy.
+    const auto selector = operations::data_movement::parse_implementation(implementation);
+    if (selector != operations::data_movement::ImplementationSelector::Codegen &&
+        operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
 
-    const auto selector = operations::data_movement::parse_implementation(implementation);
     if (selector == operations::data_movement::ImplementationSelector::Codegen) {
         TT_FATAL(
-            operations::data_movement::supported_by_codegen(input_tensor, normalized_dims),
+            operations::data_movement::supported_by_codegen(input_tensor, normalized_dims, memory_config),
             "PermuteCodegen: call does not satisfy supported_by_codegen()");
         return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
     }
     if (selector == operations::data_movement::ImplementationSelector::Auto &&
-        operations::data_movement::supported_by_codegen(input_tensor, normalized_dims) &&
+        operations::data_movement::supported_by_codegen(input_tensor, normalized_dims, memory_config) &&
         !operations::data_movement::is_demoted(input_tensor, normalized_dims)) {
         return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
     }

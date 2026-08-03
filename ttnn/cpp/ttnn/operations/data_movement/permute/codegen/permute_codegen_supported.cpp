@@ -10,7 +10,10 @@
 
 namespace ttnn::operations::data_movement {
 
-bool supported_by_codegen(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& dims) {
+bool supported_by_codegen(
+    const Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& dims,
+    const std::optional<MemoryConfig>& output_mem_config) {
     const auto& shape = input_tensor.logical_shape();
     const uint32_t rank = shape.rank();
     if (rank != dims.size() || rank < 2 || rank > PermuteCodegenDeviceOperation::kMaxDims) {
@@ -19,7 +22,14 @@ bool supported_by_codegen(const Tensor& input_tensor, const ttsl::SmallVector<ui
     if (input_tensor.layout() != Layout::ROW_MAJOR) {
         return false;
     }
+    // Both readers and both writers bind interleaved TensorAccessorArgs (a two-element compile-time
+    // ABI); a sharded buffer on either side widens that and the program factory rejects it. The
+    // output side is gated here rather than at validate because native supports interleaved-to-
+    // sharded, so "auto" has somewhere to fall back to.
     if (input_tensor.memory_config().is_sharded()) {
+        return false;
+    }
+    if (output_mem_config.has_value() && output_mem_config->is_sharded()) {
         return false;
     }
     // Every kernel builder here assumes positive per-core work (split_work_to_cores rejects a
@@ -67,7 +77,8 @@ bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& d
     // supported, so a forced implementation="codegen" call still runs them. Both conditions below
     // are mechanisms measured on device, not an enumerated regression list -- every case that
     // matches loses to native for the stated structural reason, and cases outside them either win
-    // or sit inside the measurement window.
+    // or sit inside the measurement window. Measured on Blackhole; the mechanisms are not
+    // arch-specific but have not been re-measured on Wormhole, so the predicates stay unconditional.
     const auto& shape = input_tensor.logical_shape();
     const uint32_t rank = shape.rank();
     if (rank != dims.size()) {
