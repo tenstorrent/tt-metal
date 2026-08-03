@@ -310,13 +310,22 @@ class TestFactory:
         return cos, sin
 
     @staticmethod
-    def create_tt_rope_cache(device, hf_text_config, max_seq_len, layer_idx):
+    def create_tt_rope_cache(device, hf_text_config, max_seq_len, layer_idx, mesh_config=None):
         """Create HF-format cos/sin cache on TT device using HF Gemma4TextRotaryEmbedding.
 
         Returns (cos_cache, sin_cache) each [1, 1, max_seq_len, head_dim] on device.
         Matches exactly what HF produces (including identity padding for partial RoPE).
+
+        ``mesh_config`` with a context-parallel degree > 1 shards the sequence
+        dimension across the CP axis instead of replicating, so each rank gets the
+        cos/sin rows for the positions it actually owns. RoPE is the one place that
+        needs absolute positions, and because it is a per-position lookup the
+        sharding is all that is required. Omitting mesh_config replicates, which is
+        what every non-CP caller wants.
         """
         from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+        from models.demos.gemma4.tt.ccl import cp_degree
 
         rope = Gemma4TextRotaryEmbedding(hf_text_config)
         x_dummy = torch.randn(1, max_seq_len, hf_text_config.hidden_size)
@@ -328,19 +337,27 @@ class TestFactory:
         sin = sin.unsqueeze(0)
 
         is_mesh = hasattr(device, "shape")
+        if is_mesh and mesh_config is not None and cp_degree(mesh_config) > 1:
+            shard_dims = (-2, None) if mesh_config.sp_axis == 0 else (None, -2)
+            mapper = ttnn.ShardTensor2dMesh(device, device.shape, dims=shard_dims)
+        elif is_mesh:
+            mapper = ttnn.ReplicateTensorToMesh(device)
+        else:
+            mapper = None
+
         cos_tt = ttnn.from_torch(
             cos,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+            mesh_mapper=mapper,
         )
         sin_tt = ttnn.from_torch(
             sin,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+            mesh_mapper=mapper,
         )
         return cos_tt, sin_tt
 
@@ -416,6 +433,22 @@ _DEVICE_DISCOVERY_FAILURE_MARKERS = (
 def _is_device_discovery_failure(exc):
     msg = str(exc).lower()
     return any(marker in msg for marker in _DEVICE_DISCOVERY_FAILURE_MARKERS)
+
+
+def _fabric_config_for_shape(shape):
+    """Fabric config for a mesh shape.
+
+    A single device needs no fabric: launching it on a 1x1 mesh of a multi-device
+    system fails the is_device_active() check, since fabric expects every device to
+    be opened. A line mesh only ever routes along one axis, so FABRIC_1D suffices.
+    A mesh with both dims > 1 runs collectives on both axes — tensor parallel on
+    one, context parallel on the other — and needs 2D routing.
+    """
+    if shape == (1, 1):
+        return None
+    if shape[0] > 1 and shape[1] > 1:
+        return ttnn.FabricConfig.FABRIC_2D
+    return ttnn.FabricConfig.FABRIC_1D
 
 
 def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
@@ -496,7 +529,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         params = [
             pytest.param(
                 s,
-                {"fabric_config": None if s == (1, 1) else ttnn.FabricConfig.FABRIC_1D, **extra},
+                {"fabric_config": _fabric_config_for_shape(s), **extra},
                 id=f"{s[0]}x{s[1]}",
             )
             for s in mesh_shapes
