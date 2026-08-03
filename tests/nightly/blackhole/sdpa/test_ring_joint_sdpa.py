@@ -59,6 +59,10 @@ MESH_CONFIG = MeshConfig.detect()
 
 BATCH_SIZE = 1
 
+# Experimental LLK-assert override: shrink user-allocatable worker L1 by 16 KiB so the
+# kernel-config staging region grows from 69 KiB to 85 KiB on Blackhole.
+LLK_ASSERT_WORKER_L1_SIZE = 1_444_992
+
 
 @dataclass(frozen=True)
 class GPTOSSRingSinkConfig:
@@ -569,7 +573,10 @@ def open_ring_joint_sdpa_runtime(
         mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
         # trace_region_size defaults to 0 (no trace region), leaving every existing caller unchanged; only
         # the trace-replay test asks for one.
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+        mesh_device_kwargs = {"mesh_shape": mesh_shape, "trace_region_size": trace_region_size}
+        if os.getenv("TT_METAL_LLK_ASSERTS"):
+            mesh_device_kwargs["worker_l1_size"] = LLK_ASSERT_WORKER_L1_SIZE
+        mesh_device = ttnn.open_mesh_device(**mesh_device_kwargs)
 
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
