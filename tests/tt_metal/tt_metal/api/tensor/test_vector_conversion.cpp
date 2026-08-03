@@ -288,11 +288,11 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
 
     auto host = HostTensor::from_vector(input, spec);
-    auto mesh = enqueue_write_tensor(mesh_device_->mesh_command_queue(), host, *mesh_device_, mem_cfg);
+    auto mesh = mesh_device_->mesh_command_queue().enqueue_write_tensor(host, mem_cfg);
 
     EXPECT_TRUE(mesh.memory_config().is_l1());
 
-    auto readback = enqueue_read_tensor(mesh_device_->mesh_command_queue(), mesh);
+    auto readback = mesh_device_->mesh_command_queue().enqueue_read_tensor(mesh);
 
     EXPECT_THAT(readback.to_vector<float>(), Pointwise(Eq(), input));
 }
