@@ -27,9 +27,27 @@ which are a pessimistic proxy and cost a lot of time once (STATUS.md trap #12):
     Block 1 decode   PCC 0.99991
     Block 2 velocity PCC 0.9999989, semantic codes EXACT, 73/74 frame codes exact on synthetic h
     Block 3          real speech PCC 0.999984, worst sample 1.16% of peak
-The end-to-end question is not any of those PCCs -- it is how many of the 37 INTEGER codes per
-frame differ from the reference, because that is what changes the audio. `compare_codes()` below
-measures exactly that, and attributes any excess over Block 2's own 1-in-74 to Block 1.
+The end-to-end question is not any of those PCCs -- it is the WER of the decoded audio, because
+that is what a listener gets. Full 15-case fixture, free-running: natural-text WER 0.88% over 341
+words, 15/15 natural [END_AUDIO]. `compare_codes()` below is the finer-grained probe.
+
+PERFORMANCE, steady state on one N150, case 2 (468 frames, 37.4 s of audio, first 30 discarded):
+
+    Block 1 decode      41.5 ms/frame   44.2%
+    Block 2 flow        52.4 ms/frame   55.7%
+    host embed_frame     0.2 ms/frame    0.2%
+    TOTAL               94.0 ms/frame   = 0.094 s/frame
+    prefill 1.1 s once; Block 3 codec 2.5 s once (6.8% of the audio duration)
+    RTF 1.27 end to end, 1.18 steady state   (RTF = generation / audio, lower is better)
+
+A frame is 80 ms of audio at 12.5 Hz, so RTF = ms_per_frame / 80. For scale, the
+ign/voxtral_p150_qb2 branch's perf test targets 0.10 s/frame -- but on Blackhole P150 and on a
+larger model variant (4B / 32 layers against our 3.4B / 26), so treat it as a rough waypoint and
+not a like-for-like comparison.
+
+BLOCK 2 IS NOW THE LARGER HALF (55.7%), so it is where the next optimization should go. Block 1
+has already had its big structural wins (the GQA row fold, mixed-precision weights) and sits at
+194 GB/s on its linears, which is the measured ceiling for a plain interleaved matmul here.
 """
 
 import os
