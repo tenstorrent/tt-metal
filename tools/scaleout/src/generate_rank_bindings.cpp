@@ -858,7 +858,9 @@ int main(int argc, char** argv) {
 
             if (!topology.mapping.success) {
                 log_error(tt::LogFabric, "Topology mapping failed: {}", topology.mapping.error_message);
-                return 1;
+                // Non-zero ranks skip mapping and wait at the exit barrier below. Returning here would
+                // leave them hung; abort tears down the whole MPI job.
+                context->abort(1);
             }
             log_info(tt::LogFabric, "Topology mapping complete");
 
@@ -1015,7 +1017,9 @@ int main(int argc, char** argv) {
 
     } catch (const std::exception& e) {
         log_error(tt::LogFabric, "Error: {}", e.what());
-        return 1;
+        // Rank 0 alone runs topology mapping / pinning validation. A throw there must abort the
+        // communicator; a plain return leaves other ranks blocked on the barrier above.
+        context->abort(1);
     }
 
     return 0;
