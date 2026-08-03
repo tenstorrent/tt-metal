@@ -304,8 +304,8 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --tra
 `--trace` / `VV_TRACE_SEGMENT=1` ttnn-captures the whole steady-state speech-diffusion frame
 (neg-LM + diffusion + post-diffusion + pos-LM) as one fully device-driven graph — the "llama shape":
 positions self-advance on device, RoPE is gathered on device, and the pos hidden is loop-carried —
-then replays it per frame. It gives **≈21–22 tok/s** steady-state decode vs ≈2.4 tok/s eager
-(~9× on the AR loop), and opens the device with a ~1.4 GB trace region + 2 command queues.
+then replays it per frame. It gives **≈24–25 tok/s** steady-state decode vs ≈2.4 tok/s eager
+(~10× on the AR loop), and opens the device with a ~1.4 GB trace region + 2 command queues.
 
 | Flag | Env var | Scope | Notes |
 |------|---------|-------|-------|
@@ -513,21 +513,21 @@ tokenization; untimed warmup (`VV_ISL_WARMUP_TOKENS=32`) then timed `max_new_tok
 
 | ISL | Prefill tok/s | TTFT (s) | Decode tok/s | ms/tok | E2E | AR toks |
 |----:|-------------:|---------:|-------------:|-------:|----:|--------:|
-| 32 | 5.3 | 6.073 | 21.52 | 46 | 11s | 64 |
-| 64 | 10.5 | 6.088 | 21.50 | 47 | 16s | 128 |
-| 128 | 20.7 | 6.173 | 21.50 | 47 | 24s | 256 |
-| 256 | 41.8 | 6.128 | 21.49 | 47 | 62s | 512 |
-| 512 | 82.0 | 6.247 | 21.52 | 46 | 12s | 66 (EOS early) |
-| 1024 | 158.7 | 6.452 | 21.45 | 47 | 135s | 2048 |
-| 2048 | 292.8 | 6.995 | 21.35 | 47 | 220s | 4096 |
-| 4096 | 506.6 | 8.085 | 21.12 | 47 | 412s | 7795 (EOS before 2×) |
-| 8192 | 780.8 | 10.492 | 20.79 | 48 | 848s | 15122 (EOS before 2×) |
-| 16384 | 813.2 | 20.147 | 20.21 | 49 | 1858s | 32768 |
-| 23038 | 724.5 | 31.799 | 19.83 | 50 | 2617s | 42498 (EOS before 2×) |
+| 32 | 5.7 | 5.634 | 24.75 | 40 | 10s | 64 |
+| 64 | 11.3 | 5.656 | 24.71 | 40 | 14s | 128 |
+| 128 | 22.6 | 5.677 | 24.74 | 40 | 21s | 256 |
+| 256 | 44.5 | 5.759 | 24.70 | 40 | 54s | 512 |
+| 512 | 88.4 | 5.795 | 24.62 | 41 | 11s | 66 (EOS early) |
+| 1024 | 169.5 | 6.043 | 24.57 | 41 | 118s | 2048 |
+| 2048 | 320.0 | 6.400 | 24.39 | 41 | 192s | 4096 |
+| 4096 | 554.6 | 7.386 | 24.13 | 41 | 358s | 7795 (EOS before 2×) |
+| 8192 | 830.7 | 9.862 | 23.70 | 42 | 739s | 15122 (EOS before 2×) |
+| 16384 | 854.8 | 19.167 | 22.94 | 44 | 1623s | 32768 |
+| 23038 | 758.9 | 30.359 | 22.46 | 45 | 2295s | 42498 (EOS before 2×) |
 
-Steady decode is **~21.5 tok/s** (≈46–47 ms/tok) through mid ISLs, easing slightly to
-**~20 tok/s** at full prompt (longer KV). TTFT stays ~6s through ISL≈2k, then rises with
-prefill cost to ~32s at full length. Log: `tests/logs/test_e2e_isl_sweep_perf_full_steady.txt`.
+Steady decode is **~24.7 tok/s** (≈40–41 ms/tok) through mid ISLs, easing slightly to
+**~22.5 tok/s** at full prompt (longer KV). TTFT stays ~5.7s through ISL≈2k, then rises with
+prefill cost to ~30s at full length. Log: `tests/logs/test_e2e_isl_sweep_perf_full_steady.txt`.
 
 ### Performance tests (Tracy)
 
