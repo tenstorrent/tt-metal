@@ -215,95 +215,64 @@ execute_step_validate_env() {
 # ===========================================================================
 execute_step_seed_review_state() {
     local wt="$1" S="$_ORCH_SCRIPTS" src="${CODEGEN_SOURCE_RUN_DIR:-}"
-    [ -n "$wt" ] && [ -d "$wt" ] || { echo "REJECT: WORKTREE_DIR missing or not a directory: '$wt'"; return 1; }
+    [ -n "$wt" ] && [ -d "$wt" ] || { echo "REJECT: WORKTREE_DIR is missing: '$wt'"; return 1; }
     [ -n "$src" ] && [ -f "$src/state.json" ] || {
-        echo "REJECT: CODEGEN_SOURCE_RUN_DIR must point at a solve run dir containing state.json (got '${src:-unset}')"
+        echo "REJECT: CODEGEN_SOURCE_RUN_DIR must be a solve run dir with state.json (got '${src:-unset}')"
         return 1; }
     [ -n "${CODEGEN_REVIEW_INPUT:-}" ] && [ -f "${CODEGEN_REVIEW_INPUT}" ] || {
-        echo "REJECT: CODEGEN_REVIEW_INPUT must point at the reviewer-feedback JSON (got '${CODEGEN_REVIEW_INPUT:-unset}')"
+        echo "REJECT: CODEGEN_REVIEW_INPUT must be the reviewer-feedback JSON (got '${CODEGEN_REVIEW_INPUT:-unset}')"
         return 1; }
-    printf '%s' "${CODEGEN_PR_NUMBER:-}" | grep -qE '^[0-9]+$' || {
-        echo "REJECT: CODEGEN_PR_NUMBER must be numeric (got '${CODEGEN_PR_NUMBER:-unset}')"; return 1; }
 
-    # Resolve the arch list + run mode once, in python, so the "1 → single,
-    # N → multi" rule matches execute_step_setup_run exactly.
-    local plan
-    plan="$(SRC="$src" ARCHES="${CODEGEN_REVIEW_ARCHES:-}" python - <<'PY' || exit 1
+    # One python pass builds the whole patch, one `set-many` writes it. Copying
+    # these keys is what lets the round reuse the route_verification → tester tail
+    # without re-analyzing the issue.
+    python - "$src" <<'PY' | _disk_guard python "$S/state.py" --worktree-dir "$wt" set-many
 import json, os, sys
-state = json.load(open(os.path.join(os.environ["SRC"], "state.json")))
-raw = (os.environ.get("ARCHES") or "").strip()
-if raw:
-    arches = json.loads(raw)
-else:
-    arches = state.get("TARGET_ARCHES_JSON") or (
-        [state["TARGET_ARCH"]] if state.get("TARGET_ARCH") else [])
-    if isinstance(arches, str):
-        arches = json.loads(arches)
+state = json.load(open(os.path.join(sys.argv[1], "state.json")))
+pr = os.environ.get("CODEGEN_PR_NUMBER", "")
+num = str(state.get("ISSUE_NUMBER") or "")
+backend = os.environ.get("CODEGEN_REVIEW_TEST_BACKEND") or "local"
+if not pr.isdigit():          raise SystemExit(f"REJECT: CODEGEN_PR_NUMBER not numeric: {pr!r}")
+if not num.isdigit():         raise SystemExit("REJECT: source run has no numeric ISSUE_NUMBER")
+if backend not in ("local", "ttsim"): raise SystemExit("REJECT: TEST_BACKEND must be local|ttsim")
+
+raw = (os.environ.get("CODEGEN_REVIEW_ARCHES") or "").strip()
+arches = json.loads(raw) if raw else (state.get("TARGET_ARCHES_JSON")
+         or ([state["TARGET_ARCH"]] if state.get("TARGET_ARCH") else []))
+if isinstance(arches, str):
+    arches = json.loads(arches)
 aliases = {"bh": "blackhole", "wh": "wormhole", "qsr": "quasar"}
-seen, out = set(), []
+seen, targets = set(), []
 for value in arches:
     arch = aliases.get(str(value).strip().lower(), str(value).strip().lower())
     if arch not in {"blackhole", "wormhole", "quasar"}:
-        raise SystemExit(f"unknown target arch: {value}")
+        raise SystemExit(f"REJECT: unknown target arch: {value}")
     if arch not in seen:
-        seen.add(arch); out.append(arch)
-if not out:
-    raise SystemExit("source run recorded no target arch; cannot seed a review round")
-print(json.dumps({
-    "arches": out,
-    "mode": "single" if len(out) == 1 else "multi",
-    "issue_number": str(state.get("ISSUE_NUMBER") or ""),
-    "issue_title": state.get("ISSUE_TITLE") or "",
-    "issue_body": state.get("ISSUE_BODY") or "",
-    "issue_labels": state.get("ISSUE_LABELS") or "",
-    "issue_comments": state.get("ISSUE_COMMENTS") or "",
-    "issue_url": state.get("ISSUE_URL") or "",
-    "run_id": state.get("RUN_ID") or "",
-    "ttsim_so_path": state.get("TTSIM_SO_PATH") or "",
-    "ttsim_so_paths": state.get("TTSIM_SO_PATHS") or "",
-}))
+        seen.add(arch); targets.append(arch)
+if not targets:
+    raise SystemExit("REJECT: source run recorded no target arch")
+
+patch = {k: state.get(k) or "" for k in
+         ("ISSUE_TITLE", "ISSUE_BODY", "ISSUE_LABELS", "ISSUE_COMMENTS", "ISSUE_URL")}
+patch.update({
+    "RUN_KIND": "review", "ISSUE_NUMBER": num, "TEST_BACKEND": backend,
+    # The round updates an existing PR: it commits locally, never opens one.
+    "CREATE_LOCAL_BRANCH": "yes", "CREATE_PR": "no",
+    "PR_NUMBER": pr, "PR_HEAD_SHA": os.environ.get("CODEGEN_PR_HEAD_SHA", ""),
+    "REVIEW_INPUT": os.environ["CODEGEN_REVIEW_INPUT"],
+    "SOURCE_RUN_DIR": sys.argv[1], "SOURCE_RUN_ID": state.get("RUN_ID") or "",
+})
+# The same "1 → single, N → multi" rule execute_step_setup_run applies.
+single = len(targets) == 1
+patch["RUN_MODE"] = "single" if single else "multi"
+patch["TARGET_ARCH" if single else "TARGET_ARCHES"] = targets[0] if single else json.dumps(targets)
+key = "TTSIM_SO_PATH" if single else "TTSIM_SO_PATHS"
+if state.get(key):
+    patch[key] = state[key]
+json.dump(patch, sys.stdout)
+print(f"OK: PR #{pr}, issue #{num}, arches={targets}, backend={backend}", file=sys.stderr)
 PY
-)" || { echo "REJECT: could not read the source run state"; return 1; }
-
-    jget() { printf '%s' "$plan" | python -c "import json,sys;print(json.load(sys.stdin)[sys.argv[1]])" "$1"; }
-    local mode arches_json num
-    mode="$(jget mode)"
-    arches_json="$(printf '%s' "$plan" | python -c "import json,sys;print(json.dumps(json.load(sys.stdin)['arches']))")"
-    num="$(jget issue_number)"
-    printf '%s' "$num" | grep -qE '^[0-9]+$' || {
-        echo "REJECT: source run has no numeric ISSUE_NUMBER"; return 1; }
-
-    local backend="${CODEGEN_REVIEW_TEST_BACKEND:-local}"
-    case "$backend" in local|ttsim) ;; *) echo "REJECT: CODEGEN_REVIEW_TEST_BACKEND must be local|ttsim"; return 1 ;; esac
-
-    bset() { _disk_guard python "$S/state.py" --worktree-dir "$wt" set "$@" >/dev/null; }
-    bset RUN_KIND            "review"
-    bset RUN_MODE            "$mode"
-    bset ISSUE_NUMBER        "$num"
-    bset ISSUE_TITLE         "$(jget issue_title)"
-    bset ISSUE_BODY          "$(jget issue_body)"
-    bset ISSUE_LABELS        "$(jget issue_labels)"
-    bset ISSUE_COMMENTS      "$(jget issue_comments)"
-    bset ISSUE_URL           "$(jget issue_url)"
-    bset TEST_BACKEND        "$backend"
-    # The round updates an existing PR: it commits locally and never opens one.
-    bset CREATE_LOCAL_BRANCH "yes"
-    bset CREATE_PR           "no"
-    if [ "$mode" = "single" ]; then
-        bset TARGET_ARCH "$(printf '%s' "$arches_json" | python -c "import json,sys;print(json.load(sys.stdin)[0])")"
-        [ -n "$(jget ttsim_so_path)" ] && bset TTSIM_SO_PATH "$(jget ttsim_so_path)"
-    else
-        bset TARGET_ARCHES "$arches_json"
-        [ -n "$(jget ttsim_so_paths)" ] && bset TTSIM_SO_PATHS "$(jget ttsim_so_paths)"
-    fi
-    # Review-round identity, carried into the run state by execute_step_setup_review_run.
-    bset PR_NUMBER      "${CODEGEN_PR_NUMBER}"
-    bset PR_HEAD_SHA    "${CODEGEN_PR_HEAD_SHA:-}"
-    bset REVIEW_INPUT   "${CODEGEN_REVIEW_INPUT}"
-    bset SOURCE_RUN_DIR "$src"
-    bset SOURCE_RUN_ID  "$(jget run_id)"
-
-    echo "OK: seeded review state for PR #${CODEGEN_PR_NUMBER}, issue #${num}, arches=${arches_json}, backend=${backend}"
+    [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
 }
 
 # ===========================================================================

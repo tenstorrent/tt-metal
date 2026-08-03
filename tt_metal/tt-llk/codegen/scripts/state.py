@@ -15,6 +15,7 @@ Backing file resolution (highest precedence first):
 Subcommands:
     set K V         Store string value V under key K.
     set K V --json  Store V parsed as JSON (typed: numbers, bools, objects).
+    set-many        Merge a JSON object read from stdin, in a single write.
     get K           Print value of K (raw for strings, JSON otherwise).
                     Missing key -> print --default (empty string) and exit 0.
     del K           Remove key K (no error if absent).
@@ -129,6 +130,20 @@ def _cmd_set(path: Path, key: str, value: str, as_json: bool) -> int:
     return 0
 
 
+def _cmd_set_many(path: Path) -> int:
+    """Merge a JSON object read from stdin into the store, in one write."""
+    try:
+        patch = json.load(sys.stdin)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"state.py: set-many stdin is not valid JSON: {exc}")
+    if not isinstance(patch, dict):
+        raise SystemExit("state.py: set-many expects a JSON object")
+    store = _load(path)
+    store.update(patch)
+    _atomic_write(path, store)
+    return 0
+
+
 def _cmd_get(path: Path, key: str, default: str) -> int:
     store = _load(path)
     if key in store:
@@ -206,6 +221,9 @@ def main(argv: list[str] | None = None) -> int:
     p_del = sub.add_parser("del", help="Remove a key.")
     p_del.add_argument("key")
 
+    sub.add_parser(
+        "set-many", help="Merge a JSON object from stdin into the store (one write)."
+    )
     sub.add_parser("keys", help="Print all keys, one per line.")
     sub.add_parser("dump", help="Print the whole store as pretty JSON.")
 
@@ -214,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "set":
         return _cmd_set(path, args.key, args.value, args.as_json)
+    if args.cmd == "set-many":
+        return _cmd_set_many(path)
     if args.cmd == "get":
         return _cmd_get(path, args.key, args.default)
     if args.cmd == "del":
