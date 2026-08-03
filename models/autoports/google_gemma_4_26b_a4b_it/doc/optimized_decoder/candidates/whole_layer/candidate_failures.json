@@ -1,0 +1,55 @@
+{
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "captured_at_utc": "2026-07-31T06:37:35Z",
+  "optimized_decoder_sha256": "5604d3ec748b432497232782acf844787ff12e6b2934e49194720527b4098d6f",
+  "optimized_test_sha256": "a0ad898e5f66b3563cf1a69838d0389644e3385b265ff64f695a6ecc244e0a9b",
+  "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_WHOLE_LAYER_SWEEP=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_whole_layer_candidate_pcc -k 'dram_sharded_dense_'",
+  "hardware": "Blackhole P300",
+  "max_l1_bytes_per_core": 1572864,
+  "failures": [
+    {
+      "candidate": "dram_sharded_dense_bfp8_hifi4_g4d3_w22",
+      "batch_scope": [1, 32],
+      "layer_scope": ["sliding_attention", "full_attention"],
+      "gate_cores": 4,
+      "down_cores": 3,
+      "gate_in0_block_w": 22,
+      "down_in0_block_w": 22,
+      "dtype": "bfloat8_b",
+      "fidelity": "HiFi4",
+      "result": "rejected_exact_l1_blocker",
+      "error": "Statically allocated circular buffers on core range [0-0 - 3-9] grow to 2864128 B, beyond max L1 size 1572864 B"
+    },
+    {
+      "candidate": "dram_sharded_dense_bfp8_hifi4_g2d2_w44x33",
+      "batch_scope": [1, 32],
+      "layer_scope": ["sliding_attention", "full_attention"],
+      "gate_cores": 2,
+      "down_cores": 2,
+      "gate_in0_block_w": 44,
+      "down_in0_block_w": 33,
+      "dtype": "bfloat8_b",
+      "fidelity": "HiFi4",
+      "result": "rejected_exact_l1_blocker",
+      "error": "Statically allocated circular buffers on core range [0-0 - 1-9] grow to 10475264 B, beyond max L1 size 1572864 B"
+    }
+  ],
+  "passing_controls": [
+    {
+      "candidate": "dram_sharded_dense_bf16_hifi4_g8d6_w11",
+      "gate_cores": 8,
+      "down_cores": 6,
+      "gate_in0_block_w": 11,
+      "down_in0_block_w": 11,
+      "result": "both representative layer PCC cases passed"
+    },
+    {
+      "candidate": "dram_sharded_dense_bfp8_hifi4_g8d6_w11",
+      "gate_cores": 8,
+      "down_cores": 6,
+      "gate_in0_block_w": 11,
+      "down_in0_block_w": 11,
+      "result": "both representative layer PCC cases passed"
+    }
+  ]
+}

@@ -1,0 +1,423 @@
+2026-07-31 06:49:01.547 | DEBUG    | ttnn:<module>:76 - Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES
+2026-07-31 06:49:01.547 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=true,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 106 items / 97 deselected / 9 selected
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-sliding_attention-device_params0-mesh_device0] 2026-07-31 06:49:03.300 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-31 06:49:03.300 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-31 06:49:03.300 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-31 06:49:03.300 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-31 06:49:03.302 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-31 06:49:03.302 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-31 06:49:03.306 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-31 06:49:03.527 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-31 06:49:03.527 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-31 06:49:03.527 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-31 06:49:03.527 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-31 06:49:03.529 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-31 06:49:03.675 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-31 06:49:03.806 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 06:49:03.806 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 06:49:03.806 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-31 06:49:03.806 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-31 06:49:03.806 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 06:49:03.806 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 06:49:03.806 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 06:49:03.806 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 06:49:03.806 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 06:49:03.806 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 06:49:03.806 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 06:49:03.806 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 06:49:03.806 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-31 06:49:03.806 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-31 06:49:03.860 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-31 06:49:03.861 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-31 06:49:03.861 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-31 06:49:03.861 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-31 06:49:03.861 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-31 06:49:03.861 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-31 06:49:03.861 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 06:49:03.861 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:03.865 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:03.869 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:03.873 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:03.915 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-31 06:49:04.492 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=98805689012380 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-31 06:49:04.508 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+[transformers] You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This is expected if you use an Attention Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._attn_implementation`
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+2026-07-31 06:49:04.878 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:04.883 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:04.888 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:04.893 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:05.899 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:05.903 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:05.907 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:05.911 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0] 2026-07-31 06:49:06.757 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 06:49:06.757 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 06:49:06.757 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-31 06:49:06.757 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-31 06:49:06.757 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-31 06:49:06.757 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-31 06:49:06.757 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-31 06:49:06.820 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-31 06:49:06.821 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-31 06:49:06.821 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-31 06:49:06.821 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-31 06:49:06.821 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-31 06:49:06.821 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-31 06:49:06.821 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:06.821 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 06:49:06.825 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:06.829 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:06.833 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:06.876 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-31 06:49:07.838 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:07.842 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:07.846 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:07.850 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-sliding_attention-device_params0-mesh_device0] 2026-07-31 06:49:08.753 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 06:49:08.753 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 06:49:08.753 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-31 06:49:08.753 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-31 06:49:08.753 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-31 06:49:08.753 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-31 06:49:08.753 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-31 06:49:08.815 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-31 06:49:08.815 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-31 06:49:08.815 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-31 06:49:08.815 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-31 06:49:08.815 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-31 06:49:08.815 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-31 06:49:08.815 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:08.815 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 06:49:08.819 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:08.823 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:08.827 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:08.871 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-31 06:49:09.832 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:09.836 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:09.840 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:09.844 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_natural_cache-device_params0-mesh_device0] 2026-07-31 06:49:10.420 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 06:49:10.421 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 06:49:10.421 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-31 06:49:10.421 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-31 06:49:10.421 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-31 06:49:10.421 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-31 06:49:10.421 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-31 06:49:10.484 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-31 06:49:10.484 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-31 06:49:10.484 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-31 06:49:10.484 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-31 06:49:10.484 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-31 06:49:10.484 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-31 06:49:10.484 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:10.484 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 06:49:10.488 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:10.492 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:10.496 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:10.541 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-31 06:49:11.501 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:11.506 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:11.510 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:11.514 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PASSED2026-07-31 06:49:12.519 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:12.523 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:12.528 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:12.532 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-full_attention-device_params0-mesh_device0] 2026-07-31 06:49:12.841 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 06:49:12.841 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 06:49:12.841 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-31 06:49:12.841 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-31 06:49:12.841 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-31 06:49:12.841 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-31 06:49:12.841 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-31 06:49:12.903 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-31 06:49:12.903 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-31 06:49:12.903 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-31 06:49:12.903 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-31 06:49:12.903 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-31 06:49:12.903 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-31 06:49:12.903 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:12.903 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 06:49:12.907 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:12.911 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:12.915 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:12.960 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-31 06:49:13.921 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:13.925 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:13.930 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:13.934 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PASSED2026-07-31 06:49:14.939 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:14.943 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:14.947 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:14.951 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-full_attention-device_params0-mesh_device0] 2026-07-31 06:49:15.254 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 06:49:15.254 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 06:49:15.255 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-31 06:49:15.255 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-31 06:49:15.255 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-31 06:49:15.255 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-31 06:49:15.255 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-31 06:49:15.318 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-31 06:49:15.318 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-31 06:49:15.318 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-31 06:49:15.318 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-31 06:49:15.318 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-31 06:49:15.318 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-31 06:49:15.318 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:15.318 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 06:49:15.322 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:15.326 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:15.330 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:15.374 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-31 06:49:16.335 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:16.339 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:16.343 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:16.347 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_shared_physical_cache-device_params0-mesh_device0] 2026-07-31 06:49:17.239 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 06:49:17.239 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 06:49:17.239 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-31 06:49:17.239 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-31 06:49:17.239 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-31 06:49:17.239 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-31 06:49:17.239 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-31 06:49:17.301 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-31 06:49:17.301 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-31 06:49:17.301 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-31 06:49:17.301 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-31 06:49:17.301 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-31 06:49:17.301 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-31 06:49:17.301 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 06:49:17.301 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:17.305 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:17.309 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:17.313 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:17.357 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-31 06:49:18.318 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:18.322 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:18.326 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:18.331 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PASSED2026-07-31 06:49:19.335 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:19.340 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:19.344 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:19.348 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0] 2026-07-31 06:49:19.579 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 06:49:19.579 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 06:49:19.580 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-31 06:49:19.580 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-31 06:49:19.580 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-31 06:49:19.580 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-31 06:49:19.580 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-31 06:49:19.643 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-31 06:49:19.643 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-31 06:49:19.643 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-31 06:49:19.643 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-31 06:49:19.643 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-31 06:49:19.643 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-31 06:49:19.643 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 06:49:19.643 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:19.648 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:19.652 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:19.656 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:19.699 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-31 06:49:20.660 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:20.665 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:20.669 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:20.673 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:21.678 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:21.683 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:21.687 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:21.691 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:22.696 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:22.700 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:22.704 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:22.709 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-full_attention-device_params0-mesh_device0] 2026-07-31 06:49:23.448 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 06:49:23.448 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 06:49:23.448 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-31 06:49:23.448 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-31 06:49:23.448 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-31 06:49:23.448 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-31 06:49:23.448 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-31 06:49:23.512 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-31 06:49:23.512 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-31 06:49:23.512 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-31 06:49:23.512 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-31 06:49:23.512 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-31 06:49:23.512 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-31 06:49:23.512 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:23.512 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 06:49:23.516 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:23.520 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:23.524 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:23.567 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-31 06:49:24.529 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:24.533 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:24.537 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:24.541 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:25.546 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:25.551 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:25.555 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:25.559 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:26.564 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:26.568 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:26.572 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:26.576 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:27.581 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:27.585 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:27.589 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:27.593 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:28.598 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:28.602 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:28.606 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:28.610 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:29.615 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:29.619 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:29.623 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:29.628 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:30.632 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:30.636 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:30.641 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:30.645 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:31.649 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:31.654 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:31.658 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:31.662 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:32.667 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:32.671 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:32.675 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:32.680 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:33.684 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:33.689 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:33.693 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:33.697 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:34.702 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:34.706 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:34.710 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:34.714 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:35.719 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:35.724 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:35.728 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:35.732 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PASSED2026-07-31 06:49:36.737 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:36.741 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:36.746 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:36.750 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+12.44s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-full_attention-device_params0-mesh_device0]
+3.40s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+1.95s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_natural_cache-device_params0-mesh_device0]
+1.94s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-full_attention-device_params0-mesh_device0]
+1.90s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-sliding_attention-device_params0-mesh_device0]
+1.88s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_shared_physical_cache-device_params0-mesh_device0]
+1.53s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+1.52s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-full_attention-device_params0-mesh_device0]
+1.41s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-sliding_attention-device_params0-mesh_device0]
+1.20s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-sliding_attention-device_params0-mesh_device0]
+0.34s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-full_attention-device_params0-mesh_device0]
+0.34s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_natural_cache-device_params0-mesh_device0]
+0.34s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+0.34s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-full_attention-device_params0-mesh_device0]
+0.34s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-full_attention-device_params0-mesh_device0]
+0.33s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-sliding_attention-device_params0-mesh_device0]
+0.33s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+0.33s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_shared_physical_cache-device_params0-mesh_device0]
+0.13s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-full_attention-device_params0-mesh_device0]
+0.13s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-sliding_attention-device_params0-mesh_device0]
+0.13s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+0.13s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-full_attention-device_params0-mesh_device0]
+0.13s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-sliding_attention-device_params0-mesh_device0]
+0.13s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_natural_cache-device_params0-mesh_device0]
+0.13s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_shared_physical_cache-device_params0-mesh_device0]
+0.13s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-full_attention-device_params0-mesh_device0]
+0.12s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-sliding_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-sliding_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-sliding_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_natural_cache-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch1-full_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_mutable_trace_aba[blackhole-full_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-full_attention_shared_physical_cache-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-sliding_attention-device_params0-mesh_device0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_traced_decode_contract[blackhole-batch32-full_attention-device_params0-mesh_device0]
+================ 9 passed, 97 deselected, 2 warnings in 33.91s =================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-31 06:49:37.755 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:37.759 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:37.763 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-31 06:49:37.767 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+nanobind: leaked 3 instances!
+ - leaked instance 0x7c51f4e32208 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7c51f4f160b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7c51f47a0108 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 34 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 303 functions!
+ - leaked function "__init__"
+ - leaked function "GetPCIeDeviceID"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "remove_sub_device_manager"
+ - leaked function "__init__"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "deallocate_buffers"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-31 06:49:37.904 | info     |    BuildKernels | JIT cache stats: 483/483 hits (100.0%) [483 cached, 2596 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-31 06:49:37.904 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-31 06:49:37.905 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-31 06:49:37.906 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-31 06:49:37.906 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-31 06:49:37.906 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-31 06:49:37.906 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-31 06:49:37.918 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-31 06:49:37.918 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-31 06:49:38.355 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-31 06:49:38.355 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-31 06:49:38.355 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

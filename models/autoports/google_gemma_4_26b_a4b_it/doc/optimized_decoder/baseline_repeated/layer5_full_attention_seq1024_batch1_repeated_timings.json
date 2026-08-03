@@ -1,0 +1,23 @@
+{
+  "batch": 1,
+  "decode_trace_host_ms_median": 3.2173460349440575,
+  "decode_trace_host_ms_samples": [
+    3.2256022095680237,
+    3.228076733648777,
+    3.2120374962687492,
+    3.2173460349440575,
+    3.2160039991140366
+  ],
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "prefill_host_ms_median": 680.5497650057077,
+  "prefill_host_ms_samples": [
+    680.7584427297115,
+    680.5497650057077,
+    680.2267599850893,
+    680.513515137136,
+    680.8294281363487
+  ],
+  "sequence_length": 1024
+}

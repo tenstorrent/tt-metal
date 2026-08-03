@@ -1,0 +1,9 @@
+layer_idx,layer_type,batch,replay,device_fw_ns,device_kernel_ns,host_measured_ms
+0,sliding_attention,1,warmup,1815542,1814756,
+0,sliding_attention,1,measured,1815506,1814750,1.8859077244997025
+5,full_attention,1,warmup,2003749,2002974,
+5,full_attention,1,measured,2003724,2002962,2.083747647702694
+0,sliding_attention,32,warmup,32113241,32112481,
+0,sliding_attention,32,measured,32123906,32123159,32.18123875558376
+5,full_attention,32,warmup,31973448,31972690,
+5,full_attention,32,measured,31928540,31927771,31.99268877506256

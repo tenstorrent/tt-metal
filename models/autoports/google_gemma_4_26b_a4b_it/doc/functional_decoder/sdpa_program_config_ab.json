@@ -1,0 +1,28 @@
+{
+  "batch": 32,
+  "final_program_config": {
+    "compute_grid_cap": [
+      8,
+      4
+    ],
+    "exp_approx_mode": false,
+    "k_chunk_size": 64,
+    "q_chunk_size": 32,
+    "reason": "The default Blackhole grid exceeds the decode kernel reduction contract for this model's low KV-head counts; the 32-core cap is the smallest tested common correctness configuration for both layer kinds."
+  },
+  "layer_results": {
+    "full_attention": {
+      "default_program_config_pcc": 0.958088679991618,
+      "final_program_config_pcc": 0.99986123869592
+    },
+    "sliding_attention": {
+      "canonical_full_grid_q32_k64_pcc": 0.6291031491029685,
+      "default_program_config_pcc": 0.6300065337286656,
+      "final_program_config_pcc": 0.9992826009529862
+    }
+  },
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "real_weights": true,
+  "threshold": 0.995,
+  "trace_replay": true
+}

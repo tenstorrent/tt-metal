@@ -1,0 +1,11 @@
+Current-source traced decode, sequence/current position 1024, Blackhole device 3
+
+Layer                Batch  Host warmed  Device warmup FW  Device measured FW  Device measured kernel
+sliding_attention        1      3.038 ms           2.991 ms              2.991 ms                  2.991 ms
+sliding_attention       32     68.969 ms          68.879 ms             68.860 ms                 68.859 ms
+full_attention           1      3.204 ms           3.177 ms              3.177 ms                  3.176 ms
+full_attention          32     68.723 ms          68.650 ms             68.628 ms                 68.628 ms
+
+Device rows are the second (measured) replay from the dedicated
+--device-trace-profiler run. The compact raw CSV retains both warmup and
+measured rows for every layer/batch case.

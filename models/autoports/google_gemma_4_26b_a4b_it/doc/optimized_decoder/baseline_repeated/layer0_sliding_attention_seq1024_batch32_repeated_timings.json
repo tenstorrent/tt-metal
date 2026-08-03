@@ -1,0 +1,15 @@
+{
+  "batch": 32,
+  "decode_trace_host_ms_median": 68.94498225301504,
+  "decode_trace_host_ms_samples": [
+    68.9147636294365,
+    68.94498225301504,
+    68.90163850039244,
+    68.97149235010147,
+    68.99185199290514
+  ],
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "sequence_length": 1024
+}

@@ -1,0 +1,23 @@
+{
+  "batch": 1,
+  "decode_trace_host_ms_median": 3.021462820470333,
+  "decode_trace_host_ms_samples": [
+    3.025731071829796,
+    3.021462820470333,
+    3.0185673385858536,
+    3.015751950442791,
+    3.0625108629465103
+  ],
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "prefill_host_ms_median": 678.776984103024,
+  "prefill_host_ms_samples": [
+    679.4461896643043,
+    678.612008690834,
+    678.776984103024,
+    678.5479672253132,
+    678.92711982131
+  ],
+  "sequence_length": 1024
+}
