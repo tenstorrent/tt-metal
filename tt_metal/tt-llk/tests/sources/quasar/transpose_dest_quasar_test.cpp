@@ -45,7 +45,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
             else
             {
@@ -53,31 +53,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // types have no unpack-to-dest consumer pulse.
                 set_up_zero_dest_dvalid_handshake_for_unpack();
             }
-
-            const DataFormat unpack_src_format = static_cast<DataFormat>(formats.unpack_A_src);
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                if (unpack_src_format == DataFormat::Float32)
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-                }
-                else if (unpack_src_format == DataFormat::Int32)
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-                }
-                else
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
-                }
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
-            }
         }
         else
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
         }
 
         buffer_descriptor_u bd_val = {0};
@@ -126,13 +105,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Real unpack produces all SrcA tiles first, then the dummy SrcB
             // tiles consumed by transpose. Preserve that ordering: the two
             // MOPs cannot be mocked as one simultaneous SrcAB handshake.
+            const std::uint32_t tiles_per_loop = TILE_CNT;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 if constexpr (!unpack_to_dest)
                 {
-                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(tiles_per_loop);
                 }
-                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(TILE_CNT);
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(tiles_per_loop);
             }
         }
         else
@@ -231,39 +211,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Math isolate has no destination producer before FPU, so make FPU
             // the producer and restore immediate ownership of the destination.
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        if constexpr (is_fp32_dest_acc_en)
-        {
-            if (pack_src_format == DataFormat::Float32)
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
-            else if (pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-            }
-            else
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
+        configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, pack_src_format);
         PROFILER_SYNC();
     }
     {
@@ -274,13 +236,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // Real unpack emits SrcA and dummy SrcB as two ordered batches.
+            const std::uint32_t tiles_per_loop = TILE_CNT;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 if constexpr (!unpack_to_dest)
                 {
-                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(TILE_CNT);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(tiles_per_loop);
                 }
-                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(TILE_CNT);
+                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_per_loop);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -326,18 +289,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (volatile std::uint32_t*)TENSIX_CFG_BASE;
-            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
         }
 

@@ -12,6 +12,7 @@
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 // Globals
@@ -50,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // Setup data valid scheme
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
         buffer_descriptor_u bd_val_A {};
         bd_val_A.f.l1_addr_16B = L1_ADDRESS(buffer_A[0]);
@@ -89,10 +90,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                const std::uint32_t datacopy_handshake_iters = INPUT_TILE_CNT;
+                const std::uint32_t binary_handshake_iters   = INPUT_TILE_CNT * num_faces;
                 // Phase 1 datacopy consumes SrcA once per tile.
-                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(INPUT_TILE_CNT);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(datacopy_handshake_iters);
                 // Phase 2 reuse-dest binary consumes both sources per face.
-                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(INPUT_TILE_CNT * num_faces);
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(binary_handshake_iters);
             }
         }
         else
@@ -152,7 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // L1_TO_L1 / MATH_ISOLATE keep the math↔pack handshake: set up FPU→PACK dest-dvalid.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
@@ -174,8 +177,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(INPUT_TILE_CNT);
-                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(INPUT_TILE_CNT * num_faces);
+                const std::uint32_t datacopy_handshake_iters = INPUT_TILE_CNT;
+                const std::uint32_t binary_handshake_iters   = INPUT_TILE_CNT * num_faces;
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(datacopy_handshake_iters);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(binary_handshake_iters);
             }
         }
         else
@@ -243,12 +248,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
         buffer_descriptor_u bd_val {};

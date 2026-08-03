@@ -9,6 +9,7 @@
 #include "llk_defs.h"
 #include "perf.h"
 #include "profiler.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -38,7 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
         buffer_descriptor_u bd_val_A = {0};
         bd_val_A.f.l1_addr_16B       = buffer_A[0] / 16;
@@ -77,8 +78,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // The SCALAR math MOP clears SrcAB only on the final outer-loop iteration,
             // so mock unpack must produce one SrcA/SrcB handshake per tile.
-            const std::uint32_t dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
-            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * dvalids_per_tile);
+            const std::uint32_t dvalids_per_tile    = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
+            const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT * dvalids_per_tile;
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(src_handshake_iters);
         }
         else // UNPACK_ISOLATE, L1_CONGESTION, L1_TO_L1
         {
@@ -120,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // End-to-end and math-isolate runs require FPU destination ownership.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
         DataFormat math_format     = static_cast<DataFormat>(formats.math);
@@ -149,16 +151,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
-        {
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // Do exactly the handshakes produced by real unpack. An additional
             // synthetic SET/CLEAR pair races the final unpack and leaves an
             // unmatched clear token, causing the ~2048-cycle stall.
             _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                {
+                    _llk_math_eltwise_binary_broadcast_(i);
+                }
+            }
         }
         else
         {
@@ -168,10 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_math_eltwise_binary_broadcast_(i);
                 }
-                if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
-                {
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-                }
+                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
         }
         PROFILER_SYNC();
@@ -208,12 +213,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
         buffer_descriptor_u bd_val = {0};
