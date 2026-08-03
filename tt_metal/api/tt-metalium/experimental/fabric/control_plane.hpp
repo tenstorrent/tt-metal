@@ -18,6 +18,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -156,6 +157,8 @@ public:
     FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;
     // Return physical chip id from fabric node id
     ChipId get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    // Non-fatal variant for optional remote-node metadata.
+    std::optional<ChipId> try_get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
     // Return fabric node id from ASIC id
     FabricNodeId get_fabric_node_id_from_asic_id(uint64_t asic_id) const;
     // Return user physical mesh ids
@@ -237,6 +240,10 @@ public:
 
     // Peer fabric node (and its Ethernet channel) connected to `fabric_node_id` on `chan_id` via one physical hop
     // (intra-mesh or inter-mesh).
+    std::optional<std::pair<FabricNodeId, chan_id_t>> try_get_connected_mesh_chip_chan_ids(
+        FabricNodeId fabric_node_id, chan_id_t chan_id) const;
+
+    // Fatal variant for callers that require a complete physical-link mapping.
     std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
         FabricNodeId fabric_node_id, chan_id_t chan_id) const;
 

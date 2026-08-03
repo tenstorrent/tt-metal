@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <span>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -24,7 +25,6 @@ struct KernelGroup;
 
 namespace tt::tt_metal::experimental::dfb::detail {
 
-// Per-risc config matching dfb_initializer_per_risc_t
 struct LocalDFBInterfaceHost {
     std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> base_addr = {0};
     std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> limit = {0};
@@ -105,7 +105,14 @@ struct DataflowBufferImpl {
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;
-    std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;
+    uint16_t dm1_remapper_slot_count() const;  // slots this DFB contributes to the core-wide DM1 blob
+    void append_dm1_remapper_slots_for_core(const CoreCoord& core, std::vector<uint8_t>& data) const;
+
+    std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;  // WH/BH only (4-word CB format)
+
+    // Returns per-core DFBRiscConfig with base_addr/limit resolved for core's alloc_addr.
+    // Used by serialize_dfb_config_for_core to build per-hart init blobs.
+    std::vector<DFBRiscConfig> compute_per_core_risc_configs(const CoreCoord& core) const;
 
     // Override entry_size and/or num_entries. Recomputes capacity/stride and, on a re-entry
     // (already-finalized) DFB with implicit sync, recomputes the txn descriptors in place while
@@ -119,6 +126,37 @@ struct DataflowBufferImpl {
         return core_lookup_.begin()->second.second;
     }
 };
+
+// Host-precomputed init indices in dfb_global_header_t (participation masks; dfb_byte_offset filled during layout
+// write). Device uses these instead of walking all DFBs on the merged-loop hot path.
+void populate_dfb_global_header_participation(
+    dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+void verify_dfb_global_header_participation(
+    const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Verifies that each hart's blob in the serialized config is internally consistent.
+void verify_dfb_hart_blobs(
+    std::span<const uint8_t> config_bytes, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Packed Quasar config size for [prefix | DM1 blobs | DM0 blobs | layouts], including L1 transfer padding.
+uint32_t compute_dfb_config_serialized_size(
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// DM0 ISR blob region: core header + txn_id-indexed hw pool + txn desc pool.
+uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// DM1 remapper blob: core header + contiguous remapper slots across all DFBs on core.
+uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+std::vector<uint8_t> serialize_dm1_remapper_core_blob(
+    const CoreCoord& core, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Packs Quasar DFB config: [header | offset table | DM1 blobs | DM0 blobs | per-DFB layouts]. Returns bytes written.
+size_t serialize_dfb_config_for_core(
+    const CoreCoord& core,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
+    std::span<uint8_t> out);
 
 class TileCounterAllocator {
 public:
