@@ -47,12 +47,13 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
         return True
     if ":" in ref:  # "repo_id:filename" -> resolvable from the local hub cache without a network call
         repo_id, fname = ref.split(":", 1)
-        try:
-            from huggingface_hub import hf_hub_download
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
 
+        try:
             hf_hub_download(repo_id=repo_id, filename=fname, local_files_only=True)
             return True
-        except Exception:
+        except (LocalEntryNotFoundError, EntryNotFoundError, FileNotFoundError):
             return False
     return False
 

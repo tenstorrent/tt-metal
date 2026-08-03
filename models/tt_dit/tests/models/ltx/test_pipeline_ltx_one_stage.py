@@ -136,6 +136,10 @@ def test_pipeline_one_stage(
         )
 
         if int(ttnn.distributed_context_get_rank()) == 0:
+            # Minimal artifact gate: the leg must not pass on missing/empty output. A calibrated
+            # VBench/CLIP quality check (like the distilled path) is the stronger follow-up.
+            assert os.path.exists(output_filename), f"pipeline produced no video at {output_filename}"
+            assert os.path.getsize(output_filename) > 0, f"pipeline produced an empty video at {output_filename}"
             logger.info(f"Saved video to: {output_filename}")
             print_ltx_timing_table(
                 pipeline,
