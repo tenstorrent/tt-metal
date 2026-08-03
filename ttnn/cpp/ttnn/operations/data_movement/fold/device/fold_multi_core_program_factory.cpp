@@ -18,22 +18,6 @@ namespace ttnn::operations::data_movement {
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
-namespace {
-
-// Metal 2.0 named resource handles for the sharded fold ProgramSpec.
-// Prefixed to stay distinct under unity builds.
-const DFBSpecName FOLD_SH_SRC0{"fold_sh_src0"};
-const DFBSpecName FOLD_SH_DST0{"fold_sh_dst0"};
-const TensorParamName FOLD_SH_INPUT{"fold_sh_input"};
-const TensorParamName FOLD_SH_OUTPUT{"fold_sh_output"};
-const KernelSpecName FOLD_SH_WRITER{"fold_sh_writer"};
-const KernelSpecName FOLD_SH_READER{"fold_sh_reader"};
-
-constexpr const char* FOLD_SH_KERNEL =
-    "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp";
-
-}  // namespace
-
 ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -42,6 +26,18 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     const Tensor& output = output_tensor;
     const uint32_t stride_h = operation_attributes.stride_h;
     const uint32_t stride_w = operation_attributes.stride_w;
+
+    // Metal 2.0 resource + kernel names, declared local to the factory (not at namespace scope) so
+    // they can't collide with a sibling factory in the same unity-build translation unit.
+    const DFBSpecName SRC0{"src0"};
+    const DFBSpecName DST0{"dst0"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName READER{"reader"};
+
+    constexpr const char* FOLD_KERNEL =
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp";
 
     auto all_cores = input.shard_spec()->grid;
     auto shard_shape = input.shard_spec()->shape;
@@ -63,26 +59,26 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     const uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal::get_l1_alignment());
 
     // Input DFB — borrowed onto the sharded input buffer (formerly a globally-allocated CB).
-    // The backing L1 address resolves at runtime from the FOLD_SH_INPUT tensor argument.
+    // The backing L1 address resolves at runtime from the INPUT tensor argument.
     DataflowBufferSpec src0_dfb{
-        .unique_id = FOLD_SH_SRC0,
+        .unique_id = SRC0,
         .entry_size = aligned_pixel_size,
         .num_entries = num_pixels,
         .data_format_metadata = cb_data_format,
-        .borrowed_from = FOLD_SH_INPUT,
+        .borrowed_from = INPUT,
     };
 
     // Output DFB — borrowed onto the sharded output buffer.
     DataflowBufferSpec dst0_dfb{
-        .unique_id = FOLD_SH_DST0,
+        .unique_id = DST0,
         .entry_size = aligned_dst_pixel_size,
         .num_entries = num_dst_pixels,
         .data_format_metadata = cb_data_format,
-        .borrowed_from = FOLD_SH_OUTPUT,
+        .borrowed_from = OUTPUT,
     };
 
-    TensorParameter input_param{.unique_id = FOLD_SH_INPUT, .spec = input.tensor_spec()};
-    TensorParameter output_param{.unique_id = FOLD_SH_OUTPUT, .spec = output.tensor_spec()};
+    TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
     // Named compile-time args shared by both instances. The legacy `is_reader` CTA (a per-instance
     // literal that splits the output columns between the two same-source instances) is appended
@@ -112,27 +108,23 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     };
 
     KernelSpec writer_spec{
-        .unique_id = FOLD_SH_WRITER,
-        .source = std::filesystem::path{FOLD_SH_KERNEL},
+        .unique_id = WRITER,
+        .source = std::filesystem::path{FOLD_KERNEL},
         .compiler_options = {.opt_level = KernelBuildOptLevel::Os},
         .dfb_bindings =
-            {DFBBinding{
-                 .dfb_spec_name = FOLD_SH_SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = FOLD_SH_DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::PRODUCER}},
+            {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args = make_cta(/*is_reader=*/1),
         .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
     };
 
     KernelSpec reader_spec{
-        .unique_id = FOLD_SH_READER,
-        .source = std::filesystem::path{FOLD_SH_KERNEL},
+        .unique_id = READER,
+        .source = std::filesystem::path{FOLD_KERNEL},
         .compiler_options = {.opt_level = KernelBuildOptLevel::Os},
         .dfb_bindings =
-            {DFBBinding{
-                 .dfb_spec_name = FOLD_SH_SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::CONSUMER},
-             DFBBinding{
-                 .dfb_spec_name = FOLD_SH_DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::CONSUMER}},
+            {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::CONSUMER}},
         .compile_time_args = make_cta(/*is_reader=*/0),
         .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
     };
@@ -144,17 +136,17 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
         .tensor_parameters = {input_param, output_param},
         .work_units = {WorkUnitSpec{
             .name = "main",
-            .kernels = {FOLD_SH_WRITER, FOLD_SH_READER},
+            .kernels = {WRITER, READER},
             .target_nodes = all_cores,
         }},
     };
 
     ProgramRunArgs run_args;
     // No runtime args on either kernel; provide empty entries so every kernel has a KernelRunArgs.
-    run_args.kernel_run_args = {KernelRunArgs{.kernel = FOLD_SH_WRITER}, KernelRunArgs{.kernel = FOLD_SH_READER}};
+    run_args.kernel_run_args = {KernelRunArgs{.kernel = WRITER}, KernelRunArgs{.kernel = READER}};
     run_args.tensor_args = {
-        {FOLD_SH_INPUT, TensorArgument{input.mesh_tensor()}},
-        {FOLD_SH_OUTPUT, TensorArgument{output.mesh_tensor()}},
+        {INPUT, TensorArgument{input.mesh_tensor()}},
+        {OUTPUT, TensorArgument{output.mesh_tensor()}},
     };
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};

@@ -29,43 +29,33 @@ using namespace tt::tt_metal::experimental;
 
 namespace {
 
-// ---- Metal 2.0 named resource handles: tiled (TILE-input) sub-program ----
-const DFBSpecName FOLD_T_SRC0{"fold_t_src0"};
-const DFBSpecName FOLD_T_SRC1{"fold_t_src1"};
-const TensorParamName FOLD_T_INPUT{"fold_t_input"};
-const TensorParamName FOLD_T_OUTPUT{"fold_t_output"};
-const KernelSpecName FOLD_T_READER{"fold_t_reader"};
-const KernelSpecName FOLD_T_WRITER{"fold_t_writer"};
-const KernelSpecName FOLD_T_COMPUTE{"fold_t_compute"};
-const KernelSpecName FOLD_T_COMPUTE_CLIFF{"fold_t_compute_cliff"};
-
-// ---- Metal 2.0 named resource handles: row-major-input sub-program ----
-const DFBSpecName FOLD_RM_SRC0{"fold_rm_src0"};
-const DFBSpecName FOLD_RM_SRC1{"fold_rm_src1"};
-const TensorParamName FOLD_RM_INPUT{"fold_rm_input"};
-const TensorParamName FOLD_RM_OUTPUT{"fold_rm_output"};
-const KernelSpecName FOLD_RM_READER{"fold_rm_reader"};
-const KernelSpecName FOLD_RM_WRITER{"fold_rm_writer"};
-
-constexpr const char* READER_TILED =
-    "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_tiled.cpp";
-constexpr const char* WRITER_TILED =
-    "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_tiled_input.cpp";
-// Metal 2.0 fork of untilize's compute kernel. The legacy fold DRAM (tiled) factory
-// file-path-instantiated untilize/device/kernels/compute/untilize.cpp, which is shared with the
-// untilize op (still on the legacy API). Per the shared-kernel port strategy, the `_metal2` fork
-// lives *beside the original* in the untilize op's directory (created by this port, reused by
-// future Metal 2.0 consumers) — not copied into fold's tree. See METAL2_PORT_REPORT.md.
-constexpr const char* COMPUTE_UNTILIZE =
-    "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
-constexpr const char* READER_RM =
-    "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp";
-constexpr const char* WRITER_RM =
-    "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp";
-
 ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
+
+    // Metal 2.0 resource + kernel names. Declared local (not at namespace scope) so the sibling
+    // row-major factory in the same unity-build translation unit can reuse the same identifiers
+    // without collision.
+    const DFBSpecName SRC0{"src0"};
+    const DFBSpecName SRC1{"src1"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const KernelSpecName COMPUTE_CLIFF{"compute_cliff"};
+
+    constexpr const char* READER_TILED =
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_tiled.cpp";
+    constexpr const char* WRITER_TILED =
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_tiled_input.cpp";
+    // Metal 2.0 fork of untilize's compute kernel. The legacy fold DRAM (tiled) factory
+    // file-path-instantiated untilize/device/kernels/compute/untilize.cpp, which is shared with the
+    // untilize op (still on the legacy API). Per the shared-kernel port strategy, the `_metal2` fork
+    // lives *beside the original* in the untilize op's directory (created by this port, reused by
+    // future Metal 2.0 consumers) — not copied into fold's tree.
+    constexpr const char* COMPUTE_UNTILIZE =
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
 
     const uint32_t input_width = input_tensor.logical_shape()[2];
 
@@ -112,29 +102,29 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
 
     // Source DFB (formerly src0 CB) and untilized-output DFB (formerly src1 CB).
     DataflowBufferSpec src0_dfb{
-        .unique_id = FOLD_T_SRC0,
+        .unique_id = SRC0,
         .entry_size = single_tile_size,
         .num_entries = num_input_tiles,
         .data_format_metadata = cb_data_format,
     };
     DataflowBufferSpec src1_dfb{
-        .unique_id = FOLD_T_SRC1,
+        .unique_id = SRC1,
         .entry_size = out_single_tile_size,
         .num_entries = num_input_tiles,
         .data_format_metadata = out_cb_data_format,
     };
 
-    TensorParameter input_param{.unique_id = FOLD_T_INPUT, .spec = input_tensor.tensor_spec()};
-    TensorParameter output_param{.unique_id = FOLD_T_OUTPUT, .spec = output.tensor_spec()};
+    TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
     // Reader kernel: DRAM -> DFB. Input tensor is bound (its buffer address + TensorAccessorArgs
     // plumbing disappear); src0 CB index becomes the SRC0 DFB binding.
     KernelSpec reader_spec{
-        .unique_id = FOLD_T_READER,
+        .unique_id = READER,
         .source = std::filesystem::path{READER_TILED},
         .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = FOLD_T_SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = FOLD_T_INPUT, .accessor_name = "src"}},
+            .dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .compile_time_args =
             {{"tiles_per_channel_dim", tiles_per_channel_dim}, {"tiles_per_width_dim", tiles_per_width_dim}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block_id", "num_blocks"}},
@@ -143,11 +133,11 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
 
     // Writer kernel: DFB -> DRAM.
     KernelSpec writer_spec{
-        .unique_id = FOLD_T_WRITER,
+        .unique_id = WRITER,
         .source = std::filesystem::path{WRITER_TILED},
         .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = FOLD_T_SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = FOLD_T_OUTPUT, .accessor_name = "dst"}},
+            .dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args =
             {{"input_width", input_width},
              {"stride_height", stride_h},
@@ -166,36 +156,30 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     // preserving the per-group block-count multiplicity. ComputeConfig set directly (Style B):
     // only fp32_dest_acc_en was set by the legacy op -> enable_32_bit_dest.
     const bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
-    auto make_compute_cfg = [&]() {
-        ComputeGen1Config cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    auto make_compute_spec = [&](const KernelSpecName& id, uint32_t nblocks) {
+        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // The compute kernel consumes SRC0. When SRC0 is Float32 and enable_32_bit_dest is set,
         // the validator requires an explicit unpack mode. Legacy set none (default) -> UnpackToSrc.
         if (fp32_dest_acc_en) {
-            cfg.unpack_modes.insert({FOLD_T_SRC0, UnpackMode::UnpackToSrc});
+            compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToSrc});
         }
-        return cfg;
-    };
-
-    auto make_compute_spec = [&](const KernelSpecName& id, uint32_t nblocks) {
         return KernelSpec{
             .unique_id = id,
             .source = std::filesystem::path{COMPUTE_UNTILIZE},
             .dfb_bindings =
-                {DFBBinding{
-                     .dfb_spec_name = FOLD_T_SRC0, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
-                 DFBBinding{
-                     .dfb_spec_name = FOLD_T_SRC1, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
+                {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"per_core_block_cnt", nblocks * tiles_per_width_dim},
                  {"per_core_block_tile_cnt", tiles_per_channel_dim}},
-            .hw_config = make_compute_cfg(),
+            .hw_config = std::move(compute_cfg),
         };
     };
 
-    KernelSpec compute_spec = make_compute_spec(FOLD_T_COMPUTE, nblocks_per_core);
+    KernelSpec compute_spec = make_compute_spec(COMPUTE, nblocks_per_core);
     const bool cliff_present = !core_range_cliff.ranges().empty();
     KernelSpec compute_cliff_spec =
-        cliff_present ? make_compute_spec(FOLD_T_COMPUTE_CLIFF, nblocks_per_core_cliff) : KernelSpec{};
+        cliff_present ? make_compute_spec(COMPUTE_CLIFF, nblocks_per_core_cliff) : KernelSpec{};
 
     // Determine the "full" core set vs. the cliff core for runtime arg distribution.
     uint32_t ncores_full = ncores;
@@ -205,8 +189,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         full_cores = core_range;
     }
 
-    KernelRunArgs reader_run{.kernel = FOLD_T_READER};
-    KernelRunArgs writer_run{.kernel = FOLD_T_WRITER};
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
 
     uint32_t block_start_id = 0;
     auto ncores_x = grid_size.x;
@@ -266,7 +250,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         .tensor_parameters = {input_param, output_param},
         .work_units = {WorkUnitSpec{
             .name = "main",
-            .kernels = {FOLD_T_READER, FOLD_T_WRITER, FOLD_T_COMPUTE},
+            .kernels = {READER, WRITER, COMPUTE},
             .target_nodes = core_range,
         }},
     };
@@ -274,19 +258,19 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         spec.kernels.push_back(compute_cliff_spec);
         spec.work_units.push_back(WorkUnitSpec{
             .name = "cliff",
-            .kernels = {FOLD_T_READER, FOLD_T_WRITER, FOLD_T_COMPUTE_CLIFF},
+            .kernels = {READER, WRITER, COMPUTE_CLIFF},
             .target_nodes = core_range_cliff,
         });
     }
 
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {reader_run, writer_run, KernelRunArgs{.kernel = FOLD_T_COMPUTE}};
+    run_args.kernel_run_args = {reader_run, writer_run, KernelRunArgs{.kernel = COMPUTE}};
     if (cliff_present) {
-        run_args.kernel_run_args.push_back(KernelRunArgs{.kernel = FOLD_T_COMPUTE_CLIFF});
+        run_args.kernel_run_args.push_back(KernelRunArgs{.kernel = COMPUTE_CLIFF});
     }
     run_args.tensor_args = {
-        {FOLD_T_INPUT, TensorArgument{input_tensor.mesh_tensor()}},
-        {FOLD_T_OUTPUT, TensorArgument{output.mesh_tensor()}},
+        {INPUT, TensorArgument{input_tensor.mesh_tensor()}},
+        {OUTPUT, TensorArgument{output.mesh_tensor()}},
     };
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
@@ -295,6 +279,21 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
 ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
+
+    // Metal 2.0 resource + kernel names. Declared local (not at namespace scope) so the sibling
+    // tiled factory in the same unity-build translation unit can reuse the same identifiers
+    // without collision.
+    const DFBSpecName SRC0{"src0"};
+    const DFBSpecName SRC1{"src1"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+
+    constexpr const char* READER_RM =
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp";
+    constexpr const char* WRITER_RM =
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp";
 
     const uint32_t batch_size = input_tensor.logical_shape()[0];
     const uint32_t input_height = input_tensor.logical_shape()[1];
@@ -338,7 +337,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
 
     const int double_buffer = 2;
     DataflowBufferSpec src0_dfb{
-        .unique_id = FOLD_RM_SRC0,
+        .unique_id = SRC0,
         .entry_size = aligned_stick_nbytes * stride_w * stride_h,
         .num_entries = static_cast<uint32_t>(double_buffer),
         .data_format_metadata = cb_data_format,
@@ -350,14 +349,14 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     // It is touched by a single kernel (the writer, by raw pointer) -> self-loop DFB, and its
     // binding is conditional on !is_l1_aligned (matched by a kernel-side #ifdef).
     DataflowBufferSpec src1_dfb{
-        .unique_id = FOLD_RM_SRC1,
+        .unique_id = SRC1,
         .entry_size = stick_nbytes * stride_w * stride_h,
         .num_entries = 1,
         .data_format_metadata = cb_data_format,
     };
 
-    TensorParameter input_param{.unique_id = FOLD_RM_INPUT, .spec = input_tensor.tensor_spec()};
-    TensorParameter output_param{.unique_id = FOLD_RM_OUTPUT, .spec = output.tensor_spec()};
+    TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
     const KernelSpec::CompileTimeArgs common_cta{
         {"stick_nbytes", stick_nbytes},
@@ -376,11 +375,11 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     }
 
     KernelSpec reader_spec{
-        .unique_id = FOLD_RM_READER,
+        .unique_id = READER,
         .source = std::filesystem::path{READER_RM},
         .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = FOLD_RM_SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = FOLD_RM_INPUT, .accessor_name = "src"}},
+            .dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .compile_time_args = common_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"src_index", "curr_src_row_index"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
@@ -388,27 +387,27 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
 
     // Writer: consumes src0; when !is_l1_aligned it also uses src1 as a self-loop scratch.
     Group<DFBBinding> writer_dfbs{
-        DFBBinding{.dfb_spec_name = FOLD_RM_SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
+        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
     if (!is_l1_aligned) {
-        writer_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = FOLD_RM_SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER});
-        writer_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = FOLD_RM_SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER});
+        writer_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER});
+        writer_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER});
     }
     KernelSpec writer_spec{
-        .unique_id = FOLD_RM_WRITER,
+        .unique_id = WRITER,
         .source = std::filesystem::path{WRITER_RM},
         .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = FOLD_RM_OUTPUT, .accessor_name = "dst"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = common_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"dst_index"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // Per-core runtime args (name-first tables built from the legacy node-first loop).
-    KernelRunArgs reader_run{.kernel = FOLD_RM_READER};
-    KernelRunArgs writer_run{.kernel = FOLD_RM_WRITER};
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
 
     const uint32_t output_height = input_height / stride_h;
     const uint32_t output_width = input_width / stride_w;
@@ -449,7 +448,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .tensor_parameters = {input_param, output_param},
         .work_units = {WorkUnitSpec{
             .name = "main",
-            .kernels = {FOLD_RM_READER, FOLD_RM_WRITER},
+            .kernels = {READER, WRITER},
             .target_nodes = all_cores,
         }},
     };
@@ -460,8 +459,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {reader_run, writer_run};
     run_args.tensor_args = {
-        {FOLD_RM_INPUT, TensorArgument{input_tensor.mesh_tensor()}},
-        {FOLD_RM_OUTPUT, TensorArgument{output.mesh_tensor()}},
+        {INPUT, TensorArgument{input_tensor.mesh_tensor()}},
+        {OUTPUT, TensorArgument{output.mesh_tensor()}},
     };
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
