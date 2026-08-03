@@ -57,6 +57,12 @@ const std::vector<DemotedCase>& ungeneralized_demoted_cases() {
         // program-factory defect (write_batch not a multiple of chunk_wt degenerating the
         // batched-writer pipeline to lockstep, fixed in build_row) rather than a genuine
         // performance ceiling, so none of that family is demoted anymore.
+        //
+        // round 5/8 resolution: [7,96,160] L1 bf16 (Wt == 5, total_Ht == 21) was reclassified by
+        // analysis as a marginal, not-credibly-established loss (CI straddles parity, DRAM sibling
+        // and nearest same-regime L1 siblings both win), but reroutes were exhausted for this round,
+        // so it stays demoted rather than left on codegen unmeasured.
+        {{7, 96, 160}, BufferType::L1, DataType::BFLOAT16},
     };
     return cases;
 }
