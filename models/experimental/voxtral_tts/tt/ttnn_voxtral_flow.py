@@ -62,7 +62,6 @@ stay on host, deliberately, and both are once per frame rather than once per ste
 schedule is fixed, so `_schedule()` builds its projections once and caches them on device.
 """
 
-import os
 import torch
 import ttnn
 
@@ -344,41 +343,3 @@ class TtVoxtralFlow:
         """h [B,3072] -> audio_codes [B,37] int64 (semantic ++ acoustic)."""
         sem = self.semantic_code(llm_hidden)
         return torch.cat([sem, self.decode_frame(sem, llm_hidden, **kw)], dim=1)
-
-
-def main():
-    """Compare against the CPU reference. The output is INTEGER codes, so equality is exact."""
-    from models.experimental.voxtral_tts.reference import voxtral_flow_ref as ref
-    from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc
-
-    dev = ttnn.open_device(device_id=0, l1_small_size=65536)
-    try:
-        gen = TtVoxtralFlow(dev)
-        w = ref.load_flow_state()
-        h, x_0 = ref.make_synthetic_inputs(batch=2, seed=0)
-
-        # 1) one velocity evaluation -- the unit a trace would capture
-        t_emb = ref.time_embedding(torch.tensor(0.375).view(1, 1).repeat(2, 1),
-                                   w["time_embedding.inv_freq"])
-        exp_v = ref.predict_velocity(x_0, h, t_emb, w)
-        got_v = gen._predict_velocity(x_0, h, t_emb)
-        print(f"  [velocity      ] PCC {pcc(got_v, exp_v):.8f}  maxabs {(got_v-exp_v).abs().max():.3e}")
-
-        # 2) semantic code -- must match EXACTLY, it is an index
-        exp_s, got_s = ref.semantic_code(h, w), gen.semantic_code(h)
-        print(f"  [semantic code ] exact match: {bool((exp_s==got_s).all())}  {exp_s.flatten().tolist()}")
-
-        # 3) full frame, deterministic x_0 -- 37 INTEGER codes, so exact or not
-        exp_f = ref.reference_frame(h, w, x_0=x_0)
-        got_f = gen(h, x_0=x_0)
-        n_diff = int((exp_f != got_f).sum())
-        print(f"  [full frame    ] {'IDENTICAL' if n_diff==0 else f'{n_diff} of {exp_f.numel()} codes differ'}")
-        if n_diff:
-            print(f"      ref  {exp_f[0, :10].tolist()}")
-            print(f"      got  {got_f[0, :10].tolist()}")
-    finally:
-        ttnn.close_device(dev)
-
-
-if __name__ == "__main__":
-    main()
