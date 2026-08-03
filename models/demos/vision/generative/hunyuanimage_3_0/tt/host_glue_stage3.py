@@ -56,7 +56,20 @@ def _rm_upload(tt_pipe, t):
     )
 
 
-def setup_ondevice_headglue(model, tt_pipe, kwargs, attn_mask, token_h=64, token_w=64):
+def setup_ondevice_headglue_static(model, tt_pipe, token_h=64, token_w=64):
+    """PROMPT-INDEPENDENT on-device conv heads (patch_embed + final_layer) -- the ~114s
+    conv-kernel compile. Build ONCE at server startup and pass as `heads=` to
+    setup_ondevice_headglue / generate_image_ondevice to reuse across renders (the
+    weights are the fixed VAE conv weights, independent of prompt/text)."""
+    return {
+        "token_h": token_h,
+        "token_w": token_w,
+        "patch_embed_tt": build_patch_embed(tt_pipe.device, model, token_h, token_w),
+        "final_layer_tt": build_final_layer(tt_pipe.device, model, token_h, token_w),
+    }
+
+
+def setup_ondevice_headglue(model, tt_pipe, kwargs, attn_mask, token_h=64, token_w=64, heads=None):
     """Precompute the static gen_image sequence pieces + build the on-device conv heads.
     Returns a ctx dict consumed by run_velocity_once_ondevice."""
     input_ids = kwargs["input_ids"]  # [cfg, S]
@@ -66,13 +79,15 @@ def setup_ondevice_headglue(model, tt_pipe, kwargs, attn_mask, token_h=64, token
     cfg, S = int(input_ids.shape[0]), int(input_ids.shape[1])
     with torch.no_grad():
         base = model.model.wte(input_ids).to(torch.float32)  # [cfg, S, hidden] static base embeds
+    if heads is None:
+        heads = setup_ondevice_headglue_static(model, tt_pipe, token_h, token_w)
     ctx = {
         "cfg": cfg,
         "S": S,
         "token_h": token_h,
         "token_w": token_w,
-        "patch_embed_tt": build_patch_embed(tt_pipe.device, model, token_h, token_w),
-        "final_layer_tt": build_final_layer(tt_pipe.device, model, token_h, token_w),
+        "patch_embed_tt": heads["patch_embed_tt"],
+        "final_layer_tt": heads["final_layer_tt"],
         "rows": [],
     }
     for i in range(cfg):
@@ -131,3 +146,83 @@ def run_velocity_once_ondevice(model, ctx, tt_pipe, latents, t, cfg_factor):
     for x in (emb_pe, emb_fl, img_embeds, img_rm):
         ttnn.deallocate(x)
     return torch.cat(vels, dim=0)  # [cfg,32,H,W]
+
+
+def generate_image_ondevice(
+    model,
+    tt_pipe,
+    prompt,
+    image_size=(1024, 1024),
+    num_inference_steps=None,
+    guidance_scale=None,
+    seed=0,
+    out_path="hunyuan_t2i_ondevice.png",
+    heads=None,
+):
+    """Full hybrid text->image render using the STAGE-3 fully-on-device head-glue path
+    (hidden never leaves the device across the loop). Mirrors gen_image.generate_image
+    but swaps run_velocity_once -> run_velocity_once_ondevice. Returns (PIL image, timing).
+    Honors HUNYUAN_VAE_AUTOCAST (bf16/fp16) + HUNYUAN_CCL_LINKS like the baseline."""
+    import os
+    import time
+
+    from .gen_image import prepare_gen_image_inputs
+
+    gc = model.generation_config
+    steps = int(num_inference_steps or gc.diff_infer_steps)
+    guidance = float(guidance_scale if guidance_scale is not None else gc.diff_guidance_scale)
+    cfg = 2 if guidance > 1.0 else 1
+
+    kwargs, attn_mask = prepare_gen_image_inputs(model, prompt, list(image_size), seed=seed)
+    pipe = model.pipeline
+    sched = pipe.scheduler
+    sched.set_timesteps(steps, device="cpu")
+    timesteps = sched.timesteps
+    h = kwargs["batch_gen_image_info"][0].token_height
+    w = kwargs["batch_gen_image_info"][0].token_width
+    g = torch.Generator("cpu").manual_seed(seed)
+    latents = torch.randn(1, int(model.config.vae["latent_channels"]), h, w, generator=g, dtype=torch.float32)
+
+    ctx = setup_ondevice_headglue(model, tt_pipe, kwargs, attn_mask, token_h=h, token_w=w, heads=heads)
+
+    t_gen = time.time()
+    per_step_ms = []
+    for i, t in enumerate(timesteps):
+        t0 = time.time()
+        pred = run_velocity_once_ondevice(model, ctx, tt_pipe, latents, t, cfg)  # [cfg,32,h,w]
+        if cfg == 2:
+            pc, pu = pred.chunk(2)
+            pred = pu + guidance * (pc - pu)
+        latents = sched.step(pred, t, latents, return_dict=False)[0]
+        per_step_ms.append(1000.0 * (time.time() - t0))
+        print(f"  step {i + 1}/{steps} {per_step_ms[-1]:.0f} ms", flush=True)
+    loop_s = time.time() - t_gen
+
+    t_vae = time.time()
+    sf = model.vae.config.scaling_factor
+    if sf:
+        latents = latents / sf
+    if hasattr(model.vae, "ffactor_temporal"):
+        latents = latents.unsqueeze(2)
+    _vae_ac = os.environ.get("HUNYUAN_VAE_AUTOCAST", "").lower()
+    with torch.no_grad():
+        if _vae_ac in ("bf16", "fp16"):
+            _dt = torch.bfloat16 if _vae_ac == "bf16" else torch.float16
+            with torch.autocast(device_type="cpu", dtype=_dt):
+                image = model.vae.decode(latents.float(), return_dict=False)[0]
+        else:
+            image = model.vae.decode(latents.float(), return_dict=False)[0]
+    if hasattr(model.vae, "ffactor_temporal"):
+        image = image.squeeze(2)
+    image = pipe.image_processor.postprocess(image, output_type="pil", do_denormalize=[True] * image.shape[0])[0]
+    vae_s = time.time() - t_vae
+
+    total = loop_s + vae_s
+    ms = sum(per_step_ms) / len(per_step_ms)
+    image.save(out_path)
+    print(
+        f"ONDEVICE_E2E_TOTAL_LATENCY_S={total:.3f} loop={loop_s:.1f}s @ {ms:.0f} ms/step x{steps} "
+        f"vae={vae_s:.1f}s token_hw=({h},{w}) out={out_path}",
+        flush=True,
+    )
+    return image, {"total_s": total, "loop_s": loop_s, "vae_s": vae_s, "ms_per_step": ms, "steps": steps}

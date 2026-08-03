@@ -132,3 +132,54 @@ cancelling the halved collective COUNT (step is NOT purely latency-bound) — AN
 is 3x bigger (step1 24.2s vs 8.6s). At 50 cold steps that +15.6s compile outweighs the 49x0.1s steady
 saving => ~10s SLOWER per cold render. Kept gated: only net-positive if the compile amortizes across
 renders (resident server). NOT flipped default.
+
+## 2026-08-03 — Lever 3 LANDED: on-device host-glue render path (the #1 lever)
+
+ROOT-CAUSE FIX: the perf harness `test_image3_t2i_perf.py` was measuring the HYBRID path
+(`gen_image.generate_image` -> `forward_image` does `_mesh_to_torch` = per-step device->host
+download of the full [1,S,hidden] + host patch_embed/final_layer). The on-device host-glue
+driver `generate_image_ondevice` (keeps hidden ON DEVICE all 50 steps; only the tiny velocity
+downloads) + its perf harness `test_host_glue_stage3_perf.py` were UNCOMMITTED on the t2i-demo
+worktree and never ported. Ported both onto unified (drop-in: deps setup_ondevice_headglue /
+run_velocity_once_ondevice / prepare_gen_image_inputs all identical).
+
+Measured, full 50-step 1024² cyberpunk render, all levers default + bf16 VAE (apples-to-apples
+with the 282s reference config, num_layers=32, use_trace=False):
+
+| path | steady ms/step | E2E s/image | notes |
+|---|---|---|---|
+| HYBRID (test_image3_t2i_perf) | 5548 | 351.4 | per-step host round-trip present |
+| **ON-DEVICE (this)** | **947** | **216.5** | hidden stays on device |
+
+Breakdown of 216.5s: step-1 compile **133.7s** (one-time on-device conv-kernel compile, amortizable)
++ loop 46.4s @ 947 ms/step + bf16 VAE 36.4s. The host round-trip was ~4600 ms/step (~83% of the
+hybrid step). vs hybrid 351.4s = **-38.4% E2E**; vs the 282s reference (2782 ms/step, pre-my-wins)
+my 4 device-forward wins take steady 2782 -> 947.
+
+WARM (compile amortized, e.g. resident server / 2nd render) = loop 46.4 + vae 36.4 = **~83 s/image**
+projected (steady 947 ms/step is rock-steady measured; the 133.7s is a one-time cost). Best value.
+Still eager (use_trace=False) -> tracing the on-device forward is the next lever (kills eager dispatch).
+
+## 2026-08-03 — Lever 3b: WARM resident server (conv-heads cached) -> ~84 s/image
+
+The on-device path's 133.7s step-1 was a PER-RENDER conv-head recompile: generate_image_ondevice
+called setup_ondevice_headglue every render, rebuilding patch_embed/final_layer. Split it:
+`setup_ondevice_headglue_static` (conv heads, build ONCE) + per-prompt rows (cheap); generate_image_ondevice
++ a resident server (`demo/warm_render_server.py`) build heads once + reuse (heads=). Conv-head BUILD is
+actually 4s; the ~114s is a LAZY compile on first use (render 1), then program-cache-warm for render 2+.
+
+Measured, one resident process, 5 renders (bf16 VAE, all levers default):
+
+| render | prompt | E2E | ms/step | note |
+|---|---|---|---|---|
+| cyber_base | (warmup) | 201.2s | 3297 | pays the lazy conv compile ONCE |
+| cyber_v1_gold | tweak | 84.2s | 970 | WARM |
+| cyber_v2_fog | tweak | 84.0s | 953 | WARM |
+| cyber_v3_dawn | tweak | 84.9s | 983 | WARM |
+| diff_zen | very different | 98.1s | 1236 | new seq-len -> +14s one-time layer recompile |
+
+WARM_AVG (renders 2-5) = 87.8s (loop 51.8 + vae 36.0). Same-length prompt variations = ~84.4s
+(loop ~48s @ ~970 ms/step + bf16 vae ~36s). A new prompt LENGTH pays a one-time ~14s layer recompile,
+then warms. So warm device = **~84 s/image** per prompt-variation (~88s avg incl. a length change).
+Full ladder: hybrid 351.4s -> on-device cold 216.5s -> **warm 84s**. The ~36s bf16 VAE is now ~43%
+of the warm render -> VAE port is the next lever; tracing the ~970 ms/step forward is the other.
