@@ -47,7 +47,7 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
 
-def _boolq_reward(completions, answer, **kwargs):
+def boolq_reward(completions, answer, **kwargs):
     rewards = []
     for text, ground_truth in zip(completions, answer):
         clean = text.strip().lower()
@@ -57,7 +57,7 @@ def _boolq_reward(completions, answer, **kwargs):
     return rewards
 
 
-def _run_output_dir() -> str:
+def get_output_dir() -> str:
     return os.path.join(
         str(REPO_ROOT),
         "generated/tt-train/grpo_run",
@@ -160,8 +160,8 @@ def _ttml_main() -> None:
     device_config, raw = _load_device_config()
     mesh_device = _open_ttml_device(device_config)
 
-    model_id = raw["model_id"]
-    weight_sync_every = int(raw["weight_sync_every"])
+    model_id = raw["training_config"]["model_id"]
+    weight_sync_every = int(raw["training_config"]["weight_sync_every"])
 
     completer: Any = None
     client: Any = None
@@ -183,7 +183,7 @@ def _ttml_main() -> None:
 
         dataset = load_dataset("google/boolq", split="train").shuffle(seed=42).map(format_boolq)
 
-        output_dir = _run_output_dir()
+        output_dir = get_output_dir()
         grpo_config = get_grpo_config(raw, output_dir=output_dir)
         optimizer_dict = raw["training_config"]["optimizer"]
         transformer_config = get_model_config(raw["training_config"]["model_config"])
@@ -211,7 +211,7 @@ def _ttml_main() -> None:
             completer=completer,
             dataset=dataset,
             config=grpo_config,
-            reward_func=_boolq_reward,
+            reward_func=boolq_reward,
             optimizer_dict=optimizer_dict,
             callbacks=[
                 WeightSyncCallback(completer, every=weight_sync_every),
@@ -242,7 +242,7 @@ def _ttt_main() -> None:
     # the rollout mesh / batch / seq-len come from ``remote_rollout_config``.
     raw = load_config(os.path.join(str(REPO_ROOT), CONFIG_REL))
     grpo_temperature = float(raw["training_config"]["grpo_config"]["temperature"])
-    model_id = raw["model_id"]
+    model_id = raw["training_config"]["model_id"]
     rr = raw["remote_rollout_config"]
 
     parent_mesh = ttnn.open_mesh_device(

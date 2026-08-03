@@ -268,14 +268,16 @@ opens the rollout mesh and constructs `TttGenerationWorker`.
 | `max_batch_size` | `int`       | `32`         | Per-submesh concurrent decode capacity. Global generation batch = `max_batch_size * num_submeshes`. Sets the paged KV-cache block budget on each submesh — over-sizing costs L1 / DRAM; under-sizing rejects large requests. |
 | `max_seq_len`    | `int`       | `2048`       | Max prompt + completion length. Sets the KV-cache page-table depth: `max_num_blocks_per_user = ceil(max_seq_len / block_size)`. Must fit the longest prompt (post chat-template) plus `grpo_config.max_completion_length`.    |
 
-### Top-level knobs
+### `training_config` extras
+
+Set alongside the standard `GRPOTrainer` blocks under `training_config`:
 
 | Field               | Type   | Default                                | Description                                                                                                              |
 | ------------------- | ------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `model_id`          | `str`  | `"meta-llama/Llama-3.2-1B-Instruct"`   | HF repo path. TTML rank uses it for tokenizer + `LlamaCompleterRemoteRollout`; TTT rank uses it for `llama_stop_and_pad` and `TttGenerationWorker.model_source`. |
 | `weight_sync_every` | `int`  | `1`                                    | Cadence (in optimizer steps) at which `WeightSyncCallback` pushes fresh policy weights from the TTML rank to the TTT worker. |
 
-`training_config` (GRPO / optimizer knobs) and `device_config`
+The rest of `training_config` (GRPO / optimizer knobs) and `device_config`
 (trainer-mesh shape / DDP) are the standard `GRPOTrainer` blocks —
 see [`tt-train/docs/GRPO_TRAINER.md`](../../../../docs/GRPO_TRAINER.md).
 
