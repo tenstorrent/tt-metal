@@ -14,12 +14,12 @@ that plugs into the model-agnostic `models/demos/common/prefill` engine.
 
 ## Roadmap
 
-Stacked PRs, bottom-up. **This PR is P1.**
+Stacked PRs, bottom-up. **This PR is P3.**
 
-- [x] **P1 — package scaffold + attention** *(this PR)*: GQA, RoPE (YaRN), attention sinks, and
+- [x] **P1 — package scaffold + attention** (merged): GQA, RoPE (YaRN), attention sinks, and
       per-layer sliding/full alternation; single-Blackhole-card PCC vs a torch reference.
-- [ ] **P2 — KV cache + indexed RoPE**: chunked, block-cyclic, SP-sharded KV cache.
-- [ ] **P3 — MoE**: `TtGptOssMoE` over the DeepSeek EP submodules (SwiGLU-OAI + biases, no shared expert).
+- [x] **P2 — KV cache + indexed RoPE** (merged): chunked, block-cyclic, SP-sharded KV cache.
+- [ ] **P3 — MoE** *(this PR)*: `TtGptOssMoE` over the DeepSeek EP submodules (SwiGLU-OAI + biases, no shared expert).
 - [ ] **P4 — model + runtime**: full model, chunked-prefill runtime, and the `common/prefill` adapter.
 - [ ] **P5 — galaxy bring-up**: TP=8 / SP=4 / EP=32 on the 4×8 Blackhole Galaxy (gated on galaxy access).
 - [ ] **P6 — ring SDPA**: the sinks + sliding + halo-CCL ring SDPA (Pavle Josipović's op), for scalable SP and multi-chunk long context.
