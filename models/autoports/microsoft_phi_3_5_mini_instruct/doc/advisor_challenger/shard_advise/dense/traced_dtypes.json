@@ -1,0 +1,21 @@
+{
+  "layer_kind": "dense",
+  "layer_idx": 0,
+  "batch": 32,
+  "traced_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "policy_source": "doc/optimized_decoder/final_perf_after_phase_candidate.log (OPT_POLICY name=final), corroborated by doc/optimized_decoder/tracy_final/decode_b32_perf_report.csv",
+  "advisor_commit": "618cd4e75dae69d334bb9d8cdeff314816ccf214",
+  "advisor_pin_expected": "618cd4e75d",
+  "advisor_home": "/home/mvasiljevic/tt-mlir"
+}

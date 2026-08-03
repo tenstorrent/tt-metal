@@ -1,0 +1,12 @@
+{
+  "shipped_policy": {
+    "policy_name": "final"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/final_perf_after_phase_candidate.log (OPT_POLICY name=final), corroborated by doc/optimized_decoder/tracy_final/decode_b32_perf_report.csv"
+}

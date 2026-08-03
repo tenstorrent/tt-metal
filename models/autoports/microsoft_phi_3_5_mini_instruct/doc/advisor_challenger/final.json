@@ -1,0 +1,97 @@
+{
+  "outcome": "improved",
+  "changed": true,
+  "changed_precision": false,
+  "decode_batch": 32,
+  "incumbent_ms": 0.7886101678013802,
+  "final_ms": 0.7484575919806957,
+  "repeats_ms": [
+    0.7484575919806957,
+    0.7485391572117805,
+    0.7483784481883049,
+    0.7485844381153584,
+    0.7480604387819767
+  ],
+  "delta_ms": -0.0401525758206844,
+  "delta_pct": -5.092,
+  "winning_repeats_ms": [0.7484575919806957, 0.7485391572117805, 0.7483784481883049, 0.7485844381153584, 0.7480604387819767],
+  "confirmed_fresh_process": true,
+  "winning_config": {
+    "advisor_rope_l1_chain": true,
+    "decode_core_grid": [8, 1],
+    "down_in0_block_w": 16
+  },
+  "oracle": "real Phi-3.5 layer-0 weights with recorded target activations and nonzero reference-filled cache, against the HF layer reference at PCC 0.995",
+  "oracle_scope": "batch-32 decode at logical position 127",
+  "oracle_reference": "HF Phi3 decoder-layer reference, which the placement change cannot move",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "oracle_pcc": 0.9989930042363637,
+  "oracle_artifact": "oracle_rope_l1_real.log",
+  "model_estimate": {
+    "before_us": 22392.576,
+    "after_us": 21107.694,
+    "band_us": 22.822,
+    "per_kind": {
+      "dense": {
+        "before_us": 22392.576,
+        "after_us": 21107.694,
+        "layers": 32
+      }
+    },
+    "method": "per-layer measured delta x layers_of_kind, summed"
+  },
+  "combination": {
+    "measured_sets": [
+      {
+        "set": ["incumbent"],
+        "measured_ms": 0.7886101678013802,
+        "repeats_ms": [0.7891278807073832, 0.7885578740388155, 0.789108844473958, 0.7886101678013802, 0.7884146831929684],
+        "oracle_passed": true
+      },
+      {
+        "chains": ["rope_l1_chain"],
+        "measured_ms": 0.7487090304493904,
+        "repeats_ms": [0.7486138120293617, 0.7487090304493904, 0.7485705427825451, 0.7487242296338081, 0.7487663254141808],
+        "oracle_passed": true
+      },
+      {
+        "chains": ["rope_l1_chain_confirm"],
+        "measured_ms": 0.7484575919806957,
+        "repeats_ms": [0.7484575919806957, 0.7485391572117805, 0.7483784481883049, 0.7485844381153584, 0.7480604387819767],
+        "oracle_passed": true
+      }
+    ],
+    "best_set": ["rope_l1_chain"]
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial post-incumbent batch-32 dense-layer capture and reconcile ranking",
+      "ranked_from": "reconciliation_dense.json",
+      "candidate": "rope_l1_chain",
+      "measured_ms": 0.7487090304493904,
+      "oracle_passed": true
+    },
+    {
+      "iteration": 2,
+      "trigger": "fresh-process confirmation of the measured winner",
+      "reranked_from": "candidate_rope_l1_perf_report.csv",
+      "candidate": "rope_l1_chain fresh-process confirmation",
+      "measured_ms": 0.7484575919806957,
+      "oracle_passed": true
+    }
+  ],
+  "rejected_knobs": [
+    "down_in0_block_w=32 (direct optimize sweep, not advisor-attributable; remains non-default)",
+    "fused_rope=true (topology/semantic candidate, not this advisor placement chain; remains default-off)",
+    "partial fused-cache/SDPA edge placements (invalid soft pairs because paged_fused_update_cache is tracer-terminal)",
+    "advisor core counts 11/22 alone (not recommendations; shipped chain uses exact batch-dividing 32-core height shards)"
+  ],
+  "reported_not_screened": {
+    "advised_boundaries_us_advisor_agrees": 5.129,
+    "layer_handoff_us_per_layer": 1.019,
+    "layer_handoff_us_per_model": 31.589,
+    "unreachable_paged_fused_update_cache_us": 39.422
+  }
+}

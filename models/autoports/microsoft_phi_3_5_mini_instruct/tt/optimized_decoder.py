@@ -88,6 +88,7 @@ class OptimizationPolicy:
     fused_paged_cache_update: bool = True
     explicit_decode_sdpa: bool = False
     fused_rope: bool = False
+    advisor_rope_l1_chain: bool = True
     fused_prefill_rope: bool = False
     prefill_core_grid: tuple[int, int] = (8, 8)
     prefill_qkv_in0_block_w: int | None = 2
@@ -897,6 +898,35 @@ class OptimizedDecoder(LightweightModule):
             )
         query_memory_config = query.memory_config()
         key_memory_config = key.memory_config()
+        if self.policy.advisor_rope_l1_chain:
+            cos = ttnn.to_memory_config(cos, query_memory_config)
+            sin = ttnn.to_memory_config(sin, query_memory_config)
+
+            def apply_l1_rope(value):
+                leading = list(tuple(value.shape)[:-1])
+                first = ttnn.slice(
+                    value,
+                    [0] * len(leading) + [0],
+                    leading + [self.head_dim // 2],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                second = ttnn.slice(
+                    value,
+                    [0] * len(leading) + [self.head_dim // 2],
+                    leading + [self.head_dim],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                rotated = ttnn.concat((ttnn.neg(second), first), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+                rotated = ttnn.to_memory_config(rotated, query_memory_config)
+                return ttnn.add(
+                    ttnn.multiply(value, cos, memory_config=query_memory_config),
+                    ttnn.multiply(rotated, sin, memory_config=query_memory_config),
+                    memory_config=query_memory_config,
+                )
+
+            query = apply_l1_rope(query)
+            key = apply_l1_rope(key)
+            return query, ttnn.to_memory_config(key, key_memory_config)
         query = self._apply_rope(ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG), cos, sin)
         key = self._apply_rope(ttnn.to_memory_config(key, ttnn.DRAM_MEMORY_CONFIG), cos, sin)
         return (
