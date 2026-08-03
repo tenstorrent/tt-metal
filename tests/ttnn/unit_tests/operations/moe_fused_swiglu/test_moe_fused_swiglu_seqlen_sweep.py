@@ -47,7 +47,13 @@ def _core_grid():
 CORE_GRID = _core_grid()
 
 TILE = 32
-HIDDEN = 2048
+#: N and the weight dtype are harness variables now — the op generalizes over both, and the
+#: read-bytes denominator below must follow them or the reported utilisation silently lies.
+HIDDEN = int(os.environ.get("MOE_HIDDEN", 2048))
+WEIGHT_DTYPE = {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}[
+    os.environ.get("MOE_WDTYPE", "bfp4")
+]
+W_TILE = ttnn.tile_size(WEIGHT_DTYPE)
 BFP4_TILE = 576
 NUM_GLOBAL_EXPERTS, NUM_LOCAL_EXPERTS, LOCAL_EXPERT_ID, GLOBAL_EXPERT_ID = 256, 8, 3, 137
 
@@ -109,7 +115,7 @@ def _formats():
 
 def read_bytes(count, emb, input_format):
     """DRAM bytes the op must read: three bfp4 weight sets + ONE read of the real tokens."""
-    weights = 3 * (emb * HIDDEN // 1024) * BFP4_TILE
+    weights = 3 * (emb * HIDDEN // 1024) * W_TILE
     if input_format == "bf16_rm":
         return weights + count * emb * 2.0
     return weights + ((count + TILE - 1) // TILE) * TILE * emb * 1.0625
@@ -155,7 +161,7 @@ def _build_static(emb, capacity, input_format, wplace, device):
     tt_w = [
         ttnn.from_torch(
             torch.randn(s, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat4_b,
+            dtype=WEIGHT_DTYPE,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=mc,

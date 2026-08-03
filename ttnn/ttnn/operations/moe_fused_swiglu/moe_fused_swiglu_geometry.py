@@ -119,6 +119,22 @@ SEM_WDSPLIT = SEM_H_FREE + 1  # writer -> reader, SAME core: "my W_down share la
 SEM_COUNT = SEM_WDSPLIT + 1
 NUM_DEVICE_SEMAPHORES = 16
 
+#: Per-core L1 available to this op's circular buffers, as a default for host-only use. The
+#: descriptor overrides it with the device's own `get_max_worker_l1_unreserved_size()`.
+L1_CB_BUDGET = 1_532_032
+
+#: Headroom subtracted from that figure before deciding weight residency.
+#:
+#: NOT arbitrary. The allocator's "circular buffers grow to N B" is an ADDRESS, not a size: the CB
+#: region starts above the kernel binaries, runtime args and semaphores, and that base is
+#: PROGRAM-SPECIFIC, so no host-side call returns it. Measured here: a descriptor whose CBs sum to
+#: 1 515 264 B threw at 1 626 752 B, i.e. a base of 111 488 B, while
+#: `get_max_worker_l1_unreserved_size()` reported only 40 832 B of reservation. This margin is
+#: exactly that difference, so the residency decision fails over cleanly instead of reaching the
+#: allocator. It is measured on one program and the base is program-specific, so treat it as the
+#: best available estimate rather than an exact bound — the allocator remains the final authority.
+L1_CB_RESERVE = 70_656  # 111 488 measured base - 40 832 reported reserved
+
 
 # --------------------------------------------------------------------------------------------
 # Small numeric helpers
@@ -197,7 +213,20 @@ class Blocking:
     producing a program that computes the wrong thing.
     """
 
-    def __init__(self, hgroups: int, kgroups: int, emb: int, hidden: int, m_t_max: int):
+    def __init__(
+        self,
+        hgroups: int,
+        kgroups: int,
+        emb: int,
+        hidden: int,
+        m_t_max: int,
+        *,
+        w_tile: int = 576,
+        bfp8_tile: int = 1088,
+        bf16_tile: int = 2048,
+        x_stick: int = 0,
+        l1_budget: int = 0,
+    ):
         if kgroups < 2:
             raise ValueError(
                 f"moe_fused_swiglu: needs a grid at least 2 rows tall (got {hgroups}x{kgroups}); "
@@ -246,56 +275,134 @@ class Blocking:
         if M_BLOCK % OUT_SUBBLOCK_H_GU or M_BLOCK % h:
             raise ValueError(f"moe_fused_swiglu: M_BLOCK {M_BLOCK} must be a multiple of both sub-block heights")
 
+        self.gather_pages = self.plan["gather_pages"]
+        self.slice_pages = self.plan["slice_pages"]
+
         self.max_m_blocks = (m_t_max + M_BLOCK - 1) // M_BLOCK
         self.depth_x = DEPTH_X if self.max_m_blocks > 1 else 1
         self.depth_w = 1 if W_RESIDENT else DEPTH_W
         self.wd_ahead = max(1, min(WD_AHEAD, hgroups))
-        self.depth_wd = self._choose_depth_wd()
-        self.wd_split = max(0, min(8, WD_SPLIT)) if self.depth_wd == hgroups else 0
         self.hack_ahead = max(1, min(HACK_AHEAD, DEPTH_H - 1))
 
-        self.gather_pages = self.plan["gather_pages"]
-        self.slice_pages = self.plan["slice_pages"]
+        # W_down residency wants the CB to hold the WHOLE phase-2 K stream, which is LINEAR IN N
+        # and in the weight dtype: `hgroups * hn_pad * ec_max` tiles. At N 2048 / bfp4 that is
+        # 111 KB and it fits; at 4x the hidden extent, or at bf16 weights (3.56x the bytes), it
+        # does not. So residency is a BUDGET DECISION, not a constant — fall back to the smallest
+        # legal depth rather than throwing at program build.
+        self.w_tile, self.bfp8_tile, self.bf16_tile = w_tile, bfp8_tile, bf16_tile
+        self.x_stick = x_stick or bfp8_tile
+        self.l1_budget = l1_budget or L1_CB_BUDGET
+        self.wd_resident = WD_RESIDENT
+        self.depth_wd = self._choose_depth_wd()
+        if self.l1_bytes(True) > self.l1_budget:
+            self.wd_resident = False  # residency is what pins the depth to hgroups
+            self.depth_wd = self._min_depth_wd()
+            while self.l1_bytes(True) > self.l1_budget:
+                nxt = self._next_smaller_depth_wd(self.depth_wd)
+                if nxt == self.depth_wd:
+                    break
+                self.depth_wd = nxt
+        self.wd_split = max(0, min(8, WD_SPLIT)) if self.depth_wd == hgroups else 0
 
     # -- hn_pad ---------------------------------------------------------------------------
     def _hn_pad_legal(self, hn_pad: int):
-        """(gu_chunks, plan) if this hn_pad can be served, else (None, reason)."""
+        """(gu_chunks, plan) if this hidden width can be served, else (None, reason).
+
+        Four constraints, all of which have bitten:
+          * it must COVER the hidden extent;
+          * every column group must get a real column — a uniform width means the number of
+            non-empty groups is `ceil(hid_t/hn_pad)`, so `hn_pad * (hgroups-1) < hid_t`;
+          * it must decompose into chunks that fit the DEST budget, `OUT_SUBBLOCK_H_GU * chunk_w
+            <= DEST_AUTO_LIMIT_TILES`;
+          * the scatter plan's divisibility lattice must close (see `scatter_plan`).
+        """
         if hn_pad * self.hgroups < self.hid_t:
-            return None, "too narrow to cover the hidden extent"
-        if min(max(0, min(hn_pad, self.hid_t - x * hn_pad)) for x in range(self.hgroups)) == 0:
-            return None, f"leaves a column group empty (hidden {self.hidden} over {self.hgroups} columns)"
-        chunks = max(1, GU_CHUNKS)
-        while chunks > 1 and hn_pad % chunks:
-            chunks -= 1
-        chunk_w = hn_pad // chunks
-        if OUT_SUBBLOCK_H_GU * chunk_w > DEST_AUTO_LIMIT_TILES:
-            return None, f"gate/up sub-block {OUT_SUBBLOCK_H_GU}x{chunk_w} exceeds the DEST budget"
-        plan, why = scatter_plan(M_BLOCK, self.m_eff_min, hn_pad, self.kgroups)
-        if plan is None:
-            return None, why
-        return (chunks, plan), None
+            return None, "does not cover the hidden extent"
+        if hn_pad * (self.hgroups - 1) >= self.hid_t:
+            return None, f"leaves a column group with no real column (hid_t {self.hid_t})"
+        # Prefer the tuned chunk count; widen it only if the DEST budget forces smaller chunks.
+        for chunks in sorted(range(1, hn_pad + 1), key=lambda c: (abs(c - GU_CHUNKS), c)):
+            if hn_pad % chunks:
+                continue
+            if OUT_SUBBLOCK_H_GU * (hn_pad // chunks) > DEST_AUTO_LIMIT_TILES:
+                continue
+            plan, why = scatter_plan(M_BLOCK, self.m_eff_min, hn_pad, self.kgroups)
+            if plan is None:
+                return None, why
+            return (chunks, plan), None
+        return None, (
+            f"no chunk count divides {hn_pad} with a sub-block inside the DEST budget of " f"{DEST_AUTO_LIMIT_TILES}"
+        )
 
     def _choose_hn_pad(self):
         """Smallest legal hidden width per column group.
 
-        `ceil(hid_t/hgroups)` is only the FLOOR. It also has to decompose into GU_CHUNKS chunks
-        that fit the DEST budget and satisfy the scatter plan, and neither holds for every N —
-        e.g. hid_t 112 over 11 columns gives 11, which is prime and over the budget of 8. Padding
-        up costs a few pad columns that `HnSteps` already narrows out of the last K-block's FMA.
+        `ceil(hid_t/hgroups)` is only the FLOOR. The width also has to leave every column group a
+        real column, decompose inside the DEST budget, and satisfy the scatter plan — and none of
+        those holds for every N. Padding up costs a few pad columns, which `HnSteps` already
+        narrows out of the last K-block's FMA.
         """
         floor = (self.hid_t + self.hgroups - 1) // self.hgroups
+        ceiling = max(floor, (self.hid_t - 1) // max(1, self.hgroups - 1)) + 1
         reasons = []
-        for hn_pad in range(floor, floor + DEST_AUTO_LIMIT_TILES * GU_CHUNKS + 1):
+        for hn_pad in range(floor, ceiling + 1):
             ok, why = self._hn_pad_legal(hn_pad)
             if ok:
                 return hn_pad, ok[0], ok[1]
             reasons.append(f"  hn_pad {hn_pad}: {why}")
+        # Actionable, not just a refusal: report the column counts that WOULD work here.
+        workable = []
+        for h in range(2, self.hgroups + 1):
+            probe = Blocking.__new__(Blocking)
+            probe.hgroups, probe.kgroups = h, self.kgroups
+            probe.hid_t, probe.hidden, probe.m_eff_min = self.hid_t, self.hidden, self.m_eff_min
+            f = (self.hid_t + h - 1) // h
+            if any(probe._hn_pad_legal(v)[0] for v in range(f, f + DEST_AUTO_LIMIT_TILES + 2)):
+                workable.append(h)
         raise ValueError(
-            f"moe_fused_swiglu: no legal hidden width per column group for hidden {self.hidden} on a "
-            f"{self.hgroups}x{self.kgroups} grid:\n" + "\n".join(reasons)
+            f"moe_fused_swiglu: hidden {self.hidden} ({self.hid_t} tiles) cannot be split across "
+            f"{self.hgroups} grid columns:\n"
+            + "\n".join(reasons)
+            + (
+                f"\n  workable column counts for this hidden: {workable} — pass a narrower core_grid"
+                if workable
+                else ""
+            )
         )
 
     # -- depth_wd -------------------------------------------------------------------------
+    def _depth_wd_legal(self, d: int) -> bool:
+        """A cb_w_down depth must hold the pipeline: the `wd_ahead` blocks in flight, plus the
+        reserved-but-unpublished one the deferred barrier carries across a round boundary, plus
+        the one compute is consuming.
+
+        It must additionally DIVIDE hgroups in exactly two cases, both of which make the reader's
+        hgroups pushes per M-block have to land the write pointer back on the CB base:
+          * residency, where slot r must hold K-block r on every M-block. Breaking this is
+            silent-wrong-answer class — b > 0 matmuls against the wrong weight block, no hang;
+          * `wd_ahead > 1`, where the multi-block BATCH reserve starts mid-CB and would otherwise
+            straddle the FIFO end.
+        With wd_ahead == 1 and no residency, single-block pushes can never straddle, so any depth
+        above the floor is legal — which is what lets a prime hgroups fall back at all.
+        """
+        if d < self.wd_ahead + 2:
+            return False
+        if (self.wd_resident or self.wd_ahead > 1) and self.hgroups % d:
+            return False
+        return True
+
+    def _min_depth_wd(self):
+        for d in range(self.wd_ahead + 2, self.hgroups + 1):
+            if self._depth_wd_legal(d):
+                return d
+        return self.hgroups
+
+    def _next_smaller_depth_wd(self, d):
+        for c in range(d - 1, self.wd_ahead + 1, -1):
+            if self._depth_wd_legal(c):
+                return c
+        return d
+
     def _choose_depth_wd(self):
         """cb_w_down depth in phase-2 K-blocks.
 
@@ -304,29 +411,45 @@ class Blocking:
         DIVIDE hgroups, so the reader's hgroups pushes per M-block bring the write pointer back
         to the CB base and K-block r always occupies slot r. Residency needs the full hgroups.
         """
-        if WD_RESIDENT:
-            return self.hgroups
-        floor = self.wd_ahead + 2
-        for d in range(floor, self.hgroups + 1):
-            if self.hgroups % d == 0:
-                return d
-        return self.hgroups
+        return self.hgroups if self.wd_resident else self._min_depth_wd()
 
-    # -- CB page counts -------------------------------------------------------------------
-    def cb_pages(self, x_is_rm: bool):
-        gu_block = M_BLOCK * self.hn_pad
-        return {
-            "x_in": XSTICK_ROWS * TILE if x_is_rm else 1,
-            "x_stage": DEPTH_XSTAGE * self.kr_pad if x_is_rm else 1,
-            "x_tiles": self.depth_x * M_BLOCK * self.kr_pad,
-            "w_gu": self.depth_w * self.kr_pad * self.hn_pad,
-            "w_down": self.depth_wd * self.hn_pad * self.ec_max,
-            "gu_block": gu_block,
-            "gather": self.gather_pages,
-            "slice": self.slice_pages,
-            "h": DEPTH_H * gu_block,
-            "out_block": M_BLOCK * self.ec_max,
-        }
+    # -- the CB layout -------------------------------------------------------------------
+    def cb_layout(self, x_is_rm: bool, out_tile: int = 0, idx_page: int = 64, counts_page: int = 64):
+        """(cb_index, pages, page_bytes, format_key) for EVERY circular buffer, in order.
+
+        THE one definition. The descriptor turns this into `CBDescriptor`s and `l1_bytes` sums it,
+        so the residency decision is priced on exactly the bytes that get allocated — the two used
+        to be separate arithmetic, and the copy undercounted by ~95 KB, which turned a clean
+        "does not fit" into an allocator throw at program build.
+        """
+        b8, b16, w, out = self.bfp8_tile, self.bf16_tile, self.w_tile, (out_tile or self.bfp8_tile)
+        gu = M_BLOCK * self.hn_pad
+        outb = M_BLOCK * self.ec_max
+        return [
+            (CB_X_IN, XSTICK_ROWS * TILE if x_is_rm else 1, self.x_stick, "x_in"),
+            (CB_X_TILES, self.depth_x * M_BLOCK * self.kr_pad, b8, "bfp8"),
+            (CB_X_STAGE, DEPTH_XSTAGE * self.kr_pad if x_is_rm else 1, b8, "bfp8"),
+            (CB_W_GATE, self.depth_w * self.kr_pad * self.hn_pad, w, "weight"),
+            (CB_W_UP, self.depth_w * self.kr_pad * self.hn_pad, w, "weight"),
+            (CB_W_DOWN, self.depth_wd * self.hn_pad * self.ec_max, w, "weight"),
+            (CB_H, DEPTH_H * gu, b8, "bfp8"),
+            (CB_IDX_SCRATCH, 1, idx_page, "u32"),
+            (CB_COUNTS_SCRATCH, 1, counts_page, "u32"),
+            (CB_GATHER_GATE, self.gather_pages, b8, "bfp8"),
+            (CB_GATHER_UP, self.gather_pages, b8, "bfp8"),
+            (CB_SLICE_GATE, self.slice_pages, b16, "bf16"),
+            (CB_SLICE_UP, self.slice_pages, b16, "bf16"),
+            (CB_H_SLICE, self.slice_pages, b8, "bfp8"),
+            (CB_OUT_TILES, DEPTH_OUT * outb, out, "out"),
+            (CB_GATE_ACC, gu, b8, "bfp8"),
+            (CB_UP_ACC, gu, b8, "bfp8"),
+            (CB_GATE_SILU, self.slice_pages, b16, "bf16"),
+            (CB_H_LOCAL, gu, b8, "bfp8"),
+            (CB_OUT_INTERM, outb, b16, "bf16"),
+        ]
+
+    def l1_bytes(self, x_is_rm: bool, out_tile: int = 0) -> int:
+        return sum(pages * page for _, pages, page, _ in self.cb_layout(x_is_rm, out_tile))
 
     def describe(self) -> str:
         return (

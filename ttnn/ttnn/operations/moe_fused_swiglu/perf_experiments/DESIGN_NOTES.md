@@ -257,6 +257,46 @@ Measured directly and found to be at its limit, or found not to be the bottlenec
   about what the hotspot is: rotating the walk does not move it.
 * **the gather's trailing atomic barrier (`SCATTER_NOBAR`)** — null; the atomics ack on a warm path.
 
+## 8b. N scaling, and the L1 ceiling
+
+The op has no N=2048 dependency: `hidden` comes from `w_gate.shape[-1]` and `Blocking` derives
+everything from it. What N actually costs, measured at 11x8, bf16_rm, median of 3, us:
+
+| | 128 | 256 | 512 |
+|---|---|---|---|
+| emb 7168, N 1024 | 60.54 | 92.93 | 167.56 |
+| emb 7168, N 2048 | 84.67 | 121.42 | 212.09 |
+| emb 6144, N 1024 | 55.71 | 84.60 | 153.24 |
+| emb 6144, N 2048 | 76.92 | 109.42 | 193.40 |
+
+**Sub-linear, and that is expected.** Doubling N doubles the gate/up output, the h all-gather and
+the `down` contraction, but the op is weight-DRAM-dominated and only 2 of the 3 weight matrices
+scale with N in a way that is not already amortised — plus the fixed per-round rendezvous does not
+move. At emb 7168 the count-256 cell goes 92.93 -> 121.42 for a 2x N, i.e. **1.31x**.
+
+**`hn_pad` is a SEARCHED padding, not `ceil(hid_t/hgroups)`.** It has to (a) cover the extent,
+(b) leave every column group a real column, (c) decompose into chunks inside the DEST budget, and
+(d) satisfy the scatter plan. At N=2048/11 columns the search returns 6, unchanged. At N=3584 it
+returns 11 with 11 chunks — legal, but an unusually fine chunk stream that has not been measured.
+
+**The real ceiling is L1, and it is emb-dependent.** `cb_w_down` is `depth_wd * hn_pad * ec_max`
+tiles and `hn_pad` is `hidden / columns`, so the whole CB set grows with N. Measured at 11x8 with
+bfp4 weights: emb 7168 fits N <= 2048, emb 6144 fits N <= 2048 with residency. Beyond that the op
+raises with the computed numbers rather than letting the allocator throw.
+
+W_down residency is therefore a BUDGET DECISION, not a constant: when the resident CB does not
+fit, the depth falls back to the smallest legal one. That also disables `WD_SPLIT`, which needs
+`depth_wd == hgroups` for its address derivation — so the fallback costs both wins at once, and
+the honest summary is that this op wants residency and is L1-bound before it is anything else.
+
+**The L1 accounting trap, recorded because it cost time twice.** The allocator's "circular buffers
+grow to N B" is an ADDRESS, not a size: the CB region starts above the kernel binaries, runtime
+args and semaphores, and that base is PROGRAM-SPECIFIC. Measured: a descriptor whose CBs sum to
+1 515 264 B threw at 1 626 752 B — a base of 111 488 B — while
+`get_max_worker_l1_unreserved_size()` reported only 40 832 B reserved. `L1_CB_RESERVE` is that
+difference. It is one measurement of a program-specific quantity, so the allocator stays the final
+authority; the margin only makes the common case fail with a useful message.
+
 ## 9. Still open
 
 **Count 512.** After the round-17 wins there is no knob-turn left at 512 (`WD_SPLIT` 4 -> 200.05,

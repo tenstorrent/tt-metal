@@ -354,22 +354,46 @@ def create_program_descriptor(
     all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(hgroups - 1, kgroups - 1))])
 
     emb = int(input_tensor.shape[-1])
-    capacity = int(input_tensor.shape[-2])
     hidden = int(w_gate.shape[-1])
-    blk = Blocking(hgroups, kgroups, emb, hidden, input_m_tiles)
+    x_is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    bfp8_tile = ttnn.tile_size(ttnn.bfloat8_b)
+    kr_pad_probe = -(-(emb // TILE) // kgroups)
+    blk = Blocking(
+        hgroups,
+        kgroups,
+        emb,
+        hidden,
+        input_m_tiles,
+        w_tile=ttnn.tile_size(w_gate.dtype),
+        bfp8_tile=bfp8_tile,
+        bf16_tile=ttnn.tile_size(ttnn.bfloat16),
+        x_stick=(kr_pad_probe * TILE * input_tensor.element_size()) if x_is_rm else bfp8_tile,
+        l1_budget=int(ttnn._ttnn.device.get_max_worker_l1_unreserved_size()) - geo.L1_CB_RESERVE,
+    )
+    idx_page = max(int(global_expert_idx_table.buffer_aligned_page_size()), ttnn.get_dram_alignment())
+    counts_page = max(int(counts.buffer_aligned_page_size()), ttnn.get_dram_alignment())
+    need = blk.l1_bytes(x_is_rm, ttnn.tile_size(output_tensor.dtype))
+    if need > blk.l1_budget:
+        raise RuntimeError(
+            f"moe_fused_swiglu: needs {need} B of L1 per core, device has {blk.l1_budget} B.\n"
+            f"  {blk.describe()}\n"
+            f"  W_down residency is already {'off' if not blk.wd_resident else 'on'}. What is left "
+            f"scales with hn_pad ({blk.hn_pad} tiles, = hidden / grid COLUMNS) and with the weight "
+            f"dtype ({blk.w_tile} B/tile).\n"
+            f"  A NARROWER grid makes this WORSE — fewer columns means a wider hn_pad. What helps: "
+            f"more grid columns, a smaller hidden, a smaller emb, or a narrower weight dtype."
+        )
 
     # ---- dtypes -----------------------------------------------------------------------------
     # The weight stride and CB format both come from the tensor. All three weights share a dtype
     # (validate() enforces it), so one width serves the gate/up and down streams alike.
     w_dtype = w_gate.dtype
-    w_tile = ttnn.tile_size(w_dtype)
-    bfp8_tile = ttnn.tile_size(ttnn.bfloat8_b)
-    bf16_tile = ttnn.tile_size(ttnn.bfloat16)
+    w_tile = blk.w_tile
+    bf16_tile = blk.bf16_tile
     dram_align = ttnn.get_dram_alignment()
     out_dtype = output_tensor.dtype
     out_tile = ttnn.tile_size(out_dtype)
 
-    x_is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     input_format = 0 if x_is_rm else 1
     x_stick_slice = blk.kr_pad * TILE * input_tensor.element_size() if x_is_rm else bfp8_tile
 
@@ -410,39 +434,22 @@ def create_program_descriptor(
             f"do not match the {hgroups}x{kgroups} grid"
         )
 
-    # ---- circular buffers --------------------------------------------------------------------
-    pages = blk.cb_pages(x_is_rm)
+    # ---- circular buffers --------------------------------------------------------------
     # The slice accumulators are bf16, NOT bfp8, and that is a measured CORRECTNESS choice: the
     # scatter chains KGROUPS contributors through one accumulator and bfp8's pack rounding is a
     # biased half-LSB, so the error grows linearly in the chain. bf16 removes the per-step
-    # quantisation entirely (max relative error 0.0580 -> 0.0204, matching the tree's).
+    # quantisation entirely (max relative error 0.0580 -> 0.0204). See DESIGN_NOTES.md §2.
+    fmt = {
+        "bfp8": ttnn.bfloat8_b,
+        "bf16": ttnn.bfloat16,
+        "weight": w_dtype,
+        "out": out_dtype,
+        "u32": ttnn.uint32,
+        "x_in": ttnn.bfloat16 if x_is_rm else ttnn.bfloat8_b,
+    }
     cbs = [
-        _cb(geo.CB_X_IN, all_cores, pages["x_in"], x_stick_slice, ttnn.bfloat16 if x_is_rm else ttnn.bfloat8_b),
-        _cb(geo.CB_X_TILES, all_cores, pages["x_tiles"], bfp8_tile, ttnn.bfloat8_b),
-        _cb(geo.CB_X_STAGE, all_cores, pages["x_stage"], bfp8_tile, ttnn.bfloat8_b),
-        _cb(geo.CB_W_GATE, all_cores, pages["w_gu"], w_tile, w_dtype),
-        _cb(geo.CB_W_UP, all_cores, pages["w_gu"], w_tile, w_dtype),
-        _cb(geo.CB_W_DOWN, all_cores, pages["w_down"], w_tile, w_dtype),
-        _cb(geo.CB_H, all_cores, pages["h"], bfp8_tile, ttnn.bfloat8_b),
-        _cb(
-            geo.CB_IDX_SCRATCH,
-            all_cores,
-            1,
-            max(int(global_expert_idx_table.buffer_aligned_page_size()), dram_align),
-            ttnn.uint32,
-        ),
-        _cb(geo.CB_COUNTS_SCRATCH, all_cores, 1, max(int(counts.buffer_aligned_page_size()), dram_align), ttnn.uint32),
-        _cb(geo.CB_GATHER_GATE, all_cores, pages["gather"], bfp8_tile, ttnn.bfloat8_b),
-        _cb(geo.CB_GATHER_UP, all_cores, pages["gather"], bfp8_tile, ttnn.bfloat8_b),
-        _cb(geo.CB_SLICE_GATE, all_cores, pages["slice"], bf16_tile, ttnn.bfloat16),
-        _cb(geo.CB_SLICE_UP, all_cores, pages["slice"], bf16_tile, ttnn.bfloat16),
-        _cb(geo.CB_H_SLICE, all_cores, pages["slice"], bfp8_tile, ttnn.bfloat8_b),
-        _cb(geo.CB_OUT_TILES, all_cores, geo.DEPTH_OUT * pages["out_block"], out_tile, out_dtype),
-        _cb(geo.CB_GATE_ACC, all_cores, pages["gu_block"], bfp8_tile, ttnn.bfloat8_b),
-        _cb(geo.CB_UP_ACC, all_cores, pages["gu_block"], bfp8_tile, ttnn.bfloat8_b),
-        _cb(geo.CB_GATE_SILU, all_cores, pages["slice"], bf16_tile, ttnn.bfloat16),
-        _cb(geo.CB_H_LOCAL, all_cores, pages["gu_block"], bfp8_tile, ttnn.bfloat8_b),
-        _cb(geo.CB_OUT_INTERM, all_cores, pages["out_block"], bf16_tile, ttnn.bfloat16),
+        _cb(idx, all_cores, pages, page, fmt[key])
+        for idx, pages, page, key in blk.cb_layout(x_is_rm, out_tile, idx_page, counts_page)
     ]
 
     # ---- compile-time args --------------------------------------------------------------------
