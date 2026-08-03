@@ -1,0 +1,139 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "changed_precision": false,
+  "incumbent_ms": 1.449416484683752,
+  "final_ms": 1.449416484683752,
+  "repeats_ms": [
+    1.449416484683752,
+    1.449209302663803,
+    1.4492766186594963,
+    1.4494585618376732,
+    1.4499587193131447
+  ],
+  "oracle": "unchanged frozen incumbent; existing official-weight HF layer checks",
+  "oracle_scope": "no placement or precision change shipped",
+  "oracle_reference": "official-weight HF references recorded by optimized_decoder",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "iterations": [
+    {
+      "trigger": "initial reconcile.py ranking of all measurable full-attention chains",
+      "candidates": [
+        {
+          "candidate": "advisor_rope_k_l1",
+          "chains": ["full_attention:12", "full_attention:11", "full_attention:10"],
+          "measured_ms": 1.453618612140417,
+          "repeats_ms": [1.4536821655929089, 1.453618612140417, 1.453227885067463, 1.45339859649539, 1.457084845751524],
+          "verdict": "rejected_non_overlap"
+        },
+        {
+          "candidate": "advisor_rope_q_l1",
+          "chains": ["full_attention:6", "full_attention:7"],
+          "measured_ms": 1.4544179663062096,
+          "repeats_ms": [1.4542360231280327, 1.455958317965269, 1.4544179663062096, 1.4549121260643005, 1.4530856348574162],
+          "verdict": "rejected_non_overlap"
+        },
+        {
+          "candidate": "advisor_qkv_direct",
+          "chains": ["full_attention:2", "full_attention:1"],
+          "measured_ms": 1.4501315727829933,
+          "repeats_ms": [1.4501315727829933, 1.4506209082901478, 1.4498754777014256, 1.4503367617726326, 1.4500448107719421],
+          "verdict": "rejected_non_overlap"
+        },
+        {
+          "candidate": "advisor_rope_dram",
+          "chains": ["full_attention:b57"],
+          "measured_ms": 1.4516145549714565,
+          "repeats_ms": [1.4502562023699284, 1.4516145549714565, 1.453358717262745, 1.4523217268288136, 1.4508218690752983],
+          "verdict": "rejected_non_overlap"
+        }
+      ]
+    },
+    {
+      "trigger": "ranked chains whose immediate advised placement is rejected by a device contract",
+      "reranked_from": "initial frozen reconciliation; no prior candidate was kept",
+      "candidates": [
+        {
+          "candidate": "advisor_head_norm_l1",
+          "chain": "full_attention:b12",
+          "verdict": "rejected_hard_error",
+          "hard_error": "TT_FATAL layernorm_device_operation.cpp:166: Height sharded inputs are not supported"
+        },
+        {
+          "candidate": "advisor_sdpa_direct",
+          "chain": "full_attention:b61",
+          "verdict": "rejected_hard_error",
+          "hard_error": "TT_FATAL nlp_concat_heads_decode_device_operation.cpp:44: Input tensor must be sharded"
+        }
+      ]
+    },
+    {
+      "trigger": "geometry family including an exactly-dividing grid, the advised neighbourhood, and an above-advice probe",
+      "reranked_from": "initial frozen reconciliation; no prior candidate was kept",
+      "candidates": [
+        {
+          "candidate": "advisor_grid10",
+          "verdict": "rejected_hard_error",
+          "hard_error": "TT_FATAL: matmul does not support uneven sharding for K=192, per_core_K=20"
+        },
+        {
+          "candidate": "advisor_grid11",
+          "verdict": "rejected_hard_error",
+          "hard_error": "TT_FATAL layernorm_device_operation.cpp:277: block_w must be divisible by subblock_w"
+        },
+        {
+          "candidate": "advisor_grid16",
+          "verdict": "rejected_hard_error",
+          "hard_error": "TT_FATAL program.cpp:149: illegal kernel placement on dispatch cores"
+        }
+      ]
+    }
+  ],
+  "rejected_knobs": [
+    "advisor_rope_k_l1",
+    "advisor_rope_q_l1",
+    "advisor_qkv_direct",
+    "advisor_rope_dram",
+    "advisor_head_norm_l1",
+    "advisor_sdpa_direct",
+    "advisor_grid10",
+    "advisor_grid11",
+    "advisor_grid16"
+  ],
+  "model_estimate": {
+    "before_us": 780263.248,
+    "after_us": 780263.248,
+    "band_us": 290.144,
+    "per_kind": {
+      "linear_attention": {
+        "before_us": 759984.336,
+        "after_us": 759984.336,
+        "layers": 48,
+        "band_us": 278.16,
+        "advisor_drop_ceiling_us": 0.0,
+        "feasibility": "not_measurable"
+      },
+      "full_attention": {
+        "before_us": 20278.912,
+        "after_us": 20278.912,
+        "layers": 16,
+        "band_us": 11.984,
+        "advisor_drop_ceiling_us": 539.168,
+        "feasibility": "measurable"
+      }
+    },
+    "method": "sum of reconcile.py model_estimate.this_kind_us; candidate deltas applied per kind; uncertainty_per_model_us summed linearly"
+  },
+  "advised_boundaries": {
+    "full_attention": {"us_advisor_drops": 33.698, "us_advisor_agrees": 1.593, "us_unresolved": 41.029},
+    "linear_attention": {"us_advisor_drops": 0.0, "us_advisor_agrees": 3988.953, "us_unresolved": 896.672}
+  },
+  "model_estimate_layer_handoff": {
+    "full_attention_us_per_layer": 1.376,
+    "full_attention_us_per_model": 20.64,
+    "linear_attention_us_per_layer": 1.358,
+    "linear_attention_us_per_model": 63.826,
+    "total_us_per_model": 84.466
+  }
+}

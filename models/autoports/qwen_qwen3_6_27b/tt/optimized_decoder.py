@@ -60,6 +60,12 @@ class OptimizationPolicy:
     linear_recurrent_fidelity: object = ttnn.MathFidelity.HiFi2
     linear_recurrent_state_dtype: object = ttnn.float32
     decode_storage_cores: int = 8
+    advisor_rope_q_l1: bool = False
+    advisor_rope_k_l1: bool = False
+    advisor_head_norm_l1: bool = False
+    advisor_qkv_direct: bool = False
+    advisor_rope_dram: bool = False
+    advisor_sdpa_direct: bool = False
 
 
 POLICIES = {
@@ -319,6 +325,33 @@ POLICIES.update(
         "final_cum_down_w68": replace(_FINAL_CUMULATIVE, mlp_down_in0_block_w=68),
         "final_cum_mlp_hifi2": replace(_FINAL_CUMULATIVE, mlp_fidelity=ttnn.MathFidelity.HiFi2),
         "final_cum_grid4": replace(_FINAL_CUMULATIVE, decode_storage_cores=4),
+        # Advisor-challenger controls. Default-off: the pinned advisor places
+        # the residual/norm chain on a broader grid than the shipped 8 cores.
+        # Ten exactly divides the 160 hidden tiles; 11 is the advised
+        # neighbourhood, and 16 deliberately probes above the advised count.
+        "advisor_grid10": replace(
+            _FINAL_CUMULATIVE,
+            decode_storage_cores=10,
+            o_decode_in0_block_w=1,
+            mlp_gate_decode_in0_block_w=1,
+            mlp_up_decode_in0_block_w=1,
+            mlp_down_in0_block_w=2,
+        ),
+        "advisor_grid11": replace(
+            _FINAL_CUMULATIVE,
+            decode_storage_cores=11,
+            o_decode_in0_block_w=1,
+            mlp_gate_decode_in0_block_w=1,
+            mlp_up_decode_in0_block_w=1,
+            mlp_down_in0_block_w=1,
+        ),
+        "advisor_grid16": replace(_FINAL_CUMULATIVE, decode_storage_cores=16),
+        "advisor_rope_q_l1": replace(_FINAL_CUMULATIVE, advisor_rope_q_l1=True),
+        "advisor_rope_k_l1": replace(_FINAL_CUMULATIVE, advisor_rope_k_l1=True),
+        "advisor_head_norm_l1": replace(_FINAL_CUMULATIVE, advisor_head_norm_l1=True),
+        "advisor_qkv_direct": replace(_FINAL_CUMULATIVE, advisor_qkv_direct=True),
+        "advisor_rope_dram": replace(_FINAL_CUMULATIVE, advisor_rope_dram=True),
+        "advisor_sdpa_direct": replace(_FINAL_CUMULATIVE, advisor_sdpa_direct=True),
         # Gated-delta decode has four projections of the same normalized
         # hidden state. Materialize them as one DRAM-sharded projection and
         # keep its output projection DRAM-sharded as well. Independent dtype
@@ -1299,6 +1332,84 @@ class OptimizedDecoder(FunctionalDecoder):
             )
         return ttnn.matmul(left, right, **kwargs)
 
+    def _advisor_per_head_norm(self, tensor, weight_name):
+        """Advisor candidate: keep the per-head norm on its L1 shard family."""
+        shape = tensor.shape
+        flat = ttnn.reshape(tensor, (1, 1, shape[1] * shape[2], shape[3]))
+        flat = ttnn.rms_norm(
+            flat,
+            epsilon=self.eps,
+            weight=self.weights[weight_name],
+            memory_config=self.decode_attention_memory_config,
+        )
+        return ttnn.reshape(flat, shape)
+
+    def _advisor_partial_rope_decode(self, tensor, current_positions, *, keep_l1):
+        """Advisor candidate with explicit slice/repeat layouts for one RoPE branch."""
+        rotary_dim = int(self.head_dim * float(self.hf_config.partial_rotary_factor))
+        heads = tensor.shape[2]
+        branch_memcfg = ttnn.L1_MEMORY_CONFIG if keep_l1 else ttnn.DRAM_MEMORY_CONFIG
+        slice_memcfg = ttnn.L1_MEMORY_CONFIG if keep_l1 else ttnn.DRAM_MEMORY_CONFIG
+        rotary = ttnn.slice(
+            tensor,
+            (0, 0, 0, 0),
+            (1, self.batch, heads, rotary_dim),
+            memory_config=slice_memcfg,
+        )
+        passthrough = ttnn.slice(
+            tensor,
+            (0, 0, 0, rotary_dim),
+            (1, self.batch, heads, self.head_dim),
+            memory_config=slice_memcfg,
+        )
+        cos = ttnn.embedding(
+            current_positions,
+            self.rope["cos"],
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sin = ttnn.embedding(
+            current_positions,
+            self.rope["sin"],
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cos = ttnn.transpose(ttnn.unsqueeze_to_4D(cos), 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        sin = ttnn.transpose(ttnn.unsqueeze_to_4D(sin), 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        cos = ttnn.slice(cos, (0, 0, 0, 0), (1, self.batch, 1, rotary_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
+        sin = ttnn.slice(sin, (0, 0, 0, 0), (1, self.batch, 1, rotary_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
+        cos = ttnn.repeat(cos, ttnn.Shape([1, 1, heads, 1]), memory_config=branch_memcfg)
+        sin = ttnn.repeat(sin, ttnn.Shape([1, 1, heads, 1]), memory_config=branch_memcfg)
+        half = rotary_dim // 2
+        rotated = ttnn.concat(
+            [
+                ttnn.neg(
+                    ttnn.slice(
+                        rotary,
+                        (0, 0, 0, half),
+                        (1, self.batch, heads, rotary_dim),
+                        memory_config=branch_memcfg,
+                    ),
+                    memory_config=branch_memcfg,
+                ),
+                ttnn.slice(
+                    rotary,
+                    (0, 0, 0, 0),
+                    (1, self.batch, heads, half),
+                    memory_config=branch_memcfg,
+                ),
+            ],
+            dim=-1,
+            memory_config=branch_memcfg,
+        )
+        rotary = ttnn.add(
+            ttnn.multiply(rotary, cos, memory_config=branch_memcfg),
+            ttnn.multiply(rotated, sin, memory_config=branch_memcfg),
+            memory_config=branch_memcfg,
+        )
+        output = ttnn.concat([rotary, passthrough], dim=-1, memory_config=branch_memcfg)
+        return ttnn.to_memory_config(output, self.decode_attention_memory_config) if keep_l1 else output
+
     def _full_attention_decode(self, hidden_states, page_table, current_positions):
         cache_positions = ttnn.typecast(current_positions, ttnn.int32)
         q_width = self.num_heads * self.head_dim
@@ -1316,7 +1427,8 @@ class OptimizedDecoder(FunctionalDecoder):
         # interleaved row.  Passing the DRAM-matmul's width-sharded output is
         # accepted by the API but silently assigns the wrong values to heads
         # for dense real weights (the diagonal synthetic fixture masked it).
-        qkv = ttnn.to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG)
+        if not self.policy.advisor_qkv_direct:
+            qkv = ttnn.to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             qkv,
             num_heads=self.num_heads,
@@ -1324,10 +1436,19 @@ class OptimizedDecoder(FunctionalDecoder):
             memory_config=self.decode_attention_memory_config,
         )
         ttnn.deallocate(qkv)
-        q = self._per_head_norm(q, "q_norm")
-        k = self._per_head_norm(k, "k_norm")
-        q = self._partial_rope_decode(q, current_positions)
-        k = self._partial_rope_decode(k, current_positions)
+        norm = self._advisor_per_head_norm if self.policy.advisor_head_norm_l1 else self._per_head_norm
+        q = norm(q, "q_norm")
+        k = norm(k, "k_norm")
+        if self.policy.advisor_rope_q_l1 or self.policy.advisor_rope_dram:
+            q = self._advisor_partial_rope_decode(
+                q, current_positions, keep_l1=self.policy.advisor_rope_q_l1
+            )
+        else:
+            q = self._partial_rope_decode(q, current_positions)
+        if self.policy.advisor_rope_k_l1:
+            k = self._advisor_partial_rope_decode(k, current_positions, keep_l1=True)
+        else:
+            k = self._partial_rope_decode(k, current_positions)
         ttnn.experimental.paged_update_cache(
             self.caches["key"], k, update_idxs_tensor=cache_positions, page_table=page_table
         )
@@ -1350,7 +1471,8 @@ class OptimizedDecoder(FunctionalDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
-        attention = ttnn.to_memory_config(attention, self.decode_attention_memory_config)
+        if not self.policy.advisor_sdpa_direct:
+            attention = ttnn.to_memory_config(attention, self.decode_attention_memory_config)
         attention = ttnn.experimental.nlp_concat_heads_decode(attention, num_heads=self.num_heads)
         attention = ttnn.multiply(attention, ttnn.sigmoid(gate))
         ttnn.deallocate(gate)

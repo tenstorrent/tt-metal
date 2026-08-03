@@ -1,0 +1,7 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+No signposts found in the file. Using the entire file for analysis.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/profiles/full_attention_ops/incumbent_perf.csv

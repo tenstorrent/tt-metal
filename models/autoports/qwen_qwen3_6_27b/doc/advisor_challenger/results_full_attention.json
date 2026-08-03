@@ -1,0 +1,85 @@
+{
+  "chains": {
+    "full_attention:12": {
+      "verdict": "rejected",
+      "candidate": "advisor_rope_k_l1",
+      "measurement": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/measurements/advisor_rope_k_l1.json",
+      "combined_with": ["full_attention:11", "full_attention:10"],
+      "reason": "the K-RoPE L1 chain is slower and fails repeat non-overlap"
+    },
+    "full_attention:11": {
+      "verdict": "rejected",
+      "candidate": "advisor_rope_k_l1",
+      "measurement": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/measurements/advisor_rope_k_l1.json",
+      "combined_with": ["full_attention:12", "full_attention:10"],
+      "reason": "cos/sin repeats are one executable K-RoPE chain"
+    },
+    "full_attention:b12": {
+      "verdict": "not_measurable",
+      "candidate": "advisor_head_norm_l1",
+      "hard_error": "TT_FATAL layernorm_device_operation.cpp:166: Height sharded inputs are not supported",
+      "reason": "the adjacent norm must be pulled into the advisor L1 chain, but its advised height-sharded input is illegal"
+    },
+    "full_attention:6": {
+      "verdict": "rejected",
+      "candidate": "advisor_rope_q_l1",
+      "measurement": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/measurements/advisor_rope_q_l1.json",
+      "combined_with": ["full_attention:7"],
+      "reason": "the Q-RoPE L1 chain is slower and fails repeat non-overlap"
+    },
+    "full_attention:7": {
+      "verdict": "rejected",
+      "candidate": "advisor_rope_q_l1",
+      "measurement": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/measurements/advisor_rope_q_l1.json",
+      "combined_with": ["full_attention:6"],
+      "reason": "cos/sin repeats are one executable Q-RoPE chain"
+    },
+    "full_attention:2": {
+      "verdict": "rejected",
+      "candidate": "advisor_qkv_direct",
+      "measurement": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/measurements/advisor_qkv_direct.json",
+      "combined_with": ["full_attention:1"],
+      "reason": "direct advised QKV-to-head placement does not beat every incumbent repeat"
+    },
+    "full_attention:b61": {
+      "verdict": "not_measurable",
+      "candidate": "advisor_sdpa_direct",
+      "hard_error": "TT_FATAL nlp_concat_heads_decode_device_operation.cpp:44: Input tensor must be sharded",
+      "reason": "removing the SDPA-output DRAM-to-L1 boundary violates the immediate consumer contract"
+    },
+    "full_attention:b57": {
+      "verdict": "rejected",
+      "candidate": "advisor_rope_dram",
+      "measurement": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/measurements/advisor_rope_dram.json",
+      "reason": "leaving the Q-RoPE output in DRAM is slower and fails repeat non-overlap"
+    },
+    "full_attention:1": {
+      "verdict": "rejected",
+      "candidate": "advisor_qkv_direct",
+      "measurement": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/measurements/advisor_qkv_direct.json",
+      "combined_with": ["full_attention:2"],
+      "reason": "the packed projection and QKV-head input form one executable chain"
+    },
+    "full_attention:10": {
+      "verdict": "rejected",
+      "candidate": "advisor_rope_k_l1",
+      "measurement": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/measurements/advisor_rope_k_l1.json",
+      "combined_with": ["full_attention:11", "full_attention:12"],
+      "reason": "the K branch's slice/repeat extent is measured together"
+    }
+  },
+  "geometry_probes": [
+    {
+      "candidate": "advisor_grid10",
+      "hard_error": "TT_FATAL: matmul does not support uneven sharding for K=192, per_core_K=20"
+    },
+    {
+      "candidate": "advisor_grid11",
+      "hard_error": "TT_FATAL layernorm_device_operation.cpp:277: block_w must be divisible by subblock_w"
+    },
+    {
+      "candidate": "advisor_grid16",
+      "hard_error": "TT_FATAL program.cpp:149: illegal kernel placement on dispatch cores"
+    }
+  ]
+}

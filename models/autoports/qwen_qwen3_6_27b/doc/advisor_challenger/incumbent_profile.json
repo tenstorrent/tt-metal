@@ -1,0 +1,36 @@
+{
+  "label": "incumbent_profile",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    1.4578036405146122,
+    1.4574161171913147,
+    1.459928508847952,
+    1.4586484618484974,
+    1.4579016342759132
+  ],
+  "median_ms": 1.4579016342759132,
+  "noise_floor_ms": 0.0025123916566371918,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one full_attention decoder layer, traced decode replay, batch 32, measured end to end on host",
+  "measured_at": "2026-08-03T10:11:20+00:00",
+  "shipped_policy": {
+    "candidate": "default"
+  },
+  "shipped_weight_dtypes": {
+    "full_attention": "BFLOAT16",
+    "full_attention_kv_cache": "BFLOAT8_B",
+    "linear_attention_input": "BFLOAT4_B",
+    "linear_attention_output": "BFLOAT4_B",
+    "linear_attention_state": "BFLOAT8_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/artifacts/candidates/final_full_traced_b32.json and final6_linear_traced_b32.json; executed OPTIMIZED_POLICY candidate=default",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

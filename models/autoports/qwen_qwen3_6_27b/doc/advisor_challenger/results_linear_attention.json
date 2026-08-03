@@ -1,0 +1,10 @@
+{
+  "chains": {},
+  "decision": {
+    "verdict": "not_measurable",
+    "noise_floor_us": 5.795,
+    "advisor_drop_ceiling_us": 0.0,
+    "contribution_us": 0.0,
+    "reason": "the reachable residual/norm/MLP envelope contains no advisor-dropped boundary; the stateful token mixer is declared uncapturable"
+  }
+}
