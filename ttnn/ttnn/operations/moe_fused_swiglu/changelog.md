@@ -1,3 +1,62 @@
+# Rewrite — generality and readability
+
+The op was fast, correct and unreadable: 41 environment knobs (10 selecting paths whose
+measurement had said no), 41 % of the descriptor in measurement prose, one 827-line function, 122
+hand-counted positional compile-time args, and a hard wire to hidden=2048 / bfp4 weights / an 11x8
+grid. This rewrite keeps the performance and removes the rest.
+
+## Result
+
+| | 128 | 256 | 512 |
+|---|---|---|---|
+| bf16_rm, before / after | 84.44 / **84.59** | 120.23 / **120.84** | 211.68 / **212.43** |
+| bfp8_tile, before / after | 84.34 / **83.62** | 112.06 / **113.93** | 200.14 / **200.28** |
+
+Perf-neutral. Every cell is inside the ~1 % run-to-run band except bfp8 at count 256 (+1.7 %),
+which is at the edge of it and was not chased.
+
+Size: kernels 2868 -> 1519 lines plus 434 of shared header; the host descriptor 1946 -> two files
+of ~430 and ~440.
+
+## What changed
+
+* **Deleted** every default-off knob (its measurement said no): the reduce tree, HSPLIT,
+  HSEND=writer, HSIG=counter, WG_TRID, WD_LATE, XSTAGE_DIAG, SCATTER_ROT, SCATTER_NOBAR,
+  SILU_FUSE, DOWN_OUT, bfp4-h, and the interleaved bank-run remap. Also SCATTER_NOC_SPLIT, whose
+  losing arm was dead because the winning one ships.
+* **No environment knobs at all.** Winners are named constants; the grid is a `core_grid=`
+  argument. The measurement prose moved to `perf_experiments/DESIGN_NOTES.md`.
+* **Named compile-time args.** One X-macro list per kernel, mirrored on the host, with a test that
+  parses the header and asserts they agree. `TA_BASE = 35` and `CT_XMCAST = 47` are gone, and with
+  them the reason ~20 parameters were smuggled through `-D` defines.
+* **A shared transport header** for what the reader and writer genuinely do the same way: the
+  weight-chunk read, the W_down row read (three copies), the gather leg, peer coordinates (seven
+  copies) and the semaphore idioms (~fifteen).
+* **Generalized** over hidden (a searched `hn_pad`, not `ceil`), worker grid, weight dtype
+  (bfp4/bfp8/bf16) and weight placement, each with a measurement.
+
+## Bugs this found in code that predates it
+
+* `wd_split` was gated on `depth_wd == hgroups` alone; it also needs residency, or the writer
+  writes W_down slots that are live on b > 0.
+* The non-resident W_down fallback never reached the kernels — they were still told "resident" and
+  skipped every read after M-block 0. Reproduced at PCC −0.0002 on M-block 1.
+* The bf16 output path wrote bfp8-sized pages.
+* `min()` of two differing gate/up shard widths can invent a boundary that crosses a real one.
+* The `down` DEST budget was only checked above sub-block height 1.
+* Weights were not required to be TILE_LAYOUT.
+
+The last four came from an external review; the first two from reading what the geometry produces
+off the shipped grid. All six are invisible at 11x8 / N 2048 / bfp4.
+
+## Verification
+
+Golden 45/45 throughout. A cross-revision bitwise gate (SHA-256 of the defined output region, 11
+shapes) held after every semantically-empty step. 99 cells of the op's own suite at 11x8. 71 000
+determinism dispatches over 24 interleaved shapes spanning m_eff, format, hidden, weight dtype and
+placement, across 4 seeds and both grids, 0 divergences — plus three injected races re-verified as
+detected.
+
 # moe_fused_swiglu — implementation changelog
 
 Device: **blackhole_p150**, `compute_with_storage_grid_size() = 11 x 10` (the p150a is harvested to

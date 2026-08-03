@@ -1,5 +1,21 @@
 # Operation Design: moe_fused_swiglu
 
+> **STATUS — read this first.** This document is the ORIGINAL design of record and its numbers are
+> the phase-1 ones. Three things in it are now superseded:
+>
+> * **The grid.** §1.1/§1.4 are written for 13x10 = 130 cores. The op takes the grid as a
+>   parameter and every graded number is quoted at **11x8**; the default is the device's full grid.
+> * **§1.5, coalesced weight reads.** The interleaved bank-run remap described there was built,
+>   measured a NET NEGATIVE, and is DELETED. What survives is the DRAM ND-shard run length. See
+>   `perf_experiments/DESIGN_NOTES.md` §5-6.
+> * **The hidden dim.** `2048` appears throughout as a constant; it is now a parameter, and
+>   `hn_pad` is a searched padding rather than `ceil(HID_T/HGROUPS)`.
+>
+> The BLOCKING MODEL in §1 — which axis is split how, and why the h all-gather beats reducing the
+> output — is unchanged and is still the design. For every tuning constant and the measurement
+> behind it, read `perf_experiments/DESIGN_NOTES.md`, which is maintained; this file is not.
+
+
 One MoE routed-expert block as ONE device program: three bfp4 matmuls with a fused SwiGLU
 between them, DRAM in / DRAM out, `h` never materialised outside L1, token count read from a
 device tensor at kernel runtime.
@@ -110,7 +126,8 @@ win tracks subblock **size, not shape** (all four 8-tile shapes 1.46×, `2×2` 1
 `M_t` costs nothing here. `m_tiles` is rounded **up** to a multiple of `out_subblock_h` — legal
 because rows past `count` are UNDEFINED (feature_spec.py:24-30).
 
-### 1.5 Coalesced weight reads — the DRAM decision
+### 1.5 Coalesced weight reads — the DRAM decision  [SUPERSEDED: the interleaved bank-run
+### remap below was measured a net negative and deleted; see DESIGN_NOTES.md §5]
 
 Blackhole p150 has **8 DRAM banks** and interleaved page → bank is `page_id % 8`, with in-bank
 slot `page_id / 8` at stride `aligned_page_size`
