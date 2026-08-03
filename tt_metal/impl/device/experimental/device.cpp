@@ -7,6 +7,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 #include "tt_metal/impl/device/device_impl.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::experimental::Device {
 
@@ -18,7 +19,7 @@ uint32_t get_worker_noc_hop_distance(
     if (auto* mesh = dynamic_cast<distributed::MeshDevice*>(device)) {
         TT_FATAL(mesh->num_devices() == 1, "get_worker_noc_hop_distance() is only supported on unit MeshDevice.");
         // Delegate to the underlying device
-        return get_worker_noc_hop_distance(mesh->get_devices().front(), logical_src, logical_dst, noc);
+        return get_worker_noc_hop_distance(mesh->impl().get_devices().front(), logical_src, logical_dst, noc);
     }
 
     // Handle regular Device - cast to access internal physical_worker_core_from_logical_core
@@ -49,7 +50,8 @@ uint32_t get_worker_noc_hop_distance(
     NOC noc) {
     TT_FATAL(mesh_device != nullptr, "MeshDevice pointer cannot be null");
     const auto linear_index = mesh_coord.to_linear_index(mesh_device->shape());
-    return get_worker_noc_hop_distance(mesh_device->get_devices().at(linear_index), logical_src, logical_dst, noc);
+    return get_worker_noc_hop_distance(
+        mesh_device->impl().get_devices().at(linear_index), logical_src, logical_dst, noc);
 }
 
 }  // namespace tt::tt_metal::experimental::Device

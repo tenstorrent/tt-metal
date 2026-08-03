@@ -21,6 +21,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt::constants;
 
@@ -190,7 +191,7 @@ void send_async(
 
     const auto& device_coord = socket_connections[0].sender_core.device_coord;
     TT_FATAL(
-        mesh_device->get_device(device_coord) != nullptr,
+        mesh_device->impl().get_device(device_coord) != nullptr,
         "Sender device for socket connection is not local to this mesh device");
 
     distributed::MeshWorkload workload;

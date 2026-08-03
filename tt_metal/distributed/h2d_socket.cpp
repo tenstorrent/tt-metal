@@ -21,6 +21,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <distributed/mesh_device_impl.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
@@ -48,7 +49,7 @@ void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
         return;
     }
 
-    cluster.advance_device_execution(mesh_device->get_device(device_coord)->id());
+    cluster.advance_device_execution(mesh_device->impl().get_device(device_coord)->id());
 }
 
 }  // namespace
@@ -81,10 +82,10 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, bytes_acked_buffer_view, true);
 
-    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
+    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->impl().get_device(recv_core_.device_coord)->id());
     TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for bytes_acked pinned memory.");
     TT_FATAL(
-        noc_addr.value().device_id == mesh_device->get_device(recv_core_.device_coord)->id(),
+        noc_addr.value().device_id == mesh_device->impl().get_device(recv_core_.device_coord)->id(),
         "Pinned Memory used for H2D sockets must be mapped to the same device as the receiver core. H2D Sockets cannot "
         "communicate with remote devices");
     return PinnedBufferInfo{
@@ -119,7 +120,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
-    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
+    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->impl().get_device(recv_core_.device_coord)->id());
     TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for data pinned memory.");
 
     return PinnedBufferInfo{
@@ -153,7 +154,7 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
     // On a claimed service core the worker-grid BankManager can't reach L1; allocate from the service-core allocator.
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
-    auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
+    auto* recv_device = mesh_device->impl().get_device(recv_core_.device_coord);
     if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(recv_device, recv_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
@@ -172,7 +173,7 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
     }
 
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
-    auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
+    auto* recv_device = mesh_device->impl().get_device(recv_core_.device_coord);
     if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         const uint64_t alloc_size = fifo_size_ + pcie_alignment;
         DeviceAddr raw_addr = svc.allocate_l1(recv_device, recv_core_.core_coord, alloc_size);
@@ -241,7 +242,7 @@ void H2DSocket::write_socket_metadata(
 
     if (svc_config_l1_addr_.has_value()) {
         // WriteShard can't reach service cores, so write L1 directly. config_buffer_address_ isn't assigned yet.
-        auto* device = mesh_device->get_device(recv_core_.device_coord);
+        auto* device = mesh_device->impl().get_device(recv_core_.device_coord);
         std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(&md), sizeof(md));
         tt::tt_metal::detail::WriteToDeviceL1(
             device, recv_core_.core_coord, static_cast<uint32_t>(config_buffer_->address()), bytes);
@@ -273,7 +274,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     const CoreType recv_umd_core_type = (recv_core_type_ == RecvCoreType::Dram) ? CoreType::DRAM : CoreType::TENSIX;
 
     if (mesh_device) {
-        recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
+        recv_device_id = mesh_device->impl().get_device(recv_core_.device_coord)->id();
         recv_virtual_core = mesh_device->virtual_core_from_logical_core(recv_core_.core_coord, recv_umd_core_type);
     } else {
         recv_device_id = device_id.value();
@@ -435,13 +436,14 @@ H2DSocket::H2DSocket(
     md.h2d.data_addr_hi = 0;
     md.h2d.pcie_xy_enc = bytes_acked_info.pcie_xy_enc;
 
-    const CoreCoord virtual_core = mesh_device->get_device(recv_core_.device_coord)
+    const CoreCoord virtual_core = mesh_device->impl()
+                                       .get_device(recv_core_.device_coord)
                                        ->virtual_core_from_logical_core(recv_core_.core_coord, CoreType::DRAM);
     MetalContext::instance(extract_context_id(mesh_device.get()))
         .get_cluster()
         .write_core(
-            mesh_device->get_device(recv_core_.device_coord)->id(),
-            tt_cxy_pair(mesh_device->get_device(recv_core_.device_coord)->id(), virtual_core),
+            mesh_device->impl().get_device(recv_core_.device_coord)->id(),
+            tt_cxy_pair(mesh_device->impl().get_device(recv_core_.device_coord)->id(), virtual_core),
             std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&md), sizeof(md)),
             static_cast<uint64_t>(config_buffer_address_) + dram_l1_noc_offset_);
 }
@@ -460,7 +462,7 @@ H2DSocket::~H2DSocket() noexcept {
             config_buffer_.reset();
             data_buffer_.reset();
             auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
-            auto* recv_device = mesh_device_->get_device(recv_core_.device_coord);
+            auto* recv_device = mesh_device_->impl().get_device(recv_core_.device_coord);
             if (svc_config_l1_addr_.has_value()) {
                 svc.deallocate_l1(recv_device, recv_core_.core_coord, svc_config_l1_addr_.value());
             }

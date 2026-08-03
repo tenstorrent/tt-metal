@@ -25,6 +25,7 @@
 #include "jit_build/build.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/jit_build/build_cache_telemetry.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -245,7 +246,7 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
                         "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
     }
-    auto* device = this->devices_.at(0)->get_devices().at(0);
+    auto* device = this->devices_.at(0)->impl().get_devices().at(0);
 
     ScopedTempDir precompiled_root("tt_metal_precompiled_seed_hit");
     seed_precompiled_root(precompiled_root.path_, kReaderKernelPath, kReaderDmConfig);
@@ -270,7 +271,7 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
     // hlk_desc contributions diverge, this test fails as `jit_srcs.delta() > 0` (runtime
     // falls through to JIT) rather than as a layout assertion, which is exactly the
     // failure mode that justifies surfacing CBCompileConfigsFromProgram in the public API.
-    auto* device = this->devices_.at(0)->get_devices().at(0);
+    auto* device = this->devices_.at(0)->impl().get_devices().at(0);
 
     constexpr uint32_t kPageSize = 2048;
     constexpr DataFormat kCbFormat = DataFormat::Float16_b;
@@ -310,7 +311,7 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
 TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::JitCompile);
     Program program = create_precompiled_program(precompiled_config);
-    auto* device = this->devices_.at(0)->get_devices().at(0);
+    auto* device = this->devices_.at(0)->impl().get_devices().at(0);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
@@ -321,7 +322,7 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
 TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::Error);
     Program program = create_precompiled_program(precompiled_config);
-    auto* device = this->devices_.at(0)->get_devices().at(0);
+    auto* device = this->devices_.at(0)->impl().get_devices().at(0);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;

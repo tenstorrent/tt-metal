@@ -54,6 +54,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <umd/device/types/arch.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -265,7 +266,7 @@ void verify_transfer(
     std::vector<uint32_t> trigger{num_workers};
     for (const auto& coord : coords) {
         tt::tt_metal::detail::WriteToDeviceL1(
-            sender_mesh->get_device(coord),
+            sender_mesh->impl().get_device(coord),
             sender->get_service_core(coord),
             static_cast<uint32_t>(sender->get_data_ready_counter_addr(coord)),
             trigger);
@@ -345,7 +346,7 @@ MeshWorkload make_sender_worker_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = mesh->impl().get_device(coord);
         const auto service_phys = device->worker_core_from_logical_core(sender->get_service_core(coord));
         const uint32_t md_addr = metadata_enabled ? static_cast<uint32_t>(sender->get_metadata_addr(coord)) : 0u;
         for (const auto& wc : worker_cores) {
@@ -386,7 +387,7 @@ MeshWorkload make_receiver_worker_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = mesh->impl().get_device(coord);
         const auto service_phys = device->worker_core_from_logical_core(receiver->get_service_core(coord));
         const std::vector<uint32_t> rt_args = {
             static_cast<uint32_t>(receiver->get_consumed_counter_addr(coord)),
@@ -428,7 +429,7 @@ void verify_metadata_sender_write(
     for (const auto& coord : sender->get_backing_tensor().tensor_topology().mesh_coords()) {
         readback.clear();
         tt::tt_metal::detail::ReadFromDeviceL1(
-            sender_mesh->get_device(coord),
+            sender_mesh->impl().get_device(coord),
             sender->get_service_core(coord),
             static_cast<uint32_t>(sender->get_metadata_addr(coord)),
             md_bytes,
@@ -624,7 +625,7 @@ void expect_metadata_on_receiver_workers(
     const CoreRange recv_workers = receiver->get_worker_cores();
     std::vector<uint32_t> rb;
     for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
-        auto* device = receiver_mesh->get_device(coord);
+        auto* device = receiver_mesh->impl().get_device(coord);
         for (const auto& wc : recv_workers) {
             rb.clear();
             tt::tt_metal::detail::ReadFromDeviceL1(device, wc, recv_md_addr, md_bytes, rb);
@@ -649,7 +650,7 @@ void expect_metadata_everywhere(
     for (const auto& coord : sender->get_backing_tensor().tensor_topology().mesh_coords()) {
         rb.clear();
         tt::tt_metal::detail::ReadFromDeviceL1(
-            sender_mesh->get_device(coord),
+            sender_mesh->impl().get_device(coord),
             sender->get_service_core(coord),
             static_cast<uint32_t>(sender->get_metadata_addr(coord)),
             md_bytes,
@@ -783,7 +784,7 @@ MeshWorkload make_receiver_consumer_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = mesh->impl().get_device(coord);
         const auto service_phys = device->worker_core_from_logical_core(receiver->get_service_core(coord));
         for (const auto& wc : worker_cores) {
             const auto [start_page, end_page] =
@@ -891,7 +892,7 @@ MeshWorkload make_bridge_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = mesh->impl().get_device(coord);
         const auto h2d_service_phys = device->worker_core_from_logical_core(upstream.get_service_core(coord));
         const auto d2d_service_phys = device->worker_core_from_logical_core(d2d_sender->get_service_core(coord));
         const uint32_t d2d_md_addr =

@@ -21,6 +21,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt::constants;
 
@@ -372,7 +373,7 @@ void send_async_rate(
 
     const auto& device_coord = socket_connections[0].sender_core.device_coord;
     TT_FATAL(
-        mesh_device->get_device(device_coord) != nullptr,
+        mesh_device->impl().get_device(device_coord) != nullptr,
         "Sender device for socket connection is not local to this mesh device");
 
     distributed::MeshWorkload workload;
@@ -396,7 +397,7 @@ void socket_forward_rate(
     TT_FATAL(recv_socket_connections.size() == 1, "SocketForward only supports one sender and one receiver core.");
 
     const auto& device_coord = send_socket_connections[0].sender_core.device_coord;
-    auto* target_device = mesh_device->get_device(device_coord);
+    auto* target_device = mesh_device->impl().get_device(device_coord);
     TT_FATAL(target_device != nullptr, "SocketForward device coordinate not found in mesh device");
 
     distributed::MeshWorkload workload;
@@ -416,7 +417,7 @@ void recv_async_rate(
     TT_FATAL(recv_socket_connections.size() == 1, "recv_async_rate only supports one connection.");
 
     const auto& device_coord = recv_socket_connections[0].receiver_core.device_coord;
-    auto* target_device = mesh_device->get_device(device_coord);
+    auto* target_device = mesh_device->impl().get_device(device_coord);
     TT_FATAL(target_device != nullptr, "Receiver device coordinate not found in mesh device");
 
     distributed::MeshWorkload workload;

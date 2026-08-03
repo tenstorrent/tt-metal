@@ -26,6 +26,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -95,7 +96,7 @@ void test_h2d_socket(
         cluster.read_core(
             recv_data_readback.data(),
             data_size,
-            tt_cxy_pair(mesh_device->get_device(recv_core.device_coord)->id(), recv_core_virtual),
+            tt_cxy_pair(mesh_device->impl().get_device(recv_core.device_coord)->id(), recv_core_virtual),
             recv_data_buffer->address());
         EXPECT_EQ(src_vec, recv_data_readback);
     }
@@ -341,7 +342,7 @@ void test_hd_socket_multithreaded_loopback(
 bool is_device_coord_mmio_mapped(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, const MeshCoordinate& device_coord) {
     const auto& cluster = MetalContext::instance().get_cluster();
-    auto device_id = mesh_device->get_device(device_coord)->id();
+    auto device_id = mesh_device->impl().get_device(device_coord)->id();
     return cluster.get_associated_mmio_device(device_id) == device_id;
 }
 

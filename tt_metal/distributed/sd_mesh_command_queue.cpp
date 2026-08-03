@@ -69,7 +69,7 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     active_distributed_context_(std::move(distributed_context)) {
     // Init thread pool with all local devices for parallel dispatch.
     // One thread per device enables NUMA-aware CPU binding.
-    auto local_devices = mesh_device_->get_devices();
+    auto local_devices = mesh_device_->impl().get_devices();
     if (local_devices.size() > 1) {
         launch_thread_pool_ = create_device_bound_thread_pool(mesh_device_->impl().get_context_id(), local_devices);
     }
@@ -376,7 +376,7 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
     }
     auto lock = lock_api_function_();
     wait_for_cores_idle();
-    for (const auto& device : mesh_device_->get_devices()) {
+    for (const auto& device : mesh_device_->impl().get_devices()) {
         tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
             .get_cluster()
             .dram_barrier(device->id());

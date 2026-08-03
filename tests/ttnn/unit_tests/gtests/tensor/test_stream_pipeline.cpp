@@ -59,6 +59,7 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include <umd/device/types/arch.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -236,7 +237,7 @@ MeshWorkload build_relay_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = stage.get_device(coord);
+        auto* device = stage.impl().get_device(coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(up.service_core(coord));
         CoreCoord down_svc_phys{0, 0};
         uint32_t down_counter_addr = 0;
@@ -444,7 +445,7 @@ void run_pipeline(
         const CoreRange recv_workers = last_recv.get_worker_cores();
         std::vector<uint32_t> rb;
         for (const auto& coord : last_recv.get_backing_tensor().tensor_topology().mesh_coords()) {
-            auto* device = stages[num_stages - 1]->get_device(coord);
+            auto* device = stages[num_stages - 1]->impl().get_device(coord);
             for (const auto& wc : recv_workers) {
                 rb.clear();
                 tt::tt_metal::detail::ReadFromDeviceL1(device, wc, recv_md_addr, metadata_size_bytes, rb);

@@ -31,6 +31,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -154,7 +155,7 @@ MeshWorkload build_drain_workload(
 
     MeshWorkload worker_workload;
     for (const auto& coord : coords) {
-        auto* device = mesh_device->get_device(coord);
+        auto* device = mesh_device->impl().get_device(coord);
         const CoreCoord service_logical = service.get_service_core(coord);
         const CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);
         const uint32_t consumed_counter_addr = static_cast<uint32_t>(service.get_consumed_counter_addr(coord));

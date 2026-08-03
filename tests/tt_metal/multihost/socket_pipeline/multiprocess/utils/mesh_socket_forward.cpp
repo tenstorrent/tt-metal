@@ -18,6 +18,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -161,7 +162,7 @@ void socket_forward(
     const auto& device_coord = send_socket_connections[0].sender_core.device_coord;
 
     // Check if this device coordinate is local to this mesh device
-    auto* target_device = mesh_device->get_device(device_coord);
+    auto* target_device = mesh_device->impl().get_device(device_coord);
     TT_FATAL(target_device != nullptr, "SocketForward device coordinate not found in mesh device");
 
     distributed::MeshWorkload workload;

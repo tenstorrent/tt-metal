@@ -41,7 +41,6 @@
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
-#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -570,7 +569,7 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
 
     for (const auto& mesh_device : devices_) {
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-            auto* device = mesh_device->get_device(coord[0], coord[1]);
+            auto* device = mesh_device->impl().get_device(coord[0], coord[1]);
             auto compute_grid = device->compute_with_storage_grid_size();
             auto logical_grid = device->logical_grid_size();
 

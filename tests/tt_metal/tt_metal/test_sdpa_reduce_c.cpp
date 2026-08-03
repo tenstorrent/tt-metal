@@ -15,6 +15,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using std::vector;
 using namespace tt;
@@ -181,7 +182,7 @@ static bool test_sdpa_reduce_c(
         num_faces);
 
     // Get device and command queue from mesh
-    tt_metal::IDevice* device = mesh_device->get_devices().at(0);
+    tt_metal::IDevice* device = mesh_device->impl().get_devices().at(0);
     tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
     tt_metal::Program program = tt_metal::CreateProgram();

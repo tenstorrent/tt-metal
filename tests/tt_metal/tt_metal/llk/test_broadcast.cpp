@@ -37,6 +37,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -238,7 +239,7 @@ void run_single_core_broadcast(
     auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, k_num_tiles_broadcast_test);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    auto* device = mesh_device->get_devices().empty() ? nullptr : mesh_device->get_devices().front();
+    auto* device = mesh_device->impl().get_devices().empty() ? nullptr : mesh_device->impl().get_devices().front();
     TT_FATAL(device != nullptr, "mesh_device has no backing devices");
     const bool is_quasar = device->arch() == ARCH::QUASAR;
 

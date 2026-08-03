@@ -29,6 +29,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -277,7 +278,7 @@ MeshWorkload build_producer_workload(
 
     MeshWorkload producer_workload;
     for (const auto& coord : coords) {
-        auto* device = mesh_device->get_device(coord);
+        auto* device = mesh_device->impl().get_device(coord);
         const CoreCoord service_logical = service.get_service_core(coord);
         const CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);
         const uint32_t write_ack_counter_addr = static_cast<uint32_t>(service.get_write_ack_counter_addr(coord));
@@ -438,7 +439,7 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     std::vector<uint32_t> latency_gate_word{1};
     auto release_latency_gate = [&]() {
         for (const auto& coord : coords) {
-            auto* device = g_mesh_device->get_device(coord);
+            auto* device = g_mesh_device->impl().get_device(coord);
             for (uint32_t y = kProducerCores.start_coord.y; y <= kProducerCores.end_coord.y; ++y) {
                 for (uint32_t x = kProducerCores.start_coord.x; x <= kProducerCores.end_coord.x; ++x) {
                     tt::tt_metal::detail::WriteToDeviceL1(

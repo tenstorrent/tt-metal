@@ -68,7 +68,7 @@ TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
 
 TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
     auto stats = mesh_device_->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         auto device_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
         EXPECT_EQ(stats.total_allocatable_size_bytes, device_stats.total_allocatable_size_bytes);
     }
@@ -103,14 +103,14 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshInvalidConfig) {
 
 TEST_F(MeshDevice2x4Test, CreateSubmesh) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
-    EXPECT_THAT(mesh_device_->get_devices(), SizeIs(8));
+    EXPECT_THAT(mesh_device_->impl().get_devices(), SizeIs(8));
     EXPECT_TRUE(mesh_device_->is_parent_mesh());
     EXPECT_THAT(mesh_device_->get_submeshes(), IsEmpty());
 
     auto submesh = mesh_device_->create_submesh(MeshShape{1, 2}, MeshCoordinate{1, 1});
     EXPECT_THAT(mesh_device_->get_submeshes(), SizeIs(1));
     EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
-    EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+    EXPECT_THAT(submesh->impl().get_devices(), SizeIs(2));
     EXPECT_FALSE(submesh->is_parent_mesh());
     EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
 
@@ -136,7 +136,7 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshes) {
     EXPECT_THAT(submeshes, SizeIs(4));
     for (const auto& submesh : submeshes) {
         EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
-        EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+        EXPECT_THAT(submesh->impl().get_devices(), SizeIs(2));
     }
 
     EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);

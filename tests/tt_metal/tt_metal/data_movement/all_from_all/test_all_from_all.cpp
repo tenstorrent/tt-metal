@@ -626,7 +626,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes2_0) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 329;
 
@@ -652,7 +652,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal_2_0) 
     uint32_t test_id = 330;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     auto arch_ = device->arch();
 
     auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
@@ -737,7 +737,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedI
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllGridSweepPacketSizes2_0) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     auto grid = device->compute_with_storage_grid_size();
 
     uint32_t test_case_id = 336;

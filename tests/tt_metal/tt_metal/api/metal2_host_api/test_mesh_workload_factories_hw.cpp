@@ -82,7 +82,7 @@ protected:
         if (this->IsSkipped()) {
             return;
         }
-        IDevice* device = mesh_device_->get_devices().at(0);
+        IDevice* device = mesh_device_->impl().get_devices().at(0);
         if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
         }

@@ -9,6 +9,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -45,7 +46,7 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
         // buffer->size() is already the correct per-device size in both layouts.
         std::lock_guard<std::mutex> tracking_lock(tracking_mutex_);
 
-        auto underlying_devices = mesh_device->get_devices();
+        auto underlying_devices = mesh_device->impl().get_devices();
         size_t num_tracked = 0;
         uint64_t size_per_device = buffer->size();
 
@@ -180,7 +181,7 @@ void ShmTrackingProcessor::track_deallocate(Buffer* buffer) {
         // sharded and replicated). No double-counting — see track_allocate comment.
         std::lock_guard<std::mutex> tracking_lock(tracking_mutex_);
 
-        auto underlying_devices = mesh_device->get_devices();
+        auto underlying_devices = mesh_device->impl().get_devices();
         uint64_t size_per_device = buffer->size();
 
         // Track deallocation on all underlying Devices that have SHM provider

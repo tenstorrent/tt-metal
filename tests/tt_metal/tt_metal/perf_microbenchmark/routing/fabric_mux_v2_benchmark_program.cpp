@@ -19,6 +19,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -535,7 +536,7 @@ void FabricMuxV2BenchmarkContext::initialize() {
     TT_FATAL(mesh_device_ != nullptr, "Failed to create full mesh device for mux-v2 standalone benchmark");
 
     device_ = nullptr;
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         if (device != nullptr && device->id() == 0) {
             device_ = device;
             break;

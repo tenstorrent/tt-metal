@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -50,7 +51,7 @@ struct NocApiLatencyConfig {
 bool run_noc_api_latency_test(
     const shared_ptr<distributed::MeshDevice>& mesh_device, const NocApiLatencyConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
 
     /* ================ SETUP ================ */
 
@@ -182,7 +183,7 @@ bool run_noc_api_latency_test(
 // Sweep test for unicast write and read
 void unicast_sweep_test(
     const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id, KernelType kernel_type) {
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     for (uint32_t transaction_size = 32; transaction_size <= 4096; transaction_size *= 2) {
         for (uint32_t num_transactions = 1; num_transactions <= 256; num_transactions *= 2) {
             NocApiLatencyConfig test_config = {
@@ -273,7 +274,7 @@ TEST_F(GenericMeshDeviceFixture, TensixNocApiLatencyMulticastWrite5x5) {
 TEST_F(GenericMeshDeviceFixture, TensixNocApiLatencyMulticastWriteAll) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 706;
-    auto* device = this->mesh_device_->get_device(0);
+    auto* device = this->mesh_device_->impl().get_device(0);
     CoreCoord grid_size = device->compute_with_storage_grid_size();
     tt::tt_metal::unit_tests::dm::noc_api_latency::multicast_write_sweep_test(
         this->mesh_device_, test_case_id, {0, 0}, {grid_size.x - 1, grid_size.y - 1}, true);

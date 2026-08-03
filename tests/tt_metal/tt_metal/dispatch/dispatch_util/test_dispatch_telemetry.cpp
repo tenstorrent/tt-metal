@@ -26,6 +26,7 @@
 #include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "command_queue_fixture.hpp"
 #include "multi_command_queue_fixture.hpp"
@@ -100,7 +101,7 @@ protected:
         }
     }
 
-    IDevice* device() const { return devices_.at(0)->get_devices().front(); }
+    IDevice* device() const { return devices_.at(0)->impl().get_devices().front(); }
 
     tt::umd::TTDevice& tt_device() const {
         return *MetalContext::instance().get_cluster().get_driver()->get_tt_device(device()->id());
@@ -192,7 +193,7 @@ protected:
         }
     }
 
-    IDevice* device() const { return device_->get_devices().front(); }
+    IDevice* device() const { return device_->impl().get_devices().front(); }
 
     tt::umd::TTDevice& tt_device() const {
         return *MetalContext::instance().get_cluster().get_driver()->get_tt_device(device()->id());
@@ -262,7 +263,7 @@ protected:
         }
     }
 
-    IDevice* device() const { return mesh_device_->get_devices().front(); }
+    IDevice* device() const { return mesh_device_->impl().get_devices().front(); }
 
     tt::umd::TTDevice& tt_device() const {
         return *MetalContext::instance().get_cluster().get_driver()->get_tt_device(device()->id());

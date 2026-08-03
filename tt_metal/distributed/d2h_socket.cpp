@@ -13,6 +13,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include <distributed/mesh_device_impl.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
 #endif
@@ -65,7 +66,7 @@ void advance_d2h_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
         return;
     }
 
-    cluster.advance_device_execution(mesh_device->get_device(device_coord)->id());
+    cluster.advance_device_execution(mesh_device->impl().get_device(device_coord)->id());
 }
 
 }  // namespace
@@ -113,10 +114,11 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
-    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->get_device(sender_core_.device_coord)->id());
+    const auto& noc_addr =
+        pinned_memory_->get_noc_addr(mesh_device->impl().get_device(sender_core_.device_coord)->id());
     TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for D2H socket pinned memory.");
     TT_FATAL(
-        noc_addr.value().device_id == mesh_device->get_device(sender_core_.device_coord)->id(),
+        noc_addr.value().device_id == mesh_device->impl().get_device(sender_core_.device_coord)->id(),
         "Pinned Memory used for D2H sockets must be mapped to the same device as the sender core. D2H Sockets cannot "
         "communicate with remote devices.");
 
@@ -136,7 +138,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
 #endif
     using_hugepage_ = true;
 
-    auto* device = mesh_device->get_device(sender_core_.device_coord);
+    auto* device = mesh_device->impl().get_device(sender_core_.device_coord);
     auto device_id = device->id();
     auto& sysmem_mgr = device->sysmem_manager();
 
@@ -185,7 +187,7 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
-    auto* sender_device = mesh_device->get_device(sender_core_.device_coord);
+    auto* sender_device = mesh_device->impl().get_device(sender_core_.device_coord);
     if (svc.claimed_cores(sender_device->id()).contains(sender_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(sender_device, sender_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
@@ -224,7 +226,7 @@ void D2HSocket::write_socket_metadata(
         distributed::WriteShard(
             mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
     } else {
-        IDevice* device = mesh_device->get_device(sender_core_.device_coord);
+        IDevice* device = mesh_device->impl().get_device(sender_core_.device_coord);
         tt::tt_metal::detail::WriteToDeviceL1(
             device, sender_core_.core_coord, config_buffer_address_, config_data, CoreType::WORKER);
     }
@@ -245,7 +247,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     // installed writer is harmless there.
 
     if (mesh_device) {
-        sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        sender_device_id = mesh_device->impl().get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
         if (!cluster.is_mock_or_emulated()) {
             sender_core_tlb_ = cluster.get_driver()
@@ -313,7 +315,7 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     } else {
         data_info = init_host_buffer_hugepage(mesh_device);
 
-        auto* device = mesh_device->get_device(sender_core_.device_coord);
+        auto* device = mesh_device->impl().get_device(sender_core_.device_coord);
         auto& sysmem_mgr = device->sysmem_manager();
         auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.allocate_region(sizeof(uint32_t));
         hugepage_bytes_sent_host_ptr_ = static_cast<volatile uint32_t*>(bs_host_ptr);
@@ -386,7 +388,7 @@ D2HSocket::~D2HSocket() noexcept {
         try {
             config_buffer_.reset();
             auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
-            auto* sender_device = mesh_device_->get_device(sender_core_.device_coord);
+            auto* sender_device = mesh_device_->impl().get_device(sender_core_.device_coord);
             svc.deallocate_l1(sender_device, sender_core_.core_coord, svc_config_l1_addr_.value());
         } catch (const std::exception& e) {
             log_warning(LogMetal, "D2HSocket destructor: service-core L1 release failed: {}", e.what());

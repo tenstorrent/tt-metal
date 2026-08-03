@@ -544,7 +544,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
 
     const bool use_tensix_fallback = MetalContext::instance().rtoptions().get_use_quasar_tensix_dispatch_cores();
     auto mesh_device = devices_.front();
-    IDevice* device = mesh_device->get_devices().front();
+    IDevice* device = mesh_device->impl().get_devices().front();
     if (!use_tensix_fallback && detail::sd_cq_kernel_tests_should_skip(device)) {
         GTEST_SKIP() << "No dispatch-engine cores in soc descriptor";
     }

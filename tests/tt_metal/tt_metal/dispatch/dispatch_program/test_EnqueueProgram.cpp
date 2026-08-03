@@ -2379,7 +2379,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
-    for (const auto& device : device_->get_devices()) {
+    for (const auto& device : device_->impl().get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
@@ -2411,7 +2411,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
 }
 
 TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
-    for (const auto& device : device_->get_devices()) {
+    for (const auto& device : device_->impl().get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
@@ -2439,7 +2439,7 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
-    for (const auto& device : device_->get_devices()) {
+    for (const auto& device : device_->impl().get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";

@@ -28,6 +28,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -116,7 +117,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
 
     tt::tt_metal::distributed::MeshWorkload worker_workload;
     for (const auto& coord : coords) {
-        auto* device = mesh_device->get_device(coord);
+        auto* device = mesh_device->impl().get_device(coord);
 
         // Service-core physical NoC coords and consumed-counter address both vary per device.
         const tt::tt_metal::CoreCoord service_logical = service.get_service_core(coord);
@@ -313,7 +314,7 @@ void run_h2d_stream_service_case(
             EXPECT_EQ(readback, expected) << "contents mismatch at coord " << coord;
 
             if (cs.metadata_size_bytes > 0) {
-                auto* d = mesh_device->get_device(coord);
+                auto* d = mesh_device->impl().get_device(coord);
                 const auto* exp_meta_u8 = reinterpret_cast<const uint8_t*>(expected_meta.data());
                 const std::vector<uint8_t> expected_meta_u8(exp_meta_u8, exp_meta_u8 + expected_meta.size());
 

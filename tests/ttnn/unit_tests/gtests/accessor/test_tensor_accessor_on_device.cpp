@@ -17,6 +17,7 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/api/ttnn/distributed/api.hpp"
@@ -832,7 +833,7 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
     const auto& params = GetParam();
 
     // Use all available cores for multi-core testing
-    auto* device = mesh_device_->get_devices().at(0);
+    auto* device = mesh_device_->impl().get_devices().at(0);
     auto grid_size = device->compute_with_storage_grid_size();
     CoreRangeSet cores = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
 
@@ -848,7 +849,7 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPagesBigStep) {
     const auto& params = GetParam();
 
     // Use all available cores for multi-core testing
-    auto* device = mesh_device_->get_devices().at(0);
+    auto* device = mesh_device_->impl().get_devices().at(0);
     auto grid_size = device->compute_with_storage_grid_size();
     CoreRangeSet cores = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
 

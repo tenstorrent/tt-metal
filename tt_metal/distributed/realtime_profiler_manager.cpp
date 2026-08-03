@@ -539,7 +539,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             continue;
         }
 
-        IDevice* device = mesh_device->get_device(coord);
+        IDevice* device = mesh_device->impl().get_device(coord);
         auto device_id = device->id();
 
         auto eligibility = evaluate_realtime_profiler_eligibility(device, context_id_);

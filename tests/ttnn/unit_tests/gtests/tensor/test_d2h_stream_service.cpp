@@ -19,6 +19,7 @@
 #include <ttnn/distributed/distributed_configs.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -85,7 +86,7 @@ void write_worker_metadata(
     const std::vector<uint8_t>& metadata) {
     const uint32_t worker_metadata_addr = static_cast<uint32_t>(service.get_worker_metadata_addr());
     for (const auto& coord : service.get_backing_tensor().tensor_topology().mesh_coords()) {
-        auto* device = mesh_device->get_device(coord);
+        auto* device = mesh_device->impl().get_device(coord);
         for (uint32_t y = worker_cores.start_coord.y; y <= worker_cores.end_coord.y; ++y) {
             for (uint32_t x = worker_cores.start_coord.x; x <= worker_cores.end_coord.x; ++x) {
                 tt::tt_metal::detail::WriteToDeviceL1(
@@ -127,7 +128,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_worker_workload(
 
     tt::tt_metal::distributed::MeshWorkload workloads;
     for (const auto& coord : coords) {
-        auto* device = mesh_device->get_device(coord);
+        auto* device = mesh_device->impl().get_device(coord);
         const tt::tt_metal::CoreCoord service_logical = service.get_service_core(coord);
         const tt::tt_metal::CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);
         const uint32_t write_ack_counter_addr = static_cast<uint32_t>(service.get_write_ack_counter_addr(coord));

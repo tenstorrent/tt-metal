@@ -23,6 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -99,7 +100,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
 
     tt::tt_metal::distributed::MeshWorkload worker_workload;
     for (const auto& coord : coords) {
-        auto* device = mesh_device->get_device(coord);
+        auto* device = mesh_device->impl().get_device(coord);
 
         const CoreCoord service_logical = service.get_service_core(coord);
         const CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);

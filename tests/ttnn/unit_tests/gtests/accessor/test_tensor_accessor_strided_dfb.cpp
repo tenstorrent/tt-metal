@@ -25,6 +25,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
@@ -116,7 +117,7 @@ void run_strided_dfb_copy_test(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_dfb_entries,
     KernelBuilderFn kernel_builder_fn) {
-    auto* device = mesh_device->get_devices().at(0);
+    auto* device = mesh_device->impl().get_devices().at(0);
 
     MemoryConfig mem_config(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
     tt::tt_metal::TensorSpec tensor_spec(

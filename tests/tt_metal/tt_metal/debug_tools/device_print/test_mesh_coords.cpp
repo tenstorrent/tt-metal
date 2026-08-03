@@ -85,7 +85,7 @@ distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distribut
     distributed::MeshWorkload workload;
     constexpr CoreCoord kCore = {0, 0};
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        auto [row, col] = GetGlobalCoord(mesh_device->get_device(coord)->id());
+        auto [row, col] = GetGlobalCoord(mesh_device->impl().get_device(coord)->id());
         Program program;
         CreateKernel(
             program,

@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -37,7 +38,7 @@ struct MulticastAtomicConfig {
 /// @param test_config - Configuration of the test
 /// @return true if test passes, false otherwise
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MulticastAtomicConfig& test_config) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
 
     uint32_t num_senders = test_config.sender_cores.size();
     uint32_t num_dests = test_config.dst_grid_size.x * test_config.dst_grid_size.y;
@@ -218,7 +219,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource) {
     uint32_t test_id = 342;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -241,7 +242,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource) {
     uint32_t test_id = 343;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -264,7 +265,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1) {
     uint32_t test_id = 344;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -287,7 +288,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1) {
     uint32_t test_id = 345;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -310,7 +311,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement) {
     uint32_t test_id = 346;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -335,7 +336,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1) {
     uint32_t test_id = 347;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -362,7 +363,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource_2_0) {
     uint32_t test_id = 348;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -386,7 +387,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement_2_0) {
     uint32_t test_id = 349;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -412,7 +413,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource_2_0) {
     uint32_t test_id = 350;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -436,7 +437,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1_2_0) {
     uint32_t test_id = 351;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -460,7 +461,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1_2_0) {
     uint32_t test_id = 352;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {
@@ -484,7 +485,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1_2_0) {
     uint32_t test_id = 353;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     auto grid_size = device->compute_with_storage_grid_size();
     if (grid_size.x < 5 || grid_size.y < 4) {

@@ -4,12 +4,13 @@
 
 #include "hd_socket_test_utils.hpp"
 #include "tt_metal/fabric/physical_system_discovery.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {
 
 bool is_device_coord_mmio_mapped(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& device_coord) {
     const auto& cluster = MetalContext::instance().get_cluster();
-    auto device_id = mesh_device->get_device(device_coord)->id();
+    auto device_id = mesh_device->impl().get_device(device_coord)->id();
     return cluster.get_associated_mmio_device(device_id) == device_id;
 }
 
