@@ -21,6 +21,32 @@ inline void rand_prng() {
     TTI_SFPMOV(0, prng_source, DEST, sfpmov_mod1_from_special);
 }
 
+inline void mix_uint32_full() {
+    // Thomas Wang's bijective 32-bit mix. SFPSHFT can only shift in place on
+    // Wormhole, while immediate SFPSHFT2 selects its source with Imm12 & 15.
+    TTI_SFPNOT(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+    TTI_SFPSHFT(15, 0, p_sfpu::LREG5, sfpshft_mod1_arg_imm);
+    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
+    // The low nibble of -12 is 4, so this computes LREG5 = LREG4 >> 12.
+    TTI_SFPSHFT2((-12) & 0xFFF, 0, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+    TTI_SFPSHFT(2, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
+    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+    TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
+    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
+    TTI_SFPSHFT(3, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
+    TTI_SFPSHFT(11, 0, p_sfpu::LREG5, sfpshft_mod1_arg_imm);
+    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+    // The low nibble of -16 is 0, so this computes LREG4 = LREG0 >> 16.
+    TTI_SFPSHFT2((-16) & 0xFFF, 0, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+}
+
 template <bool APPROXIMATION_MODE>
 inline void rand_init(std::uint32_t seed) {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -29,6 +55,13 @@ inline void rand_init(std::uint32_t seed) {
         seed = 0xFFFFFFFE;
     }
     init_prng_seed(seed);
+    // Hash the first vector once to create a nonlinear, seed-dependent salt
+    // for the hardware LFSR lanes, then prime the first hot-loop input.
+    rand_prng<p_sfpu::LREG5>();
+    mix_uint32_full();
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    rand_prng<p_sfpu::LREG1>();
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
 }
 
 template <std::uint32_t VALUE, std::uint32_t EXPONENT>
@@ -43,68 +76,61 @@ inline void uint32_to_dense_uniform_fp32() {
     TTI_SFPSETEXP(0, VALUE, EXPONENT, 0);
 }
 
+inline void mix_uint32_fast() {
+    // The same bijective ARX permutation used on Blackhole, scheduled around
+    // Wormhole's in-place SFPSHFT and SFPSHFT2 immediate-source semantics.
+    // LREG1 holds x on entry and LREG0 holds the result on exit.
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    // (-16 & 15) == 0: LREG4 = LREG0 >> 16.
+    TTI_SFPSHFT2((-16) & 0xFFF, 0, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+
+    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+    TTI_SFPSHFT(3, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
+    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+    TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG4, sfpshft_mod1_arg_imm);
+    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+
+    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG1, 0);
+    TTI_SFPSHFT(10, 0, p_sfpu::LREG1, sfpshft_mod1_arg_imm);
+    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
+
+    // (-15 & 15) == 1: LREG0 = LREG1 >> 15.
+    TTI_SFPSHFT2((-15) & 0xFFF, 0, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+}
+
+inline void rand_row() {
+    mix_uint32_fast();
+    // LREG1 becomes the following row's input. Its high bit also provides the
+    // current row's FP32 rounding bit.
+    rand_prng<p_sfpu::LREG1>();
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
+    uint32_to_dense_uniform_fp32<p_sfpu::LREG0, p_sfpu::LREG6>();
+    // (-31 & 15) == 1: LREG4 = LREG1 >> 31.
+    TTI_SFPSHFT2((-31) & 0xFFF, 0, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_3, 0);
+    dst_reg++;
+}
+
 template <bool APPROXIMATION_MODE>
 inline void rand(std::uint32_t from, std::uint32_t scale) {
-    // The hardware PRNG exposes 32 lane streams that are shifted views of the
-    // same LFSR. Salt each lane before applying a nonlinear integer finalizer
-    // so adjacent output elements do not retain that correlation.
-    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG3, 0);
-
-    // Load scale param to lreg1
-    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, scale & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, scale >> 16);
+    // Load scale param to lreg5
+    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, scale & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, scale >> 16);
 
     // Load from param to lreg2
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, from & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
-    TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 1);
-
-    rand_prng<p_sfpu::LREG5>();
-    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
 
 #pragma GCC unroll 0
-    for (int d = 0; d < 8; d++) {
-        // Generate a random word, then avalanche its bits together with the
-        // lane salt. This is Thomas Wang's 32-bit integer mix expressed with
-        // shifts, additions, and XORs so it is efficient on both architectures.
-        TTI_SFPNOT(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
-        TTI_SFPSHFT(15, 0, p_sfpu::LREG5, sfpshft_mod1_arg_imm);
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
-        // In immediate mode, SFPSHFT2 selects its source with Imm12 & 0xf.
-        // The low nibble of -12 is 4, so this computes LREG5 = LREG4 >> 12.
-        TTI_SFPSHFT2((-12) & 0xFFF, 0, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
-        TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-        TTI_SFPSHFT(2, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
-        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-        TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
-        TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-        TTI_SFPSHFT(3, 0, p_sfpu::LREG0, sfpshft_mod1_arg_imm);
-        TTI_SFPSHFT(11, 0, p_sfpu::LREG5, sfpshft_mod1_arg_imm);
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-        // The low nibble of -16 is 0, so this computes LREG4 = LREG0 >> 16.
-        TTI_SFPSHFT2((-16) & 0xFFF, 0, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
-        TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-
-        rand_prng<p_sfpu::LREG5>();
-        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
-        uint32_to_dense_uniform_fp32<p_sfpu::LREG0, p_sfpu::LREG6>();
-        // Add a rounding bit. Carry out of an all-ones mantissa naturally
-        // reaches the adjacent binade, giving boundary values half the
-        // rounding basin of interior values.
-        TTI_SFPMOV(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
-        TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG4, 0);
-        TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
-
-        // Scale the base sample into the requested range.
-        TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-
-        TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_3, 0);
-        dst_reg++;
+    for (int d = 0; d < 4; d++) {
+        rand_row();
+        rand_row();
     }
 }
 }  // namespace ckernel::sfpu
