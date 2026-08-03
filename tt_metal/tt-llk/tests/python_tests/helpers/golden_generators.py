@@ -4669,3 +4669,130 @@ class ScalarBinopGolden:
             raise ValueError(f"Unsupported scalar binop operation: {operation}")
 
         return result.to(format_dict[data_format]).flatten()
+
+
+def truncate_to_bfloat16(values: torch.Tensor) -> torch.Tensor:
+    """SFPSTORE into a 16-bit Dest truncates rather than rounds.
+
+    Clearing the low 16 bits of the IEEE-754 pattern drops mantissa bits without
+    touching sign or exponent, i.e. moves toward zero for either sign.
+    """
+    return (
+        (values.to(torch.float32).contiguous().view(torch.int32) & ~0xFFFF)
+        .view(torch.float32)
+        .clone()
+    )
+
+
+def round_to_dest_width(
+    values: torch.Tensor, dest_acc: DestAccumulation
+) -> torch.Tensor:
+    """A value as it sits in Dest, at the width dest_acc selects."""
+    if dest_acc == DestAccumulation.Yes:
+        return values.to(torch.float32)
+    return values.to(torch.bfloat16).to(torch.float32)
+
+
+@register_golden
+class SoftmaxKGolden:
+    """Golden for the softmax_k SFPU entry (experimental/ckernel_sfpu_softmax_k.h).
+
+    Per-row softmax over the 16 columns of face 0's first row band, with the row
+    maximum supplied by the caller instead of being reduced on the fly:
+
+        out[r][c] = exp(x[r][c] - m[r]) / sum_{c' < k} exp(x[r][c'] - m[r])   c < k
+        out[r][c] = 0                                                        c >= k
+
+    Columns >= k have to be exactly 0.0 in the input: the kernel takes a condition
+    code from |even-column value| before subtracting the max and only re-enables all
+    lanes after the exponential, so those lanes stay 0 and are then multiplied by the
+    reciprocal. Rows outside the processed band come back untouched.
+    """
+
+    def __call__(self, input_tile, logits, k, rows=4, face_dim=16):
+        golden = input_tile.to(torch.float32).clone()
+        for row in range(rows):
+            exponentials = torch.exp(logits[row] - logits[row].max())
+            golden[row, :k] = exponentials / exponentials.sum()
+            golden[row, k:face_dim] = 0.0
+        return golden
+
+
+@register_golden
+class SdpaExpUnclampedGolden:
+    """Golden for the upper-unclamped exp helpers
+    (experimental/ckernel_sfpu_sdpa_exp_unclamped.h).
+
+    The kernel is the accurate 21f exp with the upper input clamp removed, so across
+    the domain its caller uses -- val <= 0, and anywhere well below the clamp point
+    at val ~= 88.7 -- it is just exp(val * scale). The scale arrives as a *bfloat16*
+    bit pattern, which is what sfpi::sFloat16b() consumes, not an fp32 one.
+    """
+
+    def __call__(self, operand, scale_bits: int, data_format: DataFormat):
+        scale = (
+            torch.tensor([scale_bits << 16], dtype=torch.int32)
+            .view(torch.float32)
+            .item()
+        )
+        result = torch.exp(operand.flatten().to(torch.float32) * scale)
+        return result.to(format_dict[data_format])
+
+
+@register_golden
+class SamplingGolden:
+    """Golden for the sampling SFPU helpers
+    (experimental/llk_sfpu/ckernel_sfpu_sampling.h).
+
+    Element-wise reference per op, followed by the store each one actually performs.
+    SFPSTORE into a 16-bit Dest truncates, and only recip_scalar compensates for that
+    (convert<vFloat16b>(Nearest), and only when !(DST_ACCUM_MODE || APPROX)); with a
+    32-bit Dest nothing rounds at all. Callers pass the scalar operand as a raw fp32
+    bit pattern so it decodes exactly the way Converter::as_float does on device.
+    """
+
+    # The only helper that converts before storing, so the only one that rounds
+    # rather than truncates on a 16-bit Dest.
+    ROUND_TO_NEAREST_OPS = {"recip_scalar"}
+
+    def __call__(
+        self,
+        op: str,
+        operand_a,
+        operand_b,
+        scalar_bits: int,
+        dest_acc: DestAccumulation,
+    ):
+        scalar = struct.unpack("<f", struct.pack("<I", scalar_bits & 0xFFFFFFFF))[0]
+        a = operand_a.to(torch.float32)
+        b = operand_b.to(torch.float32)
+
+        if op == "recip_scalar":
+            result = 1.0 / a
+        elif op == "clamp_max_scalar":
+            result = torch.minimum(a, torch.full_like(a, scalar))
+        elif op == "mul_unary_scalar":
+            result = a * scalar
+        elif op == "le":
+            result = (a <= b).to(torch.float32)
+        elif op == "lt":
+            result = (a < b).to(torch.float32)
+        elif op == "ge":
+            result = (a >= b).to(torch.float32)
+        elif op == "add":
+            result = a + b
+        elif op == "sub":
+            result = a - b
+        elif op == "mul":
+            result = a * b
+        else:
+            raise ValueError(f"Unsupported sampling operation: {op}")
+
+        return self._store(result, op, dest_acc)
+
+    def _store(self, values, op: str, dest_acc: DestAccumulation):
+        if dest_acc == DestAccumulation.Yes:
+            return values.to(torch.float32)  # the whole fp32 LReg lands in Dest
+        if op in self.ROUND_TO_NEAREST_OPS:
+            return values.to(torch.bfloat16).to(torch.float32)
+        return truncate_to_bfloat16(values)

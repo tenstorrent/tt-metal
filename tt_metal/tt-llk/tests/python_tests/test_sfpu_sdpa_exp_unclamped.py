@@ -33,7 +33,11 @@ result down on the way to L1.
 
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import ELEMENTS_PER_TILE
+from helpers.golden_generators import (
+    ELEMENTS_PER_TILE,
+    SdpaExpUnclampedGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -62,11 +66,6 @@ BF16_HALF = 0x3F00
 INPUT_RANGES = [(-20.0, 0.0), (-88.0, 0.0), (-4.0, 4.0)]
 
 
-def _bf16_pattern_to_float(pattern: int) -> float:
-    """Decode a bfloat16 bit pattern (as sfpi::sFloat16b sees it) to a python float."""
-    return torch.tensor([pattern << 16], dtype=torch.int32).view(torch.float32).item()
-
-
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No],
@@ -89,10 +88,8 @@ def test_sfpu_sdpa_exp_unclamped(formats, dest_acc, input_range, scale, num_tile
     src_A = torch.empty(stimuli_size, dtype=torch_format).uniform_(low, high)
     src_B = torch.zeros_like(src_A)
 
-    # The kernel scales in bfloat16, so round the scale the same way before the
-    # golden multiply.
-    scale_value = _bf16_pattern_to_float(scale)
-    golden_tensor = torch.exp(src_A.to(torch.float32) * scale_value)
+    golden_generator = get_golden_generator(SdpaExpUnclampedGolden)
+    golden_tensor = golden_generator(src_A, scale, formats.output_format)
 
     configuration = TestConfig(
         "sources/sfpu_sdpa_exp_unclamped_test.cpp",
