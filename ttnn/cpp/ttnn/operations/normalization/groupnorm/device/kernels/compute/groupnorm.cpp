@@ -126,16 +126,12 @@ void kernel_main() {
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
 
-    // Non-tile-aligned H*W (#50682). With L = logical_hw, P = padded_hw, the P - L tile-padding
-    // rows are reduced over as if they were data. Assuming they hold zeros (every TILE-layout
-    // producer zero-fills them), pass 1's numerator is already the true sum, so only the divisor
-    // is wrong: the writer rescales the reduce scaler by sqrt(P/L) to divide by the real count.
-    // Pass 2 then centers each padding row to (0 - E[x]) and squares it, leaving a bias of
-    // exactly K*E[x]^2 with K = P/L - 1, which is subtracted below. Aligned inputs have P == L,
-    // so has_pad_correction is false and the whole path is compiled out.
-    // The subtraction reintroduces a cancellation the two-pass algorithm otherwise avoids: the
-    // reduce stores v + K*E[x]^2 in bfloat16, so accuracy degrades as K and E[x]^2/v grow. Real
-    // shapes (K <= 0.6) stay in tolerance; masking cb_xmm's padding rows instead would be exact.
+    // Non-tile-aligned H*W (#50682), L = logical_hw, P = padded_hw, K = P/L - 1. The P - L padding
+    // rows are reduced over as data; they hold zeros, so pass 1's sum is right and only the divisor
+    // is wrong -- the writer rescales the scaler by sqrt(P/L). Pass 2 centers each padding row to
+    // (0 - E[x]) and squares it, biasing the variance by exactly K*E[x]^2, subtracted below.
+    // P == L compiles the whole path out. Cost: the subtraction cancels in bfloat16, so accuracy
+    // degrades as K and E[x]^2/v grow (real shapes at K <= 0.6 stay in tolerance).
     constexpr uint32_t logical_hw = get_named_compile_time_arg_val("logical_hw");
     constexpr uint32_t padded_hw = get_named_compile_time_arg_val("padded_hw");
     constexpr bool has_pad_correction = padded_hw != logical_hw;
@@ -537,9 +533,9 @@ void kernel_main() {
             dfb_ex2_global.wait_front(1);
             dfb_ex2pe.reserve_back(1);
 
-            // Var := Var - K*E[x]^2, staged through dfb_msq so (Var + eps) below is unchanged for
-            // aligned inputs. cb_ex_global still holds E[x] here (it is popped after the output
-            // loop); dfb_k holds K. Binary ops read from CBs, hence the round trips.
+            // Var := Var - K*E[x]^2, staged through dfb_msq so (Var + eps) is unchanged when aligned.
+            // cb_ex_global still holds E[x] (popped after the output loop). Binary ops read from CBs,
+            // hence the round trips.
             constexpr uint32_t dfb_var_src_id = has_pad_correction ? dfb_msq_id : dfb_ex2_global_id;
             if constexpr (has_pad_correction) {
                 dfb_k.wait_front(1);

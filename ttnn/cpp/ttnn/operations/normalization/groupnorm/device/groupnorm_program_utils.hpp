@@ -15,15 +15,13 @@ namespace ttnn::prim {
 
 enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
 
-// Non-tile-aligned H*W (#50682): the two-pass path reduces over the tile-padding rows as if they
-// were data, so the reduce scaler must divide by the real element count and the compute kernel must
-// subtract K*E[x]^2 from the variance. Shared by all three two-pass factories so the scaler formula
-// has one definition. Kernels re-derive `active` from (padded_hw != logical_hw), which is why
-// `kernel_logical_hw` reports padded_hw when off -- otherwise the kernel flag could disagree with
-// the CB allocation and hang the compute kernel on dfb_k.wait_front.
-// The interleaved factories ship these as compile-time args, so H*W=200 and H*W=224 (same padded
-// 224) must not share a cached program. They do not: the default program hash keys on TensorSpec's
-// logical_shape. A compute_program_hash that dropped it would serve one of them the wrong scaler.
+// Non-tile-aligned H*W (#50682): the two-pass path reduces over the tile-padding rows as data, so
+// the scaler must divide by the real element count and the compute kernel must subtract K*E[x]^2.
+// Shared by all three two-pass factories so the scaler formula has one definition. Kernels re-derive
+// `active` from (padded_hw != logical_hw), hence `kernel_logical_hw` reporting padded_hw when off --
+// a disagreeing flag would hang the compute kernel on dfb_k.wait_front. Interleaved ships these as
+// compile-time args, so H*W=200 and H*W=224 (same padded 224) must not share a cached program; they
+// do not, because the default program hash keys on TensorSpec's logical_shape.
 struct GroupNormPadCorrection {
     bool active = false;
     uint32_t logical_hw = 0;

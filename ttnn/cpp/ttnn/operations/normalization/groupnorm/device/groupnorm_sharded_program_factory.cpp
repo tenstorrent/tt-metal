@@ -561,10 +561,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         };
     }
 
-    // Non-tile-aligned H*W (#50682): rescale the reduce scaler to divide by the real element count
-    // and pass K for the compute kernel's variance correction. See GroupNormPadCorrection for why
-    // an inactive correction still reports logical == padded, and compute/groupnorm.cpp for the
-    // derivation. Unlike the interleaved paths these ship as RUNTIME args (8, 9).
+    // Non-tile-aligned H*W (#50682): corrected reduce scaler + K for the variance correction.
+    // Derivation in compute/groupnorm.cpp, `active` semantics in GroupNormPadCorrection.
+    // Unlike the interleaved paths these ship as RUNTIME args (8, 9).
     const auto pad = make_group_norm_pad_correction(
         static_cast<uint32_t>(a.logical_shape()[2]), static_cast<uint32_t>(a.padded_shape()[2]), use_welford);
     const uint32_t pad_scaler_bits = pad.scaler_bits(num_rows_per_batch_per_core * num_datum_row_per_group);

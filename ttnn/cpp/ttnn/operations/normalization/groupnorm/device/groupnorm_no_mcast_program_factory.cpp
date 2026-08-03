@@ -659,10 +659,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     uint32_t reduce_factor_w_group_2 = std::max(1u, num_rows_per_batch_per_core_group_2 * num_channels_per_group);
     uint32_t reduce_factor_c_group_2 = std::max(1u, num_cores_per_batch * num_cores_per_group);
 
-    // Non-tile-aligned H*W (#50682): rescale the reduce scaler to divide by the real element count
-    // and pass K for the compute kernel's variance correction. See GroupNormPadCorrection for why
-    // an inactive correction still reports logical == padded, and compute/groupnorm.cpp for the
-    // derivation. Each core group carries its own scaler because reduce_factor_w differs.
+    // Non-tile-aligned H*W (#50682): corrected reduce scaler + K for the variance correction.
+    // Derivation in compute/groupnorm.cpp, `active` semantics in GroupNormPadCorrection.
+    // Each core group carries its own scaler: reduce_factor_w differs.
     const auto pad = make_group_norm_pad_correction(
         static_cast<uint32_t>(a.logical_shape()[2]), static_cast<uint32_t>(a.padded_shape()[2]), use_welford);
 
