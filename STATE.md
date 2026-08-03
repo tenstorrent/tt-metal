@@ -592,6 +592,40 @@ untuned conv3d blocking stubs, which is where the largest absolute win sits.
 Neither number includes the data-parallel mapping: with tiles spread over the 32-chip
 mesh these divide by up to 32 (768P 5 s decode ~4.6 s, encode ~24.8 s).
 
+### Next: encoder perf via H/W parallelism + neighbor_pad (user directive)
+
+Two obstacles, both with an existing in-tree precedent, and one measurement question to
+settle first.
+
+**1. `neighbor_pad_async` has no `reflect` mode** (`neighbor_pad_async_nanobind.cpp:33`
+offers only `zeros`/`replicate`), and H3 pads reflect. Narrower than it looks: at interior
+shard boundaries the halo *is* the neighbour's real data, so the mode is irrelevant and
+`replicate` is already exact there. They differ only in the outermost pixel at the two
+**global** image edges -- replicate gives `[x0, x0, x1, ...]` where reflect wants
+`[x1, x0, x1, ...]`. Plan: pad `replicate` via `neighbor_pad_persistent_buffer`, then blend
+the global edge rows/cols to their reflect values with a per-device edge mask. A per-device
+mask is sharded *data*, so program structure stays SPMD-uniform. Gate it explicitly: a
+1-pixel border error passes PCC and reads as a faint vignette. `WanCausalConv3d`
+(`vae_wan2_1.py:253`) and `LTXCausalConv3d` (`vae_ltx.py:42`) are the templates; LTX's
+external/internal padding split is the cleaner of the two.
+
+**2. GroupNorm reduces over C, H *and* W within a frame**, so H/W sharding needs
+cross-device stats. `normalization.GroupNorm` shards channels, not H/W, so it cannot do it
+-- but the **LTX latent upsampler already solves this**: `latent_upsampler_ltx.py:46-82`
+all-gathers H/W, runs GroupNorm on the full (cropped) extent, and re-partitions, handling
+the ROW_MAJOR/TILE transitions and the mesh-factor pad crop. Reuse that shape rather than
+inventing a distributed GroupNorm.
+
+**Measurement question to settle before building it.** The encoder's problem is
+*efficiency*, not parallelism: 2.3 TFLOP/s against the decoder's 14.0 on the same silicon.
+H/W sharding spreads one tile over more chips, but each chip still runs at 2.3 TFLOP/s, and
+DP-over-tiles already saturates the mesh (768P 5 s has 224 work units for 32 devices; 1440P
+has 832). So H/W parallelism buys **per-tile latency and lower peak memory per device**, not
+throughput, until the blockings are tuned. Sweeping `_FP32_BLOCKINGS` with
+`bruteforce_conv3d_sweep.py` is what addresses the 6x gap. Worth doing the sweep first, or
+at least measuring both, so the H/W work is evaluated against a tuned single-device number
+rather than an untuned one.
+
 ## Hangs / resets
 
 None yet. No device work has run.
