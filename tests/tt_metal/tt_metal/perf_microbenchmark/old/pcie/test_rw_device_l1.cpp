@@ -23,6 +23,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -67,7 +68,7 @@ int main(int argc, char** argv) {
 
         {
             auto begin = std::chrono::steady_clock::now();
-            pass &= tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], core, target_cb_addr, src_vec);
+            pass &= tt_metal::detail::WriteToDeviceL1(device->impl().get_devices()[0], core, target_cb_addr, src_vec);
             auto end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(end - begin).count();
             auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
@@ -77,7 +78,8 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> result_vec;
         {
             auto begin = std::chrono::steady_clock::now();
-            tt_metal::detail::ReadFromDeviceL1(device->get_devices()[0], core, target_cb_addr, buffer_size, result_vec);
+            tt_metal::detail::ReadFromDeviceL1(
+                device->impl().get_devices()[0], core, target_cb_addr, buffer_size, result_vec);
             auto end = std::chrono::steady_clock::now();
 
             auto elapsed_us = duration_cast<microseconds>(end - begin).count();

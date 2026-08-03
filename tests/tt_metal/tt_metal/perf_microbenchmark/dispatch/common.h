@@ -37,6 +37,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::tt_dispatch_tests::Common {
 
@@ -1144,7 +1145,7 @@ protected:
         // Initialize common pointers
         auto& mcq = mesh_device_->mesh_command_queue();
         fdcq_ = &dynamic_cast<distributed::FDMeshCommandQueue&>(mcq);
-        device_ = mesh_device_->get_devices()[0];
+        device_ = mesh_device_->impl().get_devices()[0];
         mgr_ = &device_->sysmem_manager();  // Use Chip 0's SystemMemoryManager
 
         if (Common::is_quasar_sim()) {

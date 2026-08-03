@@ -44,6 +44,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace ttnn::operations::generic::test {
 
@@ -1632,7 +1633,7 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
 
     std::vector<uint32_t> sender_status;
     tt::tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+        sender_device->impl().get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1643,7 +1644,7 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     std::vector<uint32_t> receiver_status;
 
     tt::tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+        receiver_device->impl().get_devices()[0],
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,

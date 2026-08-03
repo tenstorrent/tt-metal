@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -37,7 +38,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_ReserveWithoutPush) {
     // regression run may have exported to skip the check elsewhere.
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -75,7 +76,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
     // regression run may have exported to skip the check elsewhere.
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -119,7 +120,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_LookaheadReserve_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -168,7 +169,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_Balanced_NoViolation) {
     // regression run may have exported to skip the check elsewhere.
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -210,7 +211,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_SkipEnv_Suppresses) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     ::setenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 

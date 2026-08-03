@@ -47,6 +47,7 @@
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -206,7 +207,7 @@ static void validate_result(
 void run_single_core_tilize_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
-    auto* dev = mesh_device->get_devices()[0];
+    auto* dev = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const std::uint32_t num_tiles = test_config.num_tiles_r * test_config.num_tiles_c;
@@ -455,7 +456,7 @@ void run_single_core_unpack_tilizeA_B_program(
     Program program = tt::tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -958,7 +959,7 @@ static void run_quasar_tilize_untilize_test(
     std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 

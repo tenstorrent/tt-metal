@@ -26,6 +26,7 @@
 
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -33,7 +34,7 @@ using NamedArgsTest = GenericMeshDeviceFixture;
 
 TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -78,7 +79,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
 
 TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -129,7 +130,7 @@ TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
 
 TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -168,7 +169,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
 
 TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -233,7 +234,7 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
 // exercises the relocated, presence-gated prolog #include on the compute path.
 TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -273,7 +274,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
 // is correct: positional at [0..N-1], named at [N..].
 TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -323,7 +324,7 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
 // Two entries with the same name and value should be silently deduplicated.
 TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 

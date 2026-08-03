@@ -25,6 +25,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -80,7 +81,7 @@ int main(int argc, char** argv) {
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
-                    device->get_devices()[0], dram_channel, dram_addr, src_vec);
+                    device->impl().get_devices()[0], dram_channel, dram_addr, src_vec);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }
@@ -99,7 +100,7 @@ int main(int argc, char** argv) {
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 tt_metal::detail::ReadFromDeviceDRAMChannel(
-                    device->get_devices()[0], dram_channel, dram_addr, buffer_size, result_vec);
+                    device->impl().get_devices()[0], dram_channel, dram_addr, buffer_size, result_vec);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }

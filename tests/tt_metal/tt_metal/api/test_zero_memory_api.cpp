@@ -46,6 +46,7 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 #include "gtest/gtest.h"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -86,7 +87,7 @@ namespace tt::tt_metal {
 
 TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     auto& mesh_device = *devices_[0];
-    IDevice* dev = mesh_device.get_devices()[0];
+    IDevice* dev = mesh_device.impl().get_devices()[0];
 
     constexpr uint32_t scratch_bytes = 8 * 1024;
     constexpr uint32_t num_pages = 4;
@@ -207,7 +208,7 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
 // chunks of one DFB entry and then barriers once.
 TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiBatchedL1) {
     auto& mesh_device = *devices_[0];
-    IDevice* dev = mesh_device.get_devices()[0];
+    IDevice* dev = mesh_device.impl().get_devices()[0];
 
     constexpr uint32_t scratch_bytes = 32 * 1024;
     constexpr uint32_t num_chunks = 4;  // 4 disjoint 8 KB L1 zeros, then a single barrier

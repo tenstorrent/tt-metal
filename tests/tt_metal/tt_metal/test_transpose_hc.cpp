@@ -20,12 +20,13 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     Program program = CreateProgram();
     constexpr bool multibank = true;
 

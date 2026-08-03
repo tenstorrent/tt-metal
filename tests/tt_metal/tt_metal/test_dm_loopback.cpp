@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -34,7 +35,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 

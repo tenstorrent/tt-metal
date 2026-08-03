@@ -39,6 +39,7 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -116,7 +117,7 @@ bool single_core_reconfig(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_bfp16b{
         .device = device,
@@ -622,7 +623,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     };
     experimental::SetProgramRunArgs(program, params);
 
-    auto* dev = mesh_device->get_devices()[0];
+    auto* dev = mesh_device->impl().get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
@@ -977,7 +978,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     };
     experimental::SetProgramRunArgs(program, params);
 
-    auto* dev = mesh_device->get_devices()[0];
+    auto* dev = mesh_device->impl().get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> out0_data;

@@ -30,6 +30,7 @@
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -88,8 +89,7 @@ void run_borrowed_memory_dfb_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const NodeCoord& node,
     const BorrowedDFBTestConfig& cfg) {
-
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     const ARCH arch = device->arch();
     const bool is_all = (cfg.cap == DFBAccessPattern::ALL);
 
@@ -289,7 +289,7 @@ void run_update_address_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const NodeCoord& node,
     std::optional<uint32_t> reentry_num_entries_override = std::nullopt) {
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     const ARCH arch = device->arch();
 
     constexpr uint32_t num_entries  = 16;

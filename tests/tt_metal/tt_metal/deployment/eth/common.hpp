@@ -13,6 +13,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 /* Performance debug helpers */
 #define NOW() std::chrono::high_resolution_clock::now()
@@ -260,7 +261,7 @@ static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores)
             continue;
         }
         threads.emplace_back([&] {
-            auto* const device = c.mesh_device->get_devices()[0];
+            auto* const device = c.mesh_device->impl().get_devices()[0];
             track_eth_progress_timeout(device, nullptr, c.core, c.core, c.iter_l1_addr, c.expected_count);
         });
     }
@@ -286,7 +287,7 @@ static void wait_to_finish_eth_timeout_cores(
     }
 
     for (const auto& [dev, workload] : devices) {
-        detail::CompileProgram(dev->get_devices()[0], *programs[dev]);
+        detail::CompileProgram(dev->impl().get_devices()[0], *programs[dev]);
         devices[dev]->add_program(device_range, std::move(*programs[dev]));
     }
 
@@ -331,8 +332,8 @@ static void wait_to_finish_eth_timeout(
         fixture->RunProgram(recv_mesh_device, recv_workload, true);
     }
 
-    auto* const send_device = send_mesh_device->get_devices()[0];
-    auto* const recv_device = recv_mesh_device->get_devices()[0];
+    auto* const send_device = send_mesh_device->impl().get_devices()[0];
+    auto* const recv_device = recv_mesh_device->impl().get_devices()[0];
     track_eth_progress_timeout(send_device, recv_device, send_core, recv_core, iter_l1_addr, expected_count);
 
     fixture->FinishCommands(send_mesh_device);
@@ -454,7 +455,7 @@ static void tensix_zero_dram(
     TT_FATAL(dram_start_addr < dram_end_addr, "start addr must be less than end addr");
     tt_metal::Program zero_program = tt_metal::Program();
 
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
     CoreCoord core_grid = device->compute_with_storage_grid_size();
     uint32_t total_bytes = dram_end_addr - dram_start_addr;
     uint32_t core_count = core_grid.x * core_grid.y;
@@ -531,7 +532,7 @@ static void tensix_counter_dram(
     TT_FATAL(dram_start_addr < dram_end_addr, "start addr must be less than end addr");
     tt_metal::Program zero_program = tt_metal::Program();
 
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
     CoreCoord core_grid = device->compute_with_storage_grid_size();
     uint32_t total_bytes = dram_end_addr - dram_start_addr;
     uint32_t core_count = core_grid.x * core_grid.y;
@@ -612,7 +613,7 @@ static bool tensix_compare_dram_banks(
 
     tt_metal::Program cmp_program = tt_metal::Program();
 
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
     CoreCoord core_grid = device->compute_with_storage_grid_size();
     uint32_t total_bytes = dram_end_addr - dram_start_addr;
     uint32_t core_count = core_grid.x * core_grid.y;
@@ -734,7 +735,7 @@ static bool test_check_cores(std::span<struct core_setup> cores) {
             log_info(tt::LogTest, "core_check: {}", cs.locinfo);
         }
         prev = cs.locinfo;
-        auto* const dev = cs.mesh_device->get_devices()[0];
+        auto* const dev = cs.mesh_device->impl().get_devices()[0];
         pass &= bandwidth_check(dev, cs.core, cs.delta_time_addr, cs.total_transferred, cs.bw_threshold);
         pass &= data_check(dev, cs.core, cs.recv_l1_address, cs.inp);
 
@@ -917,7 +918,7 @@ static bool ensure_links(std::span<std::shared_ptr<distributed::MeshDevice>> dev
     }
 
     for (const auto& device : devices) {
-        auto* const dev = device->get_devices()[0];
+        auto* const dev = device->impl().get_devices()[0];
         int numlinks = dev->get_active_ethernet_cores().size();
         if (numlinks != expected_links) {
             pass = false;

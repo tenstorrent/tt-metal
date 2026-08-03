@@ -48,6 +48,7 @@
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
 #include "test_helpers.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -3903,7 +3904,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
+    IDevice* device = mesh_device_->impl().get_devices()[0];
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
@@ -3940,7 +3941,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
+    IDevice* device = mesh_device_->impl().get_devices()[0];
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
@@ -3968,7 +3969,7 @@ void kernel_main() {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
+    IDevice* device = mesh_device_->impl().get_devices()[0];
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
@@ -4002,7 +4003,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
+    IDevice* device = mesh_device_->impl().get_devices()[0];
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
@@ -4063,7 +4064,7 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", node, {"compute", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
+    IDevice* device = mesh_device_->impl().get_devices()[0];
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 

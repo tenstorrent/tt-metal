@@ -33,6 +33,7 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using std::vector;
 using namespace tt;
@@ -50,7 +51,7 @@ struct MulReduceScalarConfig {
 };
 
 bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
-    IDevice* device = mesh_device.get_devices()[0];
+    IDevice* device = mesh_device.impl().get_devices()[0];
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
 

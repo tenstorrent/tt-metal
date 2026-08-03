@@ -25,6 +25,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -95,7 +96,7 @@ void create_and_read_max_num_semaphores(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     std::vector<uint32_t> golden;
     for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;

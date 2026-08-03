@@ -16,6 +16,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <distributed/mesh_device_impl.hpp>
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
@@ -84,7 +85,7 @@ void set_rt_args(
 }  // namespace
 
 TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelSameRuntimeArgs) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {2, 2};
@@ -124,7 +125,7 @@ TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelSameRuntimeArgs) {
 }
 
 TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelUniqueRuntimeArgs) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {1, 1};

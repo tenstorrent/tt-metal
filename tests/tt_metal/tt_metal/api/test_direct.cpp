@@ -35,6 +35,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using std::vector;
 using namespace tt;
@@ -63,7 +64,7 @@ bool reader_only(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -133,7 +134,7 @@ bool writer_only(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt_metal::BufferType::DRAM};
@@ -197,7 +198,7 @@ struct ReaderWriterConfig {
 /// @return
 bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderWriterConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -344,7 +345,7 @@ static ReaderDatacopyWriterContext setup_reader_datacopy_writer_context(
     ReaderDatacopyWriterContext ctx;
     ctx.byte_size = test_config.num_tiles * test_config.tile_byte_size;
 
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
         .size = ctx.byte_size,
@@ -384,7 +385,7 @@ static bool verify_reader_datacopy_writer_output(const ReaderDatacopyWriterConte
 bool reader_datacopy_writer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderDatacopyWriterConfig& test_config) {
     auto ctx = setup_reader_datacopy_writer_context(mesh_device, test_config);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     const bool is_quasar = device->arch() == ARCH::QUASAR;
     // On Quasar we can split work across two DM threads when num_tiles > 1;

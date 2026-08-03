@@ -32,6 +32,7 @@
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.
@@ -62,7 +63,7 @@ static void RunTest(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
     // TENSIX cores use the Metal 2.0 host API and the *_2_0.cpp kernel; ETH/DRAM cores remain on the legacy

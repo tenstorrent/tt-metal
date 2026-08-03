@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -29,7 +30,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 
@@ -92,7 +93,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 
@@ -162,7 +163,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 

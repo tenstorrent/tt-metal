@@ -13,6 +13,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -34,8 +35,8 @@ static void run_test_stress(
     map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs) {
     /* =================== */
     (void)fixture;
-    auto* const send_device = send_mesh_device->get_devices()[0];
-    auto* const recv_device = recv_mesh_device->get_devices()[0];
+    auto* const send_device = send_mesh_device->impl().get_devices()[0];
+    auto* const recv_device = recv_mesh_device->impl().get_devices()[0];
 
     TEST_PARAM(uint32_t, transfer_size, 160 * 1024, "ETH_TEST_TRANSFER_SIZE");
     TEST_PARAM(uint32_t, transfer_count, 2 << 20, "ETH_TEST_TRANSFER_COUNT");
@@ -128,11 +129,11 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
 
     for (int i = 0; i < devices_.size(); i++) {
         const auto& sender_mesh_device = devices_[i];
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
 
         for (int j = i; j < devices_.size(); j++) {
             const auto& receiver_mesh_device = devices_[j];
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
 
             log_info(
                 tt::LogTest,

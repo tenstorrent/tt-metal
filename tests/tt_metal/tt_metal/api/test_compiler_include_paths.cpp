@@ -24,6 +24,7 @@
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "multi_device_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -60,7 +61,7 @@ void kernel_main() {
 )";
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     Program program = CreateProgram();
 
     DataMovementConfig config{
@@ -109,7 +110,7 @@ void kernel_main() {
 )";
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     Program program = CreateProgram();
 
     DataMovementConfig config{
@@ -211,7 +212,7 @@ void kernel_main() {
 )";
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     auto compile_and_get_elf_path = [&]() -> fs::path {
         Program program = CreateProgram();

@@ -20,6 +20,7 @@
 #include "llrt.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -166,7 +167,7 @@ protected:
 
     void RunTestOnDevice(
         const std::function<void()>& run_function, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running test on device {}.", device->id());
         run_function();
         log_info(tt::LogTest, "Finished running test on device {}.", device->id());

@@ -102,6 +102,7 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 #include "test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -679,7 +680,7 @@ BuiltProgram build_program(
         core_list.assign(full_order.begin() + off, full_order.begin() + off + want);
     }
     if (cfg.log_core_map) {
-        const auto did = mesh_device->get_devices()[0]->id();
+        const auto did = mesh_device->impl().get_devices()[0]->id();
         const auto& sd = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(did);
         for (const auto& c : core_list) {
             const auto p = sd.get_physical_tensix_core_from_logical(c);  // matches profiler core_x/core_y
@@ -1001,7 +1002,7 @@ int main(int argc, char** argv) {
         auto mesh_device =
             distributed::MeshDevice::create_unit_mesh(cfg.device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size);
 
-        log_info(LogTest, "Clock: {} MHz", get_tt_npu_clock(mesh_device->get_devices()[0]));
+        log_info(LogTest, "Clock: {} MHz", get_tt_npu_clock(mesh_device->impl().get_devices()[0]));
 
         const auto grid = mesh_device->compute_with_storage_grid_size();
         uint32_t effective_cores = grid.x * grid.y;

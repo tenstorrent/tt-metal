@@ -39,6 +39,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "multi_device_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -176,7 +177,7 @@ TEST(DescriptorPatching, ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
 
 class DescriptorPatchingDeviceTest : public GenericMeshDeviceFixture {
 protected:
-    IDevice* device() { return get_mesh_device()->get_devices()[0]; }
+    IDevice* device() { return get_mesh_device()->impl().get_devices()[0]; }
 };
 
 // resolve_bindings correctly maps a single per-core buffer arg.

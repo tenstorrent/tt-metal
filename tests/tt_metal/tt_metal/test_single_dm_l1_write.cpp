@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -26,7 +27,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     auto mesh_device = devices_[0];
 
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(

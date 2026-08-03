@@ -5,6 +5,7 @@
 // Edge-case coverage: counter-wrap, ring-pressure, decoy, long-run (Metal 2.0).
 
 #include "dfb_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -13,11 +14,11 @@ namespace tt::tt_metal {
 enum class A1Transform { Identity, Relu };
 
 static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh_device, A1Transform transform) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
     constexpr uint32_t num_entries = 4;
     const m2::NodeCoord node{0, 0};
@@ -156,11 +157,11 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
     uint32_t entry_size = 1024,
     uint32_t num_entries = 16,
     uint32_t total_tiles = 16) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Implicit sync is Quasar-only";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     const m2::NodeCoord node{0, 0};
 
     const m2::DFBSpecName DFB{"dfb"};
@@ -259,11 +260,11 @@ TEST_F(MeshDeviceFixture, B3_2_0_TailCreditRace_RepeatedImplicitSync_DMDM) {
 // D1: long implicit-sync run past counter wrap
 TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Implicit sync is Quasar-only";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     constexpr uint32_t kPreloadValue = 65528;
     constexpr uint32_t kPushTiles = 32;
     constexpr uint32_t kEntrySize = 1024;
@@ -441,11 +442,11 @@ TEST_F(MeshDeviceFixture, D2_2_0_AllDMsConcurrent_6Sx2S_ImplicitOn) {
 // D3: multi-core two-groups-via-decoy
 TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "TC-based grouping is Quasar-only";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
     const uint32_t num_workers = grid.x * grid.y;
     if (num_workers < 2) {

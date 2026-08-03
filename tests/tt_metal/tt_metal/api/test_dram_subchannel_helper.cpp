@@ -15,6 +15,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -22,7 +23,7 @@ class DramSubchannelHelperFixture : public BlackholeSingleCardFixture {};
 
 TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
 
     const uint32_t num_banks = soc_desc.get_num_dram_views();
@@ -68,7 +69,7 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
 
 TEST_F(DramSubchannelHelperFixture, RejectsOutOfRangeBank) {
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     EXPECT_ANY_THROW(mesh_device->impl().pick_unused_dram_logical_core(num_banks));

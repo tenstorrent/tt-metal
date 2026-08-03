@@ -14,6 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include "device_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -30,7 +31,7 @@ namespace tt::tt_metal {
 TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
@@ -42,7 +43,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SanityCheck) {
 TEST_F(MeshDeviceFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
@@ -52,7 +53,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
 }
 
 TEST_F(MeshDeviceFixture, Host_UAF_ReadShard_SanityCheck) {
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
 
     // ReadShard's sanitizer check runs before its is_sharded() assertion, so a
     // plain interleaved buffer still drives the UAF path under test here.
@@ -66,7 +67,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadShard_SanityCheck) {
 TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
@@ -88,7 +89,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
 TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
@@ -103,7 +104,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) 
 TEST_F(MeshDeviceFixture, Host_UAF_Allocated_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);  // left allocated
 

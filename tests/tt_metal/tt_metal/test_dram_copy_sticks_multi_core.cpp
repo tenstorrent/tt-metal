@@ -29,6 +29,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -46,7 +47,7 @@ struct hlk_args_t {
 
 TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
     bool pass = true;
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     try {
         tt_metal::Program program = tt_metal::CreateProgram();

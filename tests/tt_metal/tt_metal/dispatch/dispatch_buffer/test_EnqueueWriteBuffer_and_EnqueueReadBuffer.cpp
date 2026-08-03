@@ -50,6 +50,7 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -234,7 +235,7 @@ void WriteToUnitMeshBuffer(
     const std::vector<uint32_t>& src,
     const std::shared_ptr<distributed::MeshBuffer>& buf,
     const std::optional<BufferShardingArgs>& sharding_args) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     std::shared_ptr<Buffer> slow_dispatch_buffer;
     if (sharding_args.has_value()) {
         slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
@@ -250,7 +251,7 @@ void ReadFromUnitMeshBuffer(
     std::vector<uint32_t>& dst,
     const std::shared_ptr<distributed::MeshBuffer>& buf,
     const std::optional<BufferShardingArgs>& sharding_args) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     std::shared_ptr<Buffer> slow_dispatch_buffer;
     if (sharding_args.has_value()) {
         slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
@@ -291,7 +292,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const TestBufferConfig& config) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     // Clear out command queue
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -465,7 +466,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
     srand(config.seed);
 
     auto device_coord = distributed::MeshCoordinate(0, 0);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     for (const bool cq_write : {true, false}) {
         for (const bool cq_read : {true, false}) {
@@ -814,7 +815,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSinglePageLargerThanMaxPrefe
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeShardedBuffer) {
     const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 2048;
     for (const auto& mesh_device : devices_) {
-        log_info(tt::LogTest, "Running On Device {}", mesh_device->get_devices()[0]->id());
+        log_info(tt::LogTest, "Running On Device {}", mesh_device->impl().get_devices()[0]->id());
         CoreCoord start(0, 0);
         CoreCoord end(3, 0);
         CoreRange cores(start, end);
@@ -860,7 +861,7 @@ TEST_F(
 
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeSubBuffer) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
 
         const uint32_t max_prefetch_command_size =
@@ -908,7 +909,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLarger
 
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeSubBuffer) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
 
         const uint32_t max_prefetch_command_size =
@@ -938,7 +939,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
     const uint32_t region_size = 5 * page_size;
     const uint32_t region_offset = 9 * page_size;
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         CoreCoord start(0, 0);
         CoreCoord end(4, 0);
@@ -983,7 +984,7 @@ TEST_F(
     const uint32_t region_size = 5 * page_size;
     const uint32_t region_offset = 9 * page_size;
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         CoreCoord start(0, 0);
         CoreCoord end(4, 0);
@@ -1040,7 +1041,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestNon32BAlignedPageSizeForDram
 // Requires enqueue write buffer
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         uint32_t page_size = 2048;
         uint32_t command_issue_region_size = device->sysmem_manager().get_issue_queue_size(0);
@@ -1060,7 +1061,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapHostHugepageOnEnqueueRea
 
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", mesh_device->id());
         uint32_t page_size = 2048;
         uint32_t command_queue_size = device->sysmem_manager().get_cq_size();
@@ -1079,7 +1080,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
     uint32_t small_page_size = 2048;  // page size for second read
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         uint32_t command_completion_region_size = device->sysmem_manager().get_completion_queue_size(0);
 
@@ -1139,7 +1140,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteShardedSubBuffer) {
     const uint32_t buffer_size = 64 * page_size;
     const BufferRegion region(256, 512);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         CoreCoord start(0, 0);
         CoreCoord end(5, 0);
@@ -1178,7 +1179,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteSubBuffer) {
     const uint32_t buffer_size = 64 * page_size;
     const BufferRegion region(256, 512);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
 
         distributed::DeviceLocalBufferConfig dram_config{
@@ -1204,7 +1205,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteSubBufferLargeOffse
     const uint32_t buffer_size = (0xFFFF + 50000) * 2 * page_size;
     const BufferRegion region(((2 * 0xFFFF) + 25000) * page_size, 32);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
@@ -1230,7 +1231,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadBufferWriteSubBuffer) {
     const uint32_t buffer_region_size = 128;
     const BufferRegion region(buffer_region_offset, buffer_region_size);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
@@ -1262,7 +1263,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadSubBufferWriteBuffer) {
     const uint32_t buffer_region_size = 128;
     const BufferRegion region(buffer_region_offset, buffer_region_size);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
@@ -1291,7 +1292,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadSubBufferInvalidRegion) 
     const uint32_t buffer_region_size = buffer_size;
     const BufferRegion region(buffer_region_offset, buffer_region_size);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
@@ -1310,7 +1311,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWriteSubBufferInvalidRegion)
     const uint32_t buffer_region_size = buffer_size;
     const BufferRegion region(buffer_region_offset, buffer_region_size);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
@@ -1327,7 +1328,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWriteSubBufferInvalidRegion)
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficientSpace2) {
     // Using default 75-25 issue and completion queue split
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         uint32_t command_completion_region_size = device->sysmem_manager().get_completion_queue_size(0);
 
@@ -1372,7 +1373,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
         distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
@@ -1384,7 +1385,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToDramBank0) {
 
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToAllDramBanks) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {
             .num_pages = uint32_t(mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
@@ -1403,7 +1404,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToAllDramBanks) {
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     constexpr uint32_t num_round_robins = 2;
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {
             .num_pages = num_round_robins * (mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
@@ -1422,7 +1423,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTw
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, Sending131072Pages) {
     TestBufferConfig config = {.num_pages = 131072, .page_size = 128, .buftype = BufferType::DRAM};
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
         distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
@@ -1435,7 +1436,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, Sending131072Pages) {
 
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDram) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
@@ -1450,7 +1451,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDram
 
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDram2) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
@@ -1465,7 +1466,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDram
 
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         uint32_t page_size = 2048;
         uint32_t command_queue_size = device->sysmem_manager().get_cq_size();
@@ -1486,7 +1487,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDram
     constexpr uint32_t page_size = 200;
     const uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         const uint32_t num_banks = mesh_device->allocator()->get_num_banks(BufferType::DRAM);
         const uint32_t num_pages = std::max(4 * num_banks, (max_prefetch_command_size / page_size) + num_banks);
@@ -1509,7 +1510,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestSubBufferReadCrossesRelayPag
         relay_page_boundary - 1, relay_page_boundary, relay_page_boundary + 1};
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
         distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
@@ -1527,7 +1528,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestLargeSubBufferReadPastRebase
     constexpr uint32_t region_num_pages = 64;
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running on Device {}", device->id());
         distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
         distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
@@ -1550,7 +1551,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     TestBufferConfig config = {
         .num_pages = uint32_t(device->allocator()->get_num_banks(BufferType::DRAM)),
         .page_size = 2048,
@@ -1565,7 +1566,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     constexpr uint32_t num_round_robins = 2;
     TestBufferConfig config = {
         .num_pages = num_round_robins * (device->allocator()->get_num_banks(BufferType::DRAM)),
@@ -1617,7 +1618,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDra
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     uint32_t page_size = 2048;
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
     uint32_t command_queue_size =
@@ -1635,7 +1636,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteComma
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDramWrapsAcrossBanksAndTransactions) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     constexpr uint32_t page_size = 200;
     const uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     const uint32_t num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
@@ -1682,7 +1683,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestLargeSubBufferReadPastRebas
 
 TEST_F(UnitMeshCQMultiDeviceBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSize) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
@@ -1705,7 +1706,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteShardedSubBufferFor
     const std::vector<ShardedSubBufferStressTestConfig>& configs =
         local_test_functions::generate_sharded_sub_buffer_test_configs(max_buffer_size);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running on Device {}", device->id());
         for (const ShardedSubBufferStressTestConfig& config : configs) {
             log_debug(
@@ -1758,7 +1759,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleNonOverlappingWrites
     const uint32_t buffer_size = 16 * page_size;
     const uint32_t buffer_region_size = 4 * page_size;
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running on Device {}", device->id());
         CoreCoord start_coord = {0, 0};
         CoreCoord end_coord = {5, 5};
@@ -1903,7 +1904,7 @@ TEST_F(
     const uint32_t region_offset = 16 * page_size;
     const uint32_t region_size = 16 * page_size;
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         CoreCoord start(0, 0);
         CoreCoord end(3, 3);
@@ -1941,7 +1942,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleNonOverlappingReadsS
     const uint32_t buffer_size = 16 * page_size;
     const uint32_t buffer_region_size = buffer_size / 4;
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running on Device {}", device->id());
         CoreCoord start_coord = {0, 0};
         CoreCoord end_coord = {5, 5};
@@ -2006,7 +2007,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteShardedSubBufferMul
     const uint32_t buffer_region_size = page_size * 7;
     vector<uint32_t> src = local_test_functions::generate_arange_vector(buffer_region_size);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running on Device {}", device->id());
         CoreCoord start_coord = {0, 0};
         CoreCoord end_coord = {3, 3};
@@ -2039,7 +2040,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteSubBufferForL1) {
     const uint32_t buffer_size = 128 * page_size;
     const BufferRegion region(2 * page_size, 2048);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
 
         distributed::DeviceLocalBufferConfig l1_config{
@@ -2059,7 +2060,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteSubBufferLargeOffse
     const uint32_t buffer_size = 512 * page_size;
     const BufferRegion region(400 * page_size, 2048);
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
 
         distributed::DeviceLocalBufferConfig l1_config{
@@ -2112,7 +2113,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestNon32BAlignedPageSizeForL1) 
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         if (device->is_mmio_capable()) {
             continue;
         }
@@ -2215,7 +2216,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForL1)
 
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToL1Bank0) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
         distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
@@ -2228,7 +2229,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToL1Bank0) {
 
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToAllL1Banks) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         auto compute_with_storage_grid = mesh_device->compute_with_storage_grid_size();
         TestBufferConfig config = {
@@ -2246,7 +2247,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToAllL1Banks) {
 
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         auto compute_with_storage_grid = mesh_device->compute_with_storage_grid_size();
 
@@ -2265,7 +2266,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToAllL1BanksTwiceRou
 
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForL1) {
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
@@ -2367,7 +2368,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, WritesToRandomBufferTypeAndThenR
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
     for (const auto& mesh_device : devices_) {
-        if (not mesh_device->get_devices()[0]->is_mmio_capable()) {
+        if (not mesh_device->impl().get_devices()[0]->is_mmio_capable()) {
             continue;
         }
         EXPECT_TRUE(local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<true>(

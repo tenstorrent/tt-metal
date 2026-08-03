@@ -26,6 +26,7 @@
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include "test_helpers.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -52,7 +53,7 @@ protected:
             return;
         }
         auto mesh_device = devices_.at(0);
-        IDevice* device = mesh_device->get_devices()[0];
+        IDevice* device = mesh_device->impl().get_devices()[0];
         if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
         }
@@ -67,7 +68,7 @@ protected:
             return;
         }
         auto mesh_device = devices_.at(0);
-        IDevice* device = mesh_device->get_devices()[0];
+        IDevice* device = mesh_device->impl().get_devices()[0];
         if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
         }
@@ -265,7 +266,7 @@ TEST_F(MeshWorkloadFactorySlowDispatchHWTest, FactoryMethodsSupportSlowDispatch)
 
 TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsDfbResizeBetweenEnqueues) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     // Build a workload with a producer-consumer DFB loopback.
     distributed::MeshWorkload workload = MakeMeshWorkloadFromSpec(*mesh_device, MakeLoopbackSpec());

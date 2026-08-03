@@ -27,6 +27,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include "device_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -38,7 +39,7 @@ namespace tt::tt_metal {
 TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_SanityCheck) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -71,7 +72,7 @@ TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_SanityCheck) {
 TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -106,7 +107,7 @@ TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
 TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_Source_SanityCheck) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -141,7 +142,7 @@ TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_Source_SanityCheck) {
 TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_Dest_SanityCheck) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -177,7 +178,7 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto& mesh = this->devices_.at(0);
-    auto* device = mesh->get_devices()[0];
+    auto* device = mesh->impl().get_devices()[0];
     // WH-only: the 32 B DRAM-read rule is compiled into the JIT kernel only under
     // a wormhole cluster. Under blackhole the same offset aborts with the 64 B
     // message (regex mismatch), so gate to WH and SKIP elsewhere rather than fail
@@ -236,7 +237,7 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_BH) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto& mesh = this->devices_.at(0);
-    auto* device = mesh->get_devices()[0];
+    auto* device = mesh->impl().get_devices()[0];
     // BH-only: the 64 B DRAM-read rule is compiled into the JIT kernel only under
     // a blackhole cluster. Under wormhole the 32 B rule accepts this 32-aligned
     // offset, so the read proceeds and aborts as an OOB write instead — gate to
@@ -290,7 +291,7 @@ TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto& mesh = this->devices_.at(0);
-    auto* device = mesh->get_devices()[0];
+    auto* device = mesh->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -345,7 +346,7 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Aligned_NoViolation_WH) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto& mesh = this->devices_.at(0);
-    auto* device = mesh->get_devices()[0];
+    auto* device = mesh->impl().get_devices()[0];
     // WH-only positive control (guards the 32 B / 0x1F mask). Skip on other arches.
     if (device->arch() != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "WH-only positive control; device arch is not wormhole.";
@@ -416,7 +417,7 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Aligned_NoViolation_BH) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto& mesh = this->devices_.at(0);
-    auto* device = mesh->get_devices()[0];
+    auto* device = mesh->impl().get_devices()[0];
     // BH-only positive control (guards the 64 B / 0x3F mask). Skip on other arches.
     if (device->arch() != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "BH-only positive control; device arch is not blackhole.";
@@ -483,7 +484,7 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Aligned_NoViolation_BH) {
 TEST_F(MeshDeviceFixture, NocRead_L1_Aligned_NoViolation) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 

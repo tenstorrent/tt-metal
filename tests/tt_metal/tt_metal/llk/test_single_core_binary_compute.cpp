@@ -38,6 +38,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -451,7 +452,7 @@ bool single_core_binary(
     };
     experimental::SetProgramRunArgs(program, params);
 
-    auto* dev = mesh_device->get_devices()[0];
+    auto* dev = mesh_device->impl().get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     return read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus);

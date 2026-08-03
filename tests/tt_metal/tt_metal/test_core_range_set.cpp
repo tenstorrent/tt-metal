@@ -21,6 +21,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
 #include "impl/program/program_impl.hpp"
@@ -91,7 +92,7 @@ void check_semaphores_are_initialized(
 }  // namespace
 
 TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     Program program = CreateProgram();
 
     CoreRange core_range_one({0, 0}, {1, 1});

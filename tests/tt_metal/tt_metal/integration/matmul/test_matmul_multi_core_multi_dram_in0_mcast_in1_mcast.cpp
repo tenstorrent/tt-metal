@@ -41,6 +41,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -505,7 +506,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(const std::shared_ptr<dist
     auto activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     pass &= move_tiles_to_dram(device, activations, M, K, in0_dram_addr);
 
     auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);

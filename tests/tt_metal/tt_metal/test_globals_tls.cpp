@@ -13,6 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -32,7 +33,7 @@ constexpr uint32_t TOTAL_RESULT_BYTES = NUM_DM_CORES * TLS_CHECK_RESULT_SLOT_BYT
 // This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     const uint32_t signal_address = 100 * 1024;
     const uint32_t l1_result_addr = 200 * 1024;
@@ -278,7 +279,7 @@ static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {

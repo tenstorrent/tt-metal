@@ -20,6 +20,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "impl/context/metal_context.hpp"
 #include "device_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -35,7 +36,7 @@ TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto& mesh_device = this->devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
 
     // Pin a low lowest_occupied_compute_l1_address by allocating a 1 MB L1
@@ -89,7 +90,7 @@ TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
 TEST_F(MeshDeviceFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
 
     const auto& hal = MetalContext::instance().hal();
@@ -170,7 +171,7 @@ TEST_F(MeshDeviceFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
 TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
 
     // A tiny 2-page CB leaves the vast majority of L1 free; no clash possible.

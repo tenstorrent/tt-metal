@@ -34,6 +34,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -281,7 +282,7 @@ void run_alias_dfb_program(
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
@@ -445,7 +446,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAddressEquality1Sx1S) {
 
     Program program = MakeProgramFromSpec(*devices_.at(0), spec);
 
-    IDevice* device = devices_.at(0)->get_devices()[0];
+    IDevice* device = devices_.at(0)->impl().get_devices()[0];
     detail::CompileProgram(device, program);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(device);
@@ -494,7 +495,7 @@ TEST_F(MeshDeviceFixture, AliasDFBDataFlow4Sx2S) {
 }
 
 TEST_F(MeshDeviceFixture, AliasDFBAllocSecondarySkipped) {
-    IDevice* device = devices_.at(0)->get_devices()[0];
+    IDevice* device = devices_.at(0)->impl().get_devices()[0];
     const CoreCoord core{0, 0};
 
     const auto cfg_a = make_1sx1s_config(512, 8);
@@ -525,7 +526,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAllocSecondarySkipped) {
 }
 
 TEST_F(MeshDeviceFixture, AliasDFBAlloc3Way) {
-    IDevice* device = devices_.at(0)->get_devices()[0];
+    IDevice* device = devices_.at(0)->impl().get_devices()[0];
     const CoreCoord core{0, 0};
 
     const auto cfg_a = make_1sx1s_config(512,  8);
@@ -556,7 +557,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAlloc3Way) {
 }
 
 TEST_F(MeshDeviceFixture, AliasDFBAgreedGroupResize) {
-    IDevice* device = devices_.at(0)->get_devices()[0];
+    IDevice* device = devices_.at(0)->impl().get_devices()[0];
     const CoreCoord core{0, 0};
 
     // Two aliased DFBs starting at equal total size (4096 B), plus a trailing non-aliased DFB to
@@ -609,7 +610,7 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
 
     Program program = MakeProgramFromSpec(*devices_.at(0), spec);
 
-    IDevice* device = devices_.at(0)->get_devices()[0];
+    IDevice* device = devices_.at(0)->impl().get_devices()[0];
     detail::CompileProgram(device, program);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(device);
@@ -714,7 +715,7 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    IDevice* device = devices_.at(0)->get_devices()[0];
+    IDevice* device = devices_.at(0)->impl().get_devices()[0];
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;

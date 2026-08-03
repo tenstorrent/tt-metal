@@ -22,6 +22,7 @@
 #include "impl/context/metal_context.hpp"
 #include "common/mesh_dispatch_fixture.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -49,7 +50,7 @@ protected:
             GTEST_SKIP() << "RISCV Atomics not supported on Wormhole";
         }
         mesh_device_ = devices_[0];
-        device_ = mesh_device_->get_devices()[0];
+        device_ = mesh_device_->impl().get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;

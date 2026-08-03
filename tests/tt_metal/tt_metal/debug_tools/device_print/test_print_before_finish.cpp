@@ -19,6 +19,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the finish command can wait for the last dprint.
@@ -39,7 +40,7 @@ void RunTest(DevicePrintFixture* fixture, const std::shared_ptr<distributed::Mes
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};

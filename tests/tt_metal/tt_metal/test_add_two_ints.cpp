@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -22,7 +23,7 @@ using namespace tt::tt_metal;
 // Result is read from L1
 ////////////////////////////////////////////////////////////////////////////
 TEST_F(MeshDeviceSingleCardFixture, AddTwoInts) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     uint32_t l1_unreserved_base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     Program program = CreateProgram();

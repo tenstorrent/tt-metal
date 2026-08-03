@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/rtoptions.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -46,7 +47,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(16, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->impl().get_devices()[0], node, l1_address, init_values);
 
     const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
@@ -88,7 +89,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
 
     std::vector<uint32_t> actual_values(16, 0);
     tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], node, l1_address, 16 * sizeof(uint32_t), actual_values);
+        mesh_device->impl().get_devices()[0], node, l1_address, 16 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9, 8, 10, 9, 13, 12, 14, 13, 17, 16, 18, 17, 21};
 
@@ -123,7 +124,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(4, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->impl().get_devices()[0], node, l1_address, init_values);
 
     const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
@@ -165,7 +166,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
 
     std::vector<uint32_t> actual_values(4, 0);
     tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], node, l1_address, 4 * sizeof(uint32_t), actual_values);
+        mesh_device->impl().get_devices()[0], node, l1_address, 4 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9};
 

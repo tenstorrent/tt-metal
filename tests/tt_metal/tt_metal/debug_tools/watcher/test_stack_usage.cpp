@@ -18,6 +18,7 @@
 #include <vector>
 #include <optional>
 #include "impl/kernels/kernel.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -39,7 +40,7 @@ void RunOneTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     CoreCoord coord = {0, 0};
     std::vector<uint32_t> compile_args{free};

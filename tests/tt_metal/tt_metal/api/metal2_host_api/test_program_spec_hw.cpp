@@ -30,6 +30,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "test_helpers.hpp"
 #include "impl/program/program_impl.hpp"  // ScratchpadBaseReDeliveredAfterDfbResize: DFB allocated-address query
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -76,7 +77,7 @@ protected:
 
 TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     // Test parameters
     constexpr uint32_t entry_size = 1024;  // bytes per DFB entry
@@ -218,7 +219,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
 
 TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;
     constexpr uint32_t num_entries_in_dfb = 4;
@@ -338,7 +339,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
 TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;  // CTA value folded into the XOR (not a DFB size)
     constexpr uint32_t num_tiles = 8;      // CRTA value folded into the XOR
@@ -412,7 +413,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
 
 TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;
     constexpr uint32_t num_entries_in_dfb = 4;
@@ -501,7 +502,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
 
 TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;  // CTA value folded into the XOR (not a DFB size)
     constexpr uint32_t num_tiles = 8;      // CRTA value folded into the XOR
@@ -566,7 +567,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 
 TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     const NodeCoord node{0, 0};
 
@@ -649,7 +650,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 
 TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     // Tensor: 8 pages × 1024 bytes (BFLOAT16, ROW_MAJOR, shape {8, 512} → page = row = 1024 B)
     constexpr uint32_t num_pages = 8;
@@ -783,7 +784,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 
 TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t kReportAddr = 100 * 1024;  // host-known fixed L1 addr (same idiom as ScratchpadWriteReadback)
     constexpr uint32_t kNumReportWords = 4;
@@ -894,7 +895,7 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
 // real, writable, node-local L1" and "the framework delivered its base address to the kernel".
 TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t kScratchpadBytes = 64;                            // 16 x uint32_t
     constexpr uint32_t kNumElems = kScratchpadBytes / sizeof(uint32_t);  // 16
@@ -995,7 +996,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 //            MULTI-WORD binding in the middle (River's original had named=0, binding=0).
 TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;  // bytes per DFB entry
     constexpr uint32_t num_entries = 4;    // DFB depth
@@ -1214,7 +1215,7 @@ void kernel_main() {
 // (base_B == base_A → the NE check fails) and its pattern write lands inside the grown DFB's region.
 TEST_F(ProgramSpecHWTest, ScratchpadBaseReDeliveredAfterDfbResize) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;      // bytes per DFB entry (constant)
     constexpr uint32_t num_entries_small = 2;  // initial DFB depth

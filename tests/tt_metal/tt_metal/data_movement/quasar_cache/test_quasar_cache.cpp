@@ -10,6 +10,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -39,8 +40,7 @@ struct L2FlushTestConfig {
 bool run_l2_flush_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const L2FlushTestConfig& config) {
-
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     constexpr CoreCoord core = {0, 0};
     const experimental::NodeCoord node{0, 0};
 
@@ -126,8 +126,7 @@ struct L1DCacheTestConfig {
 bool run_l1_dcache_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const L1DCacheTestConfig& config) {
-
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     constexpr CoreCoord core = {0, 0};
     const experimental::NodeCoord node{0, 0};
 

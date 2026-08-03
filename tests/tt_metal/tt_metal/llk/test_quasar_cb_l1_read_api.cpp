@@ -14,6 +14,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -38,7 +39,7 @@ const std::vector<DataT> EXPECTED_RESULT = {VAL0, VAL1, VAL2, VAL3, VAL2};
 // them back through both APIs. Reading tile_index 1 exercises the per-tile stride term.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
     auto mesh_device = devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);

@@ -5,6 +5,7 @@
 // Multi-core and multi-DFB (concurrent/sequential) tests (Metal 2.0).
 
 #include "dfb_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -17,10 +18,10 @@ static void run_single_dfb_multicore_2_0(
     m2::DFBAccessPattern pap,
     m2::DFBAccessPattern cap,
     bool implicit_sync) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
     if (grid.x * grid.y < 2) {
         GTEST_SKIP() << "Multi-core test requires >= 2 Tensix cores";
@@ -124,14 +125,14 @@ static void run_concurrent_dfbs_program_2_0(
     uint32_t entry_size,
     uint32_t entries_per_dfb,
     bool implicit_sync) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Concurrent DFB tests require Quasar";
     }
     if (2 * num_dfbs > 6) {
         GTEST_SKIP() << "2*num_dfbs must fit in 6 Quasar DM threads";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     const m2::NodeCoord node{0, 0};
 
     // One big DRAM tensor sliced num_dfbs ways for input + same for output.
@@ -235,13 +236,13 @@ static void run_sequential_4_dfbs_2_0(
     uint32_t num_producers,
     uint32_t num_consumers,
     bool implicit_sync) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Sequential 4-DFB test requires Quasar";
     }
     if (num_producers + num_consumers > 6) {
         GTEST_SKIP() << "num_p + num_c must fit in 6 Quasar DM threads";
     }
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;
     // num_entries must be divisible by both num_producers and num_consumers.
@@ -422,11 +423,11 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_Mixed_2_0) {
 
 TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
     const bool implicit_sync = GetParam();
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t num_dfbs = 4;
     constexpr uint32_t entry_size = 1024;
@@ -570,10 +571,10 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
 // homogeneous-grid multi-core group test
 TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
     if (grid.x < 2 || grid.y < 2) {
         GTEST_SKIP() << "Homogeneous-grid test requires >= 2x2 Tensix grid";

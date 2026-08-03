@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <distributed/mesh_device_impl.hpp>
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -59,5 +60,6 @@ TEST_F(MeshDeviceSingleCardFixture, InterleavedL1Buffer) {
     int num_bank_pages_one = 258;
     int num_bank_pages_two = 378;
 
-    test_interleaved_l1_buffer_impl(devices_[0]->get_devices()[0], num_bank_pages_one, num_bank_pages_two, page_size);
+    test_interleaved_l1_buffer_impl(
+        devices_[0]->impl().get_devices()[0], num_bank_pages_one, num_bank_pages_two, page_size);
 }

@@ -27,6 +27,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 const std::string mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 const std::string drainer_kernel_src =
@@ -380,7 +381,7 @@ int main(int argc, char** argv) {
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device = mesh_device_map.at(0 /* chip_id */);
     // need device handle to do L1 read/writes
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt::tt_metal::distributed::MeshWorkload mesh_workload;

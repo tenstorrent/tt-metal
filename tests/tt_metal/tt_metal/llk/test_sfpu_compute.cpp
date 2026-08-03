@@ -46,6 +46,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/int8.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -681,12 +682,12 @@ std::vector<uint32_t> run_sfpu_pipeline(
     const size_t out_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
     tt::tt_metal::InterleavedBufferConfig in_dram{
-        .device = mesh_device->get_devices()[0],
+        .device = mesh_device->impl().get_devices()[0],
         .size = in_bytes,
         .page_size = in_bytes,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
     tt::tt_metal::InterleavedBufferConfig out_dram{
-        .device = mesh_device->get_devices()[0],
+        .device = mesh_device->impl().get_devices()[0],
         .size = out_bytes,
         .page_size = out_bytes,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -967,7 +968,7 @@ std::vector<uint32_t> sfpu_quasar_run(
     const experimental::ProgramRunArgs& params,
     const std::vector<std::pair<std::shared_ptr<tt::tt_metal::Buffer>, const std::vector<uint32_t>*>>& inputs,
     const std::shared_ptr<tt::tt_metal::Buffer>& out_buf) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto program = experimental::MakeProgramFromSpec(*mesh_device, spec);
     experimental::SetProgramRunArgs(program, params);
     for (const auto& [buf, data] : inputs) {
@@ -993,7 +994,7 @@ std::vector<uint32_t> sfpu_quasar_run(
 /// @return
 bool run_sfpu_binary_two_input_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const size_t per_buffer_byte_size_input = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
     const size_t per_buffer_byte_size_output = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
@@ -1177,7 +1178,7 @@ bool run_sfpu_binary_two_input_buffer(
 bool run_sfpu_ternary_three_input_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
     const size_t per_buffer_byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device,

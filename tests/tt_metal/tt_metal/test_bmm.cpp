@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using std::vector;
 using namespace tt;
@@ -201,7 +202,7 @@ bool validate_bmm_result(
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto& mesh_device = *devices_[0];
-    IDevice* dev = mesh_device.get_devices()[0];
+    IDevice* dev = mesh_device.impl().get_devices()[0];
 
     BmmParams p;
     if (dev->arch() != ARCH::QUASAR) {
@@ -279,7 +280,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";
     }
 
-    IDevice* dev = mesh_device.get_devices()[0];
+    IDevice* dev = mesh_device.impl().get_devices()[0];
 
     BmmParams p;
     p.Mt = 2; p.Kt = 2; p.Nt = 2;

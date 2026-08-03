@@ -67,6 +67,7 @@
 #include "common/env_lib.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -219,7 +220,7 @@ protected:
 TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     const auto target = MetalContext::instance().get_cluster().get_target_device_type();
 
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     if (use_mock_mode()) {
         TT_FATAL(

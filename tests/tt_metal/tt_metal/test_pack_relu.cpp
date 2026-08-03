@@ -16,6 +16,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -40,7 +41,7 @@ static void run_pack_relu_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t relu_config,
     const std::function<float(float)>& golden_fn) {
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     uint32_t single_tile_size = 2 * 1024;

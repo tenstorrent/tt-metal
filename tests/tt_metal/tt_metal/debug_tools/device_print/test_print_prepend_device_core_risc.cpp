@@ -23,6 +23,7 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are prepended with their corresponding device, core and RISC.
@@ -38,7 +39,8 @@ void UpdateGoldenOutput(
     const std::string& risc) {
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine. CoreCoord::str() formats as "x-y".
-    const std::string& device_core_risc = std::to_string(mesh_device->get_devices()[0]->id()) + ":?-?:" + risc + ": ";
+    const std::string& device_core_risc =
+        std::to_string(mesh_device->impl().get_devices()[0]->id()) + ":?-?:" + risc + ": ";
 
     const std::string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);
@@ -62,7 +64,7 @@ void RunTest(
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     CreateKernel(
         program_,
@@ -130,11 +132,11 @@ TEST_F(DevicePrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (auto& mesh_device : this->devices_) {
-        if (mesh_device->get_devices()[0]->get_active_ethernet_cores(true).empty()) {
+        if (mesh_device->impl().get_devices()[0]->get_active_ethernet_cores(true).empty()) {
             log_info(
                 tt::LogTest,
                 "Skipping device {} due to no active ethernet cores...",
-                mesh_device->get_devices()[0]->id());
+                mesh_device->impl().get_devices()[0]->id());
             continue;
         }
         this->RunTestOnDevice(

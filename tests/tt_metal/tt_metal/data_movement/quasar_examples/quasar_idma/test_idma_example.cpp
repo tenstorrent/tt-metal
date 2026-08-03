@@ -8,6 +8,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -94,7 +95,7 @@ bool run_idma_basic_test(const std::shared_ptr<distributed::MeshDevice>& mesh_de
     constexpr uint32_t total_bytes = num_elements * elem_size;
     constexpr uint32_t num_words = total_bytes / sizeof(uint32_t);
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     auto buffers = make_idma_src_dst_buffers(mesh_device, total_bytes);
     const uint32_t src_base = buffers.src->address();
     const uint32_t dst_base = buffers.dst->address();
@@ -142,7 +143,7 @@ bool run_idma_1d_strided_test(const std::shared_ptr<distributed::MeshDevice>& me
     constexpr uint32_t src_num_words = (num_elements * src_stride) / sizeof(uint32_t);
     constexpr uint32_t dst_num_words = (num_elements * elem_size) / sizeof(uint32_t);
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     std::vector<uint32_t> src_data(src_num_words);
     for (uint32_t i = 0; i < src_num_words; i++) {

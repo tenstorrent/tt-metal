@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "debug_tools_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -38,7 +39,7 @@ protected:
         }
         MeshWatcherFixture::SetUp();
         mesh_device = devices_[0];
-        device = mesh_device->get_devices()[0];
+        device = mesh_device->impl().get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         is_quasar = arch_ == tt::ARCH::QUASAR;
         // On Quasar, DM0/DM1 are reserved for internal use; user kernels can only land on DM2..DM7.

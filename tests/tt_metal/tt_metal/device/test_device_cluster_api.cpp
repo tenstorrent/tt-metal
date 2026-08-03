@@ -17,6 +17,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::unit_tests::multichip::cluster {
 
@@ -29,8 +30,8 @@ using namespace tt::test_utils;
 TEST_F(N300MeshDeviceFixture, EthValidateEthernetConnectivity) {
     const auto& mesh_device_0 = this->devices_.at(0);
     const auto& mesh_device_1 = this->devices_.at(1);
-    auto* device_0 = mesh_device_0->get_devices()[0];
-    auto* device_1 = mesh_device_1->get_devices()[0];
+    auto* device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* device_1 = mesh_device_1->impl().get_devices()[0];
 
     // Check active and inactive core counts
     const auto& device_0_active_eth_cores = device_0->get_active_ethernet_cores();
@@ -92,7 +93,7 @@ TEST_F(N300MeshDeviceFixture, EthValidateEthernetConnectivity) {
 
 TEST_F(N300MeshDeviceFixture, EthInvalidLogicalEthernetCore) {
     const auto& mesh_device_0 = this->devices_.at(0);
-    auto* device_0 = mesh_device_0->get_devices()[0];
+    auto* device_0 = mesh_device_0->impl().get_devices()[0];
     EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core(CoreCoord(1, 0)));
     EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core(CoreCoord(0, 16)));
 }
@@ -117,7 +118,7 @@ TEST_F(N300MeshDeviceFixture, EthValidateAllEthernetCoreMapping) {
         {CoreCoord(0, 15), CoreCoord(21, 17)},
     };
     const auto& mesh_device_0 = this->devices_.at(0);
-    auto* device_0 = mesh_device_0->get_devices()[0];
+    auto* device_0 = mesh_device_0->impl().get_devices()[0];
     for (const auto& logical_core : device_0->ethernet_cores()) {
         ASSERT_TRUE(
             device_0->ethernet_core_from_logical_core(logical_core) ==
@@ -145,7 +146,7 @@ TEST_F(N300MeshDeviceFixture, EthValidatePhysicalCoreConversion) {
         {CoreCoord(0, 15), CoreCoord(21, 17)},
     };
     const auto& mesh_device_0 = this->devices_.at(0);
-    auto* device_0 = mesh_device_0->get_devices()[0];
+    auto* device_0 = mesh_device_0->impl().get_devices()[0];
     for (const auto& logical_core : device_0->ethernet_cores()) {
         ASSERT_TRUE(
             device_0->virtual_core_from_logical_core(logical_core, CoreType::ETH) ==
@@ -158,8 +159,8 @@ TEST_F(N300MeshDeviceFixture, EthValidatePhysicalCoreConversion) {
 TEST_F(N300MeshDeviceFixture, ActiveEthValidateEthernetSockets) {
     const auto& mesh_device_0 = this->devices_.at(0);
     const auto& mesh_device_1 = this->devices_.at(1);
-    auto* device_0 = mesh_device_0->get_devices()[0];
-    auto* device_1 = mesh_device_1->get_devices()[0];
+    auto* device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* device_1 = mesh_device_1->impl().get_devices()[0];
 
     std::vector<CoreCoord> device_0_sockets = device_0->get_ethernet_sockets(1);
     std::vector<CoreCoord> device_1_sockets = device_1->get_ethernet_sockets(0);

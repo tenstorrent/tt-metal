@@ -46,6 +46,7 @@
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -81,7 +82,7 @@ DfbInitTimingBenchContext create_dfb_init_timing_bench_context() {
 
     DfbInitTimingBenchContext ctx;
     ctx.mesh_device = id_to_device.begin()->second;
-    ctx.device = ctx.mesh_device->get_devices()[0];
+    ctx.device = ctx.mesh_device->impl().get_devices()[0];
     return ctx;
 }
 

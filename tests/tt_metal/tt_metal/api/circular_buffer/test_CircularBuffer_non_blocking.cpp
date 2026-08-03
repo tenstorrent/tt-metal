@@ -26,6 +26,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt::tt_metal;
 
@@ -39,7 +40,7 @@ std::vector<std::shared_ptr<Buffer>> create_output_buffers(
     distributed::MeshWorkload& /*workload*/, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     std::vector<std::shared_ptr<Buffer>> output_buffers;
     output_buffers.reserve(n_cbs);

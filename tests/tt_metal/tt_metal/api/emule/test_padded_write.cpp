@@ -14,6 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
 #include "impl/emulation/host_sanitizers.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -24,7 +25,7 @@ TEST_F(MeshDeviceFixture, Tensor_Padding_Violation_SanityCheck) {
     GTEST_SKIP() << "Temporarily disabled. See SANITIZER_CHECKS.md for details.";
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto* device = this->devices_.at(0)->impl().get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <llrt/tt_cluster.hpp>
 #include "tests/tt_metal/tt_fabric/common/fabric_worker_kernel_helpers.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_fabric::test_utils {
 
@@ -55,7 +56,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     auto program = std::make_shared<tt_metal::Program>();
 
     // Use first device
-    auto* src_physical_device = device->get_devices()[0];
+    auto* src_physical_device = device->impl().get_devices()[0];
     // Get source fabric node ID from logical first device
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     FabricNodeId src_fabric_node = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device->id());
@@ -130,7 +131,7 @@ void signal_worker_teardown(
     std::vector<uint32_t> data = {WORKER_TEARDOWN};
 
     // Get the actual device where the kernel is running (first device in mesh)
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     auto virtual_core = mesh_device->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
 

@@ -28,6 +28,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -113,7 +114,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {
         auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            mesh_device->get_devices()[0]->id(), physical_core, buffer_1->address(), page_size_1);
+            mesh_device->impl().get_devices()[0]->id(), physical_core, buffer_1->address(), page_size_1);
         EXPECT_TRUE(std::equal(input_1_it, input_1_it + page_size_1 / sizeof(uint32_t), readback.begin()));
         input_1_it += page_size_1 / sizeof(uint32_t);
     }
@@ -138,7 +139,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto input_2_it = input_2.begin();
     for (const auto& physical_core : physical_cores_2) {
         auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            mesh_device->get_devices()[0]->id(), physical_core, buffer_3->address(), page_size_2);
+            mesh_device->impl().get_devices()[0]->id(), physical_core, buffer_3->address(), page_size_2);
         EXPECT_TRUE(std::equal(input_2_it, input_2_it + page_size_2 / sizeof(uint32_t), readback.begin()));
         input_2_it += page_size_2 / sizeof(uint32_t);
     }

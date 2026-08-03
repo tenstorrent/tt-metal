@@ -41,6 +41,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -376,7 +377,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bfloat16 identity
     auto golden = tt_metal::select_columns(tensor.get_values(), M, K, N);
 
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto
         [workload,
          mm_reader_kernel_sender,

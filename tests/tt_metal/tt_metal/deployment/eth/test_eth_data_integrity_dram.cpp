@@ -13,6 +13,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -228,7 +229,7 @@ static bool run_test_integrity_dram(
     };
     wait_to_finish_eth_timeout_cores(fixture, cores, programs);
 
-    auto* const send_device = send_mesh_device->get_devices()[0];
+    auto* const send_device = send_mesh_device->impl().get_devices()[0];
     double threshold = get_eth_bw() * 0.5;
 
     bool pass = true;
@@ -252,9 +253,9 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet03DataIntegrityDram) {
     ASSERT_TRUE(ensure_links(devices_));
 
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
 
             log_info(
                 tt::LogTest,

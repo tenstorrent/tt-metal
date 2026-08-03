@@ -20,6 +20,7 @@
 #include "impl/context/metal_context.hpp"
 #include "device_fixture.hpp"
 #include "metal2_host_api/test_helpers.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -75,7 +76,7 @@ class KernelThreadSyncTest : public tt::tt_metal::MeshDeviceFixture {};
 
 TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     NodeCoord node{0, 0};
 
     // Arch-specific config: kernels to launch, one scratch layout per kernel,

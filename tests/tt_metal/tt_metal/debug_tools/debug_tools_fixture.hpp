@@ -17,6 +17,7 @@
 #include <cerrno>
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
+#include <distributed/mesh_device_impl.hpp>
 
 // Access to internal API: BuildEnvManager, CompileProgram, get_kernel
 #include "jit_build/build_env_manager.hpp"
@@ -59,11 +60,11 @@ protected:
         // and a hung core will fail that check. Tensix/DRAM cores don't need this.
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         for (auto& [device_id, device] : id_to_device_) {
-            for (const auto& logical_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
+            for (const auto& logical_core : device->impl().get_devices()[0]->get_inactive_ethernet_cores()) {
                 CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-                    device->get_devices()[0]->id(), logical_core, CoreType::ETH);
+                    device->impl().get_devices()[0]->id(), logical_core, CoreType::ETH);
                 cluster.assert_risc_reset_at_core(
-                    tt_cxy_pair(device->get_devices()[0]->id(), virtual_core), tt::umd::RiscType::ALL);
+                    tt_cxy_pair(device->impl().get_devices()[0]->id(), virtual_core), tt::umd::RiscType::ALL);
             }
         }
 
@@ -339,7 +340,7 @@ public:
         KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, config);
 
         SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         detail::CompileProgram(device, program_);
 
         // Find compiled kernel and extract format string from it to compare with expected_format_message

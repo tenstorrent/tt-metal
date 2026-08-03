@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/kernels/kernel.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -41,7 +42,7 @@ TEST_F(MeshDeviceSingleCardFixture, StreamScratchRegisterTensixCores) {
 TEST_F(MeshDeviceSingleCardFixture, StreamScratchRegisterEriscCores) {
     // Get device from fixture
     auto mesh_device = this->devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Check if device has active ethernet cores
     if (device->get_active_ethernet_cores(true).empty()) {

@@ -26,6 +26,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt::tt_metal;
 
@@ -88,7 +89,7 @@ namespace local_test_functions {
 template <typename T>
 std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                                             .device = device,
                                             .size = test_config.size_bytes,
@@ -150,7 +151,7 @@ bool l1_buffer_read_write(const std::shared_ptr<distributed::MeshDevice>& mesh_d
 template <typename T>
 std::shared_ptr<Buffer> make_height_sharded_l1_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     return CreateBuffer(tt::tt_metal::ShardedBufferConfig{
         .device = device,
         .size = test_config.size_bytes,
@@ -215,7 +216,7 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_WritesOnlyFilteredCores) 
             ttsl::Span<const uint8_t>(
                 reinterpret_cast<const uint8_t*>(newest.data()), newest.size() * sizeof(uint32_t)),
             filter);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->impl().get_devices()[0]->id());
         std::vector<uint32_t> output;
         tt::tt_metal::detail::ReadFromBuffer(buffer, output);
         auto expected =
@@ -239,7 +240,7 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_EmptyFilterIsNoop) {
             ttsl::Span<const uint8_t>(
                 reinterpret_cast<const uint8_t*>(newest.data()), newest.size() * sizeof(uint32_t)),
             empty_filter);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->impl().get_devices()[0]->id());
         std::vector<uint32_t> output;
         tt::tt_metal::detail::ReadFromBuffer(buffer, output);
         EXPECT_EQ(output, sentinel);
@@ -265,7 +266,7 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_FullFilterMatchesUnfilter
             *buffer_b,
             ttsl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(uint32_t)),
             full_filter);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->impl().get_devices()[0]->id());
         std::vector<uint32_t> out_a;
         std::vector<uint32_t> out_b;
         tt::tt_metal::detail::ReadFromBuffer(buffer_a, out_a);
@@ -336,7 +337,7 @@ TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
         for (const auto& core : cores) {
             physical_cores.push_back(mesh_device->worker_core_from_logical_core(core));
         }
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         uint32_t page_size = tt::constants::TILE_HW * sizeof(uint32_t);
         uint32_t total_size = cores.size() * page_size;
         auto buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{

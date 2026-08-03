@@ -46,6 +46,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -204,7 +205,7 @@ inline void run_single_dfb_program_2_0(
     // path is arch-agnostic (only the implicit async_read/write<TXN_ID> path is #ifdef ARCH_QUASAR).
     // So the simple 1x1 explicit-sync cases run on WH/BH too; only implicit-sync and multi-core
     // are Quasar-only (mirrors the legacy DFB_SKIP_IF_UNSUPPORTED gate).
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR &&
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR &&
         (p.implicit_sync || p.num_producers > 1 || p.num_consumers > 1)) {
         GTEST_SKIP() << "M2 non-Quasar: only 1x1 explicit-sync DFB runs on WH/BH "
                         "(implicit-sync + multi-core are Quasar-only)";
@@ -224,7 +225,7 @@ inline void run_single_dfb_program_2_0(
         GTEST_SKIP() << "ALL DM consumer with implicit_sync not supported (legacy parity)";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     const m2::NodeCoord node{0, 0};
     const uint32_t entries_per_core = p.num_entries_in_buffer.value_or(p.num_entries);
     const bool is_all = (p.cap == m2::DFBAccessPattern::ALL);
@@ -310,7 +311,7 @@ inline void run_single_dfb_program_2_0(
     // a Gen2 config, so mirror the legacy driver -- DM producer -> RISCV_0, DM consumer ->
     // RISCV_1/NOC_1, Tensix -> ComputeGen1. The make_*_kernel helpers default to Gen2; override
     // to Gen1 on WH/BH here (only 1x1 explicit-sync cases reach WH/BH per the skip gate above).
-    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() == ARCH::QUASAR) {
         // Gen2 implicit-sync opt-out (#45160): only DM endpoints carry the per-kernel flag; for
         // ImplicitSyncFalse it keeps the host from programming implicit ISR/txn metadata over the
         // kernels' explicit credit-flow path. Tensix endpoints have no DM side.

@@ -5,6 +5,7 @@
 // Intra-scope (self-loop) DFB tests.
 
 #include "dfb_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -14,7 +15,7 @@ static void run_intra_tensix_dfb_program(
     uint32_t entry_size,
     uint32_t num_entries,
     uint32_t num_threads) {
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     experimental::dfb::DataflowBufferConfig dfb_config{
         .entry_size = entry_size,
@@ -130,11 +131,11 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB4Sx4S) {
 // Metal 2.0 intra: DM->Trisc self-loop double-relu
 TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "C2 INTRA-scope DFB self-loop requires Quasar";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
     constexpr uint32_t num_entries = 4;
     const m2::NodeCoord node{0, 0};
@@ -256,10 +257,10 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
 // Metal 2.0 intra-Tensix self-loop harness + test
 static void run_intra_tensix_dfb_program_2_0(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t entry_size, uint32_t num_threads) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 INTRA test is Quasar-only";
     }
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t num_entries = 16;  // matches legacy
     TT_FATAL(num_entries % num_threads == 0, "num_entries must be divisible by num_threads");
@@ -341,10 +342,10 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1S_2_0) {
 // Metal 2.0 intra + remapper coexistence
 TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;
     constexpr uint32_t num_entries = 16;

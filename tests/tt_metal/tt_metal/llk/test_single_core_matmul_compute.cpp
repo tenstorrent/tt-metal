@@ -44,6 +44,7 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -364,7 +365,7 @@ bool single_tile_matmul(
     const uint32_t in1_tile_size = tt::tile_size(in1_fmt);
     const uint32_t out_tile_size = tt::tile_size(out_fmt);
 
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -525,7 +526,7 @@ bool single_block_matmul(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
         .device = device,
@@ -691,7 +692,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
         .device = device,

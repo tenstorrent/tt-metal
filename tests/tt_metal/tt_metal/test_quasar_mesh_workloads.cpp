@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -116,7 +117,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSingleWorkloadNonBlockingEnqueueFi
     }
 
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
@@ -154,7 +155,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMultipleWorkloadsNonBlockingEnqueu
     }
 
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
@@ -209,7 +210,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, TestInterleavedWorkloadsAcrossT
     }
 
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(

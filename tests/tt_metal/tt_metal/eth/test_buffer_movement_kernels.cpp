@@ -41,6 +41,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -72,8 +73,8 @@ bool chip_to_chip_dram_buffer_transfer(
     const DataMovementProcessor& processor) {
     bool pass = true;
 
-    auto* sender_device = sender_mesh_device->get_devices()[0];
-    auto* receiver_device = receiver_mesh_device->get_devices()[0];
+    auto* sender_device = sender_mesh_device->impl().get_devices()[0];
+    auto* receiver_device = receiver_mesh_device->impl().get_devices()[0];
 
     distributed::DeviceLocalBufferConfig sender_dram_config{
         .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
@@ -375,7 +376,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     }
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
-    auto* const sender_device = sender_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -425,7 +426,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
     }
     const auto& sender_mesh_device = devices_.at(1);
     const auto& receiver_mesh_device = devices_.at(0);
-    auto* const sender_device = sender_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -473,8 +474,8 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
-    auto* const sender_device = sender_mesh_device->get_devices()[0];
-    auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
+    auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
@@ -560,9 +561,9 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
     uint32_t page_size = 2 * 32 * 32;
     uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
@@ -650,9 +651,9 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
@@ -726,9 +727,9 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }

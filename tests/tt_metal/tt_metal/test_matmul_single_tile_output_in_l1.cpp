@@ -17,13 +17,14 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};

@@ -35,6 +35,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -50,7 +51,7 @@ protected:
             GTEST_SKIP() << "DRAM programmable cores not enabled";
         }
         mesh_device_ = devices_[0].get();
-        device_ = mesh_device_->get_devices()[0];
+        device_ = mesh_device_->impl().get_devices()[0];
     }
 
     distributed::MeshDevice* mesh_device_{};

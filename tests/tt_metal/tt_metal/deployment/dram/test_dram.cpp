@@ -29,6 +29,7 @@
 
 #include <iomanip>
 #include <array>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -893,7 +894,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
         bool chip_pass = true;
 
         const auto& mesh_device = devices_[chip_index];
-        auto* const device = mesh_device->get_devices()[0];
+        auto* const device = mesh_device->impl().get_devices()[0];
 
         chip_summary.chips_tested = 1;
 
@@ -1172,7 +1173,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
         bool chip_pass = true;
 
         const auto& mesh_device = devices_[chip_index];
-        auto* const device = mesh_device->get_devices()[0];
+        auto* const device = mesh_device->impl().get_devices()[0];
 
         chip_summary.chips_tested = 1;
 
@@ -1510,7 +1511,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
         bool chip_pass = true;
 
         const auto& mesh_device = devices_[chip_index];
-        auto* const device = mesh_device->get_devices()[0];
+        auto* const device = mesh_device->impl().get_devices()[0];
 
         chip_summary.chips_tested = 1;
 

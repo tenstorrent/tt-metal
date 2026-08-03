@@ -35,6 +35,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "../metal2_host_api/test_helpers.hpp"
 #include "dfb_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -293,7 +294,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->impl().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
@@ -386,7 +387,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->impl().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
@@ -1591,12 +1592,12 @@ static inline void validate_multicore_dfb_groups_2_0(
 
 TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
     // 2-core test (nodes (0,0)..(1,0)): the Quasar 1x3 emu reports a 1x1
     // compute grid, so skip there.
-    CoreCoord grid = mesh_device->get_devices()[0]->compute_with_storage_grid_size();
+    CoreCoord grid = mesh_device->impl().get_devices()[0]->compute_with_storage_grid_size();
     if (grid.x < 2) {
         GTEST_SKIP() << "2-core test requires grid.x >= 2 (got " << grid.x << "x" << grid.y << ")";
     }
@@ -1638,12 +1639,12 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync_2_0) {
 
 TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
     // 2-core test (nodes (0,0)..(1,0)): the Quasar 1x3 emu reports a 1x1
     // compute grid, so skip there.
-    CoreCoord grid = mesh_device->get_devices()[0]->compute_with_storage_grid_size();
+    CoreCoord grid = mesh_device->impl().get_devices()[0]->compute_with_storage_grid_size();
     if (grid.x < 2) {
         GTEST_SKIP() << "2-core test requires grid.x >= 2 (got " << grid.x << "x" << grid.y << ")";
     }
@@ -1681,7 +1682,7 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync_2_0) {
 #define CONFIG_TC_TEST_2_0(name, prod, cons, num_p, num_c, pap_kind, cap_kind, exp_prod_tc, exp_cons_tc) \
     TEST_F(MeshDeviceFixture, name##_2_0) {                                                              \
         auto& mesh_device = this->devices_.at(0);                                                        \
-        if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {                                     \
+        if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {                              \
             GTEST_SKIP() << "M2 path is Quasar-only";                                                    \
         }                                                                                                \
         using namespace m2_config_test_helpers;                                                          \
@@ -1772,7 +1773,7 @@ TEST(TxnIdAllocatorTest, AllocatesTopDownFromDfbPool) {
 // land on {2, 3, 1} (divisibility-based selection).
 TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Implicit sync (and therefore the txn-id allocator) is Quasar-only";
     }
     using namespace m2_config_test_helpers;
@@ -1830,7 +1831,7 @@ TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
 //   ALL:     threshold = num_consumers * (num_entries / num_txn_ids)
 TEST_F(MeshDeviceFixture, B4_CachedThreshold_Config_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Implicit sync (and therefore threshold caching) is Quasar-only";
     }
     using namespace m2_config_test_helpers;
@@ -1885,7 +1886,7 @@ TEST_F(MeshDeviceFixture, B4_CachedThreshold_Config_2_0) {
 // (b) barely-divisible (only n=1 works) should succeed.
 TEST_F(MeshDeviceFixture, B10_NumEntriesDivisibility_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Txn-id allocator is Quasar-only";
     }
     using namespace m2_config_test_helpers;
@@ -1944,7 +1945,7 @@ TEST_F(MeshDeviceFixture, B10_NumEntriesDivisibility_2_0) {
 // INTRA self-loop config probe (legacy: TensixIntraTest1xDFB1Sx1SConfig).
 TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "INTRA scope is Quasar-only";
     }
     const m2::DFBSpecName DFB{"intra_dfb"};
@@ -1993,7 +1994,7 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
 // B6 — Producer access pattern = ALL is rejected.
 TEST_F(MeshDeviceFixture, B6_AllProducer_Rejected_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB validation tested on Quasar";
     }
     using namespace m2_config_test_helpers;
@@ -2026,7 +2027,7 @@ TEST_F(MeshDeviceFixture, B7_CB_DFB_Mix_Rejected_2_0) {
 // B8 — ALL consumer with num_consumers > 4 is rejected (Remapper has 4 clientR slots).
 TEST_F(MeshDeviceFixture, B8_FiveAllConsumers_Rejected_2_0) {
     auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device->impl().get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Remapper limit tested on Quasar";
     }
     using namespace m2_config_test_helpers;

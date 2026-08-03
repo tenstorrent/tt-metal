@@ -26,6 +26,7 @@
 #include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -191,7 +192,7 @@ TEST_F(DevicePrintCheckpointTest, CheckpointLoopAndDumpDest) {
 static void run_global_checkpoint(
     DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     using namespace dp_ckpt;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     size_t tile_size = tt::tile_size(FMT);
     size_t buf_sz = NUM_TILES * tile_size;
 

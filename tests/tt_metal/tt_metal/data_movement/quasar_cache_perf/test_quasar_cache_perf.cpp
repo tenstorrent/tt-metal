@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <cstdint>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -30,7 +31,7 @@ bool should_skip_test() { return std::getenv("TT_METAL_SIMULATOR") == nullptr; }
 // on a single DM core, then reads back and verifies the byte pattern landed.
 bool run_cache_write(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t size_bytes, std::uint32_t write_path) {
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     constexpr CoreCoord core = {0, 0};
     const experimental::NodeCoord node{0, 0};
 

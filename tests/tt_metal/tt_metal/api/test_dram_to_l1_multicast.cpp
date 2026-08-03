@@ -27,6 +27,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 
@@ -48,7 +49,7 @@ bool dram_to_l1_multicast(
     const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
 
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);

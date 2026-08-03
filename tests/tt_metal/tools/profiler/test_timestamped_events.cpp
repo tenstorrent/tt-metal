@@ -11,13 +11,14 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
 void RunFillUpAllBuffers(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count, bool fast_dispatch) {
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};

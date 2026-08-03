@@ -41,6 +41,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test is similar to test_matmul_large_block.
@@ -99,7 +100,7 @@ std::vector<std::uint32_t> transpose_tiles(
 }  // namespace
 
 TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     bool pass = true;
 
     try {

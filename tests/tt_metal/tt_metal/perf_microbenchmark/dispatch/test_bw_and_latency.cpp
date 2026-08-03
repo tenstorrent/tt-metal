@@ -42,6 +42,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -221,7 +222,7 @@ int main(int argc, char** argv) {
     try {
         auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0 /*device_id*/);
         auto& cq = mesh_device->mesh_command_queue();
-        auto device_id = mesh_device->get_devices()[0]->id();
+        auto device_id = mesh_device->impl().get_devices()[0]->id();
 
         auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
         tt_metal::Program program = tt_metal::CreateProgram();

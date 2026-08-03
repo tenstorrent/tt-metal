@@ -13,6 +13,7 @@
 #include "hw/inc/internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt/rtoptions.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -40,7 +41,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         log_error(tt::LogTest, "For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)");
     }
 
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;

@@ -36,6 +36,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -52,7 +53,7 @@ const uint32_t N_RANDS = 512;
 // Disabled because this test can hang the NoC due to hardware issues.
 // Uses detail::LaunchProgram which requires slow dispatch mode
 TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     // Use default test parameters
     uint32_t time_secs = DEFAULT_SECONDS;

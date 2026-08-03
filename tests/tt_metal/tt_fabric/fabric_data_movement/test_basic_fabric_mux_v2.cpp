@@ -26,6 +26,7 @@
 #include "fabric_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests::fabric_mux_v2_tests {
 
@@ -156,7 +157,7 @@ struct ReceiverDeviceContext {
     MuxDeployment receiver_mux_deployment;
 };
 
-ChipId get_physical_device_id(const MeshDevicePtr& device) { return device->get_devices()[0]->id(); }
+ChipId get_physical_device_id(const MeshDevicePtr& device) { return device->impl().get_devices()[0]->id(); }
 
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
@@ -671,7 +672,7 @@ std::vector<uint32_t> read_worker_status(
     const MeshDevicePtr& device, const tt::tt_metal::CoreCoord& logical_core, uint32_t test_results_address) {
     std::vector<uint32_t> worker_status;
     tt::tt_metal::detail::ReadFromDeviceL1(
-        device->get_devices()[0],
+        device->impl().get_devices()[0],
         logical_core,
         test_results_address,
         kTestResultsSizeBytes,

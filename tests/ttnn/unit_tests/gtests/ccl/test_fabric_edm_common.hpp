@@ -43,6 +43,7 @@
 #include <functional>
 #include <limits>
 #include <unordered_set>
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -608,7 +609,7 @@ bool RunPipelinedWorkersTest(
                 reader_kernels[stage],
                 {&device_tensors[stage]},
                 {page_size_bytes},
-                mesh_device->get_devices()[0],
+                mesh_device->impl().get_devices()[0],
                 0,  // link = 0, don't care, since we aren't specifying connections
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
@@ -621,7 +622,7 @@ bool RunPipelinedWorkersTest(
                 writer_kernels[stage],
                 {&device_tensors[stage + 1]},
                 {page_size_bytes},
-                mesh_device->get_devices()[0],
+                mesh_device->impl().get_devices()[0],
                 0,  // link = 0, don't care, since we aren't specifying connections
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},

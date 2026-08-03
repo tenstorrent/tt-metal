@@ -21,6 +21,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -40,7 +41,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         Program program;
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
 
         const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
@@ -81,7 +82,7 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
     Program program;
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 

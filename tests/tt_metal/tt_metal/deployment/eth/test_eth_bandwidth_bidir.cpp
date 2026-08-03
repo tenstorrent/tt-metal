@@ -13,6 +13,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -30,8 +31,8 @@ static bool run_test_bandwidth_bidir(
     DataMovementProcessor processor0,
     span<uint32_t> inputs) {
     /* =================== */
-    auto* const send_device = send_mesh_device->get_devices()[0];
-    auto* const recv_device = recv_mesh_device->get_devices()[0];
+    auto* const send_device = send_mesh_device->impl().get_devices()[0];
+    auto* const recv_device = recv_mesh_device->impl().get_devices()[0];
 
     TEST_PARAM(uint32_t, transfer_size, 160 * 1024, "ETH_TEST_TRANSFER_SIZE");
     TEST_PARAM(uint32_t, transfer_count, 20 << 10, "ETH_TEST_TRANSFER_COUNT");
@@ -127,9 +128,9 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidir) {
     ASSERT_TRUE(ensure_links(devices_));
 
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
 
             log_info(
                 tt::LogTest,

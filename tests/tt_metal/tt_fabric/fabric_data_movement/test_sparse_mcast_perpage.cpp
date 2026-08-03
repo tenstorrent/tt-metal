@@ -29,6 +29,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -150,7 +151,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
 
     std::vector<uint32_t> sender_status;
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+        sender_device->impl().get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -161,7 +162,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
     for (auto& [dev, _] : receiver_programs) {
         std::vector<uint32_t> recv_status;
         tt_metal::detail::ReadFromDeviceL1(
-            dev->get_devices()[0],
+            dev->impl().get_devices()[0],
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,

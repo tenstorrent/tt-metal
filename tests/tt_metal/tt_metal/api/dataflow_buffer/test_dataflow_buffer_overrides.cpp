@@ -5,6 +5,7 @@
 // DFB re-entry / entry-size / num-entries override runtime tests (legacy-only).
 
 #include "dfb_test_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -24,7 +25,7 @@ static void run_dfb_size_override_test(
     const std::vector<DfbSizeOverride>& launches,
     uint8_t num_producers = 1,
     uint8_t num_consumers = 1) {
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     const bool implicit_sync = (device->arch() == ARCH::QUASAR) && implicit_sync_param;
 
     // Per-thread compile-time loop bounds; the strided kernels split `workload` across the threads

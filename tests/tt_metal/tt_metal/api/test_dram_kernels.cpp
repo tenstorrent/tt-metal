@@ -19,6 +19,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -56,7 +57,7 @@ protected:
             GTEST_SKIP() << "DRAM programmable cores not enabled";
         }
         mesh_device_ = devices_[0].get();
-        device_ = mesh_device_->get_devices()[0];
+        device_ = mesh_device_->impl().get_devices()[0];
         device_range_ = distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));
         drisc_l1_base_ = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
         drisc_l1_noc_addr_ = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);

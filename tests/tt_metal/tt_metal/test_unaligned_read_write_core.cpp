@@ -31,6 +31,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test verifies that the slow dispatch path can perform device reads and writes when the page size is not a
@@ -41,7 +42,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     bool pass = true;
 
     try {

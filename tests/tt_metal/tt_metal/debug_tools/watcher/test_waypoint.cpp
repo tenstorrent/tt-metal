@@ -26,6 +26,7 @@
 #include <umd/device/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.
@@ -56,7 +57,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& hal = MetalContext::instance().hal();
     const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
     // Watcher waypoint kernels use Metal 2.0 on all architectures.
@@ -221,7 +222,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 }
 
 void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& hal = MetalContext::instance().hal();
     if (hal.get_arch() == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Metal 2.0 does not yet support ETH KernelSpecs";

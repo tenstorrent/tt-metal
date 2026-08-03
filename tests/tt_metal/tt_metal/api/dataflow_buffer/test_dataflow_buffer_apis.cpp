@@ -35,6 +35,7 @@
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/driver_atomics.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -44,7 +45,7 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
     using DataT = std::uint32_t;
 
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     if (device->arch() == ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar read_tile_value / get_tile_address on DFB is under debug; run on WH/BH";
     }
@@ -373,7 +374,7 @@ struct ExtentProbeParams {
 void run_extent_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ExtentProbeParams& params) {
     constexpr uint32_t extent_record_bytes = 8 * sizeof(uint32_t);
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     const bool is_quasar = device->arch() == ARCH::QUASAR;
 
     if (!is_quasar && (params.num_producers > 1 || params.num_consumers > 1)) {

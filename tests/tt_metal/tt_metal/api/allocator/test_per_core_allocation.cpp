@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -53,7 +54,7 @@ protected:
 static constexpr DeviceAddr PAGE_SIZE = 1024;
 
 TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u) << "Need at least 2 compute cores";
@@ -85,7 +86,7 @@ TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
 }
 
 TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u);
@@ -123,7 +124,7 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
 }
 
 TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u);

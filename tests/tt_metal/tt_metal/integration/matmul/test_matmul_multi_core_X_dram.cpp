@@ -45,6 +45,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <umd/device/types/arch.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -240,7 +241,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
             out_subblock_h,
             out_subblock_w);
 
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program_ = workload.get_programs().at(device_range);

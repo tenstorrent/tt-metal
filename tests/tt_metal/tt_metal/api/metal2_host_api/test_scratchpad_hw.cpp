@@ -38,13 +38,14 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "command_queue_fixture.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 namespace {
 
 TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     // Gen1 only (mirrors test_program_spec_hw.cpp's guard). The scratchpad feature works on both
     // gens, but the device-side kernel here uses the Gen1 L1-readback idiom (plain volatile L1

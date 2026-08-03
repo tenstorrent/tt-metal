@@ -48,6 +48,7 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -281,7 +282,7 @@ void get_packed_tilized_input_output_pair(
 
 void run_single_core_unary_broadcast_quasar(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const UnaryBroadcastConfig& test_config) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     constexpr uint32_t num_tiles = 32;

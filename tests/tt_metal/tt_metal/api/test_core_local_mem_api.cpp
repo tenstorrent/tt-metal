@@ -23,6 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace {
 
@@ -80,7 +81,7 @@ void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
 
     uint64_t cycles_elapsed = 0;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto virtual_core = device->worker_core_from_logical_core(core);
     mc.get_cluster().read_core(&cycles_elapsed, sizeof(uint64_t), tt_cxy_pair(device->id(), virtual_core), cycles_addr);
 

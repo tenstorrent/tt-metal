@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -48,7 +49,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_src_addr, initial_data);
+    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->impl().get_devices()[0], 0, dram_src_addr, initial_data);
 
     const experimental::KernelSpecName DM_READER{"dm_reader"};
     const experimental::KernelSpecName DM_TRANSFORM{"dm_transform"};
@@ -157,7 +158,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
 
     std::vector<uint32_t> actual_data(num_elements, 0);
     tt_metal::detail::ReadFromDeviceDRAMChannel(
-        mesh_device->get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+        mesh_device->impl().get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
 
@@ -197,7 +198,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node_0, buf_a_addr, initial_data);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->impl().get_devices()[0], node_0, buf_a_addr, initial_data);
 
     const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(node_1);
 
@@ -377,7 +378,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 
     std::vector<uint32_t> actual_data(num_elements, 0);
     tt_metal::detail::ReadFromDeviceDRAMChannel(
-        mesh_device->get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+        mesh_device->impl().get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 

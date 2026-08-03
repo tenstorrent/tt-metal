@@ -17,6 +17,7 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -25,7 +26,7 @@ TEST_F(MeshDispatchFixture, InitializeGlobalSemaphores) {
 
     auto cores_vec = corerange_to_cores(cores);
     for (const auto& mesh_device : devices_) {
-        auto device_id = mesh_device->get_devices()[0]->id();
+        auto device_id = mesh_device->impl().get_devices()[0]->id();
         {
             uint32_t initial_value = 1;
             auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(mesh_device.get(), cores, initial_value);
@@ -61,7 +62,7 @@ TEST_F(MeshDispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
         cores_vecs.push_back(corerange_to_cores(crs));
     }
     for (const auto& mesh_device : devices_) {
-        auto device_id = mesh_device->get_devices()[0]->id();
+        auto device_id = mesh_device->impl().get_devices()[0]->id();
         {
             std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores;
             global_semaphores.reserve(cores.size());
@@ -94,7 +95,7 @@ TEST_F(MeshDispatchFixture, ResetGlobalSemaphores) {
 
     auto cores_vec = corerange_to_cores(cores);
     for (const auto& mesh_device : devices_) {
-        auto device_id = mesh_device->get_devices()[0]->id();
+        auto device_id = mesh_device->impl().get_devices()[0]->id();
         {
             uint32_t initial_value = 1;
             uint32_t reset_value = 2;

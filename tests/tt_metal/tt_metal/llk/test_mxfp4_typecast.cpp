@@ -27,6 +27,7 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
 #include "tt_metal/test_utils/mx_utils.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -51,7 +52,7 @@ static vector<uint32_t> run_mxfp4_typecast(
     const vector<uint32_t>& src_vec,
     uint32_t num_tiles,
     bool fp32_dest_acc_en) {
-    IDevice* dev = mesh_device.get_devices()[0];
+    IDevice* dev = mesh_device.impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     uint32_t input_tile_size = tt::tile_size(input_fmt);

@@ -24,6 +24,7 @@
 
 #include <chrono>
 #include <thread>
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -65,7 +66,7 @@ void sync_debug_servers_before_teardown() {
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     TT_FATAL(device->is_mmio_capable(), "Host hugepage test requires an MMIO-capable device");
 
     auto& cluster = MetalContext::instance().get_cluster();

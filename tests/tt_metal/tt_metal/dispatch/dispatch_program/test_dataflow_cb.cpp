@@ -14,6 +14,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -22,7 +23,7 @@ using namespace tt::tt_metal;
 // Validates data integrity: DRAM -> Reader -> CB -> Writer -> DRAM (src == dst)
 TEST_F(MeshDispatchFixture, DataflowCb) {
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     if (dev->arch() == ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar does not support CBs, skipping test";
     }
@@ -119,7 +120,7 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
 
 TEST_F(MeshDispatchFixture, DataflowDfb) {
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};

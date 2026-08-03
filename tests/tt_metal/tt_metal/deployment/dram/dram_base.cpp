@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <string>
 #include <umd/device/types/telemetry.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 static bool get_dram_inject_tensix_heartbeat_stall_from_env_once() {
     const char* env = std::getenv("DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL");
@@ -214,7 +215,7 @@ static void log_verbose_dram_work_item(
 
 std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, tt_metal::NOC noc) {
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     const uint32_t num_dram_channels = device->num_dram_channels();
 
@@ -330,7 +331,7 @@ DramRunSummary run_dram_base_test(
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
     TT_FATAL(cfg.total_bytes <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB-2KB)");
@@ -448,7 +449,7 @@ DramRunSummary run_dram_multi_core_single_controller_test(
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     TT_FATAL(!cores.empty(), "No cores provided");
     TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
@@ -579,7 +580,7 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t num_controllers = 8u;
 
@@ -731,7 +732,7 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t num_controllers = 8u;
 
@@ -858,7 +859,7 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     constexpr uint32_t num_controllers = 8u;
 
@@ -985,7 +986,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     uint32_t chunk_bytes,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     TT_FATAL(!worker_cores.empty(), "No worker cores provided");
     TT_FATAL(!jobs_per_core.empty(), "No per-core jobs provided");

@@ -21,6 +21,7 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "impl/context/metal_context.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -115,7 +116,7 @@ void RunFilteringTest(
         << log;
 
     for (const auto& mesh_device : all_devices) {
-        auto [row, col] = GetGlobalCoord(mesh_device->get_devices()[0]->id());
+        auto [row, col] = GetGlobalCoord(mesh_device->impl().get_devices()[0]->id());
         if (std::make_pair(row, col) == fixture->target_coord) {
             continue;
         }
@@ -130,7 +131,7 @@ void RunFilteringTest(
 void RunAllChipsVerificationTest(
     DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     constexpr auto kDprint = tt::llrt::RunTimeDebugFeatureDprint;
-    ChipId chip_id = mesh_device->get_devices()[0]->id();
+    ChipId chip_id = mesh_device->impl().get_devices()[0]->id();
     auto [row, col] = GetGlobalCoord(chip_id);
 
     auto workload = BuildMeshCoordWorkload(mesh_device);

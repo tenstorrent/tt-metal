@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <distributed/mesh_device_impl.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -55,7 +56,7 @@ distributed::MeshWorkload make_l1_write_workload(
 
 void run_cross_cq_handoff(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint8_t producer_cq, uint8_t consumer_cq) {
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t producer_address = MetalContext::instance().hal().get_dev_addr(
@@ -100,7 +101,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
     }
 
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
@@ -147,7 +148,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventBetweenWorkloads) {
     }
 
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
@@ -209,7 +210,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, RecordEventToHostFromBothCQs) {
     }
 
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address_0 = MetalContext::instance().hal().get_dev_addr(

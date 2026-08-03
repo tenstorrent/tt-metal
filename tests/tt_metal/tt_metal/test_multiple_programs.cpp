@@ -18,6 +18,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 using std::vector;
 using namespace tt;
@@ -176,7 +177,7 @@ void write_program_runtime_args_to_device(
 // 3. Second program runs matmul, using results from step 2 as input activation
 //////////////////////////////////////////////////////////////////////////////////////////
 TEST_F(MeshDeviceSingleCardFixture, MultiplePrograms) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 1;

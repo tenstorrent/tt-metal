@@ -38,6 +38,7 @@
 #include "tt_metal/common/scoped_timer.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include "distributed/mesh_trace.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 // Access to internal API: ProgramImpl::get_id
 #include "impl/program/program_impl.hpp"
@@ -657,8 +658,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -681,8 +682,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -733,8 +734,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -762,8 +763,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -928,8 +929,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -983,8 +984,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -1108,7 +1109,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
 
     CreateDevice(dfb_total_size * 4);
 
-    IDevice* device = this->device_->get_devices()[0];
+    IDevice* device = this->device_->impl().get_devices()[0];
     CoreCoord worker = {0, 0};
 
     // Each execution writes 1 uint32 (entry_size).  Pick addresses after the

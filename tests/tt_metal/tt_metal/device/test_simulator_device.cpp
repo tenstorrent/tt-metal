@@ -34,6 +34,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -98,7 +99,7 @@ TEST_F(AnyDispatchSimulatorFixture, QuasarStaticTlbReadWrite) {
     constexpr uint32_t value32 = 0xDEADBEEF;
 
     for (auto& mesh_device : this->devices_) {
-        const ChipId chip_id = mesh_device->get_devices()[0]->id();
+        const ChipId chip_id = mesh_device->impl().get_devices()[0]->id();
         const auto& sdesc = cluster.get_soc_desc(chip_id);
 
         const std::vector<tt::umd::CoreCoord> tensix_cores =
