@@ -141,6 +141,24 @@ Two different status vocabularies are in play. Do not conflate them.
 - `status: inconclusive` — no registered detector matched. This is **not**
   evidence that the kernel is correct.
 
+Before you report `inconclusive`, check that the quiescence detectors could
+physically fire. Compare `summary.quiescent_threshold_fs` against
+`summary.end_time_fs`:
+
+```bash
+python3 -c "import json,sys; s=json.load(open(sys.argv[1]))['summary']; \
+print('capture', s['end_time_fs'], 'fs | threshold', s['quiescent_threshold_fs'], \
+'fs | usable:', s['quiescent_threshold_fs'] < s['end_time_fs'])" evidence.json
+```
+
+`--quiescent` defaults to `1us`, and a targeted capture is often shorter than
+that — a 988 ns trace can never contain a 1 µs idle gap, so every quiescence
+detector is silently disabled and `inconclusive` means nothing. Re-run with
+`--quiescent` set well below the capture length (a few percent of it) before
+drawing any conclusion. Also compare `last_activity_fs` against
+`end_time_fs`: a trace that goes idle in its first few nanoseconds and stays
+idle is a capture-window problem, not a kernel finding.
+
 The bridge's tester-log status — a superset that also covers the cases where no
 `evidence.json` exists at all:
 
@@ -197,6 +215,8 @@ repository; do not extend this skill with signal paths.
 | `selection resolved N signals, exceeding --limit` | Too broad a `--match`/profile set | Narrow the selection or raise `--limit` |
 | `--remote-cwd is required when the SSH setup script is relative` | Host set, workspace not inferable | Set `LLK_DEBUG_REMOTE_CWD` or `AETHER_WORKSPACE` |
 | `SSH FSDB command failed` | Host unreachable or toolchain missing there | Verify the host; check `command.stderr.log` |
+| Command killed with no output on a large FSDB | `--backend-timeout` default is 120 s; cataloguing millions of vars over SSH exceeds it | Raise `--backend-timeout` (600–1200 s for a ~100 MB FSDB) and run it in the background |
+| `inconclusive` with a mostly-idle trace | `--quiescent` (default `1us`) ≥ capture length, so quiescence detectors cannot fire | Re-run with `--quiescent` below the capture length — see step 3 |
 | `FSDB does not exist or is not readable` | Local mode, but the FSDB is on the sim host | Set `LLK_DEBUG_HOST`/`SSH_MACHINE_NAME` |
 
 ## Report
