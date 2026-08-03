@@ -259,13 +259,10 @@ def generate_slice_to_pcie_device_mapping(host_vector, mpi_user=None, worker_tt_
             logger.info("Please build with: ./build_metal.sh --build-tests")
             sys.exit(1)
 
-    # One rank per host. Use host:1 slots so OpenMPI does not treat hosts as
-    # oversubscribed when a default hostfile (e.g. /etc/ttop) is also in the env
-    # (exit 213). Prefer this over bare --host a,b,c which conflicts on SC16 CI.
     if mpi_user:
-        host_vector_str = ",".join(f"{mpi_user}@{h}:1" for h in host_vector)
+        host_vector_str = ",".join(f"{mpi_user}@{h}" for h in host_vector)
     else:
-        host_vector_str = ",".join(f"{h}:1" for h in host_vector)
+        host_vector_str = ",".join(host_vector)
 
     cmd = [
         "mpirun",
@@ -273,8 +270,6 @@ def generate_slice_to_pcie_device_mapping(host_vector, mpi_user=None, worker_tt_
         str(len(host_vector)),
         "--host",
         host_vector_str,
-        "--map-by",
-        "ppr:1:node",
         "--mca",
         "btl",
         "self,tcp",
@@ -299,13 +294,8 @@ def generate_slice_to_pcie_device_mapping(host_vector, mpi_user=None, worker_tt_
 
     logger.info(f"Running: {' '.join(cmd)}")
 
-    env = os.environ.copy()
-    # Avoid ttop default hostfile / rankfile fighting --host (common SC16 CI failure).
-    env.pop("PRTE_MCA_prte_default_hostfile", None)
-    env.pop("OMPI_MCA_orte_default_hostfile", None)
-
     try:
-        result = subprocess.run(cmd, env=env)
+        result = subprocess.run(cmd)
         if result.returncode != 0:
             logger.error(f"{cmd} Failed to generate device mapping")
             sys.exit(result.returncode)
@@ -429,7 +419,6 @@ def generate_pipeline_config_files(
     worker_tt_metal_home=None,
     output_dir=None,
     stage_size="4x2",
-    preserve_hostfile_order=False,
 ):
     with open(pipeline_config_file, "r") as f:
         config = yaml.safe_load(f)
@@ -447,13 +436,9 @@ def generate_pipeline_config_files(
                 f"Hostfile has {len(allocated_hosts)} hosts but pipeline config has {len(config_hosts)} unique hosts"
             )
             sys.exit(1)
-        if preserve_hostfile_order:
-            # Hostfile line i maps to config_hosts[i] (blitz pipeline / ring order).
-            logger.info("Preserving hostfile order for remapping (no canonical sort)")
-        else:
-            # Sort allocated hosts into canonical order (low_u08, low_u02, high_u02, high_u08)
-            # so that they match config_hosts order regardless of hostfile ordering.
-            allocated_hosts = sort_hosts_canonical(allocated_hosts)
+        # Sort allocated hosts into canonical order (low_u08, low_u02, high_u02, high_u08)
+        # so that they match config_hosts order regardless of hostfile ordering.
+        allocated_hosts = sort_hosts_canonical(allocated_hosts)
         host_map = dict(zip(config_hosts, allocated_hosts))
         logger.info(f"Remapping hosts: {host_map}")
         stage_contributions = remap_stage_contribution_hosts(stage_contributions, host_map)
@@ -497,14 +482,7 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="File with one hostname per line. Overrides hosts in pipeline config. "
-        "By default hosts are sorted into canonical order (low_u08, low_u02, high_u02, high_u08) "
-        "before matching. Use --preserve-hostfile-order for SC16 blitz ring order.",
-    )
-    parser.add_argument(
-        "--preserve-hostfile-order",
-        action="store_true",
-        help="With --hostfile, map hostfile line i to pipeline config host i without canonical sort. "
-        "Required for SC16 when the hostfile is already in blitz pipeline / ring order.",
+        "Hosts are sorted into canonical order (low_u08, low_u02, high_u02, high_u08) before matching.",
     )
     parser.add_argument(
         "--worker-tt-metal-home",
@@ -529,5 +507,4 @@ if __name__ == "__main__":
         args.worker_tt_metal_home,
         args.output_dir,
         stage_size=args.stage_size,
-        preserve_hostfile_order=args.preserve_hostfile_order,
     )
