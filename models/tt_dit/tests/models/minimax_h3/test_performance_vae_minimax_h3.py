@@ -372,3 +372,90 @@ def test_visual_roundtrip_quality(mesh_device):
     logger.info(f"ROUNDTRIP visual PSNR: {psnr:.2f} dB")
     assert_quality(expected, actual, pcc=0.99)
     assert psnr >= 25.0, f"visual roundtrip PSNR {psnr:.2f} dB < 25 dB"
+
+
+MESH_4X8 = [
+    pytest.param(
+        (4, 8),
+        {"fabric_config": None, "require_exact_physical_num_devices": True, "l1_small_size": 65536},
+        id="mesh4x8",
+    )
+]
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+def test_visual_data_parallel_throughput(mesh_device):
+    """Per-wave time with one work unit per device, and the resulting full-video projections.
+
+    The single-device baselines above are per *invocation*; this measures a whole mesh-sized
+    **wave**, which is what the encode/decode paths now issue. Correctness of the
+    decomposition is gated in ``test_vae_data_parallel_minimax_h3.py`` (bit-exact); this only
+    times it.
+    """
+    from loguru import logger
+
+    weights_dir = _weights_dir("vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+    config = _config(weights_dir)
+    devices = mesh_device.get_num_devices()
+    torch.manual_seed(0)
+
+    encoder = MiniMaxH3Encoder3d(
+        num_frames=CLIP_FRAMES,
+        height=TILE,
+        width=TILE,
+        in_channels=3,
+        out_channels=2 * config["latent_channels"],
+        block_out_channels=tuple(config["block_out_channels"]),
+        layers_per_block=config["layers_per_block"],
+        spatial_downsample_factors=tuple(config["spatial_downsample_factors"]),
+        temporal_downsample_factors=tuple(config["temporal_downsample_factors"]),
+        temporal_taps=3,
+        mesh_device=mesh_device,
+    )
+    encoder.load_torch_state_dict(_random_encoder_state(config))
+    x = torch.randn(devices, CLIP_FRAMES, TILE, TILE, encoder.conv_in.in_channels)
+    x_device = ttnn.from_torch(
+        x,
+        dtype=ttnn.float32,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    encoder_wave = _time_it(lambda: encoder(x_device), mesh_device=mesh_device)
+    logger.info(f"PERF encoder wave of {devices} units: {encoder_wave:.3f} s ({encoder_wave / devices:.4f} s/unit)")
+
+    decoder = MiniMaxH3ViTDecoder3d(
+        num_frames=DECODE_LATENT_FRAMES,
+        height=LATENT_TILE,
+        width=LATENT_TILE,
+        in_channels=config["latent_channels"],
+        out_channels=config["out_channels"],
+        num_layers=config["decoder_num_layers"],
+        mesh_device=mesh_device,
+    )
+    decoder.load_torch_state_dict(_random_decoder_state(config))
+    tokens = torch.randn(devices, DECODE_LATENT_FRAMES * LATENT_TILE * LATENT_TILE, config["latent_channels"])
+    tokens_device = ttnn.from_torch(
+        tokens,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    decoder_wave = _time_it(lambda: decoder(tokens_device), mesh_device=mesh_device)
+    logger.info(f"PERF decoder wave of {devices} units: {decoder_wave:.3f} s ({decoder_wave / devices:.4f} s/unit)")
+
+    for name, units in WORK_UNITS.items():
+        encode_units = units["tiles"] * units["encode_clips"]
+        decode_units = units["tiles"] * units["decode_chunks"]
+        encode_waves = -(-encode_units // devices)
+        decode_waves = -(-decode_units // devices)
+        encode_total = encode_waves * encoder_wave
+        decode_total = decode_waves * decoder_wave
+        logger.info(
+            f"PROJECTED {name}: encode {encode_units} units / {encode_waves} waves = {encode_total:.1f} s, "
+            f"decode {decode_units} units / {decode_waves} waves = {decode_total:.1f} s, "
+            f"total {encode_total + decode_total:.1f} s"
+        )

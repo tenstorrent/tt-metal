@@ -102,6 +102,7 @@ class MiniMaxH3CausalConv3d(Module):
         kernel_size: int | Sequence[int] = 3,
         stride: int | Sequence[int] = 1,
         spatial_padding: int = 1,
+        trailing_spatial_padding: int = 0,
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
@@ -148,15 +149,25 @@ class MiniMaxH3CausalConv3d(Module):
         # sharded, so this stays a local concat of zeros.
         self.time_pad = 0 if self.collapse_temporal else self.kernel_size[0] - 1
 
+        # Padding is asymmetric in general: H3's downsamplers pre-pad ``(0,1,0,1)`` reflect
+        # (one extra row at the bottom, one column at the right) so a stride-2 conv lands on
+        # exactly ceil(size/2). Carrying that here rather than in the model means one code
+        # path covers it sharded and unsharded -- and under sharding it *has* to be here,
+        # because only the device owning the global bottom/right edge may add that row, and
+        # the interior devices need a real halo row from their neighbour instead.
+        self.trailing_spatial_padding = trailing_spatial_padding
+        pad_before = spatial_padding
+        pad_after = spatial_padding + trailing_spatial_padding
+
         # A sharded axis gets its pad from the halo (external); a replicated one keeps it
         # local (internal). Never both, or the pad is applied twice.
-        self.external_pad_h = spatial_padding if self.height_factor > 1 else 0
-        self.external_pad_w = spatial_padding if self.width_factor > 1 else 0
-        self.local_pad_h = 0 if self.height_factor > 1 else spatial_padding
-        self.local_pad_w = 0 if self.width_factor > 1 else spatial_padding
+        self.external_pad_h = (pad_before, pad_after) if self.height_factor > 1 else (0, 0)
+        self.external_pad_w = (pad_before, pad_after) if self.width_factor > 1 else (0, 0)
+        self.local_pad_h = (0, 0) if self.height_factor > 1 else (pad_before, pad_after)
+        self.local_pad_w = (0, 0) if self.width_factor > 1 else (pad_before, pad_after)
 
         self._edge_masks: dict[int, tuple] = {}
-        if self.is_sharded and spatial_padding > 0:
+        if self.is_sharded and pad_after > 0:
             if self.height_factor > 1:
                 self._edge_masks[2] = edge_mask_pair(
                     mesh_device, self.height_factor, parallel_config.height_parallel.mesh_axis, dtype
@@ -238,19 +249,20 @@ class MiniMaxH3CausalConv3d(Module):
         one fused call when both are sharded, following ``WanCausalConv3d``.
         """
         dims, pad_left, pad_right, axes, semaphores, links = [], [], [], [], [], []
-        for dim, pad, factor, factor_config in (
+        for dim, (before, after), factor, factor_config in (
             (2, self.external_pad_h, self.height_factor, "height_parallel"),
             (3, self.external_pad_w, self.width_factor, "width_parallel"),
         ):
-            if pad <= 0 or factor <= 1:
+            if (before <= 0 and after <= 0) or factor <= 1:
                 continue
             mesh_axis = getattr(self.parallel_config, factor_config).mesh_axis
             dims.append(dim)
-            pad_left.append(pad)
-            pad_right.append(pad)
+            pad_left.append(before)
+            pad_right.append(after)
             axes.append(mesh_axis)
             semaphores.append(self.ccl_manager.get_np_ping_pong_semaphore(mesh_axis))
-            links.append(max(1, min(math.prod(x_BTHWC.shape[:dim]), self.ccl_manager.num_links)))
+            # list(): ttnn.Shape supports integer indexing only, not slicing.
+            links.append(max(1, min(math.prod(list(x_BTHWC.shape)[:dim]), self.ccl_manager.num_links)))
 
         if not dims:
             return x_BTHWC
@@ -265,17 +277,17 @@ class MiniMaxH3CausalConv3d(Module):
             neighbor_sems=semaphores,
             num_links=links,
         )
-        for dim, pad in zip(dims, pad_left):
-            x_BTHWC = reflect_edge_correction(x_BTHWC, dim, pad, edge_masks=self._edge_masks.get(dim))
+        for dim, before, after in zip(dims, pad_left, pad_right):
+            x_BTHWC = reflect_edge_correction(x_BTHWC, dim, before, after, edge_masks=self._edge_masks.get(dim))
         return x_BTHWC
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         """``x_BTHWC``: ``(B, T, H, W, C)`` ROW_MAJOR, C already tile-aligned."""
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"conv3d needs ROW_MAJOR, got {x_BTHWC.layout}"
 
-        if self.local_pad_h > 0 or self.local_pad_w > 0:
+        if any(self.local_pad_h) or any(self.local_pad_w):
             x_BTHWC = reflect_pad_hw(x_BTHWC, self.local_pad_h, self.local_pad_w)
-        if self.external_pad_h > 0 or self.external_pad_w > 0:
+        if any(self.external_pad_h) or any(self.external_pad_w):
             x_BTHWC = self._halo_pad(x_BTHWC)
         if self.time_pad > 0:
             x_BTHWC = causal_pad_t(x_BTHWC, self.time_pad, self.mesh_device)
@@ -306,7 +318,8 @@ def causal_pad_t(x_BTHWC: ttnn.Tensor, pad: int, mesh_device: ttnn.MeshDevice) -
 def reflect_edge_correction(
     padded_BTHWC: ttnn.Tensor,
     dim: int,
-    pad: int,
+    pad_before: int,
+    pad_after: int | None = None,
     *,
     edge_masks: tuple[ttnn.Tensor, ttnn.Tensor] | None,
 ) -> ttnn.Tensor:
@@ -329,11 +342,16 @@ def reflect_edge_correction(
     A one-pixel border error passes PCC and reads as a faint vignette, so this needs its own
     gate rather than riding on a whole-encoder PCC number.
     """
-    if pad <= 0:
+    if pad_after is None:
+        pad_after = pad_before
+    if pad_before <= 0 and pad_after <= 0:
         return padded_BTHWC
     size = padded_BTHWC.shape[dim]
-    for j in range(pad):
-        for leading in (True, False):
+    # Each edge is corrected against its own pad width, so an asymmetric halo -- the
+    # downsamplers' (0, 1) -- corrects only the trailing edge and leaves the leading one
+    # alone, which is what having no leading pad means.
+    for leading, pad in ((True, pad_before), (False, pad_after)):
+        for j in range(pad):
             target = pad - 1 - j if leading else size - pad + j
             source = pad + 1 + j if leading else size - pad - 2 - j
             mask = None if edge_masks is None else edge_masks[0 if leading else 1]
@@ -359,38 +377,52 @@ def edge_mask_pair(
 
     Sharded *data*, so :func:`reflect_edge_correction` stays branch-free and every device
     issues an identical program.
+
+    The mask has to be placed along **the same mesh axis the activation is sharded on**.
+    ``ShardTensorToMesh(dim=0)`` distributes linearly over all 32 devices and ignores which
+    axis a shard belongs to, so on a 4x8 mesh it lands correctly only for the
+    fastest-varying axis: with width on axis 1 the device at ``(i, j)`` happens to receive
+    mask row ``j``, which is right, while with height on axis 0 it receives row ``j`` when it
+    needs row ``i``. That put the edge corrections on the wrong devices -- measured as a
+    worst-element error of 7.117 for ``h4`` against 2.4e-07 for ``w8``, which is what made
+    the asymmetry legible. ``ShardTensor2dMesh`` with the other axis ``None`` replicates
+    along it and is correct for either.
     """
     leading = torch.zeros(factor, 1, 1, 1, 1)
     trailing = torch.zeros(factor, 1, 1, 1, 1)
     leading[0] = 1.0
     trailing[-1] = 1.0
+    dims: list[int | None] = [None, None]
+    dims[mesh_axis] = 0
     return tuple(
         ttnn.from_torch(
             mask,
             dtype=dtype,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(dims), mesh_shape=tuple(mesh_device.shape)),
         )
         for mask in (leading, trailing)
     )
 
 
-def reflect_pad_hw(x_BTHWC: ttnn.Tensor, pad_h: int, pad_w: int) -> ttnn.Tensor:
-    """Symmetric reflect pad on H (dim 2) and W (dim 3).
+def reflect_pad_hw(x_BTHWC: ttnn.Tensor, pad_h: int | tuple[int, int], pad_w: int | tuple[int, int]) -> ttnn.Tensor:
+    """Reflect pad on H (dim 2) and W (dim 3); each may be ``(before, after)``.
 
     Reflect excludes the edge itself, so a pad of 1 takes row 1 rather than row 0 --
     which is exactly where it differs from ``replicate``, and the reason this is done
-    locally rather than through ``neighbor_pad_async``.
+    locally rather than through ``neighbor_pad_async``. An asymmetric ``(0, 1)`` is the
+    downsamplers' bottom/right pre-pad.
     """
     for pad, dim in ((pad_h, 2), (pad_w, 3)):
-        if pad <= 0:
+        before, after = (pad, pad) if isinstance(pad, int) else pad
+        if before <= 0 and after <= 0:
             continue
         size = x_BTHWC.shape[dim]
-        if size < pad + 1:
-            raise ValueError(f"cannot reflect-pad dim {dim} of size {size} by {pad}")
-        leading = [slice_dim(x_BTHWC, dim, i, i + 1) for i in range(pad, 0, -1)]
-        trailing = [slice_dim(x_BTHWC, dim, size - 1 - i, size - i) for i in range(1, pad + 1)]
+        if size < max(before, after) + 1:
+            raise ValueError(f"cannot reflect-pad dim {dim} of size {size} by {(before, after)}")
+        leading = [slice_dim(x_BTHWC, dim, i, i + 1) for i in range(before, 0, -1)]
+        trailing = [slice_dim(x_BTHWC, dim, size - 1 - i, size - i) for i in range(1, after + 1)]
         x_BTHWC = ttnn.concat([*leading, x_BTHWC, *trailing], dim=dim)
     return x_BTHWC
 

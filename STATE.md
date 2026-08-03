@@ -921,3 +921,61 @@ tile is 22 MB and holding all 308 units of a 768P/5s video would be 6.8 GB (~29 
 Full visual suite re-run green after both refactors: **9 passed**, encoder PCC 99.9829 -
 99.9883 %, decoder 99.9977 - 99.9979 %. Note the suite is `SINGLE_DEVICE`, so it gates the
 tiling/stitch *order* refactor; DP-at-32 is gated separately by the two independence tests.
+
+## Amendment 38 (2026-08-03) — measured data-parallel throughput: 30x, near-linear
+
+`test_performance_vae_minimax_h3.py::test_visual_data_parallel_throughput`, 4x8 mesh, one
+work unit per device, weights replicated:
+
+| | single device (amendment 32) | 32-unit wave | per unit | speedup |
+|---|---|---|---|---|
+| encoder tile `(17,256,256)` | 3.544 s | **3.714 s** | **0.1161 s** | **30.5x** |
+| decoder invocation, 1797 tokens | 0.755 s | **0.778 s** | **0.0243 s** | **31.1x** |
+
+**95-97 % scaling efficiency.** A 32-unit wave costs ~5 % more wall clock than a single
+unit did alone, which is the expected result for zero-CCL SPMD -- the only additions are
+the wider host transfer and the mesh dispatch.
+
+Projected full-video wall time:
+
+| working point | encode | decode | total |
+|---|---|---|---|
+| 768P / 5 s | 26.0 s (224 units, 7 waves) | 5.4 s (196 units, 7 waves) | **31.4 s** |
+| 768P / 10 s | 52.0 s (14 waves) | 10.1 s (13 waves) | **62.1 s** |
+| 1440P / 5 s | 96.6 s (26 waves) | 17.9 s (23 waves) | **114.5 s** |
+| 1440P / 10 s | 182.0 s (49 waves) | 35.8 s (46 waves) | **217.8 s** |
+
+768P/5s goes from ~941 s sequential to **31.4 s**, a **30x** end-to-end win from
+parallelism alone, nothing tuned.
+
+**The encoder is now 83 % of total time** (26.0 s against 5.4 s). DP scaled both halves
+equally, so the amendment-32 imbalance is unchanged and its cause is unchanged: the encoder
+runs at ~2.3 TFLOP/s against the decoder's 14.0 because its blockings are stubs. The
+`_FP32_BLOCKINGS` sweep targets exactly that ~6x, which would put 768P/5s near 10 s.
+
+## Amendment 39 (2026-08-03) — the H/W halo gate found a real bug in the committed conv
+
+The conv threading committed in `44f1eb6c402` had **never executed on device**. Its first
+run failed immediately:
+
+```
+links.append(max(1, min(math.prod(x_BTHWC.shape[:dim]), self.ccl_manager.num_links)))
+TypeError: __getitem__(): incompatible function arguments ... Invoked with types:
+           ttnn._ttnn.types.Shape, slice
+```
+
+`ttnn.Shape` supports integer indexing but **not slicing**. Fixed with `list(...)`. Worth
+recording as a general trap: `x.shape[:n]` is silently fine on a torch tensor and throws on
+a ttnn one, so it survives any host-side review.
+
+Two further failures were the *gate* being wrong, not the model, and both are worth keeping
+as notes on how to test a halo:
+
+* `F.pad(mode="reflect")` on a **5D** tensor requires 6 pad values and would pad T as well.
+  H3 pads only the spatial axes, so the reference folds to 4D `(B*T, C, H, W)` first.
+* Comparing *gathered padded shards* against the globally padded tensor is wrong by
+  construction: the halos are interior duplicates, so four shards of height 8 padded by 1
+  each side concatenate to 40, not the true padded 34. The gate now compares **each device's
+  shard against its window of the globally padded reference**, which is also strictly
+  stronger -- it pins down which rows each device received, so an interior halo taken from
+  the wrong neighbour fails, not just a bad global edge.

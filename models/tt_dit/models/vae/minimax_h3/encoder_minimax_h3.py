@@ -46,7 +46,7 @@ import ttnn
 
 from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import GroupNorm3D
-from .conv_minimax_h3 import MiniMaxH3CausalConv3d, reflect_pad_bottom_right
+from .conv_minimax_h3 import MiniMaxH3CausalConv3d
 
 MINIMAX_H3_VAE_NUM_GROUPS = 32
 MINIMAX_H3_VAE_NORM_EPS = 1e-6
@@ -238,7 +238,56 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
         return ttnn.reshape(out, (B, T, H, W, C))
 
 
-def _norm_silu(norm: MiniMaxH3FrameGroupNorm, x_BTHWC: ttnn.Tensor, dtype: ttnn.DataType = ttnn.float32) -> ttnn.Tensor:
+def _gn_hw_sharded(norm: MiniMaxH3FrameGroupNorm, x_BTHWC: ttnn.Tensor, parallel_config, ccl_manager) -> ttnn.Tensor:
+    """Per-frame GroupNorm on an H/W-sharded tensor: gather the spatial extent, norm, re-shard.
+
+    The shape of ``upsampler/latent_upsampler_ltx.py:_gn_hw_sharded``, which is the only
+    in-tree solution to this problem -- and it takes a ``GroupNorm3D``, which
+    :class:`MiniMaxH3FrameGroupNorm` already is, so the norms stay built at the **global**
+    H/W while the convs are built at the local shard.
+
+    Minus that function's crop/re-pad branch, deliberately: it exists for mesh-factor
+    padding, and H3 never has any. Its spatial extents are dyadic (256/128/64/32/16), so at
+    factor 2/4/8 every one of the eight norm sites divides its mesh factor exactly *and*
+    every local ``H*W`` is a multiple of 32. The assertion below is what keeps that true --
+    if it ever fires, port the crop branch rather than relaxing it, because normalising over
+    padding zeros is silently wrong (it is the live TODO at ``vae_mochi.py:270``).
+    """
+    if parallel_config is None:
+        return norm(x_BTHWC)
+    h_parallel, w_parallel = parallel_config.height_parallel, parallel_config.width_parallel
+    if h_parallel.factor <= 1 and w_parallel.factor <= 1:
+        return norm(x_BTHWC)
+
+    if x_BTHWC.layout != ttnn.ROW_MAJOR_LAYOUT:
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+    for dim, spatial in ((2, h_parallel), (3, w_parallel)):
+        if spatial.factor > 1:
+            assert x_BTHWC.shape[dim] * spatial.factor == (norm.height if dim == 2 else norm.width), (
+                f"dim {dim} shard {x_BTHWC.shape[dim]} x factor {spatial.factor} != "
+                f"global {norm.height if dim == 2 else norm.width}; mesh-factor padding is "
+                "unsupported here and normalising over pad zeros is silently wrong"
+            )
+            x_BTHWC = ccl_manager.all_gather(x_BTHWC, dim=dim, mesh_axis=spatial.mesh_axis, use_hyperparams=False)
+
+    x_BTHWC = norm(x_BTHWC)
+
+    for dim, spatial in ((2, h_parallel), (3, w_parallel)):
+        if spatial.factor > 1:
+            # ROW_MAJOR is required: a sub-tile-wide shard cannot be sliced out of a tilized
+            # tensor, so tilize-then-partition fails.
+            x_BTHWC = ttnn.mesh_partition(x_BTHWC, dim=dim, cluster_axis=spatial.mesh_axis)
+    return x_BTHWC
+
+
+def _norm_silu(
+    norm: MiniMaxH3FrameGroupNorm,
+    x_BTHWC: ttnn.Tensor,
+    dtype: ttnn.DataType = ttnn.float32,
+    *,
+    parallel_config=None,
+    ccl_manager=None,
+) -> ttnn.Tensor:
     """``silu(norm(x))``, returned ROW_MAJOR in ``dtype``, ready for the next conv.
 
     The norm is bf16 whatever the surrounding precision -- ``ttnn.group_norm`` has no
@@ -246,9 +295,11 @@ def _norm_silu(norm: MiniMaxH3FrameGroupNorm, x_BTHWC: ttnn.Tensor, dtype: ttnn.
     stays fp32 to match the reference, which is why the cast back is explicit rather
     than letting bf16 propagate through the convolutions.
     """
-    h = ttnn.silu(norm(x_BTHWC))
+    h = ttnn.silu(_gn_hw_sharded(norm, x_BTHWC, parallel_config, ccl_manager))
     if h.get_dtype() != dtype:
         h = ttnn.typecast(h, dtype)
+    if h.layout != ttnn.ROW_MAJOR_LAYOUT:
+        h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
     return h
 
 
@@ -270,13 +321,25 @@ class MiniMaxH3ResnetBlock3d(Module):
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
+        parallel_config=None,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
 
         self.dtype = dtype
-        conv_kwargs = dict(temporal_taps=temporal_taps, mesh_device=mesh_device, dtype=dtype)
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
+        conv_kwargs = dict(
+            temporal_taps=temporal_taps,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+        )
+        # Norms are built at the GLOBAL H/W: _gn_hw_sharded gathers the spatial extent
+        # before calling them. Only the convs see the per-device shard.
         norm_kwargs = dict(num_frames=num_frames, height=height, width=width, mesh_device=mesh_device)
         # A resnet never changes T/H/W, so both norms share one shape.
         self.norm1 = MiniMaxH3FrameGroupNorm(in_channels, **norm_kwargs)
@@ -289,8 +352,9 @@ class MiniMaxH3ResnetBlock3d(Module):
             )
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
-        h = self.conv1(_norm_silu(self.norm1, x_BTHWC, self.dtype))
-        h = self.conv2(_norm_silu(self.norm2, h, self.dtype))
+        norm_kwargs = dict(parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
+        h = self.conv1(_norm_silu(self.norm1, x_BTHWC, self.dtype, **norm_kwargs))
+        h = self.conv2(_norm_silu(self.norm2, h, self.dtype, **norm_kwargs))
         residual = self.conv_shortcut(x_BTHWC) if self.in_channels != self.out_channels else x_BTHWC
         return ttnn.add(residual, h)
 
@@ -312,6 +376,8 @@ class MiniMaxH3Downsample3d(Module):
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
+        parallel_config=None,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.spatial_stride = spatial_stride
@@ -323,14 +389,20 @@ class MiniMaxH3Downsample3d(Module):
             kernel_size=3,
             stride=(effective_temporal_stride, spatial_stride, spatial_stride),
             spatial_padding=0,
+            # H3's asymmetric bottom/right reflect pre-pad, which is what makes the strided
+            # conv land on exactly ceil(size/2). Expressed as the conv's trailing pad rather
+            # than a separate pre-pad so one path covers sharded and unsharded: under H/W
+            # sharding only the device owning the global bottom/right edge may reflect, while
+            # the interior devices need a real halo row from their neighbour.
+            trailing_spatial_padding=1 if spatial_stride == 2 else 0,
             temporal_taps=temporal_taps,
             mesh_device=mesh_device,
             dtype=dtype,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
         )
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
-        if self.spatial_stride == 2:
-            x_BTHWC = reflect_pad_bottom_right(x_BTHWC)
         return self.conv(x_BTHWC)
 
 
@@ -351,6 +423,8 @@ class MiniMaxH3DownBlock3d(Module):
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
+        parallel_config=None,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.resnets = ModuleList(
@@ -364,6 +438,8 @@ class MiniMaxH3DownBlock3d(Module):
                     temporal_taps=temporal_taps,
                     mesh_device=mesh_device,
                     dtype=dtype,
+                    parallel_config=parallel_config,
+                    ccl_manager=ccl_manager,
                 )
                 for i in range(num_layers)
             ]
@@ -380,6 +456,8 @@ class MiniMaxH3DownBlock3d(Module):
                         temporal_taps=temporal_taps,
                         mesh_device=mesh_device,
                         dtype=dtype,
+                        parallel_config=parallel_config,
+                        ccl_manager=ccl_manager,
                     )
                 ]
             )
@@ -417,14 +495,26 @@ class MiniMaxH3Encoder3d(Module):
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
+        parallel_config=None,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.temporal_taps = temporal_taps
+        # height/width here are the GLOBAL extents. Norms are built at them and gather to
+        # them; the convs derive their per-device shard from parallel_config.
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
         self.in_channels = in_channels
         self.dtype = dtype
         self.input_shape = (num_frames, height, width)
 
-        conv_kwargs = dict(temporal_taps=temporal_taps, mesh_device=mesh_device, dtype=dtype)
+        conv_kwargs = dict(
+            temporal_taps=temporal_taps,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+        )
         self.conv_in = MiniMaxH3CausalConv3d(
             in_channels, block_out_channels[0], kernel_size=3, spatial_padding=1, **conv_kwargs
         )
@@ -448,6 +538,8 @@ class MiniMaxH3Encoder3d(Module):
                     temporal_taps=temporal_taps,
                     mesh_device=mesh_device,
                     dtype=dtype,
+                    parallel_config=parallel_config,
+                    ccl_manager=ccl_manager,
                 )
             )
             if temporal_downsample_factors[i] * spatial_downsample_factors[i] > 1:
@@ -470,7 +562,9 @@ class MiniMaxH3Encoder3d(Module):
         h = self.conv_in(x_BTHWC)
         for down_block in self.down_blocks:
             h = down_block(h)
-        return self.conv_out(_norm_silu(self.norm_out, h, self.dtype))
+        return self.conv_out(
+            _norm_silu(self.norm_out, h, self.dtype, parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
+        )
 
 
 def pad_pixel_channels(x_BTHWC: torch.Tensor, aligned: int = 32) -> torch.Tensor:
