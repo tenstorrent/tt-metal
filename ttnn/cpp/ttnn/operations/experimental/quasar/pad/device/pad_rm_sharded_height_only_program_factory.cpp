@@ -165,7 +165,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // reader rt args
         std::vector<uint32_t> reader_kernel_args;
-        reader_kernel_args.reserve(1 + (3 * core_stick_map.size()));
+        // num_cores + (noc x, noc y, num_chunks) per core + (start id, length) per chunk, where a chunk
+        // holds at least one stick
+        reader_kernel_args.reserve(1 + (3 * core_stick_map.size()) + (2 * num_sticks_per_core_padded));
         reader_kernel_args.push_back(core_stick_map.size());  // num_cores
 
         for (const auto& core_stick_pair : core_stick_map) {

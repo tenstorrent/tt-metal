@@ -2012,7 +2012,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
-    non_idle_cores_vec.reserve(subdevice_cores.ranges().size());
+    non_idle_cores_vec.reserve(subdevice_cores.ranges().size() * non_idle_cores.ranges().size());
     for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
         if (intersection.empty()) {

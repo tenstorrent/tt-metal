@@ -688,7 +688,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                                     : std::nullopt;
 
     std::vector<DataflowBufferSpec> dfbs;
-    dfbs.reserve(23);
 
     // scalar CB(s)
     // The pool2d split-reader compute kernel references dfb::in_cb_1 and dfb::in_scalar_cb_1
@@ -696,6 +695,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // whenever pool2d uses a split reader. (mpwi has a single input/scalar stream — reader1 is
     // the writer face.)
     const bool has_second_input_cb = cb_sizes.has_split_reader && !return_indices;
+
+    // mandatory: in_scalar_0, clear_value, in_shard, reader_indices, in_0, out
+    constexpr uint32_t num_mandatory_dfbs = 6;
+    dfbs.reserve(
+        num_mandatory_dfbs + (has_second_input_cb ? 2 : 0) + (return_indices ? 9 : 0) +
+        (cb_sizes.has_pre_tilize ? 2 : 0) + (cb_sizes.has_out_idx ? 1 : 0) + (one_scalar_per_core ? 0 : 1));
 
     dfbs.push_back(local_dfb(
         DFB_IN_SCALAR_0, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));
