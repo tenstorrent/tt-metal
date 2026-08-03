@@ -59,6 +59,7 @@ OUTPUT_SCHEMA = [
     Column("formats.output", "string", True, "formats"),
     Column("formats.register_A", "string", True, "formats"),
     Column("formats.register_B", "string", True, "formats"),
+    Column("formats.sfpu_math", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
     Column("unpack_to_dest", "string", True, "flags"),

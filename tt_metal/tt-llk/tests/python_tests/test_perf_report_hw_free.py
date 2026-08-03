@@ -39,6 +39,7 @@ def _fake_formats():
         unpack_A_dst="Float16_b",
         unpack_B_dst="Float16_b",
         output_format="Float16_b",
+        sfpu_math="Float16_b",
     )
     return [fmt]
 
