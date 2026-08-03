@@ -197,6 +197,11 @@ class MiniMaxH3TransformerBlock(Module):
         tables = []
         for p in range(NUM_MODULATION_PARAMS):
             table = ttnn.slice(projected, [0, 0, 0, p * self.hidden_local], [1, 1, rows, (p + 1) * self.hidden_local])
+            # AdaLN applies the scales as (1 + scale). Adding the 1 to the table costs one elementwise
+            # op on `num_timesteps * MODALITY_NUM` rows -- six, typically -- where doing it after the
+            # gather would cost one over the whole packed sequence, per scale, per block.
+            if p in (_SCALE_MSA, _SCALE_MLP):
+                table = ttnn.add(table, 1.0)
             # ttnn.embedding wants a 2D [num_embeddings, embedding_dim] weight.
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
@@ -238,22 +243,25 @@ class MiniMaxH3TransformerBlock(Module):
         def modulation(param: int) -> ttnn.Tensor:
             return self._gather_rows(tables[param], indices)
 
-        # 1. Modulated self-attention.
+        # 1. Modulated self-attention. The (1 + scale) and shift are handed to the norm as a per-token
+        # dynamic weight and bias, so the fused norm op applies the modulation itself rather than the
+        # block following it with a separate multiply and add. The gated residual is one addcmul
+        # (residual + gate * branch) rather than a multiply and an add.
         residual = spatial_1BND
-        normed = self.norm1(spatial_1BND)
-        normed = ttnn.add(
-            ttnn.mul(normed, ttnn.add(modulation(_SCALE_MSA), 1.0)),
-            modulation(_SHIFT_MSA),
+        normed = self.norm1(
+            spatial_1BND,
+            dynamic_weight=modulation(_SCALE_MSA),
+            dynamic_bias=modulation(_SHIFT_MSA),
         )
         attn_out = self.attn(normed, N=N, rope_cos=rope_cos, rope_sin=rope_sin)
-        spatial_1BND = ttnn.add(residual, ttnn.mul(attn_out, modulation(_GATE_MSA)))
+        spatial_1BND = ttnn.addcmul(residual, attn_out, modulation(_GATE_MSA))
 
         # 2. Modulated feed-forward.
         residual = spatial_1BND
-        normed = self.norm2(spatial_1BND)
-        normed = ttnn.add(
-            ttnn.mul(normed, ttnn.add(modulation(_SCALE_MLP), 1.0)),
-            modulation(_SHIFT_MLP),
+        normed = self.norm2(
+            spatial_1BND,
+            dynamic_weight=modulation(_SCALE_MLP),
+            dynamic_bias=modulation(_SHIFT_MLP),
         )
         # ParallelFeedForward expects a replicated input; its RowParallelLinear reduce-scatters the
         # result back to TP-fractured. As in the attention module, bringup takes the unfused
@@ -261,4 +269,4 @@ class MiniMaxH3TransformerBlock(Module):
         if self.tp_factor > 1:
             normed = self.ccl_manager.all_gather_persistent_buffer(normed, dim=3, mesh_axis=self.tp_mesh_axis)
         ff_out = self.ff(normed, compute_kernel_config=self.mm_compute_kernel_config)
-        return ttnn.add(residual, ttnn.mul(ff_out, modulation(_GATE_MLP)))
+        return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
