@@ -22,6 +22,7 @@ set(FABRIC_SOURCES
     control_plane.cpp
     mesh_graph_descriptor.cpp
     routing_table_generator.cpp
+    skip_ring_topology.cpp
     mesh_graph.cpp
     erisc_datamover_builder.cpp
     fabric_router_channel_mapping.cpp
