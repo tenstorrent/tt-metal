@@ -507,12 +507,9 @@ public:
      *   @c open_finish() and issuing on a half-open connection. Use plain @c open() unless the overlap
      *   is worth that. Never call both @c open() and this pair on one sender.
      */
-    FORCE_INLINE void open_start() { conn_.open_start(); }
+    FORCE_INLINE void open_start();
     /// Complete a handshake begun by @c open_start(), bind @c route, and yield the opened stream.
-    FORCE_INLINE FabricStream<ConnT> open_finish(const ccl_routing_utils::line_unicast_route_info_t& route) {
-        conn_.open_finish();
-        return FabricStream<ConnT>(&conn_, alignment_, route);
-    }
+    FORCE_INLINE FabricStream<ConnT> open_finish(const ccl_routing_utils::line_unicast_route_info_t& route);
 
     /// One-shot: send exactly one fabric atomic-inc of @c val to @c remote_sem_noc_addr along
     /// @c route, then tear down. Collapses open() -> arm_inc() -> inc() -> close() for the common
@@ -603,19 +600,13 @@ public:
     /// Build the connection (deferred open) from the fabric runtime-arg block; advances conn_arg_idx.
     /// Unlike DirectConn there is no is_forward argument — a duplex sender uses whichever directions
     /// the host actually wired up.
-    FORCE_INLINE explicit DuplexConn(size_t& conn_arg_idx) :
-        conn_(FabricConnectionManager::build_from_args<
-              FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx)) {}
+    FORCE_INLINE explicit DuplexConn(size_t& conn_arg_idx);
 
-    FORCE_INLINE void open() { conn_.open_finish(); }
-    FORCE_INLINE void close() { conn_.close(); }
-    FORCE_INLINE bool has(uint32_t dir) const {
-        return dir == kForward ? conn_.has_forward_connection() : conn_.has_backward_connection();
-    }
+    FORCE_INLINE void open();
+    FORCE_INLINE void close();
+    FORCE_INLINE bool has(uint32_t dir) const;
     /// Valid ONLY when has(dir) — get_*_connection() asserts otherwise.
-    FORCE_INLINE SenderT* sender(uint32_t dir) {
-        return dir == kForward ? &conn_.get_forward_connection() : &conn_.get_backward_connection();
-    }
+    FORCE_INLINE SenderT* sender(uint32_t dir);
 
 private:
     FabricConnectionManager conn_;
@@ -766,14 +757,7 @@ public:
     FabricDuplexStream& operator=(const FabricDuplexStream&) = delete;
     /// Move ctor (open() returns by value); transfers `closed_` so the moved-from stream never
     /// double-closes the transferred connection.
-    FORCE_INLINE FabricDuplexStream(FabricDuplexStream&& o) :
-        conn_(o.conn_), alignment_(o.alignment_), closed_(o.closed_) {
-        for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
-            uni_route_[d] = o.uni_route_[d];
-            mcast_route_[d] = o.mcast_route_[d];
-        }
-        o.closed_ = true;
-    }
+    FORCE_INLINE FabricDuplexStream(FabricDuplexStream&& o);
     FabricDuplexStream& operator=(FabricDuplexStream&&) = delete;
     FORCE_INLINE ~FabricDuplexStream() { close(); }  // RAII backstop; idempotent with close()
 
@@ -823,10 +807,9 @@ public:
      * @param conn_arg_idx  Index of the fabric arg block; ADVANCED past the block.
      * @param alignment     L1 alignment used to size the on-wire payload (bytes).
      */
-    FORCE_INLINE FabricDuplexSender(size_t& conn_arg_idx, uint32_t alignment) :
-        conn_(conn_arg_idx), alignment_(alignment) {}
+    FORCE_INLINE FabricDuplexSender(size_t& conn_arg_idx, uint32_t alignment);
     /// Construct from a pre-built connection policy.
-    FORCE_INLINE FabricDuplexSender(ConnT conn, uint32_t alignment) : conn_(conn), alignment_(alignment) {}
+    FORCE_INLINE FabricDuplexSender(ConnT conn, uint32_t alignment);
 
     FabricDuplexSender(const FabricDuplexSender&) = delete;
     FabricDuplexSender& operator=(const FabricDuplexSender&) = delete;
@@ -834,24 +817,12 @@ public:
     /// Open with a UNICAST route per direction -> Cast::Unicast stream.
     FORCE_INLINE FabricDuplexStream<Cast::Unicast, ConnT> open(
         const ccl_routing_utils::line_unicast_route_info_t& forward_route,
-        const ccl_routing_utils::line_unicast_route_info_t& backward_route) {
-        conn_.open();
-        FabricDuplexStream<Cast::Unicast, ConnT> s(&conn_, alignment_);
-        s.uni_route_[DuplexConn::kForward] = forward_route;
-        s.uni_route_[DuplexConn::kBackward] = backward_route;
-        return s;
-    }
+        const ccl_routing_utils::line_unicast_route_info_t& backward_route);
 
     /// Open with a MULTICAST route per direction -> Cast::Multicast stream (all_reduce's shape).
     FORCE_INLINE FabricDuplexStream<Cast::Multicast, ConnT> open(
         const ccl_routing_utils::line_multicast_route_info_t& forward_route,
-        const ccl_routing_utils::line_multicast_route_info_t& backward_route) {
-        conn_.open();
-        FabricDuplexStream<Cast::Multicast, ConnT> s(&conn_, alignment_);
-        s.mcast_route_[DuplexConn::kForward] = forward_route;
-        s.mcast_route_[DuplexConn::kBackward] = backward_route;
-        return s;
-    }
+        const ccl_routing_utils::line_multicast_route_info_t& backward_route);
 
 private:
     ConnT conn_;

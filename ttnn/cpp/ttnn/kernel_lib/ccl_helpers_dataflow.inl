@@ -36,9 +36,9 @@ FORCE_INLINE void write_local_mirror(uint64_t noc0_dst_noc_addr, uint32_t src_l1
 // ============================================================================================
 // Out-of-line implementations of the methods declared inline in the .hpp interface. Moved here
 // per the ".hpp = documentation + declarations, .inl = implementation" convention. The
-// connection policies (DirectConn / MuxConn), the FabricStream move ctor, and the
-// FabricStreamSender ctors + open() live here; the channel-arming / lifecycle and
-// FabricStreamSender::signal implementations follow in their original sections below.
+// connection policies (DirectConn / MuxConn / DuplexConn), the stream move ctors, and the
+// sender ctors + open() overloads (unidirectional and duplex) live here; the channel-arming /
+// lifecycle and FabricStreamSender::signal implementations follow in their original sections below.
 // ============================================================================================
 
 // ----------------------------------------------------------------------------
@@ -186,6 +186,18 @@ template <typename ConnT>
 FORCE_INLINE FabricStream<ConnT> FabricStreamSender<ConnT>::open(
     const ccl_routing_utils::line_unicast_route_info_t& route) {
     conn_.open();
+    return FabricStream<ConnT>(&conn_, alignment_, route);
+}
+
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::open_start() {
+    conn_.open_start();
+}
+
+template <typename ConnT>
+FORCE_INLINE FabricStream<ConnT> FabricStreamSender<ConnT>::open_finish(
+    const ccl_routing_utils::line_unicast_route_info_t& route) {
+    conn_.open_finish();
     return FabricStream<ConnT>(&conn_, alignment_, route);
 }
 
@@ -457,6 +469,74 @@ FORCE_INLINE void MulticastFusedWriteIncChannel<ConnT>::write_fused(
 // ============================================================================
 // The DUPLEX tier
 // ============================================================================
+
+// ----------------------------------------------------------------------------
+// DuplexConn — duplex fabric-connection policy (both directions exposed)
+// ----------------------------------------------------------------------------
+
+FORCE_INLINE DuplexConn::DuplexConn(size_t& conn_arg_idx) :
+    conn_(FabricConnectionManager::build_from_args<
+          FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx)) {}
+
+FORCE_INLINE void DuplexConn::open() { conn_.open_finish(); }
+
+FORCE_INLINE void DuplexConn::close() { conn_.close(); }
+
+FORCE_INLINE bool DuplexConn::has(uint32_t dir) const {
+    return dir == kForward ? conn_.has_forward_connection() : conn_.has_backward_connection();
+}
+
+FORCE_INLINE DuplexConn::SenderT* DuplexConn::sender(uint32_t dir) {
+    return dir == kForward ? &conn_.get_forward_connection() : &conn_.get_backward_connection();
+}
+
+// ----------------------------------------------------------------------------
+// FabricDuplexSender — ctors + open() overloads (the route-pair type picks the cast)
+// ----------------------------------------------------------------------------
+
+template <typename ConnT>
+FORCE_INLINE FabricDuplexSender<ConnT>::FabricDuplexSender(size_t& conn_arg_idx, uint32_t alignment) :
+    conn_(conn_arg_idx), alignment_(alignment) {}
+
+template <typename ConnT>
+FORCE_INLINE FabricDuplexSender<ConnT>::FabricDuplexSender(ConnT conn, uint32_t alignment) :
+    conn_(conn), alignment_(alignment) {}
+
+template <typename ConnT>
+FORCE_INLINE FabricDuplexStream<Cast::Unicast, ConnT> FabricDuplexSender<ConnT>::open(
+    const ccl_routing_utils::line_unicast_route_info_t& forward_route,
+    const ccl_routing_utils::line_unicast_route_info_t& backward_route) {
+    conn_.open();
+    FabricDuplexStream<Cast::Unicast, ConnT> s(&conn_, alignment_);
+    s.uni_route_[DuplexConn::kForward] = forward_route;
+    s.uni_route_[DuplexConn::kBackward] = backward_route;
+    return s;
+}
+
+template <typename ConnT>
+FORCE_INLINE FabricDuplexStream<Cast::Multicast, ConnT> FabricDuplexSender<ConnT>::open(
+    const ccl_routing_utils::line_multicast_route_info_t& forward_route,
+    const ccl_routing_utils::line_multicast_route_info_t& backward_route) {
+    conn_.open();
+    FabricDuplexStream<Cast::Multicast, ConnT> s(&conn_, alignment_);
+    s.mcast_route_[DuplexConn::kForward] = forward_route;
+    s.mcast_route_[DuplexConn::kBackward] = backward_route;
+    return s;
+}
+
+// ----------------------------------------------------------------------------
+// FabricDuplexStream — move ctor
+// ----------------------------------------------------------------------------
+
+template <Cast C, typename ConnT>
+FORCE_INLINE FabricDuplexStream<C, ConnT>::FabricDuplexStream(FabricDuplexStream&& o) :
+    conn_(o.conn_), alignment_(o.alignment_), closed_(o.closed_) {
+    for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
+        uni_route_[d] = o.uni_route_[d];
+        mcast_route_[d] = o.mcast_route_[d];
+    }
+    o.closed_ = true;
+}
 
 // ----------------------------------------------------------------------------
 // FabricDuplexStream — arming (per connected direction, on that direction's route)
