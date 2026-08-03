@@ -1,0 +1,64 @@
+# Metal 2.0 Port Brief — `ttnn/cpp/ttnn/operations/reduction/moe`
+
+> Audit cleared all gates. This is your actionable input; the full record is in `METAL2_PREPORT_AUDIT.md`.
+
+**Gates cleared:** Device 2.0 ✓ · Features ✓ · TTNN factory concept ✓ · Offset base pointers ✓ · TensorAccessor 3rd arg ✓
+
+**Recipe docs:** `ccf3df7c4ab 2026-08-03 docs(metal_2.0): require an explicit opt_level when porting compute kernels` *(carry this line into the port report's Provenance section)*
+
+**Port unit:** one DeviceOperation (`MoeDeviceOperation`), one factory (`MoeProgramFactory`, in `device/moe_program_factory.cpp`), three kernels — reader `device/kernels/dataflow/reader_create_index_tensor.cpp`, writer `device/kernels/dataflow/writer_unary_interleaved.cpp`, compute `device/kernels/compute/moe.cpp`. Single core (`CoreRange({0,0},{0,0})`), interleaved only, one config — there is no second code path to reason about.
+
+## TTNN factory analysis
+
+These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); the op ports to `ProgramSpecFactoryConcept`. Carry them forward:
+
+- **Current concept:** `descriptor` — `MoeProgramFactory::create_descriptor(const MoeParams&, const MoeInputs&, Tensor&)` returning a `tt::tt_metal::ProgramDescriptor` ([moe_program_factory.cpp:18-19](ttnn/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp#L18-L19)). `program_factory_t = std::variant<MoeProgramFactory>` ([moe_device_operation.hpp:24](ttnn/cpp/ttnn/operations/reduction/moe/device/moe_device_operation.hpp#L24)).
+- **Op-owned tensors:** none.
+- **Target concept:** `ProgramSpecFactoryConcept`.
+- **Gate-cleared, confirmed absent** (each would have blocked this brief): custom hash · `get_dynamic_runtime_args` (deprecated hook) · `override_runtime_arguments` (not-yet-supported replacement) · pybind `create_descriptor` — all gate conjuncts — plus other migration-risky pybind, which surfaces as a `safe` warning that also fails the gate. All `no` on this op; `moe_nanobind.cpp` binds only the user-facing `ttnn::moe` function.
+
+## Construct — to do
+
+**Tensor bindings** — 4 bindings, all **Case 1** (base fed into a `TensorAccessor`, all access through the accessor). Express each as a `TensorParameter` / `TensorBinding`; the kernel constructs `TensorAccessor(tensor::name)` and the legacy plumbing disappears.
+
+- `input` — legacy: reader RTA 0 via the `MeshTensor` overload of `emplace_runtime_args` ([moe_program_factory.cpp:239-245](ttnn/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp#L239-L245)); kernel: `TensorAccessor(s0_args, src_addr)` ([reader:62](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L62)), read via `noc.async_read(s0, …)` ([reader:96](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L96), [:99](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L99)).
+- `topk_mask` — legacy: reader RTA 1; kernel: `TensorAccessor(s1_args, topk_addr)` ([reader:66](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L66)), read at [reader:112](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L112).
+- `expert_mask` — legacy: reader RTA 2; kernel: `TensorAccessor(s2_args, expert_addr)` ([reader:70](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L70)), read at [reader:83](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L83).
+- `output` — legacy: writer RTA 0 ([moe_program_factory.cpp:257-261](ttnn/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp#L257-L261)); kernel: `TensorAccessor(out_args, dst_addr0)` ([writer:31](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L31)), written at [writer:40-46](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L40-L46).
+
+No binding is Case 2 and none is a borrowed-memory DFB. The compute kernel touches no tensor memory (pure CB-to-CB), so it needs no tensor binding at all.
+
+**What goes away with these four bindings.** All four RTAs *are* the tensor bases, so after the port the reader and writer have **zero** runtime args. Also removed: the four host-side `TensorAccessorArgs(...).append_to(...)` calls ([moe_program_factory.cpp:228-230](ttnn/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp#L228-L230) and [:248](ttnn/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp#L248)) and the kernel-side declarations they feed — the chained `TensorAccessorArgs<7>` / `next_compile_time_args_offset()` block at [reader:55-57](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L55-L57) and `TensorAccessorArgs<3>()` at [writer:19](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L19).
+
+**TensorParameter relaxation:** none.
+
+**TensorAccessor 3rd arg:** none — no accessor in this op passes an explicit page size, so there is nothing to drop. One thing *not* to mistake for a 3rd arg: the reader's `tile_bytes_input` / `tile_bytes_topk` / `tile_bytes_expert` ([reader:60](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L60), [:64](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L64), [:68](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L68)) and the writer's `tile_bytes` ([writer:23](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L23)) are the **transfer size** argument to `noc.async_read` / `noc.async_write`. Those stay (moved onto the DFB object per kernel-side whitelist rule 7).
+
+**CB endpoints** — 13 DFBs, no flags and no drops:
+
+- **Self-loop** (single toucher — bind compute both PRODUCER and CONSUMER): `c_5` input_transposed, `c_6` index_transposed, `c_7` values, `c_8` output_ind, `c_9` cur_max, `c_10` cur_sum, `c_12` masked_input. All seven are compute-internal scratch — produced and consumed inside `compute/moe.cpp` only, and neither dataflow kernel names their index.
+- **Already legal 1:1** (one locked producer + one locked consumer — no action): `c_0` input, `c_1` expert_mask, `c_2` topk_mask, `c_4` index (all reader → compute); `c_3` scale (**writer** → compute); `c_11` out (compute → writer).
+- **No** dead-CB drop, **no** 1P+1C assignment needed, **no** multi-binding advanced option.
+
+Two rows worth reading before you bind:
+
+- **`c_3` scale is produced by the *writer*, not the reader.** `dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<...>()` at [writer:28-29](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L28-L29) does the `reserve_back` / `push_back`; compute reads it inside `compute_kernel_lib::reduce` (`wait_front(1)`, never popped). The writer needs a PRODUCER binding on this DFB in addition to its CONSUMER binding on `c_11`.
+- **`c_4` index is one toucher on the fill side, not two.** `generate_index_tile` ([reader:18-38](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L18-L38)) writes the tile through `dfb.get_write_ptr()` ([reader:22](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L22)) — but the *same* kernel brackets it with `reserve_back(1)` / `push_back(1)`, so the PRODUCER binding covers the raw peek. Don't read it as a second endpoint.
+
+**Compile-time args → named.** All 29 CTA reads use literal constant indices, so every one is nameable; no CTA varargs. The names are already legible from the kernel-side variables: reader `dfb_id_in0`, `dfb_intermed_index`, `dfb_topk_mask`, `dfb_expert_mask`, `Ht`, `Wt`, `K` ([reader:45-52](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L45-L52)); writer `out_dfb_index`, `Ht`, `K` ([writer:14-16](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L14-L16)); compute the ten DFB indices plus `Ht`, `Wt`, `K`, `logk`, `logWt`, `tile_width` ([compute:439-459](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp#L439-L459)). The twelve CTAs that carry DFB indices are replaced by `dfb::name` bindings, leaving the scalars.
+
+**`kernel_lib` call sites — both port by token substitution.** Both donor entry points take the DFB id as a `uint32_t` non-type template parameter, which is the ✓ shape (`dfb::name`'s constexpr cast covers template-parameter position):
+
+- `dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<scale_dfb_index, PoolType::SUM, ReduceDim::REDUCE_ROW>()` — [writer:28-29](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L28-L29)
+- `compute_kernel_lib::reduce<pool_type, reduce_dim, in_dfb, scale_dfb, out_dfb, ReduceInputPolicy::WaitUpfrontNoPop>(...)` — [compute:222-229](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp#L222-L229), reached four times from `kernel_main` ([compute:488](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp#L488), [:490](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp#L490), [:498](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp#L498))
+
+Both headers live in `ttnn/cpp/ttnn/kernel_lib/` and are out of your scope — do not modify or fork them.
+
+## Watch for
+
+- **CB endpoints (multi-binding):** none, and structurally so — the op allocates no semaphores at all (`desc.semaphores` is never populated), has no borrowed-memory CB, and instantiates no kernel source twice (the factory pushes exactly three `KernelDescriptor`s, one per source, at [moe_program_factory.cpp:291-293](ttnn/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp#L291-L293)). No hidden second writer to hunt.
+- **Cross-op / shared kernels:** none. The op owns all three kernel sources and no other op or test instantiates any of them, so there is no fork to reuse, none to create, and no sunset list to record. The two out-of-directory includes are `kernel_lib` headers, which the shared-kernel caution explicitly excludes from its scope. Also: there is **no** `experimental/quasar` copy of this op — nothing in that out-of-bounds tree to be tempted by.
+- **A `DataflowBuffer(0)` inside the reduce donor is inert, not a stray binding.** `reduce_helpers_compute.inl:340` constructs `DataflowBuffer accum_dfb(...)` with a literal `0` when accumulation is disabled, which is the case for all four `reduce` calls here (no `Accumulate` argument is passed). No FIFO operation is ever issued on it — the `wait_front` / `pop_front` sites at `:196` / `:217` sit behind an `enable_accumulation` guard. In this op `c_0` is bound to compute anyway, since compute consumes the input DFB.
+- **RTA varargs:** none. Every runtime-arg read uses a literal constant index and is a distinct field (reader args 0/1/2 at [reader:41-43](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L41-L43), writer arg 0 at [writer:12](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L12)) — no counted loop, no data-selected index, no running `arg_index++`. And all four become tensor bindings, so there is nothing left to name. Do not reach for the vararg mechanism anywhere in this port.
+- **Three dead lines you will see in the kernels.** `const DataFormat data_format = get_dataformat(out_dfb_index);` ([writer:24](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L24)) is never used, and `constexpr uint32_t onetile = 1;` is unused in both dataflow kernels ([reader:59](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp#L59), [writer:22](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L22)). They are recorded as anomalies for the ops team in `METAL2_PREPORT_AUDIT.md`; they are not port work. Don't go looking for what they were for.
+- **The writer hardcodes the scale DFB index.** [writer:27](ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp#L27) declares `constexpr uint32_t scale_dfb_index = tt::CBIndex::c_3;` rather than receiving it as a compile-time arg, duplicating the host's choice at [moe_program_factory.cpp:106](ttnn/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp#L106) (compute receives the same index properly, as CTA 3). A named `dfb::` binding removes the duplicated literal — expect the writer to gain a DFB binding where the legacy kernel had none declared.
