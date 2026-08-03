@@ -265,7 +265,10 @@ std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_2d_to_4d(uint32_t di
 
 uint32_t reduce_scatter_clamp_workers_to_available_pages(
     uint32_t num_workers_per_direction, uint32_t num_links, uint32_t pages_to_distribute) {
-    TT_FATAL(num_links > 0, "num_links must be non-zero");
+    TT_FATAL(
+        num_links > 0 && num_links >= pages_to_distribute,
+        "num_links must be between zero and the number of input pages got: {}",
+        num_links);
     // reduce_scatter_get_tile_offsets splits pages across all links' workers, so the per-direction
     // budget is the page count divided by num_links.
     const uint32_t max_useful_workers_per_direction = pages_to_distribute / num_links;
