@@ -141,7 +141,8 @@ def _rewrite_optimized_artifact_provenance(mesh_device, path, exact_command):
 
 def _select_optimized_path(monkeypatch):
     monkeypatch.setattr(functional_tests, "FunctionalDecoder", OptimizedDecoder)
-    monkeypatch.setattr(functional_tests, "ARTIFACT_DIR", ARTIFACT_DIR)
+    destination = Path(os.environ.get("GEMMA4_ADVISOR_ORACLE_DIR", str(ARTIFACT_DIR)))
+    monkeypatch.setattr(functional_tests, "ARTIFACT_DIR", destination)
 
 
 def _select_bfp8_cache_candidate(monkeypatch, artifact_dir):
@@ -375,9 +376,10 @@ def test_optimized_real_weights_prefill_decode(monkeypatch, mesh_device, device_
         0.995,
     )
     layer_type = functional_tests._load_text_config().layer_types[layer_idx]
+    artifact_dir = Path(os.environ.get("GEMMA4_ADVISOR_ORACLE_DIR", str(ARTIFACT_DIR)))
     _rewrite_optimized_artifact_provenance(
         mesh_device,
-        ARTIFACT_DIR / f"pcc_layer{layer_idx}_{layer_type}_shared{int(shared_physical)}.json",
+        artifact_dir / f"pcc_layer{layer_idx}_{layer_type}_shared{int(shared_physical)}.json",
         "GEMMA4_RANGE_DOWNLOAD=1 pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/"
         "test_optimized_decoder.py::test_optimized_real_weights_prefill_decode",
     )

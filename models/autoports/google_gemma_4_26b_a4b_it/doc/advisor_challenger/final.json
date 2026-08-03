@@ -1,0 +1,92 @@
+{
+  "outcome": "improved",
+  "changed": true,
+  "changed_precision": false,
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "capture_batch": 1,
+  "incumbent_ms": 1.8240209855139256,
+  "final_ms": 1.587259229272604,
+  "repeats_ms": [1.824091114103794, 1.8241103366017342, 1.8236223980784416, 1.8240209855139256, 1.8235234171152115],
+  "winning_repeats_ms": [1.5874848514795303, 1.588189397007227, 1.586423832923174, 1.587259229272604, 1.5865570865571499],
+  "confirmed": true,
+  "confirmed_fresh_process": true,
+  "confirmation_repeats_ms": [1.5874564833939075, 1.5871254540979862, 1.5873697213828564, 1.5868527069687843, 1.5903193317353725],
+  "shipped_default_repeats_ms": [1.5871241502463818, 1.5892918966710567, 1.600425112992525, 1.5986796095967293, 1.599708180874586],
+  "oracle": "real-weight HuggingFace layer-reference PCC",
+  "oracle_scope": "shipped-default prefill and decode for sliding attention and both full-attention cache modes",
+  "oracle_reference": "HuggingFace google/gemma-4-26B-A4B-it decoder layer",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "oracle_artifacts": [
+    "oracle/shipped_default/pcc_layer0_sliding_attention_shared1.json",
+    "oracle/shipped_default/pcc_layer5_full_attention_shared1.json",
+    "oracle/shipped_default/pcc_layer5_full_attention_shared0.json"
+  ],
+  "layer_counts": {"sliding_attention": 25, "full_attention": 5},
+  "winning_config": "88-core width-sharded hidden-width RMSNorm in decode; result converted back to the incumbent DRAM interface",
+  "combination": {
+    "measured_sets": [
+      {
+        "set": ["incumbent", "sliding_attention"],
+        "measured_ms": 1.8240209855139256,
+        "repeats_ms": [1.824091114103794, 1.8241103366017342, 1.8236223980784416, 1.8240209855139256, 1.8235234171152115]
+      },
+      {
+        "set": ["advisor_norm88", "sliding_attention"],
+        "measured_ms": 1.587259229272604,
+        "repeats_ms": [1.5874848514795303, 1.588189397007227, 1.586423832923174, 1.587259229272604, 1.5865570865571499],
+        "oracle_passed": true
+      },
+      {
+        "set": ["incumbent", "full_attention"],
+        "measured_ms": 2.013928834348917,
+        "repeats_ms": [2.013928834348917, 2.014058823697269, 2.0156196132302284, 2.0125189889222383, 2.0120768900960684]
+      },
+      {
+        "set": ["advisor_norm88", "full_attention"],
+        "measured_ms": 1.7766602151095867,
+        "repeats_ms": [1.7772365175187588, 1.7766602151095867, 1.7776897922158241, 1.7757019959390163, 1.7757204174995422],
+        "oracle_passed": true
+      }
+    ]
+  },
+  "shipped_policy_source": "executed_policy.json",
+  "rejected_knobs": {
+    "GEMMA4_ADVISOR_ROTARY_DRAM": "default-off; hard error: rotary decode input must be sharded",
+    "GEMMA4_ADVISOR_NORM_CORES=110": "rejected as an illegal non-integral hidden-width shard; this above-advisor attempt prevents treating 88 as a core-count recommendation",
+    "dram_sharded_dense_candidate_subclasses": "remain non-default; reconciliation attributes zero removable boundary time to them"
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "post-freeze batch-1 capture and IR-aware reconciliation for both layer kinds",
+      "reranked_from": "name-only pairing that collapsed structural conversion nodes",
+      "result": "boundary chains have zero advisor-attributable value, but reconciliation exposed material one-core RMSNorm operations advised onto 88 cores"
+    },
+    {
+      "iteration": 2,
+      "trigger": "material-op obligation from generated reconciliation",
+      "reranked_from": "zero-value boundary chains to model-scaled material-op disagreements",
+      "result": "88-core RMSNorm beat every control repeat in both layer kinds, passed fresh confirmation and real-weight oracle, and was shipped"
+    }
+  ],
+  "model_estimate": {
+    "before_us": 54633.600,
+    "after_us": 47528.213,
+    "band_us": 32.390,
+    "per_kind": {
+      "sliding_attention": {"before_us": 44728.325, "after_us": 38809.281, "layers": 25, "advisor_removes_per_model_us": 5919.044, "band_us": 14.675},
+      "full_attention": {"before_us": 9905.275, "after_us": 8718.932, "layers": 5, "advisor_removes_per_model_us": 1186.343, "band_us": 17.715}
+    },
+    "layer_handoff": "reported, not screened: DRAM layer entry and no captured L1 exit for both kinds",
+    "method": "frozen per-kind profile-window estimate minus measured per-layer candidate delta times model-config layer count; repeat-spread bands summed linearly"
+  },
+  "advisor_contribution_us": 7105.387,
+  "advisor_contribution_pct": 13.0055,
+  "advised_boundaries": {
+    "us_advisor_agrees": {"sliding_attention": 7.882, "full_attention": 8.826},
+    "screened": false,
+    "note": "real conversion time reported without crediting it to the advisor contribution"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "shipped_policy": {
+    "attention_weight_dtype": "BFLOAT16",
+    "dense_weight_dtype": "BFLOAT16",
+    "expert_weight_dtype": "BFLOAT8_B"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/optimized_trace_bfp8_lofi_final_raw/.logs/cpp_device_perf_report.csv; doc/optimized_decoder/candidates/fidelity_decision.json"
+}

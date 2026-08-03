@@ -12,6 +12,7 @@ below as optimization candidates are selected.
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from typing import Any
 
@@ -97,6 +98,8 @@ class OptimizedDecoder(FunctionalDecoder):
     dram_dense_weight_dtype = ttnn.bfloat8_b
     dense_compute_fidelity: ttnn.MathFidelity | None = None
     expert_compute_fidelity: ttnn.MathFidelity | None = ttnn.MathFidelity.LoFi
+    # Advisor-challenger decode-batch-1 winner: 88-core width-sharded hidden RMSNorm.
+    advisor_norm_cores = 88
 
     @classmethod
     def from_state_dict(
@@ -181,6 +184,38 @@ class OptimizedDecoder(FunctionalDecoder):
                 else "gate_HiFi4_up_down_framework_default"
             ),
         }
+        advisor_norm_cores = int(os.environ.get("GEMMA4_ADVISOR_NORM_CORES", str(cls.advisor_norm_cores)))
+        decoder.advisor_norm_cores = advisor_norm_cores
+        decoder.advisor_rotary_dram = os.environ.get("GEMMA4_ADVISOR_ROTARY_DRAM", "0") == "1"
+        decoder.advisor_norm_memory_config = None
+        decoder.advisor_norm_program_config = None
+        if advisor_norm_cores:
+            if HIDDEN_SIZE % advisor_norm_cores != 0 or (HIDDEN_SIZE // advisor_norm_cores) % TILE_SIZE != 0:
+                raise ValueError(
+                    f"GEMMA4_ADVISOR_NORM_CORES={advisor_norm_cores} is illegal: width {HIDDEN_SIZE} "
+                    "requires an integral tile-aligned shard; 88 cores is the maximum legal "
+                    "width-sharded grid"
+                )
+            if advisor_norm_cores % 11 != 0 or advisor_norm_cores // 11 > 10:
+                raise ValueError(
+                    f"GEMMA4_ADVISOR_NORM_CORES={advisor_norm_cores} is illegal on the 11x10 worker grid"
+                )
+            grid = ttnn.CoreGrid(x=11, y=advisor_norm_cores // 11)
+            shard_width = HIDDEN_SIZE // advisor_norm_cores
+            decoder.advisor_norm_memory_config = ttnn.create_sharded_memory_config(
+                (TILE_SIZE, shard_width),
+                grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            decoder.advisor_norm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[11, advisor_norm_cores // 11],
+                subblock_w=1,
+                block_h=1,
+                block_w=shard_width // TILE_SIZE,
+                inplace=False,
+            )
         expected_dtypes = {
             "qkv": attention_weight_dtype,
             "o_proj": attention_weight_dtype,
@@ -220,6 +255,25 @@ class OptimizedDecoder(FunctionalDecoder):
         if cls.optimization_candidate.startswith("dram_sharded_dense_"):
             decoder._materialize_dram_sharded_dense_weights()
         return decoder
+
+    def _rms_norm(self, x: ttnn.Tensor, weight: ttnn.Tensor | None) -> ttnn.Tensor:
+        """Use the advisor's hidden-width sharded norm only for decode-sized inputs."""
+        if (
+            self.advisor_norm_memory_config is None
+            or x.shape[-1] != HIDDEN_SIZE
+            or x.shape[-2] > TILE_SIZE
+        ):
+            return super()._rms_norm(x, weight)
+        sharded = ttnn.to_memory_config(x, self.advisor_norm_memory_config, dtype=x.dtype)
+        normalized = ttnn.rms_norm(
+            sharded,
+            epsilon=self.eps,
+            weight=weight,
+            program_config=self.advisor_norm_program_config,
+            compute_kernel_config=self.correctness_compute_config,
+            memory_config=self.advisor_norm_memory_config,
+        )
+        return ttnn.sharded_to_interleaved(normalized, ttnn.DRAM_MEMORY_CONFIG)
 
     @staticmethod
     def _core_range_set(core_count: int) -> ttnn.CoreRangeSet:

@@ -1,0 +1,21 @@
+{
+  "layer_kind": "sliding_attention",
+  "layer_idx": 0,
+  "batch": 1,
+  "capture_batch": 1,
+  "requested_decode_batch": 1,
+  "traced_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "policy_source": "doc/optimized_decoder/tracy/optimized_trace_bfp8_lofi_final_raw/.logs/cpp_device_perf_report.csv; doc/optimized_decoder/candidates/fidelity_decision.json",
+  "advisor_commit": "618cd4e75dae69d334bb9d8cdeff314816ccf214",
+  "advisor_pin_expected": "618cd4e75d",
+  "captured_at": "2026-08-03T13:22:36+00:00"
+}

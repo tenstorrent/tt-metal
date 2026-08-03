@@ -907,14 +907,25 @@ class FunctionalDecoder(LightweightModule):
             k_heads = ttnn.to_memory_config(k_heads, k_mem_config, dtype=k_heads.dtype)
             v_heads = ttnn.to_memory_config(v_heads, v_mem_config, dtype=v_heads.dtype)
         else:
-            q_heads = ttnn.to_memory_config(q_heads, q_mem_config, dtype=q_heads.dtype)
-            k_heads = ttnn.to_memory_config(k_heads, k_mem_config, dtype=k_heads.dtype)
-            v_heads = ttnn.to_memory_config(v_heads, v_mem_config, dtype=v_heads.dtype)
-            rope_mem_config = _make_decode_rope_memory_config(self.mesh_device, batch, kind.head_dim)
-            position_cos = ttnn.interleaved_to_sharded(position_cos, rope_mem_config)
-            position_sin = ttnn.interleaved_to_sharded(position_sin, rope_mem_config)
-            q_heads = ttnn.experimental.rotary_embedding_hf(q_heads, position_cos, position_sin, is_decode_mode=True)
-            k_heads = ttnn.experimental.rotary_embedding_hf(k_heads, position_cos, position_sin, is_decode_mode=True)
+            if getattr(self, "advisor_rotary_dram", False):
+                q_heads = ttnn.experimental.rotary_embedding_hf(
+                    q_heads, position_cos, position_sin, is_decode_mode=True)
+                k_heads = ttnn.experimental.rotary_embedding_hf(
+                    k_heads, position_cos, position_sin, is_decode_mode=True)
+                q_heads = ttnn.to_memory_config(q_heads, q_mem_config, dtype=q_heads.dtype)
+                k_heads = ttnn.to_memory_config(k_heads, k_mem_config, dtype=k_heads.dtype)
+                v_heads = ttnn.to_memory_config(v_heads, v_mem_config, dtype=v_heads.dtype)
+            else:
+                q_heads = ttnn.to_memory_config(q_heads, q_mem_config, dtype=q_heads.dtype)
+                k_heads = ttnn.to_memory_config(k_heads, k_mem_config, dtype=k_heads.dtype)
+                v_heads = ttnn.to_memory_config(v_heads, v_mem_config, dtype=v_heads.dtype)
+                rope_mem_config = _make_decode_rope_memory_config(self.mesh_device, batch, kind.head_dim)
+                position_cos = ttnn.interleaved_to_sharded(position_cos, rope_mem_config)
+                position_sin = ttnn.interleaved_to_sharded(position_sin, rope_mem_config)
+                q_heads = ttnn.experimental.rotary_embedding_hf(
+                    q_heads, position_cos, position_sin, is_decode_mode=True)
+                k_heads = ttnn.experimental.rotary_embedding_hf(
+                    k_heads, position_cos, position_sin, is_decode_mode=True)
 
         key_cache, value_cache = kv_cache
         update_kwargs = self._cache_view_kwargs(prefill=False)

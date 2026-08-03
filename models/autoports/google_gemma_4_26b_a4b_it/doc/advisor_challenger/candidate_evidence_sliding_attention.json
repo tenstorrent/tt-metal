@@ -1,0 +1,29 @@
+{
+  "layer_kind": "sliding_attention",
+  "devices": {
+    "LayerNormDeviceOperation": {
+      "candidate": "advisor_norm88",
+      "verdict": "kept",
+      "measured_ms": 1.587259229272604,
+      "repeats_ms": [1.5874848514795303, 1.588189397007227, 1.586423832923174, 1.587259229272604, 1.5865570865571499],
+      "confirmation_ms": 1.5873697213828564,
+      "oracle_passed": true,
+      "oracle_pcc": 0.9996293363,
+      "perf_report": "tracy/norm88_sliding_ops.csv",
+      "note": "Whole-layer candidate jointly changes the four hidden-width RMSNorm instances to the advisor-directed 88-core width-sharded implementation."
+    },
+    "RotaryEmbeddingHfDeviceOperation": {
+      "verdict": "hard_error",
+      "hard_error": "rotary_embedding_hf_device_operation.cpp:57: input_tensor.is_sharded(): Input must be sharded in decode mode",
+      "candidate": "advisor_rotary_dram"
+    },
+    "SdpaDecodeDeviceOperation": {
+      "verdict": "advisor_agrees",
+      "note": "The executed SDPA decode already requests DRAM output; this is real time but not an advisor-attributable change."
+    },
+    "NLPConcatHeadsDecodeDeviceOperation": {
+      "verdict": "not_applicable",
+      "note": "The decode concat-heads operation requires sharded input; the advisor's DRAM placement cannot be applied at this operation boundary."
+    }
+  }
+}

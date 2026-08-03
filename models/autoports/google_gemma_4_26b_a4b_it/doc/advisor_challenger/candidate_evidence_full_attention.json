@@ -1,0 +1,24 @@
+{
+  "layer_kind": "full_attention",
+  "devices": {
+    "LayerNormDeviceOperation": {
+      "candidate": "advisor_norm88",
+      "verdict": "kept",
+      "measured_ms": 1.7766602151095867,
+      "repeats_ms": [1.7772365175187588, 1.7766602151095867, 1.7776897922158241, 1.7757019959390163, 1.7757204174995422],
+      "confirmation_ms": 1.7777485959231853,
+      "oracle_passed": true,
+      "oracle_pcc": 0.9997872958,
+      "perf_report": "tracy/norm88_full_ops.csv",
+      "note": "Whole-layer candidate jointly changes the four hidden-width RMSNorm instances to the advisor-directed 88-core width-sharded implementation."
+    },
+    "SdpaDecodeDeviceOperation": {
+      "verdict": "advisor_agrees",
+      "note": "The executed SDPA decode already requests DRAM output; this is real time but not an advisor-attributable change."
+    },
+    "NLPConcatHeadsDecodeDeviceOperation": {
+      "verdict": "not_applicable",
+      "note": "The decode concat-heads operation requires sharded input; the advisor's DRAM placement cannot be applied at this operation boundary."
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "label": "advisor_norm88_sliding",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    1.5874848514795303,
+    1.588189397007227,
+    1.586423832923174,
+    1.587259229272604,
+    1.5865570865571499
+  ],
+  "median_ms": 1.587259229272604,
+  "noise_floor_ms": 0.0017655640840530396,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one sliding-attention decoder layer with advisor hidden-norm88 candidate, traced decode replay, batch 1, measured end to end on host",
+  "measured_at": "2026-08-03T13:26:33+00:00",
+  "shipped_policy": {
+    "attention_weight_dtype": "BFLOAT16",
+    "dense_weight_dtype": "BFLOAT16",
+    "expert_weight_dtype": "BFLOAT8_B"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/optimized_trace_bfp8_lofi_final_raw/.logs/cpp_device_perf_report.csv; doc/optimized_decoder/candidates/fidelity_decision.json",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

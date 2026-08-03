@@ -1,0 +1,37 @@
+{
+  "label": "incumbent",
+  "layer_counts": {"sliding_attention": 25, "full_attention": 5},
+  "total_layers": 30,
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 30,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    1.824091114103794,
+    1.8241103366017342,
+    1.8236223980784416,
+    1.8240209855139256,
+    1.8235234171152115
+  ],
+  "median_ms": 1.8240209855139256,
+  "noise_floor_ms": 0.0005869194865226746,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one sliding-attention decoder layer, traced decode replay, batch 1, measured end to end on host",
+  "measured_at": "2026-08-03T13:21:21+00:00",
+  "shipped_policy": {
+    "attention_weight_dtype": "BFLOAT16",
+    "dense_weight_dtype": "BFLOAT16",
+    "expert_weight_dtype": "BFLOAT8_B"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/optimized_trace_bfp8_lofi_final_raw/.logs/cpp_device_perf_report.csv; doc/optimized_decoder/candidates/fidelity_decision.json",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ],
+  "incumbent_ms": 1.8240209855139256
+}
