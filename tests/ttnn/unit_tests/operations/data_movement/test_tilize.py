@@ -1118,6 +1118,52 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
+# Regression test for issue #51215 bug 1: the retile compute kernel entered the tilize phase
+# without reconfiguring the packer destination format from mid_cb (input format) to out_cb
+# (output format), so the final pack never performed the dtype conversion the design relies on.
+@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
+@pytest.mark.parametrize(
+    "in_dtype, out_dtype, min_pcc",
+    [
+        (ttnn.bfloat16, ttnn.bfloat8_b, 0.999),
+        (ttnn.float32, ttnn.bfloat16, 0.9999),
+    ],
+    ids=["bf16_to_bfp8", "fp32_to_bf16"],
+)
+@pytest.mark.parametrize(
+    "input_tile_shape, output_tile_shape",
+    [
+        ((32, 32), (16, 32)),
+        ((16, 32), (32, 32)),
+    ],
+    ids=["32x32_to_16x32", "16x32_to_32x32"],
+)
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 128], [1, 1, 128, 256]])
+def test_tilize_retile_dtype_conversion(
+    device, tensor_shape, input_tile_shape, output_tile_shape, in_dtype, out_dtype, min_pcc
+):
+    """Retile into a different tile shape AND dtype: exercises the pack_reconfig_data_format
+    that was missing before tilize_init in the retile compute kernel (issue #51215 bug 1)."""
+    torch.manual_seed(42)
+    torch_dtype = torch.float32 if in_dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=in_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        tile=ttnn.Tile(list(input_tile_shape)),
+    )
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(output_tile_shape)), dtype=out_dtype)
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert tt_output.dtype == out_dtype
+
+    torch_output = ttnn.to_torch(tt_output).to(torch.float32)
+    assert_with_pcc(torch_input.to(torch.float32), torch_output, min_pcc)
+
+
 #   Blackhole LLK (_llk_unpack_tilize_init_): uint8 datums produced a
 #   strided (every-other-row zero) pattern because the BH-specific
 #   Tile_x_dim (face_r_dim * num_faces * FACE_C_DIM, spanning the full

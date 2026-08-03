@@ -699,3 +699,38 @@ def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum(device, hw, kernel,
     result_flat = y_torch_after_tile.reshape(-1)[: ref_flat.numel()]
 
     assert_with_pcc(ref_flat, result_flat, pcc=0.999)
+
+
+# Regression test for issue #51215 bug 4: the single-core reader cast an arbitrarily-offset L1
+# address to uint32_t* and wrote whole words for column padding.  When the unpadded row size is
+# not a multiple of 4 bytes the stores were misaligned, clobbering adjacent input bytes and
+# leaving the last 1-3 pad bytes unfilled.
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        # bfloat16: row_bytes = width * 2; odd width → row_bytes % 4 == 2 (unaligned)
+        ([1, 1, 32, 31], [1, 1, 32, 32]),
+        ([1, 1, 32, 33], [1, 1, 32, 64]),
+        ([1, 1, 64, 29], [1, 1, 64, 32]),
+        # Partial height: exercises both column-pad and row-pad paths together
+        ([1, 1, 30, 31], [1, 1, 32, 32]),
+    ],
+    ids=["bf16_w31", "bf16_w33", "bf16_w29", "bf16_w31_h30"],
+)
+def test_tilize_with_val_padding_unaligned_row_width(device, input_shape, output_shape):
+    """Single-core tilize_with_val_padding with row bytes not a multiple of 4 (issue #51215 bug 4)."""
+    pad_value = 7.0
+    torch_input = (torch.rand(input_shape) * 200 - 100).to(torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    )
+    tt_output = ttnn.tilize_with_val_padding(tt_input, output_shape, pad_value, use_multicore=False)
+    torch_output = tt_output.cpu().to_torch_with_padded_shape()
+
+    torch_golden = pytorch_tilize_with_val_padding(torch_input, output_shape, pad_value)
+    assert_equal(torch_golden, torch_output)
