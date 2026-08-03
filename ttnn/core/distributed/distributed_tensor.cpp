@@ -224,11 +224,11 @@ public:
                 distributed_buffer.emplace_shard(mapped_coord, [&b = replicated_buffer]() { return b; });
             }
 
-            const auto tensor_topology =
+            auto tensor_topology =
                 tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, std::move(buffer_coords));
 
-            return Tensor(
-                tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), tensor_spec, tensor_topology));
+            return Tensor(tt::tt_metal::HostTensor::from_buffer(
+                std::move(distributed_buffer), tensor_spec, std::move(tensor_topology)));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -398,11 +398,11 @@ private:
         const auto actual_distribution_shape =
             (distribution_shape_.dims() == 1) ? MeshShape(num_views_with_value) : distribution_shape_;
 
-        const auto tensor_topology =
+        auto tensor_topology =
             tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, std::move(buffer_coords));
 
-        return Tensor(
-            tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), shard_spec, tensor_topology));
+        return Tensor(tt::tt_metal::HostTensor::from_buffer(
+            std::move(distributed_buffer), shard_spec, std::move(tensor_topology)));
     }
 
     // Mesh parameters. `mesh_device_view_` is empty when constructed from a `MeshShape` only.
