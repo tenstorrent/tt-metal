@@ -148,6 +148,13 @@ target "zstd" {
   tags       = ["tool-zstd:local"]
 }
 
+target "curl" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.tools"
+  target     = "curl"
+  tags       = ["tool-curl:local"]
+}
+
 target "sfpi" {
   context    = "."
   dockerfile = "dockerfile/Dockerfile.tools"
@@ -188,7 +195,7 @@ target "dockerfile-frontend" {
 }
 
 group "tools" {
-  targets = ["ccache", "clangbuildanalyzer", "cmake", "dockerfile-frontend", "doxygen", "gdb", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
+  targets = ["ccache", "clangbuildanalyzer", "cmake", "curl", "dockerfile-frontend", "doxygen", "gdb", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
 }
 
 # =============================================================================
@@ -256,6 +263,7 @@ target "_main-common" {
     cmake-layer              = "target:cmake"
     yq-layer                 = "target:yq"
     zstd-layer               = "target:zstd"
+    curl-layer               = "target:curl"
     sfpi-layer               = "target:sfpi"
     openmpi-layer            = "target:openmpi"
   }

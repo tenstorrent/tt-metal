@@ -240,6 +240,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DDEBUG_EARLY_RETURN_KERNELS ";
     }
 
+    if (rtoptions.get_measure_dfb_init_time_enabled()) {
+        this->defines_ += "-DDFB_INIT_TIMING_ENABLED ";
+    }
+
     if (rtoptions.get_watcher_debug_delay()) {
         this->defines_ += "-DWATCHER_DEBUG_DELAY=" + to_string(rtoptions.get_watcher_debug_delay()) + " ";
     }
