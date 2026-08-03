@@ -14,6 +14,10 @@ partial outputs. One set of host weights is loaded into
 both are run on the same replicated input, and the (replicated) forward output
 and gate gradient must match within PCC bounds.
 
+Blackhole only: every bundled MGD and every measured EP configuration is
+Blackhole, so the module skips on other archs rather than exercising an untuned
+path.
+
 Needs ``EP_AXIS_SIZE`` chips on the "ep" axis; the module-scoped fixture skips
 otherwise. Override the axis size with ``TTML_EP_AXIS_SIZE`` and supply a
 matching ``TT_MESH_GRAPH_DESC_PATH`` for sizes that have no bundled MGD, e.g.
@@ -43,8 +47,6 @@ import ttml
 from ttml.models.deepseek.moe import MoE
 from ttml.models.deepseek.moe_sparse_ep import SparseMoEEP
 
-pytestmark = pytest.mark.requires_device
-
 SEED = 2026
 
 # Chips required on the "ep" axis. 2 is the smallest layout that actually
@@ -52,9 +54,9 @@ SEED = 2026
 EP_AXIS_SIZE = int(os.environ.get("TTML_EP_AXIS_SIZE", "2"))
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
-    ("wormhole_b0", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
+# Blackhole only — see the module docstring. No Wormhole MGDs are bundled.
+_MGD_FOR_SHAPE = {
+    (1, 2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
 }
 
 
@@ -81,16 +83,23 @@ class _Cfg:
 # ---------------------------------------------------------------------------
 
 
-def _detect_arch() -> Optional[str]:
+def _is_blackhole() -> bool:
     try:
-        name = ttnn.get_arch_name().lower()
+        return "blackhole" in ttnn.get_arch_name().lower()
     except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
+        return False
+
+
+# Blackhole-only: the bundled MGDs and the measured EP configurations are all
+# Blackhole, so on any other arch this module skips rather than silently
+# exercising an untuned path.
+pytestmark = [
+    pytest.mark.requires_device,
+    pytest.mark.skipif(
+        not _is_blackhole(),
+        reason="sparse_ep MoE is supported/validated on Blackhole only",
+    ),
+]
 
 
 def _close_device_quietly() -> None:
@@ -105,10 +114,7 @@ def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
     previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
     if previous:
         return previous
-    arch = _detect_arch()
-    if arch is None:
-        return previous
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
+    candidate = _MGD_FOR_SHAPE.get(shape)
     if candidate and os.path.isfile(candidate):
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
     return previous

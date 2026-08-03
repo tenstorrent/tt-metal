@@ -40,6 +40,18 @@ except ImportError:
     _AVAILABLE = False
 
 
+def _is_blackhole() -> bool:
+    """Blackhole-only gate: the sparse MoE ops are validated on Blackhole."""
+    if not _AVAILABLE:
+        return False
+    try:
+        return "blackhole" in ttnn.get_arch_name().lower()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_IS_BLACKHOLE = _is_blackhole()
+
 SEED = 2026
 
 
@@ -120,7 +132,7 @@ def _grad_pcc(label, dense_param, sparse_param, *, pcc=0.95):
 
 
 # (B, S, dim, moe_inter_dim, E, K). "tiny" is fastest; the others come
-# from the moe_group / moe_ungroup perf tables (see pr_description*.md).
+# from the moe_group / moe_ungroup perf tables.
 SHAPES = [
     pytest.param((2, 32, 64, 64, 4, 2), id="tiny"),
     pytest.param((2, 128, 512, 128, 2, 2), id="perf-b2-s128-h512"),
@@ -129,6 +141,7 @@ SHAPES = [
 
 
 @pytest.mark.skipif(not _AVAILABLE, reason="ttml / ttnn not importable")
+@pytest.mark.skipif(not _IS_BLACKHOLE, reason="sparse MoE is supported/validated on Blackhole only")
 @pytest.mark.requires_device
 class TestSparseVsDenseMoE:
     def setup_method(self, method):
