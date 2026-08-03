@@ -29,8 +29,9 @@ resolved.
 
 ## Current milestone
 
-**M2 complete.** Packing, conditioning, and the scheduler are ported and gated
-bit-exact on host. Next: **M3 — AdaLN precompute**.
+**M3 complete.** Packing, conditioning, scheduler, and the AdaLN precompute are
+all gated bit-exact on host. No device work yet. Next: **M4 — weight load at
+TP=4/SP=8**, the first step that needs a mesh.
 
 ## Gate evidence
 
@@ -39,7 +40,7 @@ bit-exact on host. Next: **M3 — AdaLN precompute**.
 | 1 | 177 GB reclaimed, FL2VA downloaded, `TT_DIT_CACHE_DIR` set | **PASS** | reclaim 273 -> 436 GB free (`~/h3_reclaim.log`); FL2VA **81/81 files, 0 `.incomplete`**, 135 GiB (transformer 62G, text_encoder 63G, video_vae 9.8G, audio_vae 578M) at snapshot `73372e6cf53e414edd3ab03e357717fb0602e758`; checkpoint keys/shapes/dtypes verified (below) |
 | 2a | packing bit-exact vs diffusers `minimax-h3` | **PASS** | 48/48 exact checks vs reference across both working points, keyframe and t2va; then `test_packing_minimax_h3.py` **38 passed, 2 skipped** (skips = diffusers branch not installed) |
 | 2b | conditioning + scheduler bit-exact | **PASS** | scheduler: 16/16 exact vs reference incl. full 49-eval rollouts at shift 12.0 and 3.0; conditioning: noise stream + generator advance + fp16 recipe exact. Suite `models/tt_dit/tests/models/minimax_h3/`: **71 passed, 3 skipped** |
-| 3 | AdaLN precompute parity | not started | — |
+| 3 | AdaLN precompute parity | **PASS** | real checkpoint: 196 (step, layer) projections + all 49 final-layer rows, **0 mismatches**, built in 6.8 s (`~/h3_adaln_build.log`, table at `~/h3_adaln_table.pt`). `test_adaln_precompute_minimax_h3.py` 13 passed; suite now **84 passed, 3 skipped** |
 | 4 | weight load at TP=4/SP=8, shapes/dtypes/fixups | not started | — |
 | 5 | attention block PCC >= 0.9995 | not started | — |
 | 6 | full 50-layer forward PCC >= 0.99 @ 960x544 | not started | — |
@@ -81,6 +82,17 @@ Dtype census: **522 BF16 + 13 F32**, and the 13 fp32 tensors are exactly the set
 the plan named — `{video,audio}_patch_proj.{weight,bias}`,
 `time_embedder.proj_{in,out}.{weight,bias}`,
 `final_layer.{video,audio}_out.{weight,bias}`, `rope.inv_freq`.
+
+## AdaLN precompute (M3) measurements
+
+- 49 evaluations, 2-3 distinct timesteps per step, **146 table rows**.
+- `block_params [50, 438, 6, 5376]` bf16, `final_shift`/`final_scale` `[146, 5376]`.
+- **1.416 GB total -> 0.354 GB/device at TP=4**, against 26.0 GB of `adaln_proj`
+  weights (6.50 GB/device). **18x** fewer resident bytes; the 13B parameters never
+  reach the device, taking the DiT from 16.6 to ~10.0 GB/device.
+- Build reads the 26 GB once, streaming one block at a time: 6.8 s warm page cache.
+- Rounding-order sensitivity quantified: activating in bf16 instead of fp32 shifts
+  modulation by **7.8e-3**.
 
 ## §9 verdicts
 
@@ -170,13 +182,17 @@ forbidden — it dropped all chips off PCIe on CPLD < 1.16.
 
 ## Next step
 
-**M3 — AdaLN precompute.** Stream `blocks.*.adaln_proj.linear.{weight,bias}`
-(50 x `[96768, 2688]`, ~13B params, 40% of the checkpoint) from safetensors once,
-evaluate over the known `(step, timestep, modality)` set for a given schedule
-config, and persist the ~1.4 GB table. The 13B weights then never reach the
-device, taking the DiT from 16.6 to ~10.0 GB/device.
+**M4 — `MiniMaxH3Checkpoint` and weight load at TP=4/SP=8.** Build the
+`Module`/`Parameter` tree and load `FL2VA/transformer` into it, verifying shapes,
+dtypes, and both load-time fixups without running a forward. Skip
+`blocks.*.adaln_proj.*` entirely — M3 replaced it.
 
-Gate: parity vs the reference `index_select` path, reproducing diffusers'
-rounding order exactly — `temb` is shared across blocks and each AdaLN module
-applies its **own** SiLU and casts to its own dtype afterwards
-(`transformer_minimax_h3.py:124`), so the SiLU must not be hoisted. Host only.
+The two fixups, both in `_prepare_torch_state` and both silent if wrong
+(amendments 5 and 6): reorder per-head-interleaved QKV to `[q_all; k_all; v_all]`
+before `ColParallelLinear(chunks=3)`, and swap `fc1`'s `[gate; value]` halves to
+`[value; gate]` *before* `permute_for_swiglu` does the cross-device interleave.
+
+Gate: every expected key consumed, no unexpected keys, all 12 fp32 parameters
+still fp32 after load, and per-device shard shapes matching §3.2. First milestone
+needing a mesh — record `tt-smi` and processes before it, and reset proactively if
+mesh state is uncertain.
