@@ -23,7 +23,7 @@ Two things about this tower differ from the text encoder in `model_qwen3vl.py`:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import math
 
 import torch
 
@@ -31,9 +31,10 @@ import ttnn
 
 from ...layers.linear import Linear
 from ...layers.module import Module
+from ...layers.normalization import LayerNorm
 
-if TYPE_CHECKING:
-    pass
+# `ttnn` SDPA requires a tile-aligned head dimension.
+_TILE = 32
 
 
 def vision_bilinear_indices_and_weights(
@@ -150,3 +151,169 @@ class Qwen3VlVisionPatchEmbed(Module):
     def forward(self, patches: ttnn.Tensor) -> ttnn.Tensor:
         """`(total_patches, patch_dim)` -> `(total_patches, hidden_size)`."""
         return self.proj.forward(patches)
+
+
+def vision_rope_position_ids(grid_thw: torch.Tensor, *, spatial_merge_size: int) -> torch.Tensor:
+    """`(total_patches, 2)` `(row, col)` positions for the tower's 2-D rotary embedding.
+
+    Note this is a *different* grid from the decoder's 3-axis M-RoPE in `model_qwen3vl.py`: the tower
+    rotates over spatial position within one image only, and has no temporal axis -- frames of a video
+    repeat the same `(row, col)` grid, since each frame is its own attention block.
+
+    The reshape/transpose puts positions into `spatial_merge_size` blocks, matching the patch order the
+    merger consumes.
+    """
+    out = []
+    for t, h, w in grid_thw.tolist():
+        t, h, w = int(t), int(h), int(w)
+        m = spatial_merge_size
+        hpos = torch.arange(h).unsqueeze(1).expand(-1, w)
+        hpos = hpos.reshape(h // m, m, w // m, m).transpose(1, 2).flatten()
+        wpos = torch.arange(w).unsqueeze(0).expand(h, -1)
+        wpos = wpos.reshape(h // m, m, w // m, m).transpose(1, 2).flatten()
+        out.append(torch.stack([hpos, wpos], dim=-1).repeat(t, 1))
+    return torch.cat(out, dim=0)
+
+
+def vision_rope_tensors(
+    grid_thw: torch.Tensor,
+    *,
+    head_dim: int,
+    spatial_merge_size: int,
+    rope_theta: float = 10000.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """`(cos, sin)` of shape `(total_patches, head_dim)` for the tower's rotary embedding.
+
+    The two position axes each contribute `head_dim // 4` frequencies, giving `head_dim // 2` before
+    the `rotate_half` duplication. Built on the host and uploaded, as elsewhere in this port.
+    """
+    position_ids = vision_rope_position_ids(grid_thw, spatial_merge_size=spatial_merge_size)
+    dim = head_dim // 2
+    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+    freqs = (position_ids.unsqueeze(-1) * inv_freq).flatten(1)
+    emb = torch.cat((freqs, freqs), dim=-1)
+    return emb.cos(), emb.sin()
+
+
+def _pad_head_dim(weight: torch.Tensor, *, num_heads: int, head_dim: int, padded: int, axis: int) -> torch.Tensor:
+    """Zero-pad a per-head weight or bias from `head_dim` to `padded` along `axis`.
+
+    `axis=0` for the output rows of q/k/v and for biases, `axis=1` for the input columns of the output
+    projection. The zeros contribute nothing to the dot products, which is why the softmax `scale` must
+    still be computed from the *true* head_dim -- see [`Qwen3VlVisionAttention`].
+    """
+    if head_dim == padded:
+        return weight
+    if axis == 0:
+        shaped = weight.reshape(num_heads, head_dim, *weight.shape[1:])
+        pad = [0] * (2 * (shaped.ndim - 2)) + [0, padded - head_dim]
+        return torch.nn.functional.pad(shaped, pad).reshape(num_heads * padded, *weight.shape[1:])
+    shaped = weight.reshape(weight.shape[0], num_heads, head_dim)
+    return torch.nn.functional.pad(shaped, (0, padded - head_dim)).reshape(weight.shape[0], num_heads * padded)
+
+
+class Qwen3VlVisionMLP(Module):
+    """Two biased linears with a GELU between. `hidden_act` is `gelu_pytorch_tanh` for this config."""
+
+    def __init__(self, *, hidden_size: int, intermediate_size: int, hidden_act: str, mesh_device) -> None:
+        super().__init__()
+        self.linear_fc1 = Linear(hidden_size, intermediate_size, bias=True, mesh_device=mesh_device)
+        self.linear_fc2 = Linear(intermediate_size, hidden_size, bias=True, mesh_device=mesh_device)
+        self._act = hidden_act
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = self.linear_fc1.forward(x)
+        x = ttnn.gelu(x) if self._act.startswith("gelu") else ttnn.silu(x)
+        return self.linear_fc2.forward(x)
+
+
+class Qwen3VlVisionAttention(Module):
+    """Plain MHA over one attention block, with biases and no QK-norm.
+
+    `head_dim` is `hidden_size // num_heads == 72` for this config, which is not tile-aligned. `ttnn`
+    SDPA rejects it outright (`TT_FATAL logical_shape[3] == legacy_shape[3]`), so q/k/v/o are padded to
+    96 at load time and `scale` is passed explicitly as `72 ** -0.5`. Leaving `scale` to SDPA would
+    make it `96 ** -0.5` and silently change the softmax temperature -- wrong output, not a crash.
+
+    One image is one attention block: `cu_seqlens = repeat_interleave(h*w, t).cumsum()`, so a single
+    image gives `[0, h*w]` and plain full attention is exact. Multiple images or video frames need
+    block-diagonal masking, which is not implemented here yet -- `forward` takes one block.
+    """
+
+    def __init__(self, *, hidden_size: int, num_heads: int, mesh_device) -> None:
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = hidden_size // num_heads
+        self.padded_head_dim = math.ceil(self.head_dim / _TILE) * _TILE
+        self.scale = self.head_dim**-0.5
+
+        self.inner = num_heads * self.padded_head_dim
+        self.qkv = Linear(hidden_size, 3 * self.inner, bias=True, mesh_device=mesh_device)
+        self.proj = Linear(self.inner, hidden_size, bias=True, mesh_device=mesh_device)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        kw = dict(num_heads=self.num_heads, head_dim=self.head_dim, padded=self.padded_head_dim)
+        if (w := state.get("qkv.weight")) is not None:
+            # the reference packs [q|k|v] on the output axis; pad each third's heads independently
+            state["qkv.weight"] = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in w.chunk(3, dim=0)])
+        if (b := state.get("qkv.bias")) is not None:
+            state["qkv.bias"] = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in b.chunk(3, dim=0)])
+        if (w := state.get("proj.weight")) is not None:
+            state["proj.weight"] = _pad_head_dim(w, axis=1, **kw)
+
+    def forward(self, hidden_states: ttnn.Tensor, *, pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
+        seq_len = hidden_states.shape[-2]
+        qkv = self.qkv.forward(hidden_states)
+
+        q, k, v = (
+            ttnn.permute(
+                ttnn.reshape(part, (1, seq_len, self.num_heads, self.padded_head_dim)),
+                (0, 2, 1, 3),
+            )
+            # `ttnn.split` takes a chunk *size*, as torch does -- passing 3 would give `inner`
+            # slices of width 3 rather than the three [q | k | v] blocks.
+            for part in ttnn.split(qkv, self.inner, dim=-1)
+        )
+
+        cos, sin = pos_embeds
+        q = _apply_vision_rope(q, cos, sin, self.head_dim)
+        k = _apply_vision_rope(k, cos, sin, self.head_dim)
+
+        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=self.scale)
+        attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (seq_len, self.num_heads * self.padded_head_dim))
+        return self.proj.forward(attn)
+
+
+def _apply_vision_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, head_dim: int) -> ttnn.Tensor:
+    """Rotate the leading `head_dim` channels of each head, leaving the padding tail untouched.
+
+    The padded channels carry no position, so rotating them would mix zeros into the rotation and is
+    simply skipped.
+    """
+    rot, tail = x[..., :head_dim], x[..., head_dim:]
+    half = head_dim // 2
+    rotated = ttnn.concat([ttnn.neg(rot[..., half:]), rot[..., :half]], dim=-1)
+    out = ttnn.add(ttnn.mul(rot, cos), ttnn.mul(rotated, sin))
+    return ttnn.concat([out, tail], dim=-1) if tail.shape[-1] else out
+
+
+class Qwen3VlVisionBlock(Module):
+    """Pre-norm attention and MLP with `LayerNorm` (eps 1e-6), not the decoder's RMSNorm."""
+
+    def __init__(
+        self, *, hidden_size: int, num_heads: int, intermediate_size: int, hidden_act: str, norm_eps: float, mesh_device
+    ) -> None:
+        super().__init__()
+        self.norm1 = LayerNorm(hidden_size, norm_eps=norm_eps, mesh_device=mesh_device)
+        self.attn = Qwen3VlVisionAttention(hidden_size=hidden_size, num_heads=num_heads, mesh_device=mesh_device)
+        self.norm2 = LayerNorm(hidden_size, norm_eps=norm_eps, mesh_device=mesh_device)
+        self.mlp = Qwen3VlVisionMLP(
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
+            hidden_act=hidden_act,
+            mesh_device=mesh_device,
+        )
+
+    def forward(self, hidden_states: ttnn.Tensor, *, pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
+        hidden_states = hidden_states + self.attn.forward(self.norm1.forward(hidden_states), pos_embeds=pos_embeds)
+        return hidden_states + self.mlp.forward(self.norm2.forward(hidden_states))
