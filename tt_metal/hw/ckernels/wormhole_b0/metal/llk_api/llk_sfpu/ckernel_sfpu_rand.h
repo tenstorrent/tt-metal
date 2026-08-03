@@ -13,6 +13,8 @@ using namespace sfpi;
 namespace ckernel::sfpu {
 
 constexpr std::uint32_t sfpshft_mod1_arg_imm = 1;
+constexpr std::uint32_t dense_uniform_exponent_bias = 126;
+constexpr std::uint32_t dense_uniform_exponent_bias_reg = p_sfpu::LREG7;
 
 template <std::uint32_t DEST>
 inline void rand_prng() {
@@ -56,9 +58,14 @@ inline void uint32_to_dense_uniform_fp32() {
     // binade index and the low 23 bits as the FP32 mantissa. The zero word
     // maps to the 2^-33 binade, deliberately avoiding subnormals and zero.
     TTI_SFPLZ(0, VALUE, EXPONENT, 0);
-    TTI_SFPIADD(0, p_sfpu::LCONST_0, EXPONENT, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPIADD(126, EXPONENT, EXPONENT, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSETMAN(0, p_sfpu::LCONST_1, VALUE, 0);
+    TTI_SFPIADD(
+        0,
+        dense_uniform_exponent_bias_reg,
+        EXPONENT,
+        sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    // The positive bias also supplies a zero sign bit; its temporary exponent
+    // is overwritten by SFPSETEXP.
+    TTI_SFPSETMAN(0, dense_uniform_exponent_bias_reg, VALUE, 0);
     TTI_SFPSETEXP(0, VALUE, EXPONENT, 0);
 }
 
@@ -114,12 +121,13 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     // Load from param to lreg2
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, from & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
+    TT_SFPLOADI(dense_uniform_exponent_bias_reg, sfpi::SFPLOADI_MOD0_USHORT, dense_uniform_exponent_bias);
 
     make_lane_salt();
     rand_prng<p_sfpu::LREG1>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
 
-    constexpr std::uint32_t row_instruction_count = 26;
+    constexpr std::uint32_t row_instruction_count = 25;
     TTI_REPLAY(0, row_instruction_count, 1, 1);
     rand_row();
 #pragma GCC unroll 7
