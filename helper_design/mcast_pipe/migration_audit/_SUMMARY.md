@@ -54,8 +54,8 @@ block inventory; this is the **pre-migration blocker view**.
 6. **Legacy-API prerequisite narrowed to move.** Sort is now on `Noc`/`Semaphore<>`; its upstream
    ready/done split removes the old single-counter ambiguity. A focused 2026-08-03 re-audit finds its
    phase broadcast expressible by API-v9 Counter `send_signal`/`receive_signal`, with both return
-   counters left op-owned. It remains `refactor`, not yet `pending`: host/device wire work and focused
-   control-only Counter coverage are still owed. Move still needs an object-API port first.
+   counters left op-owned. It has since migrated at API v9 in `7337302b564`; move still needs an
+   object-API port first.
 
 ## Step-C re-entry delta (2026-08-03)
 
@@ -64,8 +64,16 @@ block inventory; this is the **pre-migration blocker view**.
   longer holds for coordinator/reader at API v9.
 - Writer is a helper-neutral `done`-counter companion; its census/ledger disposition must be resolved
   as part of the atomic sort plan.
-- Downstream impact: Step D must re-map the sort pattern against the existing v9 API. Step G owes a
-  focused control-only Counter unit case. No API bump is implied by this Step-C finding.
+- Downstream outcome: Step D mapped sort to the existing v9 API, Step G added the focused
+  control-only Counter unit case, and apply completed without an API bump.
+
+## Apply/reconcile outcome (2026-08-03)
+
+- Step G added the focused Counter signal-only coverage; helper suite 72/72.
+- Coordinator and reader migrated at API v9 in `7337302b564`; writer remains helper-neutral after
+  coupled runtime-ABI cleanup.
+- Host build, exact fresh-cache `--dev` path, Ht=2 deadlock pair, and full 7-case long-tensor
+  inventory all passed. Census and ledger now record the completed two-kernel migration.
 
 ## Clean set (the easy wins that prove the API)
 Canonical two-sided P1/C1 pairs: matmul in0/in1 sender+receiver (4), conv weights sender+receiver

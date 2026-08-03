@@ -10,8 +10,9 @@ DERIVED FROM: current mcast_pipe API v9, api_feasibility.md, hazards_catalog.md,
 > remain observable. This does not reopen F2 as a style choice, change its measured default, or add a
 > topology/dtype/performance cell. The existing F2 result still stands: Flag is the performance
 > default; Counter remains the supported use-case knob for protocols that require monotone events.
-> The missing focused control-only, multi-iteration Counter case belongs to Step G helper coverage,
-> not this bake-off. No re-measure and no helper API-version change.
+> The focused control-only, multi-iteration Counter case belonged to Step G helper coverage, not
+> this bake-off; it is now present and the helper suite passes 72/72. No re-measure and no helper
+> API-version change.
 
 > **Current v9 completion correction (2026-07-30):** the F1 result below
 > remains valid for remote-only traffic: the receiver's linked flag wait proves

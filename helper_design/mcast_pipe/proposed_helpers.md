@@ -2,7 +2,7 @@ DERIVED FROM: current mcast_pipe API v9, api_feasibility.md, style_bakeoff.md, c
 
 # Step F — Helper Proposal: `Pipe` (`mcast_pipe`)
 
-> **Step-F re-entry (2026-08-03) — sort-single-row is an API-v9 migration candidate.** The current
+> **Step-F re-entry (2026-08-03) — sort-single-row is migrated at API v9.** The current
 > helper already expresses the coordinator→workers control channel as a no-handshake Counter
 > `SenderPipe::send_signal()` / `ReceiverPipe::receive_signal()` pair, materialized through one
 > `Mcast2D` wire over the full grid with the coordinator as the excluded source. The reader→coordinator
@@ -11,8 +11,9 @@ DERIVED FROM: current mcast_pipe API v9, api_feasibility.md, style_bakeoff.md, c
 > not a Pipe caller. Migration cost is a host/kernel ABI refactor: emit the Mcast2D CT/RT blocks,
 > adopt constexpr semaphore ID 0, switch the inverted level doorbell to the monotone Counter wire,
 > and remove obsolete writer doorbell arguments. No helper method, knob, count semantic, or API bump
-> is proposed. Before apply, Step G must add focused back-to-back, control-only Counter device
-> coverage. The fat-helper gate remains satisfied by the existing helper contract.
+> was selected. Step G added focused back-to-back, control-only Counter device coverage, and the
+> atomic unit migrated in `7337302b564`. No helper method, knob, count semantic, or API bump was
+> required. The fat-helper gate remains satisfied by the existing helper contract.
 
 > **Current v9 correction (2026-07-30):** the historical F1 decision below is
 > scoped to remote receivers. A real INCLUDE-source loopback is fenced to
@@ -212,9 +213,9 @@ llama worker_receiver, gn_v2 receiver. `(EXCLUDE or INCLUDE, Flag, flush, pre_ha
   `mcast_block_chunked` (producer-overlapped per-burst broadcast) on raw API this round.
 - sdpa read_k — `can_link=false` path (unlinked + barrier-between); deepseek_prefill — `Staging::Counter`.
 - move — **legacy raw API → port to `Noc`/`Semaphore` first**, then migrate.
-- sort-single-row — **API-v9 refactor candidate after focused Step-G control-only Counter coverage**:
-  coordinator + reader become the no-handshake Counter control Pipe faces; ready/done counters stay
-  raw/object and writer remains a helper-neutral companion in the same atomic host/kernel unit.
+- sort-single-row — **migrated at API v9 (`7337302b564`)**: coordinator + reader are the
+  no-handshake Counter control Pipe faces; ready/done counters stay raw/object and writer remains a
+  helper-neutral companion in the same atomic host/kernel unit.
 
 **Defer / out of scope (NOT this round — human-review items):**
 - **Rotating-sender / role-flip (R6):** matmul `..._in0_sender_receiver_padding_block_sharded`,

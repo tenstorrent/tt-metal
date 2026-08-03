@@ -14,8 +14,6 @@ void kernel_main() {
     const uint32_t index_tensor_buffer_addr = get_arg_val<uint32_t>(1);
     const uint32_t coordinator_core_physical_coord_x = get_arg_val<uint32_t>(2);
     const uint32_t coordinator_core_physical_coord_y = get_arg_val<uint32_t>(3);
-    const uint32_t coordinator_to_cores_semaphore_arg = get_arg_val<uint32_t>(4);
-    const uint32_t cores_to_coordinator_done_semaphore_arg = get_arg_val<uint32_t>(5);
 
     // Compile time args
     constexpr uint32_t input_tensor_output_cb_index = get_compile_time_arg_val(0);
@@ -59,7 +57,8 @@ void kernel_main() {
     constexpr uint32_t uint16_tile_size = get_tile_size(uint16_conv_cb_index);
 
     // Semaphore setup
-    Semaphore<> cores_to_coordinator_done_sem(cores_to_coordinator_done_semaphore_arg);
+    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;
+    Semaphore<> cores_to_coordinator_done_sem(cores_to_coordinator_done_semaphore_id);
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Get core start value

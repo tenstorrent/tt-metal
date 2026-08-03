@@ -1,49 +1,63 @@
-# mcast_pipe rollout report — API v9, verify-only pass 2026-08-03
+# mcast_pipe rollout report — API v9, sort re-entry 2026-08-03
 
 ## Run header
 
-- Helper: `mcast_pipe`, `MCAST_PIPE_API_VERSION=9` (unchanged — this skill only reads it)
+- Helper: `mcast_pipe`, `MCAST_PIPE_API_VERSION=9` (unchanged)
 - Entry mode: **re-entry**
 - Invocation mode: **`halt`**
-- Baseline: `origin/llk_helper_library` at `4a1d6a97ca9` (HEAD 17 commits ahead, at `eb05b3929a3`)
+- Baseline: `origin/llk_helper_library` at `4a1d6a97ca9` (code HEAD 20 commits ahead, at `7337302b564`)
 - Branch: `sjovic/mcast-migration`; pre-rebase branch preserved at
   `backup/mcast-migration-prerebase-20260803`
-- Re-entry worklist: **0 stale kernels, 0 stale/pending host bindings, 0 pending kernels, 0 net-new
-  units — the entire worklist was the 6 `needs_recheck` rows** raised by
-  `reconcile_2026-08-03.md`, handled as Phase 2's priority-1 **verify-only** pass
+- Re-entry worklist: one Tier-5 unit, `sort-single-row-control`, containing two Pipe faces, one
+  helper-neutral writer companion, and one host binding.
 - Device: single-chip Blackhole p100a (`bh-41-special-sjovic-for-reservation-53855`) — matches the
   `test_map.json` baseline machine
-- Test runner: `scripts/run_safe_pytest.sh`; gtest under `flock /tmp/tt-device.lock`
+- Test runner: `scripts/run_safe_pytest.sh`
 
-**No production code was modified in this run.** A verify-only pass re-runs a row's `validation_set`
-and clears the flag; it never rewrites a call site. There is therefore no diff, no commit of
-production code, and nothing to quarantine or revert. Per-tier subagents were not used (standing
-instruction not to spawn agents unprompted); the single verify-only unit ran inline.
+Production code commit `7337302b564` replaces the sort coordinator→workers inverted level
+doorbell with the existing no-handshake Counter signal Pipe. The independent reader-ready and
+writer-done counters remain operation-owned; writer is therefore not counted as a helper migration.
 
 ## Rollout state at v9
 
 | State | Count |
 |---|---:|
-| kernel-current | 10 |
-| host-binding-current | 10 |
-| fully end-to-end current | 10 bindings / 10 kernels |
+| kernel-current | 12 |
+| host-binding-current | 11 |
+| fully end-to-end current | 11 bindings / 12 kernels |
 | host-pending | 0 |
 | kernel-pending | 0 |
 | quarantined | 0 |
 | **open `needs_recheck`** | **0** (was 6 at the start of this run) |
-| deferred | 81 kernels / 0 host bindings |
+| deferred | 79 kernels / 0 host bindings |
 
 The fleet is **fully current at v9**: nothing stale, nothing pending, no advisory flags open.
+The helper-neutral sort writer remains one of the deferred rows because it has no Pipe face.
 
-Deferred dropped 82 → 81 because `reconcile_2026-08-03.md` removed the deepseek_prefill
+Deferred first dropped 82 → 81 because `reconcile_2026-08-03.md` removed the deepseek_prefill
 `reader_dispatch.cpp` row after the kernel was deleted upstream by `af00262e51d` (#48694). Its
 F2-counter coverage is retained by `reader_combine.cpp` and 5 other census entries.
+It then dropped 81 → 79 when the sort coordinator and reader migrated.
 
 "Fully end to end" remains channel-specific: e.g. height-sharded Conv2D has a weights-multicast
 binding but reads activations locally. Block- and width-sharded Conv2D activation multicast stay in
 the deferred kernel census.
 
-## This run — verify-only results
+## This run — sort migration results
+
+| Unit | Rows | Kind | Result |
+|---|---:|---|---|
+| `sort-single-row-control` | 2 migrated kernels + 1 helper-neutral companion + 1 host binding | Tier-5 migration | **PASS** |
+
+- Step G added four control-only Counter cases; complete helper suite passed 72/72 before and after
+  production integration.
+- `./build_metal.sh`: passed.
+- Exact `[1,524288]` long-tensor node under `--dev` from a fresh isolated cache: passed; all three
+  sort JIT artifacts confirmed.
+- Ht=2 deadlock regression: 2/2 passed. Full long-tensor inventory: 7/7 passed.
+- Reconcile found all 91 ledger kernel paths present and no new raw multicast primitive callsites.
+
+## Prior same-day verify-only results
 
 | Unit | Rows | Kind | Result |
 |---|---:|---|---|
@@ -92,7 +106,7 @@ Ledger write-back: `needs_recheck` cleared on all 6 rows, `last_verified` = 2026
 commit (`aeeb28ff007`) — its documented role is the revert/bisect anchor, not "last verified at".
 `test_map.json` baseline refreshed `54d8dfb7bef` → `4a1d6a97ca9`.
 
-## Cumulative rollout (from the original migration, unchanged by this run)
+## Cumulative rollout
 
 | Tier / atomic unit | Bindings | Failed | Quarantined | Production diff |
 |---|---:|---:|---:|---:|
@@ -100,9 +114,10 @@ commit (`aeeb28ff007`) — its documented role is the revert/bisect anchor, not 
 | 2 — `conv2d-weights-fixed-line` | 1 | 0 | 0 | +40 / −96 |
 | 3 — `matmul-in1-mcast-padding-host` | 4 | 0 | 0 | +196 / −70 |
 | 4 — `groupnorm-sharded-v2-mcast-host` | 4 | 0 | 0 | +168 / −376 |
-| Total | 10 | 0 | 0 | +452 / −593 |
+| 5 — `sort-single-row-control` | 1 | 0 | 0 | +57 / −79 |
+| Total | 11 | 0 | 0 | +509 / −672 |
 
-Net reduction of 141 production lines. No in-context performance run was requested, so no performance
+Net reduction of 163 production lines. No in-context performance run was requested, so no performance
 delta is claimed.
 
 | Kernel | Status | Validation | File deletions |
@@ -117,6 +132,8 @@ delta is claimed.
 | GroupNorm v2 legacy receiver | migrated, fully end-to-end | exact JIT; parameterized 108/2 skips | 17 |
 | GroupNorm v2 Welford sender | migrated, fully end-to-end | exact JIT; parameterized 108/2 skips | 113 |
 | GroupNorm v2 Welford receiver | migrated, fully end-to-end | exact JIT; parameterized 108/2 skips | 20 |
+| Sort single-row coordinator | migrated, fully end-to-end | exact fresh-cache JIT; long 7/7; Ht=2 2/2 | 43 |
+| Sort single-row reader | migrated, fully end-to-end | exact fresh-cache JIT; long 7/7; Ht=2 2/2 | 21 |
 
 Conv2D and GroupNorm rows were **not** in this run's scope — their factories are byte-identical to the
 pre-rebase verified state, so they needed no recheck. Their evidence dates from 2026-07-30.
@@ -137,7 +154,7 @@ rebase, so the verify-only pass neither widened nor narrowed them:
 
 ## Deferred kernel work
 
-The 81 deferred kernel rows remain outside this rollout. Principal production blockers:
+The 79 deferred kernel rows remain outside this rollout. Principal production blockers:
 
 - matmul in0 control channels needing typed/custom control values or independent data/signal loopback;
 - width-sharded Conv2D activation multicast (prior port failed 25 numerical cases; baseline restored);
@@ -147,11 +164,9 @@ The 81 deferred kernel rows remain outside this rollout. Principal production bl
   include-source loopback;
 - TopK no-handshake receiver initialization hazards.
 
-`reconcile_2026-08-03.md` additionally lists **10 deferred rows whose upstream churn touched protocol
-lines**, so their tags/notes may have drifted (loudest: the three `sort/` kernels, whose
-`cores_to_coordinator_semaphore` was split into `ready` + `done`, and
-`unified_routed_expert_ffn_reader.cpp`, which lost a `noc.async_write_multicast`). Nothing was
-re-tagged — a re-audit is an open follow-up, not part of this pass.
+The earlier reconcile listed ten deferred rows whose upstream churn touched protocol lines. The
+three sort rows were re-audited here: coordinator and reader migrated, while writer was explicitly
+classified helper-neutral. The remaining churned rows stay deferred for later focused audits.
 
 No partial migration for a deferred or quarantined unit remains in the worktree.
 
@@ -167,6 +182,7 @@ confirmed by patch-id).
 | Conv2D fixed-line weights | `51dfb1f1ed61045ed10dc679269960b6d2ccac9e` | `5320c2d69bd` | `261e322ed22` |
 | Matmul in1 | `aeeb28ff007807c71b1f60842cca85e5c41efa7f` | `53724c12419` | `2d0280d3dac` |
 | GroupNorm v2 | `bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0` | `49e559dcb55` | `0a796a025c9` |
+| Sort single-row control | `7337302b5649b7cd169764cd95c0b0343e88950d` | this ledger/report follow-up | n/a |
 
 Two on-branch commit *messages* still cite pre-rebase hashes (`baa86dc7116` "…for 75b977e1a04",
 `5320c2d69bd` "…for 261e322ed22") — history is immutable; this table is the key.

@@ -74,8 +74,10 @@ The inverted flag is likewise not required behavior. The strongest v9 formulatio
 
 ## Verdict
 
-**refactor (medium), migratable with API v9; no helper redesign required.**
+**migrated with API v9 in `7337302b564`; no helper redesign required.**
 
-The migration requires a paired host/kernel ABI and control-protocol rewrite, but the varying ready/done counts are no longer a design gap because they remain explicit outside the control-only Pipe.
+The paired host/kernel ABI and control-protocol rewrite is complete. The varying ready/done counts
+remain explicit outside the control-only Pipe.
 
-Validation gap to close before apply: the helper device-unit suite covers `DataReadySignal::Counter` through the data-bearing `send()`/`receive()` path, but has no focused multi-iteration **control-only Counter** device test for `send_signal()`/`receive_signal()`.
+Validation closed: four focused multi-iteration control-only Counter device cases pass, along with
+the 72-case helper suite and the mapped sort inventories.

@@ -8,6 +8,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "ckernel.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 #include "sort_dataflow_common.hpp"
 
@@ -15,29 +16,9 @@
 
 void kernel_main() {
     // Runtime args
-    const uint32_t start_core_physical_coord_x = get_arg_val<uint32_t>(0);
-    const uint32_t start_core_physical_coord_y = get_arg_val<uint32_t>(1);
-    const uint32_t end_core_physical_coord_x = get_arg_val<uint32_t>(2);
-    const uint32_t end_core_physical_coord_y = get_arg_val<uint32_t>(3);
-    const uint32_t coordinator_to_cores_semaphore_arg = get_arg_val<uint32_t>(4);
-    const uint32_t cores_to_coordinator_ready_semaphore_arg = get_arg_val<uint32_t>(5);
-    const uint32_t cores_to_coordinator_done_semaphore_arg = get_arg_val<uint32_t>(6);
-    // Number of worker cores this coordinator serves.  Used as the exact-match target
-    // for `cores_to_coordinator_ready_sem.wait()` and (indirectly, via
-    // `number_of_confirmations = Wt / 2`) for the per-sub-stage done-sem waits.
-    const uint32_t number_of_workers = get_arg_val<uint32_t>(7);
-    // Number of NoC destinations for the go-signal multicast.  Must match the
-    // number of cores in the multicast rectangle (excluding the coord itself when
-    // the rect contains it).  In the partial-grid path the multicast rectangle
-    // covers a bounding box that may be strictly larger than `number_of_workers`,
-    // so this is tracked as a separate value from the worker count above — using
-    // `number_of_workers` here would drift the NoC's ack counter and hang the op.
-    // See `sort_program_factory.cpp` (SortProgramFactorySingleRowMultiCore) for
-    // the derivation of both quantities.
-    const uint32_t num_multicast_dests = get_arg_val<uint32_t>(8);
-    const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(9);
-    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(10);
-    const uint32_t output_index_tensor_buffer_addr = get_arg_val<uint32_t>(11);
+    const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(0);
+    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(1);
+    const uint32_t output_index_tensor_buffer_addr = get_arg_val<uint32_t>(2);
 
     // Compile time args
     constexpr uint32_t total_work_units = get_compile_time_arg_val(0);
@@ -58,6 +39,7 @@ void kernel_main() {
     constexpr uint32_t W_tile_bytes = get_compile_time_arg_val(rm_base_offset + 3);
     constexpr uint32_t W_index_bytes = get_compile_time_arg_val(rm_base_offset + 4);
     constexpr uint32_t tile_width = get_compile_time_arg_val(rm_base_offset + 5);
+    constexpr auto coordinator_mcast_args = dataflow_kernel_lib::McastArgs<rm_base_offset + 6, 3>();
 
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t TILE_H = 32;
@@ -67,6 +49,7 @@ void kernel_main() {
     const auto output_index_tensor_addr_gen = TensorAccessor(output_index_tensor_args, output_index_tensor_buffer_addr);
 
     Noc noc;
+    auto coordinator_pipe = coordinator_mcast_args.sender(noc);
     CircularBuffer input_tensor_cb(input_tensor_cb_index);
     CircularBuffer index_tensor_cb(index_tensor_cb_index);
     CircularBuffer rm_coord_value_row(rm_coord_value_row_cb);
@@ -83,16 +66,18 @@ void kernel_main() {
     const uint32_t index_tensor_tile_size = get_tile_size(index_tensor_cb_index);
 
     // Semaphore setup
-    Semaphore<> coordinator_to_cores_sem(coordinator_to_cores_semaphore_arg);
     // Two separate up-channels from the worker cores: the reader's per-row readiness ->
     // ready sem, the writer's per-pair confirmations -> done sem.  They are kept on
     // distinct semaphores so each exact-match wait() below has its own monotonic target;
     // folded onto one shared counter, at a tile-row boundary (Ht >= 2) a fast reader's
     // next-row readiness could land during the confirmation window and push the counter
     // past the done target, so the wait would never match and the op would deadlock.
-    Semaphore<> cores_to_coordinator_ready_sem(cores_to_coordinator_ready_semaphore_arg);
-    Semaphore<> cores_to_coordinator_done_sem(cores_to_coordinator_done_semaphore_arg);
+    constexpr uint32_t cores_to_coordinator_ready_semaphore_id = 1;
+    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;
+    Semaphore<> cores_to_coordinator_ready_sem(cores_to_coordinator_ready_semaphore_id);
+    Semaphore<> cores_to_coordinator_done_sem(cores_to_coordinator_done_semaphore_id);
 
+    constexpr uint32_t number_of_workers = coordinator_mcast_args.num_active;
     const uint32_t number_of_confirmations = Wt / 2;
 
     // Copy input data to output and generate index tiles
@@ -204,14 +189,7 @@ void kernel_main() {
         cores_to_coordinator_ready_sem.set(0);  // Reset the semaphore
 
         // Set signal to start processing
-        coordinator_to_cores_sem.set_multicast<NocOptions::DEFAULT>(
-            noc,
-            start_core_physical_coord_x,
-            start_core_physical_coord_y,
-            end_core_physical_coord_x,
-            end_core_physical_coord_y,
-            num_multicast_dests);
-        noc.async_write_barrier();
+        coordinator_pipe.send_signal();
 
         // Calculate sorting stages
         uint32_t stages = 0;
@@ -222,14 +200,7 @@ void kernel_main() {
         for (uint32_t stage = 1; stage <= stages; stage++) {
             for (uint32_t sub = stage; sub > 0; sub--) {
                 // Set signal to start processing next sub-stage
-                coordinator_to_cores_sem.set_multicast<NocOptions::DEFAULT>(
-                    noc,
-                    start_core_physical_coord_x,
-                    start_core_physical_coord_y,
-                    end_core_physical_coord_x,
-                    end_core_physical_coord_y,
-                    num_multicast_dests);
-                noc.async_write_barrier();
+                coordinator_pipe.send_signal();
 
                 // Wait until cores will process and save data
                 cores_to_coordinator_done_sem.wait(number_of_confirmations);

@@ -117,24 +117,22 @@ API addition.
 - The two op-specific return counters stay outside the helper rather than turning `SenderPipe` into a
   generic three-channel protocol object.
 
-### Residual proof obligations (not feasibility blockers)
+### Residual proof obligations — closed by apply (2026-08-03)
 
-1. **Step G helper coverage:** add a focused multi-iteration, control-only Counter device case for
-   `send_signal()` / `receive_signal()`, including back-to-back sends. Current Counter device coverage
-   is data-bearing. This is a test-only materialization improvement; keep
-   `MCAST_PIPE_API_VERSION=9`.
-2. **Apply Phase 1 mapping:** device-verify the current discovery route for all three sort JIT kernels.
-   Start with one exact `test_sort_long_tensor` parameter, then cover
-   `test_sort_multi_row_multi_core_no_deadlock` at `Ht=2` for both descending values.
-3. **Apply ledger disposition:** coordinator and reader can become pending after plan approval; writer
-   remains a raw/helper-neutral protocol companion even if the atomic commit cleans its ABI.
+1. **Step G helper coverage: complete.** Four focused multi-iteration, control-only Counter device
+   cases cover 1×2 and 1×8 rectangles with 2 and 32 back-to-back sends; helper suite 72/72.
+2. **Apply Phase 1 mapping: complete.** The exact fresh-cache `test_sort_long_tensor` parameter
+   confirmed all three sort JIT kernels, `test_sort_multi_row_multi_core_no_deadlock` passed at
+   `Ht=2` for both descending values, and the complete long-tensor inventory passed 7/7.
+3. **Ledger disposition: complete.** Coordinator and reader are migrated at v9; writer remains a
+   raw/helper-neutral protocol companion after coupled ABI cleanup.
 
 ### Verdict: **FEASIBLE AS CURRENTLY MATERIALIZED (API v9)**
 
 No caller-facing helper change and no API-version bump. Step E has no new style cell to measure or
 re-decide; the existing Counter choice is forced by event-preservation behavior here. Step F only
-needs to refresh the proposal's migration list / stale sort wording. Step G owes the focused
-control-only Counter unit case before handing the `sort-single-row` unit to `apply-dm-helper`.
+refreshed the proposal's migration list and stale sort wording. Step G supplied the focused
+control-only Counter unit case, and `apply-dm-helper` completed the unit in `7337302b564`.
 
 ---
 
