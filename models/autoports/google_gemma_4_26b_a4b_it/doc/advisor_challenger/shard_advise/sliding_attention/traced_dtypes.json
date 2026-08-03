@@ -1,0 +1,22 @@
+{
+  "layer_kind": "sliding_attention",
+  "layer_idx": 0,
+  "batch": 1,
+  "capture_batch": 1,
+  "requested_decode_batch": 1,
+  "traced_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "policy_source": "doc/optimized_decoder/tracy/decode_sliding_attention_batch1.csv; doc/optimized_decoder/tracy/decode_full_attention_batch1.csv; doc/optimized_decoder/README.md selected bfp8_experts_lofi",
+  "advisor_commit": "618cd4e75dae69d334bb9d8cdeff314816ccf214",
+  "advisor_pin_expected": "618cd4e75d",
+  "captured_at": "2026-08-03T15:12:05+00:00",
+  "capture_template": ".agents/skills/advisor-challenger/scripts/capture_template.py"
+}

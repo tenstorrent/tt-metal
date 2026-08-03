@@ -1,0 +1,39 @@
+{
+  "chains": {
+    "sliding_attention:b21": {
+      "verdict": "kept",
+      "measured_ms": 1.3184487260878086,
+      "repeats_ms": [1.3181746192276478, 1.3184487260878086, 1.3184901885688305, 1.3174626603722572, 1.3186795637011528],
+      "oracle_passed": true,
+      "oracle_pcc": 0.9997073934348056,
+      "oracle_weights": "real",
+      "ops": ["nlp_concat_heads_decode", "linear"],
+      "combined_with": ["sliding_attention:b19 attempted first as the required aggregate extension"],
+      "perf_report": "doc/advisor_challenger/tracy/candidate_sliding_ops.csv"
+    },
+    "sliding_attention:b19": {
+      "verdict": "below_threshold",
+      "hard_error": "Sharded output not supported for GQA",
+      "combined_with": ["sliding_attention:b21"]
+    },
+    "sliding_attention:4": {"verdict": "below_threshold"},
+    "sliding_attention:2": {"verdict": "below_threshold"},
+    "sliding_attention:0": {"verdict": "below_threshold"},
+    "sliding_attention:1": {"verdict": "below_threshold"},
+    "sliding_attention:3": {"verdict": "below_threshold"}
+  },
+  "material_ops": {
+    "LayerNormDeviceOperation": {
+      "verdict": "rejected",
+      "measured_ms": 1.3469416834414005,
+      "repeats_ms": [1.3472753204405308, 1.3469416834414005, 1.3462222926318645, 1.3462235033512115, 1.3476987183094025],
+      "candidate": "88-core exact-dividing width-sharded norm"
+    }
+  },
+  "disagreements": {
+    "RotaryEmbeddingHfDeviceOperation#0": {"verdict": "below_threshold"},
+    "RotaryEmbeddingHfDeviceOperation#1": {"verdict": "below_threshold"},
+    "SdpaDecodeDeviceOperation#0": {"verdict": "kept_in_dram", "hard_error": "Sharded output not supported for GQA"},
+    "NLPConcatHeadsDecodeDeviceOperation#0": {"verdict": "below_threshold"}
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "outcome": "improved",
+  "changed": true,
+  "changed_precision": false,
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "capture_batch": 1,
+  "incumbent_ms": 1.3411529175937176,
+  "final_ms": 1.3184487260878086,
+  "repeats_ms": [1.3410769775509834, 1.3413378782570362, 1.339827999472618, 1.3411529175937176, 1.3426323421299458],
+  "confirmed": true,
+  "confirmed_fresh_process": true,
+  "winning_repeats_ms": [1.3181746192276478, 1.3184487260878086, 1.3184901885688305, 1.3174626603722572, 1.3186795637011528],
+  "confirmation_repeats_ms": [1.3185637444257736, 1.3186565227806568, 1.3182000443339348, 1.3177920877933502, 1.318220105022192],
+  "shipped_default_repeats_ms": {
+    "sliding_attention": [1.3193277642130852, 1.3191187754273415, 1.3190562836825848, 1.3187547028064728, 1.319062877446413],
+    "full_attention": [1.4949232712388039, 1.4942852221429348, 1.4939317293465137, 1.4947064220905304, 1.4947302639484406]
+  },
+  "oracle": "real-weight HuggingFace layer-reference PCC",
+  "oracle_reference": "HuggingFace google/gemma-4-26B-A4B-it decoder layer",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "layer_counts": {"sliding_attention": 25, "full_attention": 5},
+  "winning_config": "keep nlp_concat_heads_decode output sharded into output projection; retain SDPA DRAM boundary",
+  "combination": {
+    "measured_sets": [
+      {"set": ["incumbent", "sliding_attention"], "measured_ms": 1.3411529175937176, "repeats_ms": [1.3410769775509834, 1.3413378782570362, 1.339827999472618, 1.3411529175937176, 1.3426323421299458], "oracle_passed": true},
+      {"chains": ["sliding_attention:b21"], "measured_ms": 1.3184487260878086, "repeats_ms": [1.3181746192276478, 1.3184487260878086, 1.3184901885688305, 1.3174626603722572, 1.3186795637011528], "oracle_passed": true},
+      {"set": ["incumbent", "full_attention"], "measured_ms": 1.5393735840916634, "repeats_ms": [1.5384297631680965, 1.5388245321810246, 1.5405866876244545, 1.5395426750183105, 1.5393735840916634], "oracle_passed": true},
+      {"chains": ["full_attention:b23"], "measured_ms": 1.4945481903851032, "repeats_ms": [1.4943255670368671, 1.4946621842682362, 1.4945481903851032, 1.4938891120254993, 1.494626346975565], "oracle_passed": true}
+    ]
+  },
+  "shipped_policy_source": "executed_policy.json",
+  "rejected_knobs": {
+    "GEMMA4_ADVISOR_NORM_CORES=88": "default-off; measured 1.346942 ms sliding and 1.549943 ms full versus 1.341153/1.539374 ms controls",
+    "GEMMA4_ADVISOR_NORM_CORES=110": "default-off; illegal because 2816 is not tile-divisible across 110 cores",
+    "sharded_sdpa_output_extension": "default-off; hard error: Sharded output not supported for GQA"
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "material one-core LayerNorm obligation from reconciliation",
+      "chains": ["advisor material LayerNorm disagreement; 88-core exact-dividing grid"],
+      "measured_ms": {"sliding_attention": 1.3469416834414005, "full_attention": 1.5499427169561386},
+      "verdict": "rejected: slower than the frozen incumbent for both layer kinds"
+    },
+    {
+      "iteration": 2,
+      "trigger": "reconcile-ranked concat-heads to output-projection boundary; aggregate-first sliding screen",
+      "reranked_from": "fresh frozen-incumbent reconciliation for each layer kind",
+      "chains": ["sliding_attention:b21", "full_attention:b23"],
+      "combined_with": ["sliding_attention:b19 attempted as connected extension; hard error for sharded GQA SDPA output"],
+      "measured_ms": {"sliding_attention": 1.3184487260878086, "full_attention": 1.4945481903851032},
+      "repeats_ms": {
+        "sliding_attention": [1.3181746192276478, 1.3184487260878086, 1.3184901885688305, 1.3174626603722572, 1.3186795637011528],
+        "full_attention": [1.4943255670368671, 1.4946621842682362, 1.4945481903851032, 1.4938891120254993, 1.494626346975565]
+      },
+      "oracle_passed": true,
+      "verdict": "kept and confirmed in fresh processes"
+    }
+  ],
+  "model_estimate": {
+    "before_us": 38887.565,
+    "after_us": 38095.833,
+    "band_us": 80.885,
+    "per_kind": {
+      "sliding_attention": {"before_us": 31594.250, "after_us": 31026.645, "layers": 25, "advisor_removes_per_model_us": 567.605, "band_us": 70.100},
+      "full_attention": {"before_us": 7293.315, "after_us": 7069.188, "layers": 5, "advisor_removes_per_model_us": 224.127, "band_us": 10.785}
+    },
+    "layer_handoff": "reported, not screened: DRAM entry to L1 costs 0.921 us/layer sliding and 0.904 us/layer full",
+    "method": "per-layer measured profile window x layers_of_kind, summed; uncertainty bands summed linearly"
+  },
+  "advisor_contribution_us": 791.732,
+  "advisor_contribution_pct": 2.036,
+  "advised_boundaries": {
+    "us_advisor_agrees": {"sliding_attention": 6.676, "full_attention": 4.012},
+    "screened": false,
+    "note": "reported real conversion time; excluded from advisor contribution"
+  }
+}

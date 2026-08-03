@@ -1,6 +1,6 @@
 {
   "decode_current_pos": 32,
-  "decode_pcc": 0.9997431909453603,
+  "decode_pcc": 0.9997073934348056,
   "decode_threshold": 0.995,
   "layer_idx": 0,
   "layer_type": "sliding_attention",

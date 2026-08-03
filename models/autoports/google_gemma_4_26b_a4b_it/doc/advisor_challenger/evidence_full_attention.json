@@ -1,0 +1,35 @@
+{
+  "chains": {
+    "full_attention:b23": {
+      "verdict": "kept",
+      "measured_ms": 1.4945481903851032,
+      "repeats_ms": [1.4943255670368671, 1.4946621842682362, 1.4945481903851032, 1.4938891120254993, 1.494626346975565],
+      "oracle_passed": true,
+      "oracle_pcc": 0.9998681295831672,
+      "oracle_weights": "real",
+      "perf_report": "doc/advisor_challenger/tracy/candidate_full_ops.csv"
+    },
+    "full_attention:b21": {"verdict": "below_threshold"},
+    "full_attention:b16": {"verdict": "below_threshold"},
+    "full_attention:b18": {"verdict": "below_threshold"},
+    "full_attention:b17": {"verdict": "below_threshold"},
+    "full_attention:5": {"verdict": "below_threshold"},
+    "full_attention:3": {"verdict": "below_threshold"},
+    "full_attention:0": {"verdict": "below_threshold"},
+    "full_attention:2": {"verdict": "below_threshold"},
+    "full_attention:1": {"verdict": "below_threshold"},
+    "full_attention:4": {"verdict": "below_threshold"}
+  },
+  "material_ops": {
+    "LayerNormDeviceOperation": {
+      "verdict": "rejected",
+      "measured_ms": 1.5499427169561386,
+      "repeats_ms": [1.5509696677327156, 1.5522048249840736, 1.5497395396232605, 1.5499427169561386, 1.5487997606396675],
+      "candidate": "88-core exact-dividing width-sharded norm"
+    }
+  },
+  "disagreements": {
+    "SdpaDecodeDeviceOperation#0": {"verdict": "kept_in_dram", "hard_error": "Sharded output not supported for GQA"},
+    "NLPConcatHeadsDecodeDeviceOperation#0": {"verdict": "rejected", "reason": "opposite sharded concat-to-projection chain measured faster"}
+  }
+}

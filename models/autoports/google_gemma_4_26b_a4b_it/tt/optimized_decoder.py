@@ -12,6 +12,7 @@ runtime tensor value, so every path remains trace safe.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -321,7 +322,17 @@ def _large_prefill_dense_program_config(m: int, *, projection: str) -> Any:
 def _decode_residual_configs(cores: int) -> tuple[Any, Any]:
     if HIDDEN_SIZE % (cores * TILE_SIZE):
         raise ValueError(f"hidden size {HIDDEN_SIZE} must tile-divide residual cores {cores}")
-    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores - 1, 0))})
+    grid_x, grid_y = cores, 1
+    if cores > 14:
+        for candidate_y in range(10, 0, -1):
+            if cores % candidate_y == 0 and cores // candidate_y <= 14:
+                grid_x, grid_y = cores // candidate_y, candidate_y
+                break
+        else:
+            raise ValueError(f"cannot place {cores} residual cores on the device grid")
+    grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
+    )
     shard_width = HIDDEN_SIZE // cores
     memory = ttnn.create_sharded_memory_config(
         shape=(TILE_SIZE, shard_width),
@@ -335,7 +346,7 @@ def _decode_residual_configs(cores: int) -> tuple[Any, Any]:
     while block_w % subblock_w:
         subblock_w -= 1
     program = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[cores, 1],
+        compute_with_storage_grid_size=[grid_x, grid_y],
         subblock_w=subblock_w,
         block_h=1,
         block_w=block_w,
@@ -348,6 +359,9 @@ class OptimizedDecoder(FusedDecoder):
     """Batch-1 optimized decoder with an active-expert sparse runtime."""
 
     DEFAULT_CANDIDATE = "bfp8_experts_lofi"
+    # Shipped advisor contribution: keep concat-heads output sharded into the
+    # output projection, eliminating the measured L1->DRAM boundary.
+    ADVISOR_ATTN_CHAIN = True
     USE_LARGE_PREFILL_DENSE_CONFIGS = False
     PREFILL_EXPERT_UP_GATE_CORES = 4
     PREFILL_EXPERT_DOWN_CORES = 8
@@ -367,7 +381,12 @@ class OptimizedDecoder(FusedDecoder):
         self.expert_compute_config = _compute_config(
             self.mesh_device, self.policy.expert_math_fidelity, fp32_dest_acc_en=True
         )
-        self.decode_residual_memory_config, self.decode_norm_program_config = _decode_residual_configs(8)
+        # Advisor-challenger candidate knob.  Eight cores remains the frozen
+        # incumbent unless the stage explicitly selects another legal grid.
+        advisor_norm_cores = int(os.environ.get("GEMMA4_ADVISOR_NORM_CORES", "8"))
+        self.decode_residual_memory_config, self.decode_norm_program_config = _decode_residual_configs(
+            advisor_norm_cores
+        )
 
     @classmethod
     def from_state_dict(cls, state_dict: dict[str, Any], *, candidate: str | None = None, **kwargs: Any):

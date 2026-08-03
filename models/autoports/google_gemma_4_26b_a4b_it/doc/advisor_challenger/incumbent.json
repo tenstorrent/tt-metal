@@ -1,0 +1,35 @@
+{
+  "label": "incumbent",
+  "layer_counts": {"sliding_attention": 25, "full_attention": 5},
+  "total_layers": 30,
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    1.3410769775509834,
+    1.3413378782570362,
+    1.339827999472618,
+    1.3411529175937176,
+    1.3426323421299458
+  ],
+  "median_ms": 1.3411529175937176,
+  "noise_floor_ms": 0.002804342657327652,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one sliding-attention decoder layer, traced decode replay, batch 1, measured end to end on host",
+  "measured_at": "2026-08-03T15:10:35+00:00",
+  "shipped_policy": {
+    "candidate": "bfp8_experts_lofi"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/decode_sliding_attention_batch1.csv; doc/optimized_decoder/tracy/decode_full_attention_batch1.csv; doc/optimized_decoder/README.md selected bfp8_experts_lofi",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ],
+  "incumbent_ms": 1.3411529175937176
+}

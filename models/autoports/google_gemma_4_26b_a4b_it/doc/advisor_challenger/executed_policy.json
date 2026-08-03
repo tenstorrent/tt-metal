@@ -1,0 +1,9 @@
+{
+  "shipped_policy": {"candidate": "bfp8_experts_lofi"},
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/decode_sliding_attention_batch1.csv; doc/optimized_decoder/tracy/decode_full_attention_batch1.csv; doc/optimized_decoder/README.md selected bfp8_experts_lofi"
+}

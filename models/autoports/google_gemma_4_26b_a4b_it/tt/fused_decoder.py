@@ -300,6 +300,8 @@ class FusedDecoder(FunctionalDecoder):
             )
 
         sdpa_kwargs = self._cache_view_kwargs(prefill=False)
+        concat_mem_config = _make_decode_height_sharded_memory_config(self.mesh_device, batch, kind.head_dim)
+        advisor_attn_chain = getattr(self, "ADVISOR_ATTN_CHAIN", False)
         attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_heads,
             key_cache,
@@ -309,13 +311,16 @@ class FusedDecoder(FunctionalDecoder):
             scale=1.0,
             sliding_window_size=kind.sliding_window,
             program_config=self.sdpa_program_config,
+            # SDPA-decode rejects sharded GQA output in this checkout.  The
+            # candidate therefore keeps that hard boundary and tests the
+            # adjacent concat->projection boundary independently.
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             **sdpa_kwargs,
         )
-        concat_mem_config = _make_decode_height_sharded_memory_config(self.mesh_device, batch, kind.head_dim)
         attn_out = ttnn.to_memory_config(attn_out, concat_mem_config, dtype=attn_out.dtype)
         attn_out = ttnn.experimental.nlp_concat_heads_decode(attn_out, num_heads=NUM_Q_HEADS)
-        attn_out = ttnn.sharded_to_interleaved(attn_out, ttnn.DRAM_MEMORY_CONFIG)
+        if not advisor_attn_chain:
+            attn_out = ttnn.sharded_to_interleaved(attn_out, ttnn.DRAM_MEMORY_CONFIG)
         attn_out = ttnn.linear(
             attn_out,
             self.weights.o_proj,

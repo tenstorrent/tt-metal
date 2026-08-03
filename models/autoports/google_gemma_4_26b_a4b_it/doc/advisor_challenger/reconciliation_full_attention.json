@@ -1,0 +1,1707 @@
+{
+  "feasibility": {
+    "noise_floor_us": 2.157,
+    "noise_floor_source": "max-min of incumbent repeats_ms",
+    "noise_floor_excluding_first_us": 1.762,
+    "first_repeat_share_of_floor": 0.183,
+    "repeats_monotone_decreasing": false,
+    "repeats": 5,
+    "ceiling_us": 8.448,
+    "ceiling_vs_floor": 3.92,
+    "chains_resolvable_alone": 1,
+    "verdict": "measurable",
+    "advice": "1 chain(s) exceed the 2.157 us floor; screen those individually and group the rest."
+  },
+  "model_estimate": {
+    "this_kind_us": 7293.315,
+    "per_layer_window_us": 1458.663,
+    "layers_in_window": 1,
+    "layers_of_kind": 5,
+    "total_layers": 30,
+    "kind_share_of_layers": 0.167,
+    "layer_counts": {
+      "sliding_attention": 25,
+      "full_attention": 5
+    },
+    "layer_counts_source": "incumbent.json layer_counts (cross-checked)",
+    "ceiling_per_model_us": 42.24,
+    "uncertainty_per_model_us": 10.785,
+    "layer_handoff": {
+      "entry_from_dram": true,
+      "exit_in_l1": true,
+      "entry_op": "InterleavedToShardedDeviceOperation",
+      "entry_us": 0.904,
+      "redundant_per_model_us": 3.616,
+      "note": "This layer loads its input from DRAM but leaves its output in L1, so consecutive layers do not hand off in L1 and this conversion is paid once per layer. NOT this stage's to fix -- the advisor is not asked about layer boundaries -- but report it upstream."
+    },
+    "note": "Sum this_kind_us over every layer kind for the full-model estimate, and choose between candidates on THAT. Per-layer microseconds are for detection against the per-layer noise floor; per-model microseconds are for deciding, because layer counts differ by kind. Report the model estimate as before/after with the uncertainty band: a per-layer delta scaled by the layer count carries the per-layer floor scaled by the same factor."
+  },
+  "capture_provenance": {
+    "capture_batch": 1,
+    "capture_policy_source": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/incumbent_full_attention.json",
+    "traced_weight_dtypes": {
+      "attention": "BFLOAT16",
+      "dense": "BFLOAT16",
+      "experts": "BFLOAT8_B"
+    },
+    "allow_bf16_dram_sharded_matmul": true,
+    "spills": 2,
+    "spill_ran": true,
+    "op_counts": {
+      "report_total_ops": 29,
+      "ops_listed": 30,
+      "final_choices": 26
+    },
+    "dram_sharded_advised": null,
+    "layers_in_window": 1,
+    "graph_input_reshards": 16,
+    "graph_input_note": "reshards with producer=='input' come off a graph input the py-to-IR boundary hardcodes to DRAM interleaved. Some are genuine weight placement (DRAM is where weights live); the one feeding the first op is the layer's activation entry and is an artifact. Capturing N consecutive layers reduces the artifact to 1/N of the layer boundaries.",
+    "spill_caution": "the optimizer spilled 2 time(s) building this plan, so it did not fit L1 as a whole. Expect single-chain application to hit the same wall, and treat a capacity failure as a partial-application artifact rather than evidence the direction is wrong."
+  },
+  "untraced_detail": {
+    "ops": [
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 3.497,
+        "share_pct": 0.24
+      },
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 2.251,
+        "share_pct": 0.154
+      },
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 3.154,
+        "share_pct": 0.216
+      },
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 2.184,
+        "share_pct": 0.15
+      },
+      {
+        "device": "PagedFusedUpdateCacheDeviceOperation",
+        "us": 6.597,
+        "share_pct": 0.452
+      },
+      {
+        "device": "SliceDeviceOperation",
+        "us": 1.728,
+        "share_pct": 0.118
+      },
+      {
+        "device": "LayerNormDeviceOperation",
+        "us": 34.695,
+        "share_pct": 2.379
+      },
+      {
+        "device": "BinaryNgDeviceOperation",
+        "us": 2.776,
+        "share_pct": 0.19
+      },
+      {
+        "device": "BinaryNgDeviceOperation",
+        "us": 3.457,
+        "share_pct": 0.237
+      },
+      {
+        "device": "TypecastDeviceOperation",
+        "us": 2.22,
+        "share_pct": 0.152
+      },
+      {
+        "device": "MatmulDeviceOperation 32 x 2816 x 128",
+        "us": 38.234,
+        "share_pct": 2.621
+      },
+      {
+        "device": "TypecastDeviceOperation",
+        "us": 2.048,
+        "share_pct": 0.14
+      },
+      {
+        "device": "TopKDeviceOperation",
+        "us": 24.588,
+        "share_pct": 1.686
+      },
+      {
+        "device": "SliceDeviceOperation",
+        "us": 0.749,
+        "share_pct": 0.051
+      },
+      {
+        "device": "SliceDeviceOperation",
+        "us": 0.739,
+        "share_pct": 0.051
+      },
+      {
+        "device": "SoftmaxDeviceOperation",
+        "us": 6.396,
+        "share_pct": 0.438
+      },
+      {
+        "device": "UnaryDeviceOperation",
+        "us": 2.041,
+        "share_pct": 0.14
+      },
+      {
+        "device": "ScatterDeviceOperation",
+        "us": 3.05,
+        "share_pct": 0.209
+      },
+      {
+        "device": "BinaryNgDeviceOperation",
+        "us": 2.44,
+        "share_pct": 0.167
+      },
+      {
+        "device": "TypecastDeviceOperation",
+        "us": 1.861,
+        "share_pct": 0.128
+      },
+      {
+        "device": "LayerNormDeviceOperation",
+        "us": 8.172,
+        "share_pct": 0.56
+      },
+      {
+        "device": "UnaryDeviceOperation",
+        "us": 19.357,
+        "share_pct": 1.327
+      },
+      {
+        "device": "SparseMatmulDeviceOperation active=8/128 x 32 x 2816 x 1408",
+        "us": 330.397,
+        "share_pct": 22.651
+      },
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 18.779,
+        "share_pct": 1.287
+      },
+      {
+        "device": "SliceDeviceOperation",
+        "us": 1.41,
+        "share_pct": 0.097
+      },
+      {
+        "device": "SliceDeviceOperation",
+        "us": 1.264,
+        "share_pct": 0.087
+      },
+      {
+        "device": "BinaryNgDeviceOperation",
+        "us": 3.031,
+        "share_pct": 0.208
+      },
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 11.883,
+        "share_pct": 0.815
+      },
+      {
+        "device": "UnaryDeviceOperation",
+        "us": 35.49,
+        "share_pct": 2.433
+      },
+      {
+        "device": "SparseMatmulDeviceOperation active=8/128 x 32 x 704 x 2816",
+        "us": 106.702,
+        "share_pct": 7.315
+      },
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 36.227,
+        "share_pct": 2.484
+      },
+      {
+        "device": "BinaryNgDeviceOperation",
+        "us": 4.992,
+        "share_pct": 0.342
+      },
+      {
+        "device": "ReduceDeviceOperation",
+        "us": 2.991,
+        "share_pct": 0.205
+      },
+      {
+        "device": "LayerNormDeviceOperation",
+        "us": 7.928,
+        "share_pct": 0.544
+      },
+      {
+        "device": "BinaryNgDeviceOperation",
+        "us": 1.793,
+        "share_pct": 0.123
+      },
+      {
+        "device": "LayerNormDeviceOperation",
+        "us": 7.636,
+        "share_pct": 0.523
+      },
+      {
+        "device": "BinaryNgDeviceOperation",
+        "us": 1.691,
+        "share_pct": 0.116
+      },
+      {
+        "device": "BinaryNgDeviceOperation",
+        "us": 5.638,
+        "share_pct": 0.387
+      }
+    ],
+    "declared_uncapturable_by_report": [
+      "nlp_concat_heads_decode",
+      "sparse_matmul"
+    ],
+    "note": "untraced means the profile has it and the advisor's graph does not. That is expected for ops the report declares uncapturable (terminal in the tracer) and a problem otherwise. This tool cannot tell the two apart per op -- the capture log can."
+  },
+  "generated_by": "advisor-challenger/scripts/reconcile.py",
+  "tool_version": 5,
+  "confidence": {
+    "paired_by_name": 17,
+    "paired_by_position": 3,
+    "us_paired_by_position": 6.822,
+    "pct_paired_by_position": 0.468,
+    "device_to_advised_fanout": 2.67,
+    "report_declares_uncapturable": true,
+    "degraded": false,
+    "degraded_because": [],
+    "hard": [
+      "measured_window_us",
+      "per-op us and share_pct",
+      "accounting_closes_100pct",
+      "the single-replay and window-ratio guards",
+      "by_conversion_class us"
+    ],
+    "soft": [
+      "which advised op each device op is",
+      "advised_here / advisor_removes_us",
+      "the chain ranking, since it is computed from the soft items above"
+    ]
+  },
+  "limitations": [
+    "Ops are paired by normalised name, then by position when no name matches. A positional pair is a guess; rows carry pair_confidence, and pct_paired_by_position says how much of the window rests on guesses. On an unfamiliar model expect this to rise.",
+    "advised_here is keyed on producer/consumer op NAMES, so a repeated edge collapses to one key: presence is a strong signal, absence a weak one.",
+    "untraced conflates 'terminal in the tracer' with 'ran but the advisor never placed it'. This tool cannot tell them apart; the capture log can.",
+    "The profile exposes no grid and no output memory config, so a conversion that only regrids is invisible here and unresolved classes cannot be settled without the IR.",
+    "Nothing here is a measurement. Every verdict comes from the device."
+  ],
+  "layer_kind": "full_attention",
+  "layers_of_kind": 5,
+  "total_layers": 30,
+  "measured_window_us": 1458.663,
+  "accounting": {
+    "boundary": {
+      "us": 37.922,
+      "ops": 22,
+      "share_pct": 2.6
+    },
+    "chain": {
+      "us": 275.985,
+      "ops": 12,
+      "share_pct": 18.92
+    },
+    "agrees_with_shipped": {
+      "us": 374.98,
+      "ops": 6,
+      "share_pct": 25.707
+    },
+    "untraced": {
+      "us": 750.086,
+      "ops": 38,
+      "share_pct": 51.423
+    },
+    "dram_resident": {
+      "us": 19.69,
+      "ops": 2,
+      "share_pct": 1.35
+    }
+  },
+  "accounting_closes_100pct": true,
+  "accounted_us": 1458.663,
+  "scope": {
+    "window_us": 1458.663,
+    "incumbent_us": 1539.374,
+    "note": "The profile and the harness both cover ONE decoder layer, and window_us should be within a few percent of incumbent_us. per_model_us on each chain scales by layers_of_kind to the whole model and is an extrapolation -- never compare it to incumbent_ms, which is per layer.",
+    "layers_of_kind": 5,
+    "total_layers": 30
+  },
+  "ranked_by": "advisor_removes_us (conversions the advice does not place), then total conversion value + chain op us. NOT the advised ops' window share. Compare each chain's vs_noise_floor before spending a measurement on it.",
+  "advised_boundaries": {
+    "advisor_drops_ops": 7,
+    "us_advisor_drops": 8.448,
+    "advisor_agrees_ops": 4,
+    "us_advisor_agrees": 4.012,
+    "undetermined_ops": 9,
+    "us_undetermined": 17.256,
+    "unresolved_ops": 2,
+    "us_unresolved": 8.206,
+    "by_conversion_class": {
+      "dram_to_l1": {
+        "us": 8.218,
+        "ops": 8
+      },
+      "l1_to_dram": {
+        "us": 8.742,
+        "ops": 7
+      },
+      "fill_pad": {
+        "us": 4.825,
+        "ops": 1
+      },
+      "retilize": {
+        "us": 12.756,
+        "ops": 5
+      },
+      "reshape_view": {
+        "us": 3.381,
+        "ops": 1
+      }
+    },
+    "note": "us_advisor_drops is what this stage can attribute to the advisor. us_advisor_agrees is real conversion time the advisor endorses: attacking it is a separate activity and crediting it here would contaminate the measurement. us_unresolved needs the IR to classify -- resolve it, do not skip it."
+  },
+  "chains": [
+    {
+      "chain": "full_attention:b23",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 2.444,
+      "advisor_removes_us": 2.444,
+      "verdict": "kept",
+      "measured_ms": 1.4945481903851032,
+      "repeats_ms": [
+        1.4943255670368671,
+        1.4946621842682362,
+        1.4945481903851032,
+        1.4938891120254993,
+        1.494626346975565
+      ],
+      "kind": "boundary_only",
+      "edge": "nlp_concat_heads_decode -> linear",
+      "how": "remove the l1_to_dram on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 2.444,
+      "op_share_pct": 0.0,
+      "per_model_us": 12.22,
+      "advisor_removes_per_model_us": 12.22,
+      "vs_noise_floor": 1.13,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "oracle_passed": true,
+      "oracle_pcc": 0.9998681295831672,
+      "oracle_weights": "real",
+      "perf_report": "doc/advisor_challenger/tracy/candidate_full_ops.csv"
+    },
+    {
+      "chain": "full_attention:b21",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 0.923,
+      "advisor_removes_us": 0.923,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "kind": "boundary_only",
+      "edge": "paged_scaled_dot_product_attention_decode -> nlp_concat_heads_decode",
+      "how": "remove the dram_to_l1 on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 0.923,
+      "op_share_pct": 0.0,
+      "per_model_us": 4.615,
+      "advisor_removes_per_model_us": 4.615,
+      "vs_noise_floor": 0.43,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:b16",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 0.916,
+      "advisor_removes_us": 0.916,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "kind": "boundary_only",
+      "edge": "rotary_embedding -> paged_scaled_dot_product_attention_decode",
+      "how": "remove the dram_to_l1 on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 0.916,
+      "op_share_pct": 0.0,
+      "per_model_us": 4.58,
+      "advisor_removes_per_model_us": 4.58,
+      "vs_noise_floor": 0.42,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:b18",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 0.909,
+      "advisor_removes_us": 0.909,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "kind": "boundary_only",
+      "edge": "rotary_embedding -> paged_scaled_dot_product_attention_decode",
+      "how": "remove the dram_to_l1 on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 0.909,
+      "op_share_pct": 0.0,
+      "per_model_us": 4.545,
+      "advisor_removes_per_model_us": 4.545,
+      "vs_noise_floor": 0.42,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:b17",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 0.904,
+      "advisor_removes_us": 0.904,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "kind": "boundary_only",
+      "edge": "rotary_embedding -> paged_scaled_dot_product_attention_decode",
+      "how": "remove the dram_to_l1 on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 0.904,
+      "op_share_pct": 0.0,
+      "per_model_us": 4.52,
+      "advisor_removes_per_model_us": 4.52,
+      "vs_noise_floor": 0.42,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:5",
+      "ops": [
+        "rms_norm"
+      ],
+      "us": 7.756,
+      "boundary_us": 1.188,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "advisor_removes_us": 0.619,
+      "conversion_value_us": 1.188,
+      "op_share_pct": 0.532,
+      "per_model_us": 44.72,
+      "advisor_removes_per_model_us": 3.095,
+      "vs_noise_floor": 0.29,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:3",
+      "ops": [
+        "rms_norm",
+        "add",
+        "rms_norm"
+      ],
+      "us": 17.069,
+      "boundary_us": 1.147,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "advisor_removes_us": 0.557,
+      "conversion_value_us": 1.147,
+      "_unresolved_us": 0.0,
+      "op_share_pct": 1.17,
+      "per_model_us": 91.08,
+      "advisor_removes_per_model_us": 2.785,
+      "vs_noise_floor": 0.26,
+      "resolvable_alone": false,
+      "confidence": "low"
+    },
+    {
+      "chain": "full_attention:0",
+      "ops": [
+        "rms_norm",
+        "linear"
+      ],
+      "us": 187.928,
+      "boundary_us": 0.452,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.452,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 12.884,
+      "per_model_us": 941.9,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:2",
+      "ops": [
+        "rotary_embedding"
+      ],
+      "us": 31.167,
+      "boundary_us": 0.0,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.0,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 2.137,
+      "per_model_us": 155.835,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:1",
+      "ops": [
+        "rms_norm",
+        "rms_norm",
+        "rms_norm"
+      ],
+      "us": 27.052,
+      "boundary_us": 0.459,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.459,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 1.855,
+      "per_model_us": 137.555,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:4",
+      "ops": [
+        "gelu",
+        "multiply"
+      ],
+      "us": 5.013,
+      "boundary_us": 0.0,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.0,
+      "advisor_removes_us": 0.0,
+      "_unresolved_us": 0.0,
+      "op_share_pct": 0.344,
+      "per_model_us": 25.065,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "low"
+    }
+  ],
+  "material_ops_on_le_2_cores": [
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 44.324,
+      "share_pct": 3.039,
+      "shipped_cores": 1,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x88 cores=(0,0)-(10,7)",
+      "advised_cores": 88,
+      "chain": "full_attention:0",
+      "verdict": "rejected",
+      "measured_ms": 1.5499427169561386,
+      "repeats_ms": [
+        1.5509696677327156,
+        1.5522048249840736,
+        1.5497395396232605,
+        1.5499427169561386,
+        1.5487997606396675
+      ],
+      "candidate": "88-core exact-dividing width-sharded norm"
+    }
+  ],
+  "starved_ops_not_attributable": [
+    {
+      "op": "nlp_create_qkv_heads_decode",
+      "device": "NLPCreateQKVHeadsDecodeDeviceOperation",
+      "cls": "NLPCreateQKVHeadsDecode",
+      "pair_confidence": "name",
+      "us": 26.075,
+      "share_pct": 1.788,
+      "shipped_cores": 1,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+      "advised_cores": 1,
+      "note": "the advisor wants this placement too, so improving it is a direct grid sweep with no advisor contribution -- report it, hand it to $optimize, and do not screen it here"
+    },
+    {
+      "op": "rotary_embedding",
+      "device": "RotaryEmbeddingHfDeviceOperation",
+      "cls": "RotaryEmbeddingHf",
+      "pair_confidence": "name",
+      "us": 27.552,
+      "share_pct": 1.889,
+      "shipped_cores": 2,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/height_sharded/2x1 cores=(0,0)-(1,0)",
+      "advised_cores": 2,
+      "note": "the advisor wants this placement too, so improving it is a direct grid sweep with no advisor contribution -- report it, hand it to $optimize, and do not screen it here"
+    }
+  ],
+  "note": "Screen chains in the order given, each as one unit, and record repeats_ms. Do NOT copy advised core counts: they are selected under a bytes-shaped objective and are often smaller than the divisors of the tensor's tile count. The advisor's contribution is the op SET and the DIRECTION of the change; own the geometry.",
+  "disagreements": [
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 0.904,
+      "share_pct": 0.062,
+      "shipped_cores": 8,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "None -> rms_norm",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 44.324,
+      "share_pct": 3.039,
+      "shipped_cores": 1,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x88 cores=(0,0)-(10,7)",
+      "advised_cores": 88,
+      "chain": "full_attention:0",
+      "verdict": "rejected",
+      "measured_ms": 1.5499427169561386,
+      "repeats_ms": [
+        1.5509696677327156,
+        1.5522048249840736,
+        1.5497395396232605,
+        1.5499427169561386,
+        1.5487997606396675
+      ],
+      "candidate": "88-core exact-dividing width-sharded norm"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 2816 x 10240",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 143.604,
+      "share_pct": 9.845,
+      "shipped_cores": 107,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x107 cores=(0,0)-(10,8)",
+      "advised_cores": 99,
+      "chain": "full_attention:0"
+    },
+    {
+      "op": "nlp_create_qkv_heads_decode",
+      "device": "NLPCreateQKVHeadsDecodeDeviceOperation",
+      "cls": "NLPCreateQKVHeadsDecode",
+      "pair_confidence": "name",
+      "us": 26.075,
+      "share_pct": 1.788,
+      "shipped_cores": 1,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+      "advised_cores": 1
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 0.969,
+      "share_pct": 0.066,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "nlp_create_qkv_heads_decode -> rms_norm",
+      "advised_here": true,
+      "advised_reshard": {
+        "kind": "to_memory_config",
+        "from": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+        "to": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+        "transition": "l1->l1",
+        "output_revert": false
+      },
+      "reason": "the advisor puts a conversion here too -- agreement, not a candidate"
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 0.944,
+      "share_pct": 0.065,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "nlp_create_qkv_heads_decode -> rms_norm",
+      "advised_here": true,
+      "advised_reshard": {
+        "kind": "to_memory_config",
+        "from": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+        "to": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+        "transition": "l1->l1",
+        "output_revert": false
+      },
+      "reason": "the advisor puts a conversion here too -- agreement, not a candidate"
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 0.918,
+      "share_pct": 0.063,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "nlp_create_qkv_heads_decode -> rms_norm",
+      "advised_here": true,
+      "advised_reshard": {
+        "kind": "to_memory_config",
+        "from": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+        "to": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+        "transition": "l1->l1",
+        "output_revert": false
+      },
+      "reason": "the advisor puts a conversion here too -- agreement, not a candidate"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 9.479,
+      "share_pct": 0.65,
+      "shipped_cores": 1,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+      "advised_cores": 8,
+      "chain": "full_attention:1"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 9.536,
+      "share_pct": 0.654,
+      "shipped_cores": 1,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+      "advised_cores": 8,
+      "chain": "full_attention:1"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 8.037,
+      "share_pct": 0.551,
+      "shipped_cores": 1,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+      "advised_cores": 8,
+      "chain": "full_attention:1"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 3.497,
+      "share_pct": 0.24,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 2.251,
+      "share_pct": 0.154,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": "rotary_embedding",
+      "device": "RotaryEmbeddingHfDeviceOperation",
+      "cls": "RotaryEmbeddingHf",
+      "pair_confidence": "name",
+      "us": 31.167,
+      "share_pct": 2.137,
+      "shipped_cores": 16,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/16x1 cores=(0,0)-(10,0)",
+      "advised_cores": 11,
+      "chain": "full_attention:2"
+    },
+    {
+      "op": "rotary_embedding",
+      "device": "RotaryEmbeddingHfDeviceOperation",
+      "cls": "RotaryEmbeddingHf",
+      "pair_confidence": "name",
+      "us": 27.552,
+      "share_pct": 1.889,
+      "shipped_cores": 2,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/height_sharded/2x1 cores=(0,0)-(1,0)",
+      "advised_cores": 2
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 3.154,
+      "share_pct": 0.216,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 2.184,
+      "share_pct": 0.15,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 0.916,
+      "share_pct": 0.063,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "rotary_embedding -> paged_scaled_dot_product_attention_decode",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 0.904,
+      "share_pct": 0.062,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "rotary_embedding -> paged_scaled_dot_product_attention_decode",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 0.909,
+      "share_pct": 0.062,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "rotary_embedding -> paged_scaled_dot_product_attention_decode",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": null,
+      "device": "PagedFusedUpdateCacheDeviceOperation",
+      "cls": "PagedFusedUpdateCache",
+      "pair_confidence": null,
+      "us": 6.597,
+      "share_pct": 0.452,
+      "shipped_cores": 2,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": "paged_scaled_dot_product_attention_decode",
+      "device": "SdpaDecodeDeviceOperation",
+      "cls": "SdpaDecode",
+      "pair_confidence": "name",
+      "us": 17.391,
+      "share_pct": 1.192,
+      "shipped_cores": 32,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op",
+      "verdict": "kept_in_dram",
+      "hard_error": "Sharded output not supported for GQA"
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 0.923,
+      "share_pct": 0.063,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "paged_scaled_dot_product_attention_decode -> nlp_concat_heads_decode",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "nlp_concat_heads_decode",
+      "device": "NLPConcatHeadsDecodeDeviceOperation",
+      "cls": "NLPConcatHeadsDecode",
+      "pair_confidence": "name",
+      "us": 2.299,
+      "share_pct": 0.158,
+      "shipped_cores": 16,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "opposite sharded concat-to-projection chain measured faster",
+      "verdict": "rejected"
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 2.444,
+      "share_pct": 0.168,
+      "shipped_cores": 16,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "nlp_concat_heads_decode -> linear",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 8192 x 2816",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 172.156,
+      "share_pct": 11.802,
+      "shipped_cores": 88,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x88 cores=(0,0)-(10,7)",
+      "advised_cores": 88
+    },
+    {
+      "op": null,
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": null,
+      "us": 1.728,
+      "share_pct": 0.118,
+      "shipped_cores": 88,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 1.114,
+      "share_pct": 0.076,
+      "shipped_cores": 8,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "linear -> rms_norm",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 7.636,
+      "share_pct": 0.523,
+      "shipped_cores": 8,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x88 cores=(0,0)-(10,7)",
+      "advised_cores": 88,
+      "chain": "full_attention:3"
+    },
+    {
+      "op": "add",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 1.809,
+      "share_pct": 0.124,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x88 cores=(0,0)-(10,7)",
+      "advised_cores": 88,
+      "chain": "full_attention:3"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 7.624,
+      "share_pct": 0.523,
+      "shipped_cores": 8,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x88 cores=(0,0)-(10,7)",
+      "advised_cores": 88,
+      "chain": "full_attention:3"
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 1.181,
+      "share_pct": 0.081,
+      "shipped_cores": 8,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "rms_norm -> linear",
+      "advised_here": true,
+      "advised_reshard": {
+        "kind": "to_memory_config",
+        "from": "l1/width_sharded/1x88 cores=(0,0)-(10,7)",
+        "to": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+        "transition": "l1->l1",
+        "output_revert": false
+      },
+      "reason": "the advisor puts a conversion here too -- agreement, not a candidate"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 2816 x 2112",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 51.777,
+      "share_pct": 3.55,
+      "shipped_cores": 66,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x66 cores=(0,0)-(10,5)",
+      "advised_cores": 66
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 2816 x 2112",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 51.401,
+      "share_pct": 3.524,
+      "shipped_cores": 66,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x66 cores=(0,0)-(10,5)",
+      "advised_cores": 66
+    },
+    {
+      "op": "gelu",
+      "device": "UnaryDeviceOperation",
+      "cls": "Unary",
+      "pair_confidence": "position",
+      "us": 2.109,
+      "share_pct": 0.145,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x66 cores=(0,0)-(10,5)",
+      "advised_cores": 66,
+      "chain": "full_attention:4"
+    },
+    {
+      "op": "multiply",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 2.904,
+      "share_pct": 0.199,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x66 cores=(0,0)-(10,5)",
+      "advised_cores": 66,
+      "chain": "full_attention:4"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 2112 x 2816",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 46.019,
+      "share_pct": 3.155,
+      "shipped_cores": 88,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x88 cores=(0,0)-(10,7)",
+      "advised_cores": 88
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 1.238,
+      "share_pct": 0.085,
+      "shipped_cores": 8,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "linear -> rms_norm",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 7.756,
+      "share_pct": 0.532,
+      "shipped_cores": 8,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x88 cores=(0,0)-(10,7)",
+      "advised_cores": 88,
+      "chain": "full_attention:5"
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 1.138,
+      "share_pct": 0.078,
+      "shipped_cores": 8,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "rms_norm -> None",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": null,
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": null,
+      "us": 34.695,
+      "share_pct": 2.379,
+      "shipped_cores": 1,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": null,
+      "us": 2.776,
+      "share_pct": 0.19,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": null,
+      "us": 3.457,
+      "share_pct": 0.237,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TypecastDeviceOperation",
+      "cls": "Typecast",
+      "pair_confidence": null,
+      "us": 2.22,
+      "share_pct": 0.152,
+      "shipped_cores": 88,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "MatmulDeviceOperation 32 x 2816 x 128",
+      "cls": "Matmul",
+      "pair_confidence": null,
+      "us": 38.234,
+      "share_pct": 2.621,
+      "shipped_cores": 4,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TypecastDeviceOperation",
+      "cls": "Typecast",
+      "pair_confidence": null,
+      "us": 2.048,
+      "share_pct": 0.14,
+      "shipped_cores": 4,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "FillPadDeviceOperation",
+      "cls": "FillPad",
+      "pair_confidence": null,
+      "us": 4.825,
+      "share_pct": 0.331,
+      "shipped_cores": 4,
+      "bucket": "boundary",
+      "conversion_class": "fill_pad",
+      "edge": "rms_norm -> None",
+      "advisor_comparable": "unresolved",
+      "reason": "fill_pad is not a placement edge the advisor states, and the profile cannot show whether it changed layout. It may still be a chain boundary -- check this edge's layouts in the IR. Do not drop it: it is unresolved, not out of scope"
+    },
+    {
+      "op": null,
+      "device": "TopKDeviceOperation",
+      "cls": "TopK",
+      "pair_confidence": null,
+      "us": 24.588,
+      "share_pct": 1.686,
+      "shipped_cores": 1,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": null,
+      "us": 0.749,
+      "share_pct": 0.051,
+      "shipped_cores": 1,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": null,
+      "us": 0.739,
+      "share_pct": 0.051,
+      "shipped_cores": 1,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "SoftmaxDeviceOperation",
+      "cls": "Softmax",
+      "pair_confidence": null,
+      "us": 6.396,
+      "share_pct": 0.438,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "UnaryDeviceOperation",
+      "cls": "Unary",
+      "pair_confidence": null,
+      "us": 2.041,
+      "share_pct": 0.14,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "UntilizeWithUnpaddingDeviceOperation",
+      "cls": "UntilizeWithUnpadding",
+      "pair_confidence": null,
+      "us": 2.391,
+      "share_pct": 0.164,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "rms_norm -> None",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": null,
+      "device": "UntilizeWithUnpaddingDeviceOperation",
+      "cls": "UntilizeWithUnpadding",
+      "pair_confidence": null,
+      "us": 1.212,
+      "share_pct": 0.083,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "rms_norm -> None",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": null,
+      "device": "UntilizeWithUnpaddingDeviceOperation",
+      "cls": "UntilizeWithUnpadding",
+      "pair_confidence": null,
+      "us": 1.169,
+      "share_pct": 0.08,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "rms_norm -> None",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": null,
+      "device": "ScatterDeviceOperation",
+      "cls": "Scatter",
+      "pair_confidence": null,
+      "us": 3.05,
+      "share_pct": 0.209,
+      "shipped_cores": 1,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TilizeWithValPaddingDeviceOperation",
+      "cls": "TilizeWithValPadding",
+      "pair_confidence": null,
+      "us": 5.677,
+      "share_pct": 0.389,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "rms_norm -> None",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": null,
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": null,
+      "us": 2.44,
+      "share_pct": 0.167,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TypecastDeviceOperation",
+      "cls": "Typecast",
+      "pair_confidence": null,
+      "us": 1.861,
+      "share_pct": 0.128,
+      "shipped_cores": 4,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": null,
+      "us": 8.172,
+      "share_pct": 0.56,
+      "shipped_cores": 8,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 1.148,
+      "share_pct": 0.079,
+      "shipped_cores": 8,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "rms_norm -> None",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": null,
+      "device": "UntilizeWithUnpaddingDeviceOperation",
+      "cls": "UntilizeWithUnpadding",
+      "pair_confidence": null,
+      "us": 2.307,
+      "share_pct": 0.158,
+      "shipped_cores": 1,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "rms_norm -> None",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": null,
+      "device": "UnaryDeviceOperation",
+      "cls": "Unary",
+      "pair_confidence": null,
+      "us": 19.357,
+      "share_pct": 1.327,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "SparseMatmulDeviceOperation active=8/128 x 32 x 2816 x 1408",
+      "cls": "SparseMatmul",
+      "pair_confidence": null,
+      "us": 330.397,
+      "share_pct": 22.651,
+      "shipped_cores": 4,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 18.779,
+      "share_pct": 1.287,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": null,
+      "us": 1.41,
+      "share_pct": 0.097,
+      "shipped_cores": 88,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": null,
+      "us": 1.264,
+      "share_pct": 0.087,
+      "shipped_cores": 88,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": null,
+      "us": 3.031,
+      "share_pct": 0.208,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 11.883,
+      "share_pct": 0.815,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "UnaryDeviceOperation",
+      "cls": "Unary",
+      "pair_confidence": null,
+      "us": 35.49,
+      "share_pct": 2.433,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "SparseMatmulDeviceOperation active=8/128 x 32 x 704 x 2816",
+      "cls": "SparseMatmul",
+      "pair_confidence": null,
+      "us": 106.702,
+      "share_pct": 7.315,
+      "shipped_cores": 8,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 36.227,
+      "share_pct": 2.484,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "ReshapeViewDeviceOperation",
+      "cls": "ReshapeView",
+      "pair_confidence": null,
+      "us": 3.381,
+      "share_pct": 0.232,
+      "shipped_cores": 4,
+      "bucket": "boundary",
+      "conversion_class": "reshape_view",
+      "edge": "rms_norm -> None",
+      "advisor_comparable": "unresolved",
+      "reason": "reshape_view is not a placement edge the advisor states, and the profile cannot show whether it changed layout. It may still be a chain boundary -- check this edge's layouts in the IR. Do not drop it: it is unresolved, not out of scope"
+    },
+    {
+      "op": null,
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": null,
+      "us": 4.992,
+      "share_pct": 0.342,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "ReduceDeviceOperation",
+      "cls": "Reduce",
+      "pair_confidence": null,
+      "us": 2.991,
+      "share_pct": 0.205,
+      "shipped_cores": 88,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 1.31,
+      "share_pct": 0.09,
+      "shipped_cores": 8,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "rms_norm -> None",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": null,
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": null,
+      "us": 7.928,
+      "share_pct": 0.544,
+      "shipped_cores": 8,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": null,
+      "us": 1.793,
+      "share_pct": 0.123,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": null,
+      "us": 7.636,
+      "share_pct": 0.523,
+      "shipped_cores": 8,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": null,
+      "us": 1.691,
+      "share_pct": 0.116,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": null,
+      "us": 5.638,
+      "share_pct": 0.387,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": "transpose",
+      "bucket": "advised_but_not_present",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "transpose",
+      "bucket": "advised_but_not_present",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "transpose",
+      "bucket": "advised_but_not_present",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/width_sharded/1x16 cores=(0,0)-(10,0)",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "transpose",
+      "bucket": "advised_but_not_present",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/width_sharded/1x16 cores=(0,0)-(10,0)",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    }
+  ],
+  "measurement_evidence": "models/autoports/google_gemma_4_26b_a4b_it/doc/advisor_challenger/evidence_full_attention.json"
+}

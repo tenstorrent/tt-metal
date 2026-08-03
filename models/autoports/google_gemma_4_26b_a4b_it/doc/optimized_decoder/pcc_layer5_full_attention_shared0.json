@@ -1,6 +1,6 @@
 {
   "decode_current_pos": 32,
-  "decode_pcc": 0.9998759013221976,
+  "decode_pcc": 0.9998681295831672,
   "decode_threshold": 0.995,
   "layer_idx": 5,
   "layer_type": "full_attention",

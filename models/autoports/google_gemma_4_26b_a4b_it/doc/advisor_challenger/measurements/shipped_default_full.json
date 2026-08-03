@@ -1,0 +1,32 @@
+{
+  "label": "shipped_default_full",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    1.4949232712388039,
+    1.4942852221429348,
+    1.4939317293465137,
+    1.4947064220905304,
+    1.4947302639484406
+  ],
+  "median_ms": 1.4947064220905304,
+  "noise_floor_ms": 0.0009915418922901154,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one full-attention decoder layer, traced decode replay, batch 1, measured end to end on host",
+  "measured_at": "2026-08-03T15:32:07+00:00",
+  "shipped_policy": {
+    "candidate": "bfp8_experts_lofi"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "dense": "BFLOAT16",
+    "experts": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/README.md and DEFAULT_CANDIDATE; profiler-verified executed bfp8_experts_lofi",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}
