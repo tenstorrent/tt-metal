@@ -86,8 +86,10 @@ private:
 class RealtimeProfilerClockSync {
 public:
     // How often the owner should call resync(). A DVFS step goes uncorrected for at most this long, and the error it
-    // leaves is ~5200ppm times that. Measured worst case: 10ms -> 14.2us, 1ms -> 5.7us, 250us -> 2.8us.
-    static constexpr auto kSyncInterval = std::chrono::milliseconds(1);
+    // leaves is ~5200ppm times that until the burst below catches it: measured 10ms -> 14.2us, 1ms -> 5.7us,
+    // 250us -> 2.8us. Step response is all this sets. What the mapping wanders between anchors is the frequency fit's
+    // own residual, ~6ppm, three orders of magnitude smaller, and is bounded by probe quality rather than by rate.
+    static constexpr auto kSyncInterval = std::chrono::milliseconds(4);
 
     // Steps arrive in bursts; running this fast all the time would spend its probes on the quiet vast majority.
     static constexpr auto kBurstSyncInterval = std::chrono::microseconds(250);
@@ -96,6 +98,13 @@ public:
     // A miss this many times larger than the probe measuring it is a step, not noise: the ratio is 1 at the
     // acceptance boundary and above 10 for one throttler tick of dip.
     static constexpr int kExcursionDriftRatio = 4;
+
+    // A probe cannot place an anchor better than half its own bracket, and an anchor is only replaced by one that
+    // would land it better, so the widest bracket the reads keep producing is what the mapping's error settles at.
+    // Ranking a few reads and keeping the tightest holds that settling point near the floor rather than near
+    // whatever the link was doing at the time: on a 32-chip mesh a lone read brackets 11-36us against 0.7-0.9us
+    // here, and the mapping goes seconds without being re-anchored as a result.
+    static constexpr int kResyncProbes = 4;
 
     // `profiler_core` is the reserved tensix running the profiler kernels on `device`.
     RealtimeProfilerClockSync(ContextId context_id, IDevice* device, CoreCoord profiler_core);

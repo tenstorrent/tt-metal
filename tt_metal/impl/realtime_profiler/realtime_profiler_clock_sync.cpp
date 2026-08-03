@@ -467,7 +467,7 @@ bool RealtimeProfilerClockSync::calibrate() {
 
 bool RealtimeProfilerClockSync::resync() {
     TTZoneScopedDN(RT_PROFILER, "Resync");
-    const auto p = probe();
+    const auto p = best_of(kResyncProbes);
     if (!p.has_value()) {
         return false;
     }

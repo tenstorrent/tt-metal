@@ -437,39 +437,43 @@ RealtimeProfilerReceiver::DeviceState::DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::~DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::DeviceState(DeviceState&&) noexcept = default;
 
-void RealtimeProfilerReceiver::sync_devices(std::chrono::steady_clock::time_point now) {
+void RealtimeProfilerReceiver::sync_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
     // Nothing reads the mapping while no callback is registered, so there is nothing to keep current. Zeroing the
-    // deadline makes the first pass after one appears re-anchor, and sync_devices runs before the drain in that same
-    // pass, so a consumer never sees a record stamped with the mapping left over from before it registered.
+    // deadline makes the first pass after one appears re-anchor, and a device is synced before it is drained, so a
+    // consumer never sees a record stamped with the mapping left over from before it registered.
     if (!realtime_profiler_service_->has_consumers()) {
-        next_poll_at_ = {};
+        dev_state.next_poll_at = {};
         return;
     }
     // The drain loop runs far faster than the clock needs polling, so this gates itself rather than the caller.
-    if (now < next_poll_at_) {
+    if (now < dev_state.next_poll_at) {
         return;
     }
-    const bool bursting = now - last_excursion_at_ < RealtimeProfilerClockSync::kBurstWindow;
-    next_poll_at_ =
+    const bool bursting = now - dev_state.last_excursion_at < RealtimeProfilerClockSync::kBurstWindow;
+    dev_state.next_poll_at =
         now + (bursting ? RealtimeProfilerClockSync::kBurstSyncInterval : RealtimeProfilerClockSync::kSyncInterval);
 
+    if (!dev_state.clock_sync->resync()) {
+        ++dev_state.consecutive_resync_failures;
+        return;
+    }
+    dev_state.consecutive_resync_failures = 0;
+    if (dev_state.clock_sync->saw_excursion()) {
+        dev_state.last_excursion_at = now;
+    }
+}
+
+void RealtimeProfilerReceiver::report_stalled_syncs(std::chrono::steady_clock::time_point now) {
     size_t stalled = 0;
-    for (auto& dev_state : devices_) {
-        if (!dev_state.clock_sync->resync()) {
-            stalled += ++dev_state.consecutive_resync_failures >= kResyncFailuresBeforeStalled;
-            continue;
-        }
-        dev_state.consecutive_resync_failures = 0;
-        if (dev_state.clock_sync->saw_excursion()) {
-            last_excursion_at_ = now;
-        }
+    for (const auto& dev_state : devices_) {
+        stalled += dev_state.consecutive_resync_failures >= kResyncFailuresBeforeStalled;
     }
     if (stalled != 0) {
         TT_LOG_WARNING_THROTTLED(
             last_probe_timeout_warn_,
             now,
             kWarnInterval,
-            "[Real-time profiler] {} of {} device(s) have not answered a clock resync for {} consecutive passes; "
+            "[Real-time profiler] {} of {} device(s) have not answered a clock resync for {} consecutive attempts; "
             "their published mapping is aging and its error bound no longer covers the drift since it was placed",
             stalled,
             devices_.size(),
@@ -792,10 +796,8 @@ uint64_t RealtimeProfilerReceiver::run_loop(
                 RealtimeProfilerRuntimeSizes::fifo_pages);
         }
         last_pass = now;
-        // Reuses the pass's clock read: taking a fresh one per device costs more in vDSO calls on this loop than
-        // the probes themselves do.
-        sync_devices(now);
         const uint32_t num_pages = drain_all_devices(now, page_buf, record_buf);
+        report_stalled_syncs(now);
         num_pages_received += num_pages;
 
         if (now - last_fifo_plot >= kFifoPlotInterval) {
@@ -830,8 +832,15 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
     std::vector<ProgramRealtimeRecord>& record_buf) {
     uint32_t num_pages = 0;
     for (auto& dev_state : devices_) {
+        sync_device(dev_state, now);
         try {
-            num_pages += drain_device_pages(dev_state, now, page_buf, record_buf);
+            const uint32_t drained = drain_device_pages(dev_state, now, page_buf, record_buf);
+            num_pages += drained;
+            // A drain that moved pages is the only part of a pass long enough to matter to the devices behind this
+            // one, and re-reading the clock for every device on an idle pass costs more than it can save.
+            if (drained != 0) {
+                now = std::chrono::steady_clock::now();
+            }
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal, "[Real-time profiler] Exception draining device {}: {}", dev_state.chip_id, e.what());

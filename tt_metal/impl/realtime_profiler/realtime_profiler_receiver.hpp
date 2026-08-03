@@ -83,6 +83,9 @@ private:
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
         uint32_t consecutive_resync_failures = 0;
+        std::chrono::steady_clock::time_point next_poll_at{};
+        // Per-device: one chip stepping its AICLK says nothing about what the others are doing.
+        std::chrono::steady_clock::time_point last_excursion_at{};
         // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
         std::unique_ptr<RealtimeProfilerClockSync> clock_sync;
 
@@ -102,15 +105,18 @@ private:
         const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
     void bring_up_device_clocks();
 
-    // Runs on the drain loop: one probe per device, offered straight to its clock model. Costs the drain a read per
-    // device per interval, far under the drain-gap threshold, and far less than a second thread costs in wakeups.
-    void sync_devices(std::chrono::steady_clock::time_point now);
+    // Runs on the drain loop, immediately before the device it syncs is drained: one probe, offered straight to that
+    // device's clock model. Interleaved rather than taken for every device at the top of a pass, so a device's probe
+    // interval is bounded by its own drain instead of by every other device's.
+    void sync_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
+    void report_stalled_syncs(std::chrono::steady_clock::time_point now);
 
     // Receiver thread body.
     void run();
     uint64_t run_loop(std::vector<uint32_t>& page_buf, std::vector<ProgramRealtimeRecord>& record_buf);
     uint64_t drain_on_shutdown(std::vector<uint32_t>& page_buf, std::vector<ProgramRealtimeRecord>& record_buf);
-    // `now` is the instant the pass started, and is what each published record's clock mapping is evaluated against.
+    // Syncs each device's clock immediately before draining it. `now` enters as the instant the pass started and is
+    // re-read as devices are drained, so a device late in a long pass is not gated on a stale one.
     uint32_t drain_all_devices(
         std::chrono::steady_clock::time_point now,
         std::vector<uint32_t>& page_buf,
@@ -137,8 +143,6 @@ private:
     RealtimeProfilerRecordRing ring_;
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};
-    std::chrono::steady_clock::time_point next_poll_at_{};
-    std::chrono::steady_clock::time_point last_excursion_at_{};
 
     std::atomic<uint32_t> peak_fifo_pages_{0};  // all-time peak D2H FIFO usage
     uint32_t fifo_pages_window_max_ = 0;        // peak since the last Tracy plot sample
