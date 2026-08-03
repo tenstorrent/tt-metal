@@ -1,0 +1,106 @@
+{
+  "outcome": "SHIPPED",
+  "changed": true,
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "capture_batch": 1,
+  "incumbent_ms": 1.259868647903204,
+  "final_ms": 1.253953818231821,
+  "delta_ms": -0.005914829671383,
+  "delta_pct": -0.469476705,
+  "repeats_ms": [
+    1.253683939576149,
+    1.2539859302341938,
+    1.2544870749115944,
+    1.2532228603959084,
+    1.253953818231821
+  ],
+  "winning_repeats_ms": [
+    1.253683939576149,
+    1.2539859302341938,
+    1.2544870749115944,
+    1.2532228603959084,
+    1.253953818231821
+  ],
+  "confirmed_fresh_process": true,
+  "confirmation_repeats_ms": [
+    1.25359321013093,
+    1.2536443024873734,
+    1.253629680722952,
+    1.2535212561488152,
+    1.2530425377190113
+  ],
+  "winning_config": {
+    "layer_kind": "sliding_attention",
+    "dram_sharded_roles": ["o_proj", "packed_mlp_gate_up", "mlp_down"],
+    "o_proj_in0_block_w": 1
+  },
+  "oracle_passed": true,
+  "oracle": "test_optimized_real_weights_prefill_decode at PCC >= 0.995",
+  "oracle_reference": "real HuggingFace Gemma layer reference used by the frozen incumbent oracle",
+  "oracle_weights": "real",
+  "oracle_pcc": {
+    "prefill": 0.9983577923060104,
+    "decode": 0.9994986225691548,
+    "threshold": 0.995
+  },
+  "oracle_artifact": "../optimized_decoder/candidate_runs/advisor_sliding_o_chain.json",
+  "shipped_default_oracle_artifact": "../optimized_decoder/candidate_runs/advisor_shipped_default_audit.json",
+  "perf_report": "tracy/candidate_sliding_o_ops.csv",
+  "layer_counts": {"sliding_attention": 25, "full_attention": 5},
+  "rejected_knobs": {
+    "GEMMA4_OPT_DRAM_SHARDED_ROLES_qkv_full_attention": "default-off; measured 1.2906363047659397 ms versus 1.2616609595716 ms incumbent",
+    "GEMMA4_OPT_RESIDUAL_SHARD_CORES": "default-off; advisor norm/grid direction was not booked into the shipped attention-boundary win",
+    "GEMMA4_OPT_DRAM_SHARDED_ROLES_other": "default-off; only the measured sliding O addition ships"
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial post-freeze capture and reconcile for both layer kinds",
+      "captures": {"sliding_attention": 1, "full_attention": 1},
+      "chains": ["sliding_attention_o_projection", "full_attention_qkv"],
+      "measured_sets": [
+        {
+          "set": ["sliding_attention_o_projection"],
+          "measured_ms": 1.253953818231821,
+          "repeats_ms": [1.253683939576149, 1.2539859302341938, 1.2544870749115944, 1.2532228603959084, 1.253953818231821],
+          "oracle_passed": true
+        },
+        {
+          "set": ["full_attention_qkv"],
+          "measured_ms": 1.2906363047659397,
+          "repeats_ms": [1.290230918675661, 1.2906962260603905, 1.2906363047659397, 1.2916175834834576, 1.2902812287211418],
+          "oracle_passed": false,
+          "oracle_reason": "not kept: every candidate repeat was slower than every incumbent repeat"
+        }
+      ]
+    }
+  ],
+  "combination": {
+    "best_set": ["sliding_attention_o_projection"],
+    "measured_sets": [
+      {
+        "set": ["incumbent"],
+        "measured_ms": 1.259868647903204,
+        "repeats_ms": [1.2600866705179214, 1.2601570039987564, 1.2588659301400185, 1.2593739107251167, 1.259868647903204],
+        "oracle_passed": true
+      },
+      {
+        "set": ["sliding_attention_o_projection"],
+        "measured_ms": 1.253953818231821,
+        "repeats_ms": [1.253683939576149, 1.2539859302341938, 1.2544870749115944, 1.2532228603959084, 1.253953818231821],
+        "oracle_passed": true
+      }
+    ]
+  },
+  "model_estimate": {
+    "before_us": 36224.105,
+    "after_us": 36076.234,
+    "band_us": 36.538,
+    "per_kind": {
+      "sliding_attention": {"before_us": 30168.425, "after_us": 30020.554, "layers": 25},
+      "full_attention": {"before_us": 6055.68, "after_us": 6055.68, "layers": 5}
+    },
+    "method": "per-layer measured delta x layers_of_kind, summed"
+  }
+}

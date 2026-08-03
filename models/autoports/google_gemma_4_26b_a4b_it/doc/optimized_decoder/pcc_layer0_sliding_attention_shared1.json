@@ -1,18 +1,18 @@
 {
   "decode_current_pos": 32,
-  "decode_pcc": 0.999616902015678,
+  "decode_pcc": 0.9994986225691548,
   "decode_threshold": 0.995,
   "layer_idx": 0,
   "layer_type": "sliding_attention",
   "model_id": "google/gemma-4-26B-A4B-it",
   "optimized_stage_provenance": {
-    "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+    "checkout_git_sha": "30b2d86f4e40dc8b5e023bcfc7b07ebadc460d03",
     "exact_command": "pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode[blackhole-sliding_attention_shared_cache-device_params0-mesh_device0]",
     "hardware": {
       "arch": "Blackhole P300C",
-      "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
     },
-    "optimized_decoder_sha256": "c3097938ef5162426d3f8684a9de9fdc3bccdbe0db51aa583aaeb4a9067fc37c",
+    "optimized_decoder_sha256": "2ac047f6256609b103f615d38555ca618beba5cc32af3c92c775d207f43d1181",
     "optimized_test_sha256": "1b60098494fe482f7e06b6d83992b8b82ca214bfb1a643815c2d99af455b1013",
     "resolved_policy": {
       "constructor_defaults": {
@@ -50,23 +50,23 @@
         "weight_dtype": "DataType.BFLOAT16"
       },
       "environment_overrides": {
-        "GEMMA4_OPT_CANDIDATE_ID": "final_v2_watcher"
+        "GEMMA4_OPT_CANDIDATE_ID": "advisor_shipped_default_audit"
       }
     }
   },
   "pcc_results": [
     {
       "passed": true,
-      "pcc": 0.9985449934874906,
+      "pcc": 0.9983577923060104,
       "threshold": 0.995
     },
     {
       "passed": true,
-      "pcc": 0.999616902015678,
+      "pcc": 0.9994986225691548,
       "threshold": 0.995
     }
   ],
-  "prefill_pcc": 0.9985449934874906,
+  "prefill_pcc": 0.9983577923060104,
   "prefill_threshold": 0.995,
   "sequence_length": 32,
   "shared_physical_cache": true

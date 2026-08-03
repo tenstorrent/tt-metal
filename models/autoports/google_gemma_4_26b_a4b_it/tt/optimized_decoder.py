@@ -638,13 +638,10 @@ class OptimizedDecoder(FunctionalDecoder):
         if env_roles is not None:
             dram_sharded_roles = tuple(role.strip() for role in env_roles.split(",") if role.strip())
         elif not dram_sharded_roles:
-            # Precision-locked cumulative sweeps select packed MLP/down DRAM
-            # sharding for both kinds and add O projection only for full
-            # attention.  Block 11 is the best non-regressing MLP geometry
-            # across primary batch 1 and serving batch 32.
-            dram_sharded_roles = ("packed_mlp_gate_up", "mlp_down")
-            if hf_config.layer_types[layer_idx] == "full_attention":
-                dram_sharded_roles = ("o_proj", *dram_sharded_roles)
+            # The advisor challenger measured O projection DRAM sharding as a
+            # strict batch-1 win for sliding attention too. QKV and every
+            # other losing role remain available through the env-gated knob.
+            dram_sharded_roles = ("o_proj", "packed_mlp_gate_up", "mlp_down")
             auto_selected_mlp_dram = True
         invalid_roles = set(dram_sharded_roles) - _DRAM_SHARDED_ROLES
         if invalid_roles:
@@ -785,6 +782,10 @@ class OptimizedDecoder(FunctionalDecoder):
                     and name in {"packed_mlp_gate_up", "mlp_down"}
                 ):
                     role_block_w = "11"
+                elif role_block_w is None and dram_in0_block_w is None and auto_selected_mlp_dram and name == "o_proj":
+                    # The shipped advisor-challenger winner executed this
+                    # exact role-specific geometry.
+                    role_block_w = "1"
                 sharded_weight, config, input_config, output_config = _dram_sharded_weight_and_config(
                     weight,
                     device=mesh_device,
@@ -1086,11 +1087,10 @@ class OptimizedDecoder(FunctionalDecoder):
             num_kv_heads=kind.num_kv_heads,
             memory_config=head_mem_config,
         )
-        q_mem_config, k_mem_config, v_mem_config = (
-            q_heads.memory_config(),
-            k_heads.memory_config(),
-            v_heads.memory_config(),
-        )
+        # The head split explicitly produces this layout. During shard
+        # analysis the optimizer owns tensor layout state, so use the
+        # already-declared phase config instead of querying the traced tensor.
+        q_mem_config = k_mem_config = v_mem_config = head_mem_config
         q_heads = ttnn.to_memory_config(q_heads, ttnn.L1_MEMORY_CONFIG, dtype=q_heads.dtype)
         k_heads = ttnn.to_memory_config(k_heads, ttnn.L1_MEMORY_CONFIG, dtype=k_heads.dtype)
         v_heads = ttnn.to_memory_config(v_heads, ttnn.L1_MEMORY_CONFIG, dtype=v_heads.dtype)

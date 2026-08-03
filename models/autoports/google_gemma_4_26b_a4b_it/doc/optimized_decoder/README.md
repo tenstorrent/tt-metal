@@ -26,8 +26,10 @@ The selected policy is:
 - Both layer kinds use DRAM-sharded packed gate/up and down decode weights
   with `in0_block_w=11`, the fastest correct geometry that did not regress
   either measured batch.
-- Full attention additionally uses a DRAM-sharded O projection at its
-  precision-locked BFP8/LoFi policy. Sliding attention keeps O interleaved.
+- Both attention kinds use a DRAM-sharded O projection. Full attention keeps
+  its precision-locked BFP8/LoFi policy; the advisor-challenger stage later
+  established a strict batch-1 win for sliding attention's BF16/HiFi4 O path
+  and shipped its measured role-specific `in0_block_w=1` geometry.
 
 Tests assert optimized-method identity and material path counters, so a
 functional fallback cannot satisfy the suite.
