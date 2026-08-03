@@ -14,10 +14,23 @@ void kernel_main() {
     union {
         float f;
         uint32_t u;
-    } f2u_from, f2u_to, f2u_scale;
+    } f2u_from, f2u_to, f2u_scale, f2u_upper_bound;
     f2u_from.u = get_arg_val<uint32_t>(1);
     f2u_to.u = get_arg_val<uint32_t>(2);
-    f2u_scale.f = f2u_to.f - f2u_from.f;
+    // Construct nextafter(to, -infinity) directly, then choose the largest
+    // scale whose rounded upper endpoint remains below `to`. This avoids a
+    // per-row clamp in the SFPU hot loop. Validation guarantees from < to.
+    uint32_t upper_bound_bits;
+    if ((f2u_to.u & 0x7FFFFFFFU) == 0) {
+        upper_bound_bits = 0x80000001U;
+    } else {
+        upper_bound_bits = (f2u_to.u >> 31) ? f2u_to.u + 1U : f2u_to.u - 1U;
+    }
+    f2u_upper_bound.u = upper_bound_bits;
+    f2u_scale.f = f2u_upper_bound.f - f2u_from.f;
+    if (!(f2u_from.f + f2u_scale.f < f2u_to.f) && f2u_scale.u != 0) {
+        --f2u_scale.u;
+    }
     const uint32_t start_id = get_arg_val<uint32_t>(3);
     const uint32_t num_tiles = get_arg_val<uint32_t>(4);
     const uint32_t end_id = start_id + num_tiles;

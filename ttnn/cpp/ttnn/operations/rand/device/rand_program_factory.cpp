@@ -191,9 +191,8 @@ ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
     };
     compute_desc.runtime_args.reserve(num_cores_total);
 
-    const float eps = 1e-6f;
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
-    const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
+    const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to);
 
     const auto layout = rand_core_layout(ws);
     for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
@@ -229,9 +228,8 @@ void RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
     constexpr uint32_t compute_kernel_idx = 1;
 
     const auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
-    const float eps = 1e-6f;
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
-    const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
+    const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to);
     const uint32_t out_addr = output.buffer()->address();
 
     const auto layout = rand_core_layout(ws);

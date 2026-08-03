@@ -237,6 +237,33 @@ def test_rand_tile_means_have_iid_dispersion(device):
     )
 
 
+@pytest.mark.parametrize("low, high", [(0.0, 5e-7), (2.0, 2.0000005), (-1.0, 0.0)])
+def test_rand_respects_narrow_fp32_ranges(device, low, high):
+    data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.float32, low=low, high=high, seed=17)).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+    assert torch.unique(data).numel() > 1
+
+
+def test_rand_all_ones_seed_does_not_lock_prng(device):
+    data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.float32, seed=0xFFFFFFFF)).float()
+
+    # An XNOR LFSR left in the all-ones lock state repeats its lane values.
+    assert torch.unique(data).numel() > 1024
+
+
+def test_rand_fp32_uses_rounding_bit(device):
+    data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.float32, seed=1)).float()
+    top_binade = data[(data >= 0.5) & (data < 1.0)]
+    odd_mantissa_fraction = (top_binade.contiguous().view(torch.int32) & 1).float().mean().item()
+
+    # Using only 23 source bits leaves every other representable FP32 value
+    # absent from [0.5, 1). The extra bit should select both parities evenly.
+    assert 0.45 < odd_mantissa_fraction < 0.55
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],

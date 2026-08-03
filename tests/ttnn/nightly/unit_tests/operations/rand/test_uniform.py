@@ -186,6 +186,23 @@ def test_uniform_seed_distinguishes_cache_entries(device):
     device.disable_and_clear_program_cache()
 
 
+def test_uniform_respects_narrow_fp32_range(device):
+    npu = ttnn.from_torch(
+        torch.zeros((256, 256), dtype=torch.float32),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    ttnn.uniform(npu, 0.0, 5e-7, 17)
+    data = ttnn.to_torch(npu).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= 0.0)
+    assert torch.all(data < 5e-7)
+    assert torch.unique(data).numel() > 1
+
+
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 2, 4, 70, 40]],

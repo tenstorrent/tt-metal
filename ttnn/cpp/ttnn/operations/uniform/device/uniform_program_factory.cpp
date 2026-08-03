@@ -86,17 +86,15 @@ uint32_t uniform_seed_for_core(const UniformDeviceOperation::operation_attribute
     return attrs.seed != 0 ? attrs.seed + i : get_random_seed();
 }
 
-// [from, to) as the bit patterns the compute kernel expects; shared so eps cannot drift between the
-// miss-build and the hit-patch.
+// [from, to) as the bit patterns the compute kernel expects; shared so the
+// miss-build and the hit-patch cannot drift.
 struct UniformRange {
     uint32_t f2u_from;
     uint32_t f2u_to;
 };
 
 UniformRange uniform_range(const UniformDeviceOperation::operation_attributes_t& attrs) {
-    constexpr float eps = 1e-6f;
-    // -eps make sure that generated number is < attrs.to
-    return {std::bit_cast<uint32_t>(attrs.from), std::bit_cast<uint32_t>(attrs.to - eps)};
+    return {std::bit_cast<uint32_t>(attrs.from), std::bit_cast<uint32_t>(attrs.to)};
 }
 }  // namespace
 
