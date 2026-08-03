@@ -23,6 +23,16 @@ enum class HubRole : uint32_t {
 };
 
 struct MatmulDecodeDeviceOperation {
+    // The weight (input B) is bound only through the sharded ``in1_cb`` (see the
+    // full / partial / batched program factories), and the CB infrastructure
+    // resolves the per-core read pointer from the buffer's shard mapping. The
+    // activation A and the output are not per-core allocated by the callers in
+    // question (LinearDecode resharded A to a lockstep width-sharded config and
+    // builds the output mem config lockstep), so the only per-core tensor that
+    // reaches this op is B, and it is addressed per-core via the CB. Declare the
+    // opt-in so ``launch()`` accepts a per-core allocated weight.
+    static constexpr bool supports_per_core_allocation = true;
+
     struct operation_attributes_t {
         int M;
         int N;

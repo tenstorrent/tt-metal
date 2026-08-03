@@ -402,7 +402,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             cache=cache.sub("hc_head"),
         )
         self.norm = DeepSeekV4RMSNorm(
-            self._thunk("norm.weight"), config.rms_norm_eps, self.last_device, cache.file("norm")
+            self._thunk("norm.weight"), config.rms_norm_eps, self.last_device, cache.file("norm"), sharded=True
         )
 
     # -- weight plumbing (lazy dequant; a populated tile cache skips the read) -- #

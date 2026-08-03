@@ -4,7 +4,15 @@ import ttnn
 import torch
 
 from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config
-from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, Linear, LinearDecode, _rms_norm_unweighted
+from .layers import (
+    BatchedLinearDecode,
+    DeepSeekV4RMSNorm,
+    Linear,
+    LinearDecode,
+    _rms_norm_unweighted,
+    max_width_shard_cores,
+    partial_blocks,
+)
 from .paged_cache import PagedLayerView
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
@@ -648,8 +656,31 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         cache = _as_cache(cache)
         print(f"weight_dtype: {weight_dtype}")
 
+        # Spread every prefetched LinearDecode weight across the same core budget so
+        # the four shards stack on one grid under per-core allocation and the whole
+        # set fits L1 at once when ``prefetch_weights`` loads them before the attention
+        # forward. The budget is the largest power-of-two core count the device grid
+        # exposes that every weight can be width-sharded across (full weights need N
+        # divisible by cores with a tile-aligned per-core width; partial weights need
+        # a (k_blocks, n_blocks) factorisation with tile-aligned Kc and Nc). On
+        # Blackhole (>= 128 Tensix cores) this is 128; on a 64-core grid it falls back
+        # to 64.
+        budget = min(
+            max_width_shard_cores(4096, device),  # o_b_proj (full, N=4096)
+            max_width_shard_cores(32768, device),  # q_b_proj (full, N=32768)
+        )
+        kv_k_blocks, kv_n_blocks = partial_blocks(4096, 512, budget)
+        qa_k_blocks, qa_n_blocks = partial_blocks(4096, 1024, budget)
+
         self.o_b_proj = LinearDecode(
-            weights["o_b_proj.weight"], device, cache.file("o_b_proj"), dtype=weight_dtype, K=8192, N=4096
+            weights["o_b_proj.weight"],
+            device,
+            cache.file("o_b_proj"),
+            dtype=weight_dtype,
+            K=8192,
+            N=4096,
+            n_blocks=budget,
+            per_core_allocation=True,
         )
         self.kv_proj = LinearDecode(
             weights["kv_proj.weight"],
@@ -657,13 +688,21 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             cache.file("kv_proj"),
             dtype=weight_dtype,
             partial_width_sharded=True,
-            k_blocks=4,
-            n_blocks=16,
+            k_blocks=kv_k_blocks,
+            n_blocks=kv_n_blocks,
             N=512,
             K=4096,
+            per_core_allocation=True,
         )
         self.q_b_proj = LinearDecode(
-            weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype, n_blocks=64, K=1024, N=32768
+            weights["q_b_proj.weight"],
+            device,
+            cache.file("q_b_proj"),
+            dtype=weight_dtype,
+            n_blocks=budget,
+            K=1024,
+            N=32768,
+            per_core_allocation=True,
         )
         self.q_a_proj = LinearDecode(
             weights["q_a_proj.weight"],
@@ -671,10 +710,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             cache.file("q_a_proj"),
             dtype=weight_dtype,
             partial_width_sharded=True,
-            k_blocks=2,
-            n_blocks=32,
+            k_blocks=qa_k_blocks,
+            n_blocks=qa_n_blocks,
             K=4096,
             N=1024,
+            per_core_allocation=True,
         )
         # self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
         # self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
@@ -747,10 +787,20 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         )
 
     def prefetch_weights(self):
-        # self.o_b_proj.fetch_weights()
+        self.o_b_proj.fetch_weights()
         self.kv_proj.fetch_weights()
         self.q_b_proj.fetch_weights()
         self.q_a_proj.fetch_weights()
+
+    def free_weights(self):
+        # Drop any prefetched LinearDecode weights that weren't consumed by a ``forward``
+        # (e.g. a prefetch that was abandoned). ``LinearDecode.forward`` already frees
+        # its own L1 copy after each matmul, so this is only needed to reclaim a
+        # prefetch that didn't run.
+        self.o_b_proj.free_weights()
+        self.kv_proj.free_weights()
+        self.q_b_proj.free_weights()
+        self.q_a_proj.free_weights()
 
     def _sdpa_decode(
         self,

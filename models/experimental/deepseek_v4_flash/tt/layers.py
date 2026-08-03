@@ -17,6 +17,38 @@ def get_width_shard_num_cores(width: int, device, num_cores: Optional[int] = Non
     return num_cores
 
 
+def max_width_shard_cores(N: int, device) -> int:
+    """Largest power-of-two core count that fits the device grid and over which a
+    full width-sharded ``[K, N]`` weight can be tiled: ``N % cores == 0`` and the
+    per-core shard width ``N // cores`` is tile-aligned (÷ 32).
+
+    Used to spread each resident decode weight across as many cores as the device
+    exposes so the per-core L1 footprint is minimised and the whole set fits L1 at
+    once under per-core allocation.
+    """
+    grid = device.compute_with_storage_grid_size()
+    device_cores = grid.x * grid.y
+    c = 1 << (device_cores.bit_length() - 1)  # largest power of two <= device_cores
+    while c > 1 and (N % c != 0 or (N // c) % ttnn.TILE_SIZE != 0):
+        c //= 2
+    return c
+
+
+def partial_blocks(K: int, N: int, cores: int) -> tuple[int, int]:
+    """Pick ``(k_blocks, n_blocks)`` with ``k_blocks * n_blocks == cores`` and both
+    ``K // k_blocks`` and ``N // n_blocks`` tile-aligned (÷ 32), preferring the
+    largest ``n_blocks`` (shortest per-core K reduction). Raises if none exists.
+    """
+    n = cores
+    while n > 0:
+        if N % n == 0 and (N // n) % ttnn.TILE_SIZE == 0:
+            k = cores // n
+            if k * n == cores and K % k == 0 and (K // k) % ttnn.TILE_SIZE == 0:
+                return k, n
+        n //= 2
+    raise ValueError(f"no partial block factor for K={K}, N={N}, cores={cores}")
+
+
 def regular_width_sharded_l1_config(
     height: int, width: int, device, num_cores: Optional[int] = None
 ) -> ttnn.MemoryConfig:
@@ -122,12 +154,14 @@ class LinearDecode(DeepSeekV4Module):
         num_inputA_cores: int = 32,
         k_blocks: Optional[int] = None,
         n_blocks: Optional[int] = None,
+        per_core_allocation: bool = False,
     ):
         self.partial_width_sharded = partial_width_sharded
         self.num_inputA_cores = num_inputA_cores
         self.dtype = dtype
         self.device = device
         self.l1_weights = None
+        self.per_core_allocation = per_core_allocation
 
         assert K != -1 and N != -1, "K and N must be set"
         self.K = K
@@ -159,6 +193,12 @@ class LinearDecode(DeepSeekV4Module):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        # Per-core L1 allocation gives each core an independent L1 address for its
+        # weight shard (per-bank allocator) instead of lockstep allocation across
+        # the grid, which is what lets the resident decode weights pack alongside
+        # other L1 tensors without one core's shard constraining the others.
+        if per_core_allocation:
+            self.weights_memory_config.experimental_set_per_core_allocation(True)
         # The decode op wants the weight as [K, N]; torch nn.Linear stores [out=N, in=K].
         w = _materialize(weight, cache_file_name, dtype)
         if w is None:
@@ -195,6 +235,15 @@ class LinearDecode(DeepSeekV4Module):
         self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         # self.weight.deallocate()
 
+    def free_weights(self):
+        # Force-drop the L1 weight copy if it's still allocated (e.g. after a
+        # ``fetch_weights`` prefetch that wasn't consumed by a ``forward``). ``forward``
+        # already frees its own copy after the matmul, so this is only needed when a
+        # prefetch is abandoned.
+        if self.l1_weights is not None and self.l1_weights.is_allocated():
+            self.l1_weights.deallocate()
+        self.l1_weights = None
+
     def get_input_memory_config(self, m: int, k: int) -> ttnn.MemoryConfig:
         a_core_range_set = ttnn.num_cores_to_corerangeset(
             self.num_inputA_cores, self.device.compute_with_storage_grid_size(), row_wise=True
@@ -209,7 +258,10 @@ class LinearDecode(DeepSeekV4Module):
         return a_memory_config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        if self.l1_weights is None or not self.l1_weights.is_allocated():
+        # If the weight wasn't prefetched into L1 (fetch_weights / prefetch_weights),
+        # fetch it on demand now and remember we own it so we free it below.
+        fetched_here = self.l1_weights is None or not self.l1_weights.is_allocated()
+        if fetched_here:
             self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         m = x.shape[-2]
         m_padded = ((m + 31) // 32) * 32
@@ -236,8 +288,7 @@ class LinearDecode(DeepSeekV4Module):
         result = ttnn.experimental.matmul_decode(
             x, self.l1_weights, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
         )
-        self.l1_weights.deallocate()
-        self.l1_weights = None
+        self.free_weights()
         return result
 
 
@@ -387,10 +438,16 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
 
 def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
     """Unweighted RMSNorm over the last dim (matches ``DeepseekV4UnweightedRMSNorm``)."""
-    # if not x.is_sharded():
-    #     b, s, t, d = x.shape
-    #     x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
-    #     x = ttnn.to_memory_config(x, x_mem_config)
+    # Width-shard so ``ttnn.rms_norm`` takes its multi-core sharded path (tiny per-core
+    # CBs) instead of the single-core default path, whose ~91 KB of static CBs all
+    # land on core (0,0) and clash with the resident ``o_b_proj`` weight prefetched
+    # alongside the other LinearDecode weights. ``width_sharded_l1_config`` caps the
+    # core count to what the device grid exposes, so for the decode-time ``q``
+    # ``[1,1,H,Dh]`` (rows = H) this spreads the reduction across a small rectangular
+    # grid regardless of the row count.
+    if not x.is_sharded():
+        b, s, t, d = x.shape
+        x = ttnn.to_memory_config(x, width_sharded_l1_config(b * s * t, d, x.device()))
     x = reshard_to_rectangular_grid(x)
     # See ``DeepSeekV4RMSNorm.forward``: keep the output in the input's (sharded)
     # layout instead of dropping to DRAM-interleaved, so the next op avoids a

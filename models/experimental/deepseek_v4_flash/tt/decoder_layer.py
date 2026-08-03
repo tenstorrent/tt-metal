@@ -81,10 +81,14 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             weight_dtype=weight_dtype,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
-            weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm")
+            weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True
         )
         self.post_attention_layernorm = DeepSeekV4RMSNorm(
-            weights["post_attention_layernorm.weight"], eps, device, cache.file("post_attention_layernorm")
+            weights["post_attention_layernorm.weight"],
+            eps,
+            device,
+            cache.file("post_attention_layernorm"),
+            sharded=True,
         )
         self.attn_hc = DeepSeekV4HyperConnection(
             config, _strip_prefix(weights, "attn_hc"), device, cache=cache.sub("attn_hc")
@@ -103,8 +107,10 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         ``streams`` ``[B,S,H,D]``; returns ``[B,S,H,D]``.
 
         Fused into a single composite device op (``ttnn.experimental.deepseek.mix_streams``)
-        that folds the broadcast-multiply, the ``comb`` transpose (via ``transpose_a=True``)
-        and the add into one op call, matching the eager math at HiFi4 / fp32 dest acc.
+        that folds the broadcast-multiply, the ``comb`` transpose and the add into one
+        op call. Width-sharded ``streams`` use a gather_in0 1D matmul; interleaved
+        ``streams`` fold the transpose into ``transpose_a=True``. Matches the eager
+        math at HiFi4 / fp32 dest acc.
         """
         _profile(self.device)
         return ttnn.experimental.deepseek.mix_streams(post, comb, sublayer_out, streams, compute_kernel_config=_HIFI4)
@@ -157,6 +163,10 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             )
         with _region("ATTN_MIX"):
             hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
+        # The attention weights were prefetched (prefetch_weights) and left resident by
+        # ``LinearDecode.forward``; free them now so the MoE fused_experts matmul
+        # (full-grid static CBs) has L1 room. Re-prefetched at the next decode step.
+        self.self_attn.free_weights()
         _profile(self.device)
         with _region("FFN_HC"):
             post, comb, collapsed = self.ffn_hc(hidden_streams)
@@ -212,6 +222,11 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             win_row=win_row,
         )
         hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
+        # Free the prefetched attention weights before the FFN so the MoE
+        # fused_experts matmul (full-grid static CBs) has L1 room. ``deallocate``
+        # inside the trace is the same pattern as ``streams.deallocate()`` above; the
+        # next trace replay re-prefetches via the captured ``prefetch_weights``.
+        self.self_attn.free_weights()
         post, comb, collapsed = self.ffn_hc(hidden_streams)
         mlp_out = self.mlp.decode_static(self.post_attention_layernorm(collapsed), hash_token=hash_token)
         return self._mix(post, comb, mlp_out, hidden_streams)

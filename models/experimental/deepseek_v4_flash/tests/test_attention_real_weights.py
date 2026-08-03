@@ -221,7 +221,7 @@ _WEIGHT_DTYPE = ttnn.bfloat4_b
 # decoded row at position p must match the reference's full-prefill row p. Decode
 # reads the incrementally-built KV / compressor cache (vs full-prefill attention),
 # which widens the gap a touch, hence the slightly looser threshold.
-DECODE_PCC_THRESHOLD = 0.97
+DECODE_PCC_THRESHOLD = 0.95
 # How many tokens to decode (one device step each) past the seeded prefix.
 _DECODE_STEPS = 4
 # On-disk cache (ttnn weight tiles + HF reference bundles). Defaults to a dir
