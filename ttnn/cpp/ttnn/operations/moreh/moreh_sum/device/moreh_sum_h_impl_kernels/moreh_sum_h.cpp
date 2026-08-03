@@ -5,27 +5,23 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t Ht = get_compile_time_arg_val(0);
-    uint32_t Wt = get_compile_time_arg_val(1);
-    uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t origin_H = get_compile_time_arg_val(3);
+    uint32_t Ht = get_arg(args::Ht);
+    // Carries the per-core work-split count (the host's num_cols_per_core_group_N), not a tile width.
+    uint32_t Wt = get_arg(args::units_per_core);
+    uint32_t NC = get_arg(args::NC);
+    constexpr uint32_t origin_H = get_arg(args::origin_H);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    DataflowBuffer dfb_input_obj(cb_input);
-    constexpr auto cb_scaler = tt::CBIndex::c_2;
-    DataflowBuffer dfb_scaler_obj(cb_scaler);
-    constexpr auto cb_mask_h = tt::CBIndex::c_3;
-    DataflowBuffer dfb_mask_h_obj(cb_mask_h);
-    constexpr auto cb_accum_dst = tt::CBIndex::c_24;
-    constexpr auto cb_masked_input = tt::CBIndex::c_25;
-    DataflowBuffer dfb_masked_input_obj(cb_masked_input);
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    DataflowBuffer dfb_input_obj(dfb::input);
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
+    DataflowBuffer dfb_mask_h_obj(dfb::mask_h);
+    DataflowBuffer dfb_masked_input_obj(dfb::masked_input);
     constexpr uint32_t TILE_H = 32;
     constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
 
-    compute_kernel_hw_startup(cb_input, cb_input, cb_out);
+    compute_kernel_hw_startup(dfb::input, dfb::input, dfb::out);
 
     dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
@@ -46,7 +42,7 @@ void kernel_main() {
 
             // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
             if (!is_h_single_tile) {
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_accum_dst>(
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::input, dfb::scaler, dfb::accum_dst>(
                     compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
             }
 
@@ -55,11 +51,11 @@ void kernel_main() {
                 tile_regs_acquire();
                 dfb_input_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
-                reconfig_data_format_srca(cb_input);
+                reconfig_data_format_srca(dfb::input);
 #endif
-                copy_tile_to_dst_init_short(cb_input);
-                copy_tile(cb_input, 0, reduce_dst_idx);
-                copy_tile(cb_mask_h, 0, mask_dst_idx);
+                copy_tile_to_dst_init_short(dfb::input);
+                copy_tile(dfb::input, 0, reduce_dst_idx);
+                copy_tile(dfb::mask_h, 0, mask_dst_idx);
                 mask_tile_init();
                 mask_tile(reduce_dst_idx, mask_dst_idx);
                 tile_regs_commit();
@@ -67,27 +63,27 @@ void kernel_main() {
                 dfb_masked_input_obj.reserve_back(onetile);
                 tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
-                pack_reconfig_data_format(cb_masked_input);
+                pack_reconfig_data_format(dfb::masked_input);
 #endif
-                pack_tile(reduce_dst_idx, cb_masked_input);
+                pack_tile(reduce_dst_idx, dfb::masked_input);
                 tile_regs_release();
                 dfb_masked_input_obj.push_back(onetile);
 
                 dfb_input_obj.pop_front(onetile);
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_masked_input, cb_scaler, cb_out>(
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::masked_input, dfb::scaler, dfb::out>(
                     compute_kernel_lib::ReduceInputBlockShape::single(),
                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+                    compute_kernel_lib::Accumulate::at(dfb::accum_dst, is_h_single_tile ? 0 : 1));
             } else {
                 // Phase 2 without masking: Reduce final tile with accumulation
                 // - If Ht == 1 (single tile): iteration=0, no accumulator reload
-                // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from cb_accum_dst
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_out>(
+                // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from the accum_dst DFB
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::input, dfb::scaler, dfb::out>(
                     compute_kernel_lib::ReduceInputBlockShape::single(),
                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+                    compute_kernel_lib::Accumulate::at(dfb::accum_dst, is_h_single_tile ? 0 : 1));
             }
         }
     }
