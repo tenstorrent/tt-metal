@@ -103,6 +103,15 @@ Paired same-process sequence-1,024 medians of five:
   Generated profiler CSVs and captured watcher/triage logs retain byte-exact
   tool output, including their original line endings and whitespace.
 
+- A final current-HEAD completion audit reran the same default suite after the
+  local checkpoint commits: 13 passed, 58 intentional opt-in skips, and zero
+  failures in 87.68 s. TTNN discovered all four local Blackhole devices, ran
+  on device 3, and closed the device cleanly. The standalone `tt-smi` binary
+  was not present in this shell's `PATH`; device discovery and the complete
+  TTNN run provided the availability check. This rerun refreshed only the two
+  101-replay stress JSONs; replay PCC remains 1.0, with medians 1.338 ms
+  sliding and 1.534 ms full.
+
 - Advertised-context command used `GEMMA4_OPTIMIZED_CONTEXT=1`; cache,
   precision, geometry, DRAM-sharded, SDPA, residual, and prefill candidate
   groups were run separately with their corresponding `GEMMA4_OPTIMIZED_*`
