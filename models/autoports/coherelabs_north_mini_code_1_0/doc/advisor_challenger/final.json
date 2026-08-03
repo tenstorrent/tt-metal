@@ -1,0 +1,58 @@
+{
+  "outcome": "improved",
+  "changed": true,
+  "changed_precision": false,
+  "incumbent_ms": 27.63493036851287,
+  "final_ms": 25.075705721974373,
+  "derived_sum_of_per_kind_medians_ms": 25.07604256272316,
+  "repeats_ms": [25.075705721974373, 25.05958378314972, 25.08015712723136, 25.097400937229395, 25.053397808223963],
+  "winning_repeats_ms": [25.075705721974373, 25.05958378314972, 25.08015712723136, 25.097400937229395, 25.053397808223963],
+  "winning_config": "32-core L1-width-sharded RMSNorm for both sparse-MoE layer kinds",
+  "contribution_us": 2551.272064447403,
+  "oracle": "per-kind real-weight decode against the frozen functional reference at PCC 0.995",
+  "oracle_scope": "official layer-1 sliding decode plus official layer-1 tensors remapped to the full-attention MoE layer-4 path",
+  "oracle_reference": "frozen functional-decoder real-weight reference",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "iterations": [
+    {
+      "trigger": "initial pinned-advisor capture and per-kind reconciliation",
+      "result": "32-core MoE RMSNorm won both layer kinds; advised 22 and above-advice 64 were slower"
+    }
+  ],
+  "model_estimate": {
+    "before_us": 24949.218,
+    "after_us": 22397.945935552594,
+    "band_us": 74.289,
+    "per_kind": {
+      "dense_full_attention": {"before_us": 153.39, "after_us": 153.39, "layers": 1, "band_us": 0.849},
+      "sliding_attention_moe": {"before_us": 18827.352, "after_us": 16678.50360048008, "layers": 36, "band_us": 58.968},
+      "full_attention_moe": {"before_us": 5968.476, "after_us": 5566.052335072517, "layers": 12, "band_us": 14.472}
+    },
+    "method": "per-layer measured device-window delta x layers_of_kind, summed; uncertainty summed linearly"
+  },
+  "advised_boundaries": {
+    "us_advisor_drops_per_model_upper_bound": 44.804,
+    "us_advisor_agrees_per_model": 1.458,
+    "note": "reported, never screened as contribution; dense apparent drops include a refuted soft pairing"
+  },
+  "model_estimate_layer_handoff": {
+    "dense_full_attention_entry_us": 0.886,
+    "redundant_per_model_us": 0.0,
+    "screened": false
+  },
+  "rejected_knobs": [
+    "dense concat-heads-to-O reshard removal: default-off/not implemented; reconcile soft-paired across an uncapturable cache/SDPA gap and final_ir.mlir contains no such advised edge",
+    "advisor_moe_norm_22: default-off; slower than the 32-core winner for both MoE kinds",
+    "advisor_moe_norm_64: default-off; regressed and overlaps/exceeds the incumbent",
+    "NORTH_MINI_ADVISOR_CAPTURE: default-off capture compatibility switch only; never a shipping candidate"
+  ],
+  "confirmed_fresh_process": true,
+  "combination": {
+    "best_set": ["sliding_attention_moe:advisor_moe_norm_32", "full_attention_moe:advisor_moe_norm_32"],
+    "measured_sets": [
+      {"set": ["incumbent"], "measured_ms": 27.63493036851287, "repeats_ms": [27.607470974326134, 27.64036998152733, 27.63493036851287, 27.62380177155137, 27.678230572491884], "oracle_passed": true},
+      {"chains": ["sliding_attention_moe:norm32", "full_attention_moe:norm32"], "measured_ms": 25.075705721974373, "derived_sum_of_per_kind_medians_ms": 25.07604256272316, "repeats_ms": [25.075705721974373, 25.05958378314972, 25.08015712723136, 25.097400937229395, 25.053397808223963], "oracle_passed": true}
+    ]
+  }
+}

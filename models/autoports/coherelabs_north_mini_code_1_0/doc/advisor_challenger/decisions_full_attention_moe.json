@@ -1,0 +1,16 @@
+{
+  "chains": {
+    "0": {"verdict": "not_measurable", "reason": "Advisor-proposed conversion removals total 0 us, below the frozen-control 1.206 us floor."}
+  },
+  "material_ops_on_le_2_cores": {
+    "0": {
+      "verdict": "shipped",
+      "reason": "Mandatory material-op sweep tested advisor 22 cores and above-advice 32 and 64 cores; 32 won and every candidate repeat beat every incumbent repeat.",
+      "candidate": "advisor_moe_norm_32",
+      "measured_ms": 0.5201236717402935,
+      "repeats_ms": [0.5200956016778946, 0.5199124477803707, 0.5201913975179195, 0.5207107774913311, 0.5201236717402935],
+      "oracle_passed": true,
+      "oracle_pcc": 0.9995256482940138
+    }
+  }
+}

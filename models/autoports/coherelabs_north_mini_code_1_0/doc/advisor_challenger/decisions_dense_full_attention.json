@@ -1,0 +1,16 @@
+{
+  "chains": {
+    "0": {"verdict": "not_measurable", "reason": "Soft positional pairing crosses the declared paged-cache/SDPA tracer gap; final_ir.mlir contains no advised edge corresponding to the shipped concat-heads to O-projection reshard."},
+    "1": {"verdict": "below_threshold", "reason": "Advisor-attributable conversion value does not clear the frozen-control floor."},
+    "2": {"verdict": "below_threshold", "reason": "Advisor-attributable conversion value does not clear the frozen-control floor."},
+    "3": {"verdict": "below_threshold", "reason": "Advisor-attributable conversion value does not clear the frozen-control floor."},
+    "4": {"verdict": "below_threshold", "reason": "Advisor-attributable conversion value does not clear the frozen-control floor."},
+    "5": {"verdict": "below_threshold", "reason": "Advisor-attributable conversion value does not clear the frozen-control floor."},
+    "6": {"verdict": "below_threshold", "reason": "Advisor-attributable conversion value does not clear the frozen-control floor."},
+    "7": {"verdict": "below_threshold", "reason": "Advisor-attributable conversion value does not clear the frozen-control floor."}
+  },
+  "disagreements": {
+    "6": {"verdict": "below_threshold", "reason": "Individual op value is below this kind's frozen-control noise floor."},
+    "7": {"verdict": "below_threshold", "reason": "Individual op value is below this kind's frozen-control noise floor."}
+  }
+}

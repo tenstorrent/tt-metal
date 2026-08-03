@@ -1,0 +1,202 @@
+{
+  "function": "decode",
+  "optimization_level": 2,
+  "pipeline": "ttnn",
+  "total_ops": 5,
+  "final_choices": 4,
+  "spill": {
+    "ran": true,
+    "total_spills": 0
+  },
+  "unfixable_ops": [],
+  "ops": [
+    {
+      "index": 0,
+      "op": "ttnn.reshape",
+      "layout": "dram/interleaved/1x1",
+      "program_config": ""
+    },
+    {
+      "index": 1,
+      "op": "ttnn.rms_norm",
+      "layout": "l1/width_sharded/1x22 cores=(0,0)-(10,1)",
+      "program_config": ""
+    },
+    {
+      "index": 2,
+      "op": "ttnn.linear",
+      "layout": "l1/width_sharded/1x80 cores=(0,0)-(10,6)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_dram_sharded"
+    },
+    {
+      "index": 3,
+      "op": "ttnn.nlp_create_qkv_heads_decode",
+      "layout": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+      "program_config": ""
+    }
+  ],
+  "reshards": [
+    {
+      "kind": "to_memory_config",
+      "producer": "input",
+      "consumer": "rms_norm",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x22 cores=(0,0)-(10,1)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "reshape",
+      "consumer": "rms_norm",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x64 cores=(0,0)-(10,4)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "rms_norm",
+      "consumer": "to_memory_config",
+      "from": "l1/width_sharded/1x22 cores=(0,0)-(10,1)",
+      "to": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "to_memory_config",
+      "consumer": "to_memory_config",
+      "from": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+      "to": "dram/interleaved/1x1",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "input",
+      "consumer": "to_memory_config",
+      "from": "?",
+      "to": "dram/interleaved/1x1",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "to_memory_config",
+      "consumer": "linear",
+      "from": "dram/interleaved/1x1",
+      "to": "dram/width_sharded/1x8 cores=(0,0)-(7,0)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "to_memory_config",
+      "consumer": "linear",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "linear",
+      "consumer": "nlp_create_qkv_heads_decode",
+      "from": "l1/width_sharded/1x80 cores=(0,0)-(10,6)",
+      "to": "l1/interleaved/10x11",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "nlp_create_qkv_heads_decode",
+      "consumer": "?",
+      "from": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+      "to": "dram/interleaved/1x1",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "input",
+      "consumer": "?",
+      "from": "?",
+      "to": "dram/interleaved/1x1",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "input",
+      "consumer": "return",
+      "from": "?",
+      "to": "dram/interleaved/1x1",
+      "output_revert": true
+    }
+  ],
+  "dram_sharding": {
+    "matmuls": 1,
+    "dram_sharded_advised": 1,
+    "dram_sharded_considered": 1,
+    "sub_tile_batch_rows": [
+      1
+    ],
+    "matmul_details": [
+      {
+        "op": "ttnn.linear",
+        "advised": true,
+        "activation_rows": 1,
+        "weight_shape": [
+          2048,
+          5120
+        ],
+        "weight_dtype": "bfp_bf8",
+        "considered": true
+      }
+    ]
+  },
+  "artifacts": {
+    "final_ir": "models/autoports/coherelabs_north_mini_code_1_0/doc/advisor_challenger/shard_advise/full_attention_moe/final_ir.mlir",
+    "report_txt": "models/autoports/coherelabs_north_mini_code_1_0/doc/advisor_challenger/shard_advise/full_attention_moe/report.txt",
+    "decision_trace": "models/autoports/coherelabs_north_mini_code_1_0/doc/advisor_challenger/shard_advise/full_attention_moe/decision_trace/decode_decision_trace.json"
+  },
+  "capture_batch": 1,
+  "captured_at": "2026-08-03T10:56:37+00:00",
+  "capture_policy_source": "doc/optimized_decoder/tracy/{dense,sliding_moe,full_moe}/decode/decode_batch1_perf_report.csv plus tt/optimized_decoder.py POLICIES['default'] at freeze",
+  "traced_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense": "BFLOAT8_B",
+    "expert": "BFLOAT8_B",
+    "router": "BFLOAT8_B",
+    "activation": "BFLOAT16",
+    "cache": "BFLOAT16"
+  },
+  "layer_kind": "full_attention_moe",
+  "uncapturable": {
+    "ops": [
+      "paged_fused_update_cache",
+      "paged_scaled_dot_product_attention_decode",
+      "nlp_concat_heads_decode",
+      "sparse_matmul",
+      "topk",
+      "scatter"
+    ],
+    "reason": "pinned direct tracer stops at paged cache update; sparse_matmul is terminal for MoE"
+  },
+  "shipped_policy": {
+    "candidate": "default",
+    "attention_weight_dtype": "BFLOAT8_B",
+    "dense_weight_dtype": "BFLOAT8_B",
+    "expert_weight_dtype": "BFLOAT8_B",
+    "router_weight_dtype": "BFLOAT8_B",
+    "activation_dtype": "BFLOAT16",
+    "cache_dtype": "BFLOAT16",
+    "dense_decode_attention_fidelity": "LoFi",
+    "dense_fidelity": "LoFi",
+    "expert_fidelity": "LoFi",
+    "dram_sharded_dense_decode": true,
+    "sharded_dense_residual": true,
+    "sparse_l1_chain": true,
+    "advisor_moe_norm_cores": 0
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense": "BFLOAT8_B",
+    "expert": "BFLOAT8_B",
+    "router": "BFLOAT8_B",
+    "activation": "BFLOAT16",
+    "cache": "BFLOAT16"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/{dense,sliding_moe,full_moe}/decode/decode_batch1_perf_report.csv plus tt/optimized_decoder.py POLICIES['default'] at freeze"
+}

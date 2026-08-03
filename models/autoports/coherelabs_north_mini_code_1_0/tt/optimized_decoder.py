@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import ttnn
 from models.autoports.coherelabs_north_mini_code_1_0.tt.fused_decoder import FusedDecoder
@@ -52,6 +52,7 @@ class OptimizationPolicy:
     prefill_moe_grid_scale: int = 0
     prefill_gate_up_in0_block_w: int = 2
     prefill_down_in0_block_w: int = 2
+    advisor_moe_norm_cores: int = 0
 
 
 POLICIES = {
@@ -68,6 +69,7 @@ POLICIES = {
         prefill_moe_grid_scale=8,
         prefill_gate_up_in0_block_w=8,
         prefill_down_in0_block_w=8,
+        advisor_moe_norm_cores=32,
     ),
     "bf16_control": OptimizationPolicy(),
     "bf16_hifi2_control": OptimizationPolicy(expert_fidelity=ttnn.MathFidelity.HiFi2),
@@ -275,6 +277,9 @@ POLICIES = {
         down_in0_block_w=24,
     ),
 }
+POLICIES.update(
+    {f"advisor_moe_norm_{cores}": replace(POLICIES["default"], advisor_moe_norm_cores=cores) for cores in (22, 32, 64)}
+)
 
 
 def _rectangular_grid(num_cores: int, grid) -> ttnn.CoreCoord:
@@ -398,6 +403,30 @@ class OptimizedDecoder(FusedDecoder):
         _replace_dtype(decoder.weights, "qkv", decoder.policy.attention_weight_dtype)
         _replace_dtype(decoder.weights, "o", decoder.policy.attention_weight_dtype)
         decoder.dram_sharded_decode_configs = {}
+        decoder.advisor_moe_norm_memory_config = None
+        decoder.advisor_moe_norm_program_config = None
+        if decoder.mlp_type == "sparse" and decoder.policy.advisor_moe_norm_cores:
+            cores = decoder.policy.advisor_moe_norm_cores
+            grid = _rectangular_grid(cores, decoder.mesh_device.compute_with_storage_grid_size())
+            core_ranges = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            )
+            decoder.advisor_moe_norm_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    core_ranges,
+                    (ttnn.TILE_SIZE, math.ceil(decoder.hidden_size / (ttnn.TILE_SIZE * cores)) * ttnn.TILE_SIZE),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            decoder.advisor_moe_norm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=grid,
+                subblock_w=1,
+                block_h=1,
+                block_w=math.ceil(decoder.hidden_size / ttnn.TILE_SIZE / cores),
+                inplace=False,
+            )
         decoder.use_dram_sharded_dense_decode = decoder.batch == 1 and (
             (decoder.policy.dram_sharded_dense_decode and decoder.mlp_type == "dense")
             or (decoder.policy.dram_sharded_moe_attention and decoder.mlp_type == "sparse")
@@ -602,7 +631,7 @@ class OptimizedDecoder(FusedDecoder):
         program_config = None
         if self.use_dram_sharded_dense_decode:
             input_memory_config, program_config, memory_config = self.dram_sharded_decode_configs["qkv"]
-            if normalized.memory_config() != input_memory_config:
+            if os.environ.get("NORTH_MINI_ADVISOR_CAPTURE") == "1" or normalized.memory_config() != input_memory_config:
                 normalized = ttnn.to_memory_config(normalized, input_memory_config)
         fused = ttnn.linear(
             normalized,
@@ -647,7 +676,7 @@ class OptimizedDecoder(FusedDecoder):
             input_memory_config, gate_up_program_config, gate_up_memory_config = self.dram_sharded_decode_configs[
                 "gate_up"
             ]
-            if normalized.memory_config() != input_memory_config:
+            if os.environ.get("NORTH_MINI_ADVISOR_CAPTURE") == "1" or normalized.memory_config() != input_memory_config:
                 normalized = ttnn.to_memory_config(normalized, input_memory_config)
         gate_up = ttnn.linear(
             normalized,
@@ -757,6 +786,32 @@ class OptimizedDecoder(FusedDecoder):
         position_cos=None,
         position_sin=None,
     ):
+        if self.advisor_moe_norm_memory_config is not None:
+            self._validate_hidden(hidden_states, decode=True)
+            if tuple(current_positions.shape) != (self.batch,):
+                raise ValueError(
+                    f"current_positions must have shape ({self.batch},), got {tuple(current_positions.shape)}"
+                )
+            if self.use_rope and (position_cos is None or position_sin is None):
+                raise ValueError("this layer kind requires position_cos and position_sin")
+            normalized = ttnn.rms_norm(
+                ttnn.to_memory_config(hidden_states, self.advisor_moe_norm_memory_config),
+                epsilon=self.eps,
+                weight=self.weights["norm"],
+                program_config=self.advisor_moe_norm_program_config,
+                memory_config=self.advisor_moe_norm_memory_config,
+            )
+            attention = self._attention_decode(
+                normalized,
+                key_cache=key_cache,
+                value_cache=value_cache,
+                page_table=page_table,
+                current_positions=current_positions,
+                position_cos=position_cos,
+                position_sin=position_sin,
+            )
+            mlp = self._mlp(normalized, 1)
+            return ttnn.add(ttnn.add(hidden_states, attention), mlp)
         if not self.use_sharded_dense_residual:
             return super().decode_forward(
                 hidden_states,

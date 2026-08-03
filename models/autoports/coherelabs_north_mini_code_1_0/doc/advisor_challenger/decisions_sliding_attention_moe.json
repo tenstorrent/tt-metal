@@ -1,0 +1,22 @@
+{
+  "chains": {
+    "0": {"verdict": "not_measurable", "reason": "All advisor-proposed conversion removals total 1.148 us, below the frozen-control 1.638 us floor."},
+    "1": {"verdict": "not_measurable", "reason": "All advisor-proposed conversion removals total 1.148 us, below the frozen-control 1.638 us floor."},
+    "2": {"verdict": "not_measurable", "reason": "All advisor-proposed conversion removals total 1.148 us, below the frozen-control 1.638 us floor."}
+  },
+  "material_ops_on_le_2_cores": {
+    "0": {
+      "verdict": "shipped",
+      "reason": "Mandatory material-op sweep tested advisor 22 cores and above-advice 32 and 64 cores; 32 won and every candidate repeat beat every incumbent repeat.",
+      "candidate": "advisor_moe_norm_32",
+      "measured_ms": 0.5183856189250946,
+      "repeats_ms": [0.5183856189250946, 0.517998281866312, 0.5184691771864891, 0.5187986232340336, 0.5177684314548969],
+      "oracle_passed": true,
+      "oracle_pcc": 0.9997189468103221
+    }
+  },
+  "disagreements": {
+    "5": {"verdict": "below_threshold", "reason": "Individual op value is below this kind's frozen-control noise floor."},
+    "6": {"verdict": "below_threshold", "reason": "Individual op value is below this kind's frozen-control noise floor."}
+  }
+}

@@ -48,10 +48,10 @@ from pathlib import Path
 #
 # RENAMES: a ttnn op whose device class is a different word.
 TTNN_TO_DEVICE = {
-    "rms_norm": "LayerNorm",                 # rms_norm is served by the layernorm device op
+    "rms_norm": "LayerNorm",  # rms_norm is served by the layernorm device op
     "linear": "Matmul",
     "concatenate_heads": "NLPConcatHeads",
-    "transpose": "Permute",                  # ttnn.transpose lowers to the permute device op
+    "transpose": "Permute",  # ttnn.transpose lowers to the permute device op
     "paged_scaled_dot_product_attention_decode": "SdpaDecode",
     "scaled_dot_product_attention_decode": "SdpaDecode",
 }
@@ -59,16 +59,21 @@ TTNN_TO_DEVICE = {
 # that is already classified by role below. `to_layout` / `to_memory_config` are here for the second reason,
 # NOT because they are free -- a to_layout is exactly how a 6.7-10 us retilize enters the graph. Its cost is
 # counted, as a `boundary` op on the device side. Excluding them only stops them stealing a compute op.
-UNPAIRED_ADVISED = {"to_layout", "to_memory_config", "reshape", "view",
-                    "full", "zeros", "ones", "empty", "arange"}
+UNPAIRED_ADVISED = {"to_layout", "to_memory_config", "reshape", "view", "full", "zeros", "ones", "empty", "arange"}
 # MOVEMENT device ops -- their only effect is placement or layout, so they are chain BOUNDARIES whatever
 # the advisor said about them. Matched by PREFIX, because tt-metal spells variants: UntilizeWithUnpadding,
 # TilizeWithValPadding. Ops that also compute (Slice, Permute, Concat, Repeat) are deliberately absent:
 # those pair with an advised op and belong to a chain.
-MOVEMENT_PREFIXES = (("Reshard", "l1_regrid"), ("ShardedToInterleaved", "l1_to_dram"),
-                     ("InterleavedToSharded", "dram_to_l1"), ("Untilize", "retilize"),
-                     ("Tilize", "retilize"), ("ReshapeView", "reshape_view"),
-                     ("FillPad", "fill_pad"), ("Copy", "copy"))
+MOVEMENT_PREFIXES = (
+    ("Reshard", "l1_regrid"),
+    ("ShardedToInterleaved", "l1_to_dram"),
+    ("InterleavedToSharded", "dram_to_l1"),
+    ("Untilize", "retilize"),
+    ("Tilize", "retilize"),
+    ("ReshapeView", "reshape_view"),
+    ("FillPad", "fill_pad"),
+    ("Copy", "copy"),
+)
 
 
 # Only these four are placement decisions the advisor states as a to_memory_config edge, so only these can be
@@ -116,7 +121,7 @@ def parse_perf(path: Path, incumbent_ms: float | None = None, layers_in_window: 
     code_col = find("op code", "op type", "name")
     dur_col = find("device time", "device kernel duration [ns]", "device kernel duration")
     core_col = find("cores", "core count")
-    mem_col = find("input 0 memory", "input_0_memory")   # memory CLASS only: no grid, no output column
+    mem_col = find("input 0 memory", "input_0_memory")  # memory CLASS only: no grid, no output column
     if code_col is None or dur_col is None:
         sys.exit(f"FATAL: {path}: need an op-code and a duration column; saw {sorted(keys)}")
     ns = "ns" in dur_col.lower() or "cycle" in dur_col.lower()
@@ -138,11 +143,17 @@ def parse_perf(path: Path, incumbent_ms: float | None = None, layers_in_window: 
             except (TypeError, ValueError):
                 cores = None
         dsc = find("dram sharded", exact=False)
-        ops.append({"id": r.get(find("id") or "", None), "cls": device_class(code), "code": code,
-                    "us": us, "cores": cores,
-                    "mem": ((r.get(mem_col) or "").strip() if mem_col else ""),
-                    "dram_sharded": (r.get(dsc) or "").strip().lower() in ("true", "1", "yes")
-                                    if dsc else False})
+        ops.append(
+            {
+                "id": r.get(find("id") or "", None),
+                "cls": device_class(code),
+                "code": code,
+                "us": us,
+                "cores": cores,
+                "mem": ((r.get(mem_col) or "").strip() if mem_col else ""),
+                "dram_sharded": (r.get(dsc) or "").strip().lower() in ("true", "1", "yes") if dsc else False,
+            }
+        )
         total += us
 
     # A report that was not bounded to one iteration by signposts repeats its op sequence. Detect that
@@ -152,22 +163,26 @@ def parse_perf(path: Path, incumbent_ms: float | None = None, layers_in_window: 
         if len(seq) % period == 0 and seq == seq[:period] * (len(seq) // period):
             reps = len(seq) // period
             if reps == layers_in_window:
-                break          # a deliberate N-consecutive-layer capture, declared with --layers-in-window
-            sys.exit(f"FATAL: {path}: the op sequence repeats {reps}x (period {period} of {len(seq)} "
-                     f"rows), so this report covers {reps} iterations rather than "
-                     f"{layers_in_window}. Re-run tt-perf-report with --start-signpost/--end-signpost "
-                     f"bounding one replay, or pass --layers-in-window {reps} if the capture really does "
-                     f"cover {reps} consecutive layers; every share computed here would be "
-                     f"{reps // max(1, layers_in_window)}x too small.")
+                break  # a deliberate N-consecutive-layer capture, declared with --layers-in-window
+            sys.exit(
+                f"FATAL: {path}: the op sequence repeats {reps}x (period {period} of {len(seq)} "
+                f"rows), so this report covers {reps} iterations rather than "
+                f"{layers_in_window}. Re-run tt-perf-report with --start-signpost/--end-signpost "
+                f"bounding one replay, or pass --layers-in-window {reps} if the capture really does "
+                f"cover {reps} consecutive layers; every share computed here would be "
+                f"{reps // max(1, layers_in_window)}x too small."
+            )
 
     # And a window far from the harness's own number means the CSV is not the decode window at all.
     if incumbent_ms is not None and incumbent_ms > 0:
         ratio = total / (incumbent_ms * 1000.0)
         if ratio > 5 or ratio < 0.2:
-            sys.exit(f"FATAL: {path}: window {total:.1f} us is {ratio:.1f}x the harness's "
-                     f"{incumbent_ms * 1000:.1f} us. Either the harness does not measure the decode "
-                     f"path, or the report is not signpost-bounded to one iteration. Shares computed "
-                     f"against this window would be wrong.")
+            sys.exit(
+                f"FATAL: {path}: window {total:.1f} us is {ratio:.1f}x the harness's "
+                f"{incumbent_ms * 1000:.1f} us. Either the harness does not measure the decode "
+                f"path, or the report is not signpost-bounded to one iteration. Shares computed "
+                f"against this window would be wrong."
+            )
     return ops, total
 
 
@@ -192,14 +207,20 @@ def parse_advised(report: dict):
     for o in report.get("ops", []):
         lay = o.get("layout", "")
         m = re.search(r"cores=\((\d+),(\d+)\)-\((\d+),(\d+)\)", lay)
-        cores = ((int(m.group(3)) - int(m.group(1)) + 1) * (int(m.group(4)) - int(m.group(2)) + 1)
-                 if m else None)
+        cores = (int(m.group(3)) - int(m.group(1)) + 1) * (int(m.group(4)) - int(m.group(2)) + 1) if m else None
         name = o["op"].replace("ttnn.", "")
         explicit = None if name in UNPAIRED_ADVISED else TTNN_TO_DEVICE.get(name, "__auto__")
-        out.append({"index": o["index"], "op": name, "explicit": explicit, "layout": lay,
-                    "cores": cores, "program_config": o.get("program_config", "") or "",
-                    "space": "dram" if lay.startswith("dram") else
-                             ("l1" if lay.startswith("l1") else None)})
+        out.append(
+            {
+                "index": o["index"],
+                "op": name,
+                "explicit": explicit,
+                "layout": lay,
+                "cores": cores,
+                "program_config": o.get("program_config", "") or "",
+                "space": "dram" if lay.startswith("dram") else ("l1" if lay.startswith("l1") else None),
+            }
+        )
     return out
 
 
@@ -249,15 +270,21 @@ def align(advised, device):
     while i < n and j < m:
         sc = pair_score(advised[i], device[j]["cls"], nameless[i])
         if sc and dp[i][j] == sc + dp[i + 1][j + 1]:
-            pairs.append((advised[i], device[j], sc)); i += 1; j += 1
+            pairs.append((advised[i], device[j], sc))
+            i += 1
+            j += 1
         elif dp[i][j] == dp[i][j + 1]:
-            pairs.append((None, device[j], 0)); j += 1
+            pairs.append((None, device[j], 0))
+            j += 1
         else:
-            pairs.append((advised[i], None, 0)); i += 1
+            pairs.append((advised[i], None, 0))
+            i += 1
     while i < n:
-        pairs.append((advised[i], None, 0)); i += 1
+        pairs.append((advised[i], None, 0))
+        i += 1
     while j < m:
-        pairs.append((None, device[j], 0)); j += 1
+        pairs.append((None, device[j], 0))
+        j += 1
     return pairs
 
 
@@ -276,15 +303,20 @@ def layer_handoff(device, layers_of_kind):
     entry_dram = movement_class(first["cls"]) == "dram_to_l1" or (first.get("mem") or "").find("DRAM") >= 0
     exit_l1 = "L1" in (last.get("mem") or "")
     if not (entry_dram and exit_l1):
-        return {"entry_from_dram": entry_dram, "exit_in_l1": exit_l1,
-                "note": "no layer-boundary DRAM round trip detected, or the profile does not show it"}
+        return {
+            "entry_from_dram": entry_dram,
+            "exit_in_l1": exit_l1,
+            "note": "no layer-boundary DRAM round trip detected, or the profile does not show it",
+        }
     return {
-        "entry_from_dram": True, "exit_in_l1": True,
-        "entry_op": first["code"], "entry_us": round(first["us"], 3),
+        "entry_from_dram": True,
+        "exit_in_l1": True,
+        "entry_op": first["code"],
+        "entry_us": round(first["us"], 3),
         "redundant_per_model_us": round(first["us"] * max(0, layers_of_kind - 1), 3),
         "note": "This layer loads its input from DRAM but leaves its output in L1, so consecutive layers do "
-                "not hand off in L1 and this conversion is paid once per layer. NOT this stage's to fix -- "
-                "the advisor is not asked about layer boundaries -- but report it upstream.",
+        "not hand off in L1 and this conversion is paid once per layer. NOT this stage's to fix -- "
+        "the advisor is not asked about layer boundaries -- but report it upstream.",
     }
 
 
@@ -305,8 +337,14 @@ def parse_reshards(report):
         src, dst = (x.get("from") or "?"), (x.get("to") or "?")
         space = lambda t: "dram" if t.startswith("dram") else ("l1" if t.startswith("l1") else "?")
         idx.setdefault((x.get("producer"), x.get("consumer")), []).append(
-            {"kind": x.get("kind"), "from": src, "to": dst,
-             "transition": f"{space(src)}->{space(dst)}", "output_revert": x.get("output_revert")})
+            {
+                "kind": x.get("kind"),
+                "from": src,
+                "to": dst,
+                "transition": f"{space(src)}->{space(dst)}",
+                "output_revert": x.get("output_revert"),
+            }
+        )
     return idx
 
 
@@ -335,13 +373,12 @@ def bsum(rows):
         "undetermined_ops": sum(1 for r in b if r.get("advised_here") is None),
         "us_undetermined": us(lambda r: r.get("advised_here") is None),
         "unresolved_ops": sum(1 for r in allb if r.get("advisor_comparable") == "unresolved"),
-        "us_unresolved": round(
-            sum(r["us"] for r in allb if r.get("advisor_comparable") == "unresolved"), 3),
+        "us_unresolved": round(sum(r["us"] for r in allb if r.get("advisor_comparable") == "unresolved"), 3),
         "by_conversion_class": by_class,
         "note": "us_advisor_drops is what this stage can attribute to the advisor. us_advisor_agrees is real "
-                "conversion time the advisor endorses: attacking it is a separate activity and crediting it "
-                "here would contaminate the measurement. us_unresolved needs the IR to classify -- resolve "
-                "it, do not skip it.",
+        "conversion time the advisor endorses: attacking it is a separate activity and crediting it "
+        "here would contaminate the measurement. us_unresolved needs the IR to classify -- resolve "
+        "it, do not skip it.",
     }
 
 
@@ -355,17 +392,32 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--layer-kind", default="unknown")
     ap.add_argument("--layers-of-kind", type=int, default=1)
-    ap.add_argument("--layers-in-window", type=int, default=1,
-                    help="how many consecutive decoder layers the capture and the profile cover. >1 puts the "
-                         "interior layer boundaries INSIDE the advised graph, where the advisor can choose "
-                         "to keep them in L1 instead of having them hardcoded to DRAM")
+    ap.add_argument(
+        "--layers-in-window",
+        type=int,
+        default=1,
+        help="how many consecutive decoder layers the capture and the profile cover. >1 puts the "
+        "interior layer boundaries INSIDE the advised graph, where the advisor can choose "
+        "to keep them in L1 instead of having them hardcoded to DRAM",
+    )
     ap.add_argument("--total-layers", type=int, default=1)
-    ap.add_argument("--incumbent-ms", type=float, default=None,
-                    help="incumbent_ms from incumbent.json; enables a window sanity check")
-    ap.add_argument("--incumbent", type=Path, default=None,
-                    help="incumbent.json itself. Strongly preferred: repeats_ms gives the harness noise "
-                         "floor, without which this script cannot tell you whether a chain is measurable")
+    ap.add_argument(
+        "--incumbent-ms",
+        type=float,
+        default=None,
+        help="incumbent_ms from incumbent.json; enables a window sanity check",
+    )
+    ap.add_argument(
+        "--incumbent",
+        type=Path,
+        default=None,
+        help="incumbent.json itself. Strongly preferred: repeats_ms gives the harness noise "
+        "floor, without which this script cannot tell you whether a chain is measurable",
+    )
     ap.add_argument("--ir", type=Path, help="accepted and ignored; geometry comes from report.json")
+    ap.add_argument(
+        "--decisions", type=Path, help="reviewed verdict annotations to validate and apply while generating the output"
+    )
     a = ap.parse_args()
 
     for f in (a.report, a.perf):
@@ -387,14 +439,20 @@ def main() -> int:
     if counts:
         want = counts.get(a.layer_kind)
         if want is None:
-            sys.exit(f"FATAL: incumbent.json records layer_counts {sorted(counts)} with no entry for "
-                     f"{a.layer_kind!r}. Name the kinds the same way in both places.")
+            sys.exit(
+                f"FATAL: incumbent.json records layer_counts {sorted(counts)} with no entry for "
+                f"{a.layer_kind!r}. Name the kinds the same way in both places."
+            )
         if want != a.layers_of_kind:
-            sys.exit(f"FATAL: --layers-of-kind {a.layers_of_kind} but incumbent.json says {a.layer_kind} "
-                     f"has {want} layers. The model estimate scales by this number; fix whichever is wrong.")
+            sys.exit(
+                f"FATAL: --layers-of-kind {a.layers_of_kind} but incumbent.json says {a.layer_kind} "
+                f"has {want} layers. The model estimate scales by this number; fix whichever is wrong."
+            )
         if sum(counts.values()) != a.total_layers:
-            sys.exit(f"FATAL: layer_counts sum to {sum(counts.values())} but --total-layers is "
-                     f"{a.total_layers}. Every layer belongs to exactly one kind.")
+            sys.exit(
+                f"FATAL: layer_counts sum to {sum(counts.values())} but --total-layers is "
+                f"{a.total_layers}. Every layer belongs to exactly one kind."
+            )
 
     report = json.loads(a.report.read_text())
     advised = parse_advised(report)
@@ -415,43 +473,64 @@ def main() -> int:
     for adv, pair_sc, dev in seq:
         if dev is None:
             auto = adv["explicit"] == "__auto__"
-            rows.append({"op": adv["op"],
-                         "bucket": "unmapped_advised" if auto else "advised_but_not_present",
-                         "us": 0.0, "share_pct": 0.0, "advised": adv["layout"],
-                         "reason": "no device op paired with this advised op. Either it did not run "
-                                   "(a capture/shape mismatch worth a look), or its name does not pair "
-                                   "with any device class -- add it to TTNN_TO_DEVICE if so."})
+            rows.append(
+                {
+                    "op": adv["op"],
+                    "bucket": "unmapped_advised" if auto else "advised_but_not_present",
+                    "us": 0.0,
+                    "share_pct": 0.0,
+                    "advised": adv["layout"],
+                    "reason": "no device op paired with this advised op. Either it did not run "
+                    "(a capture/shape mismatch worth a look), or its name does not pair "
+                    "with any device class -- add it to TTNN_TO_DEVICE if so.",
+                }
+            )
             continue
-        r = {"op": adv["op"] if adv else None, "device": dev["code"], "cls": dev["cls"],
-             # how this pairing was made: a name match is evidence, a positional one is a guess
-             "pair_confidence": (None if adv is None else "name" if pair_sc == 2 else "position"),
-             "us": round(dev["us"], 3), "share_pct": round(100 * dev["us"] / window, 3),
-             "shipped_cores": dev["cores"]}
+        r = {
+            "op": adv["op"] if adv else None,
+            "device": dev["code"],
+            "cls": dev["cls"],
+            # how this pairing was made: a name match is evidence, a positional one is a guess
+            "pair_confidence": (None if adv is None else "name" if pair_sc == 2 else "position"),
+            "us": round(dev["us"], 3),
+            "share_pct": round(100 * dev["us"] / window, 3),
+            "shipped_cores": dev["cores"],
+        }
         mv = movement_class(dev["cls"])
         if mv:
             # movement ops mostly arrive unpaired, because the advisor lists them in reshards[] rather
             # than ops[]; classify them first or they fall through to `untraced` and the ranking loses
             # its input entirely
             r.update(bucket="boundary", conversion_class=mv)
-            cur = None                                   # a conversion ends the current L1 run
+            cur = None  # a conversion ends the current L1 run
         elif adv is None:
             r.update(bucket="untraced", reason="in the profile, absent from the advisor's graph")
             cur = None
         elif adv["space"] == "dram":
-            r.update(bucket="dram_resident", advised=adv["layout"],
-                     reason="advisor placed it in DRAM -- that is advice, and it disagrees with a "
-                            "sharded shipped op")
+            r.update(
+                bucket="dram_resident",
+                advised=adv["layout"],
+                reason="advisor placed it in DRAM -- that is advice, and it disagrees with a " "sharded shipped op",
+            )
             cur = None
         else:
-            same = (adv["cores"] is not None and adv["cores"] == dev["cores"]) or \
-                   (dev["dram_sharded"] and "dram_sharded" in adv["program_config"])
-            r.update(bucket="agrees_with_shipped" if same else "chain",
-                     advised=adv["layout"], advised_cores=adv["cores"])
+            same = (adv["cores"] is not None and adv["cores"] == dev["cores"]) or (
+                dev["dram_sharded"] and "dram_sharded" in adv["program_config"]
+            )
+            r.update(
+                bucket="agrees_with_shipped" if same else "chain", advised=adv["layout"], advised_cores=adv["cores"]
+            )
             if not same:
                 if cur is None:
-                    cur = {"chain": f"{a.layer_kind}:{len(chains)}", "ops": [], "us": 0.0,
-                           "boundary_us": 0.0, "verdict": "pending", "measured_ms": None,
-                           "repeats_ms": None}
+                    cur = {
+                        "chain": f"{a.layer_kind}:{len(chains)}",
+                        "ops": [],
+                        "us": 0.0,
+                        "boundary_us": 0.0,
+                        "verdict": "pending",
+                        "measured_ms": None,
+                        "repeats_ms": None,
+                    }
                     chains.append(cur)
                 cur["ops"].append(adv["op"])
                 cur["us"] += dev["us"]
@@ -473,7 +552,8 @@ def main() -> int:
             r["reason"] = (
                 f"{r.get('conversion_class')} is not a placement edge the advisor states, and the profile "
                 "cannot show whether it changed layout. It may still be a chain boundary -- check this "
-                "edge's layouts in the IR. Do not drop it: it is unresolved, not out of scope")
+                "edge's layouts in the IR. Do not drop it: it is unresolved, not out of scope"
+            )
         elif prev is None or nxt is None:
             r["advised_here"] = None
             r["reason"] = "boundary on an edge with no paired advised op either side -- undetermined"
@@ -483,8 +563,10 @@ def main() -> int:
             r["reason"] = "the advisor puts a conversion here too -- agreement, not a candidate"
         else:
             r["advised_here"] = False
-            r["reason"] = ("no advised reshard on this edge: the advisor keeps this run in L1. Removing "
-                           "this conversion is the change to measure.")
+            r["reason"] = (
+                "no advised reshard on this edge: the advisor keeps this run in L1. Removing "
+                "this conversion is the change to measure."
+            )
 
     # conversion value: boundary us adjacent to a chain -- what joining across it would remove
     for i, r in enumerate(rows):
@@ -507,11 +589,20 @@ def main() -> int:
             continue
         if any(0 <= j < len(rows) and rows[j].get("chain") for j in (i - 1, i + 1)):
             continue
-        ch = {"chain": f"{a.layer_kind}:b{i}", "ops": [], "us": 0.0, "boundary_us": round(r["us"], 3),
-              "advisor_removes_us": round(r["us"], 3), "verdict": "pending", "measured_ms": None,
-              "repeats_ms": None, "kind": "boundary_only", "edge": r.get("edge"),
-              "how": f"remove the {r.get('conversion_class')} on this edge; the advice places no conversion "
-                     "here and both neighbours already match shipped, so no geometry change is needed"}
+        ch = {
+            "chain": f"{a.layer_kind}:b{i}",
+            "ops": [],
+            "us": 0.0,
+            "boundary_us": round(r["us"], 3),
+            "advisor_removes_us": round(r["us"], 3),
+            "verdict": "pending",
+            "measured_ms": None,
+            "repeats_ms": None,
+            "kind": "boundary_only",
+            "edge": r.get("edge"),
+            "how": f"remove the {r.get('conversion_class')} on this edge; the advice places no conversion "
+            "here and both neighbours already match shipped, so no geometry change is needed",
+        }
         chains.append(ch)
 
     for c in chains:
@@ -546,13 +637,24 @@ def main() -> int:
     # placement -- then it is advisor-attributable and needs an attempt. Where the advisor wants the same
     # 1-core placement, fixing it is a direct grid sweep with no advisor contribution: report it and hand it
     # to $optimize. Keeping those two apart is what stops this stage growing into a second optimize pass.
-    starved = [r for r in rows if (r.get("shipped_cores") or 99) <= 2 and r["share_pct"] >= 1.0
-               and r["bucket"] in ("chain", "agrees_with_shipped")]
+    starved = [
+        r
+        for r in rows
+        if (r.get("shipped_cores") or 99) <= 2
+        and r["share_pct"] >= 1.0
+        and r["bucket"] in ("chain", "agrees_with_shipped")
+    ]
     low = [r for r in starved if r["bucket"] == "chain"]
-    low_out_of_scope = [dict(r, note="the advisor wants this placement too, so improving it is a direct grid "
-                                     "sweep with no advisor contribution -- report it, hand it to $optimize, "
-                                     "and do not screen it here")
-                        for r in starved if r["bucket"] == "agrees_with_shipped"]
+    low_out_of_scope = [
+        dict(
+            r,
+            note="the advisor wants this placement too, so improving it is a direct grid "
+            "sweep with no advisor contribution -- report it, hand it to $optimize, "
+            "and do not screen it here",
+        )
+        for r in starved
+        if r["bucket"] == "agrees_with_shipped"
+    ]
 
     # How much of the accounting rests on positional guesses rather than name evidence. This is the tool's
     # generality check: on a model whose ops it does not recognise the buckets degrade, and it must SAY so
@@ -571,9 +673,14 @@ def main() -> int:
     untraced_share = acct.get("untraced", {}).get("share_pct", 0.0)
     declared_blind = bool(report.get("uncapturable"))
     fanout = round(len(device) / max(1, len(advised)), 2)
-    suspect = [x for x, bad in (
-        (f"untraced is {untraced_share:.2f} % of the window", untraced_share > 30.0),
-        (f"{len(device)} device ops against {len(advised)} advised ({fanout}x)", fanout > 2.5)) if bad]
+    suspect = [
+        x
+        for x, bad in (
+            (f"untraced is {untraced_share:.2f} % of the window", untraced_share > 30.0),
+            (f"{len(device)} device ops against {len(advised)} advised ({fanout}x)", fanout > 2.5),
+        )
+        if bad
+    ]
     degraded = bool(suspect) and not declared_blind
 
     # THE HARNESS NOISE FLOOR. A chain whose value is below the spread of the incumbent's own repeats cannot
@@ -587,18 +694,16 @@ def main() -> int:
     # matters twice over: it inflates the floor, and it breaks the exchangeability the non-overlap rule
     # assumes, because a candidate measured after the incumbent in the same process is simply warmer.
     floor_exfirst_us = round((max(repeats[1:]) - min(repeats[1:])) * 1000, 3) if len(repeats) >= 3 else None
-    first_gap_share = (round(1 - floor_exfirst_us / floor_us, 3)
-                       if floor_us and floor_exfirst_us is not None else None)
+    first_gap_share = round(1 - floor_exfirst_us / floor_us, 3) if floor_us and floor_exfirst_us is not None else None
     monotone = len(repeats) >= 3 and all(repeats[i] >= repeats[i + 1] for i in range(len(repeats) - 1))
-    ceiling_us = round(sum(
-        r["us"] for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is False), 3)
+    ceiling_us = round(sum(r["us"] for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is False), 3)
     for c in chains:
         c["vs_noise_floor"] = round(c["advisor_removes_us"] / floor_us, 2) if floor_us else None
         c["resolvable_alone"] = (c["advisor_removes_us"] > floor_us) if floor_us else None
         c["confidence"] = "low" if (c.pop("_positional", 0) or c.pop("_unresolved_us", 0)) else "high"
 
     declared = set()
-    for src in (report.get("uncapturable") or {}, ):
+    for src in (report.get("uncapturable") or {},):
         declared |= {str(x).split(".")[-1] for x in (src.get("ops") or [])}
     declared |= {str(x.get("op", "")).split(".")[-1] for x in (report.get("unfixable_ops") or [])}
     untraced_rows = [r for r in rows if r["bucket"] == "untraced"]
@@ -606,68 +711,91 @@ def main() -> int:
         "ops": [{"device": r["device"], "us": r["us"], "share_pct": r["share_pct"]} for r in untraced_rows],
         "declared_uncapturable_by_report": sorted(declared),
         "note": "untraced means the profile has it and the advisor's graph does not. That is expected for "
-                "ops the report declares uncapturable (terminal in the tracer) and a problem otherwise. "
-                "This tool cannot tell the two apart per op -- the capture log can.",
+        "ops the report declares uncapturable (terminal in the tracer) and a problem otherwise. "
+        "This tool cannot tell the two apart per op -- the capture log can.",
     }
 
-    feasibility = {"noise_floor_us": floor_us, "noise_floor_source": "max-min of incumbent repeats_ms",
-                   "noise_floor_excluding_first_us": floor_exfirst_us,
-                   "first_repeat_share_of_floor": first_gap_share, "repeats_monotone_decreasing": monotone,
-                   "repeats": len(repeats), "ceiling_us": ceiling_us,
-                   "ceiling_vs_floor": round(ceiling_us / floor_us, 2) if floor_us else None,
-                   "chains_resolvable_alone": sum(1 for c in chains if c["resolvable_alone"])}
+    feasibility = {
+        "noise_floor_us": floor_us,
+        "noise_floor_source": "max-min of incumbent repeats_ms",
+        "noise_floor_excluding_first_us": floor_exfirst_us,
+        "first_repeat_share_of_floor": first_gap_share,
+        "repeats_monotone_decreasing": monotone,
+        "repeats": len(repeats),
+        "ceiling_us": ceiling_us,
+        "ceiling_vs_floor": round(ceiling_us / floor_us, 2) if floor_us else None,
+        "chains_resolvable_alone": sum(1 for c in chains if c["resolvable_alone"]),
+    }
     if floor_us is None:
         feasibility["verdict"] = "unknown"
-        feasibility["advice"] = ("Pass --incumbent incumbent.json with at least 2 repeats_ms. Without the "
-                                "noise floor there is no way to tell a real zero from an unmeasurable one.")
+        feasibility["advice"] = (
+            "Pass --incumbent incumbent.json with at least 2 repeats_ms. Without the "
+            "noise floor there is no way to tell a real zero from an unmeasurable one."
+        )
     elif ceiling_us <= floor_us:
         feasibility["verdict"] = "not_measurable"
         feasibility["advice"] = (
             f"STOP. Everything the advisor proposes removing here totals {ceiling_us} us, below this "
             f"harness's own {floor_us} us spread. No non-overlap decision on this cell can be attributed to "
             f"the advice. Either tighten the harness (more replays per timed block) or record a contribution "
-            f"of zero WITH THIS ARITHMETIC as the reason -- do not screen chains and call the result zero.")
+            f"of zero WITH THIS ARITHMETIC as the reason -- do not screen chains and call the result zero."
+        )
     elif not chains:
         feasibility["verdict"] = "no_candidates"
         feasibility["advice"] = (
             f"{ceiling_us} us is attributable and above the {floor_us} us floor, but it resolved to no "
             "candidate. Read `disagreements` for boundary rows with advised_here=false and work out what "
-            "change would remove them; do not report zero without explaining this gap.")
+            "change would remove them; do not report zero without explaining this gap."
+        )
     elif not feasibility["chains_resolvable_alone"]:
         feasibility["verdict"] = "aggregate_only"
         feasibility["advice"] = (
             f"Do not screen these chains one at a time: the total is {ceiling_us} us "
             f"({feasibility['ceiling_vs_floor']}x the {floor_us} us floor) but no single chain clears it, so "
             f"each one measured alone returns a zero regardless of the advice. Apply the top chains together "
-            f"as one candidate first to establish that anything is there, then split only what wins.")
+            f"as one candidate first to establish that anything is there, then split only what wins."
+        )
     else:
         feasibility["verdict"] = "measurable"
-        feasibility["advice"] = (f"{feasibility['chains_resolvable_alone']} chain(s) exceed the {floor_us} us "
-                                 f"floor; screen those individually and group the rest.")
+        feasibility["advice"] = (
+            f"{feasibility['chains_resolvable_alone']} chain(s) exceed the {floor_us} us "
+            f"floor; screen those individually and group the rest."
+        )
     if first_gap_share is not None and (first_gap_share > 0.5 or monotone):
-        would = ("measurable" if any(c["advisor_removes_us"] > floor_exfirst_us for c in chains)
-                 else "aggregate_only" if ceiling_us > floor_exfirst_us else "not_measurable")
+        would = (
+            "measurable"
+            if any(c["advisor_removes_us"] > floor_exfirst_us for c in chains)
+            else "aggregate_only"
+            if ceiling_us > floor_exfirst_us
+            else "not_measurable"
+        )
         feasibility["warmup_suspect"] = {
-            "first_repeat_share_of_floor": first_gap_share, "monotone": monotone,
+            "first_repeat_share_of_floor": first_gap_share,
+            "monotone": monotone,
             "floor_without_first_repeat_us": floor_exfirst_us,
             "verdict_if_warmed_properly": would,
             "note": "The first timed repeat carries most of the spread, and/or the repeats fall "
-                    "monotonically, so this is a settling ramp rather than noise. Re-measure with at least "
-                    "10 untimed warm-up replays before accepting the verdict above -- and never measure a "
-                    "candidate after the incumbent in one process, since the later run is simply warmer.",
+            "monotonically, so this is a settling ramp rather than noise. Re-measure with at least "
+            "10 untimed warm-up replays before accepting the verdict above -- and never measure a "
+            "candidate after the incumbent in one process, since the later run is simply warmer.",
         }
     rec = incumbent.get("noise_floor_ms")
     if rec is not None and floor_us is not None and abs(rec * 1000 - floor_us) > 0.002:
         feasibility["recorded_noise_floor_disagrees"] = {
-            "recorded_ms": rec, "computed_us": floor_us,
-            "note": "incumbent.json records a noise floor that is not the spread of its own repeats_ms."}
+            "recorded_ms": rec,
+            "computed_us": floor_us,
+            "note": "incumbent.json records a noise floor that is not the spread of its own repeats_ms.",
+        }
     if repeats and incumbent.get("incumbent_ms") is not None:
         med = sorted(repeats)[len(repeats) // 2]
         if abs(incumbent["incumbent_ms"] - med) > 1e-9:
             feasibility["incumbent_ms_is_not_median"] = {
-                "recorded": incumbent["incumbent_ms"], "median": med, "min": min(repeats),
+                "recorded": incumbent["incumbent_ms"],
+                "median": med,
+                "min": min(repeats),
                 "note": "min-of-n is biased low and the bias grows with n; cells with different n are not "
-                        "comparable. Fix the incumbent before screening."}
+                "comparable. Fix the incumbent before screening.",
+            }
 
     # WHAT THE ADVICE ITSELF SAYS ABOUT ITS OWN CONSTRUCTION. `spill.ran` is true in every corpus cell, and
     # a plan the optimizer had to spill out of L1 is less likely to survive being applied one chain at a time.
@@ -679,66 +807,93 @@ def main() -> int:
         "capture_policy_source": report.get("capture_policy_source"),
         "traced_weight_dtypes": report.get("traced_weight_dtypes"),
         "allow_bf16_dram_sharded_matmul": report.get("allow_bf16_dram_sharded_matmul"),
-        "spills": sp.get("total_spills"), "spill_ran": sp.get("ran"),
-        "op_counts": {"report_total_ops": report.get("total_ops"), "ops_listed": len(advised),
-                      "final_choices": report.get("final_choices")},
+        "spills": sp.get("total_spills"),
+        "spill_ran": sp.get("ran"),
+        "op_counts": {
+            "report_total_ops": report.get("total_ops"),
+            "ops_listed": len(advised),
+            "final_choices": report.get("final_choices"),
+        },
         "dram_sharded_advised": report.get("dram_sharded_advised"),
         "layers_in_window": a.layers_in_window,
-        "graph_input_reshards": sum(1 for x in (report.get("reshards") or [])
-                                    if x.get("producer") == "input"),
+        "graph_input_reshards": sum(1 for x in (report.get("reshards") or []) if x.get("producer") == "input"),
         "graph_input_note": "reshards with producer=='input' come off a graph input the py-to-IR boundary "
-                            "hardcodes to DRAM interleaved. Some are genuine weight placement (DRAM is where "
-                            "weights live); the one feeding the first op is the layer's activation entry and "
-                            "is an artifact. Capturing N consecutive layers reduces the artifact to 1/N of "
-                            "the layer boundaries.",
+        "hardcodes to DRAM interleaved. Some are genuine weight placement (DRAM is where "
+        "weights live); the one feeding the first op is the layer's activation entry and "
+        "is an artifact. Capturing N consecutive layers reduces the artifact to 1/N of "
+        "the layer boundaries.",
     }
     if sp.get("total_spills"):
         capture_provenance["spill_caution"] = (
             f"the optimizer spilled {sp['total_spills']} time(s) building this plan, so it did not fit L1 as "
             "a whole. Expect single-chain application to hit the same wall, and treat a capacity failure as "
-            "a partial-application artifact rather than evidence the direction is wrong.")
+            "a partial-application artifact rather than evidence the direction is wrong."
+        )
     if not report.get("capture_policy_source"):
         capture_provenance["provenance_gap"] = (
             "capture_policy_source is unset, so there is no record that the traced decoder was built with "
             "the SHIPPED policy rather than class defaults. Dtypes are checked by the gate; layouts and "
-            "DRAM-sharding flags are not.")
+            "DRAM-sharding flags are not."
+        )
 
     per_layer_window = window / max(1, a.layers_in_window)
     model_estimate = {
         "this_kind_us": round(per_layer_window * a.layers_of_kind, 3),
-        "per_layer_window_us": round(per_layer_window, 3), "layers_in_window": a.layers_in_window,
-        "layers_of_kind": a.layers_of_kind, "total_layers": a.total_layers,
+        "per_layer_window_us": round(per_layer_window, 3),
+        "layers_in_window": a.layers_in_window,
+        "layers_of_kind": a.layers_of_kind,
+        "total_layers": a.total_layers,
         "kind_share_of_layers": round(a.layers_of_kind / max(1, a.total_layers), 3),
         "layer_counts": counts or None,
-        "layer_counts_source": ("incumbent.json layer_counts (cross-checked)" if counts else
-                                "UNVERIFIED -- incumbent.json records no layer_counts, so layers_of_kind is "
-                                "taken on trust and the model estimate is unchecked"),
+        "layer_counts_source": (
+            "incumbent.json layer_counts (cross-checked)"
+            if counts
+            else "UNVERIFIED -- incumbent.json records no layer_counts, so layers_of_kind is "
+            "taken on trust and the model estimate is unchecked"
+        ),
         "ceiling_per_model_us": round(ceiling_us * a.layers_of_kind / max(1, a.layers_in_window), 3),
         # the model number inherits the per-layer measurement error MULTIPLIED by the layer count, so it is
         # far less precise than its digits suggest. Quote it with this band or not at all.
-        "uncertainty_per_model_us": (round(floor_us * a.layers_of_kind / max(1, a.layers_in_window), 3)
-                                     if floor_us else None),
+        "uncertainty_per_model_us": (
+            round(floor_us * a.layers_of_kind / max(1, a.layers_in_window), 3) if floor_us else None
+        ),
         "layer_handoff": handoff,
         "note": "Sum this_kind_us over every layer kind for the full-model estimate, and choose between "
-                "candidates on THAT. Per-layer microseconds are for detection against the per-layer noise "
-                "floor; per-model microseconds are for deciding, because layer counts differ by kind. Report "
-                "the model estimate as before/after with the uncertainty band: a per-layer delta scaled by "
-                "the layer count carries the per-layer floor scaled by the same factor.",
+        "candidates on THAT. Per-layer microseconds are for detection against the per-layer noise "
+        "floor; per-model microseconds are for deciding, because layer counts differ by kind. Report "
+        "the model estimate as before/after with the uncertainty band: a per-layer delta scaled by "
+        "the layer count carries the per-layer floor scaled by the same factor.",
     }
 
     out = {
-        "feasibility": feasibility, "model_estimate": model_estimate,
-        "capture_provenance": capture_provenance, "untraced_detail": untraced_detail,
-        "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 5,
+        "feasibility": feasibility,
+        "model_estimate": model_estimate,
+        "capture_provenance": capture_provenance,
+        "untraced_detail": untraced_detail,
+        "generated_by": "advisor-challenger/scripts/reconcile.py",
+        "tool_version": 5,
         "confidence": {
-            "paired_by_name": len(byname), "paired_by_position": len(bypos),
-            "us_paired_by_position": pos_us, "pct_paired_by_position": pos_share,
-            "device_to_advised_fanout": fanout, "report_declares_uncapturable": declared_blind,
-            "degraded": degraded, "degraded_because": suspect if degraded else [],
-            "hard": ["measured_window_us", "per-op us and share_pct", "accounting_closes_100pct",
-                     "the single-replay and window-ratio guards", "by_conversion_class us"],
-            "soft": ["which advised op each device op is", "advised_here / advisor_removes_us",
-                     "the chain ranking, since it is computed from the soft items above"]},
+            "paired_by_name": len(byname),
+            "paired_by_position": len(bypos),
+            "us_paired_by_position": pos_us,
+            "pct_paired_by_position": pos_share,
+            "device_to_advised_fanout": fanout,
+            "report_declares_uncapturable": declared_blind,
+            "degraded": degraded,
+            "degraded_because": suspect if degraded else [],
+            "hard": [
+                "measured_window_us",
+                "per-op us and share_pct",
+                "accounting_closes_100pct",
+                "the single-replay and window-ratio guards",
+                "by_conversion_class us",
+            ],
+            "soft": [
+                "which advised op each device op is",
+                "advised_here / advisor_removes_us",
+                "the chain ranking, since it is computed from the soft items above",
+            ],
+        },
         "limitations": [
             "Ops are paired by normalised name, then by position when no name matches. A positional pair is "
             "a guess; rows carry pair_confidence, and pct_paired_by_position says how much of the window "
@@ -751,106 +906,173 @@ def main() -> int:
             "invisible here and unresolved classes cannot be settled without the IR.",
             "Nothing here is a measurement. Every verdict comes from the device.",
         ],
-        "layer_kind": a.layer_kind, "layers_of_kind": a.layers_of_kind,
-        "total_layers": a.total_layers, "measured_window_us": round(window, 3),
-        "accounting": acct, "accounting_closes_100pct": closes,
+        "layer_kind": a.layer_kind,
+        "layers_of_kind": a.layers_of_kind,
+        "total_layers": a.total_layers,
+        "measured_window_us": round(window, 3),
+        "accounting": acct,
+        "accounting_closes_100pct": closes,
         "accounted_us": round(accounted, 3),
         "scope": {
             "window_us": round(window, 3),
             "incumbent_us": round(a.incumbent_ms * 1000, 3) if a.incumbent_ms else None,
             "note": "The profile and the harness both cover ONE decoder layer, and window_us should be "
-                    "within a few percent of incumbent_us. per_model_us on each chain scales by "
-                    "layers_of_kind to the whole model and is an extrapolation -- never compare it to "
-                    "incumbent_ms, which is per layer.",
-            "layers_of_kind": a.layers_of_kind, "total_layers": a.total_layers},
+            "within a few percent of incumbent_us. per_model_us on each chain scales by "
+            "layers_of_kind to the whole model and is an extrapolation -- never compare it to "
+            "incumbent_ms, which is per layer.",
+            "layers_of_kind": a.layers_of_kind,
+            "total_layers": a.total_layers,
+        },
         "ranked_by": "advisor_removes_us (conversions the advice does not place), then total conversion "
-                     "value + chain op us. NOT the advised ops' window share. Compare each chain's "
-                     "vs_noise_floor before spending a measurement on it.",
+        "value + chain op us. NOT the advised ops' window share. Compare each chain's "
+        "vs_noise_floor before spending a measurement on it.",
         "advised_boundaries": bsum(rows),
-        "chains": chains, "material_ops_on_le_2_cores": low,
+        "chains": chains,
+        "material_ops_on_le_2_cores": low,
         "starved_ops_not_attributable": low_out_of_scope,
         "note": "Screen chains in the order given, each as one unit, and record repeats_ms. Do NOT copy "
-                "advised core counts: they are selected under a bytes-shaped objective and are often "
-                "smaller than the divisors of the tensor's tile count. The advisor's contribution is the "
-                "op SET and the DIRECTION of the change; own the geometry.",
+        "advised core counts: they are selected under a bytes-shaped objective and are often "
+        "smaller than the divisors of the tensor's tile count. The advisor's contribution is the "
+        "op SET and the DIRECTION of the change; own the geometry.",
         "disagreements": rows,
     }
+    if a.decisions:
+        if not a.decisions.is_file():
+            sys.exit(f"FATAL: no such decisions file: {a.decisions}")
+        decisions = json.loads(a.decisions.read_text())
+        allowed = {"measured", "below_threshold", "not_measurable", "rejected", "shipped"}
+
+        def apply_indexed(section, annotations):
+            target = out[section]
+            for raw_index, annotation in annotations.items():
+                index = int(raw_index)
+                if index < 0 or index >= len(target):
+                    sys.exit(f"FATAL: {a.decisions}: {section}[{index}] does not exist")
+                verdict = annotation.get("verdict")
+                if verdict not in allowed:
+                    sys.exit(f"FATAL: {a.decisions}: invalid verdict {verdict!r} for {section}[{index}]")
+                if not annotation.get("reason"):
+                    sys.exit(f"FATAL: {a.decisions}: {section}[{index}] has no reason")
+                target[index].update(annotation)
+
+        apply_indexed("chains", decisions.get("chains", {}))
+        apply_indexed("material_ops_on_le_2_cores", decisions.get("material_ops_on_le_2_cores", {}))
+        apply_indexed("disagreements", decisions.get("disagreements", {}))
+        out["decision_annotations"] = {
+            "path": str(a.decisions),
+            "applied_by": "advisor-challenger/scripts/reconcile.py",
+        }
+        out["tool_version"] = 6
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(out, indent=2) + "\n")
 
     print(f"{a.layer_kind}: window {window:.3f} us, {len(rows)} rows, closes: {closes}")
-    print(f"   paired: {len(byname)} by name, {len(bypos)} by position "
-          f"({pos_us:.3f} us, {pos_share:.2f} % of window)")
+    print(
+        f"   paired: {len(byname)} by name, {len(bypos)} by position " f"({pos_us:.3f} us, {pos_share:.2f} % of window)"
+    )
     if degraded:
         print("   ** DEGRADED -- " + "; ".join(suspect) + ", and the report declares nothing uncapturable.")
-        print("   ** The profile and the advice may describe different graphs: wrong file, a stale capture, "
-              "or a capture that stopped early. Resolve this before screening -- the buckets and the "
-              "ranking below are unsafe, and every share is measured against a window that may not be the "
-              "graph the advice describes.")
+        print(
+            "   ** The profile and the advice may describe different graphs: wrong file, a stale capture, "
+            "or a capture that stopped early. Resolve this before screening -- the buckets and the "
+            "ranking below are unsafe, and every share is measured against a window that may not be the "
+            "graph the advice describes."
+        )
     elif untraced_share > 30.0:
-        print(f"   note: untraced is {untraced_share:.2f} %, expected -- the report declares uncapturable "
-              f"ops. State this share as the advisor's reach, do not imply coverage.")
+        print(
+            f"   note: untraced is {untraced_share:.2f} %, expected -- the report declares uncapturable "
+            f"ops. State this share as the advisor's reach, do not imply coverage."
+        )
     for b, v in sorted(acct.items(), key=lambda x: -x[1]["us"]):
         print(f"   {b:22s} {v['us']:9.3f} us {v['share_pct']:6.2f} %  ({v['ops']} ops)")
     ab = out["advised_boundaries"]
-    print(f"   boundaries: advisor drops {ab['advisor_drops_ops']} ({ab['us_advisor_drops']:.3f} us, "
-          f"in scope) | agrees {ab['advisor_agrees_ops']} ({ab['us_advisor_agrees']:.3f} us, out of scope) "
-          f"| undetermined {ab['undetermined_ops']} ({ab['us_undetermined']:.3f} us) "
-          f"| UNRESOLVED {ab['unresolved_ops']} ({ab['us_unresolved']:.3f} us, check the IR)")
-    print("   " + "  ".join(f"{k} {v['us']:.3f}us/{v['ops']}" for k, v in
-                            sorted(ab["by_conversion_class"].items(), key=lambda x: -x[1]["us"])))
+    print(
+        f"   boundaries: advisor drops {ab['advisor_drops_ops']} ({ab['us_advisor_drops']:.3f} us, "
+        f"in scope) | agrees {ab['advisor_agrees_ops']} ({ab['us_advisor_agrees']:.3f} us, out of scope) "
+        f"| undetermined {ab['undetermined_ops']} ({ab['us_undetermined']:.3f} us) "
+        f"| UNRESOLVED {ab['unresolved_ops']} ({ab['us_unresolved']:.3f} us, check the IR)"
+    )
+    print(
+        "   "
+        + "  ".join(
+            f"{k} {v['us']:.3f}us/{v['ops']}"
+            for k, v in sorted(ab["by_conversion_class"].items(), key=lambda x: -x[1]["us"])
+        )
+    )
     f = out["feasibility"]
-    print(f"   FEASIBILITY [{f['verdict']}] floor {f['noise_floor_us']} us (n={f['repeats']}), "
-          f"ceiling {f['ceiling_us']} us ({f['ceiling_vs_floor']}x)")
+    print(
+        f"   FEASIBILITY [{f['verdict']}] floor {f['noise_floor_us']} us (n={f['repeats']}), "
+        f"ceiling {f['ceiling_us']} us ({f['ceiling_vs_floor']}x)"
+    )
     for line in textwrap.wrap(f["advice"], 108):
         print("      " + line)
     if "warmup_suspect" in f:
         w = f["warmup_suspect"]
-        print(f"   !! WARM-UP: the first repeat is {100 * (w['first_repeat_share_of_floor'] or 0):.0f} % of "
-              f"the floor" + (" and the repeats fall monotonically" if w["monotone"] else "") +
-              f". Without it the floor is {w['floor_without_first_repeat_us']} us and the verdict would be "
-              f"[{w['verdict_if_warmed_properly']}]. Add warm-up replays and re-measure.")
+        print(
+            f"   !! WARM-UP: the first repeat is {100 * (w['first_repeat_share_of_floor'] or 0):.0f} % of "
+            f"the floor"
+            + (" and the repeats fall monotonically" if w["monotone"] else "")
+            + f". Without it the floor is {w['floor_without_first_repeat_us']} us and the verdict would be "
+            f"[{w['verdict_if_warmed_properly']}]. Add warm-up replays and re-measure."
+        )
     if "incumbent_ms_is_not_median" in f:
-        print(f"   !! incumbent_ms {f['incumbent_ms_is_not_median']['recorded']} is not the median "
-              f"{f['incumbent_ms_is_not_median']['median']} -- fix before screening")
+        print(
+            f"   !! incumbent_ms {f['incumbent_ms_is_not_median']['recorded']} is not the median "
+            f"{f['incumbent_ms_is_not_median']['median']} -- fix before screening"
+        )
     for r in low_out_of_scope:
-        print(f"   -- {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us ({r['share_pct']} %) "
-              f"-- advisor agrees, so NOT this stage's: report it and hand it to $optimize")
+        print(
+            f"   -- {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us ({r['share_pct']} %) "
+            f"-- advisor agrees, so NOT this stage's: report it and hand it to $optimize"
+        )
     for r in low:
-        print(f"   !! BIGGER THAN THE CEILING: {r['device']} on {r['shipped_cores']} core(s), "
-              f"{r['us']:.3f} us ({r['share_pct']} % of the window) -- needs a measured attempt or a quoted "
-              f"hard error" if r["us"] > ceiling_us else
-              f"   !! {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us ({r['share_pct']} %) "
-              f"-- needs a measured attempt or a quoted hard error")
+        print(
+            f"   !! BIGGER THAN THE CEILING: {r['device']} on {r['shipped_cores']} core(s), "
+            f"{r['us']:.3f} us ({r['share_pct']} % of the window) -- needs a measured attempt or a quoted "
+            f"hard error"
+            if r["us"] > ceiling_us
+            else f"   !! {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us ({r['share_pct']} %) "
+            f"-- needs a measured attempt or a quoted hard error"
+        )
 
     attrib = [c for c in chains if c["advisor_removes_us"] > 0]
     rest = [c for c in chains if c["advisor_removes_us"] <= 0]
 
     def show(c):
-        print(f"      {c['chain']:20s} ops {c['us']:8.3f} + boundaries {c['boundary_us']:7.3f} us"
-              f"  (attributable {c['advisor_removes_us']:6.3f} = {c['vs_noise_floor'] or 0:.2f}x floor,"
-              f" conf {c['confidence']}, {c['advisor_removes_per_model_us']:7.1f} us/model)"
-              f"   {'/'.join(c['ops'])[:36]}")
+        print(
+            f"      {c['chain']:20s} ops {c['us']:8.3f} + boundaries {c['boundary_us']:7.3f} us"
+            f"  (attributable {c['advisor_removes_us']:6.3f} = {c['vs_noise_floor'] or 0:.2f}x floor,"
+            f" conf {c['confidence']}, {c['advisor_removes_per_model_us']:7.1f} us/model)"
+            f"   {'/'.join(c['ops'])[:36]}"
+        )
 
     cp = out["capture_provenance"]
     if cp.get("spills"):
-        print(f"   note: the advice spilled {cp['spills']}x out of L1 while being built -- a capacity "
-              f"failure on one chain is a partial-application artifact, not a wrong direction")
+        print(
+            f"   note: the advice spilled {cp['spills']}x out of L1 while being built -- a capacity "
+            f"failure on one chain is a partial-application artifact, not a wrong direction"
+        )
     if cp.get("provenance_gap"):
         print("   note: capture_policy_source unset -- no record the capture used the shipped policy")
     me = out["model_estimate"]
-    print(f"   MODEL ESTIMATE this kind: {me['this_kind_us']:.1f} us "
-          f"({a.layers_of_kind}/{a.total_layers} layers); ceiling per model {me['ceiling_per_model_us']:.1f} us")
+    print(
+        f"   MODEL ESTIMATE this kind: {me['this_kind_us']:.1f} us "
+        f"({a.layers_of_kind}/{a.total_layers} layers); ceiling per model {me['ceiling_per_model_us']:.1f} us"
+    )
     if handoff and handoff.get("redundant_per_model_us"):
-        print(f"   !! LAYER HANDOFF: input from DRAM, output left in L1 -- {handoff['entry_op'][:34]} costs "
-              f"{handoff['entry_us']} us/layer, {handoff['redundant_per_model_us']} us across the model. "
-              f"Upstream decoder issue, not this stage's.")
+        print(
+            f"   !! LAYER HANDOFF: input from DRAM, output left in L1 -- {handoff['entry_op'][:34]} costs "
+            f"{handoff['entry_us']} us/layer, {handoff['redundant_per_model_us']} us across the model. "
+            f"Upstream decoder issue, not this stage's."
+        )
     print(f"   {len(attrib)} chain(s) with advisor-attributable value, ranked by it:")
     for c in attrib:
         show(c)
     if rest:
-        print(f"   {len(rest)} chain(s) with NO attributable value -- the advisor places the same "
-              f"conversions, or they are unresolved. Listed for completeness, not as candidates:")
+        print(
+            f"   {len(rest)} chain(s) with NO attributable value -- the advisor places the same "
+            f"conversions, or they are unresolved. Listed for completeness, not as candidates:"
+        )
         for c in rest:
             show(c)
     return 0
@@ -867,9 +1089,17 @@ def self_test() -> int:
         return head + "".join(f"{c},{int(us * 1000)},32\n" for c, us in pairs)
 
     def report_of(ops, reshards=(), **kw):
-        return json.dumps({"ops": [{"index": i, "op": f"ttnn.{o}", "layout": "l1/block_sharded/1x32",
-                                    "program_config": ""} for i, o in enumerate(ops)],
-                           "reshards": list(reshards), "total_ops": len(ops), **kw})
+        return json.dumps(
+            {
+                "ops": [
+                    {"index": i, "op": f"ttnn.{o}", "layout": "l1/block_sharded/1x32", "program_config": ""}
+                    for i, o in enumerate(ops)
+                ],
+                "reshards": list(reshards),
+                "total_ops": len(ops),
+                **kw,
+            }
+        )
 
     fails = []
     with tempfile.TemporaryDirectory() as td:
@@ -878,9 +1108,21 @@ def self_test() -> int:
         def run(report, csv, extra=()):
             (d / "r.json").write_text(report)
             (d / "p.csv").write_text(csv)
-            return subprocess.run([sys.executable, __file__, "--report", str(d / "r.json"),
-                                   "--perf", str(d / "p.csv"), "--out", str(d / "o.json"), *extra],
-                                  capture_output=True, text=True)
+            return subprocess.run(
+                [
+                    sys.executable,
+                    __file__,
+                    "--report",
+                    str(d / "r.json"),
+                    "--perf",
+                    str(d / "p.csv"),
+                    "--out",
+                    str(d / "o.json"),
+                    *extra,
+                ],
+                capture_output=True,
+                text=True,
+            )
 
         def load():
             return json.loads((d / "o.json").read_text())
@@ -891,59 +1133,96 @@ def self_test() -> int:
             print(f"  {'ok  ' if cond else 'FAIL'} {name}")
 
         # 1. plain pairing, closure, and a boundary that the advice does not place
-        r = run(report_of(["rms_norm", "linear", "add"]),
-                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0),
-                        ("ReshardDeviceOperation", 2.0), ("BinaryNgDeviceOperation", 5.0)]))
+        r = run(
+            report_of(["rms_norm", "linear", "add"]),
+            csv_of(
+                [
+                    ("LayerNormDeviceOperation", 10.0),
+                    ("MatmulDeviceOperation", 100.0),
+                    ("ReshardDeviceOperation", 2.0),
+                    ("BinaryNgDeviceOperation", 5.0),
+                ]
+            ),
+        )
         check(r.returncode == 0, "clean input exits 0")
         o = load()
         check(o["accounting_closes_100pct"], "accounting closes")
         check(abs(o["measured_window_us"] - 117.0) < 1e-6, "window is the sum of device times")
         # rms_norm->LayerNorm and linear->Matmul are name matches; `add` does NOT resemble `BinaryNg`, so it
         # pairs by position. That is the documented fallback, and it is why the corpus shows 1-5 % positional.
-        check(o["confidence"]["paired_by_name"] == 2 and o["confidence"]["paired_by_position"] == 1,
-              "renames pair by name, binary elementwise falls back to position")
-        check([r["pair_confidence"] for r in o["disagreements"] if r.get("op") == "add"] == ["position"],
-              "the positional pair is flagged as such")
+        check(
+            o["confidence"]["paired_by_name"] == 2 and o["confidence"]["paired_by_position"] == 1,
+            "renames pair by name, binary elementwise falls back to position",
+        )
+        check(
+            [r["pair_confidence"] for r in o["disagreements"] if r.get("op") == "add"] == ["position"],
+            "the positional pair is flagged as such",
+        )
         check(o["advised_boundaries"]["us_advisor_drops"] == 2.0, "unplaced Reshard is attributable")
 
         # 2. the same graph, with the advice placing that conversion too -> not attributable
-        r = run(report_of(["rms_norm", "linear", "add"],
-                          [{"kind": "to_memory_config", "producer": "linear", "consumer": "add",
-                            "from": "l1/x", "to": "l1/y"}]),
-                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0),
-                        ("ReshardDeviceOperation", 2.0), ("BinaryNgDeviceOperation", 5.0)]))
+        r = run(
+            report_of(
+                ["rms_norm", "linear", "add"],
+                [{"kind": "to_memory_config", "producer": "linear", "consumer": "add", "from": "l1/x", "to": "l1/y"}],
+            ),
+            csv_of(
+                [
+                    ("LayerNormDeviceOperation", 10.0),
+                    ("MatmulDeviceOperation", 100.0),
+                    ("ReshardDeviceOperation", 2.0),
+                    ("BinaryNgDeviceOperation", 5.0),
+                ]
+            ),
+        )
         o = load()
-        check(o["advised_boundaries"]["us_advisor_drops"] == 0.0 and
-              o["advised_boundaries"]["us_advisor_agrees"] == 2.0, "advised conversion is not attributable")
+        check(
+            o["advised_boundaries"]["us_advisor_drops"] == 0.0 and o["advised_boundaries"]["us_advisor_agrees"] == 2.0,
+            "advised conversion is not attributable",
+        )
 
         # 3. an unpairable advised op must not drag device ops into untraced
-        r = run(report_of(["rms_norm", "sparse_matmul", "linear"]),
-                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0)]))
+        r = run(
+            report_of(["rms_norm", "sparse_matmul", "linear"]),
+            csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0)]),
+        )
         o = load()
-        check(o["accounting"].get("untraced", {}).get("us", 0) == 0.0,
-              "an unpairable advised op leaves the device ops paired")
+        check(
+            o["accounting"].get("untraced", {}).get("us", 0) == 0.0,
+            "an unpairable advised op leaves the device ops paired",
+        )
 
         # 4. a report covering two replays must be refused, not scaled
-        r = run(report_of(["rms_norm", "linear"]),
-                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0)] * 2))
+        r = run(
+            report_of(["rms_norm", "linear"]),
+            csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0)] * 2),
+        )
         check(r.returncode != 0 and "repeats 2x" in r.stderr, "two-replay report is refused")
 
         # 5. a profile the advice does not describe must degrade, not produce confident buckets
-        r = run(report_of(["rms_norm"]),
-                csv_of([("LayerNormDeviceOperation", 10.0)] + [(f"Op{i}Operation", 50.0)
-                                                               for i in range(8)]))
+        r = run(
+            report_of(["rms_norm"]),
+            csv_of([("LayerNormDeviceOperation", 10.0)] + [(f"Op{i}Operation", 50.0) for i in range(8)]),
+        )
         o = load()
         check(o["confidence"]["degraded"], "mismatched inputs report DEGRADED")
 
         # 6. the noise floor decides measurability
         (d / "inc.json").write_text(json.dumps({"incumbent_ms": 0.1, "repeats_ms": [0.100, 0.150]}))
-        r = run(report_of(["rms_norm", "linear", "add"]),
-                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0),
-                        ("ReshardDeviceOperation", 2.0), ("BinaryNgDeviceOperation", 5.0)]),
-                ["--incumbent", str(d / "inc.json")])
+        r = run(
+            report_of(["rms_norm", "linear", "add"]),
+            csv_of(
+                [
+                    ("LayerNormDeviceOperation", 10.0),
+                    ("MatmulDeviceOperation", 100.0),
+                    ("ReshardDeviceOperation", 2.0),
+                    ("BinaryNgDeviceOperation", 5.0),
+                ]
+            ),
+            ["--incumbent", str(d / "inc.json")],
+        )
         o = load()
-        check(o["feasibility"]["verdict"] == "not_measurable",
-              "a 2.0 us ceiling under a 50 us floor is not_measurable")
+        check(o["feasibility"]["verdict"] == "not_measurable", "a 2.0 us ceiling under a 50 us floor is not_measurable")
 
     print(f"\n{len(fails)} failure(s)" + (": " + ", ".join(fails) if fails else ""))
     return 1 if fails else 0

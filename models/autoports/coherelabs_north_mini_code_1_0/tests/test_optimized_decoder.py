@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,12 @@ def test_default_policy_selects_measured_optimized_paths():
     assert policy.prefill_down_in0_block_w == 8
     assert policy.gate_up_cores == 24
     assert policy.down_cores == 32
+    assert policy.advisor_moe_norm_cores == 32
+    for cores in (22, 32, 64):
+        assert POLICIES[f"advisor_moe_norm_{cores}"] == replace(policy, advisor_moe_norm_cores=cores)
+    decode_source = inspect.getsource(OptimizedDecoder.decode_forward)
+    assert "current_positions must have shape" in decode_source
+    assert "this layer kind requires position_cos and position_sin" in decode_source
 
 
 def _real_layer_state(layer_idx):
@@ -91,6 +98,39 @@ def _real_layer_state(layer_idx):
         with safe_open(shard, framework="pt", device="cpu") as handle:
             state.update({key: handle.get_tensor(key) for key in handle.keys() if key.startswith(prefix)})
     return state
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_advisor_full_moe_policy_real_weights_against_functional(mesh_device):
+    """Exercise the full-attention MoE path with official layer-1 tensors remapped to layer 4."""
+    config = functional_tests._config()
+    layer_one = _real_layer_state(1)
+    state = {key.replace("model.layers.1.", "model.layers.4."): value for key, value in layer_one.items()}
+    common = dict(hf_config=config, layer_idx=4, mesh_device=mesh_device, batch=1, max_cache_len=32)
+    reference = ReferenceDecoder.from_state_dict(state, **common)
+    actual = OptimizedDecoder.from_state_dict(state, candidate="advisor_moe_norm_32", **common)
+    generator = torch.Generator().manual_seed(24004)
+    hidden = functional_tests._randn(generator, 1, 1, config.hidden_size, scale=0.02)
+    page_table = functional_tests._to_tt(
+        functional_tests._page_table(1, 1), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    current = functional_tests._to_tt(
+        torch.tensor([0], dtype=torch.int32), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+
+    def run(decoder):
+        key_cache, value_cache = decoder.create_paged_kv_cache()
+        return decoder.decode_forward(
+            functional_tests._to_tt(hidden.unsqueeze(0), mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+            current_positions=current,
+        )
+
+    expected = ttnn.to_torch(run(reference)).squeeze(0)
+    observed = ttnn.to_torch(run(actual)).squeeze(0)
+    functional_tests._assert_pcc("real-layer1-remapped-full-moe-advisor", expected, observed, threshold=0.995)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)

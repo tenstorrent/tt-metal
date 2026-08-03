@@ -1,0 +1,55 @@
+{
+  "label": "incumbent",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.5530628561973572,
+    0.5532201379537582,
+    0.5542691424489021,
+    0.553658977150917,
+    0.554080568253994
+  ],
+  "median_ms": 0.553658977150917,
+  "noise_floor_ms": 0.0012062862515449524,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one full-attention sparse-MoE decoder layer, traced decode replay, batch 1, measured end to end on the host",
+  "measured_at": "2026-08-03T10:50:21+00:00",
+  "shipped_policy": {
+    "candidate": "default",
+    "attention_weight_dtype": "BFLOAT8_B",
+    "dense_weight_dtype": "BFLOAT8_B",
+    "expert_weight_dtype": "BFLOAT8_B",
+    "router_weight_dtype": "BFLOAT8_B",
+    "activation_dtype": "BFLOAT16",
+    "cache_dtype": "BFLOAT16",
+    "dense_decode_attention_fidelity": "LoFi",
+    "dense_fidelity": "LoFi",
+    "expert_fidelity": "LoFi",
+    "dram_sharded_dense_decode": true,
+    "sharded_dense_residual": true,
+    "sparse_l1_chain": true,
+    "advisor_moe_norm_cores": 0
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense": "BFLOAT8_B",
+    "expert": "BFLOAT8_B",
+    "router": "BFLOAT8_B",
+    "activation": "BFLOAT16",
+    "cache": "BFLOAT16"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/{dense,sliding_moe,full_moe}/decode/decode_batch1_perf_report.csv plus tt/optimized_decoder.py POLICIES['default'] at freeze",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ],
+  "incumbent_ms": 0.553658977150917,
+  "total_layers": 49,
+  "layer_counts": {
+    "dense_full_attention": 1,
+    "sliding_attention_moe": 36,
+    "full_attention_moe": 12
+  }
+}

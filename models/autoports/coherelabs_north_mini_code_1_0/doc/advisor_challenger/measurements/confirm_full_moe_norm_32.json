@@ -1,0 +1,95 @@
+{
+  "label": "confirm_advisor_moe_norm_32",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.5197522975504398,
+    0.5197023972868919,
+    0.5197178199887276,
+    0.5198252201080322,
+    0.519601795822382
+  ],
+  "median_ms": 0.5197178199887276,
+  "noise_floor_ms": 0.0002234242856502533,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one decoder layer, traced decode replay, batch 1, measured end to end on the host",
+  "measured_at": "2026-08-03T11:26:07+00:00",
+  "shipped_policy": {
+    "candidate": "default",
+    "attention_weight_dtype": "BFLOAT8_B",
+    "dense_weight_dtype": "BFLOAT8_B",
+    "expert_weight_dtype": "BFLOAT8_B",
+    "router_weight_dtype": "BFLOAT8_B",
+    "activation_dtype": "BFLOAT16",
+    "cache_dtype": "BFLOAT16",
+    "dense_decode_attention_fidelity": "LoFi",
+    "dense_fidelity": "LoFi",
+    "expert_fidelity": "LoFi",
+    "dram_sharded_dense_decode": true,
+    "sharded_dense_residual": true,
+    "sparse_l1_chain": true,
+    "advisor_moe_norm_cores": 0
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "dense": "BFLOAT8_B",
+    "expert": "BFLOAT8_B",
+    "router": "BFLOAT8_B",
+    "activation": "BFLOAT16",
+    "cache": "BFLOAT16"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/{dense,sliding_moe,full_moe}/decode/decode_batch1_perf_report.csv plus tt/optimized_decoder.py POLICIES['default'] at freeze",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ],
+  "executed_candidate": "advisor_moe_norm_32",
+  "executed_policy": {
+    "attention_weight_dtype": "DataType.BFLOAT8_B",
+    "dense_weight_dtype": "DataType.BFLOAT8_B",
+    "expert_weight_dtype": "DataType.BFLOAT8_B",
+    "router_weight_dtype": "DataType.BFLOAT8_B",
+    "activation_dtype": "DataType.BFLOAT16",
+    "attention_fidelity": "MathFidelity.HiFi2",
+    "dense_decode_attention_fidelity": "MathFidelity.LoFi",
+    "dense_fidelity": "MathFidelity.LoFi",
+    "expert_fidelity": "MathFidelity.LoFi",
+    "expert_fp32_dest_acc": false,
+    "gate_up_cores": 24,
+    "gate_up_in0_block_w": 16,
+    "down_cores": 32,
+    "down_in0_block_w": 24,
+    "cache_dtype": "DataType.BFLOAT16",
+    "explicit_decode_sdpa": false,
+    "explicit_prefill_sdpa": false,
+    "dram_sharded_dense_decode": true,
+    "sharded_dense_residual": true,
+    "dram_sharded_moe_attention": false,
+    "dram_k_block_cap": 32,
+    "sparse_output_tile_height": 32,
+    "sparse_l1_chain": true,
+    "prefill_moe_grid_scale": 8,
+    "prefill_gate_up_in0_block_w": 8,
+    "prefill_down_in0_block_w": 8,
+    "advisor_moe_norm_cores": 32
+  },
+  "invocation": {
+    "argv": [
+      "models/autoports/coherelabs_north_mini_code_1_0/doc/advisor_challenger/harness.py",
+      "--label",
+      "confirm_advisor_moe_norm_32",
+      "--out",
+      "models/autoports/coherelabs_north_mini_code_1_0/doc/advisor_challenger/measurements/confirm_full_moe_norm_32.json"
+    ],
+    "environment": {
+      "CHALLENGER_MODEL_DIR": "coherelabs_north_mini_code_1_0",
+      "CHALLENGER_DECODE_BATCH": "1",
+      "CHALLENGER_REQUESTED_DECODE_BATCH": "1",
+      "CHALLENGER_LAYER_IDX": "4",
+      "CHALLENGER_CANDIDATE": "advisor_moe_norm_32"
+    },
+    "policy_path": "models/autoports/coherelabs_north_mini_code_1_0/doc/advisor_challenger/incumbent.json"
+  }
+}
