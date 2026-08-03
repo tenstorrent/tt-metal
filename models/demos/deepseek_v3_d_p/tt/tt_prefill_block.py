@@ -543,12 +543,15 @@ class TtPrefillBlock(LightweightModule):
         )
         kv_intermediates = None
         mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
-        if return_kv_intermediates and return_indexer_indices:
-            mla_out, kv_intermediates, mla_indices = mla_out
-        elif return_kv_intermediates:
-            mla_out, kv_intermediates = mla_out
-        elif return_indexer_indices:
-            mla_out, mla_indices = mla_out
+        # A kv_only layer's MLA returns None (it fills the cache and stops before attention/output), so it
+        # has nothing to unpack; the kv_only short-circuit below returns the matching (None, ...) arity.
+        if not self.kv_only:
+            if return_kv_intermediates and return_indexer_indices:
+                mla_out, kv_intermediates, mla_indices = mla_out
+            elif return_kv_intermediates:
+                mla_out, kv_intermediates = mla_out
+            elif return_indexer_indices:
+                mla_out, mla_indices = mla_out
         ttnn.deallocate(attn_norm_out)
 
         # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
