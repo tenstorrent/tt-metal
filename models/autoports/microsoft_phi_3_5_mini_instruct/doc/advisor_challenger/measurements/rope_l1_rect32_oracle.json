@@ -1,0 +1,11 @@
+{
+  "oracle_weights": "real",
+  "reference": "frozen incumbent implementation with identical real layer-0 checkpoint weights and inputs",
+  "threshold": 0.995,
+  "oracle_passed": true,
+  "oracle_pcc_message": 0.9999987789923074,
+  "max_abs_diff": 0.140625,
+  "mean_abs_diff": 0.0004103586252313107,
+  "decode_batch": 32,
+  "requested_decode_batch": 32
+}

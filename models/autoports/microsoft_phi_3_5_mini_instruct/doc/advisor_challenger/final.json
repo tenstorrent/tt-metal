@@ -1,0 +1,101 @@
+{
+  "outcome": "shipped",
+  "changed": true,
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "capture_batch": 32,
+  "layer_counts": {"dense": 32},
+  "num_hidden_layers": 32,
+  "incumbent_ms": 0.6569885648787022,
+  "final_ms": 0.6071719527244568,
+  "repeats_ms": [
+    0.6083243153989315,
+    0.6086928211152554,
+    0.6070602871477604,
+    0.6068328768014908,
+    0.6071719527244568
+  ],
+  "confirmation_repeats_ms": [
+    0.6079018674790859,
+    0.6082306802272797,
+    0.6077229045331478,
+    0.6077549792826176,
+    0.6082408875226974
+  ],
+  "winning_config": {
+    "use_advisor_decode_rope_l1": true,
+    "rope_storage": "L1 interleaved",
+    "restore_geometry": "32-core exact rectangular height shard"
+  },
+  "oracle": {
+    "oracle_weights": "real",
+    "reference": "frozen incumbent with identical real layer-0 checkpoint weights and inputs",
+    "oracle_passed": true,
+    "oracle_pcc": 0.9999987789923074,
+    "threshold": 0.995
+  },
+  "oracle_passed": true,
+  "oracle_weights": "real",
+  "oracle_reference": "frozen incumbent with identical real layer-0 checkpoint weights and inputs",
+  "oracle_scope": "differential real-weight batch-32 decoder output PCC",
+  "winning_repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568],
+  "confirmed_fresh_process": true,
+  "perf_report": "measurements/rope_l1_rect32_perf.csv",
+  "iterations": [
+    {
+      "set": "dense_rope_l1_chain",
+      "chains": ["dense:b30", "dense:b15", "dense:4", "dense:9", "dense:3", "dense:8", "dense:2", "dense:10", "dense:11", "dense:7", "dense:5", "dense:6", "dense:b39", "dense:b40", "dense:1"],
+      "combined_with": "connected RoPE L1 chain required by neighbour constraints",
+      "measured_ms": 0.6071719527244568,
+      "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568],
+      "oracle_passed": true,
+      "oracle_pcc": 0.9999987789923074,
+      "oracle_weights": "real",
+      "verdict": "kept_non_overlap",
+      "trigger": "reconcile.py ranked the connected RoPE conversions above the noise floor"
+    }
+  ],
+  "combination": {
+    "best_set": "dense_rope_l1_chain",
+    "measured_sets": [
+      {
+        "set": ["dense_rope_l1_chain"],
+        "chains": ["dense:b30", "dense:b15", "dense:4", "dense:9", "dense:3", "dense:8", "dense:2", "dense:10", "dense:11", "dense:7", "dense:5", "dense:6", "dense:b39", "dense:b40", "dense:1"],
+        "measured_ms": 0.6071719527244568,
+        "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568],
+        "oracle_passed": true,
+        "oracle_pcc": 0.9999987789923074
+      }
+    ]
+  },
+  "rejected_knobs": {
+    "generic_height_shard_restore": {
+      "default": "off",
+      "result": "hard_error",
+      "error": "bad optional access",
+      "replacement": "explicit exact rectangular 32-core height shard"
+    },
+    "remove_sdpa_to_concat_conversion": {
+      "default": "off",
+      "result": "hard_requirement",
+      "error": "nlp_concat_heads_decode input must be sharded"
+    }
+  },
+  "model_estimate": {
+    "before_us": 18210.88,
+    "after_us": 16616.7484,
+    "band_us": 13.76,
+    "per_kind": {
+      "dense": {"before_us": 18210.88, "after_us": 16616.7484, "layers": 32}
+    },
+    "method": "single-replay profile estimate minus per-layer measured delta x 32 dense layers",
+    "delta_us": -1594.1316,
+    "inside_uncertainty_band": false
+  },
+  "advised_boundaries": {
+    "us_advisor_drops": 70.381,
+    "us_advisor_agrees": 1.227,
+    "us_undetermined": 1.399
+  },
+  "model_estimate_layer_handoff_us_per_model": 43.369
+}

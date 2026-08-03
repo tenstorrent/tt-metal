@@ -1,0 +1,25 @@
+{
+  "layer_kind": "dense",
+  "layer_idx": 0,
+  "batch": 32,
+  "traced_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "policy_source": "doc/optimized_decoder/README.md final policy and tracy/final/ops_perf_results.csv executed rows",
+  "advisor_commit": "618cd4e75d",
+  "advisor_pin_expected": "618cd4e75d",
+  "advisor_home": "/home/mvasiljevic/tt-mlir",
+  "captured_at": "2026-08-03T08:02:58+00:00",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "capture_batch": 32
+}

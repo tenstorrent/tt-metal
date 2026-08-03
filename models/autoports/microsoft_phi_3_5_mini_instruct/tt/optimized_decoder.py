@@ -54,6 +54,8 @@ class OptimizationPolicy:
     use_explicit_decode_sdpa: bool = True
     split_decode_qkv: bool = False
     split_decode_gate_up: bool = True
+    # Advisor-challenger winner: keep Phi's explicit rotate-half chain in L1.
+    use_advisor_decode_rope_l1: bool = True
 
 
 DEFAULT_OPTIMIZATION_POLICY = OptimizationPolicy()
@@ -435,6 +437,28 @@ class OptimizedDecoder(FunctionalDecoder):
         )
         down = self._decode_linear(activated, "down", self.decode_residual_memory_config)
         return ttnn.add(hidden_states, down, memory_config=self.decode_residual_memory_config)
+
+    def _decode_rope(self, query, key, current_positions, *, use_long_rope):
+        if not self.optimization_policy.use_advisor_decode_rope_l1:
+            return super()._decode_rope(query, key, current_positions, use_long_rope=use_long_rope)
+        cos_table = self.long_cos if use_long_rope else self.short_cos
+        sin_table = self.long_sin if use_long_rope else self.short_sin
+        rope_positions = ttnn.typecast(current_positions, ttnn.uint32)
+        cos = ttnn.reshape(
+            ttnn.embedding(rope_positions, cos_table, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG),
+            [1, 1, self.batch, self.head_dim],
+        )
+        sin = ttnn.reshape(
+            ttnn.embedding(rope_positions, sin_table, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG),
+            [1, 1, self.batch, self.head_dim],
+        )
+        query = self._apply_rope(ttnn.to_memory_config(query, ttnn.L1_MEMORY_CONFIG), cos, sin)
+        key = self._apply_rope(ttnn.to_memory_config(key, ttnn.L1_MEMORY_CONFIG), cos, sin)
+        height_memory_config = self._decode_concat_memory_config()
+        return (
+            ttnn.to_memory_config(query, height_memory_config),
+            ttnn.to_memory_config(key, height_memory_config),
+        )
 
     def _prefill_linear(self, hidden_states, role, *, seq_len, k, n, compute_role):
         program_config = (

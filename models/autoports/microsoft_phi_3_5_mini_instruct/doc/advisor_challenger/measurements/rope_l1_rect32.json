@@ -1,0 +1,49 @@
+{
+  "label": "rope_l1_rect32",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.6083243153989315,
+    0.6086928211152554,
+    0.6070602871477604,
+    0.6068328768014908,
+    0.6071719527244568
+  ],
+  "median_ms": 0.6071719527244568,
+  "noise_floor_ms": 0.0018599443137645721,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one dense decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-08-03T08:06:45+00:00",
+  "shipped_policy": {
+    "attention_weight_dtype": "bfloat4_b",
+    "gate_up_weight_dtype": "bfloat4_b",
+    "down_weight_dtype": "bfloat4_b",
+    "kv_cache_dtype": "bfloat8_b",
+    "attention_math_fidelity": "LoFi",
+    "gate_up_math_fidelity": "LoFi",
+    "down_math_fidelity": "LoFi",
+    "decode_core_count": 16,
+    "in0_block_w_qkv": 6,
+    "in0_block_w_o": 6,
+    "in0_block_w_gate_up": 6,
+    "in0_block_w_down": 16,
+    "use_explicit_prefill_programs": false,
+    "use_explicit_decode_sdpa": true,
+    "split_decode_qkv": false,
+    "split_decode_gate_up": true,
+    "use_advisor_decode_rope_l1": true
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "advisor-challenger dense rope L1 candidate over frozen executed policy",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

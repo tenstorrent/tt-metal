@@ -1,0 +1,27 @@
+{
+  "chains": {
+    "dense:b30": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:b15": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:4": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:9": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:3": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:8": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:2": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:10": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:11": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:7": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:5": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:6": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:b39": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:b40": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:1": {"verdict": "kept", "measured_ms": 0.6071719527244568, "repeats_ms": [0.6083243153989315, 0.6086928211152554, 0.6070602871477604, 0.6068328768014908, 0.6071719527244568], "oracle_passed": true, "oracle_pcc": 0.9999987789923074, "combined_with": "dense RoPE L1 chain"},
+    "dense:b44": {"verdict": "rejected", "measured_ms": 0.6569885648787022, "repeats_ms": [0.6570270471274853, 0.6569885648787022, 0.6568222306668758, 0.6567541137337685, 0.6571841426193714], "hard_error": "nlp_concat_heads_decode input must be sharded"},
+    "dense:0": {"verdict": "below_threshold", "conversion_value_us": 0.0},
+    "dense:12": {"verdict": "below_threshold", "conversion_value_us": 0.0}
+  },
+  "dram_resident": {
+    "TypecastDeviceOperation": {"verdict": "already_dram"},
+    "SdpaDecodeDeviceOperation": {"verdict": "already_dram"},
+    "NLPConcatHeadsDecodeDeviceOperation": {"verdict": "required_sharded_input_then_dram_output"}
+  }
+}
