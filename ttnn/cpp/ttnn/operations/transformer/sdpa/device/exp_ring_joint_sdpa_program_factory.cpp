@@ -63,7 +63,11 @@ uint32_t allocate_per_core_semaphore(
     return sem_id_opt.value();
 }
 
-// Appends 17 runtime args for a fabric MUX client worker.
+// Number of runtime args appended per fabric MUX client worker. Kept in sync with the
+// pushes in fabric_mux_connection_rt_args() and its disconnected-connection counterpart.
+constexpr uint32_t kFabricMuxConnectionRtArgCount = 17;
+
+// Appends kFabricMuxConnectionRtArgCount runtime args for a fabric MUX client worker.
 // Allocates 5 per-core semaphores on worker_logical_core for the connection state.
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
@@ -1593,7 +1597,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             // fabric_mux_connection_rt_args appends to a std::vector<uint32_t>; collect mux args
             // separately and then merge into the RTArgList so BufferBinding entries above are preserved.
             std::vector<uint32_t> mux_writer_args;
-            mux_writer_args.reserve(17);
+            mux_writer_args.reserve(kFabricMuxConnectionRtArgCount);
             if (link_in_range) {
                 const CoreCoord& mux_core =
                     is_backward ? mux_backward_logical_cores[link] : mux_forward_logical_cores[link];
