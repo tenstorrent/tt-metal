@@ -43,7 +43,7 @@ bool carries_routing_direction(RoutingDirection facing, EdgeCapability capabilit
     return !(facing == RoutingDirection::Z && capability == EdgeCapability::INTERMESH);
 }
 
-void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability edge_capability, ZPortRole z_role) {
+void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability edge_capability, ZPortRole chip_z_role) {
     if (facing != RoutingDirection::Z) {
         // The chord lives on the chip's extra port; a cardinal-facing router can never carry it.
         TT_FATAL(
@@ -56,16 +56,16 @@ void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability ed
     switch (edge_capability) {
         case EdgeCapability::INTERMESH:
             TT_FATAL(
-                z_role == ZPortRole::INTERMESH_BOUNDARY,
+                chip_z_role == ZPortRole::INTERMESH_BOUNDARY,
                 "A Z-facing intermesh edge means the chip's extra port is the boundary: role must be "
                 "INTERMESH_BOUNDARY, got {}",
-                to_string(z_role));
+                to_string(chip_z_role));
             break;
         case EdgeCapability::INTRAMESH_EXPRESS:
             TT_FATAL(
-                z_role == ZPortRole::EXPRESS_CHORD,
+                chip_z_role == ZPortRole::EXPRESS_CHORD,
                 "A same-mesh Z edge is this chip's express chord: role must be EXPRESS_CHORD, got {}",
-                to_string(z_role));
+                to_string(chip_z_role));
             break;
         case EdgeCapability::INTRAMESH_CARDINAL:
             TT_FATAL(

@@ -59,14 +59,14 @@ void FabricBuilderContext::compute_max_channel_counts() {
     }
 
     // Always have MESH routers
-    bool needs_vc_config = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
+    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
     possible_shapes.push_back(router_vc_shape(
         topology,
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_CARDINAL,
         ZPortRole::NONE,
         any_mesh_uses_express,
-        needs_vc_config ? &intermesh_vc_config_ : nullptr));
+        intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
 
     // If Z-facing intermesh boundary routers exist in this fabric, enumerate both families they
     // introduce: the boundary itself (5 VC0 / 4 VC1 by its wiring rules), and the mesh routers on
@@ -93,7 +93,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
             EdgeCapability::INTRAMESH_CARDINAL,
             ZPortRole::INTERMESH_BOUNDARY,  // mesh routers on boundary chips carry the from-Z slot
             any_mesh_uses_express,
-            needs_vc_config ? &intermesh_vc_config_ : nullptr));
+            intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
     }
 
     // Compute max channel counts across all router families in this fabric

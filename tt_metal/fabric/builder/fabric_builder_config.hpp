@@ -49,12 +49,15 @@ static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 // num sender channels based on more accurate topology
 static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
+// The frozen non-express forwarding VC0 count, used by the tensix/L1 path. The wiring-side
+// statement of the same number is non_express_vc0_sender_count() in router_wiring_rules (the two
+// are static_assert-ed equal there); they unify when the tensix path is widened for express.
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
-// Per-family sender counts beyond the legacy 2D mesh width are no longer independent constants:
-// they are derived from the wiring rules as the family max over facing of wired-producer arity
-// (see builder/router_wiring_rules.* for the express family, and the intermesh_z_boundary_* accessors
-// below for the Z-facing intermesh boundary family -- both are 5 VC0 / 4 VC1 by their rules).
+// Per-family sender counts beyond the frozen non-express 2D width are not constants here: they
+// are derived in builder/router_wiring_rules.* from the wiring rules -- the express family as the
+// family max over facing of wired-producer arity, the boundary family from the mesh-direction
+// count. Both are 5 VC0 / 4 VC1, by unrelated arithmetic.
 
 // VC2: 1 sender channel (worker-type, neighbour exchange) + 1 receiver (non-Z only)
 static constexpr std::size_t num_sender_channels_vc2 = 1;
@@ -113,14 +116,9 @@ static constexpr std::size_t max_downstream_edms = 8;
 // 2D mesh directions (N, E, S, W)
 static constexpr uint32_t num_mesh_directions_2d = 4;
 
-// The Z-facing intermesh boundary family's channel counts, by its own wiring rules -- not
-// arithmetic on the cardinal count, though they coincide because a Z-facing router has no self
-// among the mesh directions:
-//   VC0: the boundary egress is fed by every non-self producer (all four mesh-direction routers
-//        via their boundary targets) plus the local worker.
-//   VC1: the boundary's VC1 receiver fans out to every mesh direction.
-static constexpr uint32_t num_sender_channels_intermesh_z_boundary_vc0 = 1 + num_mesh_directions_2d;
-static constexpr uint32_t num_sender_channels_intermesh_z_boundary_vc1 = num_mesh_directions_2d;
+// The Z-facing intermesh boundary family's channel counts (5 VC0 / 4 VC1, family max) are derived
+// in builder/router_wiring_rules.* (boundary_vc0/vc1_sender_count) from this direction count, not
+// stated here.
 
 // Slots an injection channel's downstream receiver must have for bubble flow control to work: it only
 // sends when it sees this many free, so a smaller receiver stalls it permanently.

@@ -41,7 +41,7 @@ struct IntermeshVCConfig;
  *
  * The rule, per case:
  * - No U-turn: a router never wires back over its own link.
- * - Legacy (non-express): every non-self cardinal direction wires in. The extra port exists in
+ * - Non-express: every non-self cardinal direction wires in. The extra port exists in
  *   the set only as the boundary template, when the chip's extra port is INTERMESH_BOUNDARY.
  * - Express: a Z-facing producer fans out to every non-self direction; an intramesh X producer
  *   may only continue around the X ring (dimension order); any other producer wires into every
@@ -51,9 +51,10 @@ struct IntermeshVCConfig;
  * The VC matters exactly once: for a boundary producer (a Z-facing router whose edge is
  * INTERMESH). Its VC1 receiver fans out to every non-self VC1 sender (wired), while its VC0
  * receiver crosses over onto downstream VC1 senders and feeds nothing on VC0 (not wired). So
- * the boundary-producer arm answers `vc == 1`. Every other producer is VC-agnostic on this
- * question, and for_router may pass any VC when building a turn set, since that arm is
- * unreachable there (the boundary path early-returns before consulting this primitive).
+ * the boundary-producer arm answers `vc == 1`, in either mode -- that is a physical fact about
+ * the boundary's receivers, not an express-mode rule. Every other producer is VC-agnostic on
+ * this question, and turn_set_for_router may pass any VC when building a turn set, since that
+ * arm is unreachable there (the boundary path early-returns before consulting this primitive).
  *
  * Guard classification follows from the answers: a cardinal producer into a boundary egress is
  * NON_RING (the egress is not a protected ring), and a boundary producer into a protected
@@ -64,7 +65,7 @@ bool wires_into(
     RoutingDirection producer_direction,
     EdgeCapability producer_capability,
     RoutingDirection egress_direction,
-    ZPortRole z_role,
+    ZPortRole chip_z_role,
     bool express_routing_enabled,
     uint32_t vc);
 
@@ -98,15 +99,44 @@ PerDirectionCapabilities canonical_express_endpoint_capabilities();
 uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirectionCapabilities& caps);
 
 /**
- * @brief Uniform VC0/VC1 sender counts for the express mesh family
+ * @brief Uniform VC0/VC1 sender counts for the express family
  *
  * The family max over facing directions of wired-producer arity on the canonical endpoint
  * chip: one flat index space per family, with per-router wiring filling a subset and
  * per-direction channel trimming as the separate L1 lever for narrowing (which evaluates
  * arity against the actual per-chip capability set, not the canonical one).
  */
-uint32_t express_mesh_vc0_sender_count();
-uint32_t express_mesh_vc1_sender_count();
+uint32_t express_vc0_sender_count();
+uint32_t express_vc1_sender_count();
+
+/**
+ * The non-express and boundary family counts, as constexpr derivations from the 2D
+ * mesh-direction count, stated next to the wiring rule that produces them. (The express
+ * family's counts, declared above, are runtime derivations over the canonical endpoint chip --
+ * it attains the structural ceiling, so they iterate facings.) Family counts are family MAXIMA
+ * (per-chip narrowing is channel trimming's job, not the shape's). The non-express forwarding
+ * counts are frozen by standing decision: byte-identical on every existing 2D configuration.
+ */
+
+// Non-express forwarding family: the worker plus every non-self cardinal producer.
+constexpr uint32_t non_express_vc0_sender_count() { return 1 + (builder_config::num_mesh_directions_2d - 1); }
+
+// The frozen count and the tensix/L1-domain constant are two sources for one number, and the
+// include direction (rules -> config) forbids the config from calling the derivation. This is
+// the compile-time tie between them; it becomes a single source when the tensix path is widened.
+static_assert(
+    non_express_vc0_sender_count() == builder_config::num_sender_channels_2d_mesh,
+    "The frozen non-express forwarding VC0 count and num_sender_channels_2d_mesh must stay equal");
+
+// Non-express forwarding VC1: the non-self cardinal producers (no worker on VC1).
+constexpr uint32_t non_express_vc1_sender_count() { return builder_config::num_mesh_directions_2d - 1; }
+
+// Boundary family: the max is attained by a non-express boundary chip, whose every
+// mesh-direction producer wires into the boundary egress.
+constexpr uint32_t boundary_vc0_sender_count() { return 1 + builder_config::num_mesh_directions_2d; }
+
+// The from-boundary fanout width: every mesh direction.
+constexpr uint32_t boundary_vc1_sender_count() { return builder_config::num_mesh_directions_2d; }
 
 /**
  * The complete per-VC channel shape of one router: how many sender and receiver channels it
@@ -167,7 +197,7 @@ RouterVcShape router_vc_shape(
     Topology topology,
     RoutingDirection facing,
     EdgeCapability edge_capability,
-    ZPortRole z_role,
+    ZPortRole chip_z_role,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config);
 
@@ -207,7 +237,7 @@ using RouterTurnSet = std::array<std::vector<ConnectionTarget>, builder_config::
  *   template: the full non-self set on VC1, typed from-boundary. Its VC0 senders are fed by
  *   the mesh routers' boundary targets on their own turn sets.
  * - A routing-direction port gets its turn set from the wires_into primitive: 1D is the
- *   opposite direction; legacy 2D is every non-self cardinal; express adds the express rule
+ *   opposite direction; non-express 2D is every non-self cardinal; express adds the express rule
  *   (an intramesh X ingress unwires from intramesh Y, a landing X ingress does not).
  * - The chip's extra port enters the set only when it has one: an express chord is an ordinary
  *   same-VC target; an intermesh boundary is reached through the boundary target on VC0 (and on
@@ -220,7 +250,7 @@ RouterTurnSet turn_set_for_router(
     Topology topology,
     RoutingDirection facing,
     EdgeCapability edge_capability,
-    ZPortRole z_role,
+    ZPortRole chip_z_role,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config);
 
@@ -239,7 +269,7 @@ RouterArchetype router_archetype(
     Topology topology,
     RoutingDirection facing,
     EdgeCapability edge_capability,
-    ZPortRole z_role,
+    ZPortRole chip_z_role,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config);
 

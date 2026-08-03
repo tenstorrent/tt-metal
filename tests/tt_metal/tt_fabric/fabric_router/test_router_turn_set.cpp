@@ -18,12 +18,12 @@ using namespace tt::tt_fabric;
  *
  * The per-VC turn table of one router (turn_set_for_router in builder/router_wiring_rules.*),
  * by family. Behaviour is keyed on port roles, not router "types": a cardinal-facing router gets
- * the legacy or express turn set, the chip's extra port enters the turn set only through the
+ * the non-express or express turn set, the chip's extra port enters the turn set only through the
  * chip's ZPortRole, and a Z-facing router whose edge is INTERMESH gets the from-boundary fanout.
  * Covered here:
  *
  * - 1D: opposite-direction only, independent of the chip's extra-port role.
- * - Legacy 2D (non-express): every non-self cardinal, plus the boundary target when the chip's
+ * - Non-express 2D: every non-self cardinal, plus the boundary target when the chip's
  *   extra port is an intermesh boundary; VC1 mirrors the cardinals; pass-through adds the
  *   boundary target on VC1.
  * - The boundary template: VC1 fanout to every mesh direction, nothing on VC0; requires 2D+VC1.
@@ -111,10 +111,10 @@ TEST_F(RouterTurnSetTest, Linear1D_WiresOnlyTheOpposite) {
 }
 
 // ============================================================================
-// Legacy 2D (non-express)
+// Non-express 2D
 // ============================================================================
 
-TEST_F(RouterTurnSetTest, Legacy2D_WiresEveryNonSelfCardinal) {
+TEST_F(RouterTurnSetTest, NonExpress2D_WiresEveryNonSelfCardinal) {
     for (auto topology : {Topology::Mesh, Topology::Torus}) {
         for (auto facing : k_all_cardinals) {
             const auto turn_set = turn_set_for_router(
@@ -132,8 +132,8 @@ TEST_F(RouterTurnSetTest, Legacy2D_WiresEveryNonSelfCardinal) {
     }
 }
 
-TEST_F(RouterTurnSetTest, Legacy2D_KeepsWiredButUnusedXToYTurns) {
-    // Standing decision: an E/W-facing legacy router is wired into the Y directions even though
+TEST_F(RouterTurnSetTest, NonExpress2D_KeepsWiredButUnusedXToYTurns) {
+    // Standing decision: an E/W-facing non-express router is wired into the Y directions even though
     // 2D routing is already dimension-ordered and never uses those turns. Removing them would move
     // downstream counts, stream assignment, and L1 layout on every existing 2D configuration.
     const auto turn_set = turn_set_for_router(
@@ -150,7 +150,7 @@ TEST_F(RouterTurnSetTest, Legacy2D_KeepsWiredButUnusedXToYTurns) {
     EXPECT_TRUE(dirs.contains(RoutingDirection::W));
 }
 
-TEST_F(RouterTurnSetTest, Legacy2D_BoundaryChipAddsBoundaryTargetOnVC0) {
+TEST_F(RouterTurnSetTest, NonExpress2D_BoundaryChipAddsBoundaryTargetOnVC0) {
     // The chip's extra port enters the turn set when it is an intermesh boundary: the three
     // non-self cardinals plus the boundary turn, which stays on VC0.
     for (auto facing : k_all_cardinals) {
@@ -169,7 +169,7 @@ TEST_F(RouterTurnSetTest, Legacy2D_BoundaryChipAddsBoundaryTargetOnVC0) {
     }
 }
 
-TEST_F(RouterTurnSetTest, Legacy2D_VC1MirrorsCardinalsOnly) {
+TEST_F(RouterTurnSetTest, NonExpress2D_VC1MirrorsCardinalsOnly) {
     // VC1 forwards the same cardinal set, but the boundary target stays off VC1: feeding the
     // boundary's VC1 sender while it does not service VC1 would create an undrained channel.
     const auto turn_set = turn_set_for_router(

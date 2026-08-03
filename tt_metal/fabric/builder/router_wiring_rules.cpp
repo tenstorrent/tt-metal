@@ -41,14 +41,6 @@ ZPortRole z_role_of(const PerDirectionCapabilities& caps) {
     return *z == EdgeCapability::INTERMESH ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::EXPRESS_CHORD;
 }
 
-// Per-VC sender arity of one 2D router of the ordinary forwarding family (legacy or express --
-// everything except the Z-facing intermesh boundary, which has its own derived accessors in
-// builder_config): the local worker (VC0 only) plus the producers wired into it on that VC.
-// Called only by router_vc_shape; the answers are read off the shape, never re-derived at a
-// consumption site.
-uint32_t forwarding_vc0_sender_count(ZPortRole z_role, bool express_routing_enabled);
-uint32_t forwarding_vc1_sender_count(ZPortRole z_role, bool express_routing_enabled);
-
 // Emit the flat-index prefix sums and enforce the capacity ceilings at the one construction
 // site. The ceiling checks are what turn the "express with VC2 reaches it exactly (5+4+1)"
 // comment into a guarantee: every family's shape passes through here, with zero margin on
@@ -80,7 +72,7 @@ bool wires_into(
     RoutingDirection producer_direction,
     EdgeCapability producer_capability,
     RoutingDirection egress_direction,
-    ZPortRole z_role,
+    ZPortRole chip_z_role,
     bool express_routing_enabled,
     uint32_t vc) {
     if (producer_direction == egress_direction) {
@@ -89,29 +81,32 @@ bool wires_into(
 
     if (egress_direction == RoutingDirection::Z) {
         if (!express_routing_enabled) {
-            // Legacy: the extra port exists in the set only as the boundary template's target.
-            return z_role == ZPortRole::INTERMESH_BOUNDARY;
+            // Non-express: the extra port exists in the set only as the boundary template's target.
+            return chip_z_role == ZPortRole::INTERMESH_BOUNDARY;
         }
         // Express: Z is a legal target for every producer except an intramesh X one (dimension
         // order forbids X -> Y), and it is realized only when the chip has the port at all.
         const bool legal = producer_direction == RoutingDirection::Z || !is_x_axis_direction(producer_direction) ||
                            producer_capability == EdgeCapability::INTERMESH;
-        return legal && z_role != ZPortRole::NONE;
+        return legal && chip_z_role != ZPortRole::NONE;
+    }
+
+    // A boundary producer's feed is VC-shaped in either mode: its VC1 receiver fans out onto
+    // every non-self VC1 sender, while its VC0 receiver crosses over onto downstream VC1 senders
+    // and feeds nothing on VC0. Hoisted above the non-express shortcut because this is a
+    // physical fact about the boundary's receivers, not an express-mode rule -- without it a
+    // non-express boundary producer would answer true on VC0, contradicting the count derivation.
+    if (producer_direction == RoutingDirection::Z && producer_capability == EdgeCapability::INTERMESH) {
+        return vc == 1;
     }
 
     if (!express_routing_enabled) {
-        // Legacy: every non-self cardinal direction wires in, on every carrier VC.
+        // Non-express: every non-self cardinal direction wires in, on every carrier VC.
         return true;
     }
 
     if (producer_direction == RoutingDirection::Z) {
-        // A Z-facing producer fans out to every non-self direction -- but a boundary producer's
-        // feed is VC-shaped: its VC1 receiver fans out onto VC1 senders, while its VC0 receiver
-        // crosses over onto downstream VC1 senders and feeds nothing on VC0. An express chord's
-        // feed rides every carrier VC.
-        if (producer_capability == EdgeCapability::INTERMESH) {
-            return vc == 1;
-        }
+        // Boundary producers are answered above; an express chord's feed rides every carrier VC.
         return true;
     }
     if (is_x_axis_direction(producer_direction) && producer_capability != EdgeCapability::INTERMESH) {
@@ -133,7 +128,7 @@ PerDirectionCapabilities canonical_express_endpoint_capabilities() {
 
 uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirectionCapabilities& caps) {
     // The extra port's role the wiring rule consults is this chip's own, not a global.
-    const ZPortRole z_role = z_role_of(caps);
+    const ZPortRole chip_z_role = z_role_of(caps);
 
     uint32_t count = 1;  // sender channel 0 is the local worker
     for (const auto producer : k_all_directions) {
@@ -144,14 +139,14 @@ uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirecti
         if (!capability.has_value()) {
             continue;  // direction absent on this chip: no producer to wire
         }
-        if (wires_into(producer, *capability, direction, z_role, /*express_routing_enabled=*/true, /*vc=*/0)) {
+        if (wires_into(producer, *capability, direction, chip_z_role, /*express_routing_enabled=*/true, /*vc=*/0)) {
             ++count;
         }
     }
     return count;
 }
 
-uint32_t express_mesh_vc0_sender_count() {
+uint32_t express_vc0_sender_count() {
     // The canonical endpoint chip attains the structural ceiling: every Y and X producer wires
     // into an E/W facing under any capability assignment, so no per-chip set produces a wider one.
     const auto caps = canonical_express_endpoint_capabilities();
@@ -162,51 +157,39 @@ uint32_t express_mesh_vc0_sender_count() {
     return count;
 }
 
-uint32_t express_mesh_vc1_sender_count() {
-    // VC1 forwards the same wired producer set as VC0 on every facing, minus the worker slot, so
-    // vc1_arity(f) == vc0_arity(f) - 1 for every facing f. The family max therefore commutes with
-    // the subtraction: max_f(vc0_arity(f)) - 1 == max_f(vc0_arity(f) - 1).
-    return express_mesh_vc0_sender_count() - 1;
+uint32_t express_vc1_sender_count() {
+    // vc1_arity(f) == vc0_arity(f) - 1 for every facing f: on the canonical endpoint chip no
+    // producer is VC-sensitive -- the only VC-sensitive arm of wires_into is an INTERMESH Z
+    // producer, and that chip's Z is INTRAMESH_EXPRESS. The family max therefore commutes with
+    // the worker-slot subtraction: max_f(vc0_arity(f)) - 1 == max_f(vc0_arity(f) - 1).
+    return express_vc0_sender_count() - 1;
 }
-
-namespace {
-
-uint32_t forwarding_vc0_sender_count(ZPortRole /*z_role*/, bool express_routing_enabled) {
-    if (express_routing_enabled) {
-        return express_mesh_vc0_sender_count();  // family max over facing of the express rule
-    }
-    // Legacy rule: the worker plus every non-self cardinal producer. An intermesh Z edge adds
-    // nothing on VC0: the boundary's VC0 receiver forwards nowhere, so no from-Z producer exists
-    // on VC0 regardless of the extra port's role.
-    return 1 + builder_config::num_downstream_edms_2d_vc0;
-}
-
-uint32_t forwarding_vc1_sender_count(ZPortRole z_role, bool express_routing_enabled) {
-    if (z_role == ZPortRole::INTERMESH_BOUNDARY) {
-        // Legacy non-self downstreams plus the from-Z slot for the boundary's VC1 fanout.
-        return builder_config::num_downstream_edms_2d_vc1 + 1;
-    }
-    if (express_routing_enabled) {
-        return express_mesh_vc1_sender_count();  // family max over facing of the express rule
-    }
-    // Legacy rule: every non-self cardinal receiver forwards into this router on VC1.
-    return builder_config::num_downstream_edms_2d_vc1;
-}
-
-}  // namespace
 
 RouterVcShape router_vc_shape(
     Topology topology,
     RoutingDirection facing,
     EdgeCapability edge_capability,
-    ZPortRole z_role,
+    ZPortRole chip_z_role,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config) {
-    validate_facing_role_consistency(facing, edge_capability, z_role);
+    validate_facing_role_consistency(facing, edge_capability, chip_z_role);
 
-    const bool z_boundary = (facing == RoutingDirection::Z && edge_capability == EdgeCapability::INTERMESH);
+    const bool is_z_boundary_router = (facing == RoutingDirection::Z && edge_capability == EdgeCapability::INTERMESH);
     const bool requires_vc1 = vc_config && vc_config->requires_vc1;
     const bool requires_vc2 = vc_config && vc_config->requires_vc2;
+
+    // The boundary family's two construction preconditions, up front. It is 2D-only by
+    // construction: today the boundary VC0 arm of the channel mapping precedes the 2D check, so a
+    // 1D Z boundary would silently report 5 -- with topology in hand that becomes an explicit
+    // configuration error instead.
+    TT_FATAL(
+        !is_z_boundary_router || is_2D_topology(topology),
+        "A Z-facing intermesh boundary router requires a 2D topology");
+    // And it cannot exist without VC1: its whole shape is the from-boundary VC1 fanout. This is
+    // where the construction error lives now (moved from the channel mapping).
+    TT_FATAL(
+        !is_z_boundary_router || requires_vc1,
+        "A Z-facing intermesh boundary router cannot be constructed without VC1");
 
     RouterVcShape shape{};
 
@@ -217,40 +200,51 @@ RouterVcShape router_vc_shape(
     // separate question, deliberately out of scope here.
     shape.num_vcs = requires_vc2 ? 3 : (requires_vc1 ? 2 : 1);
 
-    // The intermesh boundary family is 2D-only by construction. Today the boundary VC0 arm of the
-    // channel mapping precedes the 2D check, so a 1D Z boundary would silently report 5 -- with
-    // topology in hand that becomes an explicit configuration error instead.
-    TT_FATAL(!z_boundary || is_2D_topology(topology), "A Z-facing intermesh boundary router requires a 2D topology");
+    // Per-VC counts: zero unless an arm sets them. VC0 always has its receiver.
+    uint32_t vc0_senders = 0, vc1_senders = 0, vc2_senders = 0;
+    uint32_t vc0_receivers = 1, vc1_receivers = 0, vc2_receivers = 0;
 
     if (!is_2D_topology(topology)) {
-        // 1D counts: worker, plus one forwarding peer on Linear/Ring. No VC1 or VC2 channels are
-        // ever created, independent of the num_vcs answer above.
-        shape.sender_counts = {builder_config::get_num_used_sender_channel_count(topology), 0, 0};
-        shape.receiver_counts = {1, 0, 0};
-        finalize_vc_shape_bases(shape);
-        return shape;
+        // 1D counts from the config accessor: Linear/Ring are worker plus one forwarding peer,
+        // NeighborExchange is worker-only. NeighborExchange takes this arm too, so a literal 2
+        // would move it -- the accessor exists precisely because three topologies land here.
+        // No VC1 or VC2 channels are ever created, independent of the num_vcs answer above.
+        vc0_senders = builder_config::get_num_used_sender_channel_count(topology);
+    } else {
+        // VC0: worker + wired producers, by family. The chip's extra-port role adds nothing on
+        // VC0: an intermesh boundary's VC0 receiver forwards nowhere, so no from-boundary
+        // producer exists on VC0 regardless of the chip's role -- the role addend lands on VC1.
+        if (is_z_boundary_router) {
+            vc0_senders = boundary_vc0_sender_count();
+        } else if (express_routing_enabled) {
+            vc0_senders = express_vc0_sender_count();
+        } else {
+            // Frozen by standing decision: worker + every non-self cardinal.
+            vc0_senders = non_express_vc0_sender_count();
+        }
+
+        // VC1: wired producers, by family, when the VC exists (zero by default).
+        if (requires_vc1) {
+            if (is_z_boundary_router) {
+                vc1_senders = boundary_vc1_sender_count();
+            } else if (chip_z_role == ZPortRole::INTERMESH_BOUNDARY) {
+                // A mesh router on a boundary chip gains the from-boundary slot; its width is the
+                // frozen one in either mode (the express family's 4 coincides by unrelated arithmetic).
+                vc1_senders = non_express_vc1_sender_count() + 1;
+            } else if (express_routing_enabled) {
+                vc1_senders = express_vc1_sender_count();
+            } else {
+                vc1_senders = non_express_vc1_sender_count();
+            }
+        }
+
+        // VC2: one sender by VC2's own definition.
+        vc2_senders = requires_vc2 ? 1 : 0;
+
+        // Receivers: one per active carrier VC. The boundary services no VC2 receiver.
+        vc1_receivers = requires_vc1 ? 1 : 0;
+        vc2_receivers = (requires_vc2 && !is_z_boundary_router) ? 1 : 0;
     }
-
-    // A Z-facing boundary cannot exist without VC1: its whole shape is the from-boundary VC1
-    // fanout. This is where the construction error lives now (moved from the channel mapping).
-    TT_FATAL(!z_boundary || requires_vc1, "A Z-facing intermesh boundary router cannot be constructed without VC1");
-
-    // VC0: worker + wired producers.
-    const uint32_t vc0_senders = z_boundary ? builder_config::num_sender_channels_intermesh_z_boundary_vc0
-                                            : forwarding_vc0_sender_count(z_role, express_routing_enabled);
-
-    // VC1: wired producers, when the VC exists.
-    const uint32_t vc1_senders = !requires_vc1 ? 0
-                                 : z_boundary  ? builder_config::num_sender_channels_intermesh_z_boundary_vc1
-                                               : forwarding_vc1_sender_count(z_role, express_routing_enabled);
-
-    // VC2: one sender by VC2's own definition.
-    const uint32_t vc2_senders = requires_vc2 ? 1 : 0;
-
-    // Receivers: one per active carrier VC. The boundary services no VC2 receiver.
-    const uint32_t vc0_receivers = 1;
-    const uint32_t vc1_receivers = requires_vc1 ? 1 : 0;
-    const uint32_t vc2_receivers = (requires_vc2 && !z_boundary) ? 1 : 0;
 
     shape.sender_counts = {vc0_senders, vc1_senders, vc2_senders};
     shape.receiver_counts = {vc0_receivers, vc1_receivers, vc2_receivers};
@@ -262,12 +256,12 @@ RouterTurnSet turn_set_for_router(
     Topology topology,
     RoutingDirection facing,
     EdgeCapability edge_capability,
-    ZPortRole z_role,
+    ZPortRole chip_z_role,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config) {
     RouterTurnSet turn_set{};
 
-    validate_facing_role_consistency(facing, edge_capability, z_role);
+    validate_facing_role_consistency(facing, edge_capability, chip_z_role);
 
     // The VC facts are read off the same config the shape derivation consumes.
     const bool enable_vc1 = vc_config && vc_config->requires_vc1;
@@ -321,19 +315,19 @@ RouterTurnSet turn_set_for_router(
     std::vector<RoutingDirection> outbound;
     const auto opposite = facing == RoutingDirection::Z ? facing : get_opposite_direction(facing);
     if (facing != RoutingDirection::Z &&
-        wires_into(facing, edge_capability, opposite, z_role, express_routing_enabled, 0)) {
+        wires_into(facing, edge_capability, opposite, chip_z_role, express_routing_enabled, 0)) {
         outbound.push_back(opposite);
     }
     for (const auto candidate : k_cardinal_directions) {
         if (candidate == facing || candidate == opposite) {
             continue;
         }
-        if (wires_into(facing, edge_capability, candidate, z_role, express_routing_enabled, 0)) {
+        if (wires_into(facing, edge_capability, candidate, chip_z_role, express_routing_enabled, 0)) {
             outbound.push_back(candidate);
         }
     }
     if (facing != RoutingDirection::Z &&
-        wires_into(facing, edge_capability, RoutingDirection::Z, z_role, express_routing_enabled, 0)) {
+        wires_into(facing, edge_capability, RoutingDirection::Z, chip_z_role, express_routing_enabled, 0)) {
         outbound.push_back(RoutingDirection::Z);
     }
 
@@ -363,7 +357,7 @@ RouterTurnSet turn_set_for_router(
     // the slot from the direction bijection.
     for (size_t i = 0; i < outbound.size(); ++i) {
         const auto target = outbound[i];
-        if (target == RoutingDirection::Z && z_role == ZPortRole::INTERMESH_BOUNDARY) {
+        if (target == RoutingDirection::Z && chip_z_role == ZPortRole::INTERMESH_BOUNDARY) {
             // The boundary template's target: VC0 always, VC1 only in pass-through mode.
             turn_set[0].push_back(ConnectionTarget(0, target));
             if (enable_vc1 && enable_mesh_pass_through) {
@@ -384,12 +378,12 @@ RouterArchetype router_archetype(
     Topology topology,
     RoutingDirection facing,
     EdgeCapability edge_capability,
-    ZPortRole z_role,
+    ZPortRole chip_z_role,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config) {
     return RouterArchetype{
-        router_vc_shape(topology, facing, edge_capability, z_role, express_routing_enabled, vc_config),
-        turn_set_for_router(topology, facing, edge_capability, z_role, express_routing_enabled, vc_config)};
+        router_vc_shape(topology, facing, edge_capability, chip_z_role, express_routing_enabled, vc_config),
+        turn_set_for_router(topology, facing, edge_capability, chip_z_role, express_routing_enabled, vc_config)};
 }
 
 }  // namespace tt::tt_fabric

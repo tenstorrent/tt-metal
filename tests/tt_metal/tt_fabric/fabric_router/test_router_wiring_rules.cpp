@@ -17,11 +17,11 @@ namespace tt::tt_fabric {
  * The per-VC channel shape of one router and the flat layout read off it, from router_vc_shape()
  * and the shape's flat_sender_id/flat_receiver_id prefix sums:
  *
- * - Legacy mesh/1D: VC0 only (4 senders in 2D, 2 in 1D); VC1 appears with an intermesh config.
+ * - Non-express mesh/1D: VC0 only (4 senders in 2D, 2 in 1D); VC1 appears with an intermesh config.
  * - The intermesh boundary family: VC0 = worker + 4 wired producers (5), VC1 = the 4-wide
  *   from-boundary fanout; VC1 senders start at flat index 5.
  * - Express: VC0 widens to the family max of 5, VC1 to 4; VC1 senders start after the wide base.
- * - VC2: one sender at the flat base of the family (7 legacy, 8 on a boundary chip, 9 express),
+ * - VC2: one sender at the flat base of the family (7 non-express, 8 on a boundary chip, 9 express),
  *   and no VC2 receiver on the boundary router.
  * - Builder ownership (builder_type_for_vc): tensix takes VC0 in MUX mode, nothing else.
  * - IntermeshVCConfig factory flags and invalid-query failures.
@@ -32,9 +32,9 @@ namespace tt::tt_fabric {
 
 class RouterWiringRulesTest : public ::testing::Test {};
 
-// ============ Legacy mesh / 1D ============
+// ============ Non-express mesh / 1D ============
 
-TEST_F(RouterWiringRulesTest, LegacyMesh_AndTorus_VC0OnlyLayout) {
+TEST_F(RouterWiringRulesTest, NonExpressMesh_AndTorus_VC0OnlyLayout) {
     for (auto topology : {Topology::Mesh, Topology::Torus}) {
         const auto shape = router_vc_shape(
             topology,
@@ -201,9 +201,9 @@ TEST_F(RouterWiringRulesTest, ExpressMesh_VC2AtFlatIndex9) {
     EXPECT_EQ(shape.flat_sender_id(2, 0), 9);
 }
 
-// ============ VC2 on legacy and boundary families ============
+// ============ VC2 on non-express and boundary families ============
 
-TEST_F(RouterWiringRulesTest, VC2_LegacyMeshFlatIndices) {
+TEST_F(RouterWiringRulesTest, VC2_NonExpressMeshFlatIndices) {
     auto config = IntermeshVCConfig::full_mesh();
     config.requires_vc2 = true;
     const auto shape = router_vc_shape(

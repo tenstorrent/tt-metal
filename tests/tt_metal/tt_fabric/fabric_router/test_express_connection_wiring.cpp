@@ -109,6 +109,33 @@ TEST(ExpressConnectionWiringTest, NoRouterIsWiredBackOverItsOwnLink) {
     }
 }
 
+TEST(ExpressConnectionWiringTest, BoundaryProducerFeedsNothingOnVC0InEitherMode) {
+    // The boundary producer's feed is VC-shaped unconditionally, not just under express: its VC0
+    // receiver crosses over and feeds nothing, its VC1 receiver fans out. Pinned at the primitive
+    // in both modes so the header contract and the count derivation (no from-boundary slot on
+    // VC0) cannot drift apart.
+    for (const auto express : {false, true}) {
+        for (const auto egress : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+            EXPECT_FALSE(wires_into(
+                RoutingDirection::Z,
+                EdgeCapability::INTERMESH,
+                egress,
+                ZPortRole::INTERMESH_BOUNDARY,
+                express,
+                /*vc=*/0))
+                << "express=" << express << " egress " << static_cast<int>(egress);
+            EXPECT_TRUE(wires_into(
+                RoutingDirection::Z,
+                EdgeCapability::INTERMESH,
+                egress,
+                ZPortRole::INTERMESH_BOUNDARY,
+                express,
+                /*vc=*/1))
+                << "express=" << express << " egress " << static_cast<int>(egress);
+        }
+    }
+}
+
 // --- VC symmetry ---
 
 TEST(ExpressConnectionWiringTest, CardinalAndExpressExistOnBothCarrierVCs) {
@@ -391,8 +418,8 @@ TEST(ExpressConnectionWiringTest, ExpressSenderCountsAreFamilyMaxOverFacing) {
 
     // The uniform family counts are the max over facing: one flat index space per family, with
     // per-router wiring filling a subset. VC1 forwards the same producers minus the worker slot.
-    EXPECT_EQ(express_mesh_vc0_sender_count(), 5u);
-    EXPECT_EQ(express_mesh_vc1_sender_count(), 4u);
+    EXPECT_EQ(express_vc0_sender_count(), 5u);
+    EXPECT_EQ(express_vc1_sender_count(), 4u);
 }
 
 TEST(ExpressConnectionWiringTest, ArityRespectsPerChipCapabilities) {

@@ -256,6 +256,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto eth_direction = control_plane.routing_direction_to_eth_direction(location.direction);
 
+    // Express enablement is resolved once per router and reused below (the MUX guard, the
+    // archetype, the injection-flag derivation); the query itself is a cached lazy derivation.
+    const bool express_enabled = control_plane.express_routing_enabled(local_node.mesh_id);
+
     // Get SOC descriptor for eth core lookup
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     auto eth_logical_core = soc_desc.get_eth_core_for_channel(location.eth_chan, CoordSystem::LOGICAL);
@@ -277,7 +281,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // downstream EDM count is taken without the express flag), so the variant channel map would
     // index past its end. Fail the configuration with a stated message instead.
     TT_FATAL(
-        !(downstream_is_tensix_builder && control_plane.express_routing_enabled(local_node.mesh_id)),
+        !(downstream_is_tensix_builder && express_enabled),
         "Express routing with the tensix MUX extension is not supported: the tensix path is not "
         "widened for the express VC0");
 
@@ -296,27 +300,22 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // the same path the counts pass uses, so the two cannot classify the edge differently.
     const auto edge_capability = capability_in_direction(control_plane, local_node, location.direction)
                                      .value_or(EdgeCapability::INTRAMESH_CARDINAL);
-    // What this chip's extra port is for: an intermesh boundary (has_z for the channel/connection
-    // mappings), an express chord, or nothing. One query with one answer.
-    const auto z_role = z_port_role(control_plane, local_node);
+    // What this chip's extra port is for: an intermesh boundary, an express chord, or nothing.
+    // One query with one answer.
+    const auto chip_z_role = z_port_role(control_plane, local_node);
 
     // Create the archetype EARLY (the shape is needed for computing injection flags). The
     // Z-related channel shapes exist to reach an intermesh Z router, so they are gated on that
     // rather than on the presence of any Z port. The edge's capability selects the template --
     // an intermesh Z edge gets the from-boundary fanout, an express chord is wired as ordinary
-    // same-VC cardinal/Z transitions, and everything else gets the legacy set. The direction
+    // same-VC cardinal/Z transitions, and everything else gets the non-express set. The direction
     // selects only the slot arithmetic. The boundary target exists to reach an intermesh Z
     // router, so it follows the intermesh Z edge rather than the presence of any Z port: on a
     // chip whose only Z edge crosses a mesh boundary, an express-style Z target would resolve to
     // the intermesh Z router and leak same-mesh traffic onto the boundary link.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    const auto archetype = router_archetype(
-        topology,
-        location.direction,
-        edge_capability,
-        z_role,
-        control_plane.express_routing_enabled(local_node.mesh_id),
-        &intermesh_config);
+    auto archetype = router_archetype(
+        topology, location.direction, edge_capability, chip_z_role, express_enabled, &intermesh_config);
     const auto& shape = archetype.shape;
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -338,7 +337,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // axis-turn heuristic cannot express it: at an express node the same Z output is transit when fed
     // by the ring and an acquisition when fed by a leaf attachment, and both share one axis pair.
     // Non-express meshes keep the heuristic untouched.
-    const bool express_injection = control_plane.express_routing_enabled(local_node.mesh_id);
+    const bool express_injection = express_enabled;
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         uint32_t num_channels_in_vc = shape.sender_counts[vc];
@@ -479,8 +478,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         location,
         std::move(edm_builder),
         std::move(tensix_builder_opt),
-        archetype.shape,
-        archetype.turns,
+        std::move(archetype.shape),
+        std::move(archetype.turns),
         downstream_is_tensix_builder,
         std::move(connection_registry)));
 
@@ -525,7 +524,7 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
     // fed by one upstream producer, and the channel index identifies which ingress that is.
     const auto egress = control_plane.eth_direction_to_routing_direction(direction);
     const auto queries = make_protected_ring_queries(control_plane, local_node);
-    const auto z_role = z_port_role(control_plane, local_node);
+    const auto chip_z_role = z_port_role(control_plane, local_node);
 
     // VC2 stays out of the derivation: the optional existing VC2 behavior is separate from the
     // express design, and its sender is not a fixed-direction producer slot that the table below
@@ -568,7 +567,7 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
         // is what keeps the derivation's dimension-order failure meaningful -- a DOR-forbidden
         // turn that still reaches classify_producer_effect genuinely signals a disagreement
         // between the maps and this derivation, not a correctly unwired slot.
-        if (!wires_into(ingress, *ingress_capability, egress, z_role, /*express_routing_enabled=*/true, vc)) {
+        if (!wires_into(ingress, *ingress_capability, egress, chip_z_role, /*express_routing_enabled=*/true, vc)) {
             continue;
         }
 

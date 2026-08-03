@@ -50,7 +50,7 @@ const char* to_string(ZPortRole role);
 // INTERMESH_BOUNDARY, a same-mesh Z edge (an express chord) means role EXPRESS_CHORD, and express
 // capability never sits on a cardinal facing. Anything else is an impossible chip, which the
 // factories' independent parameters would otherwise make representable again.
-void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability edge_capability, ZPortRole z_role);
+void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability edge_capability, ZPortRole chip_z_role);
 
 // The role of this chip's extra port, from the neighbor graph. Pure structure: a same-mesh Z edge
 // reports EXPRESS_CHORD, and its validity (validated express intent) is enforced separately at
