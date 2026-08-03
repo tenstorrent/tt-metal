@@ -89,6 +89,14 @@ constexpr uint32_t COUNTS_PAGE = get_compile_time_arg_val(17);
 constexpr uint32_t IDX_PAGE = get_compile_time_arg_val(18);
 constexpr uint32_t BFP4_TILE = get_compile_time_arg_val(19);
 constexpr uint32_t BFP8_TILE = get_compile_time_arg_val(20);
+// MEASUREMENT KNOB (H_DTYPE) — the h intermediate's tile size in bytes. Deliberately SEPARATE
+// from BFP8_TILE, which also sizes x, the output and the reduce operands: only the h transport
+// follows this. Defaults to BFP8_TILE so the shipped path is byte-identical.
+#ifndef H_TILE_BYTES
+#define H_TILE_BYTES BFP8_TILE
+#endif
+constexpr uint32_t H_TILE = H_TILE_BYTES;
+
 constexpr uint32_t MAX_CHILDREN = get_compile_time_arg_val(21);
 constexpr uint32_t REMAP = get_compile_time_arg_val(22);  // 1 = bank-run remap of the N axis
 constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(23);
@@ -156,6 +164,29 @@ constexpr auto xmc = McastArgs<CT_XMCAST, RT_XMCAST, HGROUPS>();
 // column r's reduce root. SPAN is the rect area (row-major sender list).
 constexpr auto hmc = McastArgs<CT_HMCAST, RT_HMCAST, HGROUPS * KGROUPS>();
 
+// PERF 17 (NEXT_ROUND_PLAN #4) — POSTED h multicast. The shipped Flag path takes no acked write
+// barrier, but the write is still NON-POSTED, so all 87 destinations generate write-acks that travel
+// back over the NoC and bump this sender's counter. `posted = true` removes that return traffic.
+//
+// THE RECEIVER-COMPLETION ARGUMENT, which is what the plan says must exist before any timing is
+// believed. Posted `flushed` alone gives a receiver NO point at which consumption is safe — it means
+// SENT, not LANDED. What makes this legal is that the VALID FLAG IS STILL NON-POSTED AND STILL
+// LINKED: the data is issued with NOC_CMD_VC_LINKED on NOC_MULTICAST_WRITE_VC and the flag write
+// terminates that link on the SAME VC, so the flag cannot overtake the payload on the wire. That is
+// not a new invariant — it is EXACTLY the invariant mcast_pipe's Flag path already relies on today
+// (`send_data_`: "LINKED ONLY FOR THE Flag SIGNAL. The link is terminated by the following signal
+// mcast"). Posting the data changes only whether ACKS COME BACK, never the wire order. So the
+// receiver's existing `wait(VALID)` remains a true arrival proof, and the golden suite — where the
+// `down` matmul actually consumes h — is a real consumption test, not a checksum of eventual arrival.
+//
+// Written raw rather than through mcast_pipe because `noc.h` blocks posted multicast at the library
+// level (`static_assert(!has_flag(opts, NocOptions::POSTED), "Mcasts with posted transactions are
+// not supported")`, marked TODO). Structurally identical to `SenderPipe::send()` on the Flag path:
+// linked data -> local VALID -> flag multicast terminating the link -> flush -> restore INVALID.
+#ifndef HPOSTED
+#define HPOSTED 0
+#endif
+
 #if HSLOT
 // PERF 4 — one SenderPipe TYPE per cb_h slot, differing only in which VALID cell it broadcasts.
 //
@@ -186,6 +217,46 @@ inline void h_slot_send(const Noc& noc, uint32_t slot, uint32_t l1, uint32_t siz
         h_slot_send<S + 1>(noc, slot, l1, size);
     }
 }
+
+#if HPOSTED
+// PERF 17 (#4) — the POSTED twin of `h_slot_send`. Same five steps as `SenderPipe::send()` on the
+// Flag path; the ONLY difference is `posted = true` on the data multicast. `slot` may be a runtime
+// value here (no template recursion needed) because the flag cell is addressed through the runtime
+// `get_semaphore`, exactly as the RECEIVE side already does.
+inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size) {
+    const auto hrect = hmc.template rect<noc_index>();
+    const auto& rb = hrect.bounds();
+    // EXCLUDE-source: `src == dst` on this send (the self-copy already placed this core's own copy),
+    // so the fan-out is the rect area minus this core — the same count SenderPipe's
+    // `num_dests_excl_` computes, and the same reason it is not a loopback (§4 trap 4).
+    const uint32_t ndest = hrect.area() - 1;
+    const uint32_t hf_addr = static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + slot));
+    volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hf_addr);
+
+    // 1. the payload — POSTED (no return acks) and LINKED, so the flag below cannot overtake it.
+    ncrisc_noc_fast_write_any_len<noc_mode>(
+        noc_index,
+        write_cmd_buf,
+        l1,
+        get_noc_multicast_addr(rb.sx, rb.sy, rb.ex, rb.ey, l1),
+        size,
+        NOC_MULTICAST_WRITE_VC,
+        /*mcast=*/true,
+        /*linked=*/true,
+        ndest,
+        /*multicast_path_reserve=*/true,
+        /*posted=*/true);
+    // 2. re-assert VALID locally: `set_multicast` broadcasts THIS core's own cell as the source, and
+    //    a core that also receives on this cell left it INVALID after its last receive.
+    noc_semaphore_set(hf, VALID);
+    // 3. the flag — NON-POSTED, on the same VC, terminating the link. This is the arrival proof.
+    noc_semaphore_set_multicast(
+        hf_addr, get_noc_multicast_addr(rb.sx, rb.sy, rb.ex, rb.ey, hf_addr), ndest, /*linked=*/false);
+    // 4. SENT, so the flag cell is safe to rewrite; 5. rotating-sender reset.
+    noc_async_writes_flushed();
+    noc_semaphore_set(hf, INVALID);
+}
+#endif
 #endif
 
 constexpr uint32_t TA_BASE = CT_HMCAST + 5;
@@ -206,6 +277,75 @@ constexpr auto idx_args = TensorAccessorArgs<cnt_args.next_compile_time_args_off
 using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
 using BRG = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WG_SHARD_W>;  // W_gate
 using BRD = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WD_SHARD_W>;  // W_down
+
+// PERF 17 — the W_down NoC split (NEXT_ROUND_PLAN #1 + #3, ONE lever). WD_SPLIT eighths of every
+// phase-2 K-block's hidden rows are read by the WRITER on NOC_1; this kernel keeps the head rows.
+// See the descriptor's MOE_SWIGLU_WD_SPLIT for the mechanism, the one-producer argument and the
+// WD_RESIDENT precondition. 0 == the shipped all-reader stream, byte for byte.
+#ifndef WD_SPLIT
+#define WD_SPLIT 0
+#endif
+//: How many of a K-block's `hn_r` hidden rows the WRITER owns. The TAIL rows, so both sides read a
+//: contiguous run and the bank-run coalescing is unchanged on either side.
+inline uint32_t wd_rows_writer(uint32_t hn_r) { return (hn_r * WD_SPLIT) / 8; }
+
+#if WD_SPLIT
+// PERF 17 — the cross-RISC completion gate. `noc_async_read_barrier()` is PER-RISC-V, so this
+// kernel's barrier proves nothing about the writer's share of the SAME K-blocks; publishing a block
+// to compute without this wait hands the `down` matmul a half-written weight tile.
+//
+// The counter is K-BLOCKS COMPLETED SINCE THE START OF THE OP (monotone, never reset), and
+// `wd_done` is this kernel's running total of blocks already PUBLISHED — exactly `b * HGROUPS` at
+// the top of M-block b, since the reader pushes exactly HGROUPS blocks per block. Waiting for
+// `wd_done + n` before pushing n blocks is therefore the tightest legal gate: at WD_WPUB_TRID the
+// writer releases block by block, so the reader never waits on bytes it is not about to publish.
+inline void wd_split_gate(uint32_t& wd_done, uint32_t n) {
+    wd_done += n;
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_WDSPLIT)), wd_done);
+}
+#endif
+
+// PERF 17b (NEXT_ROUND_PLAN §14.3) — drop the TRAILING atomic barrier after the gather's signals.
+// Mirror of the writer's; see there. The data-before-signal `noc_async_write_barrier()` STAYS.
+#ifndef SCATTER_NOBAR
+#define SCATTER_NOBAR 0
+#endif
+#if SCATTER_NOBAR
+#define MAYBE_ATOMIC_BARRIER() ((void)0)
+#else
+#define MAYBE_ATOMIC_BARRIER() noc_async_atomic_barrier()
+#endif
+
+// PERF 17b (NEXT_ROUND_PLAN §14.2) — ROTATE THE PEER-LOOP START. Mirror of the writer's; see there
+// for the mechanism and the npe evidence. Order-only change: destinations, source offsets and
+// transaction counts are identical, and every far-side wait is a monotone counter.
+#ifndef SCATTER_ROT
+#define SCATTER_ROT 0
+#endif
+inline uint32_t peer_at(uint32_t i, uint32_t n, uint32_t my_row) {
+#if SCATTER_ROT
+    uint32_t w = i + my_row;
+    while (w >= n) {
+        w -= n;
+    }
+    return w;
+#else
+    (void)my_row;
+    (void)n;
+    return i;
+#endif
+}
+
+// PERF 17 (HSPLIT) — the dual-NoC h all-gather. HSPLIT eighths of a round's TILES are broadcast by
+// the WRITER on NOC_1; this kernel keeps the head tiles and the linked VALID flag. See
+// MOE_SWIGLU_HSPLIT in the descriptor for the completion protocol and why a swap is the wrong
+// direction. 0 == the shipped reader-only multicast, byte for byte.
+#ifndef HSPLIT
+#define HSPLIT 0
+#endif
+//: The HEAD tiles this kernel broadcasts. Split by TILE, so both halves stay tile-aligned (and
+//: therefore NoC-alignment-safe) at every runtime m_eff. Never 0 — the knob is clamped to 7/8.
+inline uint32_t h_tiles_noc0(uint32_t t) { return t - (t * HSPLIT) / 8; }
 
 void kernel_main() {
     const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
@@ -289,6 +429,18 @@ void kernel_main() {
     // expectation must be too — declared here, outside the M-block loop, not reset per block.
     uint32_t h_free_expected = 0;
     (void)h_free_expected;
+#if WD_SPLIT
+    // PERF 17 — W_down K-blocks this kernel has already PUBLISHED, running across M-blocks so it
+    // stays aligned with the writer's equally-monotone completion counter.
+    uint32_t wd_done = 0;
+#endif
+#if HSPLIT
+    // PERF 17 (HSPLIT) — this core's private per-slot expectation for the NOC_1 half of each h
+    // round. Private and monotone for the same reason the HSEND=writer counters are: a ROOT
+    // self-copies its own round and is excluded from its own multicast, so its counter for that slot
+    // is one behind everyone else's, and a shared expectation would be wrong on exactly 11 cores.
+    uint32_t h2_exp[DEPTH_H] = {0};
+#endif
 #if HSEND_WRITER
     // PERF 3 — per-cb_h-slot arrival expectation, this core's own running total. See the wait site.
     uint32_t h_exp[DEPTH_H] = {0};
@@ -656,7 +808,10 @@ void kernel_main() {
                 }
 #ifndef ABLATE_NO_W_XFER
                 if (read_wd) {
-                    for (uint32_t k = 0; k < hn_r; ++k) {
+                    // PERF 17 — the writer takes the TAIL `k_w` rows on NOC_1 (WD_SPLIT eighths);
+                    // this loop shrinks to the head. At WD_SPLIT == 0 it is the whole block, byte
+                    // for byte.
+                    for (uint32_t k = 0; k < hn_r - wd_rows_writer(hn_r); ++k) {
                         // W_down's K axis is `h`'s hidden axis, which the Hn split remapped too, so
                         // the row index goes through the same remap as the N axis.
                         BRD::read(
@@ -722,12 +877,13 @@ void kernel_main() {
             }
 #ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
             const uint32_t sem_go = static_cast<uint32_t>(get_semaphore(SEM_GO));
-            for (uint32_t p = 0; p < KGROUPS; ++p) {
+            for (uint32_t i = 0; i < KGROUPS; ++i) {
+                const uint32_t p = peer_at(i, KGROUPS, my_row);  // §14.2 rotation
                 const uint32_t px = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 0);
                 const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 1);
                 noc_semaphore_inc(get_noc_addr(px, py, sem_go), 1);
             }
-            noc_async_atomic_barrier();
+            MAYBE_ATOMIC_BARRIER();
 #endif
 #if WD_LATE
             // PERF 9 — past the invite, so the column is already told and nothing downstream waits
@@ -750,18 +906,20 @@ void kernel_main() {
                 const uint32_t udst = get_write_ptr(cb_gather_up);
                 const uint32_t slot_bytes = my_row * up_bytes;
                 const uint32_t sem_data_id = static_cast<uint32_t>(get_semaphore(SEM_DATA));
-                for (uint32_t w = 0; w < sl_w; ++w) {
+                for (uint32_t i = 0; i < sl_w; ++i) {
+                    const uint32_t w = peer_at(i, sl_w, my_row);  // §14.2 rotation
                     const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
                     const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
                     noc_async_write(usrc + w * up_bytes, get_noc_addr(vx, vy, udst + slot_bytes), up_bytes);
                 }
                 noc_async_write_barrier();
-                for (uint32_t w = 0; w < sl_w; ++w) {
+                for (uint32_t i = 0; i < sl_w; ++i) {
+                    const uint32_t w = peer_at(i, sl_w, my_row);  // §14.2 rotation
                     const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
                     const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
                     noc_semaphore_inc(get_noc_addr(vx, vy, sem_data_id), 1);
                 }
-                noc_async_atomic_barrier();
+                MAYBE_ATOMIC_BARRIER();
 #endif
                 cb_pop_front(cb_up_acc, h_block_tiles);
             }
@@ -819,6 +977,10 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("reader_wd_wait");
             noc_async_read_barrier();
+#if WD_SPLIT
+            // ...and NOC_1's half of the SAME blocks (see wd_split_gate).
+            wd_split_gate(wd_done, WD_AHEAD);
+#endif
         }
         cb_push_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
         // PERF 2 — on the scatter path this column's h block is ASSEMBLED IN cb_h_local BY THE
@@ -944,10 +1106,10 @@ void kernel_main() {
 #ifndef ABLATE_NO_REDUCE_XFER  // the workers' sends are stubbed too, so this wait must go with them
                         noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
 #endif
-                        noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
+                        noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, h_block_tiles * H_TILE);
                     } else {
                         cb_wait_front(cb_h_local, h_block_tiles);
-                        noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
+                        noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * H_TILE);
                     }
                 }
 
@@ -956,6 +1118,9 @@ void kernel_main() {
                     // it also publishes the pending W_down block here. One core per round pays this.
                     noc_async_read_barrier();  // the self-copy AND the previous round's W_down block
                     if (wd_pending) {
+#if WD_SPLIT
+                        wd_split_gate(wd_done, 1);
+#endif
                         cb_push_back(cb_w_down, WD_BLOCK_TILES);
                         wd_pending = false;
                     }
@@ -978,11 +1143,20 @@ void kernel_main() {
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                                 static_cast<uint32_t>(get_semaphore(SEM_H_FREE))),
                             h_free_expected);
-                        h_slot_send(noc, (b * HGROUPS + r) % DEPTH_H, hdst, h_block_tiles * BFP8_TILE);
+                        // PERF 17 (HSPLIT) — the HEAD tiles only; the writer carries the tail on
+                        // NOC_1 and signals it separately. `h_tiles_noc0` is >= 1 by construction
+                        // (the knob is clamped to 7 eighths), which matters because this send's
+                        // LINKED flag is the round's VALID signal. Still `src == dst`, so still
+                        // exclude-source (§4 trap 4). At HSPLIT == 0 it is the whole block.
+#if HPOSTED
+                        h_slot_send_posted((b * HGROUPS + r) % DEPTH_H, hdst, h_tiles_noc0(h_block_tiles) * H_TILE);
+#else
+                        h_slot_send(noc, (b * HGROUPS + r) % DEPTH_H, hdst, h_tiles_noc0(h_block_tiles) * H_TILE);
+#endif
                     }
 #else
                     if constexpr (hmc.active) {
-                        h_send.send(hdst, hdst, h_block_tiles * BFP8_TILE);
+                        h_send.send(hdst, hdst, h_block_tiles * H_TILE);
                     }
 #endif
 #else
@@ -1011,6 +1185,19 @@ void kernel_main() {
                         MaybeDeviceZoneScope("p2_hwait");
                         noc_semaphore_wait(hf, VALID);
                         noc_semaphore_set(hf, INVALID);
+#if HSPLIT
+                        // ...and the NOC_1 half. The linked-flag guarantee above is PER-NOC: it
+                        // orders the reader's bytes against the reader's flag and says nothing
+                        // about the writer's. Monotone counter, so no reset and no ordering
+                        // requirement between the two signals.
+                        {
+                            const uint32_t s2 = (b * HGROUPS + r) % DEPTH_H;
+                            noc_semaphore_wait_min(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                    static_cast<uint32_t>(get_semaphore(SEM_H2_RDY_BASE + s2))),
+                                ++h2_exp[s2]);
+                        }
+#endif
                     }
 #else
                     if constexpr (hmc.active) {
@@ -1040,6 +1227,9 @@ void kernel_main() {
                         // for its weights"; this is the other 10, on the 87 non-sending cores.
                         MaybeDeviceZoneScope("p2_wdbar");
                         noc_async_read_barrier();
+#if WD_SPLIT
+                        wd_split_gate(wd_done, 1);
+#endif
                         cb_push_back(cb_w_down, WD_BLOCK_TILES);
                         wd_pending = false;
                     }
@@ -1060,7 +1250,10 @@ void kernel_main() {
                     const uint32_t wp = get_write_ptr(cb_w_down);
 #ifndef ABLATE_NO_W_XFER
                     if (read_wd) {
-                        for (uint32_t k = 0; k < hn_r; ++k) {
+                        // PERF 17 — the writer already has the tail rows in flight on NOC_1 (it
+                        // issued every K-block as one batch back in phase 1), so this loop reads
+                        // only the head.
+                        for (uint32_t k = 0; k < hn_r - wd_rows_writer(hn_r); ++k) {
                             BRD::read(
                                 wd_acc,
                                 BRG::remap(hbase + k, SLOTS_H) * EMB_T,
@@ -1083,6 +1276,9 @@ void kernel_main() {
             // ASSERT-free safety drain for a future WD_AHEAD that changes that arithmetic.
             if (wd_pending) {
                 noc_async_read_barrier();
+#if WD_SPLIT
+                wd_split_gate(wd_done, 1);
+#endif
                 cb_push_back(cb_w_down, WD_BLOCK_TILES);
             }
         }

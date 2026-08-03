@@ -7,7 +7,20 @@
 Read bytes = three bfp4 weight sets (count-independent) + ONE read of the real tokens at the
 format's own granularity. Graded at emb 7168: count 128 -> 91.80 us / 0.566, 256 -> 108.00 us /
 0.514, 512 -> 161.82 us / 0.388. emb 6144 and count=5120 carry no target but are reported.
+
+WEIGHT PLACEMENT — this harness now builds the weights the way PERF 12 designs for. It used to hand
+the op plain `DRAM_MEMORY_CONFIG` weights, which is a SILENTLY SLOWER call site: placement is not a
+knob, `nd_shard_n_tiles()` reads the shard width off the tensors the caller supplies, and an
+interleaved weight is correct but takes the uncoalesced one-request-per-tile stream. Measured at
+88 cores, bf16_rm, 7 reps: interleaved 102.51 / 135.37 / 241.49 us against ND-sharded
+91.34 / 130.67 / 229.58 at counts 128 / 256 / 512 — so the old harness understated the op by up to
+11 % and could not reproduce Perf 12's own "count 128 target MET". Weights are per-expert load-time
+constants, so a deployment shards them once; the bytes read are identical either way, which is why
+the `util` denominator does not change. `MOE_PERF_WPLACE=interleaved` restores the old call site for
+an A/B.
 """
+
+import os
 
 import pytest
 import torch
@@ -15,6 +28,10 @@ import torch
 import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
+from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
+    nd_shard_n_tiles,
+    weight_memory_configs,
+)
 
 TILE = 32
 HIDDEN = 2048
@@ -33,6 +50,32 @@ PERF_CASES = [
 
 _FORMATS = {"bf16_rm": (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), "bfp8_tile": (ttnn.bfloat8_b, ttnn.TILE_LAYOUT)}
 
+#: The op's DESIGNED weight placement. See the module docstring for the measured cost of getting this
+#: wrong; `interleaved` is kept only as an A/B.
+WPLACE = os.environ.get("MOE_PERF_WPLACE", "nd_shard")
+
+
+def weight_configs(device, emb, hidden, wplace):
+    if wplace == "nd_shard":
+        return weight_memory_configs(device, emb, hidden)
+    if wplace == "interleaved":
+        return ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
+    raise ValueError(f"unknown MOE_PERF_WPLACE {wplace!r}")
+
+
+def assert_placement(tt_w, wplace):
+    """Check the READER's own predicate, not the memory config we asked for.
+
+    An interleaved weight is silently CORRECT — just slower — so a placement that failed to apply
+    would otherwise be reported as a legitimate number against the graded target.
+    """
+    widths = [nd_shard_n_tiles(w) for w in tt_w]
+    if wplace == "nd_shard":
+        assert all(w > 0 for w in widths), f"asked for nd_shard but the reader sees interleaved: {widths}"
+    else:
+        assert all(w == 0 for w in widths), f"asked for interleaved but the reader sees shards: {widths}"
+    return widths
+
 
 def read_bytes(count, emb, input_format):
     weights = 3 * (emb * HIDDEN // 1024) * BFP4_TILE
@@ -50,16 +93,18 @@ def _build(emb, capacity, count, input_format, device):
     tt_x = ttnn.from_torch(
         x.to(torch.bfloat16), dtype=dt, layout=lay, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
+    gate_up_mc, down_mc = weight_configs(device, emb, HIDDEN, WPLACE)
     tt_w = [
         ttnn.from_torch(
             torch.randn(s, dtype=torch.bfloat16),
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
-        for s in ((emb, HIDDEN), (emb, HIDDEN), (HIDDEN, emb))
+        for s, mc in (((emb, HIDDEN), gate_up_mc), ((emb, HIDDEN), gate_up_mc), ((HIDDEN, emb), down_mc))
     ]
+    assert_placement(tt_w, WPLACE)
     counts = torch.zeros(NUM_GLOBAL_EXPERTS, dtype=torch.int32)
     counts[GLOBAL_EXPERT_ID] = count
     idx = torch.tensor([(11 + 37 * i) % NUM_GLOBAL_EXPERTS for i in range(NUM_LOCAL_EXPERTS)], dtype=torch.int32)
@@ -77,5 +122,6 @@ def test_perf(device, emb, capacity, count, input_format):
     out = moe_fused_swiglu(tt_x, tt_w[0], tt_w[1], tt_w[2], tt_counts, tt_idx, LOCAL_EXPERT_ID)
     assert list(out.shape) == [1, 1, capacity, emb]
     print(
-        f"[perf] {input_format} emb={emb} cap={capacity} count={count} read_MB={read_bytes(count, emb, input_format) / 1e6:.3f}"
+        f"[perf] {input_format} emb={emb} cap={capacity} count={count} wplace={WPLACE} "
+        f"read_MB={read_bytes(count, emb, input_format) / 1e6:.3f}"
     )

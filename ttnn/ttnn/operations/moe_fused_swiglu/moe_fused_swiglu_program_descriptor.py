@@ -432,12 +432,24 @@ GRID = os.environ.get("MOE_SWIGLU_GRID", "")
 #: issued first is the one the other's barrier waits for. See the reader's comment for the measured
 #: 33 us row spread this decides.
 #:
-#: MEASURED NULL, kept as the A/B that PROVED the diagnosis rather than as a win. Alone it is -0.2 to
-#: +2.8 % (150 260 vs 151 233 ns at count 256), and it is WORSE in every combination with XPRIO
-#: (152 791 vs 146 945). That is the same lesson XPRIO encodes: re-ordering ONE core's own two issue
-#: streams cannot move x forward when the queue x is stuck behind belongs to the other 109 cores and
-#: to the writer's NoC1 twin. 0 (the Phase-0 order) is the default.
-XSTAGE_FIRST = int(os.environ.get("MOE_SWIGLU_XSTAGE_FIRST", 0))
+#: WAS A MEASURED NULL AT PERF 3, IS A WIN AT PERF 16 — because the thing it trades against got 2x
+#: cheaper underneath it. Perf 3 measured -0.2 to +2.8 % (150 260 vs 151 233 ns at count 256) and
+#: WORSE in every combination with XPRIO (152 791 vs 146 945), and concluded that re-ordering ONE
+#: core's own two issue streams cannot move x forward when the queue it is stuck behind belongs to the
+#: other 109 cores. That was true of the INTERLEAVED weight stream: 534 transactions per core per
+#: M-block and 14 034 ns of `reader_wg_issue`. Perf 12's ND shard cut those to ~230 and 7 700 ns, so
+#: the weight stream no longer owns the queue and issuing x first now wins.
+#:
+#: MEASURED (Perf 16), 88 cores, ND-sharded, 7 reps, WITH `XSTAGE_STAGGER=1` and the shipped XPRIO=1:
+#:   bf16_rm    count 128/256/512   91.17 / 130.81 / 230.03  ->  91.00 / 128.43 / 226.11 us
+#:   bfp8_tile  count 128/256/512   89.92 / 121.71 / 214.53  ->  88.78 / 121.75 / 215.01 us
+#: i.e. -1.8 % / -1.7 % on the bf16 256 and 512 cells, -1.3 % on bfp8 count 128, and the two flat
+#: bfp8 cells inside this op's ~1 % per-cell noise. The bf16 asymmetry is the mechanism showing
+#: through: this knob orders the ROW_MAJOR stick read against the weight stream, and the bfp8 path
+#: reads pre-tiled pages straight into the landing slot, so it has much less to reorder.
+#: MUST be re-measured against XPRIO if either changes — the pair interacted at Perf 3 and still does
+#: (`XPRIO=0` on top of this stack costs +1.8 % at count 256). SHIPPED AT 1.
+XSTAGE_FIRST = int(os.environ.get("MOE_SWIGLU_XSTAGE_FIRST", 1))
 
 #: PERF 3 — N-CHUNKED GATE/UP WEIGHT STREAM. The bfp4 gate/up block is issued, published and
 #: consumed in this many HIDDEN-axis chunks instead of one, so the matmul runs on chunk c while
@@ -543,9 +555,208 @@ HSEND = os.environ.get("MOE_SWIGLU_HSEND", "reader")
 #: out of order); at HSEND=reader the shared VALID flag re-imposes the chain and A is forced to 1.
 HACK_AHEAD = int(os.environ.get("MOE_SWIGLU_HACK_AHEAD", 2))
 
+#: PERF 17 (NEXT_ROUND_PLAN #6) — the reduce-scatter SLICE-FOLD mechanism.
+#:
+#: The fold is `copy` + (KGROUPS-1) in-place `add`s, and every one of those `add<>` calls is a
+#: separate `eltwise_chain` at the default `SetupOwner::Chain` — so it RE-EMITS the chain's one-time
+#: setup (binary MOP init + input/pack dtype reconfig) even though the loop body is byte-identical
+#: every iteration. That per-call setup is exactly the overhead §7's `pack_l1_pair` result is partly
+#: made of, and it can be removed without `pack_l1_pair`'s L1 price.
+#:
+#:   `addchain` — the shipped fold, byte for byte.
+#:   `hoist`    — SAME math, SAME CB traffic; the first add owns the setup and the rest run
+#:                `SetupOwner::Caller`. The helper admits that only when the whole setup is
+#:                boot-hoistable (uniform math MOP + homogeneous pack CBs), which holds here by
+#:                construction — and a violation is a COMPILE ERROR, not a wrong answer.
+#:   `dest_acc` — two contributors per call (`BinaryFpu(g,g) -> DestReuseBinary(acc) -> one
+#:                PackTile`), i.e. ceil((K-1)/2) chains instead of K-1, halving the PACK count too.
+#:                This is `pack_l1_pair`'s mechanism with DEST reuse standing in for packer
+#:                L1-accumulation, which is what lets it skip the bf16 accumulator CB that made
+#:                `pack_l1_pair` L1-dead (+102 KB against 10 560 B free at 11x8) and also sidesteps
+#:                the packer-L1-accumulate-on-block-float correctness bug.
+#:
+#: MEASURED (88 cores, ND-sharded, 5 reps, us at counts 128/256/512) — `dest_acc` SHIPPED:
+#:   bf16_rm    addchain 87.15 / 123.48 / 219.40   hoist 87.06 / 123.87 / 219.52
+#:                                                 **dest_acc 84.44 / 120.23 / 211.68**
+#:                                                   (-3.1 / -2.6 / -3.5 %)
+#:   bfp8_tile  addchain 86.33 / 116.78 / 207.90   **dest_acc 84.34 / 112.06 / 200.14**
+#:                                                   (-2.3 / -4.0 / -3.7 %)
+#: Golden 45/45 on `hoist` and on `dest_acc`.
+#:
+#: `hoist` BEING FLAT IS THE INTERESTING HALF. It removes the redundant per-call init/reconfig and
+#: nothing else, and it measures null — so the fold's cost is NOT the setup. `dest_acc` removes the
+#: same setups PLUS `nc-1` packs and `nc-1` accumulator re-reads, and it is worth 2.7-4.0 %.
+#: The accumulator's L1 TRAFFIC is the whole term, which is exactly the ranking
+#: `examples/eltwise_l1_vs_dest_accumulate` isolates. It also corrects Perf 7's retraction: that
+#: bounded this family at 712 ns using `skip_eltwise`, which elides the eltwise MATH but leaves every
+#: PACK and CB round-trip in place — so it never priced the mechanism at all.
+REDUCE_MECH = os.environ.get("MOE_SWIGLU_REDUCE_MECH", "dest_acc")
+
+#: PERF 17b (NEXT_ROUND_PLAN §14.2) — rotate the reduce-scatter's peer-loop START by this core's row.
+#: 0 = the shipped in-order walk (every core hits peer 0 first, simultaneously); 1 = core in row `r`
+#: starts at peer `r` and wraps. ORDER-ONLY: same destinations, same source offsets, same transaction
+#: counts, and every far-side wait is a monotone counter that cannot observe arrival order.
+#: Targets the 8:1 incast tt-npe reports as max link demand 302.6 % vs 24.5 % average.
+#: MEASURED: a NULL on both metrics — e2e flat (113.21 -> 113.22 us at count 256) and tt-npe shows
+#: the hotspot UNMOVED (max link demand 319.3 -> 321.6 %) with congestion impact 0.0 % either way.
+#: Link demand is an aggregate over the window: rotating the order inside each core does not change
+#: WHICH links carry the bytes, since the all-to-all is a fixed set of core-pairs in one grid column.
+#: See ROUND17_LOG.md §14.2. Kept at 0.
+#: PERF 17b (NEXT_ROUND_PLAN §14.1) — fold the gate SiLU into the DEST accumulation. 1 folds all
+#: KGROUPS gate contributors in DEST, applies SiLU there and packs ONCE straight to `cb_gate_silu`,
+#: deleting `cb_slice_gate`'s pack AND unpack; 0 is the shipped two-pass shape. The trade is which
+#: thread issues the SFPU SiLU — PACK (overlappable) in `add_bias_bcast_rows` vs MATH here.
+#: PERF 17b (NEXT_ROUND_PLAN §14.4) — the last `down` K-block packs STRAIGHT to `cb_out_tiles`,
+#: removing the separate bf16 interm -> bfp8 output copy. Requires dropping `caller_owns_pack_target`
+#: (the helper static_asserts it implies LastBlockTarget::Interm), which is what brings its
+#: software-reload path to life.
+DOWN_OUT = int(os.environ.get("MOE_SWIGLU_DOWN_OUT", 0))
+
+SILU_FUSE = int(os.environ.get("MOE_SWIGLU_SILU_FUSE", 0))
+
+#: PERF 17b (NEXT_ROUND_PLAN §14.3) — drop the TRAILING `noc_async_atomic_barrier()` after the
+#: gather's semaphore increments. The gather costs TWO full ack round-trips per M-block; only the
+#: first (`noc_async_write_barrier()`, the data-before-signal proof) is load-bearing. The second
+#: guards nothing local: no later statement reads those cells, the payload is already proven landed,
+#: and the firmware's kernel-exit drain covers completion. 0 keeps the shipped barrier.
+SCATTER_NOBAR = int(os.environ.get("MOE_SWIGLU_SCATTER_NOBAR", 0))
+
+SCATTER_ROT = int(os.environ.get("MOE_SWIGLU_SCATTER_ROT", 0))
+
 #: PERF 8 — transaction-id ring on the gate/up weight stream. See the reader kernel for the
 #: mechanism. 0 = the pre-PERF-8 one-chunk-in-flight stream, byte for byte.
 WG_TRID = int(os.environ.get("MOE_SWIGLU_WG_TRID", 0))
+
+#: PERF 17 (NEXT_ROUND_PLAN #2) — how many EIGHTHS of every h all-gather round's TILES are broadcast
+#: by the WRITER on NOC_1, with the reader broadcasting the rest on NOC_0. 0 = the shipped
+#: reader-only multicast, byte for byte. Clamped to [0, 7]: the reader must keep at least one tile,
+#: because its linked flag is what carries the round's VALID signal.
+#:
+#: WHY A SPLIT AND NEVER A SWAP. The h all-gather is the op's largest single traffic term (48.46 MB
+#: delivered per M-block, 38.44 us isolated) and it rides NOC_0 alone. But the WHOLESALE move is
+#: measured WORSE twice over: `HSEND=writer` costs +5-7 % end to end, and the isolated bench has
+#: NOC_1 1.37x SLOWER for this particular multicast (52.49 vs 38.44 us). Splitting in the ratio of
+#: the two rates (~58 % NOC_0, i.e. this knob at 3) is the only assignment that can beat either.
+#:
+#: THE COMPLETION PROTOCOL, which is the whole difficulty. The shipped path gets its ordering for
+#: free: mcast_pipe's Flag links data and signal on ONE NOC_CMD_VC_LINKED chain, so no acked barrier
+#: is needed. That guarantee is PER-NOC — it says nothing about bytes travelling on the other one —
+#: so a split payload needs a second, independent "my half landed" signal. Each RISC-V therefore owns
+#: its own signal end to end:
+#:   * reader — head tiles + the existing per-slot VALID flag (`SEM_H_RDY_BASE + s`), still linked,
+#:               still no barrier;
+#:   * writer — tail tiles, an ACKED `noc_async_write_barrier()` (its atomic rides a different
+#:               command buffer and cannot terminate a link), then a monotone per-slot arrival
+#:               counter (`SEM_H2_RDY_BASE + s`).
+#: A receiver consumes the round only after BOTH. `cb_h`'s reserve/push stays entirely on the
+#: reader — the writer performs raw NoC writes into the region the reader already reserved, so the
+#: CB keeps exactly one producer (§4 trap 5), exactly as WD_SPLIT does for `cb_w_down`.
+#:
+#: The writer derives its landing address the same way `HSEND=writer` does: `cb_h`'s base captured
+#: before any push, plus `slot * hbytes` where `slot = (b*HGROUPS + my_col) % (DEPTH_H*M_BLOCK/m_eff)`.
+#: Requires HSLOT (the per-slot flag path) and is mutually exclusive with HSEND=writer; the host
+#: forces it off otherwise.
+HSPLIT = int(os.environ.get("MOE_SWIGLU_HSPLIT", 0))
+
+#: PERF 17 (NEXT_ROUND_PLAN #4) — POSTED h multicast. 1 issues the h all-gather's DATA as a posted
+#: multicast, so the 87 destinations generate no write-acks travelling back over the NoC; 0 is the
+#: shipped non-posted write, byte for byte.
+#:
+#: THE CORRECTNESS GATE THE PLAN DEMANDS, and why this is a real receiver-completion protocol and not
+#: "the bytes turned up eventually". The VALID flag stays NON-POSTED and stays LINKED: the payload is
+#: issued with NOC_CMD_VC_LINKED on NOC_MULTICAST_WRITE_VC and the flag write terminates that link on
+#: the SAME VC, so the flag cannot overtake the data on the wire. That is not a new assumption — it
+#: is precisely the invariant the SHIPPED Flag path already depends on (mcast_pipe `send_data_`:
+#: "LINKED ONLY FOR THE Flag SIGNAL. The link is terminated by the following signal mcast"). Making
+#: the data posted changes only whether ACKS RETURN, never wire order. So the receiver's existing
+#: `wait(VALID)` is still a true arrival proof, and the golden suite — in which the `down` matmul
+#: actually CONSUMES h — is a genuine consumption test.
+#:
+#: PRIOR EVIDENCE, and it pointed BOTH ways: the isolated bench measured -47.8 % on one root and
+#: -19.6 % on 11 roots, but **+10.0 % with all phases running** — consistent with posted removing the
+#: back-pressure that was keeping senders from overrunning. The real op IS "all phases", so that
+#: number predicted a LOSS.
+#:
+#: MEASURED IN THE REAL OP, and the isolated "+10 %" does NOT transfer — SHIPPED AT 1.
+#: (88 cores, ND-sharded, 5 reps, us at counts 128/256/512, each against its own in-session baseline)
+#:   bf16_rm    0 -> 87.47 / 125.13 / 223.76     1 -> 86.45 / 123.87 / 219.97  (-1.2 / -1.0 / -1.7 %)
+#:   bfp8_tile  0 -> 86.12 / 118.60 / 211.97     1 -> 85.90 / 117.19 / 207.77  (-0.3 / -1.2 / -2.0 %)
+#: Golden 45/45 on the knob, which is the consumption test: the `down` matmul reads every h byte.
+#: WHY THE ISOLATED BENCH MISPREDICTED: its "+10 % under load" was measured with `noc_async_writes_
+#: flushed()` as the only completion and NOTHING consuming the data, so its senders really could
+#: overrun. Here the linked non-posted flag still throttles the sender to wire order and `cb_h`'s
+#: reserve/ack window (HACK_AHEAD) still bounds how far ahead a sender may run — the back-pressure
+#: that matters was never the write acks. The gain grows with count (largest at 512), consistent with
+#: removing return traffic that scales with rounds x destinations.
+HPOSTED = int(os.environ.get("MOE_SWIGLU_HPOSTED", 1))
+
+#: PERF 17 (NEXT_ROUND_PLAN #1 + #3, ONE lever) — how many EIGHTHS of every W_down K-block's hidden
+#: rows are read by the WRITER on NOC_1 instead of the reader on NOC_0. 0 = the shipped all-reader
+#: stream, byte for byte; 8 = wholesale move to the writer; anything between is the fine K-row split.
+#:
+#: WHY. `WD_AHEAD = 1` means only the prologue block is batched, so 10 of 11 W_down K-blocks are read
+#: INSIDE phase 2 on the SAME NoC and the SAME RISC-V that carries the whole h all-gather, while the
+#: trace shows NOC_1 essentially idle through phase 2 (`writer_out_issue` occupies the core but
+#: `uni wr GB/s` is ~0 until the last three buckets). The sibling `moe_matmul` op measured 1.60x on an
+#: isolated weight-stream bench by splitting each K-block's rows 4/8 onto BRISC, with the diagnosis
+#: "the reader is blocked inside noc_async_read on NOC0 REQUEST-PATH credit; BRISC brings a second,
+#: physically separate request path". The counter-evidence (our own npe trace reports 0.0 % congestion
+#: and a phase-2 square wave nowhere near saturation) is exactly why this is a MEASUREMENT.
+#:
+#: THE ONE-PRODUCER RULE IS PRESERVED. Both RISC-Vs read into `cb_w_down`, but only the READER ever
+#: calls `cb_reserve_back` / `cb_push_back` on it. The writer needs no CB state at all because the
+#: destination is DERIVABLE: `WD_RESIDENT` forces `depth_wd == HGROUPS`, so K-block r permanently
+#: occupies slot r and its address is `base + r * HN_PAD * EC_MAX * BFP4_TILE` off the base the
+#: writer captures before any push (identical to the `cb_h_base` derivation HSEND=writer already
+#: uses). The writer issues its share for ALL HGROUPS blocks as ONE batch right after its W_up
+#: stream — i.e. straight into the 45 us DRAM-idle window the Perf 4 trace found — takes ONE
+#: `noc_async_read_barrier()` (NOC_1's own; a read barrier is per-RISC-V, which is precisely why the
+#: split needs a handshake) and publishes `SEM_WDSPLIT = b + 1`. The reader waits on that word once
+#: per M-block, at the top of phase 2, before its first `cb_push_back(cb_w_down, ...)`.
+#:
+#: WHY NO PER-BLOCK FLOW CONTROL IS NEEDED. All W_down DRAM reads happen at `b == 0` (WD_RESIDENT),
+#: and at `b == 0` every one of the HGROUPS slots is free from kernel start — nothing has been pushed
+#: yet, so nothing can be popped. The writer therefore cannot overwrite live data, and the reader's
+#: single wait is what orders "writer's bytes landed" before "reader publishes the block".
+#: REQUIRES `WD_RESIDENT=1` (the slot-r-holds-block-r invariant); the host forces the knob off
+#: otherwise rather than shipping a silently-wrong multi-M-block path.
+#:
+#: MEASURED (88 cores, ND-sharded, 5 reps, us at counts 128/256/512), SHIPPED AT 3:
+#:   bf16_rm    0 -> 90.91 / 128.75 / 225.95     3 -> 86.66 / 125.38 / 223.42   (-4.7 / -2.6 / -1.1 %)
+#:   bfp8_tile  0 -> 88.46 / 122.64 / 215.78     3 -> 87.54 / 117.99 / 212.05   (-1.0 / -3.8 / -1.7 %)
+#: and the whole eighths curve, bf16 in one session (0/2/4/6/8):
+#:   128  91.26 / 88.25 / 89.23 / 93.84 / 103.20
+#:   256 128.83 / 126.80 / 124.41 / 124.02 / 125.58
+#:   512 225.76 / 224.34 / 221.97 / 221.59 / 222.54
+#: — a real interior optimum, and the WHOLESALE MOVE (8) is a REGRESSION at count 128 (+13 %),
+#: reproducing `moe_matmul`'s own 8/8 role-swap regression (0.81x) on its isolated bench.
+#:
+#: WHY THE OPTIMUM IS INTERIOR, and why it lands where the isolated bench said it would. `f` = the
+#: fraction of whole-op weight bytes on NOC_0 = (96 768 + (1 - s/8) x 110 592) / 304 128:
+#:   s = 0 -> 0.682   s = 2 -> 0.621   s = 3 -> 0.561   s = 4 -> 0.500   s = 8 -> 0.318
+#: The isolated concurrent-stream sweep's optimum is **f = 0.55** (469.5 GB/s, 91.7 % of peak), and
+#: s = 3 is f = 0.561 — the closest point on the grid. The two counts pull in OPPOSITE directions and
+#: that is the whole shape of the curve: count 128 is weight-DOWNLOAD bound (fixed floor ~64 us is
+#: weights only), so it wants the global `f` balanced and punishes anything past it; counts 256/512
+#: have a long phase 2, where the marginal value is de-loading NOC_0's request path DURING the h
+#: all-gather, so they keep improving to s = 6. s = 3 is the point that wins count 128 outright
+#: without giving up phase 2, and it keeps 128 comfortably inside its 91 800 ns target.
+WD_SPLIT = int(os.environ.get("MOE_SWIGLU_WD_SPLIT", 3))
+#: PERF 17 — WHERE the writer issues its W_down share.
+#:   `wup`     — immediately after the W_up stream (default): earliest point at which NOC_1 is free,
+#:               lands in the DRAM-idle window, and the writer's next stop (the scatter's invite
+#:               wait) has tens of us of slack.
+#:   `scatter` — after the column all-to-all, i.e. the writer twin of `WD_LATE`: later, but strictly
+#:               out of the way of the gather's own NOC_1 writes.
+WD_WPLACE = os.environ.get("MOE_SWIGLU_WD_WPLACE", "wup")
+#: PERF 17b — HOW the writer publishes its share.
+#:   `trid`  — one transaction id per K-block, drained in block order, so the reader is released
+#:             block by block (default). Costs the writer nothing: every block is still issued to
+#:             DRAM at once, and the last `noc_async_read_barrier_with_trid` returns when a blanket
+#:             barrier would have. Requires HGROUPS <= NOC_MAX_TRANSACTION_ID (15).
+#:   `batch` — one blanket barrier, one publish. The reader then waits for the WHOLE 111 KB phase-2
+#:             stream before it may push K-block 0, which is the measured +13 % at count 128.
+WD_WPUB = os.environ.get("MOE_SWIGLU_WD_WPUB", "trid")
 
 #: PERF 9 — issue the W_down batch AFTER the reduce invite instead of before the reduce, so it lands
 #: in the 45 us DRAM-idle window the NoC trace found instead of on top of the W_gate/W_up stream.
@@ -573,12 +784,35 @@ WD_LATE = int(os.environ.get("MOE_SWIGLU_WD_LATE", 0))
 #: shard would make a core's whole K-run one request but would pin it to one bank.
 WSHARD = int(os.environ.get("MOE_SWIGLU_WSHARD", 1))
 
+#: MEASUREMENT ONLY — the h INTERMEDIATE's dtype. `bfp8` is shipped; `bfp4` halves every byte the h
+#: all-gather moves (48.46 MB delivered per M-block at count 256, the op's largest single traffic term)
+#: and exists to PRICE that term, not to ship it: h feeds the `down` matmul whose weights are already
+#: bfp4, so quantising h stacks a second block-float rounding on the same contraction and the precision
+#: is not expected to be acceptable. The `no_h_xfer` ablation bounds the prize at 15.16 / 16.29 / 27.77
+#: us (M = 128 / 256 / 512); this knob measures how much of that halving is actually realisable.
+#:
+#: Touches exactly three CBs (cb_h, cb_h_local, cb_h_slice) plus the H_TILE byte constant the three
+#: kernels use for h transport sizes — deliberately NOT the generic BFP8_TILE, which also sizes x, the
+#: output and the reduce operands.
+H_DTYPE = os.environ.get("MOE_SWIGLU_H_DTYPE", "bfp8")
+
 #: PERF 11 — x-staging placement. DIAG rotates which tile-row a column stages by grid row (so the 8
 #: rows of a column read 8 different DRAM pages instead of the same one); STAGGER rotates the stick
 #: walk start (the only one that changes which BANK a core is on at a given instant, since the bank
-#: is `s % 8` whatever the tile-row). Both 0 = the pre-PERF-11 lockstep column shape.
+#: is `s % 8` whatever the tile-row). 0 = the pre-PERF-11 lockstep column shape.
+#:
+#: STAGGER SHIPPED AT 1 AS OF PERF 16, and only in combination with `XSTAGE_FIRST=1` — the two are one
+#: lever, not two. Staggering the bank a core starts on can only pay while the x stream is the one
+#: holding the queue, which is exactly what `XSTAGE_FIRST=1` makes true. Measured on top of
+#: XSTAGE_FIRST=1 (88 cores, ND-sharded, 5 reps, us at counts 128/256/512):
+#:   XSTAGE_FIRST alone      91.29 / 128.42 / 226.96
+#:   + STAGGER               91.09 / 127.92 / 225.89   <-- shipped
+#:   + DIAG instead          91.35 / 128.41 / 227.62   (null, as at Perf 11/13)
+#: DIAG stays OFF: Perf 13 built it correctly against the reference's `mcast_lane` skew and measured
+#: ~-1 % at 128/512 and flat at 256, and it is still null here. The two are mutually exclusive in
+#: practice — both rotate the same injector map, and `inject_first()` is the single place that owns it.
 XSTAGE_DIAG = int(os.environ.get("MOE_SWIGLU_XSTAGE_DIAG", 0))
-XSTAGE_STAGGER = int(os.environ.get("MOE_SWIGLU_XSTAGE_STAGGER", 0))
+XSTAGE_STAGGER = int(os.environ.get("MOE_SWIGLU_XSTAGE_STAGGER", 1))
 
 #: PERF 4 — one VALID cell per `cb_h` slot instead of one shared by every round. The other half of
 #: the round-cost lever, and the one that makes HACK_AHEAD legal on the FAST (reader-send) path.
@@ -657,6 +891,17 @@ SEM_XSTAGED = 7
 SEM_H_RDY_BASE = 8
 # ... and the window ack: receiver -> round r's sender, "I have reserved slot r, you may write it".
 SEM_H_FREE = SEM_H_RDY_BASE + DEPTH_H
+# PERF 17 (WD_SPLIT) — writer -> reader, SAME CORE: "my NOC_1 share of this M-block's W_down blocks
+# has LANDED". The second intra-core semaphore in the op, and the same shape as SEM_XSTAGED: no NoC
+# traffic, one writer, monotone (set to b+1 each M-block, compared with wait_min). It exists because
+# `noc_async_read_barrier()` is PER-RISC-V — the reader's barrier says nothing about NOC_1's reads,
+# so a cross-RISC completion signal is mandatory the moment the stream is split.
+SEM_WDSPLIT = SEM_H_FREE + 1
+# PERF 17 (HSPLIT) — the h all-gather's SECOND data-ready signal, one MONOTONE arrival counter per
+# `cb_h` slot, owned by the WRITER's NOC_1 half. Monotone rather than a VALID/INVALID flag because a
+# counter needs no reset chain and the two halves' senders are on different RISC-Vs with no shared
+# reset point. DEPTH_H cells, mirroring SEM_H_RDY_BASE. Allocated unconditionally.
+SEM_H2_RDY_BASE = SEM_WDSPLIT + 1
 
 
 def _pow2_ceil(v):
@@ -842,6 +1087,13 @@ def weight_memory_configs(device, emb, hidden):
         cost two requests instead of one; `run()` splits it correctly either way.
     Height is ONE TILE-ROW so shards rotate DRAM banks across K — see the WSHARD knob for the
     measurement that makes that the load-bearing part.
+
+    `MOE_SWIGLU_WSHARD_H` raises that height for a BANDWIDTH probe. The kernel is height-agnostic by
+    construction (`page_offset_within_shard = (k % SH) * SHARD_W + (n % SHARD_W)`, so for a fixed
+    K-row consecutive n stay contiguous at any height), so this is a legal placement at any value and
+    changes only WHICH BANK a given request lands on: height H rotates banks every H K-rows instead of
+    every one. The reader still issues one request per K-row, so this probe does NOT change request
+    SIZE — it isolates the op's sensitivity to bank rotation from the request-size question.
     """
     hgroups, kgroups = worker_grid(device)
     hid_t, emb_t = hidden // TILE, emb // TILE
@@ -850,11 +1102,13 @@ def weight_memory_configs(device, emb, hidden):
     dram = device.dram_grid_size()
     banks = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram.x - 1, dram.y - 1))])
 
+    shard_h = int(os.environ.get("MOE_SWIGLU_WSHARD_H", 1))
+
     def mc(n_tiles):
         return ttnn.MemoryConfig(
             ttnn.BufferType.DRAM,
             ttnn.NdShardSpec(
-                shard_shape=ttnn.Shape([TILE, n_tiles * TILE]),
+                shard_shape=ttnn.Shape([shard_h * TILE, n_tiles * TILE]),
                 grid=banks,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -949,6 +1203,15 @@ def create_program_descriptor(
             f"the {HGROUPS} blocks pushed per M-block, so the write pointer returns to the CB base "
             f"every M-block; set MOE_SWIGLU_WD_RESIDENT=0 or fix the depth"
         )
+    # PERF 17 — the W_down NoC split's PRECONDITION, enforced here rather than assumed device-side.
+    # The writer addresses K-block r at `cb_w_down_base + r * WD_BLOCK_TILES * BFP4_TILE` with no CB
+    # state of its own, which is only the right address while the CB holds the WHOLE phase-2 K stream
+    # (`depth_wd == HGROUPS`). WD_RESIDENT is what guarantees that AND what confines every W_down DRAM
+    # read to `b == 0`, where all HGROUPS slots are free from kernel start so the writer needs no flow
+    # control. Without it the split would silently write live slots on b > 0: no hang, wrong numbers.
+    wd_split = max(0, min(8, WD_SPLIT))
+    if wd_split and (not WD_RESIDENT or depth_wd != HGROUPS):
+        wd_split = 0
     # gate/up residency makes the second weight slot dead by construction (the CB is filled once and
     # every later M-block re-pushes the same bytes), so it FREES DEPTH_W's 155 KB rather than
     # costing L1 — which is what pays for DEPTH_X's resident-x slot below.
@@ -1043,6 +1306,11 @@ def create_program_descriptor(
     dram_align = ttnn.get_dram_alignment()
     bfp4_tile = ttnn.tile_size(ttnn.bfloat4_b)
     bfp8_tile = ttnn.tile_size(ttnn.bfloat8_b)
+    # MEASUREMENT KNOB (H_DTYPE): the h intermediate's tile size/format. Separate from
+    # `bfp8_tile` so only the h path moves — x, the output and the reduce operands stay bfp8.
+    h_is_bfp4 = H_DTYPE == "bfp4"
+    h_tile = bfp4_tile if h_is_bfp4 else bfp8_tile
+    h_fmt = ttnn.bfloat4_b if h_is_bfp4 else ttnn.bfloat8_b
     bf16_tile = ttnn.tile_size(ttnn.bfloat16)
     try:
         num_banks = int(ttnn._ttnn.device.GetMemoryView(device, ttnn.BufferType.DRAM).num_banks)
@@ -1249,8 +1517,8 @@ def create_program_descriptor(
         # boundary of the epilogue is the SwiGLU multiply's pack, exactly as the tree has it.
         _cb(CB_SLICE_GATE, all_cores, n_slice, bf16_tile, ttnn.bfloat16),
         _cb(CB_SLICE_UP, all_cores, n_slice, bf16_tile, ttnn.bfloat16),
-        _cb(CB_H_SLICE, all_cores, n_slice, bfp8_tile, ttnn.bfloat8_b),
-        _cb(CB_H, all_cores, DEPTH_H * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        _cb(CB_H_SLICE, all_cores, n_slice, h_tile, h_fmt),
+        _cb(CB_H, all_cores, DEPTH_H * n_gu_block, h_tile, h_fmt),
         _cb(CB_IDX_SCRATCH, all_cores, 1, max(idx_page, dram_align), ttnn.uint32),
         _cb(CB_COUNTS_SCRATCH, all_cores, 1, max(counts_page, dram_align), ttnn.uint32),
         _cb(CB_OUT_TILES, all_cores, DEPTH_OUT * n_out_block, bfp8_tile, ttnn.bfloat8_b),
@@ -1270,7 +1538,7 @@ def create_program_descriptor(
             bf16_tile if scatter else bfp8_tile,
             ttnn.bfloat16 if scatter else ttnn.bfloat8_b,
         ),
-        _cb(CB_H_LOCAL, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        _cb(CB_H_LOCAL, all_cores, n_gu_block, h_tile, h_fmt),
         _cb(CB_OUT_INTERM, all_cores, n_out_block, bf16_tile, ttnn.bfloat16),
     ]
 
@@ -1373,7 +1641,11 @@ def create_program_descriptor(
         # PERF 3 (HSEND=writer) — the writer derives the h landing slot from this CB's BASE address.
         CB_H,
     ]
-    for t in (w_up, output_tensor):
+    # PERF 17 (WD_SPLIT) — the writer gains W_down's accessor. APPENDED LAST, after the output's, so
+    # `wu_args` / `out_args` and therefore TA_BASE and every scalar index above are untouched
+    # (`wd_args` derives from `out_args.next_compile_time_args_offset()`). Added unconditionally so
+    # the two knob settings differ only in kernel code, never in program shape.
+    for t in (w_up, output_tensor, w_down):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
     compute_ct = [
@@ -1507,6 +1779,9 @@ def create_program_descriptor(
             near = _virt(device, 0, 0)
             wargs.extend([far[0], far[1], near[0], near[1]])
             wargs.append(x)  # PERF 3 — my column == the h round this core broadcasts
+            # PERF 17 (WD_SPLIT) — W_down's base address, APPENDED LAST so every index above is
+            # unchanged. Present at every knob setting; unread at wd_split == 0.
+            wargs.append(w_down.buffer_address())
             writer_rt[x][y] = wargs
 
             compute_rt[x][y] = [
@@ -1540,6 +1815,10 @@ def create_program_descriptor(
     dm_defines.append(("HSLOT", "1" if (HSLOT and HSEND != "writer") else "0"))
     dm_defines.append(("WG_TRID", str(int(WG_TRID))))
     dm_defines.append(("WD_LATE", "1" if (WD_LATE and REDUCE == "scatter") else "0"))
+    # MEASUREMENT KNOB (H_DTYPE). A DEFINE, not a compile-time arg, for the same reason the shard
+    # widths are: inserting a CT arg shifts every later index and TA_BASE in all three kernels.
+    dm_defines.append(("H_TILE_BYTES", str(h_tile)))
+    dm_defines.append(("H_BFP4", "1" if h_is_bfp4 else "0"))
     # PERF 12 — the two weight streams' DRAM ND shard widths, in N-axis TILES. 0 == interleaved, which
     # makes `BankRuns::run` return 1 exactly as before, so an interleaved caller gets the byte-identical
     # pre-PERF-12 kernel. Passed as DEFINES, not compile-time args, so the reader's CT_XMCAST /
@@ -1553,7 +1832,44 @@ def create_program_descriptor(
     dm_defines.append(("SEM_H_FREE", str(SEM_H_FREE)))
     dm_defines.append(("DEPTH_H", str(DEPTH_H)))
     dm_defines.append(("NUM_CORES", str(num_cores)))
+    # PERF 17 — the W_down NoC split. DEFINES, not compile-time args, for the documented reason: a CT
+    # arg shifts every later index and TA_BASE in all three kernels. `CB_W_DOWN_ID` is how the writer
+    # learns the CB without taking a scalar slot; `WD_RESIDENT_D` mirrors the reader's CT arg 28.
+    dm_defines.append(("WD_SPLIT", str(wd_split)))
+    dm_defines.append(("WD_WPLACE_SCATTER", "1" if WD_WPLACE == "scatter" else "0"))
+    # Block r takes transaction id r+1, so the ring needs HGROUPS <= NOC_MAX_TRANSACTION_ID (0xF on
+    # both Wormhole and Blackhole). Above that, fall back to the single blanket barrier rather than
+    # aliasing two K-blocks onto one id, which would publish a block whose bytes are still in flight.
+    dm_defines.append(("WD_WPUB_TRID", "1" if (WD_WPUB == "trid" and HGROUPS <= 15) else "0"))
+    dm_defines.append(("SEM_WDSPLIT", str(SEM_WDSPLIT)))
+    dm_defines.append(("SCATTER_ROT", str(int(SCATTER_ROT))))
+    dm_defines.append(("SCATTER_NOBAR", str(int(SCATTER_NOBAR))))
+    dm_defines.append(("CB_W_DOWN_ID", str(CB_W_DOWN)))
+    dm_defines.append(("WD_RESIDENT_D", str(WD_RESIDENT)))
+    # PERF 17 (HSPLIT) — the dual-NoC h multicast. Needs the per-slot VALID flags (HSLOT) to own the
+    # reader's half of the signal, and is mutually exclusive with HSEND=writer, which already moved
+    # the WHOLE broadcast. Clamped to 7 so the reader always keeps at least one tile: its linked flag
+    # IS the round's VALID signal and a zero-byte multicast cannot carry it.
+    h_split = max(0, min(7, HSPLIT))
+    # ...and the `scatter` reduce, which is what makes `cb_h_local` a pure NoC-assembled landing
+    # region with a base-address write pointer on every core. On the `tree` path compute produces it
+    # through a CB front, so the writer has no legal way to read it and the whole grid would hang.
+    if HSEND == "writer" or not HSLOT or REDUCE != "scatter":
+        h_split = 0
+    dm_defines.append(("HSPLIT", str(h_split)))
+    dm_defines.append(("SEM_H2_RDY_BASE", str(SEM_H2_RDY_BASE)))
+    # Posted h multicast. Only the HSLOT reader-send path implements it (the shared-flag and
+    # writer-send paths go through mcast_pipe, whose library guard blocks posted multicast).
+    dm_defines.append(("HPOSTED", "1" if (HPOSTED and HSLOT and HSEND != "writer") else "0"))
     compute_defines = [("GU_CHUNKS", str(gu_chunks)), ("XSTAGE_DIAG", str(int(XSTAGE_DIAG)))]
+    compute_defines.append(("H_BFP4", "1" if h_is_bfp4 else "0"))
+    # PERF 17 (#6) — the slice-fold mechanism. See MOE_SWIGLU_REDUCE_MECH.
+    # §14.1 — fold the gate SiLU into the DEST accumulation. Only meaningful on the `scatter` reduce
+    # (the tree path's root epilogue is a different shape) and only with `dest_acc` (it IS the same
+    # accumulation, extended one step).
+    compute_defines.append(("DOWN_OUT", str(int(DOWN_OUT))))
+    compute_defines.append(("SILU_FUSE", "1" if (SILU_FUSE and scatter and REDUCE_MECH == "dest_acc") else "0"))
+    compute_defines.append(("REDUCE_MECH", {"addchain": "0", "hoist": "1", "dest_acc": "2"}.get(REDUCE_MECH, "0")))
     if "skip_compute" in ABLATE.split("+"):
         compute_defines.append(("SKIP_COMPUTE", "1"))
     # PERF 7 — the peel had a HOLE. `SKIP_COMPUTE` is a matmul_block_helpers define and elides ONLY
@@ -1610,5 +1926,19 @@ def create_program_descriptor(
     for s in range(DEPTH_H):
         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_H_RDY_BASE + s, core_ranges=all_cores, initial_value=0))
     semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_H_FREE, core_ranges=all_cores, initial_value=0))
+    # PERF 17 — writer -> reader on the SAME core (WD_SPLIT). Allocated unconditionally so both knob
+    # settings share a program shape; at wd_split == 0 nothing touches it. Monotone, zero-init.
+    semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_WDSPLIT, core_ranges=all_cores, initial_value=0))
+    # PERF 17 (HSPLIT) — the NOC_1 half's per-slot arrival counters. Monotone, zero-init.
+    #
+    # ALLOCATED ONLY WHEN THE SPLIT IS ON, unlike every other knob's semaphores here, and that is a
+    # measured constraint rather than a style choice: the device has NUM_SEMAPHORES == 16, and
+    # DEPTH_H cells for this block put the default DEPTH_H=3 build at exactly 16. Allocating them
+    # unconditionally made `MOE_SWIGLU_DEPTH_H=4` fail with "Semaphore id 16 exceeds max value 15",
+    # i.e. it silently took a pre-existing sweepable knob away. h_split defaults to 0 (a measured
+    # null, see the knob), so the shipped build spends nothing here and DEPTH_H stays sweepable.
+    if h_split:
+        for s in range(DEPTH_H):
+            semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_H2_RDY_BASE + s, core_ranges=all_cores, initial_value=0))
 
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)

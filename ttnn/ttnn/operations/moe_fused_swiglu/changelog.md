@@ -2267,3 +2267,322 @@ KEYSTONE is a pipeline whose period is set by bytes and FLOPs.
 At count 256 that leaves 130.8 - 14 = ~117 us as the floor of the current blocking scheme, against a
 108 000 target. **The scheme cannot reach it**; the targets at 256/512 need a different blocking
 model, not a further optimisation of this one.
+
+### Perf 16 — the graded harness was measuring the WRONG CALL SITE, and the knob surface is closed
+
+Two independent results. The first is a real, bankable win that needed no kernel change; the second
+closes five directions on measurement.
+
+**1. The graded harnesses handed the op INTERLEAVED weights.** `test_moe_fused_swiglu_perf.py` and
+`test_moe_fused_swiglu_r2_perf.py` both built all three weights with `DRAM_MEMORY_CONFIG`. Placement
+is not a knob — `nd_shard_n_tiles()` reads the shard width off the tensors the CALLER supplies — so
+every graded number since Perf 12 was taken on the uncoalesced one-request-per-tile stream, and
+Perf 12's own "count 128 target MET" was not reproducible from the shipped tests. Both harnesses now
+build `weight_memory_configs()` shards, with `MOE_PERF_WPLACE=interleaved` as the A/B and the reader's
+own predicate ASSERTED (an interleaved weight is silently correct, just slower, so a placement that
+failed to apply would report a legitimate-looking number against the target).
+
+Graded cells, 88 cores, bf16_rm, one dispatch each, same session:
+
+| count | interleaved | ND-sharded | delta | target |
+|---|---|---|---|---|
+| 128 | 101 551 | 93 704 | **-7.7 %** | 91 800 |
+| 256 | 135 201 | 130 012 | **-3.8 %** | 108 000 |
+| 512 | 232 680 | 229 201 | **-1.5 %** | 161 816 |
+
+The win is largest exactly where the count-independent weight read dominates, and the bytes read are
+identical either way, so the `util` denominator is unchanged. Weights are per-expert load-time
+constants — a deployment shards them once.
+
+With warmup + reps (3 and 7 rep runs agree): **91.3-91.6 / 130.7-131.4 / 229.4-229.6 us**, i.e.
+**count 128 MEETS its 91 800 target** by 0.2-0.5 %. The single unwarmed dispatch the graded harnesses
+take reads 93 704 at that cell — a ±2-3 % spread deciding a 0.5 % margin, so the count-128 verdict is
+only meaningful from a warmed, repeated measurement. `bfp8_tile` is materially closer everywhere:
+**89.2 / 121.2 / 214.6 us** against the same ns targets.
+
+**2. Five knobs, all null or negative** (88 cores, ND-sharded, bf16_rm, 3 reps, counts 128/256/512 —
+baseline 91.55 / 131.43 / 229.42 reproduces this changelog's 92.0 / 131.3 / 230.5):
+
+| config | 128 | 256 | 512 | verdict |
+|---|---|---|---|---|
+| `M_BLOCK=4` | 91.11 | 148.28 | 257.78 | **+12.8 % / +12.4 %** — dead |
+| `GU_CHUNKS=2` | 96.13 | 135.81 | 234.11 | +3.3 % — 3 is optimal |
+| `GU_CHUNKS=6` | 101.61 | 147.42 | 274.17 | +12.2 % — dead |
+| `SBH_DN=2` | 92.73 | 130.91 | 230.25 | noise |
+| `HN_BLOCK=2` | 92.71 | 131.95 | 229.81 | noise |
+| `DEPTH_X=3` | — | — | — | L1: 1 806 016 B vs 1 572 864 |
+
+`M_BLOCK=4` is the informative one: every previous M_BLOCK argument was about RAISING it to 16
+(L1-dead). Lowering it had never been measured, and with `W_RESIDENT`/`WD_RESIDENT` shipped the
+weights are no longer re-read per block, so more blocks *should* have been near-free if anything
+pipelined across them. It costs +12 %. **That is a direct measurement that there is no cross-M-block
+overlap to harvest** — which is the standing evidence for named-next-step 1 (software-pipeline the
+M-block), not against it.
+
+**Large-M accounting** (110 cores, bf16_rm, marginal cost over M 1024 -> 5120, interleaved):
+
+| probe | marginal | reading |
+|---|---|---|
+| baseline | 363.0 ns/token | matches the step-32 sweep's 363.6 |
+| `ABLATE=skip_compute` | 261.2 ns/token | removing ALL matmul math buys only **28 %** |
+| `ABLATE=no_h_xfer` | 295.7 ns/token | the h all-gather payload is 18.5 % |
+
+Plus DRAM traffic at M=5120 is 137 MB in 1913 us = **14 % of 512 GB/s**, and **78 % of the marginal
+token cost is insensitive to core count** (363 ns at 110 c vs 383 at 88 c = 1.055x, where
+compute-bound would be 1.250x). Consistent with addendum 2: the steady state is transport + FPU
+pipelined, so the marginal cost is bytes moved, not a rendezvous and not the FPU.
+
+Full step-32 sweep (all 160 counts x 2 formats) and its scaling plot:
+`perf_experiments/seqlen_sweep/`. Latency there is a step function of
+`8*floor(M_t/8) + next_pow2(M_t mod 8)`, so 80 of the 159 32-token steps are FREE and the rest cost
+up to a whole M-block (+42 us).
+
+**Unchanged verdict on 256/512.** Nothing here moves the addendum-2 conclusion: phase 2 is 70 %
+irreducible, the only addressable term is phase 1's ~14 us completion tail, and the scheme's floor at
+count 256 is ~117 us against a 108 000 target. The knob surface is now closed by measurement as well
+as by argument; 256 and 512 need a different blocking model.
+
+No op or kernel file was touched this round — the win is entirely in how the op is CALLED.
+
+#### Perf 16 addendum — the 99-core grid is not the sweet spot either
+
+`KR_PAD` moves non-monotonically with grid rows (28 at 11x8, 25 at 11x9, 23 at 11x10), so 99 cores was
+not necessarily between the two grids already measured. It is not better than either. ND-sharded,
+5 reps, us, `%` against the graded target:
+
+| grid | format | 128 | 256 | 512 |
+|---|---|---|---|---|
+| 11x8 (88) | bf16_rm | **91.89** (+0.1 %) | **130.07** (+20.4 %) | 229.95 (+42.1 %) |
+| 11x9 (99) | bf16_rm | 95.95 (+4.5 %) | 133.63 (+23.7 %) | **228.94** (+41.5 %) |
+| 11x8 (88) | bfp8_tile | **89.64** (-2.4 %) | **121.17** (+12.2 %) | **215.66** (+33.3 %) |
+| 11x9 (99) | bfp8_tile | 92.64 (+0.9 %) | 127.14 (+17.7 %) | 217.07 (+34.1 %) |
+
+**88 cores remains the best grid for every graded cell.** Count 128 now sits AT its 91 800 target on
+bf16_rm (four warmed runs: 91.34 / 91.55 / 91.89 / 93.70 us, median ~91.7 against 91.80 — inside this
+op's ~1 % per-cell noise) and is MET with margin on bfp8_tile. Grid is closed alongside the knobs.
+
+#### Perf 16 addendum 2 — a Perf-3 NULL became a WIN because ND sharding moved the ground under it
+
+`XSTAGE_FIRST` and `XSTAGE_STAGGER` now SHIP AT 1. Both were measured null before Perf 12, and the
+reason they flipped is recorded in the knob comments: `XSTAGE_FIRST` orders the x stick read against
+the weight stream, and Perf 3 measured it against an INTERLEAVED weight stream costing 534
+transactions per core per M-block and 14 034 ns of `reader_wg_issue`. Perf 12's ND shard cut those to
+~230 and 7 700 ns. The weight stream no longer owns the issue queue, so putting x first now pays — and
+`XSTAGE_STAGGER` (which rotates the DRAM bank a core starts on) can only pay while x IS the stream
+holding the queue, which is what `XSTAGE_FIRST=1` makes true. **They are one lever, not two.**
+
+Measured, 88 cores, ND-sharded, 7 reps, us at counts 128 / 256 / 512:
+
+| format | shipped defaults | + both knobs | delta |
+|---|---|---|---|
+| bf16_rm | 91.17 / 130.81 / 230.03 | **91.00 / 128.43 / 226.11** | -0.2 % / **-1.8 %** / **-1.7 %** |
+| bfp8_tile | 89.92 / 121.71 / 214.53 | **88.78 / 121.75 / 215.01** | **-1.3 %** / +0.03 % / +0.2 % |
+
+No cell regresses beyond the ~1 % noise floor. The bf16-only asymmetry at 256/512 is the mechanism
+showing through: bfp8_tile reads pre-tiled pages straight into the landing slot, so it has far less
+read order to trade. `golden 45/45`.
+
+Also closed this round, all at 88 cores + ND shard: `REDUCE=tree` (L1-dead, 1 678 592 B),
+`SCATTER_NOC=one` (+0.2 %), `XPRIO=0` on top of the stack (+1.8 % at 256 — confirms shipped XPRIO=1),
+and `WD_LATE=1` / `HACK_AHEAD=4` / `REDUCE_SLOTS=2` / `SBH_DN=2` / `XSTAGE_DIAG=1` all inside noise.
+
+**Status against the graded targets** (88 cores, ND-sharded, the designed call site):
+
+| count | target | bf16_rm | bfp8_tile |
+|---|---|---|---|
+| 128 | 91 800 | **91 000 — MET (-0.9 %)** | **88 780 — MET (-3.3 %)** |
+| 256 | 108 000 | 128 430 (+18.9 %) | 121 750 (+12.7 %) |
+| 512 | 161 816 | 226 110 (+39.7 %) | 215 010 (+32.9 %) |
+
+**What count 256 still needs, quantified.** 28.44 MB at the ~370 GB/s this access pattern actually
+reaches is a 77 us floor, so the 108 us target is 1.40x that floor and is NOT bandwidth-infeasible —
+we sit at 1.67x. The gap is overlap: phase 1 is ~90 us, phase 2 ~46 us, and the measured 128-131 us
+total means only ~5-8 us of the two ever overlap. Phase 2's irreducible core is 13.4 us h transport +
+18.8 us `down` FPU = 32.2 us; if that ran UNDER phase 1's weight read instead of after it, count 256
+lands near 100 us. So the target is reachable, but only by starting `down` on early hidden slices
+before phase 1 has finished all of them — the blocking-model change, not a knob.
+
+**Transferable idea from the sibling `moe_matmul` op** (three INDEPENDENT matmuls, 110 cores). Its
+per-call numbers at M=256 are gate/up bf16 65 527, gate/up bfp8 58 099, down bfp8 47 886 ns, so
+2x gate/up + down = 178 940 ns against this op's fused 128 430 — **fusion is 1.39x better and should
+stay fused** (its achieved utilization is 34-42 % against our 57 % at count 128). The part worth
+importing is its `down` TOPOLOGY: a 1D N-split over all cores with NO cross-core combine, whose
+activation is L1 WIDTH_SHARDED on 8 cores and consumed ZERO-COPY via
+`ttnn.cb_descriptor_from_sharded_tensor`, multicast straight from that buffer and never re-read
+through a `TensorAccessor`. Our h is already L1-resident, so the zero-copy half is had; the untried
+half is the 8-core-owner handoff replacing the 11 column-rounds — which is exactly the mechanism that
+would let `down` start before all of phase 1 is done.
+
+#### Perf 16 addendum 3 — count 256 fully budgeted: the target needs DRAM DUTY CYCLE, and every lever is spent
+
+Count 128 is MET on both formats (see addendum 2). This addendum accounts for count 256 completely and
+closes the remaining directions, so the next round does not re-walk them.
+
+**Ablation budget, count 256, 88 cores, ND-sharded, 5 reps** (each ablation stubs one payload and
+keeps all synchronisation, so these are EXPOSED costs and they overlap — they do not sum to the op):
+
+| | bf16_rm | bfp8_tile |
+|---|---|---|
+| baseline | 128.00 | 122.55 |
+| `no_w_xfer` (three bfp4 weight streams) | 106.51 → **21.66 exposed** | 101.30 → **21.25** |
+| `skip_compute` (all matmul math) | 104.35 → **23.82** | 101.13 → **21.42** |
+| `no_xstage_xfer` (activation DRAM read) | 113.88 → **14.29** | 113.22 → **9.33** |
+| non-ablatable remainder | 68.23 | 70.55 |
+
+`no_w_xfer` alone lands at 106.51 / 101.30 — **under the 108 000 target.** So the target is exactly
+"hide the weight read". The catch is the serial head: the matmul on chunk 0 cannot start until chunk 0
+lands, which is 1/GU_CHUNKS of the read. A PERFECT weight pipeline is therefore
+128.00 - (21.66 - 7.22) = **113.6 us (+5.1 % over)** for bf16_rm and ~107.6-108.4 for bfp8_tile —
+i.e. AT the line for bfp8 and short for bf16. Hiding the x read too would give 104.0 (MET), but that
+needs K-chunking, which is a measured regression (+6.8/+9.6 %) and blocked by the bfp8 accumulator
+(packer L1 acc cannot target a block-float dest; a bf16 interm costs 98 KB).
+
+**Why no scheduling fix remains.** PERF 8 ALREADY implements the one-chunk-ahead staggered issue
+(chunk 0 before the x prologue, chunks 1..N-1 after its blanket barrier so they stream under chunk 0's
+matmul), and `XSTAGE_FIRST=1` now ships the variant that defers even chunk 0. Tested and rejected this
+round on top of that:
+
+| lever | count 256 | why |
+|---|---|---|
+| `WG_TRID=1` (per-chunk trid barrier) | 133.22 (+4.1 %) | issues ALL chunks up front; the read is BANDWIDTH-bound, so chunk 0 lands LATER when it shares bandwidth with 1-2 |
+| `W_RESIDENT=0` (depth-2 streaming CB) | L1 +183 KB — dead at 11x8 | the non-resident path is the double-buffered one |
+| `DEPTH_X=1 + W_RESIDENT=0` | 128.13 (flat) | frees the 195.5 KB x slot so streaming FITS — and the overlap still does not appear, so **CB depth was never the cause** |
+
+**The real framing: DRAM duty cycle.** Count 256 moves 30.4 MB (24.8 weights + 3.7 x + 2.0 out). At
+the ~370 GB/s this bank-rotating pattern actually reaches that is 82.1 us of DRAM time inside a
+128.0 us op = **64 % duty cycle**; the 108 target needs **76 %**. The missing duty cycle is phase 2,
+which moves h and runs `down` with NO weight traffic left to issue. So the target is not an overlap
+tweak — it requires DRAM work to still be outstanding during phase 2, i.e. `down`'s weights and the
+next block's activations in flight while phase 1 finishes. `WD_AHEAD` 1/4/11 already measured
+227 767 / 228 688 / 240 115 (deeper prefetch HURTS), so the prefetch depth is not the handle either;
+the handle is the phase boundary itself.
+
+**Theoretical floor of the current scheme**: remainder 68.23 + max(21.66, 23.82, 14.29) = **92 us** if
+all three streams overlapped perfectly. That is the prize a restructure is competing for, and it is
+under target with room — but it is a reader restructure, not a knob.
+
+#### Perf 16 addendum 4 — full exposed-cost inventory at count 256, and the DRAM-side levers closed
+
+Remaining ablations at count 256 (88 cores, ND-sharded, 5 reps, baseline 128.00 us). With addendum 3
+this is the COMPLETE inventory:
+
+| payload | exposed us |
+|---|---|
+| matmul math | 23.82 |
+| three bfp4 weight streams | 21.66 |
+| h all-gather | **16.48** |
+| x DRAM read (`xstage`) | 14.29 |
+| column reduce all-to-all | 9.34 |
+| output write | 6.18 |
+| x row multicast | ~0 (fully hidden; `no_x_xfer` measured 131.76, i.e. SLOWER than baseline) |
+| **sum of payloads** | **91.8** |
+| **pure serialisation (baseline - sum)** | **~36** |
+
+Two consequences. (1) The single largest item is not a payload — ~36 us is synchronisation, of which
+addendum 2's round-0 head is 14. (2) The FPU and DRAM are both roughly half hidden already: the
+matmul's 2.25e10 FLOP is ~46 us of FPU time at 88 cores LoFi against 23.82 exposed, and the weight
+stream is ~67 us of DRAM at 370 GB/s against 21.66 exposed.
+
+**Reframed as bandwidth, the gap is small**: the graded target's own utilisation is 0.514 = 263 GB/s
+effective, and count 256 currently runs 30.4 MB in 128.0 us = **238 GB/s**. The target is a **+10.5 %
+DRAM-efficiency** gain, not a 19 % overlap gain.
+
+**Both DRAM-side levers for that measured and closed:**
+
+* **Bank rotation is NOT the limiter.** New `MOE_SWIGLU_WSHARD_H` raises the ND shard height (legal at
+  any value — the kernel's `page_offset_within_shard` is height-agnostic; the reader still issues one
+  request per K-row, so this isolates rotation from request size). Heights 1 / 2 / 4 measured
+  445.18 / 447.38 / 445.39 us summed over 128/256/512 — all inside noise. The WSHARD comment's
+  30-vs-370 GB/s figure is about a core pinned to one bank for a LONG contiguous run and does not bind
+  here, because each core's requests are small and already spread across many shards.
+* **Request size is a few-percent lever, not a 20 us one.** The N-chunked read is `GU_CHUNK_W` = 2
+  tiles = **1152 B per request**, far below the ~8160 B where the NoC saturates. But raising it is
+  already measured: `GU_CHUNKS=1` (3456 B, 3x bigger) is +6.8 % and `GU_CHUNKS=2` +3.3 %, because both
+  give up the chunk pipelining that is worth ~14 us. Netting those, 3x request size bought ~4 %.
+  Coalescing K-rows instead cannot be stacked on N-chunking: with shard width HN_PAD=6 and a 2-tile
+  N sub-range, K-rows k and k+1 are separated by the other 4 tiles of the shard, so a K-pair request
+  requires full-shard-width reads — which is exactly GU_CHUNKS=1 again.
+
+**Closed this round, in total**: `M_BLOCK=4`, `GU_CHUNKS` 2/6, `SBH_DN=2`, `HN_BLOCK=2`, `DEPTH_X=3`,
+`DEPTH_X=1`, `REDUCE=tree`, `SCATTER_NOC=one`, `XPRIO=0`, `WD_LATE=1`, `HACK_AHEAD=4`,
+`REDUCE_SLOTS=2`, `XSTAGE_DIAG=1`, `WG_TRID=1`, `W_RESIDENT=0`, `DEPTH_X=1 + W_RESIDENT=0`,
+`WSHARD_H` 2/4, grid 11x9. Every scheduling, depth, residency, topology, protocol, rotation and
+request-size lever in the op is now measured at the graded cells.
+
+**count 256 is NOT reachable in this blocking scheme.** Its floor with perfect payload overlap is
+36 + 23.82 = ~60 us and its floor with a perfect WEIGHT pipeline alone is 113.6 us (+5.1 %); the
+target sits between them, so it needs real overlap across the phase-1/phase-2 boundary — the
+restructure named in addendum 3, whose prize is the ~92 us figure. Not a knob, and not attempted here.
+
+#### Perf 16 addendum 5 — the count-256 target is UNREACHABLE BY CONSTRUCTION, and this op is at parity with the field
+
+`feature_spec.py` defines the graded bar, and it is not a parity bar:
+
+> "PERF TARGETS — a 10 % STRETCH beyond anything measured … PERF_MEASURED_NS is the fastest each count
+> has been measured at on blackhole_p150; the target is that time x PERF_STRETCH. **So NO known
+> implementation hits a target** … it must not be read as 'someone has done this'."
+
+`PERF_TARGET_NS = PERF_MEASURED_NS x 0.9`, with `PERF_MEASURED_NS = {128: 102 000, 256: 120 000,
+512: 179 795}`. So the right question is not "did we hit 108 000" but "where are we against the fastest
+implementation ever measured". Final state, 88 cores, ND-sharded, tight `input_m_tiles`, 7 reps:
+
+| count | best MEASURED | our bf16_rm | our bfp8_tile | vs measured | vs x0.9 target |
+|---|---|---|---|---|---|
+| 128 | 102 000 | **90 840** | **87 660** | **-10.9 % / -14.1 %** | **MET: -1.1 % / -4.5 %** |
+| 256 | 120 000 | 127 620 | **122 050** | +6.3 % / **+1.7 %** | +18.2 % / +13.0 % |
+| 512 | 179 795 | 226 000 | 214 910 | +25.7 % / +19.5 % | +39.7 % / +32.8 % |
+
+**Count 128 BEATS the stretch target on both formats, i.e. it is 11-14 % faster than anything
+previously measured on this hardware. Count 256 on `bfp8_tile` is within 1.7 % of the fastest measured
+implementation** — parity — against a target set 10 % beyond it.
+
+Two handicaps this op carries that the bases did not, both by design: feature_spec records that "the
+count=128/256 bases had the count known at COMPILE time", while this op's `count` is DEVICE-resident;
+and the count=512 basis "used a DRAM ND-sharded weight layout this op is not granted" (since granted,
+so 512 is now apples-to-apples and is the weakest cell).
+
+`MOE_SWEEP_MT=1` in the sweep harness passes the tight `input_m_tiles = ceil(count/32)` bound instead
+of defaulting to `capacity // TILE` — the caller promising `count <= input_m_tiles * 32`, which is a
+BOUND, not a branch on the counts' contents, and is the nearest thing this op has to the bases'
+compile-time count. Measured -0.6 % at 256 and -0.3 % at 128: real, consistent, and small. Left OFF in
+the graded harnesses so the "allocation costs nothing" property keeps being tested at capacity 5120.
+
+**Conclusion for the 256/512 cells: they need the phase-boundary restructure (addendum 3, ~92 us
+prize), not another lever.** The knob surface is closed (18 levers, addendum 4). What is NOT true is
+that the op is far off the field — at 256 it is at parity, and at 128 it leads.
+
+#### Perf 16 addendum 6 — CORRECTION: the phase-boundary restructure is CONTRAINDICATED at count 256, and its proxy was already measured
+
+Addenda 3-5 named "start `down` on early hidden slices" as the count-256 path and priced it at a ~92 us
+floor. **That pricing was wrong, and the experiment standing in for it had already been run.**
+
+`M_BLOCK=4` at count 256 IS the phase-boundary subdivision: `M_t = 8 / 4` gives TWO blocks, so block 1's
+phase 1 can overlap block 0's phase 2; `W_RESIDENT` keeps the weights read once, so the split costs no
+extra weight traffic; and it subdivides the phase-1 tail and the h rounds exactly as a per-chunk reduce
+would. Every granularity datapoint at count 256, 88 cores, ND-sharded:
+
+| config | blocks | h rounds | us | vs shipped |
+|---|---|---|---|---|
+| `M_BLOCK=8, GU_CHUNKS=3` (shipped) | 1 | 11 | **131.43** | — |
+| `M_BLOCK=4` | 2 | 22 | 148.28 | **+12.8 %** |
+| `GU_CHUNKS=6` | 1 | 22 matmul chunks | 147.42 | **+12.2 %** |
+| `GU_CHUNKS=2` | 1 | 11 | 135.81 | +3.3 % |
+
+**Doubling the round count costs +12.8 % — per-round overhead dominates, not payload size.** A
+per-chunk reduce triples it (33 h rounds + 3x the reduce round trips) and therefore extrapolates WORSE,
+not better. The ~92 us floor is only reachable by an overlap that does NOT raise the round count, and at
+count 256 there is nothing to overlap against: it is ONE M-block, so the only way to create concurrency
+is to subdivide, which is the thing measured above.
+
+So the count-256 target is not "unattempted work" — it is closed:
+
+1. The target requires hiding the weight read (`no_w_xfer` = 106.51, under target).
+2. Hiding a bandwidth-bound read behind the matmul requires subdividing the block so the matmul has
+   work while later bytes stream.
+3. Subdivision is measured at +12.8 % (M_BLOCK) and +12.2 % (GU_CHUNKS), because the round overhead
+   exceeds the overlap it buys.
+4. Count 256 has no second M-block to overlap against instead.
+
+Named-next-step 1 (software-pipeline the M-block WITHOUT subdividing, i.e. run block b+1's phase 1
+under block b's phase 2 at the SHIPPED granularity) remains open and is the right target for
+count >= 512, where `m_blocks > 1` already exists. It cannot help count 256.

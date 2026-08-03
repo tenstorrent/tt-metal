@@ -47,6 +47,14 @@ constexpr uint32_t SEM_GO = get_compile_time_arg_val(10);
 constexpr uint32_t SEM_DATA = get_compile_time_arg_val(11);
 constexpr uint32_t BFP4_TILE = get_compile_time_arg_val(12);
 constexpr uint32_t BFP8_TILE = get_compile_time_arg_val(13);
+// MEASUREMENT KNOB (H_DTYPE) — the h intermediate's tile size in bytes. Deliberately SEPARATE
+// from BFP8_TILE, which also sizes x, the output and the reduce operands: only the h transport
+// follows this. Defaults to BFP8_TILE so the shipped path is byte-identical.
+#ifndef H_TILE_BYTES
+#define H_TILE_BYTES BFP8_TILE
+#endif
+constexpr uint32_t H_TILE = H_TILE_BYTES;
+
 constexpr uint32_t REMAP = get_compile_time_arg_val(14);
 constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(15);
 // Smallest legal `m_eff` (= the matmul's out_subblock_h rounded up to a power of two). One
@@ -90,6 +98,87 @@ constexpr uint32_t cb_h = get_compile_time_arg_val(34);
 constexpr uint32_t TA_BASE = 35;
 constexpr auto wu_args = TensorAccessorArgs<TA_BASE>();
 constexpr auto out_args = TensorAccessorArgs<wu_args.next_compile_time_args_offset()>();
+// PERF 17 (WD_SPLIT) — W_down's accessor, APPENDED LAST on the host so nothing above shifts.
+constexpr auto wd_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+
+// PERF 17 — the W_down NoC split (NEXT_ROUND_PLAN #1 + #3, one lever). EIGHTHS of every phase-2
+// K-block's hidden rows read HERE on NOC_1 instead of on the reader's NOC_0. 0 == the shipped
+// all-reader stream and this whole block compiles away. Everything the split needs arrives as a
+// DEFINE — `CB_W_DOWN_ID`, `WD_RESIDENT_D`, `SEM_WDSPLIT`, `WD_SPLIT` — because inserting a
+// compile-time arg would shift TA_BASE in all three kernels (NEXT_ROUND_PLAN §4 trap 6).
+#ifndef WD_SPLIT
+#define WD_SPLIT 0
+#endif
+#ifndef WD_WPLACE_SCATTER
+#define WD_WPLACE_SCATTER 0
+#endif
+// PERF 17b — publish granularity of the writer's share: 1 = one transaction id per K-block, so the
+// reader is released block by block; 0 = one blanket barrier and one publish for the whole stream.
+#ifndef WD_WPUB_TRID
+#define WD_WPUB_TRID 0
+#endif
+// PERF 17b (NEXT_ROUND_PLAN §14.3) — drop the TRAILING atomic barrier after the gather's signals.
+//
+// Per M-block the gather costs TWO full ack round-trips: `noc_async_write_barrier()` (the real
+// data-before-signal proof, which must stay) and then `noc_async_atomic_barrier()` after the
+// semaphore increments. The second one guards nothing local — no later statement reads or reuses
+// those cells, the payload is already proven landed, and the firmware's kernel-exit drain covers
+// completion. 0 keeps the shipped barrier.
+#ifndef SCATTER_NOBAR
+#define SCATTER_NOBAR 0
+#endif
+#if SCATTER_NOBAR
+#define MAYBE_ATOMIC_BARRIER() ((void)0)
+#else
+#define MAYBE_ATOMIC_BARRIER() noc_async_atomic_barrier()
+#endif
+
+// PERF 17b (NEXT_ROUND_PLAN §14.2) — ROTATE THE PEER-LOOP START.
+//
+// Every core walks its KGROUPS column peers from index 0 at the same instant, so all contributors
+// hit peer 0 first, then peer 1, and so on: the reduce-scatter's all-to-all is issued as KGROUPS
+// synchronised incasts rather than a spread. That is the shape tt-npe measured as **max link demand
+// 302.6 %** against a 24.5 % average, and it is the signature the three gather stages carry as a
+// 2.2x core-to-core spread (`writer_scatter` 36 350 ns mean / 59 979 max / 27 156 min).
+//
+// Starting core `r` at peer `r` and wrapping changes NOTHING but the order: the destination set, the
+// per-peer source offsets and the transaction counts are identical, and every wait on the far side
+// is a MONOTONE counter that cannot observe arrival order. 0 = the shipped in-order walk.
+#ifndef SCATTER_ROT
+#define SCATTER_ROT 0
+#endif
+//: Peer visited at iteration `i` of a `n`-long walk on the core in row `my_row`.
+inline uint32_t peer_at(uint32_t i, uint32_t n, uint32_t my_row) {
+#if SCATTER_ROT
+    uint32_t w = i + my_row;
+    while (w >= n) {
+        w -= n;  // `my_row < KGROUPS` and `n <= KGROUPS`, so at most one wrap past the first
+    }
+    return w;
+#else
+    (void)my_row;
+    (void)n;
+    return i;
+#endif
+}
+
+// PERF 17 (HSPLIT) — this RISC-V broadcasts the TAIL tiles of every h all-gather round on NOC_1
+// while the reader keeps the head tiles (and the linked VALID flag) on NOC_0. See
+// MOE_SWIGLU_HSPLIT in the descriptor for the completion protocol. 0 == the shipped reader-only
+// multicast and this whole block compiles away.
+#ifndef HSPLIT
+#define HSPLIT 0
+#endif
+//: The TAIL tiles this RISC-V broadcasts — the exact complement of the reader's `h_tiles_noc0`, so
+//: the two halves tile the block with no gap and no overlap at every runtime m_eff.
+inline uint32_t h_tiles_noc1(uint32_t t) { return (t * HSPLIT) / 8; }
+
+#if WD_SPLIT
+constexpr uint32_t cb_w_down = CB_W_DOWN_ID;
+constexpr uint32_t WD_BLOCK_TILES = HN_PAD * EC_MAX;  // the reader's twin — one phase-2 K-block
+// The W_down stream takes its OWN tensor's DRAM ND shard width, exactly as the reader's `BRD` does.
+using BRD = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WD_SHARD_W>;
+#endif
 
 // Bank-run coalescing (see moe_fused_swiglu_bank_runs.hpp): ONE definition, bound here to this
 // kernel's compile-time knobs — identical to the reader's binding, which is the point.
@@ -129,9 +218,20 @@ void kernel_main() {
     // PERF 3 (HSEND=writer) — the h broadcast rect, NOC1 routing order: (far_x, far_y, near_x, near_y).
     constexpr uint32_t RT_HRECT = RT_PEERS + 2 * KGROUPS;
     constexpr uint32_t RT_MYCOL = RT_HRECT + 4;  // this core's grid COLUMN == the round it sends
+    constexpr uint32_t RT_WDADDR = RT_MYCOL + 1;  // PERF 17 (WD_SPLIT) — W_down's base address
 
     const auto wu_acc = TensorAccessor(wu_args, w_up_addr, BFP4_TILE);
     const auto out_acc = TensorAccessor(out_args, out_addr, BFP8_TILE);
+#if WD_SPLIT
+    const auto wd_acc = TensorAccessor(wd_args, get_arg_val<uint32_t>(RT_WDADDR), BFP4_TILE);
+    // THE ADDRESS DERIVATION, and why it needs no CB state. This RISC-V never pushes cb_w_down (the
+    // reader is its single producer, which is the one-producer rule the split must not break), so its
+    // local `cb_interface` copy never advances and `get_write_ptr` is the CB BASE for the whole
+    // kernel. `WD_RESIDENT` forces the capacity to exactly HGROUPS K-blocks, so K-block r lives at
+    // `base + r * WD_BLOCK_TILES * BFP4_TILE` on every M-block. Same derivation HSEND=writer uses for
+    // `cb_h_base`, and it must likewise be read before anything else touches the CB.
+    const uint32_t wd_base = get_write_ptr(cb_w_down);
+#endif
 
     // The reader owns the device-resident count read and publishes it to the L1 mailbox.
     volatile tt_l1_ptr uint32_t* mbox = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
@@ -144,9 +244,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_go_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
     uint32_t invites = 0;
-#if HSEND_WRITER
-    // PERF 3 — the h broadcast's two running totals, mirroring the reader's discipline: monotone,
-    // never reset, always compared with wait_min. `cb_h_base` MUST be read before any push.
+#if HSEND_WRITER || HSPLIT
+    // PERF 3 / PERF 17 — the h broadcast's two running totals, mirroring the reader's discipline:
+    // monotone, never reset, always compared with wait_min. `cb_h_base` MUST be read before any
+    // push. This RISC-V never pushes cb_h (the reader is its single producer), so its `cb_interface`
+    // copy never advances and this stays the CB base for the whole kernel.
     const uint32_t my_col = get_arg_val<uint32_t>(RT_MYCOL);
     const uint32_t cb_h_base = get_write_ptr(cb_h);
     uint32_t h_arrivals = 0;
@@ -238,6 +340,78 @@ void kernel_main() {
             }
         }
 
+        // ---- PERF 17: MY SHARE OF THE PHASE-2 W_down STREAM, on NOC_1 ----
+        //
+        // WD_SPLIT eighths of every K-block's hidden rows are read here so they do not compete with
+        // the h all-gather for the reader's NOC_0 request path (NEXT_ROUND_PLAN #1/#3). ALL HGROUPS
+        // blocks go out as one batch: with `WD_RESIDENT` every W_down DRAM read happens at b == 0,
+        // where all HGROUPS slots are free from kernel start, so there is nothing to flow-control
+        // against and the whole stream can be in flight at once. The one thing that IS mandatory is
+        // the completion handshake: `noc_async_read_barrier()` is per-RISC-V, so the reader's barrier
+        // proves nothing about these reads.
+        //
+        // The ROWS are split, not the blocks, and this RISC-V takes the TAIL rows `[hn_r - k_w, hn_r)`
+        // — a contiguous run, so the bank-run coalescing is unaffected on either side.
+#if WD_SPLIT
+        auto issue_wd_share = [&]() {
+            MaybeDeviceZoneScope("writer_wd_issue");
+            // The publish word. A plain volatile store like SEM_XSTAGED: producer and consumer are
+            // two RISC-Vs on the SAME core sharing one L1, and this word has exactly one writer.
+            // It counts K-BLOCKS COMPLETED SINCE THE START OF THE OP, so it is monotone across
+            // M-blocks and needs no reset — the same discipline as every other counter in this op.
+            volatile tt_l1_ptr uint32_t* pub =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_WDSPLIT));
+            if (!((b == 0) || (WD_RESIDENT_D == 0))) {
+                *pub = (b + 1) * HGROUPS;  // resident: nothing to read, the bytes are already there
+                return;
+            }
+            for (uint32_t r = 0; r < HGROUPS; ++r) {
+                const uint32_t hbase = r * HN_PAD;
+                uint32_t hn_r = HN_PAD;
+                if (hbase + hn_r > HID_T) {
+                    hn_r = HID_T - hbase;
+                }
+                const uint32_t k_w = (hn_r * WD_SPLIT) / 8;  // rows read HERE
+#if WD_WPUB_TRID
+                // PERF 17b — ONE TRANSACTION ID PER K-BLOCK. Every block still goes to DRAM at once
+                // (that concurrency is the whole point of the batch), but tagging them lets the
+                // drain below release block r the moment IT lands instead of when the LAST one does.
+                noc_async_read_set_trid(r + 1);
+#endif
+                for (uint32_t k = hn_r - k_w; k < hn_r; ++k) {
+                    // W_down's K axis is `h`'s hidden axis, so the row index goes through the
+                    // same remap as the N axis — identical expression to the reader's.
+                    BRD::read(
+                        wd_acc,
+                        BRG::remap(hbase + k, SLOTS_H) * EMB_T,
+                        jstart,
+                        jstart + ec,
+                        SLOTS_E,
+                        wd_base + (r * WD_BLOCK_TILES + k * EC_MAX) * BFP4_TILE,
+                        BFP4_TILE);
+                }
+            }
+#if WD_WPUB_TRID
+            noc_async_read_set_trid(0);  // back to untagged for the output write-back's cmd buf
+            // DRAIN IN BLOCK ORDER, PUBLISHING AS WE GO. This costs the writer nothing over the
+            // single blanket barrier — the last `barrier_with_trid` returns at the same instant a
+            // whole-batch barrier would — but the READER stops waiting for the whole 111 KB stream
+            // and starts waiting only for the block it is about to push. That distinction is the
+            // difference between WD_SPLIT being free at count 128 and costing +13 % there.
+            for (uint32_t r = 0; r < HGROUPS; ++r) {
+                noc_async_read_barrier_with_trid(r + 1);
+                *pub = b * HGROUPS + r + 1;
+            }
+#else
+            noc_async_read_barrier();
+            *pub = (b + 1) * HGROUPS;
+#endif
+        };
+#if !WD_WPLACE_SCATTER
+        issue_wd_share();
+#endif
+#endif
+
         // ---- PERF 2: REDUCE-SCATTER, contributor side + the finished-slice scatter ----
         if constexpr (SCATTER) {
             // The ONE shared slice plan (moe_fused_swiglu_common.hpp), from the SAME (m_eff, KGROUPS)
@@ -245,7 +419,7 @@ void kernel_main() {
             // for the reduce but still CONTRIBUTE, which is why the send loop below is unconditional.
             const uint32_t sl_w = moe_fused_swiglu::slice_workers(gu_block_tiles, KGROUPS);
             const uint32_t sl_a = gu_block_tiles / sl_w;
-            const uint32_t slice_bytes = sl_a * BFP8_TILE;
+            const uint32_t slice_bytes = sl_a * H_TILE;
             {
                 MaybeDeviceZoneScope("writer_scatter");
 #ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
@@ -268,7 +442,8 @@ void kernel_main() {
                 // with KGROUPS disjoint slots instead of one parent's slot.
                 const uint32_t gdst = get_write_ptr(cb_gather_gate);
                 const uint32_t slot_bytes = my_row * slice_bytes;
-                for (uint32_t w = 0; w < sl_w; ++w) {
+                for (uint32_t i = 0; i < sl_w; ++i) {
+                    const uint32_t w = peer_at(i, sl_w, my_row);  // §14.2 rotation
                     const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
                     const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
                     // ONE coalesced transaction per leg: worker `w` owns the CONTIGUOUS tile range
@@ -279,7 +454,8 @@ void kernel_main() {
                 if constexpr (SCATTER_NOC_SPLIT == 0) {
                     const uint32_t usrc = get_read_ptr(cb_up_acc);
                     const uint32_t udst = get_write_ptr(cb_gather_up);
-                    for (uint32_t w = 0; w < sl_w; ++w) {
+                    for (uint32_t i = 0; i < sl_w; ++i) {
+                        const uint32_t w = peer_at(i, sl_w, my_row);  // §14.2 rotation
                         const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
                         const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
                         noc_async_write(usrc + w * slice_bytes, get_noc_addr(vx, vy, udst + slot_bytes), slice_bytes);
@@ -287,12 +463,13 @@ void kernel_main() {
                 }
                 noc_async_write_barrier();
                 const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
-                for (uint32_t w = 0; w < sl_w; ++w) {
+                for (uint32_t i = 0; i < sl_w; ++i) {
+                    const uint32_t w = peer_at(i, sl_w, my_row);  // §14.2 rotation
                     const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
                     const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
                     noc_semaphore_inc(get_noc_addr(vx, vy, sem_data), 1);
                 }
-                noc_async_atomic_barrier();
+                MAYBE_ATOMIC_BARRIER();
 #endif
                 cb_pop_front(cb_gate_acc, gu_block_tiles);
                 if constexpr (SCATTER_NOC_SPLIT == 0) {
@@ -318,10 +495,73 @@ void kernel_main() {
                     slice_bytes);
                 noc_async_write_barrier();
                 noc_semaphore_inc(get_noc_addr(rvx, rvy, static_cast<uint32_t>(get_semaphore(SEM_HSLICE))), 1);
-                noc_async_atomic_barrier();
+                MAYBE_ATOMIC_BARRIER();
 #endif
                 cb_pop_front(cb_h_slice, sl_a);
             }
+
+#if HSPLIT
+            // ---- PERF 17: the NOC_1 HALF of this column's h broadcast ----
+            //
+            // The reader owns the head tiles and the round's linked VALID flag; this owns the tail
+            // tiles and its own monotone per-slot arrival counter. `cb_h`'s reserve/push stays
+            // entirely on the reader — this is a raw NoC write into the region the reader already
+            // reserved, so the CB keeps exactly ONE producer (§4 trap 5).
+            if (is_root) {
+                MaybeDeviceZoneScope("writer_hsplit");
+                const uint32_t n1 = h_tiles_noc1(gu_block_tiles);
+                // (a) my column's h block is assembled — the same monotone counter the reader waits
+                //     on, and a WAIT (not a consume), so both RISC-Vs may read it.
+                h_arrivals += sl_w;
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HSLICE))),
+                    h_arrivals);
+                // (b) every core has reserved the slot this round lands in. ONE monotone counter
+                //     shared with the reader's own send: a receiver acks the SENDING CORE once per
+                //     round, so the cell gains exactly NUM_CORES per M-block whichever RISC-V reads
+                //     it, and both keep their own identical running expectation.
+                hfree_expected += NUM_CORES;
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_H_FREE))),
+                    hfree_expected);
+#ifndef ABLATE_NO_H_XFER
+                if (n1) {
+                    // Landing slot, derived exactly as HSEND=writer derives it: every core pushes
+                    // cb_h in lockstep in units of `gu_block_tiles`, so the slot index is
+                    // (b*HGROUPS + my_col) mod (capacity / block) off the base captured above.
+                    const uint32_t blocks_cap = (DEPTH_H * M_BLOCK) / m_eff;
+                    const uint32_t slot = (b * HGROUPS + my_col) % blocks_cap;
+                    const uint32_t off = (gu_block_tiles - n1) * H_TILE;  // the reader's head, skipped
+                    const uint64_t dst = get_noc_multicast_addr(
+                        get_arg_val<uint32_t>(RT_HRECT + 0),
+                        get_arg_val<uint32_t>(RT_HRECT + 1),
+                        get_arg_val<uint32_t>(RT_HRECT + 2),
+                        get_arg_val<uint32_t>(RT_HRECT + 3),
+                        cb_h_base + slot * gu_block_tiles * H_TILE + off);
+                    // EXCLUDE-source (fan-out NUM_CORES - 1): this core already holds the WHOLE
+                    // block, because the reader's self-copy lands all of it — head and tail — in
+                    // the local cb_h slot before either half goes out.
+                    noc_async_write_multicast(
+                        get_write_ptr(cb_h_local) + off, dst, n1 * H_TILE, NUM_CORES - 1, /*linked=*/false);
+                    // ACKED, not merely flushed. Unlike the reader's half there is no LINK to carry
+                    // the ordering: the counter below rides a different command buffer and cannot
+                    // terminate a NOC_CMD_VC_LINKED chain (the Perf-3 addendum-2 finding), so the
+                    // payload must have LANDED before the signal moves.
+                    noc_async_write_barrier();
+                    noc_semaphore_inc_multicast(
+                        get_noc_multicast_addr(
+                            get_arg_val<uint32_t>(RT_HRECT + 0),
+                            get_arg_val<uint32_t>(RT_HRECT + 1),
+                            get_arg_val<uint32_t>(RT_HRECT + 2),
+                            get_arg_val<uint32_t>(RT_HRECT + 3),
+                            static_cast<uint32_t>(get_semaphore(SEM_H2_RDY_BASE + ((b * HGROUPS + my_col) % DEPTH_H)))),
+                        1,
+                        NUM_CORES - 1);
+                    MAYBE_ATOMIC_BARRIER();
+                }
+#endif
+            }
+#endif
 
 #if HSEND_WRITER
             // ---- PERF 3: the h BROADCAST, moved off the reader ----
@@ -358,7 +598,7 @@ void kernel_main() {
                 const uint32_t blocks_cap = (DEPTH_H * M_BLOCK) / m_eff;
                 const uint32_t slot = (b * HGROUPS + my_col) % blocks_cap;
                 // `gu_block_tiles` IS the reader's `h_block_tiles`: both are m_eff * HN_PAD.
-                const uint32_t hbytes = gu_block_tiles * BFP8_TILE;
+                const uint32_t hbytes = gu_block_tiles * H_TILE;
                 const uint64_t dst = get_noc_multicast_addr(
                     get_arg_val<uint32_t>(RT_HRECT + 0),
                     get_arg_val<uint32_t>(RT_HRECT + 1),
@@ -381,7 +621,7 @@ void kernel_main() {
                         static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + (my_col % DEPTH_H)))),
                     1,
                     NUM_CORES - 1);
-                noc_async_atomic_barrier();
+                MAYBE_ATOMIC_BARRIER();
 #endif
             }
 #endif
@@ -398,21 +638,28 @@ void kernel_main() {
             // slot stride IS the parent's landing address — no address negotiation. Only the m_eff
             // live tile-rows are shipped; the tail of the slot belongs to undefined token rows and
             // the parent drops it.
-            const uint32_t slot_bytes = my_slot * SLOT_TILES * BFP8_TILE;
+            const uint32_t slot_bytes = my_slot * SLOT_TILES * H_TILE;
             noc_async_write(
                 get_read_ptr(cb_gate_send),
                 get_noc_addr(parent_x, parent_y, get_write_ptr(cb_reduce_gate_in) + slot_bytes),
-                gu_block_tiles * BFP8_TILE);
+                gu_block_tiles * H_TILE);
             noc_async_write(
                 get_read_ptr(cb_up_send),
                 get_noc_addr(parent_x, parent_y, get_write_ptr(cb_reduce_up_in) + slot_bytes),
-                gu_block_tiles * BFP8_TILE);
+                gu_block_tiles * H_TILE);
             noc_async_write_barrier();
             noc_semaphore_inc(get_noc_addr(parent_x, parent_y, static_cast<uint32_t>(get_semaphore(SEM_DATA))), 1);
 #endif
             cb_pop_front(cb_gate_send, gu_block_tiles);
             cb_pop_front(cb_up_send, gu_block_tiles);
         }
+
+#if WD_SPLIT && WD_WPLACE_SCATTER
+        // PERF 17 — the `scatter` placement: past the column all-to-all, so these reads never share
+        // NOC_1 with the gather's own writes. The writer twin of WD_LATE. Placed after the whole
+        // reduce if/else so it is reached on the `tree` path too.
+        issue_wd_share();
+#endif
 
         // ---- output write-back, coalesced over the emb axis ----
         // EC_MAX is the L1 row stride of the block (uniform CB increment); `ec` is how many of

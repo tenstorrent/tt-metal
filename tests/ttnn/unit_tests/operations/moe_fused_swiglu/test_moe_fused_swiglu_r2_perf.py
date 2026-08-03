@@ -11,6 +11,10 @@ Perf-1 harness could not be pointed at a single cell. This one is selected with
 Default = the focus shape alone (emb 7168, capacity 5120, count 256, bf16_rm). Correctness is not
 asserted here beyond shape (that is the golden suite's job); this file exists to produce ONE fresh
 device-kernel duration per cell, plus the per-stage zones when the profiler is on.
+
+Weights are placed at the op's DESIGNED ND shard — see `test_moe_fused_swiglu_perf.py`'s docstring for
+the measurement; `MOE_PERF_WPLACE=interleaved` restores the old, slower call site. Any A/B run through
+this harness must hold the placement fixed, since it is worth up to 11 % on its own.
 """
 
 import os
@@ -21,6 +25,11 @@ import torch
 import ttnn
 
 from ttnn.operations.moe_fused_swiglu import moe_fused_swiglu
+
+from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
+    nd_shard_n_tiles,
+    weight_memory_configs,
+)
 
 TILE = 32
 HIDDEN = 2048
@@ -47,6 +56,29 @@ GUARD_SET = (
 )
 
 _DEFAULT = "7168,5120,256,bf16_rm"
+
+#: DUPLICATED from `test_moe_fused_swiglu_perf.py` on purpose: pytest 9 imports test modules in
+#: `importlib` mode, so a sibling test module is not importable by name and neither is `conftest`.
+#: Twenty lines of duplication beats a sys.path hack in the harness that produces the graded numbers.
+WPLACE = os.environ.get("MOE_PERF_WPLACE", "nd_shard")
+
+
+def weight_configs(device, emb, hidden, wplace):
+    if wplace == "nd_shard":
+        return weight_memory_configs(device, emb, hidden)
+    if wplace == "interleaved":
+        return ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
+    raise ValueError(f"unknown MOE_PERF_WPLACE {wplace!r}")
+
+
+def assert_placement(tt_w, wplace):
+    """Check the READER's predicate — an interleaved weight is silently correct, just slower."""
+    widths = [nd_shard_n_tiles(w) for w in tt_w]
+    if wplace == "nd_shard":
+        assert all(w > 0 for w in widths), f"asked for nd_shard but the reader sees interleaved: {widths}"
+    else:
+        assert all(w == 0 for w in widths), f"asked for interleaved but the reader sees shards: {widths}"
+    return widths
 
 
 def _cases():
@@ -79,16 +111,18 @@ def _build(emb, capacity, count, input_format, device):
     tt_x = ttnn.from_torch(
         x.to(torch.bfloat16), dtype=dt, layout=lay, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
+    gate_up_mc, down_mc = weight_configs(device, emb, HIDDEN, WPLACE)
     tt_w = [
         ttnn.from_torch(
             torch.randn(s, dtype=torch.bfloat16),
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
-        for s in ((emb, HIDDEN), (emb, HIDDEN), (HIDDEN, emb))
+        for s, mc in (((emb, HIDDEN), gate_up_mc), ((emb, HIDDEN), gate_up_mc), ((HIDDEN, emb), down_mc))
     ]
+    assert_placement(tt_w, WPLACE)
     counts = torch.zeros(NUM_GLOBAL_EXPERTS, dtype=torch.int32)
     counts[GLOBAL_EXPERT_ID] = count
     idx = torch.tensor([(11 + 37 * i) % NUM_GLOBAL_EXPERTS for i in range(NUM_LOCAL_EXPERTS)], dtype=torch.int32)
@@ -106,6 +140,6 @@ def test_r2_perf(device, case):
     out = moe_fused_swiglu(tt_x, tt_w[0], tt_w[1], tt_w[2], tt_counts, tt_idx, LOCAL_EXPERT_ID)
     assert list(out.shape) == [1, 1, capacity, emb]
     print(
-        f"[r2perf] {input_format} emb={emb} cap={capacity} count={count} "
+        f"[r2perf] {input_format} emb={emb} cap={capacity} count={count} wplace={WPLACE} "
         f"read_MB={read_bytes(count, emb, input_format) / 1e6:.3f}"
     )
