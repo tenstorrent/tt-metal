@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
 
 # Optional per-layer MLA-vs-FFN host timing (rough ratio only). Gated by TT_PREFILL_BLOCK_TIMING=1.
 # Host wall-clock with a device sync bracketing each region, so the syncs serialize the pipeline and
@@ -225,6 +226,7 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -289,6 +291,7 @@ class TtPrefillBlock(LightweightModule):
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
+            sparse_kv_cache_format=sparse_kv_cache_format,
         )
 
         if kv_only:
@@ -425,11 +428,12 @@ class TtPrefillBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         rope_tensors: dict,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         cache_layer_idx: int = 0,
         return_kv_cache: bool = False,
         return_intermediates: bool = False,
         on_layer_complete: Optional[Callable[[int], None]] = None,
+        on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
@@ -450,6 +454,10 @@ class TtPrefillBlock(LightweightModule):
                 region-offset bounds). Has no effect on dense layers.
             on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
                 the chunk this block zeros the pad window past actual_end, flushes, then fires this.
+            on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
+                residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
+                matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
+                not free/mutate x — it flows on to the next layer.
             actual_start: chunked-prefill absolute KV pos of this chunk's first real token (the cache
                 write offset = cumulative valid-KV count before it; None for single-shot). Selects
                 MLA's chunked path; requires the block to have been built with is_chunked=True.
@@ -459,7 +467,9 @@ class TtPrefillBlock(LightweightModule):
                 tt_kv_rope, tt_kvpe) and this returns (output_tensor, kv_intermediates_dict) — also
                 carrying post_mla_residual + post_attn_norm — instead of (output_tensor, kv_cache).
             actual_isl: actual (unpadded) count of real tokens; threaded to the MoE FFN for
-                padding-aware routing.
+                padding-aware routing. Paired with actual_start there: under chunked prefill the MoE
+                sees the ROTATED block-cyclic layout, so the per-chip real-token split depends on
+                BOTH values (see MoeGate.build_padding_config).
             padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
 
         Returns:
@@ -511,9 +521,10 @@ class TtPrefillBlock(LightweightModule):
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.
-            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+            cache_tensor = kvpe_cache.storage
+            if cache_tensor.layout == ttnn.TILE_LAYOUT:
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                    kvpe_cache,
+                    cache_tensor,
                     cache_user_id,
                     cache_layer_idx,
                     self.mla.layer_num,
@@ -553,6 +564,7 @@ class TtPrefillBlock(LightweightModule):
                 return_intermediates=return_intermediates,
                 actual_isl=actual_isl,
                 padding_side=padding_side,
+                actual_start=actual_start,
             )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
@@ -566,6 +578,12 @@ class TtPrefillBlock(LightweightModule):
             rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
             rec["mla"].append(_t_mla - _t_start)  # attn_norm + MLA + residual
             rec["ffn"].append(_t_ffn - _t_mla)  # ffn_norm + (MoE|dense FFN) + residual
+
+        # Post-FFN output-residual tap (e.g. the DFlash drafter): fire with this block's GLOBAL layer
+        # index (self.mla.layer_idx) and its final output residual. Not reached for kv_only blocks (they
+        # returned above with no output). The callback must NOT free/mutate x — it flows to the next layer.
+        if on_layer_hidden is not None:
+            on_layer_hidden(self.mla.layer_idx, x)
 
         if return_kv_intermediates:
             if return_indexer_indices:
@@ -583,6 +601,7 @@ class TtPrefillBlock(LightweightModule):
         return_intermediates: bool = False,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        actual_start: Optional[int] = None,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
@@ -592,6 +611,7 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates=return_intermediates,
             actual_isl=actual_isl,
             padding_side=padding_side,
+            actual_start=actual_start,
         )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)

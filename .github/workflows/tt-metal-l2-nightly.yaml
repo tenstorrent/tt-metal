@@ -115,7 +115,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
       # UMD test binaries are needed by the umd-p100-tests job below.
       build-umd-tests: true

@@ -48,7 +48,7 @@ INSTANTIATE_TEST_SUITE_P(
                 tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
                 ttnn::BufferType::DRAM,
                 tt::tt_metal::ShardSpec(
-                    CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{1, 2}, CoreCoord{7, 4}}}},
+                    CoreRangeSet{std::set<CoreRange>{CoreRange{tt::tt_metal::CoreCoord{1, 2}, tt::tt_metal::CoreCoord{7, 4}}}},
                     {32, 128},
                     tt::tt_metal::ShardOrientation::ROW_MAJOR
                 )
@@ -60,7 +60,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST(TEST_JSON_CONVERSION, TEST_MATMUL_CONFIG) {
     auto matmul_multi_core_reuse_program_config =
-        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{CoreCoord{2, 3}, 32, 64, 48, 128, 96};
+        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{tt::tt_metal::CoreCoord{2, 3}, 32, 64, 48, 128, 96};
     auto matmul_program_config = ttnn::operations::matmul::MatmulProgramConfig{matmul_multi_core_reuse_program_config};
 
     auto json_object = ttsl::json::to_json(matmul_program_config);

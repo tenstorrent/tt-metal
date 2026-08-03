@@ -119,8 +119,8 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
         auto* device = mesh_device->get_device(coord);
 
         // Service-core physical NoC coords and consumed-counter address both vary per device.
-        const CoreCoord service_logical = service.get_service_core(coord);
-        const CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);
+        const tt::tt_metal::CoreCoord service_logical = service.get_service_core(coord);
+        const tt::tt_metal::CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);
         const uint32_t consumed_counter_addr =
             static_cast<uint32_t>(service.get_consumed_counter_addr(coord));
 
@@ -159,7 +159,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
         uint32_t worker_idx = 0;
         for (uint32_t y = worker_cores.start_coord.y; y <= worker_cores.end_coord.y; ++y) {
             for (uint32_t x = worker_cores.start_coord.x; x <= worker_cores.end_coord.x; ++x) {
-                const CoreCoord core{x, y};
+                const tt::tt_metal::CoreCoord core{x, y};
                 const uint32_t start_page = worker_idx * pages_per_worker;
                 const uint32_t end_page = start_page + pages_per_worker;
                 tt::tt_metal::SetRuntimeArgs(
@@ -320,7 +320,7 @@ void run_h2d_stream_service_case(
                 // Read from the worker-owned output region, not the service-owned input region.
                 for (uint32_t y = worker_cores->start_coord.y; y <= worker_cores->end_coord.y; ++y) {
                     for (uint32_t x = worker_cores->start_coord.x; x <= worker_cores->end_coord.x; ++x) {
-                        const CoreCoord worker_logical{x, y};
+                        const tt::tt_metal::CoreCoord worker_logical{x, y};
                         std::vector<uint8_t> meta_readback(cs.metadata_size_bytes);
                         tt::tt_metal::detail::ReadFromDeviceL1(
                             d,
@@ -541,16 +541,16 @@ TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
         const char* label;
     };
     const Row rows[] = {
-        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, 0, "4_workers_row"},
+        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 20, 0, "4_workers_row"},
         // Single worker exercises the num_workers==1 degenerate-multicast path.
-        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}, 20, 0, "1_worker"},
+        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}}, 20, 0, "1_worker"},
         // Full 12x10 grid = 120 cores; N bumped to 120 to keep divisibility.
-        {640, 120, CoreRange{CoreCoord{0, 0}, CoreCoord{11, 9}}, 100, 0, "120_workers_full_grid"},
+        {640, 120, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{11, 9}}, 100, 0, "120_workers_full_grid"},
 
-        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, 16, "4_workers_meta_16B"},
-        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, 256, "4_workers_meta_256B"},
+        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 20, 16, "4_workers_meta_16B"},
+        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 20, 256, "4_workers_meta_256B"},
         // Just under socket_page_size=2560 in max_coalesce_pages=1: host pads only 16 B of zeros.
-        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, 2544, "4_workers_meta_near_page"},
+        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 20, 2544, "4_workers_meta_near_page"},
     };
     const Chunking chunkings[] = {
         {1, 1, "cb1_fifo1"},
@@ -612,15 +612,15 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
         const char* label;
     };
     const Row rows[] = {
-        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 0, "4_workers_row"},
+        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 0, "4_workers_row"},
         // Single worker exercises the num_workers==1 degenerate-multicast path.
-        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}, 0, "1_worker"},
+        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}}, 0, "1_worker"},
         // Full 12x10 grid = 120 cores; N bumped to 120 to keep divisibility.
-        Row{640, 120, CoreRange{CoreCoord{0, 0}, CoreCoord{11, 9}}, 0, "120_workers_full_grid"},
+        Row{640, 120, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{11, 9}}, 0, "120_workers_full_grid"},
 
-        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 16, "4_workers_meta_16B"},
-        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 256, "4_workers_meta_256B"},
-        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 2544, "4_workers_meta_near_page"},
+        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 16, "4_workers_meta_16B"},
+        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 256, "4_workers_meta_256B"},
+        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 2544, "4_workers_meta_near_page"},
     };
     const Chunking chunkings[] = {
         {1, 1, "cb1_fifo1"},
@@ -730,7 +730,7 @@ TEST_F(H2DStreamServiceTest, MultiThreadedHostPush_Sweep) {
     }
 
     // 4 workers; N=16 is divisible by 4.
-    const CoreRange worker_row{CoreCoord{0, 0}, CoreCoord{3, 0}};
+    const CoreRange worker_row{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}};
     struct Scenario {
         std::optional<CoreRange> workers;
         uint32_t metadata_size_bytes;

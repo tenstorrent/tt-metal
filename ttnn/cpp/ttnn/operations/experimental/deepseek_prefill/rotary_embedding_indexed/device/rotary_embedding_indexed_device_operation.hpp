@@ -22,11 +22,13 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 struct RotaryEmbeddingIndexedDeviceOperation {
     struct operation_attributes_t {
         uint32_t cluster_axis;  // mesh axis the cos/sin caches are SP-sharded along.
-        // Prior valid global KV length in tokens. A per-call scalar that is intentionally NOT hashed:
-        // it lives in a common runtime arg and is patched on cache hits by
-        // MeshWorkloadFactory::override_runtime_arguments, so one cached program is reused across
-        // chunks while the value stays current.
-        uint32_t kv_actual_global;  // TODO: move to metadata
+        // Prior valid global KV length in tokens. Used only on the SCALAR path (when no `metadata`
+        // tensor is supplied): a per-call scalar intentionally NOT hashed — it lives in a common
+        // runtime arg patched on cache hits by MeshWorkloadFactory::override_runtime_arguments, so one
+        // cached program is reused across chunks while the value stays current. On the METADATA path it
+        // is unused (0); the reader reads kv_actual_global on-device from element [0] of the 1-element
+        // `metadata` tensor.
+        uint32_t kv_actual_global;  // scalar path only
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -36,6 +38,12 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         const Tensor& cos;
         const Tensor& sin;
         const Tensor& trans_mat;
+        // Optional. When set: a dedicated 1-element uint32 DRAM tensor, replicated across the mesh,
+        // holding kv_actual_global (tokens, tile-aligned) directly at element [0]. The reader NoC-reads
+        // that one element on-device (traceable path), so a captured ttnn trace advances the value per
+        // chunk via an in-place host update of this tensor. When empty, the op uses the scalar
+        // `kv_actual_global` attribute.
+        std::optional<Tensor> metadata;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -92,11 +100,15 @@ struct RotaryEmbeddingIndexedDeviceOperation {
 
 namespace ttnn::prim {
 
+// Unified primitive. `metadata` selects the path: set -> traceable on-device read of kv_actual_global
+// (from element [0] of the 1-element metadata tensor; the scalar arg is ignored, pass 0); empty ->
+// scalar path using the kv_actual_global attribute.
 ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& input,
     const ttnn::Tensor& cos,
     const ttnn::Tensor& sin,
     const ttnn::Tensor& trans_mat,
+    const std::optional<ttnn::Tensor>& metadata,
     uint32_t kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<MemoryConfig>& memory_config,

@@ -232,7 +232,7 @@ void RunMatmulBenchmark(
         in0_sharded ? ttnn::operations::data_movement::create_sharded_memory_config(
                           ttnn::Shape{1, 1, m, k},
                           ttnn::CoreRangeSet(ttnn::CoreRange(
-                              CoreCoord(0, 0), ttnn::CoreCoord(grid_size.height() - 1, grid_size.width() - 1))),
+                              tt::tt_metal::CoreCoord(0, 0), ttnn::CoreCoord(grid_size.height() - 1, grid_size.width() - 1))),
                           ttnn::operations::data_movement::ShardStrategy::BLOCK,
                           tt::tt_metal::ShardOrientation::ROW_MAJOR)
                     : ttnn::DRAM_MEMORY_CONFIG;

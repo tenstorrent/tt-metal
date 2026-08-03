@@ -15,7 +15,8 @@
 #   INPUT_BAKE_FILE, INPUT_TARGETS, INPUT_SET_LINES, INPUT_UBUNTU_VERSION,
 #   INPUT_PYTHON_VERSION, INPUT_RETRIES, INPUT_RETRY_DELAY_SECONDS,
 #   INPUT_USE_DEFAULT_BUILDER, INPUT_VALIDATE_IMAGES, INPUT_ENABLE_ATTESTATIONS,
-#   INPUT_ENRICH_SBOM, INPUT_HARBOR_PREFIX
+#   INPUT_ENRICH_SBOM, INPUT_HARBOR_PREFIX, INPUT_SYFT_SCANNER_IMAGE,
+#   INPUT_ORAS_IMAGE
 #
 # Requires: docker (buildx), jq, numfmt; oras + syft are installed on demand for
 # SBOM enrichment. Registry auth is taken from the ambient docker credential
@@ -38,6 +39,22 @@ SYFT_VERSION="${SYFT_VERSION:-v1.46.0}"
 SYFT_SHA256="${SYFT_SHA256:-d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca}"
 ORAS_VERSION="${ORAS_VERSION:-1.3.3}"
 ORAS_SHA256="${ORAS_SHA256:-9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59}"
+
+# BuildKit's own default SBOM scanner image, run as a container to generate
+# the `type=sbom` attestation. If a caller passes syft-scanner-image (a
+# self-hosted GHCR copy - see docker-bake.hcl's syft-scanner target), it's
+# pulled through Harbor with a direct-GHCR fallback, same as every other
+# tool image below. Otherwise falls back to an anonymous mirror.gcr.io pull
+# with an anonymous docker.io retry (no Docker Hub account to authenticate
+# with).
+SYFT_SCANNER_PATH="docker/buildkit-syft-scanner:stable-1"
+if [ -n "${INPUT_SYFT_SCANNER_IMAGE}" ]; then
+  SYFT_SCANNER_PRIMARY="${INPUT_HARBOR_PREFIX}${INPUT_SYFT_SCANNER_IMAGE}"
+  SYFT_SCANNER_FALLBACK="${INPUT_SYFT_SCANNER_IMAGE}"
+else
+  SYFT_SCANNER_PRIMARY="mirror.gcr.io/${SYFT_SCANNER_PATH}"
+  SYFT_SCANNER_FALLBACK="docker.io/${SYFT_SCANNER_PATH}"
+fi
 
 # Populated by parse_inputs; referenced by later functions.
 CLEAN_TARGETS=()
@@ -77,16 +94,19 @@ parse_inputs() {
 }
 
 # --- append attestation --set entries for each target to the named array ---
-# Usage: append_attestation_sets <array-name>
-# Emits the provenance/SBOM attest overrides (or the disabled variants) so both
-# the primary bake and the Harbor fallback share identical attestation shaping.
+# Usage: append_attestation_sets <array-name> [generator-image]
+# Emits the provenance/SBOM attest overrides (or the disabled variants) so
+# both the primary bake and the Harbor fallback share identical attestation
+# shaping. generator-image defaults to SYFT_SCANNER_PRIMARY; the fallback
+# call passes SYFT_SCANNER_FALLBACK instead.
 append_attestation_sets() {
   local -n _sets="$1"
+  local generator_image="${2:-$SYFT_SCANNER_PRIMARY}"
   local t
   if [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
     for t in "${CLEAN_TARGETS[@]}"; do
       _sets+=(--set "${t}.attest=type=provenance,mode=max")
-      _sets+=(--set "${t}.attest=type=sbom")
+      _sets+=(--set "${t}.attest=type=sbom,generator=${generator_image}")
     done
   else
     for t in "${CLEAN_TARGETS[@]}"; do
@@ -103,7 +123,7 @@ build_bake_sets() {
   for s in "${SET_LINES[@]}"; do
     [ -n "$s" ] && BAKE_SETS+=(--set "$s")
   done
-  append_attestation_sets BAKE_SETS
+  append_attestation_sets BAKE_SETS "${SYFT_SCANNER_PRIMARY}"
 }
 
 # --- download a release tarball, verify its sha256, install one named binary ---
@@ -131,6 +151,27 @@ install_pinned_binary() {
   rm -rf "$tmp_dir"
 }
 
+# --- pull a self-hosted (Harbor-prefixable) tool image and extract one file
+# from it via `docker create`+`docker cp` - works even for FROM-scratch
+# images with no CMD/ENTRYPOINT (e.g. dockerfile/Dockerfile.tools' oras
+# target), since the container this creates is never started, only used as
+# a filesystem to copy from. Falls back to a direct (unprefixed) pull if the
+# Harbor pull-through fails, same as the bake retries below. ---
+# Usage: extract_from_hosted_image <canonical-image> <path-in-image> <dest-path>
+extract_from_hosted_image() {
+  local image="$1" path_in_image="$2" dest="$3"
+  local pull_ref="${INPUT_HARBOR_PREFIX}${image}"
+  local cid
+  if ! docker pull "$pull_ref" >&2; then
+    echo "  Harbor pull-through failed for ${pull_ref}, falling back to direct ${image}" >&2
+    pull_ref="$image"
+    docker pull "$pull_ref" >&2
+  fi
+  cid=$(docker create "$pull_ref" noop)
+  docker cp "${cid}:${path_in_image}" "$dest"
+  docker rm "$cid" > /dev/null
+}
+
 # --- install syft + oras into a writable temp dir when enrichment is on ---
 install_bake_tools() {
   if [ "${INPUT_ENRICH_SBOM}" = "true" ] && [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
@@ -150,10 +191,16 @@ install_bake_tools() {
         "$SYFT_SHA256" "syft" "$TOOL_BIN_DIR"
     fi
     if ! command -v oras >/dev/null 2>&1; then
-      echo "Installing oras v${ORAS_VERSION} (sha256-verified)..."
-      install_pinned_binary \
-        "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
-        "$ORAS_SHA256" "oras" "$TOOL_BIN_DIR"
+      if [ -n "${INPUT_ORAS_IMAGE}" ]; then
+        echo "Installing oras from self-hosted tool image (${INPUT_ORAS_IMAGE})..."
+        extract_from_hosted_image "${INPUT_ORAS_IMAGE}" "/install/bin/oras" "${TOOL_BIN_DIR}/oras"
+        chmod +x "${TOOL_BIN_DIR}/oras"
+      else
+        echo "Installing oras v${ORAS_VERSION} (sha256-verified)..."
+        install_pinned_binary \
+          "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
+          "$ORAS_SHA256" "oras" "$TOOL_BIN_DIR"
+      fi
     fi
   fi
 }
@@ -194,7 +241,7 @@ run_bake_with_retries() {
           FALLBACK_SETS+=(--set "$stripped")
         fi
       done
-      append_attestation_sets FALLBACK_SETS
+      append_attestation_sets FALLBACK_SETS "${SYFT_SCANNER_FALLBACK}"
       docker buildx bake -f "${INPUT_BAKE_FILE}" "${FALLBACK_SETS[@]}" "${CLEAN_TARGETS[@]}" \
         && bake_success=true || last_bake_exit=$?
       if [ "$bake_success" = "true" ]; then

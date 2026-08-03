@@ -143,23 +143,6 @@ PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_out
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-ttsl::hash::hash_t PermuteDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    const auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<PermuteDeviceOperation>(
-        operation_attributes.dims,
-        operation_attributes.output_mem_config,
-        operation_attributes.pad_value,
-        program_factory.index(),
-        input_tensor.tensor_spec(),
-        input_tensor.padded_shape(),
-        output_spec,
-        output_spec.padded_shape());
-}
-
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {

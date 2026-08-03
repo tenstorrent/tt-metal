@@ -188,6 +188,17 @@ skus:
       type: Count
       count: 1
 
+  # Like bh_sc1, but restricts the single-galaxy allocation to nodes labelled
+  # exabox.tenstorrent.com/power=14kw.
+  bh_sc1_high_power:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: Count
+      count: 1
+      match_labels:
+        exabox.tenstorrent.com/power: "14kw"
+
   bh_sc4:
     runs_on:
       - exabox-multihost-with-nfs

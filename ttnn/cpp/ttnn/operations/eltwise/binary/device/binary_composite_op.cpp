@@ -434,7 +434,7 @@ Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         s_a[1]);
     Tensor b = input_b;
     if (s_a.rank() > 2) {
-        ttsl::SmallVector<uint32_t> reshape(s_a.rank(), 1);
+        ttsl::SmallVector<std::uint32_t> reshape(s_a.rank(), 1);
         reshape[1] = s_a[1];
         b = ttnn::reshape(input_b, ttnn::Shape(reshape));
     }
@@ -473,16 +473,31 @@ Tensor remainder(
 Tensor remainder(
     const Tensor& input,
     unary::ScalarVariant scalar,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
-    float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
-    return ttnn::unary_remainder(input, scalar_f, output_mem_config, output_tensor, sub_core_grids);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    if (!output_dtype.has_value() && !sub_device_id.has_value() && post_activations.empty() &&
+        lhs_activations.empty() && rhs_activations.empty()) {
+        return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
+    }
+    return ttnn::detail::invoke_binary_ng(
+        input,
+        scalar,
+        binary::BinaryOpType::REMAINDER,
+        output_dtype,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        std::nullopt,
+        sub_core_grids,
+        sub_device_id);
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -535,15 +550,12 @@ Tensor floor_div(
 Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor temp = ttnn::div(input_a, input_b, false, std::nullopt, std::nullopt, output_mem_config);
     Tensor result = ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
-    // floor(nan, inf, -inf) = nan, inf, -inf
-    return ttnn::where(
-        ttnn::logical_or(
-            ttnn::eq(temp, std::nanf("")),
-            ttnn::logical_or(
-                ttnn::eq(temp, std::numeric_limits<float>::infinity()),
-                ttnn::eq(temp, -std::numeric_limits<float>::infinity()))),
-        temp,
-        result);
+    // floor(inf, -inf) = inf, -inf. isinf tests both in a single SFPU pass,
+    // replacing two eq's and a logical_or. The dropped eq(temp, nan) term was
+    // always false under IEEE, so NaN selects the floored value here exactly as
+    // it did before; isinf (rather than !isfinite) keeps that branch identical
+    // without relying on floor propagating NaN.
+    return ttnn::where(ttnn::isinf(temp, output_mem_config), temp, result);
 }
 
 // outer(a, b) treats each input's last dim as a vector and broadcasts the
@@ -615,15 +627,15 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
     // Effective batch is the product of leading dims (everything except the
     // vector dim); a scalar leading shape means batch=1. Uses logical shape so
     // padded tile geometry doesn't leak into the dispatch decision.
-    auto leading_volume = [](const Tensor& t) -> uint64_t {
+    auto leading_volume = [](const Tensor& t) -> std::uint64_t {
         const auto& shape = t.logical_shape();
-        uint64_t v = 1;
+        std::uint64_t v = 1;
         for (int i = 0; i + 1 < static_cast<int>(shape.rank()); ++i) {
-            v *= static_cast<uint64_t>(shape[i]);
+            v *= static_cast<std::uint64_t>(shape[i]);
         }
         return v;
     };
-    const uint64_t batch = std::max<uint64_t>(leading_volume(input_a), leading_volume(input_b));
+    const std::uint64_t batch = std::max<std::uint64_t>(leading_volume(input_a), leading_volume(input_b));
     const bool use_matmul = !is_integer && !is_fp32 && batch == 1;
     if (use_matmul) {
         // matmul requires TILE inputs and, unlike the binary_ng multiply path,
@@ -702,8 +714,8 @@ Tensor pow(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
     float exponent_floor = std::floor(exponent);
-    if (static_cast<int32_t>(exponent_floor) == exponent) {
-        int32_t exp = exponent;
+    if (static_cast<std::int32_t>(exponent_floor) == exponent) {
+        std::int32_t exp = exponent;
         return pow(input_a, exp, output_mem_config, output_tensor);
     }
     return ttnn::power(input_a, exponent, output_mem_config, output_tensor);
@@ -712,12 +724,12 @@ Tensor pow(
 // power - integer exponent
 Tensor pow(
     const Tensor& input,
-    int32_t exponent,
+    std::int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
-        uint32_t exp = exponent;
+        std::uint32_t exp = exponent;
         return ttnn::power_iterative(input, exp, output_mem_config, output_tensor);
     }
     return ttnn::power(input, unary::ScalarVariant(exponent), output_mem_config, output_tensor);

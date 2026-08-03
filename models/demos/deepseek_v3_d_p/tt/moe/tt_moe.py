@@ -444,6 +444,7 @@ class TtMoe(LightweightModule):
         return_intermediates: bool = False,
         actual_isl: int = None,
         padding_side: str = "right",
+        actual_start: Optional[int] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -455,6 +456,10 @@ class TtMoe(LightweightModule):
             return_intermediates: If True, return intermediate tensors for debugging
             actual_isl: Actual ISL of the sequence (None = no padding)
             padding_side: Padding side of the sequence
+            actual_start: chunked-prefill absolute KV position of this chunk's first real token
+                (None/0 = single-shot, sequential SP layout). Required for correct per-chip real-token
+                counts: chunked prefill feeds the KV-pad-aware ROTATED block-cyclic layout, where a
+                chip's real rows are NOT its slice of the natural sequence. See build_padding_config.
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -468,8 +473,6 @@ class TtMoe(LightweightModule):
         # ========================================
         # Gate: compute weights/indices/offsets/counts from x
         # ========================================
-        # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
-
         # Padding awareness is only validated/safe for RIGHT padding. With right padding,
         # real tokens have the lowest indices, so they are packed first in every expert
         # region and stay within the shortened FFN/dispatch bound. For left padding the
@@ -492,23 +495,22 @@ class TtMoe(LightweightModule):
         # expert indices, so dispatch must process the full range -> padding_config=None.
         padding_config = None
         if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
-            padding_config = self.gate.build_padding_config(actual_isl, padding_side)
+            padding_config = self.gate.build_padding_config(actual_isl, padding_side, actual_start or 0)
 
         scores, indices, gate_logits = self.gate(
             ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])),
             actual_isl=actual_isl,
             padding_side=padding_side,
             padding_config=padding_config,
+            actual_start=actual_start or 0,
         )
 
-        signpost(header="moe_gate_calculate_dispatch_offsets")
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
-            seq_len_per_chip=self.seq_len_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
         )
-        signpost(header="moe_gate_calculate_dispatch_offsets")
+
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates

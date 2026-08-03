@@ -26,7 +26,7 @@ void populate_runtime_arguments(
     tt::tt_metal::KernelDescriptor& reader_desc,
     tt::tt_metal::KernelDescriptor& writer_desc,
     tt::tt_metal::KernelDescriptor& compute_desc,
-    CoreCoord compute_with_storage_grid_size,
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size,
     bool any_float32,
     const BatchNormOperation::operation_attributes_t& operation_attributes,
     const BatchNormOperation::tensor_args_t& tensor_args,
@@ -361,6 +361,9 @@ tt::tt_metal::ProgramDescriptor BatchNormOperation::BatchNormFactory::create_des
               temp_1_cb,
               bias_tensor_cb}) {
             unpack_to_dest_mode[cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+        if (needs_output_typecast) {
+            unpack_to_dest_mode[output_tensor_cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
 
