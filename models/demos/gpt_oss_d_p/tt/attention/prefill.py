@@ -192,13 +192,13 @@ def attention_forward(
                 k_chunk_size=128,  # gpt-oss sliding op supports Q 64/128 and K 128 only (op asserts)
                 exp_approx_mode=False,
             )
-            # WormholeComputeKernelConfig is the generic compute-kernel config (legacy name); it is
-            # the same type the one-shot path uses via config.get_compute_kernel_config(), and runs on
-            # Blackhole. fp32_dest_acc_en=False is required by the ring op's streaming sink compute.
-            sp_kcfg = ttnn.WormholeComputeKernelConfig(
+            # Device-agnostic compute-kernel config (avoids the misleading WormholeComputeKernelConfig
+            # name on Blackhole). fp32_dest_acc_en=False is required by the ring op streaming-sink compute.
+            sp_kcfg = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=False,  # ring op requires streaming compute for attention_sink
+                fp32_dest_acc_en=False,
                 packer_l1_acc=False,
             )
             assert kv_cache is not None, "SP chunked cache-read needs a KV cache"
