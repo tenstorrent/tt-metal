@@ -91,10 +91,9 @@ inline void rand_row() {
     rand_prng<p_sfpu::LREG1>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-    // Wormhole requires an explicit independent cycle after SFPMAD. Advance
-    // the destination counter in that slot and compensate in the store.
+    TTI_SFPNOP;
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_3, 0);
     dst_reg++;
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_3, (-2) & 0x3FF);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -111,7 +110,7 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     rand_prng<p_sfpu::LREG1>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
 
-    constexpr std::uint32_t row_instruction_count = 22;
+    constexpr std::uint32_t row_instruction_count = 23;
     TTI_REPLAY(0, row_instruction_count, 1, 1);
     rand_row();
 #pragma GCC unroll 7

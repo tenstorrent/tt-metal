@@ -77,10 +77,9 @@ inline void rand_row() {
     rand_prng<p_sfpu::LREG5>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-    // SFPMAD has two-cycle latency. Advance the destination counter in its
-    // dependency slot, then compensate for that early increment in the store.
+    TTI_SFPNOP;
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
     dst_reg++;
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, (-2) & 0x3FF);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -99,7 +98,7 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
 
     // One row fits in the 32-entry replay buffer. Record and execute it once,
     // then replay it for the remaining rows without scalar loop-control gaps.
-    constexpr std::uint32_t row_instruction_count = 18;
+    constexpr std::uint32_t row_instruction_count = 19;
     TTI_REPLAY(0, row_instruction_count, 1, 1);
     rand_row();
 #pragma GCC unroll 7
