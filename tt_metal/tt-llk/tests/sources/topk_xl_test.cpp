@@ -165,12 +165,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // TRISC1 code region overflows by well over 4K under the default -O3.
 #pragma GCC optimize("O2")
 
-#include "llk_lib_math_wrappers.h"
-
-// DST_SYNC_MODE / DST_ACCUM_MODE must be defined before the SFPU params helpers.
-#define DST_SYNC_MODE  dest_sync
-#define DST_ACCUM_MODE is_fp32_dest_acc_en
 #include "experimental/llk_math_eltwise_unary_datacopy_topk_xl_copy.h"
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/ckernel_sfpu_topk_xl.h"
