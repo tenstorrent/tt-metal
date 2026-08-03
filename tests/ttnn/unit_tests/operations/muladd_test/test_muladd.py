@@ -8,7 +8,7 @@ from tests.ttnn.utils_for_testing import assert_with_ulp
 from models.common.utility_functions import skip_for_slow_dispatch
 
 
-@pytest.mark.parametrize("hw", [(1024, 1024)])
+@pytest.mark.parametrize("hw", [(2048, 512)])
 def test_add_2D_tensors(device, hw):
     torch_input_tensor_a = torch.rand(hw, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(hw, dtype=torch.bfloat16)
@@ -19,6 +19,24 @@ def test_add_2D_tensors(device, hw):
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_c = ttnn.from_torch(torch_input_tensor_c, layout=ttnn.TILE_LAYOUT, device=device)
+
+    sram_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+    )
+    input_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            sram_grid,
+            [32, 512],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_sharded_memory_config)
+    input_tensor_b = ttnn.to_memory_config(input_tensor_b, input_sharded_memory_config)
+    input_tensor_c = ttnn.to_memory_config(input_tensor_c, input_sharded_memory_config)
+
     output = muladd_test(input_tensor_a, input_tensor_b, input_tensor_c)
     output = ttnn.to_torch(output)
 
