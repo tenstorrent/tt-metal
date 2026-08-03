@@ -11,14 +11,19 @@ owning this is in STATUS.md's Block 1 section.
 Measured against the fp32 CPU reference on REAL prompts (never random ones -- STATUS.md trap #12),
 with `tt_transformers` on the same metric for comparison:
 
-                             ours bf16 W    ours BFP8 W    tt_transformers
-    prefill, last position     0.999948       0.999881        0.999564
-    decode step                0.99991        0.99986         0.981
-    decode ms/step               45.8           33.7            48
+                             ours (mixed W)   ours BFP8 W   tt_transformers
+    prefill, last position     0.999881        0.999881       0.999564
+    decode step                0.99991         0.99986        0.981
+    decode ms/step             38.7            33.6           48
+    end-to-end natural WER     0.88%           87.39%         1.17%
 
-The decode gap is the interesting one: 0.981 was recorded as "unexplained" for the old path, and
-this one does not reproduce it at either weight dtype. The likeliest reason is that
-`tt_transformers` decodes through `sdpa_decode` and this does not -- see `_layer_step`.
+ALL-BFP8 IS THE FAST ONE AND WE DO NOT SHIP IT. It triggers a card-wedging hang in multi-utterance
+runs and drives fixture case 4 into a repetition loop; both vanish under the mixed default. See
+WEIGHT_DTYPE and ttnn_voxtral_pipeline.CLEAR_PROGRAM_CACHE.
+
+The decode gap against tt_transformers (0.99991 vs 0.981) is real and reproduces at every weight
+dtype we tried, so it is not ours to explain -- but note it is NOT caused by sdpa_decode, which is
+nearly free here (see SDPA).
 
 Mirrors `voxtral_backbone_ref._layer` op-for-op. Structurally this is Block 2's `_block` plus
 three things -- RoPE, a causal mask, and a KV cache -- so what Block 2 already proved carries over
