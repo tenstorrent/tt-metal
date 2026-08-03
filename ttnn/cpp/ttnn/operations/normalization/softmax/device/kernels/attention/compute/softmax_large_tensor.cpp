@@ -79,7 +79,7 @@ void apply_fused_scale_mask(
     DataflowBuffer dfb_out_obj(dfb_out);
     reconfig_data_format(dfb_in, dfb_fused_scale_mask);
     pack_reconfig_data_format(dfb_out);
-    mul_tiles_bcast_scalar_init_short(dfb_in, dfb_fused_scale_mask);
+    mul_bcast_scalar_init(dfb_in, dfb_fused_scale_mask);
     for (uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         if(dfb_length_t -cur_blk < blk){
             blk = dfb_length_t- cur_blk;
@@ -115,7 +115,7 @@ void apply_fused_attn_mask(
 #ifdef CAUSAL_MASK
     add_init(dfb_in, dfb_fused_attn_mask);
 #else
-    add_bcast_rows_init_short(dfb_in, dfb_fused_attn_mask);
+    add_bcast_rows_init(dfb_in, dfb_fused_attn_mask);
 #endif
     for (uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         tile_regs_acquire();
@@ -207,7 +207,7 @@ void exp_cb(uint32_t dfb_in, uint32_t dfb_out, uint32_t dfb_max, const uint32_t 
     pack_reconfig_data_format(dfb_out);
 #ifdef NUMERIC_STABLE
     reconfig_data_format_srcb(dfb_max);
-    sub_bcast_cols_init_short(dfb_in, dfb_max);
+    sub_bcast_cols_init(dfb_in, dfb_max);
 #else
     copy_tile_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
 #endif
@@ -292,7 +292,7 @@ void apply_recip(uint32_t dfb_in, uint32_t dfb_recip, uint32_t dfb_out, uint32_t
     reconfig_data_format(dfb_in, dfb_recip);
     pack_reconfig_data_format(dfb_out);
     dfb_recip_obj.wait_front(1);
-    mul_bcast_cols_init_short(dfb_in, dfb_recip);
+    mul_bcast_cols_init(dfb_in, dfb_recip);
     for (uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         dfb_in_obj.wait_front(blk);
         tile_regs_acquire();

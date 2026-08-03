@@ -118,7 +118,7 @@ void kernel_main() {
          */
         reconfig_data_format(input_cb, reduce_result_cb);
         pack_reconfig_data_format(mul_rms_result_cb);
-        mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+        mul_bcast_cols_init(input_cb, reduce_result_cb);
         cb_reduce_result.wait_front(1);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
             cb_input.wait_front(block_size);
@@ -143,7 +143,7 @@ void kernel_main() {
                 // Reconfigure for mul_bcast_row
                 reconfig_data_format(mul_rms_result_cb, weight_cb);
                 pack_reconfig_data_format(mul_weight_result_cb);
-                mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
+                mul_bcast_rows_init(mul_rms_result_cb, weight_cb);
                 // cumulative wait
                 cb_weight.wait_front(col_tile + block_size);
                 cb_mul_rms_result.wait_front(block_size);
@@ -172,7 +172,7 @@ void kernel_main() {
                 // Reconfigure for mul_bcast_col
                 reconfig_data_format(input_cb, reduce_result_cb);
                 pack_reconfig_data_format(mul_rms_result_cb);
-                mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                mul_bcast_cols_init(input_cb, reduce_result_cb);
             }
 
             /**
@@ -282,7 +282,7 @@ void kernel_main() {
                 // Reconfigure for mul_bcast_col
                 reconfig_data_format(input_cb, reduce_result_cb);
                 pack_reconfig_data_format(mul_rms_result_cb);
-                mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                mul_bcast_cols_init(input_cb, reduce_result_cb);
             }
         }
         cb_reduce_result.pop_front(1);

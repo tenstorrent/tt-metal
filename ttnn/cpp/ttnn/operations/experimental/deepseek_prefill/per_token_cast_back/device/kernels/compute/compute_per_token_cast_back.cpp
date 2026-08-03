@@ -90,7 +90,7 @@ void kernel_main() {
             // cb_scale_bcast holds block_ht tiles; tile block_h_idx has column 0 = scale[:, block_h_idx].
             reconfig_data_format(cb_in_tile_id, cb_scale_bcast_id);
             pack_reconfig_data_format(cb_out_tile_id);
-            mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_bcast_id);
+            mul_bcast_cols_init(cb_in_tile_id, cb_scale_bcast_id);
             cb_in_tile.wait_front(tiles_per_block);
             cb_scale_bcast.wait_front(block_ht);
             cb_out_tile.reserve_back(tiles_per_block);

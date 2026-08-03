@@ -205,7 +205,7 @@ void kernel_main() {
             // ----- 3. divide: cb_out_tile = cb_tile * bcast_col(1/scale) -----
             reconfig_data_format(cb_tile_id, cb_inv_scale_tiles_id);
             pack_reconfig_data_format(cb_out_tile_id);
-            mul_bcast_cols_init_short(cb_tile_id, cb_inv_scale_tiles_id);
+            mul_bcast_cols_init(cb_tile_id, cb_inv_scale_tiles_id);
             cb_inv_scale_tiles.wait_front(block_ht);
             cb_out_tile.reserve_back(tiles_per_block);
             for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {

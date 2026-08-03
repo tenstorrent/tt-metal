@@ -297,7 +297,7 @@ void kernel_main() {
                 dfb_ex.push_back(1);
             }
             // x - E[x]
-            sub_tiles_bcast_scalar_init_short(dfb_x_id, dfb_ex_global_id);
+            sub_bcast_scalar_init(dfb_x_id, dfb_ex_global_id);
 
             dfb_ex_global.wait_front(1);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -422,7 +422,7 @@ void kernel_main() {
             dfb_ex_global.pop_front(1);
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
-            mul_tiles_bcast_scalar_init_short(dfb_x_id, dfb_ex2pe_id);
+            mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);
 
             dfb_ex2pe.wait_front(1);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -600,7 +600,7 @@ void kernel_main() {
     if constexpr (do_gamma) {
         index_h_offset = 0;
         if constexpr (use_negative_mask == false) {
-            mul_bcast_rows_init_short(dfb_out_id, dfb_gamma_id);
+            mul_bcast_rows_init(dfb_out_id, dfb_gamma_id);
             dfb_outgamma.reserve_back(per_core_MN);
             dfb_gamma.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -621,7 +621,7 @@ void kernel_main() {
             dfb_outgamma.wait_front(per_core_MN);
         } else {
             // cb in has data required for gamma, so we do it inplace
-            mul_bcast_rows_init_short(dfb_in_id, dfb_gamma_id);
+            mul_bcast_rows_init(dfb_in_id, dfb_gamma_id);
             dfb_gamma.wait_front(per_core_N);
             dfb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {
@@ -643,7 +643,7 @@ void kernel_main() {
     if constexpr (do_beta) {
         if constexpr (use_negative_mask == false) {
             index_h_offset = 0;
-            add_bcast_rows_init_short(dfb_inbeta_id, dfb_beta_id);
+            add_bcast_rows_init(dfb_inbeta_id, dfb_beta_id);
             dfb_outbeta.reserve_back(per_core_MN);
             dfb_beta.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -663,7 +663,7 @@ void kernel_main() {
             dfb_outbeta.wait_front(per_core_MN);
         } else {
             // cb_in_id has data required for beta, so we do it inplace
-            add_bcast_rows_init_short(dfb_in_id, dfb_beta_id);
+            add_bcast_rows_init(dfb_in_id, dfb_beta_id);
             dfb_beta.wait_front(per_core_N);
             dfb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {

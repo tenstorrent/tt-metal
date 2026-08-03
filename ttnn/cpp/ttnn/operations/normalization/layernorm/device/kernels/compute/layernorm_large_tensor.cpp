@@ -148,7 +148,7 @@ void kernel_main() {
 #else
             // x-E[x]
             reconfig_data_format(dfb_in_id, dfb_ex_id);
-            sub_bcast_cols_init_short(dfb_in_id, dfb_ex_id);
+            sub_bcast_cols_init(dfb_in_id, dfb_ex_id);
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(dfb_in_id, dfb_ex_id, i, 0, i);
             }
@@ -297,7 +297,7 @@ void kernel_main() {
 #else
             dfb_ex.wait_front(1);
             reconfig_data_format(dfb_in_id, dfb_ex_id);
-            sub_bcast_cols_init_short(dfb_in_id, dfb_ex_id);
+            sub_bcast_cols_init(dfb_in_id, dfb_ex_id);
             // x-E[x]
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(dfb_in_id, dfb_ex_id, i, 0, i);
@@ -371,7 +371,7 @@ void kernel_main() {
                 }
                 dfb_gamma.wait_front(block.full_block_size());
                 DataflowBuffer(dfb_fusion).wait_front(block.full_block_size());
-                mul_bcast_rows_init_short(dfb_fusion, dfb_gamma_id);
+                mul_bcast_rows_init(dfb_fusion, dfb_gamma_id);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(dfb_fusion, dfb_gamma_id, i, i, i);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -410,7 +410,7 @@ void kernel_main() {
                 pack_reconfig_data_format(dfb_out_id);
                 dfb_beta.wait_front(block.full_block_size());
                 DataflowBuffer(dfb_fusion).wait_front(block.full_block_size());
-                add_bcast_rows_init_short(dfb_fusion, dfb_beta_id);
+                add_bcast_rows_init(dfb_fusion, dfb_beta_id);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(dfb_fusion, dfb_beta_id, i, i, i);
 #ifdef SFPU_OP_INIT_ACTIVATION

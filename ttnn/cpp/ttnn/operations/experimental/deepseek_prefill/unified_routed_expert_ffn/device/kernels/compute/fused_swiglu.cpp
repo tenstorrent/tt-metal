@@ -252,7 +252,7 @@ FORCE_INLINE void matmul_phase(
     // Down matmul left SrcA on down weights (bf4), SrcB on activated (bf8).
     // Reconfig SrcA=partials (Float16_b), SrcB=down_bias before the bcast init.
     reconfig_data_format(partials_cb_id, down_bias_cb_id);
-    add_bcast_rows_init_short(partials_cb_id, down_bias_cb_id);
+    add_bcast_rows_init(partials_cb_id, down_bias_cb_id);
 #else
     (void)down_bias_cb_id;
     // matmul puts in1 → SrcA, in0 → SrcB. Reconfigure SrcA from in1 to
@@ -608,7 +608,7 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     // The bcast add reads SrcA=partials (Float16_b), SrcB=bias — reconfig both
     // before the init (add_bcast uses both operands, unlike the copy path).
     reconfig_data_format(gate_partials_cb_id, gate_bias_cb_id);
-    add_bcast_rows_init_short(gate_partials_cb_id, gate_bias_cb_id);
+    add_bcast_rows_init(gate_partials_cb_id, gate_bias_cb_id);
 #else
     (void)gate_bias_cb_id;
     (void)up_bias_cb_id;

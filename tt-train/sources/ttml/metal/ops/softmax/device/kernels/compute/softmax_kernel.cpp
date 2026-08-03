@@ -204,7 +204,7 @@ void calculate_sum_exp_x() {
     reconfig_data_format(cb_input, cb_max_value_after_reduction);
     for (uint32_t col = 0; col < Wt;) {
         tile_regs_acquire();
-        sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
+        sub_bcast_cols_init(cb_input, cb_max_value_after_reduction);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
             sub_tiles_bcast<BroadcastType::COL>(
                 cb_input,
@@ -417,7 +417,7 @@ void kernel_main() {
 #else
                 const uint32_t input_tile_idx = block_idx;
                 reconfig_data_format(cb_input, cb_max_value_after_reduction);
-                sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
+                sub_bcast_cols_init(cb_input, cb_max_value_after_reduction);
                 sub_tiles_bcast<BroadcastType::COL>(
                     cb_input,
                     cb_max_value_after_reduction,

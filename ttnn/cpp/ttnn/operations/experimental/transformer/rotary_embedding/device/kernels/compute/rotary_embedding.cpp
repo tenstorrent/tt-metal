@@ -22,7 +22,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 
     tile_regs_acquire();
 #ifdef DECODE_MODE
-    mul_bcast_rows_init_short(in0_cb, in1_cb);
+    mul_bcast_rows_init(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
 #else
     mul_init(in0_cb, in1_cb);
@@ -131,7 +131,7 @@ void kernel_main() {
                 cb_rotated_in.wait_front(onetile);
 
                 tile_regs_acquire();
-                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
+                mul_bcast_scalar_init(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
                 tile_regs_commit();
 

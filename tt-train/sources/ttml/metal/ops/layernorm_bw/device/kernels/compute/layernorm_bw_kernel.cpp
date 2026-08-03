@@ -104,7 +104,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
                 const uint32_t target_register = (col == 0) ? sum_register : working_register;
-                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                 mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
 
                 // Limitation: mask_tile only works when the mask register is immediately next to the data register.
@@ -121,11 +121,11 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
                     add_binary_tile(sum_register, target_register, sum_register);
                 }
             } else {
-                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                 mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, sum_register);
             }
         } else {
-            mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+            mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
             mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, sum_register);
         }
     }
@@ -177,7 +177,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 
         // compute dy * gamma for dy_gamma_xnorm
         zero_dst_reg(target_register);
-        mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+        mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
         mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
 
         // Load x_normalized for this tile
@@ -260,7 +260,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
             if constexpr (do_mask_w) {
                 if (global_col + 1 == Wt) {
                     const uint32_t target_register = (global_col == 0) ? sum_register : working_register;
-                    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                    mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                     mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, target_register);
 
                     // Limitation: mask_tile only works when the mask register is immediately next to the data register.
@@ -277,11 +277,11 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
                         add_binary_tile(sum_register, target_register, sum_register);
                     }
                 } else {
-                    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                    mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                     mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, sum_register);
                 }
             } else {
-                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                 mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, sum_register);
             }
         }
@@ -351,7 +351,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 
             // Compute dy * gamma
             zero_dst_reg(target_register);
-            mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+            mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
             mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, target_register);
 
             // Multiply: (dy * gamma) * x_normalized
@@ -419,7 +419,7 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
     // Compute dy * gamma
     zero_dst_reg(dx_register);
     reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
-    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+    mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
     mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, input_tile_idx, input_tile_idx, dx_register);
 
     // Load pre-scaled sum: (1/N) * sum(dy*gamma)

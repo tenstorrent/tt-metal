@@ -32,7 +32,7 @@ void kernel_main() {
         dfb_x_obj.wait_front(onetile);  // comes from the reader
         dfb_y_obj.reserve_back(onetile);
 
-        mul_tiles_bcast_scalar_init_short(cb_x, cb_clip_coef_clamped);
+        mul_bcast_scalar_init(cb_x, cb_clip_coef_clamped);
         mul_tiles_bcast_scalar(cb_x, cb_clip_coef_clamped, 0, 0, dst0);
         dfb_x_obj.pop_front(onetile);
         tile_regs_commit();

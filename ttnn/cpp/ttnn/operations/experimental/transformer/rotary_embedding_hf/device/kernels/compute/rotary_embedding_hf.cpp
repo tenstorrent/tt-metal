@@ -70,7 +70,7 @@ void kernel_main() {
                 rotated_in_cb.wait_front(onetile);
                 rotated_in_interm_cb.reserve_back(onetile);
                 tile_regs_acquire();
-                mul_tiles_bcast_scalar_init_short(rotated_in_cb_id, scalar_cb_id);
+                mul_bcast_scalar_init(rotated_in_cb_id, scalar_cb_id);
                 mul_tiles_bcast_scalar(rotated_in_cb_id, scalar_cb_id, 0, 0, 0);
                 tile_regs_commit();
                 tile_regs_wait();

@@ -183,7 +183,7 @@ void kernel_main() {
         // x - E[x]
         reconfig_data_format(dfb_x_id, dfb_ex_id);
         dfb_xmm.reserve_back(total_buffer_size);
-        sub_bcast_cols_init_short(dfb_x_id, dfb_ex_id);
+        sub_bcast_cols_init(dfb_x_id, dfb_ex_id);
         for (auto block : generic::blocks(Wt, block_size)) {
             tile_regs_acquire();
             for (auto i : block.local()) {
@@ -280,7 +280,7 @@ void kernel_main() {
             reconfig_data_format_srca(dfb_fusion_id, dfb_xmm_id);
 #endif
             tile_regs_acquire();
-            mul_bcast_cols_init_short(dfb_xmm_id, dfb_ex2pe_id);
+            mul_bcast_cols_init(dfb_xmm_id, dfb_ex2pe_id);
             for (auto i : block.local()) {
                 mul_tiles_bcast_cols(dfb_xmm_id, dfb_ex2pe_id, block.to_global(i), 0, i);  // tile *= 1/(sum(exp(x)))
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -322,7 +322,7 @@ void kernel_main() {
                 dfb_fusion.wait_front(block.full_block_size());
 
                 tile_regs_acquire();
-                mul_bcast_rows_init_short(dfb_fusion_id, dfb_gamma_id);
+                mul_bcast_rows_init(dfb_fusion_id, dfb_gamma_id);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(
                         dfb_fusion_id, dfb_gamma_id, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
@@ -363,7 +363,7 @@ void kernel_main() {
                 dfb_fusion.wait_front(block.full_block_size());
 
                 tile_regs_acquire();
-                add_bcast_rows_init_short(dfb_fusion_id, dfb_beta_id);
+                add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(
                         dfb_fusion_id, dfb_beta_id, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))

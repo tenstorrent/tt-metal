@@ -164,7 +164,7 @@ void kernel_main() {
                                 cb_addcmul_b.wait_front(tile_granularity);
 
 #ifdef ADDCMUL_B_BROADCAST
-                                mul_bcast_rows_init_short(addcmul_temp_cb, addcmul_b_cb);
+                                mul_bcast_rows_init(addcmul_temp_cb, addcmul_b_cb);
 #else
                                 mul_init(addcmul_temp_cb, addcmul_b_cb, 0, __builtin_LINE());
 #endif

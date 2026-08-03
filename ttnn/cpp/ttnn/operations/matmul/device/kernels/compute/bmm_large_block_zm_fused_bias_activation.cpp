@@ -490,7 +490,7 @@ void kernel_main() {
 #endif
                 reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
                 if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init_short(mm_partials_dfb_id, bias_dfb_id);
+                    add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
                 } else {
                     add_init(mm_partials_dfb_id, bias_dfb_id);
                 }

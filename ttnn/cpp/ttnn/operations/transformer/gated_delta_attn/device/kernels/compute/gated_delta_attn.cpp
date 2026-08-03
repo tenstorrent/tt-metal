@@ -402,7 +402,7 @@ void kernel_main() {
         // ==================================================================
         CircularBuffer(cb_s_upd).wait_front(state_tiles);
         CircularBuffer(cb_S_tmp).reserve_back(state_tiles);
-        mul_tiles_bcast_scalar_init_short(cb_S, cb_dl_exp);
+        mul_bcast_scalar_init(cb_S, cb_dl_exp);
         for (uint32_t t = 0; t < state_tiles; t++) {
             tile_regs_acquire();
             mul_tiles_bcast_scalar(cb_S, cb_dl_exp, t, 0, 0);

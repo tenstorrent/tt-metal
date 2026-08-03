@@ -399,7 +399,7 @@ void normalize_scores(
     reconfig_data_format(cb_reduce_intermediate_id, cb_epsilon_scalar_id);
     pack_reconfig_data_format(cb_reciprocal_sums_id);
 
-    add_bcast_scalar_init_short(cb_reduce_intermediate_id, cb_epsilon_scalar_id);
+    add_bcast_scalar_init(cb_reduce_intermediate_id, cb_epsilon_scalar_id);
     add_tiles_bcast<BroadcastType::SCALAR>(cb_reduce_intermediate_id, cb_epsilon_scalar_id, 0, 0, 0);
 
     // 4. Recip
@@ -419,7 +419,7 @@ void normalize_scores(
     // 6. Broadcast multiply
     tile_regs_acquire();
     cb_reciprocal_sums.wait_front(1);
-    mul_bcast_cols_init_short(cb_gathered_sigmoid_id, cb_reciprocal_sums_id);
+    mul_bcast_cols_init(cb_gathered_sigmoid_id, cb_reciprocal_sums_id);
     mul_tiles_bcast<BroadcastType::COL>(
         cb_gathered_sigmoid_id, cb_reciprocal_sums_id, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     tile_regs_commit();
@@ -441,7 +441,7 @@ void scale(
     CircularBuffer cb_out_weights(cb_out_weights_id);
     cb_normalized_scores.wait_front(1);
     cb_route_scale_scalar.wait_front(1);
-    mul_tiles_bcast_scalar_init_short(cb_normalized_scores_id, cb_route_scale_scalar_id);
+    mul_bcast_scalar_init(cb_normalized_scores_id, cb_route_scale_scalar_id);
 
     tile_regs_acquire();
 

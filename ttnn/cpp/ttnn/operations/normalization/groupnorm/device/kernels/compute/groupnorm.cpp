@@ -393,7 +393,7 @@ void kernel_main() {
 
                 dfb_in0.wait_front(out_block_hw_normal);
                 // x - E[x]
-                sub_tiles_bcast_scalar_init_short(dfb_in0_id, dfb_ex_global_id);
+                sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
 
                 dfb_xmm.reserve_back(out_block_hw_normal);
                 dfb_ex_global.wait_front(1);
@@ -547,7 +547,7 @@ void kernel_main() {
 
                 dfb_in0.wait_front(out_block_hw_normal);
                 // x - E[x]
-                sub_tiles_bcast_scalar_init_short(dfb_in0_id, dfb_ex_global_id);
+                sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
                 dfb_xmm.reserve_back(out_block_hw_normal);
                 dfb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
@@ -605,7 +605,7 @@ void kernel_main() {
 
                 // (x - Ex) * 1/[sqrt(Var + eps)]
                 index_h_offset = 0;
-                mul_tiles_bcast_scalar_init_short(dfb_x_id, dfb_ex2pe_id);
+                mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);
                 dfb_xmm.reserve_back(out_block_hw_normal);
                 dfb_ex2pe.wait_front(1);
                 dfb_x.wait_front(out_block_hw_normal);
@@ -704,7 +704,7 @@ void kernel_main() {
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             if (apply_gamma_beta[j]) {
-                                mul_bcast_rows_init_short(dfb_reread_write_out_id, dfb_gamma_id);
+                                mul_bcast_rows_init(dfb_reread_write_out_id, dfb_gamma_id);
                             } else {
                                 copy_tile_init(dfb_reread_write_out_id);
                             }
@@ -737,7 +737,7 @@ void kernel_main() {
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             if (apply_gamma_beta[j]) {
-                                add_bcast_rows_init_short(dfb_inbeta_id, dfb_beta_id);
+                                add_bcast_rows_init(dfb_inbeta_id, dfb_beta_id);
                             } else {
                                 copy_tile_init(dfb_inbeta_id);
                             }

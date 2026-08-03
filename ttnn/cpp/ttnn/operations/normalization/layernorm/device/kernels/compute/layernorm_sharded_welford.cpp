@@ -488,7 +488,7 @@ void kernel_main() {
         reconfig_data_format(dfb_in_id, dfb_transpose_id);
     }
     index_h_offset = 0;
-    sub_bcast_cols_init_short(dfb_in_id, dfb_transpose_id);
+    sub_bcast_cols_init(dfb_in_id, dfb_transpose_id);
     dfb_xmm.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
@@ -527,7 +527,7 @@ void kernel_main() {
     if constexpr (FLOAT32_DTYPE) {
         reconfig_data_format(dfb_xmm_id, dfb_transpose_id);
     }
-    mul_bcast_cols_init_short(dfb_xmm_id, dfb_transpose_id);
+    mul_bcast_cols_init(dfb_xmm_id, dfb_transpose_id);
     index_h_offset = 0;
     dfb_im.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_ht; i++) {
@@ -561,7 +561,7 @@ void kernel_main() {
         if constexpr (do_beta == 0) {
             pack_reconfig_data_format(dfb_out_id);
         }
-        mul_bcast_rows_init_short(dfb_im_id, dfb_gamma_id);
+        mul_bcast_rows_init(dfb_im_id, dfb_gamma_id);
         dfb_gamma.wait_front(block_wt);
         index_h_offset = 0;
         dfb_outgamma.reserve_back(num_tiles_per_block);
@@ -594,7 +594,7 @@ void kernel_main() {
     if constexpr (do_beta) {
         reconfig_data_format(dfb_fusion_id, dfb_beta_id);
         pack_reconfig_data_format(dfb_out_id);
-        add_bcast_rows_init_short(dfb_fusion_id, dfb_beta_id);
+        add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
         dfb_beta.wait_front(block_wt);
         index_h_offset = 0;
         dfb_out.reserve_back(num_tiles_per_block);

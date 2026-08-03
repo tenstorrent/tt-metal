@@ -38,7 +38,8 @@ void kernel_main() {
 #endif
 
 #ifndef BCAST_OP_INIT
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(icb0, icb1, ocb);
+    compute_kernel_hw_startup(icb0, icb1, ocb);
+    bcast_init<BCAST_LLKOP, BCAST_DIM>(icb0, icb1);
 #else
     compute_kernel_hw_startup(icb0, icb1, ocb);
     BCAST_OP_INIT(icb0, icb1);

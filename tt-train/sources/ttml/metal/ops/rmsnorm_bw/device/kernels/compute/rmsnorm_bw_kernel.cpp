@@ -58,7 +58,7 @@ inline void compute_gained_dL_dout(uint32_t col, uint32_t working_register, uint
     // Compute scaled_gain = gamma * 1/rms_a
     // NOTE: cb_recip_rms_a_bcasted is ready to be used, so we do not need to wait for it, but we need to broadcast
     // gamma.
-    mul_bcast_rows_init_short(cb_recip_rms_a_bcasted_idx, cb_gamma_idx);
+    mul_bcast_rows_init(cb_recip_rms_a_bcasted_idx, cb_gamma_idx);
     mul_tiles_bcast_rows(
         cb_recip_rms_a_bcasted_idx, cb_gamma_idx, /* tile_idx */ 0, /* tile_idx */ col, working_register);
 
@@ -85,7 +85,7 @@ inline void compute_dL_da(
 
     // Compute scaled_outer = scale * a (broadcasted multiplication)
     reconfig_data_format(cb_input_idx, cb_scale_idx);
-    mul_bcast_cols_init_short(cb_input_idx, cb_scale_idx);
+    mul_bcast_cols_init(cb_input_idx, cb_scale_idx);
     mul_tiles_bcast_cols(
         cb_input_idx,
         cb_scale_idx,

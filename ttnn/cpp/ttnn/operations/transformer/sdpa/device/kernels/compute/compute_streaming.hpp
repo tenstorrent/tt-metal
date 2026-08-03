@@ -482,7 +482,7 @@ void sub_exp_block_bcast_cols(
 
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
-        sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
+        sub_bcast_cols_init_custom(inout_cb, max_cb, tiles_per_column);
     }
 
     // inout_cb assumed ready (max_cb was already computed from it)
@@ -627,7 +627,7 @@ void salad_correct_fused(
     const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
-    mul_bcast_cols_init_short(out_in_cb, bcast_cb);
+    mul_bcast_cols_init(out_in_cb, bcast_cb);
 
     CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
@@ -730,7 +730,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
             if constexpr (use_attention_sink) {
                 // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
-                sub_bcast_cols_init_short(cb_attention_sink, cur_max_cb_rt);
+                sub_bcast_cols_init(cb_attention_sink, cur_max_cb_rt);
                 sub_tiles_bcast_cols(cb_attention_sink, cur_max_cb_rt, s, sink_row_offset + s, 1);
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
@@ -762,7 +762,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
-            mul_bcast_cols_init_short(cur_out_cb, scratch_cb);
+            mul_bcast_cols_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
             sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
             CircularBuffer(cur_out_cb).wait_front(head_dim_t_);

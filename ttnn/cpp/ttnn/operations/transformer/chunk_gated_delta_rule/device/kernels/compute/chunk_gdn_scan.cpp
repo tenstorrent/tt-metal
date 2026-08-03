@@ -91,7 +91,7 @@ void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
     cb_reserve_back(o, n);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, scal);  // bcast(a,scal): a->srcA, scal->srcB
-    mul_tiles_bcast_scalar_init_short(a, scal);
+    mul_bcast_scalar_init(a, scal);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
         mul_tiles_bcast_scalar(a, scal, i, 0, 0);

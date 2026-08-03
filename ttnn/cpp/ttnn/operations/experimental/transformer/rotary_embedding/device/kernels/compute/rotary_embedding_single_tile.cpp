@@ -116,7 +116,7 @@ void kernel_main() {
 
         tile_regs_acquire();
 #ifdef DECODE_MODE
-        mul_bcast_rows_init_short(rotated_in_interm_cb, updated_sin_cb);
+        mul_bcast_rows_init(rotated_in_interm_cb, updated_sin_cb);
         mul_tiles_bcast_rows(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
 #else
         mul_init(rotated_in_interm_cb, updated_sin_cb);
@@ -145,7 +145,7 @@ void kernel_main() {
 
         tile_regs_acquire();
 #ifdef DECODE_MODE
-        mul_bcast_rows_init_short(in_cb, updated_cos_cb);
+        mul_bcast_rows_init(in_cb, updated_cos_cb);
         mul_tiles_bcast_rows(in_cb, updated_cos_cb, 0, 0, 0);
 #else
         mul_init(in_cb, updated_cos_cb);

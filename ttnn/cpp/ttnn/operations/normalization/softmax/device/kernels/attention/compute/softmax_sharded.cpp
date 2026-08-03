@@ -39,7 +39,7 @@ ALWI void calc_numeric_stable() {
     exp_tile_init<EXP_APPROX>();
     reconfig_data_format_srcb(dfb_max_id);
     dfb_max_obj.wait_front(1);
-    sub_bcast_cols_init_short(dfb_in_id, dfb_max_id);
+    sub_bcast_cols_init(dfb_in_id, dfb_max_id);
     uint32_t index_subblock_w_offset = 0;
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
         tile_regs_acquire();
@@ -113,7 +113,7 @@ void kernel_main() {
         reconfig_data_format(dfb_in0, dfb_fused_scale);
         pack_reconfig_data_format(dfb_scale_mask);
         dfb_fused_scale_obj.wait_front(1);
-        mul_tiles_bcast_scalar_init_short(dfb_in0, dfb_fused_scale);
+        mul_bcast_scalar_init(dfb_in0, dfb_fused_scale);
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
@@ -146,7 +146,7 @@ void kernel_main() {
 #ifdef CAUSAL_MASK
         add_init(dfb_scale_mask, dfb_fused_attn);
 #else
-        add_bcast_rows_init_short(dfb_scale_mask, dfb_fused_attn);
+        add_bcast_rows_init(dfb_scale_mask, dfb_fused_attn);
 #endif
 
 #ifndef NUMERIC_STABLE
@@ -251,7 +251,7 @@ void kernel_main() {
         reconfig_data_format(dfb_exps, dfb_recipsumexps);
         pack_reconfig_data_format(dfb_out0);
         dfb_recipsumexps_obj.wait_front(1);
-        mul_bcast_cols_init_short(dfb_exps, dfb_recipsumexps);
+        mul_bcast_cols_init(dfb_exps, dfb_recipsumexps);
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();

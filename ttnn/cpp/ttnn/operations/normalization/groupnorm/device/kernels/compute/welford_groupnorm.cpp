@@ -444,7 +444,7 @@ void kernel_main() {
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
-                        sub_tiles_bcast_scalar_init_short(dfb_in0_id, dfb_ex_global_id);
+                        sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
                         reconfig_data_format_srcb(dfb_eps_id, dfb_ex_global_id);
 
                         tile_regs_acquire();
@@ -458,7 +458,7 @@ void kernel_main() {
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
 
-                        mul_tiles_bcast_scalar_init_short(dfb_input_mask_id, dfb_ex2pe_id);
+                        mul_bcast_scalar_init(dfb_input_mask_id, dfb_ex2pe_id);
                         reconfig_data_format_srcb(dfb_ex_global_id, dfb_ex2pe_id);
                         tile_regs_acquire();
                         mul_tiles_bcast_scalar(dfb_input_mask_id, dfb_ex2pe_id, mask_index, g, dst0);
@@ -548,7 +548,7 @@ void kernel_main() {
                     }
 
                     if constexpr (do_gamma) {
-                        mul_bcast_rows_init_short(dfb_x_id, dfb_gamma_id);
+                        mul_bcast_rows_init(dfb_x_id, dfb_gamma_id);
                         reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
 
                         dfb_x.wait_front(1);
@@ -564,7 +564,7 @@ void kernel_main() {
                     }
 
                     if constexpr (do_beta) {
-                        add_bcast_rows_init_short(dfb_x_id, dfb_beta_id);
+                        add_bcast_rows_init(dfb_x_id, dfb_beta_id);
                         reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
 
                         dfb_x.wait_front(1);

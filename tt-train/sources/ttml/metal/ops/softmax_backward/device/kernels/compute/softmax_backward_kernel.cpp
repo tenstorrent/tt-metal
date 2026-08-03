@@ -18,9 +18,9 @@ ALWI void mul_tiles_init_with_dt(uint32_t icb0, uint32_t icb1) {
     mul_init(icb0, icb1);
 }
 
-ALWI void sub_bcast_cols_init_short_with_dt(uint32_t icb0, uint32_t icb1) {
+ALWI void sub_bcast_cols_init_with_dt(uint32_t icb0, uint32_t icb1) {
     reconfig_data_format(icb0, icb1);
-    sub_bcast_cols_init_short(icb0, icb1);
+    sub_bcast_cols_init(icb0, icb1);
 }
 
 }  // namespace ckernel
@@ -90,7 +90,7 @@ ALWI void fused_sub_mul(
     tile_regs_acquire();
 
     // Step 1: Compute grad - sum(y * grad) and store in DST[0]
-    ckernel::sub_bcast_cols_init_short_with_dt(grad_cb_id, sum_reduce_cb_id);
+    ckernel::sub_bcast_cols_init_with_dt(grad_cb_id, sum_reduce_cb_id);
     sub_tiles_bcast<BROADCAST_TYPE>(grad_cb_id, sum_reduce_cb_id, grad_tile_idx, 0, DST_REG_ID);
 
     // Step 2: Multiply y * DST[0], reusing the DST register

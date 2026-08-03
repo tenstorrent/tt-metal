@@ -145,7 +145,7 @@ void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t 
     cb_reserve_back(o, Mt * Nt);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, col);  // bcast(a,col): a->srcA, col->srcB
-    mul_bcast_cols_init_short(a, col);
+    mul_bcast_cols_init(a, col);
     for (uint32_t mi = 0; mi < Mt; mi++) {
         for (uint32_t ni = 0; ni < Nt; ni++) {
             tile_regs_acquire();
@@ -164,7 +164,7 @@ void bcast_rows_sub(uint32_t a, uint32_t row, uint32_t o, uint32_t Mt, uint32_t 
     cb_reserve_back(o, Mt * Nt);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, row);  // bcast(a,row): a->srcA, row->srcB
-    sub_bcast_rows_init_short(a, row);
+    sub_bcast_rows_init(a, row);
     for (uint32_t mi = 0; mi < Mt; mi++) {
         for (uint32_t ni = 0; ni < Nt; ni++) {
             tile_regs_acquire();
@@ -183,7 +183,7 @@ void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
     cb_reserve_back(o, n);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, scal);  // bcast(a,scal): a->srcA, scal->srcB
-    mul_tiles_bcast_scalar_init_short(a, scal);
+    mul_bcast_scalar_init(a, scal);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
         mul_tiles_bcast_scalar(a, scal, i, 0, 0);

@@ -23,13 +23,13 @@ void kernel_main() {
         tile_regs_acquire();
         dfb_in0_obj.wait_front(onetile);
         if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_short(dfb::in1, dfb::in0);
+            add_bcast_scalar_init(dfb::in1, dfb::in0);
             add_tiles_bcast_scalar(dfb::in1, dfb::in0, 0, 0, dst0);
         } else if (ht_need_bcast) {
-            add_bcast_rows_init_short(dfb::in1, dfb::in0);
+            add_bcast_rows_init(dfb::in1, dfb::in0);
             add_tiles_bcast_rows(dfb::in1, dfb::in0, 0, 0, dst0);
         } else if (wt_need_bcast) {
-            add_bcast_cols_init_short(dfb::in1, dfb::in0);
+            add_bcast_cols_init(dfb::in1, dfb::in0);
             add_tiles_bcast_cols(dfb::in1, dfb::in0, 0, 0, dst0);
         } else {
             copy_tile_to_dst_init_short(dfb::in0);

@@ -84,7 +84,7 @@ void kernel_main() {
         rotated_in_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.wait_front(Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
+        mul_bcast_rows_init(rotated_in_interm_cb, sin_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // sin_interim = rotated * sin

@@ -285,7 +285,7 @@ void kernel_main() {
     cb_reduce_scalar.wait_front(1);
 
     tile_regs_acquire();
-    sub_bcast_cols_init_short(cb_softmax_tmp_id, cb_reduce_scalar_id);
+    sub_bcast_cols_init(cb_softmax_tmp_id, cb_reduce_scalar_id);
     sub_tiles_bcast_cols(cb_softmax_tmp_id, cb_reduce_scalar_id, 0, 0, 0);
     exp_tile_init</*APPROX=*/1>();
     exp_tile</*APPROX=*/1>(0);
@@ -325,7 +325,7 @@ void kernel_main() {
     cb_final_out.reserve_back(2);
 
     tile_regs_acquire();
-    mul_bcast_cols_init_short(cb_softmax_tmp_id, cb_reduce_scalar_id);
+    mul_bcast_cols_init(cb_softmax_tmp_id, cb_reduce_scalar_id);
     mul_tiles_bcast<BroadcastType::COL>(cb_softmax_tmp_id, cb_reduce_scalar_id, 0, 0, 0);
 
     copy_tile_to_dst_init_short(cb_intermed_val_id);

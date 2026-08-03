@@ -71,7 +71,7 @@ void kernel_main() {
             reconfig_data_format(rotated_in_interm_cb_id, sin_cb_id);
             pack_reconfig_data_format(sin_interm_cb_id);
             tile_regs_acquire();
-            mul_bcast_rows_init_short(rotated_in_interm_cb_id, sin_cb_id);
+            mul_bcast_rows_init(rotated_in_interm_cb_id, sin_cb_id);
             mul_tiles_bcast_rows(rotated_in_interm_cb_id, sin_cb_id, 0, 0, 0);
             tile_regs_commit();
             tile_regs_wait();
@@ -84,7 +84,7 @@ void kernel_main() {
             reconfig_data_format(in_cb_id, cos_cb_id);
             pack_reconfig_data_format(cos_interm_cb_id);
             tile_regs_acquire();
-            mul_bcast_rows_init_short(in_cb_id, cos_cb_id);
+            mul_bcast_rows_init(in_cb_id, cos_cb_id);
             mul_tiles_bcast_rows(in_cb_id, cos_cb_id, 0, 0, 0);
             tile_regs_commit();
             tile_regs_wait();

@@ -178,7 +178,7 @@ struct GatedReduce {
 
                     tile_regs_acquire();
                     // DST[0] = silu(g1) * scale[0]
-                    deepseek_mul_tiles_bcast_scalar_init_short(args.intermed_cb, args.scalar_cb);
+                    deepseek_mul_bcast_scalar_init(args.intermed_cb, args.scalar_cb);
                     deepseek_mul_tiles_bcast_scalar(args.intermed_cb, args.scalar_cb, 0, 0, 0);
                     // DST[0] *= sum(g2)
                     deepseek_binary_dest_reuse_tiles_init(args.intermed_cb);

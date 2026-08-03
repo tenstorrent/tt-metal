@@ -127,7 +127,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 tile_regs_wait();
 
-                mul_bcast_rows_init_short(cb_in0_transposed, cb_in1_bcast_row);
+                mul_bcast_rows_init(cb_in0_transposed, cb_in1_bcast_row);
                 reconfig_data_format_srca(cb_in0_transposed);
                 pack_reconfig_data_format(cb_out_transposed);
                 mul_tiles_bcast_rows(cb_in0_transposed, cb_in1_bcast_row, 0, 0, 0);

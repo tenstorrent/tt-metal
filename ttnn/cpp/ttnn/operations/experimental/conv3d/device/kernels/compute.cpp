@@ -96,7 +96,7 @@ void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
     CircularBuffer inout_cb_obj(inout_cb);
     CircularBuffer bias_cb_obj(bias_cb);
 
-    add_bcast_rows_init_short(inout_cb, bias_cb);
+    add_bcast_rows_init(inout_cb, bias_cb);
     inout_cb_obj.wait_front(num_tiles);
     bias_cb_obj.wait_front(cols);
     for (uint32_t i = 0; i < rows; ++i) {

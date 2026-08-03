@@ -403,7 +403,7 @@ void kernel_main() {
 #endif
 
                 reconfig_data_format(cb_input, cb_max_value_after_reduction);
-                sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
+                sub_bcast_cols_init(cb_input, cb_max_value_after_reduction);
                 sub_tiles_bcast<BroadcastType::COL>(
                     cb_input,
                     cb_max_value_after_reduction,

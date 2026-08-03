@@ -221,7 +221,7 @@ void kernel_main() {
     reconfig_data_format(dfb_in0, dfb_ex_global);
     pack_reconfig_data_format(dfb_xmm);
     index_h_offset = 0;
-    sub_bcast_cols_init_short(dfb_in0, dfb_ex_global);
+    sub_bcast_cols_init(dfb_in0, dfb_ex_global);
     dfb_xmm_obj.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -254,7 +254,7 @@ void kernel_main() {
 
     // (x - Ex) * 1/[sqrt(Var + eps)]
     reconfig_data_format(dfb_xmm, dfb_ex_global);
-    mul_bcast_cols_init_short(dfb_xmm, dfb_ex_global);
+    mul_bcast_cols_init(dfb_xmm, dfb_ex_global);
     index_h_offset = 0;
     dfb_im_obj.reserve_back(num_tiles_per_block);
 #ifndef RMSNORM
@@ -292,7 +292,7 @@ void kernel_main() {
         if constexpr (do_beta == 0) {
             pack_reconfig_data_format(dfb_out);
         }
-        mul_bcast_rows_init_short(dfb_im, dfb_gamma);
+        mul_bcast_rows_init(dfb_im, dfb_gamma);
         dfb_gamma_obj.wait_front(block_w);
         index_h_offset = 0;
         dfb_outgamma_obj.reserve_back(num_tiles_per_block);
@@ -322,7 +322,7 @@ void kernel_main() {
         dfb_outgamma_obj.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_fusion, dfb_beta);
         pack_reconfig_data_format(dfb_out);
-        add_bcast_rows_init_short(dfb_fusion, dfb_beta);
+        add_bcast_rows_init(dfb_fusion, dfb_beta);
         dfb_beta_obj.wait_front(block_w);
         index_h_offset = 0;
         dfb_out_obj.reserve_back(num_tiles_per_block);

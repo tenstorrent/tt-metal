@@ -118,7 +118,7 @@ void kernel_main() {
          */
         cb_wait_front(cb_ex, 1);  // should have 1 tile
         cb_reserve_back(cb_xmm, Wt);
-        sub_bcast_cols_init_short(cb_x, cb_ex);
+        sub_bcast_cols_init(cb_x, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
@@ -212,7 +212,7 @@ void kernel_main() {
             cb_reserve_back(cb_im_or_out, blk);
 
             tile_regs_acquire();
-            mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
+            mul_bcast_cols_init(cb_xmm, cb_ex2pe);
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
                 mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
@@ -228,7 +228,7 @@ void kernel_main() {
             if (do_gamma) {
                 tile_regs_acquire();
                 uint32_t cb_outg = do_beta ? cb_fusion : tt::CBIndex::c_16;
-                mul_bcast_rows_init_short(cb_fusion, cb_gamma);
+                mul_bcast_rows_init(cb_fusion, cb_gamma);
                 cb_reserve_back(cb_outg, blk);
                 cb_wait_front(cb_gamma, wt + blk);  // we don't pop, TODO: only wait on first ht
                 cb_wait_front(cb_fusion, blk);
@@ -248,7 +248,7 @@ void kernel_main() {
             }
             if (do_beta) {
                 tile_regs_acquire();
-                add_bcast_rows_init_short(cb_fusion, cb_beta);
+                add_bcast_rows_init(cb_fusion, cb_beta);
                 cb_reserve_back(tt::CBIndex::c_16, blk);
                 cb_wait_front(cb_beta, wt + blk);  // TODO: optimization - only wait on first ht
                 cb_wait_front(cb_fusion, blk);

@@ -71,7 +71,7 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        add_bcast_rows_init_short(tt::HlkOperand::intermed0, tt::HlkOperand::in2);
+        add_bcast_rows_init(tt::HlkOperand::intermed0, tt::HlkOperand::in2);
         cb24.wait_front(out_block_tile_cnt);
         cb2.wait_front(dst_tile_cols);
         int dst_tile_index = 0;

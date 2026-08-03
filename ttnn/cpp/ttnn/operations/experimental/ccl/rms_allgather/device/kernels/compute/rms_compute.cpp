@@ -251,7 +251,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_im);
     // (x - Ex) * 1/[sqrt(Var + eps)]
     reconfig_data_format(cb_xmm, cb_ex_global);
-    mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
+    mul_bcast_cols_init(cb_xmm, cb_ex_global);
     index_h_offset = 0;
     cb_im_obj.reserve_back(num_tiles_per_block);
     index_subblock_w_offset = 0;
@@ -281,7 +281,7 @@ void kernel_main() {
 
     reconfig_data_format(cb_im, cb_gamma);
     pack_reconfig_data_format(cb_out);
-    mul_bcast_rows_init_short(cb_im, cb_gamma);
+    mul_bcast_rows_init(cb_im, cb_gamma);
     cb_gamma_obj.wait_front(block_w);
     index_h_offset = 0;
     cb_outgamma_obj.reserve_back(num_tiles_per_block);

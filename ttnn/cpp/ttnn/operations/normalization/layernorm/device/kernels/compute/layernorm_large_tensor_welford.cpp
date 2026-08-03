@@ -528,7 +528,7 @@ void kernel_main() {
             }
             tile_regs_acquire();
             reconfig_data_format(dfb_in, dfb_ex);
-            sub_bcast_cols_init_short(dfb_in, dfb_ex);
+            sub_bcast_cols_init(dfb_in, dfb_ex);
             // x-E[x]
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(dfb_in, dfb_ex, i, 0, i);
@@ -581,7 +581,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 dfb_gamma_obj.wait_front(block.full_block_size());
                 DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
-                mul_bcast_rows_init_short(dfb_xmm, dfb_gamma);
+                mul_bcast_rows_init(dfb_xmm, dfb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, i, i, i);
                 }
@@ -613,7 +613,7 @@ void kernel_main() {
                 // Add beta
                 tile_regs_acquire();
                 reconfig_data_format(dfb_xmm, dfb_beta);
-                add_bcast_rows_init_short(dfb_xmm, dfb_beta);
+                add_bcast_rows_init(dfb_xmm, dfb_beta);
                 DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
                 dfb_beta_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {

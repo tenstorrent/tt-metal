@@ -47,7 +47,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 
             tile_regs_acquire();
 #ifdef FUSE_BIAS
-            add_bcast_rows_init_short(in_cb, bias_cb);
+            add_bcast_rows_init(in_cb, bias_cb);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
 #else
@@ -109,7 +109,7 @@ void add_bias_block(
     CircularBuffer& out_cb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
-    add_bcast_rows_init_short(in_cb.get_cb_id(), bias_cb.get_cb_id());
+    add_bcast_rows_init(in_cb.get_cb_id(), bias_cb.get_cb_id());
     reconfig_data_format(in_cb.get_cb_id(), bias_cb.get_cb_id());
     pack_reconfig_data_format(out_cb.get_cb_id());
     uint32_t fused_act_dst_id = 0;
@@ -155,7 +155,7 @@ void add_bias_and_addcmul_block(
     // Read from intermediate_cb and write back to intermediate_cb
     // ============================================
 
-    add_bcast_rows_init_short(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
+    add_bcast_rows_init(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
     reconfig_data_format(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
     pack_reconfig_data_format(intermediate_cb.get_cb_id());
 
@@ -206,7 +206,7 @@ void add_bias_and_addcmul_block(
         ternary_b_cb.wait_front(N_block_tiles);
 
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_bcast_rows_init_short(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        mul_bcast_rows_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
 #else
         unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
 #endif  // TERNARY_B_IS_FLOAT32
