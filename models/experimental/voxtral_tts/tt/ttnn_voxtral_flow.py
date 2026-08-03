@@ -69,8 +69,22 @@ CFG_ALPHA = 1.2
 N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
 
+# Math fidelity for the VELOCITY NETWORK. HiFi4 + fp32 destination accumulation is the most
+# expensive setting on the part, and Block 2's solve is 48.5 ms of the 94 ms frame, so this is the
+# first lever worth pulling -- STATUS.md 7 names it and it had never been measured.
+#
+# This does NOT touch the solver arithmetic. `x` and the CFG combine stay fp32 in decode_frame,
+# deliberately: `x` accumulates n_steps increments so its error compounds, and the CFG combine is
+# a difference of two nearly-equal vectors where the small difference IS the signal (fp32 2.4e-7
+# vs bf16 7.0e-3, ~29,000x). Lowering fidelity here must never be allowed to reach those.
+#
+# VOXTRAL_FLOW_FIDELITY=hifi4|hifi2|lofi, VOXTRAL_FLOW_FP32ACC=0|1.
+_FIDELITY = {"hifi4": ttnn.MathFidelity.HiFi4, "hifi3": ttnn.MathFidelity.HiFi3,
+             "hifi2": ttnn.MathFidelity.HiFi2, "lofi": ttnn.MathFidelity.LoFi}
+_FID = _FIDELITY[os.environ.get("VOXTRAL_FLOW_FIDELITY", "hifi4")]
+_FP32ACC = os.environ.get("VOXTRAL_FLOW_FP32ACC", "1") != "0"
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,
+    math_fidelity=_FID, math_approx_mode=False, fp32_dest_acc_en=_FP32ACC,
     packer_l1_acc=True,
 )
 # Activation dtype. Every ttnn op here inherits its input's dtype, so this one constant sets all
@@ -106,10 +120,24 @@ DTYPE = ttnn.bfloat16
 USE_TRACE = os.environ.get("VOXTRAL_FLOW_TRACE", "0") == "1"
 TRACE_REGION_SIZE = 64 * 1024 * 1024
 
-# MATMUL weight storage, independent of the activation dtype (None = same as DTYPE). bfp8 here is
-# measured at 1.38x but costs accuracy, and it is NOT NEEDED: the batch fold in _trunk is worth more
-# (2.23x) and is bit-identical. Kept as a documented fallback only -- see STATUS.md before enabling.
-WEIGHT_DTYPE = None
+# MATMUL weight storage, independent of the activation dtype (None = same as DTYPE).
+#
+# BFP8 IS THE DEFAULT NOW, and this reverses an earlier conclusion. STATUS.md says bfp8 "costs
+# accuracy for less than the free fix delivers" -- but that compared bfp8 WITHOUT the batch fold
+# against bf16 WITH it. Measured with the fold in place, on top of it:
+#
+#     config                    velocity PCC   codes differ   ms/frame
+#     HiFi4 fp32acc bf16 W       0.9999949        3/222         52.46
+#     HiFi4 fp32acc BFP8 W       0.9999845        4/222         42.57   <- default
+#     HiFi2 no-fp32acc bf16 W    0.9998382       35/222         48.72
+#     LoFi  no-fp32acc bf16 W    0.9992816       62/222         48.59
+#
+# 1.23x for one extra differing code in 222. Note what the same table says about FIDELITY: HiFi2
+# and LoFi save ~4 ms and cost 10-20x the code errors, so the expensive math setting stays. Codes
+# are what reach the audio, which is why the gate is "codes differing from the reference frame"
+# and not PCC alone (STATUS.md 3.2 used the same pairing to adopt bf16).
+WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}.get(
+    os.environ.get("VOXTRAL_FLOW_WEIGHTS", "bfp8"), None)
 
 
 class TtVoxtralFlow:

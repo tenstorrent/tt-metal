@@ -129,6 +129,19 @@ _DECODE_SHARD = ttnn.create_sharded_memory_config(
 assert PREFILL_MULTIPLE % TILE == 0 and DECODE_WINDOW % TILE == 0
 assert FIXED_WINDOW % TILE == 0, f"VOXTRAL_GPT_WINDOW must be a multiple of {TILE}"
 
+# RMSNorm is 2 of the ~29 ops in a decode layer but 6 ms of Block 1's 41.5 ms/frame, because
+# passing this compute config costs 115 us against 48 us for ttnn's own default -- 2.4x, on a
+# 6 KB tensor. Whether the default is SAFE is a separate question from whether it is fast: it
+# leaves PCC essentially unchanged (0.999993 vs 0.999996 against fp64) but makes the worst single
+# element 4-8x worse (0.16 vs 0.037), which is precisely the shape of error PCC hides (trap #9).
+#
+# MEASURED AND REJECTED. At the MODEL level the cheap norm costs far more than its per-op PCC
+# suggests: decode PCC 0.99991 -> 0.992 and worst sample 1.7% -> 18.9%, for 3.5 ms/frame. A 3e-6
+# per-op difference became a 100x model-level one through 26 layers, because every layer's norm
+# feeds the next layer's residual. The fp32 accumulation in the mean-of-squares is load-bearing.
+# Kept as a flag only so the result is reproducible; do not ship it.
+_FASTNORM = os.environ.get("VOXTRAL_GPT_FASTNORM", "0") == "1"
+
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,
     packer_l1_acc=True,
@@ -154,8 +167,11 @@ DTYPE = ttnn.bfloat16
 # version of the CLI flag set only WEIGHT_DTYPE and silently ran plain bf16.
 _W = os.environ.get("VOXTRAL_GPT_WEIGHTS", "mixed")
 WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b,
-                "mixed": ttnn.bfloat16}.get(_W, None)
-FF_WEIGHT_DTYPE = ttnn.bfloat8_b if _W == "mixed" else None   # None = same as WEIGHT_DTYPE
+                "mixed": ttnn.bfloat16, "mlp": ttnn.bfloat16}.get(_W, None)
+# Which linears take BFP8 when the base is bf16. "mixed" = FF1_FF3 only (tt_transformers' set);
+# "mlp" additionally puts FF2 in BFP8, which is where the remaining weight bytes are.
+FF_WEIGHT_DTYPE = ttnn.bfloat8_b if _W in ("mixed", "mlp") else None
+FF2_WEIGHT_DTYPE = ttnn.bfloat8_b if _W == "mlp" else None
 
 
 def interleaved_to_halfsplit(t, n_heads):
@@ -226,7 +242,7 @@ class TtVoxtralGPT:
                 "wkv": lin(torch.cat([wk, w[p + "attention.wv"]], dim=0)),
                 "wo": lin(w[p + "attention.wo"]),
                 "w1": lin(w[p + "feed_forward.w1"], ffd),
-                "w2": lin(w[p + "feed_forward.w2"]),
+                "w2": lin(w[p + "feed_forward.w2"], FF2_WEIGHT_DTYPE or wd),
                 "w3": lin(w[p + "feed_forward.w3"], ffd),
             })
         self._assert_shapes()
@@ -264,9 +280,16 @@ class TtVoxtralGPT:
         return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False,
                                                      compute_kernel_config=COMPUTE_CONFIG)
 
+    def _norm(self, x, gamma):
+        """RMSNorm. See _FASTNORM for why the compute config is optional here."""
+        if _FASTNORM:
+            return ttnn.rms_norm(x, weight=gamma, epsilon=NORM_EPS)
+        return ttnn.rms_norm(x, weight=gamma, epsilon=NORM_EPS,
+                             compute_kernel_config=COMPUTE_CONFIG)
+
     def _qkv(self, x, w, S, cos, sin):
         """Pre-norm + fused QKV + RoPE. -> (q,k,v) as [1, heads, S, head_dim], v un-rotated."""
-        h = ttnn.rms_norm(x, weight=w["an"], epsilon=NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
+        h = self._norm(x, w["an"])
         q = ttnn.linear(h, w["wq"], compute_kernel_config=COMPUTE_CONFIG)
         kv = ttnn.linear(h, w["wkv"], compute_kernel_config=COMPUTE_CONFIG)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
@@ -310,7 +333,7 @@ class TtVoxtralGPT:
         `activation="silu"` on the FF1 matmul is bit-identical to a separate `ttnn.silu` and one
         dispatch cheaper.
         """
-        h = ttnn.rms_norm(x, weight=w["fn"], epsilon=NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
+        h = self._norm(x, w["fn"])
         g = ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG)
         u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG))
         return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG))
@@ -717,16 +740,17 @@ def main():
     ap.add_argument("--cases", default="0,2", help="prompt_fixture.json indices")
     ap.add_argument("--layers", type=int, default=N_LAYERS)
     ap.add_argument("--steps", type=int, default=8, help="decode steps for --gate decode")
-    ap.add_argument("--weights", default="", choices=("", "bf16", "bfp8", "mixed"),
+    ap.add_argument("--weights", default="", choices=("", "bf16", "bfp8", "mixed", "mlp"),
                     help="weight dtype override; default follows WEIGHT_DTYPE")
     args = ap.parse_args()
 
-    global WEIGHT_DTYPE, FF_WEIGHT_DTYPE
+    global WEIGHT_DTYPE, FF_WEIGHT_DTYPE, FF2_WEIGHT_DTYPE
     if args.weights:
         WEIGHT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b,
                         "mixed": ttnn.bfloat16}[args.weights]
         # "mixed" is TWO settings; forgetting the second silently runs plain bf16.
-        FF_WEIGHT_DTYPE = ttnn.bfloat8_b if args.weights == "mixed" else None
+        FF_WEIGHT_DTYPE = ttnn.bfloat8_b if args.weights in ("mixed", "mlp") else None
+        FF2_WEIGHT_DTYPE = ttnn.bfloat8_b if args.weights == "mlp" else None
 
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device
 
