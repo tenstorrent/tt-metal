@@ -468,138 +468,68 @@ void kernel_main() {
         // ---- 3. cross-column reduce + SwiGLU ----
         {
             MaybeDeviceZoneScope("compute_reduce");
-            if constexpr (SCATTER) {
-                // REDUCE-SCATTER, worker side. Every one of the KGROUPS contributors has pushed its
-                // slice of gate and up into slot `row` of my two landing CBs, so the whole reduce is
-                // `slice_tiles` wide instead of the block's full m_eff*HN_PAD — that factor IS the
-                // win, and it is why the SiLU below is one DEST window instead of m_eff of them.
-                //
-                // Contributor 0 SEEDS the accumulator with a `copy`, contributors 1..K-2 accumulate
-                // IN PLACE, and the LAST one folds in with SiLU riding the PACKER thread. The
-                // in-place `add<blk_in(acc), blk_in(in), blk_out(acc)>` is safe for the same reason
-                // the tree's is: `eltwise_chain` pops its inputs in `elem_apply_compute` and reserves
-                // the output only later in `elem_apply_pack`, so a `slice_pages`-deep accumulator
-                // recycles its own pages in ring order. What is NOT safe — and what hung round 1 of
-                // this experiment — is letting a SECOND RISC-V push the same CB: `cb_push_back`
-                // overwrites the shared `tiles_received` word with the PUSHING RISC-V's own local
-                // count, so PACK is the ONLY pusher of cb_slice_gate/cb_slice_up here, and the
-                // dataflow kernels are the only pusher of the landing CBs.
-                if (slice_tiles) {
-                    // KGROUPS-1 contributors fold here; the last one rides the SiLU-fused add below.
-                    fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, slice_tiles);
-                    // The final gate add, with SiLU on the packer thread. A slice is at most one DEST
-                    // window, so the root's m_eff-call bias walk (the helper's bias index does not
-                    // advance with in0_subblock, bias_add_helpers.inl:141) collapses to ONE call FOR
-                    // FREE — that collapse is a large part of the measured win, not a side effect.
-                    gg_buf.wait_front(slice_tiles);
-                    for (uint32_t t0 = 0; t0 < slice_tiles; t0 += DEST_LIMIT) {
-                        uint32_t w = slice_tiles - t0;
-                        if (w > DEST_LIMIT) {
-                            w = DEST_LIMIT;
-                        }
-                        add_bias_bcast_rows<
-                            BiasBroadcast::Elementwise,
-                            OutputCBLayout::SubblockMajor,
-                            bias_add_config::NoPostBias,
-                            SiluActivation>(sg_buf, gg_buf, silu_buf, BiasAddShape::of(1, 1, 1, w), {}, t0);
+            // REDUCE-SCATTER, worker side. Every one of the KGROUPS contributors has pushed its
+            // slice of gate and up into slot `row` of my two landing CBs, so the whole reduce is
+            // `slice_tiles` wide instead of the block's full m_eff*HN_PAD — that factor IS the
+            // win, and it is why the SiLU below is one DEST window instead of m_eff of them.
+            //
+            // Contributor 0 SEEDS the accumulator with a `copy`, contributors 1..K-2 accumulate
+            // IN PLACE, and the LAST one folds in with SiLU riding the PACKER thread. The
+            // in-place `add<blk_in(acc), blk_in(in), blk_out(acc)>` is safe for the same reason
+            // the tree's is: `eltwise_chain` pops its inputs in `elem_apply_compute` and reserves
+            // the output only later in `elem_apply_pack`, so a `slice_pages`-deep accumulator
+            // recycles its own pages in ring order. What is NOT safe — and what hung round 1 of
+            // this experiment — is letting a SECOND RISC-V push the same CB: `cb_push_back`
+            // overwrites the shared `tiles_received` word with the PUSHING RISC-V's own local
+            // count, so PACK is the ONLY pusher of cb_slice_gate/cb_slice_up here, and the
+            // dataflow kernels are the only pusher of the landing CBs.
+            if (slice_tiles) {
+                // KGROUPS-1 contributors fold here; the last one rides the SiLU-fused add below.
+                fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, slice_tiles);
+                // The final gate add, with SiLU on the packer thread. A slice is at most one DEST
+                // window, so the root's m_eff-call bias walk (the helper's bias index does not
+                // advance with in0_subblock, bias_add_helpers.inl:141) collapses to ONE call FOR
+                // FREE — that collapse is a large part of the measured win, not a side effect.
+                gg_buf.wait_front(slice_tiles);
+                for (uint32_t t0 = 0; t0 < slice_tiles; t0 += DEST_LIMIT) {
+                    uint32_t w = slice_tiles - t0;
+                    if (w > DEST_LIMIT) {
+                        w = DEST_LIMIT;
                     }
-                    gg_buf.pop_front(slice_tiles);
-
-                    fold_chain<cb_slice_up, cb_gather_up>(KGROUPS, slice_tiles);
-
-                    // Drain the landing CBs' padding tail so the pop total equals the reader's
-                    // WHOLE-CB push. That is not tidiness: the whole-CB push is what returns the
-                    // landing write pointer to the CB base on EVERY core every M-block, which is the
-                    // contract the contributors' own-write-pointer address proxy stands on.
-                    constexpr uint32_t CAP = GATHER_PAGES;
-                    const uint32_t live = KGROUPS * slice_tiles;
-                    if (CAP > live) {
-                        gg_buf.pop_front(CAP - live);
-                        gu_buf.pop_front(CAP - live);
-                    }
+                    add_bias_bcast_rows<
+                        BiasBroadcast::Elementwise,
+                        OutputCBLayout::SubblockMajor,
+                        bias_add_config::NoPostBias,
+                        SiluActivation>(sg_buf, gg_buf, silu_buf, BiasAddShape::of(1, 1, 1, w), {}, t0);
                 }
-            } else {
-                // THE TREE. Walk the reader's invite WAVES (Refinement 2 lever 1): the reader reserves
-                // and pushes the WHOLE CB — REDUCE_SLOTS slots — per wave, so this side consumes
-                // exactly that much per wave, adding the `wave` slots that carry a child and draining
-                // the rest.
-                for (uint32_t c0 = 0; c0 < num_children; c0 += REDUCE_SLOTS) {
-                    uint32_t wave = num_children - c0;
-                    if (wave > REDUCE_SLOTS) {
-                        wave = REDUCE_SLOTS;
-                    }
-                    for (uint32_t c = c0; c < c0 + wave; ++c) {
-                        const bool final_child = (c + 1 == num_children);
-                        if (is_root && final_child) {
-                            // Root's last gate add: SiLU is fused on the PACKER thread, so the
-                            // activation overlaps the math thread instead of costing a separate SFPU
-                            // pass.
-                            //
-                            // One call per token tile-row: the helper's bias index does not advance
-                            // with in0_subblock (bias_add_helpers.inl:141), so an Elementwise bias
-                            // spanning M_BLOCK tile-rows is walked with bias_offset instead, one M-row
-                            // per call. The slot arrives WHOLE (see REDUCE_SLOT_TILES) but only its
-                            // first m_eff tile-rows carry live tokens, so the bias walk stops at m_eff
-                            // and the tail is dropped. THIS is the m_eff-call walk the scatter path
-                            // above collapses to one call, and it is ~85 % of this stage's cost.
-                            rg_buf.wait_front(REDUCE_SLOT_TILES);
-                            for (uint32_t m = 0; m < m_eff; ++m) {
-                                add_bias_bcast_rows<
-                                    BiasBroadcast::Elementwise,
-                                    OutputCBLayout::SubblockMajor,
-                                    bias_add_config::NoPostBias,
-                                    SiluActivation>(
-                                    gate_buf,
-                                    rg_buf,
-                                    silu_buf,
-                                    BiasAddShape::of(1, 1, OUT_SUBBLOCK_H_GU, HN_PAD),
-                                    {},
-                                    m * HN_PAD);
-                            }
-                            rg_buf.pop_front(REDUCE_SLOT_TILES);
-                        } else {
-                            add<blk_in(cb_gate_acc), blk_in(cb_reduce_gate_in), blk_out(cb_gate_acc)>(
-                                blk_shape(gu_block_tiles));
-                            if (gu_block_tiles < REDUCE_SLOT_TILES) {
-                                rg_buf.pop_front(REDUCE_SLOT_TILES - gu_block_tiles);
-                            }
-                        }
-                        add<blk_in(cb_up_acc), blk_in(cb_reduce_up_in), blk_out(cb_up_acc)>(blk_shape(gu_block_tiles));
-                        if (gu_block_tiles < REDUCE_SLOT_TILES) {
-                            ru_buf.pop_front(REDUCE_SLOT_TILES - gu_block_tiles);
-                        }
-                    }
-                    // Drain the slots of this wave that carried no child, so the pop total matches the
-                    // reader's whole-CB push and the write pointer stays block-aligned on every core.
-                    if (wave < REDUCE_SLOTS) {
-                        const uint32_t idle = (REDUCE_SLOTS - wave) * REDUCE_SLOT_TILES;
-                        rg_buf.pop_front(idle);
-                        ru_buf.pop_front(idle);
-                    }
+                gg_buf.pop_front(slice_tiles);
+
+                fold_chain<cb_slice_up, cb_gather_up>(KGROUPS, slice_tiles);
+
+                // Drain the landing CBs' padding tail so the pop total equals the reader's
+                // WHOLE-CB push. That is not tidiness: the whole-CB push is what returns the
+                // landing write pointer to the CB base on EVERY core every M-block, which is the
+                // contract the contributors' own-write-pointer address proxy stands on.
+                constexpr uint32_t CAP = GATHER_PAGES;
+                const uint32_t live = KGROUPS * slice_tiles;
+                if (CAP > live) {
+                    gg_buf.pop_front(CAP - live);
+                    gu_buf.pop_front(CAP - live);
                 }
             }
         }
 
         {
             MaybeDeviceZoneScope("compute_swiglu");
-            if constexpr (SCATTER) {
-                // The SwiGLU multiply on MY SLICE ONLY, straight into the CB the writer unicasts out
-                // of. Nothing here assembles the column's h block: the workers' finished slices tile
-                // the ROOT's cb_h_local as they LAND, so the gather IS the assembly — no landing CB
-                // and no root-side copy (measured worth 8.6 % and 52 224 B/core against the version
-                // that lands them separately and copies).
-                if (slice_tiles) {
-                    // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
-                    // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
-                    mul<blk_in(cb_gate_silu), blk_in(cb_slice_up), blk_out(cb_h_slice)>(blk_shape(slice_tiles));
-                }
-            } else if (is_root) {
-                // FPU multiply through L1 (deliberately not SFPU and not DEST-reuse — the L1
-                // round-trip measured faster for an FPU consumer, examples/compute_fusion).
-                mul<blk_in(cb_gate_silu), blk_in(cb_up_acc), blk_out(cb_h_local)>(blk_shape(gu_block_tiles));
-            } else {
-                copy<blk_in(cb_gate_acc), blk_out(cb_gate_send)>(blk_shape(gu_block_tiles));
-                copy<blk_in(cb_up_acc), blk_out(cb_up_send)>(blk_shape(gu_block_tiles));
+            // The SwiGLU multiply on MY SLICE ONLY, straight into the CB the writer unicasts out
+            // of. Nothing here assembles the column's h block: the workers' finished slices tile
+            // the ROOT's cb_h_local as they LAND, so the gather IS the assembly — no landing CB
+            // and no root-side copy (measured worth 8.6 % and 52 224 B/core against the version
+            // that lands them separately and copies).
+            if (slice_tiles) {
+                // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
+                // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
+                mul<blk_in(cb_gate_silu), blk_in(cb_slice_up), blk_out(cb_h_slice)>(blk_shape(slice_tiles));
             }
         }
 

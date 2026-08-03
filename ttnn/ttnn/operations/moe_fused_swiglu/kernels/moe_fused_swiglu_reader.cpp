@@ -238,9 +238,9 @@ constexpr auto idx_args = TensorAccessorArgs<cnt_args.next_compile_time_args_off
 // the pre-WSHARD path); everything else stays on the interleaved binding. The widths arrive as
 // DEFINES rather than compile-time args so the CT_XMCAST / TA_BASE offset arithmetic above is
 // untouched.
-using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
-using BRG = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WG_SHARD_W>;  // W_gate
-using BRD = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WD_SHARD_W>;  // W_down
+using BR = moe_fused_swiglu::WeightRuns<>;
+using BRG = moe_fused_swiglu::WeightRuns<WG_SHARD_W>;  // W_gate
+using BRD = moe_fused_swiglu::WeightRuns<WD_SHARD_W>;  // W_down
 
 // The W_down NoC split: WD_SPLIT eighths of every phase-2 K-block's hidden rows are read by the
 // WRITER on NOC_1; this kernel keeps the head rows. The writer takes the TAIL rows so both sides
@@ -351,9 +351,6 @@ void kernel_main() {
     (void)h_arrivals;
 #endif
 
-    constexpr uint32_t SLOTS_H = REMAP ? (HID_T / NUM_BANKS) : HID_T;
-    constexpr uint32_t SLOTS_E = REMAP ? (EMB_T / NUM_BANKS) : EMB_T;
-
     constexpr uint32_t WG_BLOCK_TILES = KR_PAD * HN_PAD;      // one gate weight K-block (num_k_blocks == 1)
     // PERF 3 — the N-chunk the weight stream is published in. GU_CHUNKS == 1 restores the whole-block
     // push byte for byte (the chunk IS the block, and its row stride is HN_PAD again).
@@ -437,7 +434,6 @@ void kernel_main() {
                         (kstart + k) * HID_T,
                         hstart + h0,
                         hstart + h0 + w,
-                        SLOTS_H,
                         wg_wp + k * GU_CHUNK_W * BFP4_TILE,
                         BFP4_TILE);
                 }
@@ -654,10 +650,9 @@ void kernel_main() {
                         // the row index goes through the same remap as the N axis.
                         BRD::read(
                             wd_acc,
-                            BRG::remap(hbase + k, SLOTS_H) * EMB_T,
+                            (hbase + k) * EMB_T,
                             jstart,
                             jstart + ec,
-                            SLOTS_E,
                             wp + (r * WD_BLOCK_TILES + k * EC_MAX) * BFP4_TILE,
                             BFP4_TILE);
                     }
@@ -694,97 +689,73 @@ void kernel_main() {
         const uint32_t sl_w = (SCATTER != 0) ? moe_fused_swiglu::slice_workers(h_block_tiles, KGROUPS) : 0;
         const uint32_t sl_a = (sl_w != 0) ? (h_block_tiles / sl_w) : 0;  // uniform slice size
         const uint32_t slice_tiles = (my_row < sl_w) ? sl_a : 0;         // 0 = an idle core
-        if constexpr (SCATTER) {
-            MaybeDeviceZoneScope("reader_reduce");
-            // RECEIVER side of the reduce-scatter. Reserve the landing CBs WHOLE first (so every
-            // contributor's own-write-pointer proxy is the CB base on every core, at every m_eff),
-            // then invite the WHOLE COLUMN — the generalisation of the tree's parent-invites-child
-            // SEM_GO, and the flow control that keeps M-block b+1's contribution from overwriting a
-            // slot compute has not consumed. Then wait for every contributor and push WHOLE.
-            //
-            // This is ALSO the flow control for cb_h_local: my invite for block b+1 is issued here,
-            // strictly after my phase 2 of block b has read (and barriered) cb_h_local, and no
-            // worker's h-slice send for b+1 can precede this invite (its epilogue is downstream of
-            // the gather, which is downstream of every core's invite). So the h landing needs no
-            // second handshake.
-            if (slice_tiles) {
-                cb_reserve_back(cb_gather_gate, GATHER_PAGES);
-                cb_reserve_back(cb_gather_up, GATHER_PAGES);
-            }
+        MaybeDeviceZoneScope("reader_reduce");
+        // RECEIVER side of the reduce-scatter. Reserve the landing CBs WHOLE first (so every
+        // contributor's own-write-pointer proxy is the CB base on every core, at every m_eff),
+        // then invite the WHOLE COLUMN — the generalisation of the tree's parent-invites-child
+        // SEM_GO, and the flow control that keeps M-block b+1's contribution from overwriting a
+        // slot compute has not consumed. Then wait for every contributor and push WHOLE.
+        //
+        // This is ALSO the flow control for cb_h_local: my invite for block b+1 is issued here,
+        // strictly after my phase 2 of block b has read (and barriered) cb_h_local, and no
+        // worker's h-slice send for b+1 can precede this invite (its epilogue is downstream of
+        // the gather, which is downstream of every core's invite). So the h landing needs no
+        // second handshake.
+        if (slice_tiles) {
+            cb_reserve_back(cb_gather_gate, GATHER_PAGES);
+            cb_reserve_back(cb_gather_up, GATHER_PAGES);
+        }
 #ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
-            const uint32_t sem_go = static_cast<uint32_t>(get_semaphore(SEM_GO));
-            for (uint32_t i = 0; i < KGROUPS; ++i) {
-                const uint32_t p = i;
-                const uint32_t px = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 0);
-                const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 1);
-                noc_semaphore_inc(get_noc_addr(px, py, sem_go), 1);
+        const uint32_t sem_go = static_cast<uint32_t>(get_semaphore(SEM_GO));
+        for (uint32_t i = 0; i < KGROUPS; ++i) {
+            const uint32_t p = i;
+            const uint32_t px = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 0);
+            const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 1);
+            noc_semaphore_inc(get_noc_addr(px, py, sem_go), 1);
+        }
+        noc_async_atomic_barrier();
+#endif
+        // The UP half of the gather, when MOE_SWIGLU_SCATTER_NOC=split puts it on NOC_0. The
+        // GATE half stays on the writer's NOC_1; each RISC-V owns one accumulator CB outright.
+        if constexpr (SCATTER_NOC_SPLIT) {
+            const uint32_t up_bytes = sl_a * BFP8_TILE;
+            cb_wait_front(cb_up_acc, h_block_tiles);
+#ifndef ABLATE_NO_REDUCE_XFER
+            // Wait for the WHOLE column's invites before writing, exactly as the writer does:
+            // every core invites once per peer per M-block, so (b+1)*KGROUPS is the exact total.
+            volatile tt_l1_ptr uint32_t* go_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
+            noc_semaphore_wait_min(go_ptr, (b + 1) * KGROUPS);
+            const uint32_t usrc = get_read_ptr(cb_up_acc);
+            const uint32_t udst = get_write_ptr(cb_gather_up);
+            const uint32_t slot_bytes = my_row * up_bytes;
+            const uint32_t sem_data_id = static_cast<uint32_t>(get_semaphore(SEM_DATA));
+            for (uint32_t i = 0; i < sl_w; ++i) {
+                const uint32_t w = i;  // §14.2 rotation
+                const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
+                const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
+                noc_async_write(usrc + w * up_bytes, get_noc_addr(vx, vy, udst + slot_bytes), up_bytes);
+            }
+            noc_async_write_barrier();
+            for (uint32_t i = 0; i < sl_w; ++i) {
+                const uint32_t w = i;  // §14.2 rotation
+                const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
+                const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
+                noc_semaphore_inc(get_noc_addr(vx, vy, sem_data_id), 1);
             }
             noc_async_atomic_barrier();
 #endif
-            // The UP half of the gather, when MOE_SWIGLU_SCATTER_NOC=split puts it on NOC_0. The
-            // GATE half stays on the writer's NOC_1; each RISC-V owns one accumulator CB outright.
-            if constexpr (SCATTER_NOC_SPLIT) {
-                const uint32_t up_bytes = sl_a * BFP8_TILE;
-                cb_wait_front(cb_up_acc, h_block_tiles);
+            cb_pop_front(cb_up_acc, h_block_tiles);
+        }
+        if (slice_tiles) {
 #ifndef ABLATE_NO_REDUCE_XFER
-                // Wait for the WHOLE column's invites before writing, exactly as the writer does:
-                // every core invites once per peer per M-block, so (b+1)*KGROUPS is the exact total.
-                volatile tt_l1_ptr uint32_t* go_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
-                noc_semaphore_wait_min(go_ptr, (b + 1) * KGROUPS);
-                const uint32_t usrc = get_read_ptr(cb_up_acc);
-                const uint32_t udst = get_write_ptr(cb_gather_up);
-                const uint32_t slot_bytes = my_row * up_bytes;
-                const uint32_t sem_data_id = static_cast<uint32_t>(get_semaphore(SEM_DATA));
-                for (uint32_t i = 0; i < sl_w; ++i) {
-                    const uint32_t w = i;  // §14.2 rotation
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                    noc_async_write(usrc + w * up_bytes, get_noc_addr(vx, vy, udst + slot_bytes), up_bytes);
-                }
-                noc_async_write_barrier();
-                for (uint32_t i = 0; i < sl_w; ++i) {
-                    const uint32_t w = i;  // §14.2 rotation
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                    noc_semaphore_inc(get_noc_addr(vx, vy, sem_data_id), 1);
-                }
-                noc_async_atomic_barrier();
+            // One signal per contributor per payload: KGROUPS under the single-NoC shape, 2 x
+            // KGROUPS when the up half is split off, so the total is what says "everything landed".
+            data_arrivals += KGROUPS * (SCATTER_NOC_SPLIT ? 2 : 1);
+            noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
 #endif
-                cb_pop_front(cb_up_acc, h_block_tiles);
-            }
-            if (slice_tiles) {
-#ifndef ABLATE_NO_REDUCE_XFER
-                // One signal per contributor per payload: KGROUPS under the single-NoC shape, 2 x
-                // KGROUPS when the up half is split off, so the total is what says "everything landed".
-                data_arrivals += KGROUPS * (SCATTER_NOC_SPLIT ? 2 : 1);
-                noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
-#endif
-                cb_push_back(cb_gather_gate, GATHER_PAGES);
-                cb_push_back(cb_gather_up, GATHER_PAGES);
-            }
-        } else {
-            MaybeDeviceZoneScope("reader_reduce");
-            // THE TREE, PARENT SIDE — the invite waves described above.
-            for (uint32_t c0 = 0; c0 < num_children; c0 += REDUCE_SLOTS) {
-                uint32_t wave = num_children - c0;
-                if (wave > REDUCE_SLOTS) {
-                    wave = REDUCE_SLOTS;
-                }
-                cb_reserve_back(cb_reduce_gate_in, REDUCE_CB_TILES);
-                cb_reserve_back(cb_reduce_up_in, REDUCE_CB_TILES);
-#ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop invite + data wait, keep the CB cycle
-                for (uint32_t c = c0; c < c0 + wave; ++c) {
-                    const uint32_t cx = get_arg_val<uint32_t>(RT_CHILDREN + 2 * c + 0);
-                    const uint32_t cy = get_arg_val<uint32_t>(RT_CHILDREN + 2 * c + 1);
-                    noc_semaphore_inc(get_noc_addr(cx, cy, static_cast<uint32_t>(get_semaphore(SEM_GO))), 1);
-                }
-                data_arrivals += wave;
-                noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
-#endif
-                cb_push_back(cb_reduce_gate_in, REDUCE_CB_TILES);
-                cb_push_back(cb_reduce_up_in, REDUCE_CB_TILES);
-            }
+            cb_push_back(cb_gather_gate, GATHER_PAGES);
+            cb_push_back(cb_gather_up, GATHER_PAGES);
         }
 
         // -------------------------------------------------------------------
@@ -927,20 +898,15 @@ void kernel_main() {
                     // a fixed input still varied 0.959-0.979 run to run on BOTH activation formats (the
                     // bfp8 path has no x loopback, so this send was the only remaining suspect); with
                     // both fixed it is bit-stable. Same NoC bytes, one fewer mcast destination.
-                    if constexpr (SCATTER) {
-                        // The workers' finished slices already TILE cb_h_local (each wrote
-                        // `[row*sl_a, (row+1)*sl_a)` of the block), so nothing on the compute thread
-                        // produces it: no push, no pop, no CB front. That is exactly why the write
-                        // pointer is the CB base on every core every M-block, which is what let the
-                        // workers use their OWN pointer as this core's landing address.
+                    // The workers' finished slices already TILE cb_h_local (each wrote
+                    // `[row*sl_a, (row+1)*sl_a)` of the block), so nothing on the compute thread
+                    // produces it: no push, no pop, no CB front. That is exactly why the write
+                    // pointer is the CB base on every core every M-block, which is what let the
+                    // workers use their OWN pointer as this core's landing address.
 #ifndef ABLATE_NO_REDUCE_XFER  // the workers' sends are stubbed too, so this wait must go with them
-                        noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
+                    noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
 #endif
-                        noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, h_block_tiles * H_TILE);
-                    } else {
-                        cb_wait_front(cb_h_local, h_block_tiles);
-                        noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * H_TILE);
-                    }
+                    noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, h_block_tiles * H_TILE);
                 }
 
                 if (i_send) {
@@ -1086,10 +1052,9 @@ void kernel_main() {
                         for (uint32_t k = 0; k < hn_r - wd_rows_writer(hn_r); ++k) {
                             BRD::read(
                                 wd_acc,
-                                BRG::remap(hbase + k, SLOTS_H) * EMB_T,
+                                (hbase + k) * EMB_T,
                                 jstart,
                                 jstart + ec,
-                                SLOTS_E,
                                 wp + k * EC_MAX * BFP4_TILE,
                                 BFP4_TILE);
                         }

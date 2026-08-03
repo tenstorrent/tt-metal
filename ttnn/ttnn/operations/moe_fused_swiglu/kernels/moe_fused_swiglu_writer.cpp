@@ -102,14 +102,14 @@ constexpr auto wd_args = TensorAccessorArgs<out_args.next_compile_time_args_offs
 constexpr uint32_t cb_w_down = CB_W_DOWN_ID;
 constexpr uint32_t WD_BLOCK_TILES = HN_PAD * EC_MAX;  // the reader's twin — one phase-2 K-block
 // The W_down stream takes its OWN tensor's DRAM ND shard width, exactly as the reader's `BRD` does.
-using BRD = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WD_SHARD_W>;
+using BRD = moe_fused_swiglu::WeightRuns<WD_SHARD_W>;
 
 // Bank-run coalescing (see moe_fused_swiglu_bank_runs.hpp): ONE definition, bound here to this
 // kernel's compile-time knobs — identical to the reader's binding, which is the point.
-using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
+using BR = moe_fused_swiglu::WeightRuns<>;
 // The W_up stream takes its tensor's DRAM ND shard width (0 = interleaved, byte-identical to the
 // pre-WSHARD path). The OUTPUT write-back keeps `BR`: the output is always DRAM interleaved.
-using BRG = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN, WG_SHARD_W>;
+using BRG = moe_fused_swiglu::WeightRuns<WG_SHARD_W>;
 
 // PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off (see the reader's note
 // and the durability contract in `perf_instrumentation.hpp`). 5 records per M-block on either path:
@@ -174,9 +174,6 @@ void kernel_main() {
     (void)my_slot;
     (void)root_row;
 #endif
-
-    constexpr uint32_t SLOTS_H = REMAP ? (HID_T / NUM_BANKS) : HID_T;
-    constexpr uint32_t SLOTS_E = REMAP ? (EMB_T / NUM_BANKS) : EMB_T;
     constexpr uint32_t WU_BLOCK_TILES = KR_PAD * HN_PAD;
     // PERF 3 — the N-chunk the weight stream is published in (reader's twin). 1 == the whole block.
     constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
@@ -239,7 +236,6 @@ void kernel_main() {
                             (kstart + k) * HID_T,
                             hstart + h0,
                             hstart + h0 + w,
-                            SLOTS_H,
                             wp + k * GU_CHUNK_W * BFP4_TILE,
                             BFP4_TILE);
                     }
@@ -292,10 +288,9 @@ void kernel_main() {
                     // same remap as the N axis — identical expression to the reader's.
                     BRD::read(
                         wd_acc,
-                        BRG::remap(hbase + k, SLOTS_H) * EMB_T,
+                        (hbase + k) * EMB_T,
                         jstart,
                         jstart + ec,
-                        SLOTS_E,
                         wd_base + (r * WD_BLOCK_TILES + k * EC_MAX) * BFP4_TILE,
                         BFP4_TILE);
                 }
@@ -312,120 +307,91 @@ void kernel_main() {
         issue_wd_share();
 
         // ---- PERF 2: REDUCE-SCATTER, contributor side + the finished-slice scatter ----
-        if constexpr (SCATTER) {
-            // The ONE shared slice plan (moe_fused_swiglu_common.hpp), from the SAME (m_eff, KGROUPS)
-            // compute and the reader use. `sl_w` workers own `sl_a` tiles each; rows >= sl_w are idle
-            // for the reduce but still CONTRIBUTE, which is why the send loop below is unconditional.
-            const uint32_t sl_w = moe_fused_swiglu::slice_workers(gu_block_tiles, KGROUPS);
-            const uint32_t sl_a = gu_block_tiles / sl_w;
-            const uint32_t slice_bytes = sl_a * H_TILE;
-            {
-                MaybeDeviceZoneScope("writer_scatter");
+        // ---- REDUCE-SCATTER: contributor side + the finished-slice scatter ----
+        // The ONE shared slice plan (moe_fused_swiglu_common.hpp), from the SAME (m_eff, KGROUPS)
+        // compute and the reader use. `sl_w` workers own `sl_a` tiles each; rows >= sl_w are idle
+        // for the reduce but still CONTRIBUTE, which is why the send loop below is unconditional.
+        const uint32_t sl_w = moe_fused_swiglu::slice_workers(gu_block_tiles, KGROUPS);
+        const uint32_t sl_a = gu_block_tiles / sl_w;
+        const uint32_t slice_bytes = sl_a * H_TILE;
+        {
+            MaybeDeviceZoneScope("writer_scatter");
 #ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
-                // KGROUPS invites per M-block is the generalisation of the tree's one-parent SEM_GO:
-                // every peer's reader reserves its landing CBs and THEN invites the whole column, so
-                // this wait is what stops block b+1's contribution from overwriting a landing slot
-                // compute has not consumed yet. MONOTONE, never reset — the running total only grows.
-                noc_semaphore_wait_min(sem_go_ptr, invites + KGROUPS);
+            // KGROUPS invites per M-block is the generalisation of the tree's one-parent SEM_GO:
+            // every peer's reader reserves its landing CBs and THEN invites the whole column, so
+            // this wait is what stops block b+1's contribution from overwriting a landing slot
+            // compute has not consumed yet. MONOTONE, never reset — the running total only grows.
+            noc_semaphore_wait_min(sem_go_ptr, invites + KGROUPS);
 #endif
-                invites += KGROUPS;
-                cb_wait_front(cb_gate_acc, gu_block_tiles);
-                if constexpr (SCATTER_NOC_SPLIT == 0) {
-                    cb_wait_front(cb_up_acc, gu_block_tiles);
-                }
+            invites += KGROUPS;
+            cb_wait_front(cb_gate_acc, gu_block_tiles);
+            if constexpr (SCATTER_NOC_SPLIT == 0) {
+                cb_wait_front(cb_up_acc, gu_block_tiles);
+            }
 #ifndef ABLATE_NO_REDUCE_XFER
-                const uint32_t gsrc = get_read_ptr(cb_gate_acc);
-                // LANDING ADDRESS = MY OWN write pointer + MY slot. Every core has the identical CB
-                // layout and the landing CBs are pushed WHOLE every M-block, so my write pointer is
-                // the CB base on the destination too — the same address proxy the tree edge uses,
-                // with KGROUPS disjoint slots instead of one parent's slot.
-                const uint32_t gdst = get_write_ptr(cb_gather_gate);
-                const uint32_t slot_bytes = my_row * slice_bytes;
+            const uint32_t gsrc = get_read_ptr(cb_gate_acc);
+            // LANDING ADDRESS = MY OWN write pointer + MY slot. Every core has the identical CB
+            // layout and the landing CBs are pushed WHOLE every M-block, so my write pointer is
+            // the CB base on the destination too — the same address proxy the tree edge uses,
+            // with KGROUPS disjoint slots instead of one parent's slot.
+            const uint32_t gdst = get_write_ptr(cb_gather_gate);
+            const uint32_t slot_bytes = my_row * slice_bytes;
+            for (uint32_t i = 0; i < sl_w; ++i) {
+                const uint32_t w = i;
+                const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
+                const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
+                // ONE coalesced transaction per leg: worker `w` owns the CONTIGUOUS tile range
+                // [w*sl_a, (w+1)*sl_a) because the gate/up block layout is `m*HN_PAD + n`
+                // (OUT_SUBBLOCK_H_GU == 1, SubblockMajor). A token-axis slice would be strided.
+                noc_async_write(gsrc + w * slice_bytes, get_noc_addr(vx, vy, gdst + slot_bytes), slice_bytes);
+            }
+            if constexpr (SCATTER_NOC_SPLIT == 0) {
+                const uint32_t usrc = get_read_ptr(cb_up_acc);
+                const uint32_t udst = get_write_ptr(cb_gather_up);
                 for (uint32_t i = 0; i < sl_w; ++i) {
                     const uint32_t w = i;
                     const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
                     const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                    // ONE coalesced transaction per leg: worker `w` owns the CONTIGUOUS tile range
-                    // [w*sl_a, (w+1)*sl_a) because the gate/up block layout is `m*HN_PAD + n`
-                    // (OUT_SUBBLOCK_H_GU == 1, SubblockMajor). A token-axis slice would be strided.
-                    noc_async_write(gsrc + w * slice_bytes, get_noc_addr(vx, vy, gdst + slot_bytes), slice_bytes);
-                }
-                if constexpr (SCATTER_NOC_SPLIT == 0) {
-                    const uint32_t usrc = get_read_ptr(cb_up_acc);
-                    const uint32_t udst = get_write_ptr(cb_gather_up);
-                    for (uint32_t i = 0; i < sl_w; ++i) {
-                        const uint32_t w = i;
-                        const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
-                        const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                        noc_async_write(usrc + w * slice_bytes, get_noc_addr(vx, vy, udst + slot_bytes), slice_bytes);
-                    }
-                }
-                noc_async_write_barrier();
-                const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
-                for (uint32_t i = 0; i < sl_w; ++i) {
-                    const uint32_t w = i;
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
-                    noc_semaphore_inc(get_noc_addr(vx, vy, sem_data), 1);
-                }
-                noc_async_atomic_barrier();
-#endif
-                cb_pop_front(cb_gate_acc, gu_block_tiles);
-                if constexpr (SCATTER_NOC_SPLIT == 0) {
-                    cb_pop_front(cb_up_acc, gu_block_tiles);
+                    noc_async_write(usrc + w * slice_bytes, get_noc_addr(vx, vy, udst + slot_bytes), slice_bytes);
                 }
             }
-            // ---- my finished h slice, straight into the ROOT's cb_h_local at its tile offset ----
-            // The gather IS the assembly. cb_h_local is never pushed or popped on this path, so its
-            // write pointer is the CB base on every core for every M-block — which is what lets this
-            // core use its OWN pointer as the root's. Flow control across M-blocks is the invite
-            // above, transitively: my send here is downstream of the gather, the gather is downstream
-            // of the ROOT's invite for this block, and the root only invites after its phase 2 of the
-            // PREVIOUS block has read cb_h_local (and barriered).
-            if (my_row < sl_w) {
-                MaybeDeviceZoneScope("writer_hslice");
-                cb_wait_front(cb_h_slice, sl_a);
-#ifndef ABLATE_NO_REDUCE_XFER
-                const uint32_t rvx = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 0);
-                const uint32_t rvy = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 1);
-                noc_async_write(
-                    get_read_ptr(cb_h_slice),
-                    get_noc_addr(rvx, rvy, get_write_ptr(cb_h_local) + my_row * slice_bytes),
-                    slice_bytes);
-                noc_async_write_barrier();
-                noc_semaphore_inc(get_noc_addr(rvx, rvy, static_cast<uint32_t>(get_semaphore(SEM_HSLICE))), 1);
-                noc_async_atomic_barrier();
-#endif
-                cb_pop_front(cb_h_slice, sl_a);
-            }
-
-        } else if (!is_root) {
-            // ---- reduce tree, CHILD side ----
-            MaybeDeviceZoneScope("writer_reduce_child");
-            cb_wait_front(cb_gate_send, gu_block_tiles);
-            cb_wait_front(cb_up_send, gu_block_tiles);
-#ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the tree edge, keep the CB cycle
-            // The parent invites us once per M-block; SEM_GO is monotone so no reset is needed.
-            noc_semaphore_wait_min(sem_go_ptr, ++invites);
-            // Every core has the identical CB layout and cb_reduce_*_in is pushed WHOLE (so its
-            // write pointer is always the CB base on every core), so our own write pointer + our
-            // slot stride IS the parent's landing address — no address negotiation. Only the m_eff
-            // live tile-rows are shipped; the tail of the slot belongs to undefined token rows and
-            // the parent drops it.
-            const uint32_t slot_bytes = my_slot * SLOT_TILES * H_TILE;
-            noc_async_write(
-                get_read_ptr(cb_gate_send),
-                get_noc_addr(parent_x, parent_y, get_write_ptr(cb_reduce_gate_in) + slot_bytes),
-                gu_block_tiles * H_TILE);
-            noc_async_write(
-                get_read_ptr(cb_up_send),
-                get_noc_addr(parent_x, parent_y, get_write_ptr(cb_reduce_up_in) + slot_bytes),
-                gu_block_tiles * H_TILE);
             noc_async_write_barrier();
-            noc_semaphore_inc(get_noc_addr(parent_x, parent_y, static_cast<uint32_t>(get_semaphore(SEM_DATA))), 1);
+            const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
+            for (uint32_t i = 0; i < sl_w; ++i) {
+                const uint32_t w = i;
+                const uint32_t vx = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 0);
+                const uint32_t vy = get_arg_val<uint32_t>(RT_PEERS + 2 * w + 1);
+                noc_semaphore_inc(get_noc_addr(vx, vy, sem_data), 1);
+            }
+            noc_async_atomic_barrier();
 #endif
-            cb_pop_front(cb_gate_send, gu_block_tiles);
-            cb_pop_front(cb_up_send, gu_block_tiles);
+            cb_pop_front(cb_gate_acc, gu_block_tiles);
+            if constexpr (SCATTER_NOC_SPLIT == 0) {
+                cb_pop_front(cb_up_acc, gu_block_tiles);
+            }
+        }
+        // ---- my finished h slice, straight into the ROOT's cb_h_local at its tile offset ----
+        // The gather IS the assembly. cb_h_local is never pushed or popped on this path, so its
+        // write pointer is the CB base on every core for every M-block — which is what lets this
+        // core use its OWN pointer as the root's. Flow control across M-blocks is the invite
+        // above, transitively: my send here is downstream of the gather, the gather is downstream
+        // of the ROOT's invite for this block, and the root only invites after its phase 2 of the
+        // PREVIOUS block has read cb_h_local (and barriered).
+        if (my_row < sl_w) {
+            MaybeDeviceZoneScope("writer_hslice");
+            cb_wait_front(cb_h_slice, sl_a);
+#ifndef ABLATE_NO_REDUCE_XFER
+            const uint32_t rvx = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 0);
+            const uint32_t rvy = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 1);
+            noc_async_write(
+                get_read_ptr(cb_h_slice),
+                get_noc_addr(rvx, rvy, get_write_ptr(cb_h_local) + my_row * slice_bytes),
+                slice_bytes);
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(rvx, rvy, static_cast<uint32_t>(get_semaphore(SEM_HSLICE))), 1);
+            noc_async_atomic_barrier();
+#endif
+            cb_pop_front(cb_h_slice, sl_a);
         }
 
         // ---- output write-back, coalesced over the emb axis ----
@@ -442,8 +408,7 @@ void kernel_main() {
                     if (row >= m_t) {
                         break;  // rows past ceil_tile(count) are never written
                     }
-                    BR::write(
-                        out_acc, row * EMB_T, jstart, jstart + ec, SLOTS_E, rp + t * EC_MAX * BFP8_TILE, BFP8_TILE);
+                    BR::write(out_acc, row * EMB_T, jstart, jstart + ec, rp + t * EC_MAX * BFP8_TILE, BFP8_TILE);
                 }
             }
 #endif
