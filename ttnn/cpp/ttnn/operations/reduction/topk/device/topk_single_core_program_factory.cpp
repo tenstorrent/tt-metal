@@ -240,6 +240,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
         Wt,                                        // Width in tiles
         Ktiles,                                    // K value in tiles
         static_cast<std::uint32_t>(args.largest),  // Sort order: largest (true) or smallest (false)
+        static_cast<std::uint32_t>(args.stable),   // Stable sort: ties keep the lowest index
     };
 
     KernelDescriptor compute_desc;
