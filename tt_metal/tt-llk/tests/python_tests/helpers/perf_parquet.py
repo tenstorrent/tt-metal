@@ -44,6 +44,7 @@ shared core (build_run_batch):
 Entry points:
   write_run_batch          = build_run_batch + write        (frames in memory)
   convert_csvs_to_parquet  = read + coerce + build + write  (csv files on disk)
+  parquet_to_csvs          = split a batch back into per-test CSVs (reverse)
 
 Notes:
   * One file per RUN, not per test: build_run_batch compacts every test's rows.
@@ -59,7 +60,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .perf_wide_schema import DB_SCHEMA, MANDATORY
+from .perf_wide_schema import DB_SCHEMA, MANDATORY, PROVENANCE
 
 _BOOL_MAP = {
     True: True,
@@ -280,3 +281,29 @@ def convert_csvs_to_parquet(
     table = build_run_batch(frames, **provenance)
     pq.write_table(table, out_path, compression=compression)
     return diagnostics
+
+
+def parquet_to_csvs(parquet_path, out_dir, *, drop_provenance=True, drop_empty=True):
+    """Split a run-level Parquet batch back into per-test CSVs (the reverse of
+    convert_csvs_to_parquet). One CSV per test_name, written to out_dir.
+
+    By default the CI-added provenance columns and the columns a test left
+    entirely NULL are dropped, so each CSV matches the shape of the original
+    per-test CSV. With both defaults, re-running convert_csvs_to_parquet on the
+    output reproduces the same batch. Returns {test_name: written_path}.
+    """
+    df = pq.read_table(parquet_path).to_pandas()
+    provenance_cols = {c.name for c in PROVENANCE}
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written = {}
+    for test_name, group in df.groupby("test_name"):
+        if drop_provenance:
+            group = group[[c for c in group.columns if c not in provenance_cols]]
+        if drop_empty:
+            group = group.dropna(axis=1, how="all")
+        path = out_dir / f"{test_name}.csv"
+        group.to_csv(path, index=False)
+        written[test_name] = path
+    return written

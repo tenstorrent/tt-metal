@@ -17,6 +17,7 @@ from helpers.perf_parquet import (
     arrow_schema,
     build_run_batch,
     convert_csvs_to_parquet,
+    parquet_to_csvs,
     stamp_provenance,
     to_table,
     write_parquet,
@@ -233,3 +234,42 @@ def test_convert_stringifies_bool_valued_string_column(tmp_path):
 
     back = pq.read_table(tmp_path / "out.parquet").to_pandas()
     assert list(back["unpack_to_dest"]) == ["True", "False"]
+
+
+# ── Parquet -> CSV (reverse conversion) ───────────────────────────────────────
+
+
+def test_parquet_to_csvs_splits_by_test(tmp_path):
+    batch = tmp_path / "batch.parquet"
+    write_run_batch(
+        {"perf_a": _output_row(), "perf_b": _output_row_b()}, batch, **_RUN_PROV
+    )
+
+    written = parquet_to_csvs(batch, tmp_path / "csvs")
+
+    assert set(written) == {"perf_a", "perf_b"}
+    a = pd.read_csv(written["perf_a"])
+    assert "commit_sha" not in a.columns  # provenance dropped
+    assert "mean(MATH_ISOLATE)" in a.columns  # this test's own column kept
+    assert "num_faces" not in a.columns  # only perf_b emits it -> NULL -> dropped
+
+
+def test_round_trip_parquet_csv_parquet(tmp_path):
+    # Parquet -> per-test CSVs -> Parquet reproduces the same batch.
+    batch1 = tmp_path / "batch1.parquet"
+    write_run_batch(
+        {"perf_a": _output_row(), "perf_b": _output_row_b()}, batch1, **_RUN_PROV
+    )
+
+    written = parquet_to_csvs(batch1, tmp_path / "csvs")
+    batch2 = tmp_path / "batch2.parquet"
+    convert_csvs_to_parquet(list(written.values()), batch2, **_RUN_PROV)
+
+    t1 = pq.read_table(batch1)
+    t2 = pq.read_table(batch2)
+    assert t1.schema.names == t2.schema.names
+
+    key = ["test_name", "marker"]
+    d1 = t1.to_pandas().sort_values(key).reset_index(drop=True)
+    d2 = t2.to_pandas().sort_values(key)[d1.columns].reset_index(drop=True)
+    pd.testing.assert_frame_equal(d1, d2)
