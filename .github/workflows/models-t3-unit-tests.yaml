@@ -26,6 +26,7 @@ on:
           - janus-pro-7b
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
           # mamba-2.8b: disabled — PCC failures (see #42163)
+          - ace-step-v1.5
           - gemma-4-e2b
           - gemma-4-e4b
           - panoptic-deeplab

@@ -1,0 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torchaudio
+transformers>=4.53.0,<5.0.0
+vector-quantize-pytorch==1.29.0

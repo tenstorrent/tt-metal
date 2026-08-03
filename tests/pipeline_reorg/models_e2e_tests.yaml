@@ -698,6 +698,21 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# ── ACE-Step ───────────────────────────────────────────────────────
+
+# Migrated from tests/pipeline_reorg/blackhole_demo_tests.yaml.
+- name: ACE-Step v1.5 BH QuietBox 2 demo
+  cmd: |
+    uv pip install -r models/experimental/ace_step_v1_5/requirements.txt
+    pytest --timeout 900 models/experimental/ace_step_v1_5/tests/test_prompt_to_wav_e2e.py -k "15s"
+  model: ace-step-v1.5
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+      tier: 3
+  owner_id: D0B8130N4BW # Dalar Vartanians
+  team: models
+
 # ── UNet ───────────────────────────────────────────────────────────
 
 # Trace-perf (end-to-end) test. The correctness counterpart lives in
