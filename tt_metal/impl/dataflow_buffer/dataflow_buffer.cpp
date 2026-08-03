@@ -1202,11 +1202,13 @@ void ProgramImpl::finalize_single_dfb_config(
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
 
+    // One risc id per bit of the risc masks: bits 0-7 are DM riscs, bits 8-15 are Tensix riscs.
+    constexpr uint8_t num_risc_ids = std::numeric_limits<decltype(config.producer_risc_mask)>::digits;
     std::vector<uint8_t> producer_risc_ids;
-    producer_risc_ids.reserve(16);
+    producer_risc_ids.reserve(num_risc_ids);
     std::vector<uint8_t> consumer_risc_ids;
-    consumer_risc_ids.reserve(16);
-    for (uint8_t risc_id = 0; risc_id < 16; risc_id++) {
+    consumer_risc_ids.reserve(num_risc_ids);
+    for (uint8_t risc_id = 0; risc_id < num_risc_ids; risc_id++) {
         if (config.producer_risc_mask & (1 << risc_id)) {
             producer_risc_ids.push_back(risc_id);
         }
