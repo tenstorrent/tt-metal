@@ -122,17 +122,11 @@ class DirectConn {
 public:
     using SenderT = tt::tt_fabric::WorkerToFabricEdmSender;
     /// Build the connection (deferred open) from the fabric runtime-arg block; advances conn_arg_idx.
-    FORCE_INLINE DirectConn(size_t& conn_arg_idx, bool is_forward) :
-        conn_(FabricConnectionManager::build_from_args<
-              FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx)),
-        is_forward_(is_forward) {}
+    FORCE_INLINE DirectConn(size_t& conn_arg_idx, bool is_forward);
     /// Finish opening + bind the forward/backward direction.
-    FORCE_INLINE void open() {
-        conn_.open_finish();
-        dir_ = is_forward_ ? &conn_.get_forward_connection() : &conn_.get_backward_connection();
-    }
-    FORCE_INLINE void close() { conn_.close(); }
-    FORCE_INLINE SenderT* sender() { return dir_; }
+    FORCE_INLINE void open();
+    FORCE_INLINE void close();
+    FORCE_INLINE SenderT* sender();
 
 private:
     FabricConnectionManager conn_;
@@ -176,69 +170,13 @@ public:
         size_t channel_buffer_size_bytes,
         size_t status_address,
         size_t termination_signal_address,
-        uint32_t num_mux_clients) :
-        termination_signal_address_(termination_signal_address), num_mux_clients_(num_mux_clients) {
-        valid_ = get_arg_val<uint32_t>(arg_idx++) == 1;
-        is_termination_master_ = get_arg_val<uint32_t>(arg_idx++);
-        mux_x_ = get_arg_val<uint32_t>(arg_idx++);
-        mux_y_ = get_arg_val<uint32_t>(arg_idx++);
-        const size_t channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-        const size_t connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-        const size_t connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-        const size_t flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-        const size_t buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
-        const uint8_t channel_id = get_arg_val<uint32_t>(arg_idx++);
-        termination_sync_address_ = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-        const uint32_t local_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-        const uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-        const uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-        const uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-        termination_master_noc_x_ = get_arg_val<uint32_t>(arg_idx++);
-        termination_master_noc_y_ = get_arg_val<uint32_t>(arg_idx++);
-        if (valid_) {
-            mux_ = tt::tt_fabric::build_connection_to_fabric_endpoint<NumBuffers>(
-                mux_x_,
-                mux_y_,
-                channel_id,
-                NumBuffers,
-                channel_buffer_size_bytes,
-                channel_base_address,
-                connection_info_address,
-                connection_handshake_address,
-                flow_control_address,
-                buffer_index_address,
-                local_flow_control_address,
-                local_teardown_address,
-                local_buffer_index_address);
-            // The mux endpoint is a separate kernel; block until it is ready to accept connections.
-            tt::tt_fabric::wait_for_fabric_endpoint_ready(mux_x_, mux_y_, status_address, local_status_address);
-        }
-    }
+        uint32_t num_mux_clients);
     /// Connect to the mux endpoint (no-op for a worker with no link in its direction).
-    FORCE_INLINE void open() {
-        if (valid_) {
-            tt::tt_fabric::fabric_client_connect(mux_);
-        }
-    }
+    FORCE_INLINE void open();
     /// Disconnect, then the mux termination handshake (master waits for all clients then signals
     /// the mux to terminate; non-masters inc the master's sync semaphore). No-op if not valid.
-    FORCE_INLINE void close() {
-        if (!valid_) {
-            return;
-        }
-        tt::tt_fabric::fabric_client_disconnect(mux_);
-        if (is_termination_master_) {
-            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address_);
-            noc_semaphore_wait(termination_sync_ptr, num_mux_clients_ - 1);
-            tt::tt_fabric::fabric_endpoint_terminate(mux_x_, mux_y_, termination_signal_address_);
-        } else {
-            const uint64_t dest_addr =
-                safe_get_noc_addr(termination_master_noc_x_, termination_master_noc_y_, termination_sync_address_, 0);
-            noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
-        }
-    }
-    FORCE_INLINE SenderT* sender() { return valid_ ? &mux_ : nullptr; }
+    FORCE_INLINE void close();
+    FORCE_INLINE SenderT* sender();
 
 private:
     SenderT mux_;
@@ -362,10 +300,7 @@ public:
     /// Move ctor: open() returns a FabricStream by value. C++17 guaranteed copy elision usually
     /// constructs it in place, but provide a move that transfers `closed_` so the moved-from
     /// stream never double-closes the (now transferred) connection.
-    FORCE_INLINE FabricStream(FabricStream&& o) :
-        conn_(o.conn_), alignment_(o.alignment_), route_(o.route_), closed_(o.closed_) {
-        o.closed_ = true;
-    }
+    FORCE_INLINE FabricStream(FabricStream&& o);
     FabricStream& operator=(FabricStream&&) = delete;
     FORCE_INLINE ~FabricStream() { close(); }  // RAII backstop; idempotent with explicit close()
 
@@ -430,11 +365,10 @@ public:
      * @param is_forward    Send on the forward (true) or backward (false) connection.
      * @param alignment     L1 alignment used to size the on-wire payload (bytes).
      */
-    FORCE_INLINE FabricStreamSender(size_t& conn_arg_idx, bool is_forward, uint32_t alignment) :
-        conn_(conn_arg_idx, is_forward), alignment_(alignment) {}
+    FORCE_INLINE FabricStreamSender(size_t& conn_arg_idx, bool is_forward, uint32_t alignment);
 
     /// Construct from a pre-built connection policy (e.g. MuxConn<N>, which read its own args).
-    FORCE_INLINE FabricStreamSender(ConnT conn, uint32_t alignment) : conn_(conn), alignment_(alignment) {}
+    FORCE_INLINE FabricStreamSender(ConnT conn, uint32_t alignment);
 
     FabricStreamSender(const FabricStreamSender&) = delete;
     FabricStreamSender& operator=(const FabricStreamSender&) = delete;
@@ -442,10 +376,7 @@ public:
     /// Finish opening the connection + bind the direction, bind the stream's unicast @c route, and
     /// yield the opened FabricStream. Every unicast arm_* reuses this route. The returned stream
     /// borrows this sender's connection, so this sender must outlive it.
-    FORCE_INLINE FabricStream<ConnT> open(const ccl_routing_utils::line_unicast_route_info_t& route) {
-        conn_.open();
-        return FabricStream<ConnT>(&conn_, alignment_, route);
-    }
+    FORCE_INLINE FabricStream<ConnT> open(const ccl_routing_utils::line_unicast_route_info_t& route);
 
     /// One-shot: send exactly one fabric atomic-inc of @c val to @c remote_sem_noc_addr along
     /// @c route, then tear down. Collapses open() -> arm_inc() -> inc() -> close() for the common
