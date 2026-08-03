@@ -1,1 +1,0 @@
-/localdev/mmoscicki/tt-dm-codegen/ops/s2i/templates/writer_s2i_rm_width_narrow.cpp

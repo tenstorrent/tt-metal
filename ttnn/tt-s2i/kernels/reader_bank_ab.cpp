@@ -1,1 +1,0 @@
-/localdev/mmoscicki/tt-dm-codegen/common/templates/reader_bank_ab.cpp
