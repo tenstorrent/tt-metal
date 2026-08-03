@@ -201,7 +201,7 @@ const uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
 // The extra buffer only pays for itself while each one still holds a large read chunk. noc_async_read_barrier()
 // below drains every outstanding read each iteration, so a shorter chunk means fewer reads in flight per barrier,
 // and past some point that costs more than the removed flush. Measured on Wormhole with a 64 MB paged read from
-// DRAM: the worker prefetcher (128 KB scratch, 3x43648) gains 5% at 2 KB pages, while the eth prefetcher (19 KB
+// DRAM: the worker prefetcher (128 KB scratch, 3x43680) gains 5% at 2 KB pages, while the eth prefetcher (19 KB
 // scratch, 3x6464) loses 9% and is fastest left as a plain double buffer. So derive the depth from the scratch
 // size rather than fixing it.
 constexpr uint32_t scratch_db_ring_nbuf = 3;
