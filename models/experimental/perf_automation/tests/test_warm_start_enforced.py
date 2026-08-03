@@ -197,7 +197,11 @@ def test_termination_check_wires_warm_start_into_next_target():
     """Wiring: the lookup must be reachable from termination_check, not just defined."""
     src = (_CC / "perf_mcp.py").read_text()
     i = src.index("def termination_check")
-    body = src[i : i + 8000]
+    # Scan the WHOLE function, not a fixed byte window: this asserts reachability, and a 8000-char
+    # slice silently starts testing "is it in the first 8000 chars" the moment the function grows.
+    _rest = src[i + 1 :]
+    _end = _rest.find("\ndef ")
+    body = _rest[:_end] if _end != -1 else _rest
     assert "_warm_start_for(" in body or "warm_start" in body, (
         "termination_check does not populate next_target['warm_start']; the table is still the " "agent's job to find"
     )
