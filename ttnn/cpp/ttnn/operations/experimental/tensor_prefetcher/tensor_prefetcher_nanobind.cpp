@@ -171,15 +171,14 @@ void bind_tensor_prefetcher(nb::module_& mod) {
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
-            Build a DRAM-sender GlobalCircularBuffer sized to feed one or more 1D ring matmuls
-            (gather_in0=true) with their weight tensors. The weight's DRAM layout is auto-detected
-            (legacy WIDTH_SHARDED K-row-major vs receiver-contiguous NdShardSpec) and validated/sized
-            accordingly, so callers do not choose a layout-specific factory. See notes in
-            ttnn/api/ttnn/global_circular_buffer.hpp.
+            Build a DRAM-sender GlobalCircularBuffer sized to feed one or more gather_in0 or
+            mcast_in0 1D matmuls with their weight tensors. The weight's DRAM layout is
+            auto-detected (legacy WIDTH_SHARDED K-row-major vs receiver-contiguous NdShardSpec)
+            and validated/sized accordingly.
 
             Args:
                 mesh_device: The mesh device.
-                program_configs: List of 1D mcast matmul program configs (each gather_in0=True).
+                program_configs: List of compatible 1D matmul program configs.
                 weights: List of DRAM in1 tensors, one per program_config. All must share the same
                     DRAM layout (all legacy WIDTH_SHARDED, or all receiver-contiguous NdShardSpec).
                 bank_to_receivers: List of (bank_id, receivers) pairs.
@@ -207,14 +206,12 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         mod,
         R"doc(
             Compute and validate the block_count to pair with a receiver-contiguous DRAM weight
-            in queue_tensor_prefetcher_request, for a gather_in0 1D matmul fed via global_cb.
-            Centralizes the recv-contig prefetcher/matmul cross-checks (num_shards == ring_size,
-            weight K divisible by ring_size, weight per-receiver N == per_core_N) so call sites
-            don't re-derive (and mis-derive) them. Returns the block_count (== ring_size); raises
-            on any mismatch.
+            in queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
+            global_cb. Gather returns the receiver/ring count. Mcast returns
+            weight_K_tiles / in0_block_w and uses natural FIFO order.
 
             Args:
-                program_config: The gather_in0 1D mcast matmul program config that will consume the weight.
+                program_config: The 1D matmul program config that will consume the weight.
                 weight: The receiver-contiguous (NdShardSpec) DRAM weight tensor.
                 global_cb: The DRAM-sender GCB the prefetcher and matmul share.
 
