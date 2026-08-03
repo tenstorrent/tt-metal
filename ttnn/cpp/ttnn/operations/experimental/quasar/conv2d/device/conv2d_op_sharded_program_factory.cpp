@@ -23,6 +23,7 @@
 //   #3 ACT split_reader_cb_shared -> TT_FATAL-rejected (deferred); single-DM-fill ACT only.
 
 #include <cstdint>
+#include <cstdlib>  // std::getenv (Option C split-tilize test toggle)
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -61,6 +62,7 @@ using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::is_1d_depthwise_conv;
 using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
+using ttnn::prim::access_cb_info_by_name;
 using ttnn::prim::CBInfo;
 using ttnn::prim::Conv2dCb;
 using ttnn::prim::get_cb_info;
@@ -216,6 +218,7 @@ const m2::DFBSpecName DFB_BIAS{"bias"};                        // weights writer
 const m2::DFBSpecName DFB_MATMUL_PARTIALS{"matmul_partials"};  // compute self-loop (borrows OUTPUT when aliased)
 const m2::DFBSpecName DFB_OUT{"out"};                          // compute packer -> OUTPUT (degenerate DM consumer)
 const m2::DFBSpecName DFB_READER_INDICES{"reader_indices"};    // fresh L1 DMA landing (DRAM-config path only)
+const m2::DFBSpecName DFB_IN_SCALAR{"in_scalar"};              // reduce scalar srcB (unpack-tilize probe only)
 
 const m2::TensorParamName TP_INPUT{"input"};
 const m2::TensorParamName TP_OUTPUT{"output"};
@@ -232,9 +235,325 @@ const m2::KernelSpecName KERNEL_READER{"reader"};
 const m2::KernelSpecName KERNEL_WRITER_SENDER{"writer_mcast_sender"};
 const m2::KernelSpecName KERNEL_WRITER_RECEIVER{"writer_mcast_receiver"};
 const m2::KernelSpecName KERNEL_COMPUTE{"compute"};
+const m2::KernelSpecName KERNEL_OUT_DRAIN{"out_drain"};  // Program A: credit-only OUT-drain DM kernel
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+// [#48552] Per-kernel runtime-arg population helpers, extracted from create_program_artifacts to keep its
+// clang-tidy cognitive complexity under threshold. Pure code motion: each fills the per-kernel run-args map
+// that the orchestration function then moves into ProgramRunArgs; no logic changes. Namespace scope here
+// (ttnn::prim::qsr, with `using namespace tt::tt_metal` and `namespace m2 = ...experimental` active) so all
+// types resolve.
+static std::array<uint32_t, 4> setup_mcast_args(
+    bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
+    return is_noc_0 ? std::array<uint32_t, 4>{start_x, start_y, end_x, end_y}
+                    : std::array<uint32_t, 4>{end_x, end_y, start_x, start_y};
+}
+
+static void populate_reader_runtime_args(
+    m2::KernelRunArgs& reader_run_args,
+    bool block_sharded,
+    bool transpose_mcast,
+    bool is_conv_1d_depthwise_conv,
+    uint32_t in_num_cores_x,
+    uint32_t in_num_cores_y,
+    uint32_t num_cores_x,
+    uint32_t num_cores_y,
+    distributed::MeshDevice* device,
+    NOC reader_noc,
+    const CoreRangeSet& all_cores,
+    const CoreRangeSet& input_cores,
+    const CoreRangeSet& output_cores,
+    const CoreCoord& top_left_core_physical) {
+    if (block_sharded) {
+        std::vector<uint32_t> act_mcast_noc_y;  // X table for non-transpose, Y table for transpose
+        if (transpose_mcast) {
+            act_mcast_noc_y.reserve(in_num_cores_y);
+            for (uint32_t core_idx_y = 0; core_idx_y < in_num_cores_y; ++core_idx_y) {
+                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+            }
+        } else {
+            act_mcast_noc_y.reserve(in_num_cores_x);
+            for (uint32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
+                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+            }
+        }
+        const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
+        const CoreCoord out_bottom_right_core_physical = device->worker_core_from_logical_core(out_bottom_right_core);
+        const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
+
+        for (const CoreRange& core_range : all_cores.ranges()) {
+            for (const CoreCoord& core : core_range) {
+                const bool is_receiver_core = output_cores.contains(core);
+                const bool is_sender_core = input_cores.contains(core);
+                std::array<uint32_t, 4> mcast;
+                uint32_t act_mcast_sender_id, act_mcast_sender_noc_x;
+                if (transpose_mcast) {
+                    CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
+                    CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                    mcast = setup_mcast_args(
+                        reader_is_noc_0,
+                        bottom_core_physical.x,
+                        top_left_core_physical.y,
+                        bottom_core_physical.x,
+                        bottom_core_physical.y);
+                    act_mcast_sender_id = core.y;
+                    act_mcast_sender_noc_x = bottom_core_physical.x;
+                } else {
+                    CoreCoord core_physical = device->worker_core_from_logical_core(core);
+                    mcast = setup_mcast_args(
+                        reader_is_noc_0,
+                        top_left_core_physical.x,
+                        core_physical.y,
+                        out_bottom_right_core_physical.x,
+                        core_physical.y);
+                    act_mcast_sender_id = core.x;
+                    act_mcast_sender_noc_x = core_physical.y;
+                }
+                m2::AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {
+                        {"mcast_dest_noc_start_x", mcast[0]},
+                        {"mcast_dest_noc_start_y", mcast[1]},
+                        {"mcast_dest_noc_end_x", mcast[2]},
+                        {"mcast_dest_noc_end_y", mcast[3]},
+                        {"act_mcast_sender_id", act_mcast_sender_id},
+                        {"act_mcast_sender_noc_x", act_mcast_sender_noc_x},
+                        {"is_receiver_core", (uint32_t)is_receiver_core},
+                        {"is_sender_core", (uint32_t)is_sender_core},
+                        {"dram_config_reader_index", transpose_mcast ? core.x : core.y},
+                    });
+                m2::AdvancedKernelRunArgs::Varargs varargs(act_mcast_noc_y.begin(), act_mcast_noc_y.end());
+                reader_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
+            }
+        }
+    } else if (is_conv_1d_depthwise_conv) {
+        // Depthwise reader has no runtime args.
+    } else {
+        // Height-sharded reader: {core_index, remaining_tiles_to_push}.  Activation reuse is deferred, so
+        // remaining_tiles_to_push is always 0.
+        uint32_t core_index = 0;
+        for (const CoreRange& core_range : input_cores.ranges()) {
+            for (const CoreCoord& core : core_range) {
+                m2::AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {
+                        {"core_index", core_index},
+                        {"remaining_tiles_to_push", 0u},
+                    });
+                core_index++;
+            }
+        }
+    }
+}
+
+static void populate_writer_sender_runtime_args(
+    m2::KernelRunArgs& writer_sender_run_args,
+    const CoreRangeSet& mcast_sender_cores,
+    const CoreRangeSet& input_cores,
+    const CoreRangeSet& output_cores,
+    bool populate_skipped_work_cores,
+    bool block_sharded,
+    bool transpose_mcast,
+    bool has_bias,
+    uint32_t per_core_out_matrix_width_ntiles,
+    uint32_t bias_ntiles,
+    uint32_t num_cores_x,
+    uint32_t num_cores_y,
+    uint32_t total_active_num_cores,
+    uint32_t total_num_cores,
+    distributed::MeshDevice* device,
+    NOC writer_mcast_noc,
+    const CoreCoord& top_left_core_physical,
+    const CoreCoord& top_left_core_plus_one_physical,
+    const CoreCoord& bottom_right_core_physical) {
+    m2::KernelRunArgs::RuntimeArgValues& writer_sender_rtas = writer_sender_run_args.runtime_arg_values;
+    for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            if (populate_skipped_work_cores && !output_cores.contains(core)) {
+                // Pad-out path: zeros with only the bias-flag/skip slots populated.
+                m2::AddRuntimeArgsForNode(
+                    writer_sender_rtas,
+                    core,
+                    {
+                        {"out_start_tile_id_w", 0u},
+                        {"bias_tile_offset", 0u},
+                        {"mcast_dest_noc_start_x", 0u},
+                        {"mcast_dest_noc_start_y", 0u},
+                        {"mcast_dest_noc_end_x", 0u},
+                        {"mcast_dest_noc_end_y", 0u},
+                        {"weights_mcast_num_dests", 0u},
+                        {"weights_mcast_num_cores", 0u},
+                        {"is_sender_core", 1u},
+                        {"skip_work", 1u},
+                    });
+                continue;
+            }
+            uint32_t weight_slice_i = ((block_sharded && transpose_mcast) || !block_sharded) ? core.y : core.x;
+            uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
+            uint32_t bias_tile_offset = out_start_tile_id_w;
+            TT_FATAL(
+                bias_tile_offset < bias_ntiles || !has_bias,
+                "bias_tile_offset {} should be less than bias_ntiles {}",
+                bias_tile_offset,
+                bias_ntiles);
+
+            if (block_sharded) {
+                const bool is_sender_core = input_cores.contains(core);
+                std::array<uint32_t, 4> mcast;
+                if (transpose_mcast) {
+                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
+                    CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                    TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
+                    mcast = setup_mcast_args(
+                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                        top_left_core_plus_one_physical.x,
+                        right_core_physical.y,
+                        bottom_right_core_physical.x,
+                        right_core_physical.y);
+                    m2::AddRuntimeArgsForNode(
+                        writer_sender_rtas,
+                        core,
+                        {
+                            {"out_start_tile_id_w", out_start_tile_id_w},
+                            {"bias_tile_offset", bias_tile_offset},
+                            {"mcast_dest_noc_start_x", mcast[0]},
+                            {"mcast_dest_noc_start_y", mcast[1]},
+                            {"mcast_dest_noc_end_x", mcast[2]},
+                            {"mcast_dest_noc_end_y", mcast[3]},
+                            {"weights_mcast_num_dests", num_cores_x - 1},
+                            {"weights_mcast_num_cores", num_cores_x - 1},
+                            {"is_sender_core", (uint32_t)is_sender_core},
+                            {"skip_work", 0u},
+                        });
+                } else {
+                    CoreCoord top_core = {(std::size_t)core.x, 0};
+                    CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
+                    TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
+                    mcast = setup_mcast_args(
+                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                        top_core_physical.x,
+                        top_left_core_plus_one_physical.y,
+                        top_core_physical.x,
+                        bottom_right_core_physical.y);
+                    m2::AddRuntimeArgsForNode(
+                        writer_sender_rtas,
+                        core,
+                        {
+                            {"out_start_tile_id_w", out_start_tile_id_w},
+                            {"bias_tile_offset", bias_tile_offset},
+                            {"mcast_dest_noc_start_x", mcast[0]},
+                            {"mcast_dest_noc_start_y", mcast[1]},
+                            {"mcast_dest_noc_end_x", mcast[2]},
+                            {"mcast_dest_noc_end_y", mcast[3]},
+                            {"weights_mcast_num_dests", num_cores_y - 1},
+                            {"weights_mcast_num_cores", num_cores_y - 1},
+                            {"is_sender_core", (uint32_t)is_sender_core},
+                            {"skip_work", 0u},
+                        });
+                }
+            } else {
+                std::array<uint32_t, 4> mcast = setup_mcast_args(
+                    writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                    top_left_core_physical.x,
+                    top_left_core_physical.y,
+                    bottom_right_core_physical.x,
+                    bottom_right_core_physical.y);
+                m2::AddRuntimeArgsForNode(
+                    writer_sender_rtas,
+                    core,
+                    {
+                        {"out_start_tile_id_w", out_start_tile_id_w},
+                        {"mcast_dest_noc_start_x", mcast[0]},
+                        {"mcast_dest_noc_start_y", mcast[1]},
+                        {"mcast_dest_noc_end_x", mcast[2]},
+                        {"mcast_dest_noc_end_y", mcast[3]},
+                        {"weights_mcast_num_dests", total_active_num_cores - 1},
+                        {"weights_mcast_num_cores", total_num_cores - 1},
+                        // remaining_tiles_to_push is always in the 1D schema (activation reuse deferred -> 0).
+                        {"remaining_tiles_to_push", 0u},
+                    });
+                if (has_bias) {
+                    writer_sender_rtas["bias_tile_offset"][core] = bias_tile_offset;
+                }
+            }
+        }
+    }
+}
+
+static void populate_writer_receiver_runtime_args(
+    m2::KernelRunArgs& writer_receiver_run_args,
+    const CoreRangeSet& mcast_receiver_cores,
+    const CoreRangeSet& input_cores,
+    bool block_sharded,
+    bool transpose_mcast,
+    uint32_t num_cores_x,
+    distributed::MeshDevice* device,
+    const CoreCoord& top_left_core_physical) {
+    m2::KernelRunArgs::RuntimeArgValues& writer_receiver_rtas = writer_receiver_run_args.runtime_arg_values;
+    for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            if (block_sharded) {
+                uint32_t sender_noc_x, sender_noc_y;
+                if (transpose_mcast) {
+                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
+                    CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                    sender_noc_x = top_left_core_physical.x;
+                    sender_noc_y = right_core_physical.y;
+                } else {
+                    CoreCoord top_core = {(std::size_t)core.x, 0};
+                    CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
+                    sender_noc_x = top_core_physical.x;
+                    sender_noc_y = top_left_core_physical.y;
+                }
+                const bool is_sender_core = input_cores.contains(core);
+                m2::AddRuntimeArgsForNode(
+                    writer_receiver_rtas,
+                    core,
+                    {
+                        {"weights_mcast_sender_noc_x", sender_noc_x},
+                        {"weights_mcast_sender_noc_y", sender_noc_y},
+                        {"is_sender_core", (uint32_t)is_sender_core},
+                    });
+            } else {
+                bool is_no_op_core = !input_cores.contains(core);
+                m2::AddRuntimeArgsForNode(
+                    writer_receiver_rtas,
+                    core,
+                    {
+                        {"noop", (uint32_t)is_no_op_core},
+                        {"weights_mcast_sender_noc_x", top_left_core_physical.x},
+                        {"weights_mcast_sender_noc_y", top_left_core_physical.y},
+                        // remaining_tiles_to_push is always in the 1D receiver schema (reuse deferred -> 0).
+                        {"remaining_tiles_to_push", 0u},
+                    });
+            }
+        }
+    }
+}
+
+static void populate_compute_runtime_args(
+    m2::KernelRunArgs& compute_run_args,
+    bool check_skip_compute,
+    bool is_conv_1d_depthwise_conv,
+    bool transpose_mcast,
+    const CoreRangeSet& all_cores,
+    const CoreRangeSet& output_cores) {
+    if (check_skip_compute && !is_conv_1d_depthwise_conv) {
+        CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
+        uint32_t end_coord_x = bottom_right_core_out.x;
+        uint32_t end_coord_y = bottom_right_core_out.y;
+        for (const CoreRange& range : all_cores.ranges()) {
+            for (const CoreCoord& core : range) {
+                bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
+                compute_run_args.runtime_arg_values["skip_compute"][core] = (uint32_t)skip_compute;
+            }
+        }
+    }
+}
 
 ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_program_artifacts(
     const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
@@ -291,8 +610,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     const uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-    const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
-    const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
+    // WORKAROUND (Quasar), from sjovic/quasar-resnet 057e1792f0a: force out_subblock to 1x1. The Quasar
+    // compute dest-sync (MATH_PACK / SrcA handshake) in conv_bmm_tilize_metal2 deadlocks the three compute
+    // threads whenever the matmul_partials spill/reload handles more than one tile per subblock
+    // (out_subblock_num_tiles > 1). Constraining to 1x1 makes partials flow one tile at a time so the
+    // compute pipeline drains. Verified there: the resnet stem conv passes single-core AND full 32-core
+    // (was hanging). Applies to every conv this factory builds (stem + bottleneck 3x3), so it also covers
+    // the L1-path convs a DRAM slice_config cannot reach. Gated to Quasar; WH/BH keep the tuned subblock.
+    // Remove once the LLK dest-sync limitation is fixed (tt-metal #48679 / tt-llk #48504).
+    const bool arch_is_quasar = device->arch() == tt::ARCH::QUASAR;
+    const uint32_t out_subblock_h_ntiles = arch_is_quasar ? 1 : block_config.out_subblock_h_ntiles;
+    const uint32_t out_subblock_w_ntiles = arch_is_quasar ? 1 : block_config.out_subblock_w_ntiles;
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
@@ -330,7 +658,25 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // height-block on (works on WH, hangs on BH). Full sync drains DEST per op, preventing the backup.
     // (This also selects the standard tilize, since can_use_fast_tilize() requires !dst_full_sync.)
     // Numerically identical; localized perf cost on this conv only.
-    if (block_sharded) {
+    // Also force it on height-sharded to route WH/BH off the racy fast_tilize path onto regular tilize_block
+    // (the fixed-latency PACK nop race-guard could not mask the fast_tilize dest handshake race).
+    //
+    // EXPERIMENT (Quasar height-sharded): do NOT force full DEST sync here. On Quasar the height-sharded
+    // conv still 0x19s (Risc IB interrupt on MATH) in the per-tile tilize datacopy<->pack DEST[0] reuse.
+    // Full sync uses a single DEST section, so tile t+1's datacopy MOP collides with tile t's pack drain;
+    // half sync double-buffers DEST across two sections, which can hide that reuse. Full sync was only
+    // forced on height-sharded to route WH/BH off fast_tilize -- Quasar has no fast_tilize (can_use_fast
+    // is already false), so the force serves no purpose on Quasar and may be causing the race. Let Quasar
+    // height-sharded fall back to half sync. WH/BH and block-sharded keep full sync.
+    // [#48552 EXPERIMENT] Quasar block-sharded ALSO falls back to SyncHalf (was pinned to SyncFull below).
+    // SyncFull's single DEST section makes tile t+1's datacopy MOP collide with tile t's pack drain ->
+    // ERROR_TRISC1 (MATH) 0x19 in conv_bmm_tilize (207 tilize blocks complete, then the matmul faults; the
+    // dvalid scrub did NOT help). SyncHalf double-buffers DEST across two sections and hides that reuse -- the
+    // SAME reason Quasar height-sharded was already excluded here. The SyncFull #47797 pin fixes a half-sync
+    // mcast-loop deadlock that is documented BH-specific ("works on WH, hangs on BH"); Quasar may not need it.
+    // RISK: if the Quasar block-sharded 2D-mcast loop also deadlocks under SyncHalf, this trades the 0x19 for a
+    // hang -- if so, revert to forcing SyncFull for block_sharded on Quasar.
+    if ((block_sharded || height_sharded) && !arch_is_quasar) {
         dst_full_sync_en = true;
     }
 
@@ -361,7 +707,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
 
-    const bool slice_inner_dim = (height_sharded && !enable_activation_reuse) || (block_sharded && !full_inner_dim);
+    // full_inner_dim => keep the whole reduction dim in one K-block (num_blocks_act_w = 1, no matmul-partials
+    // accumulate). For height-sharded this is the Quasar fit-guarded "no-spill" path (set upstream in conv2d.cpp
+    // for small-K convs whose full window fits L1); block-sharded already used it. When full_inner_dim is false we
+    // slice by kernel row and spill as before.
+    const bool slice_inner_dim =
+        (height_sharded && !enable_activation_reuse && !full_inner_dim) || (block_sharded && !full_inner_dim);
 
     uint32_t conv_act_c_blocks = 1;
     uint32_t out_conv_c_blocks = 1;
@@ -679,6 +1030,101 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
 
+    // OPTION C (split tilize/matmul) test toggle. When TT_METAL_QSR_CONV_SPLIT_TILIZE is set, select the
+    // conv_bmm_split_tilize_metal2.cpp compute kernel, which tilizes ALL height blocks first (one contiguous
+    // tilize phase) then matmuls them, so the compute engine transitions tilize->matmul only once (diagnostic
+    // for the Quasar per-block tilize<->matmul DEST-handshake 0x19 race). Gated to the height-sharded,
+    // single-K-block (in0_num_blocks_w == 1), single-output-width-block (num_blocks_weight_w_per_core == 1),
+    // no-split-reader / no-activation-reuse / non-depthwise path -- the resnet stem / 1x1 conv shape the split
+    // kernel implements. Requires act_tilized to hold all height blocks at once (resized below). Everything
+    // else falls back to the fused kernel even when the env is set.
+    const bool split_tilize_matmul = (std::getenv("TT_METAL_QSR_CONV_SPLIT_TILIZE") != nullptr) && height_sharded &&
+                                     !is_conv_1d_depthwise_conv && !enable_split_reader && !enable_activation_reuse &&
+                                     (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
+
+    // OPTION B — PROGRAM A (tilize-only, standalone). When TT_METAL_QSR_CONV_SPLIT_PROGRAM is set, this conv
+    // op runs ONLY the gather+tilize half in a fresh tilize-oriented Metal program (conv_tilize_only_metal2.cpp)
+    // and OUTPUTS the tilized activations — no matmul, no weights reader, no output writer. This isolates the
+    // tilize into its own program (its own tilize-oriented compute_kernel_hw_startup, no preceding matmul) to
+    // confirm the Quasar 0x19 (stale MATH DEST-dvalid left by the matmul rejecting the tilize datacopy) clears.
+    // Program B (the matmul over these tilized activations) is chained separately at the host level in a later
+    // increment. Same eligibility as Option C: the resnet stem / 1x1 height-sharded single-K-block shape.
+    // OPTION B — UNPACK-TILIZE PROBE (TT_METAL_QSR_CONV_UNPACK_TILIZE). Runs the conv's gathered activation
+    // through the MAXPOOL-style unpack-tilize path (unpack_tilizeA_B_block + reduce) instead of tilize_block,
+    // to localize the intrinsic Quasar 0x19 to tilize_block vs unpack-tilize. Shares ALL the standalone
+    // Program-A plumbing below (folded into split_program_tilize_only); differs only in the compute kernel,
+    // an extra reduce-scalar (srcB) DFB, and REDUCE_OP/REDUCE_DIM compute defines.
+    const bool split_program_unpack_tilize = (std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") != nullptr) &&
+                                             height_sharded && !is_conv_1d_depthwise_conv && !enable_split_reader &&
+                                             !enable_activation_reuse && (in0_num_blocks_w == 1) &&
+                                             (num_blocks_weight_w_per_core == 1);
+
+    // "Standalone Program A" plumbing flag — TRUE for BOTH the tilize-only kernel (TT_METAL_QSR_CONV_SPLIT_PROGRAM)
+    // AND the unpack-tilize probe (above): reader gather + tilize into a PLAIN ACT_TILIZED, no matmul / weights /
+    // writer, borrowed OUT kept only to satisfy TP_OUTPUT. They differ only where split_program_unpack_tilize is
+    // consulted (compute kernel selection, scalar DFB, compute defines, compute bindings).
+    // [#48552 Stage2] block_sharded also eligible for the tilize-only Program A (split path). Must stay aligned
+    // with conv2d.cpp's split_program_active gate or Program A tilizes but Program B never runs (RBFAIL).
+    const bool split_program_tilize_only =
+        ((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) || split_program_unpack_tilize) &&
+        (height_sharded || block_sharded) && !is_conv_1d_depthwise_conv && !enable_split_reader &&
+        !enable_activation_reuse && (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
+
+    // [#48552 DEBUG -- remove before merge] When the split env is set but this conv did NOT run tilize-only,
+    // Program A produces a normal conv output [M, N] instead of the tilized activation [M, full_K], and the
+    // chained Program B matmul then under-reserves its in0 CB (the RBFAIL dfb=0 need=M*full_K cap=M*N). Dump
+    // each gate so we can see WHICH condition is false and align conv2d.cpp's split decision with it.
+    if ((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) || split_program_unpack_tilize) {
+        log_debug(
+            tt::LogOp,
+            "[QSR-SPLIT #48552] split_program_tilize_only={} | height_sharded={} not_depthwise={} "
+            "not_split_reader={} not_act_reuse={} in0_num_blocks_w={}(want 1) num_blocks_weight_w_per_core={}(want "
+            "1) a_mem_layout={}",
+            split_program_tilize_only,
+            height_sharded,
+            !is_conv_1d_depthwise_conv,
+            !enable_split_reader,
+            !enable_activation_reuse,
+            in0_num_blocks_w,
+            num_blocks_weight_w_per_core,
+            static_cast<int>(a.memory_config().memory_layout()));
+    }
+
+    // Program A (tilize-only) EXPERIMENT: the pure tilize (conv_tilize_only_metal2.cpp) faults with ERROR_TRISC1
+    // 0x19 mid-stream (after several 4-wide blocks tilize cleanly, config identical to the PASSING standalone
+    // tilize), which matches the residual Quasar tilize DEST-bank-release LLK issue in HALF sync (syncfull=0 —
+    // the Quasar height-sharded default here). Force FULL DEST sync for the split tilize path: full sync
+    // collapses DEST to one section, eliminating the per-tile half-sync bank rotation whose release appears to
+    // stop freeing banks. This was never actually run on the conv (the earlier "half sync" try just re-set the
+    // default). If it clears the 0x19, full sync is the workaround; if not, this is a clean LLK escalation.
+    // The old FULL-sync force for the split datacopy tilize path is REMOVED. It was a workaround from before the
+    // per-tile FPU dest-dvalid clear (tilize.h datacopy loop) fixed the half-sync bank-rotation leak / 0x19.
+    // Empirically SyncFull datacopy HANGS early (dprint_tr13: block 6) while SyncHalf datacopy runs cleanly (the
+    // real stem ran TZBLK=89, no 0x19 — dprint_s1). So keep the SyncHalf (dst_full_sync default) for the split
+    // tilize-only datacopy path too, matching the fused conv.
+    // SyncFull for the UTD tilize — TRIED, REVERTED (dprint_tr12): under the semaphore scheme SyncFull stalled
+    // EARLIER than SyncHalf (both cores stuck at 6/2 blocks vs SyncHalf's core0=32). Single-bank serialization is
+    // not the fix, and it rules out the SyncHalf bank-FLIP as the cause (SyncFull has no flip yet stalls sooner).
+    // The residual stall is at the UNPACR_TILIZE->DEST fill / semaphore boundary itself, not the double-buffer.
+    // Left as SyncHalf (semaphore scheme; core0 completes all 32, core1 stalls -> LLK-level DEST-fill issue).
+
+    // OPTION B — Program A must produce the FULL im2col contraction dim K, not just one act_block_w K-sub-block.
+    // On Quasar force_conv_no_spill is off, so full_inner_dim does NOT bump act_block_w to the full K; here
+    // act_block_w_ntiles = in_ch*kw/32 (ONE window row) while the true matmul K = in_ch*kh*kw/32 = the prepared
+    // weights' K-height (b_shape[-2]) = act_block_w_ntiles * filter_h. The fused conv contracts the extra
+    // filter_h window-rows via a window-accumulation loop; the split's single tilize must instead tilize ALL
+    // filter_h K-sub-blocks into a contiguous [M, full_K] activation so Program B's plain matmul matches the
+    // [full_K, N] weights. The reader already gathers the full window (ACTFILL nt = full_K tiles per tile-row);
+    // we just tilize all of it. (RISK: the reader's gathered K-ordering — window-position x channel — must match
+    // the weights' [r][s][c] flattening; if not, PCC needs a weight reorder. Verified by the e2e PCC test.)
+    // FULL im2col contraction dim (K), in tiles. Use the PREPARED weights' K-height (= in_ch_padded*kh*kw),
+    // which is the intrinsic K and is arch-independent. The old `act_block_w_ntiles * filter_h` was WRONG on
+    // WH/BH: there conv2d.cpp's no-spill path collapses the whole K into act_block_w (act_block_w == full_K,
+    // num_blocks_act_w == 1), so `* filter_h` double-counts by filter_h (e.g. stem: 16*4=64 vs true 16), which
+    // over-sized OUT/the output tensor 4x AND drove num_blocks 4x too high -> tilize starved after full_K/act_bw
+    // blocks (WH hang at block 4). On Quasar act_block_w stays one window-row so both formulas coincide.
+    const uint32_t full_k_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
+
     TT_FATAL(
         act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0,
         "Activation matrix height in tiles ({}) must be divisible by per-core output matrix height in tiles ({})",
@@ -712,7 +1158,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
     // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2.
-    const bool packer_l1_acc_en = ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    // QSR: the Quasar hardware packer-L1-accumulate pack path (PACR0_TILE_INC in-place accumulate combined
+    // with the QSR_RESTORE_WR / g_dfb ring rewind between K-blocks) mis-addresses the matmul_partials CB and
+    // overruns it -> OOB L1 write -> ERROR_TRISC1 fault on the pack thread (opcode 0x19 = PACR0_TILE_INC).
+    // Unlike WH/BH (address derived from fifo_wr_ptr), Quasar's packer DST_TILE_FACE_ROW_IDX counter is not
+    // resynced to the rewound descriptor. Force off so K-accumulation goes through the FPU-reload path
+    // (copy_block reload + re-accumulate), which IS ported/validated on Quasar. This only
+    // drops a perf optimization; correctness is preserved. Remove once the LLK packer-L1-acc + ring-rewind
+    // counter resync is fixed. (This factory is Quasar-only, so no arch guard is needed.)
+    const bool packer_l1_acc_en = false;
+    (void)ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
@@ -788,6 +1243,31 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         input_channels_padded,
         reader_indices_actual_page_size);
 
+    // [#48552] QSR: disable the height-sharded "fully buffered weights" optimization, self-contained here.
+    // The shared get_cb_info() inflates the WEIGHTS CB by kernel_size[0] (e.g. 3x for a 3x3 kernel) so the
+    // writer reads every kernel-row weight block from DRAM once and keeps them resident across activation
+    // height blocks. That inflation overruns L1 on the bf16 layer conv2 on Quasar. So rather than add a flag
+    // to the shared Conv2dConfig, we undo the inflation on the WEIGHTS CBInfo right here, reproducing exactly
+    // the sizing the (removed) disable_fully_buffered_weights=true path produced:
+    //   base_tiles * (enable_weights_double_buffer ? 2 : 1).
+    //
+    // NO-SPILL ONLY (num_blocks_act_w == 1). This is the crucial scope: it must match exactly the ONE conv the
+    // model disabled at the known-good baseline (conv2, the 3x3 layer conv on the no-spill path), and it must
+    // NOT touch the folded 4x4 stem. The stem runs on the SLICED path (num_blocks_act_w == filter_h == 4):
+    // there the kernel-row weight blocks are consumed across the K-slices and MUST stay resident, so shrinking
+    // its WEIGHTS CB corrupts the stem (op002 stem_conv1 drops to ~0.80 and poisons everything downstream).
+    // On the no-spill path K is a single block, so the inflation is pure height-block DRAM-reuse headroom and
+    // is safe to drop (weights are simply re-read per height block; numerics unchanged). Only the WEIGHTS DFB
+    // size changes -- the factory computes the weight-reader CTA (weight_block_num_tiles, below) independently.
+    // Non-depthwise only (the get_cb_info depthwise divisor is num_blocks_act_w computed internally; depthwise
+    // weights are tiny and off the resnet path).
+    if (height_sharded && !enable_activation_reuse && !is_conv_1d_depthwise_conv && num_blocks_act_h > 1 &&
+        filter_h > 1 && num_blocks_act_w == 1) {
+        CBInfo& weights_cb = access_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS);
+        const uint32_t base_num_tiles = weights_cb.num_pages / filter_h;
+        weights_cb.num_pages = base_num_tiles * (enable_weights_double_buffer ? 2u : 1u);
+    }
+
     // split_reader_cb_shared (block-sharded split-reader overlapped ACT CB, CB_TAXONOMY_ANALYSIS.md §2) is
     // subsumed by the split-reader deferral above (enable_split_reader is forced false), so it can never
     // arise here.
@@ -803,7 +1283,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // Convenience accessor for CB sizing.
     auto cb = [&](Conv2dCb name) -> const CBInfo& { return get_cb_info_by_name(cb_info, name); };
 
-    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
+    // QSR: the packer RELU (llk_pack_relu_config(ReluConfig::zero())) leaves ~one 16x16 face per output tile
+    // UNCLAMPED on Quasar -- proven by bisect (test_conv2d_correctness_bisect): a height-sharded conv is
+    // correct with the activation off (PCC 0.99997) but drops to 0.8547 with RELU on, uniform / tap-count-
+    // independent / fidelity-independent, with stale negatives surviving (output absmax > golden). WH is fine.
+    // Route RELU through the SFPU activation path on Quasar instead (full DEST tile; the same path GELU uses)
+    // by NOT taking the packer-relu fast-path here -- the `!pack_relu` branch below then merges the SFPU relu
+    // defines (SFPU_OP_*_ACTIVATION), applied per output tile in the compute kernel after the bias add.
+    // TODO(LLK): fix the Quasar packer relu face coverage so the faster packer clamp can be used again.
+    // (arch_is_quasar is declared earlier, near the out_subblock 1x1 workaround.)
+    bool pack_relu =
+        fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU && !arch_is_quasar;
 
     const bool check_skip_compute = input_cores != output_cores;
     // populate_skipped_work_cores is only reachable with split reader (deferred), so it is always false.
@@ -820,7 +1310,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // coord below is unchanged there.
     const CoreCoord grid_start = input_cores.bounding_box().start_coord;
     const CoreCoord top_left_core = grid_start;
-    const CoreCoord top_left_core_plus_one = {grid_start.x + 1, grid_start.y + 1};
+    // Clamp the +1 per dimension: on a degenerate block-sharded grid (only 1 core in x or y, e.g. a 2x1 or
+    // 1x2 sub-grid on the emulator) the unconditional +{1,1} names a logical core that does not exist (e.g.
+    // (1,1)), and resolving it below throws "No core coordinate found at (1,1)". Only step into a dimension
+    // that actually spans >1 core. Mirrors the matmul 2D-mcast single-row/col grid fix. On a full 2D grid
+    // (num_cores_x>1 && num_cores_y>1) this is unchanged: {grid_start.x+1, grid_start.y+1}.
+    const CoreCoord top_left_core_plus_one = {
+        grid_start.x + (num_cores_x > 1 ? 1u : 0u), grid_start.y + (num_cores_y > 1 ? 1u : 0u)};
     const CoreCoord bottom_right_core = {(std::size_t)in_num_cores_x - 1, (std::size_t)in_num_cores_y - 1};
     const CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     // top_left_core_plus_one (logical origin + {1,1}) is consumed ONLY by the block-sharded 2D
@@ -894,11 +1390,27 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- compute defines ----
     std::map<std::string, std::string> compute_defines;
     if (fused_activation.has_value() && !pack_relu) {
+        // Pass the activation input dtype: several unary ops (RELU, SIGNBIT, ...) branch float-vs-int in
+        // get_op_init_and_func and TT_FATAL if it is absent. On Quasar RELU takes this SFPU path (packer-relu
+        // is disabled above), so the dtype is now required. The activation runs on the accumulated conv
+        // result that becomes the output, so use the output dtype (bf16 => the float relu_tile path).
         compute_defines.merge(ttnn::operations::unary::utils::get_defines(
-            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i", output.dtype()));
     }
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
+
+    // UnpackToDestEn bypass (tt-metal #49445): when TT_METAL_QSR_TILIZE_UNPACK_TO_DEST is set, inject
+    // QSR_TILIZE_UNPACK_TO_DEST so tilize.h routes the tilize unpacker straight into DEST (UNP_DEST) and turns
+    // the MATH A2D datacopy into a no-MOP sync forwarder — sidestepping the faulting Quasar tilize datacopy MOP
+    // (the 0x19: the semaphore-scheme tilize never frees the FPU dest-dvalid ring; unpack-to-dest removes the
+    // ring-advancing MOVA2D). Applies to any Quasar tilize_block path (the fused conv kernel AND the split
+    // Program-A tilize-only kernel) — excludes depthwise (no tilize_block) and the unpack-tilize reduce probe
+    // (uses tilizeA_B_reduce, not tilize_block).
+    if (arch_is_quasar && !is_conv_1d_depthwise_conv && !split_program_unpack_tilize &&
+        (std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr)) {
+        compute_defines.insert({"QSR_TILIZE_UNPACK_TO_DEST", "1"});
+    }
 
     // ============================================================================
     //  Build the ProgramSpec
@@ -911,11 +1423,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = TP_INPUT, .spec = a.mesh_tensor().tensor_spec()});
     spec.tensor_parameters.push_back(
         m2::TensorParameter{.unique_id = TP_OUTPUT, .spec = output.mesh_tensor().tensor_spec()});
-    spec.tensor_parameters.push_back(
-        m2::TensorParameter{.unique_id = TP_WEIGHTS, .spec = b.mesh_tensor().tensor_spec()});
-    if (has_bias) {
+    // Program A (split_program_tilize_only) has no weights reader / writer / matmul, so NO kernel binds
+    // TP_WEIGHTS or TP_BIAS. The Metal-2.0 spec validator (program_spec.cpp:575) rejects any TensorParameter
+    // that is declared but bound by no kernel, so we must not declare them in the tilize-only program.
+    if (!split_program_tilize_only) {
         spec.tensor_parameters.push_back(
-            m2::TensorParameter{.unique_id = TP_BIAS, .spec = bias.value().mesh_tensor().tensor_spec()});
+            m2::TensorParameter{.unique_id = TP_WEIGHTS, .spec = b.mesh_tensor().tensor_spec()});
+        if (has_bias) {
+            spec.tensor_parameters.push_back(
+                m2::TensorParameter{.unique_id = TP_BIAS, .spec = bias.value().mesh_tensor().tensor_spec()});
+        }
     }
     spec.tensor_parameters.push_back(
         m2::TensorParameter{.unique_id = TP_READER_INDICES, .spec = reader_indices_mesh_tensor.tensor_spec()});
@@ -929,8 +1446,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_ACT_MCAST_SENDER, .target_nodes = all_cores});
         spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_ACT_MCAST_RECEIVER, .target_nodes = all_cores});
     }
-    spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_SENDER, .target_nodes = all_cores});
-    spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_RECEIVER, .target_nodes = all_cores});
+    // Program A (split_program_tilize_only) registers no writer kernels, so nothing constructs the weights
+    // mcast Semaphore objects — do not declare their tokens (an unbound semaphore is at best dead, and the
+    // spec validator may reject it the same way it rejects unbound tensor parameters).
+    if (!split_program_tilize_only) {
+        spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_SENDER, .target_nodes = all_cores});
+        spec.semaphores.push_back(
+            m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_RECEIVER, .target_nodes = all_cores});
+    }
 
     // ---- Dataflow buffers ----
     auto make_dfb = [&](const m2::DFBSpecName& id, Conv2dCb name) {
@@ -945,11 +1468,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     // ACT: real FIFO (height-sharded direct reader->compute, or block-sharded mcast result).
     spec.dataflow_buffers.push_back(make_dfb(DFB_ACT, Conv2dCb::ACT));
-    // WEIGHTS: weights reader/writer -> compute.
-    spec.dataflow_buffers.push_back(make_dfb(DFB_WEIGHTS, Conv2dCb::WEIGHTS));
-    // BIAS (optional).
-    if (has_bias) {
-        spec.dataflow_buffers.push_back(make_dfb(DFB_BIAS, Conv2dCb::BIAS));
+    // WEIGHTS: weights reader/writer -> compute.  (Program A / tilize-only has no matmul: no weights/bias.)
+    if (!split_program_tilize_only) {
+        spec.dataflow_buffers.push_back(make_dfb(DFB_WEIGHTS, Conv2dCb::WEIGHTS));
+        // BIAS (optional).
+        if (has_bias) {
+            spec.dataflow_buffers.push_back(make_dfb(DFB_BIAS, Conv2dCb::BIAS));
+        }
     }
     // ACT_SECOND_READER (split reader, non-shared): writer fills, compute consumes.
     if (enable_split_reader) {
@@ -987,12 +1512,50 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         //  = 50,176 units of 16 B, and 2x = 100,352 units overflows the uint16_t DFB ring-extent field
         //  (max 65,536 = 1 MB). Capacity double-buffering of a full K-block is structurally impossible
         //  on Quasar — see dfb_conv2d_analysis.md.)
-        spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
+        if (split_program_unpack_tilize) {
+            // UNPACK-TILIZE PROBE (diagnostic): tilize into a PLAIN (non-borrowed) ACT_TILIZED DFB sized to hold
+            // the WHOLE per-core tilized activation (num_blocks_act_h_per_core x one ACT_TILIZED block = M*K
+            // tiles); the probe reduce writes here (throwaway). Plus a reduce-scalar (srcB) DFB — one tile, face
+            // geometry {face_r_dim=1, num_faces=4} mirroring the pool's scalar CB — credited as a compute
+            // self-loop, value unfilled.
+            const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
+            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+                .unique_id = DFB_ACT_TILIZED,
+                .entry_size = tilized_info.page_size,
+                .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
+                .data_format_metadata = tilized_info.data_format,
+            });
+            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+                .unique_id = DFB_IN_SCALAR,
+                .entry_size = tilized_info.page_size,
+                .num_entries = 1,
+                .data_format_metadata = tilized_info.data_format,
+                .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
+            });
+        } else if (split_program_tilize_only) {
+            // OPTION B / Program A: the tilize writes STRAIGHT INTO the borrowed OUT (sized to M*K below,
+            // borrowed_from OUTPUT — the op's output IS the tilized activation). No separate ACT_TILIZED DFB.
+        } else if (split_tilize_matmul) {
+            // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
+            // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the
+            // ring extent (page_size_units x num_entries) must stay under the uint16_t limit (65,536 units
+            // = 1 MB); if the full per-core tilized activation exceeds that, the DFB spec is rejected at
+            // program creation and this path cannot be used for that conv (fall back to the fused kernel).
+            const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
+            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+                .unique_id = DFB_ACT_TILIZED,
+                .entry_size = tilized_info.page_size,
+                .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
+                .data_format_metadata = tilized_info.data_format,
+            });
+        } else {
+            spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
+        }
     }
 
     // MATMUL_PARTIALS: self-loop accumulator (resolution #2).  Borrowed-from OUTPUT when
     // partials_cb_uses_output.  1D depthwise allocates no partials CB (dest-reuse), so skip it there.
-    if (!is_conv_1d_depthwise_conv) {
+    if (!is_conv_1d_depthwise_conv && !split_program_tilize_only) {
         auto dfb = make_dfb(DFB_MATMUL_PARTIALS, Conv2dCb::MATMUL_PARTIALS);
         if (partials_cb_uses_output) {
             dfb.borrowed_from = TP_OUTPUT;
@@ -1000,10 +1563,50 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
 
-    // OUT: compute packer -> OUTPUT shard (borrowed).  Producer = compute; the degenerate CONSUMER is
-    // bound to the DM output (writer) kernel which exists in the sharded path (resolution #1).
+    // OUT: borrowed from the OUTPUT tensor — compute packs the conv result directly into the output shard.
     {
-        auto dfb = make_dfb(DFB_OUT, Conv2dCb::OUT);
+        m2::DataflowBufferSpec dfb;
+        if (split_program_tilize_only) {
+            // OPTION B / Program A: the op output IS the FULL tilized im2col activation — M tile-rows x full_K
+            // tile-cols (full_K = act_block_w_ntiles * filter_h = the prepared weights' K-height), so Program B's
+            // matmul [M, full_K] x [full_K, N] matches. compute_output_specs sizes the output tensor to the same
+            // [M*32, full_K*32] shard, so the borrowed OUT matches. (Was mis-sized to M x act_block_w = one
+            // window-row's K-sub-block, causing the K=128 vs 512 matmul mismatch.)
+            //
+            // [#48552] HOST-side guard: the borrowed OUT below tilizes per_core_M * full_K tiles, so the output
+            // tensor (which this DFB borrows) MUST be [M, full_K] tiles wide. If compute_output_specs sized it as
+            // the conv result [M, N] instead (i.e. its tilize-only gate disagreed with this factory's gate), the
+            // borrowed-OUT reserve_back(M*full_K) would exceed the M*N capacity and fault as a device
+            // reserve_back RBFAIL (dataflow_buffer.inl "line 84"). Catch it here as a single, clear
+            // program-creation error so the disagreement is fixed in compute_output_specs, not chased on-device.
+            const uint32_t out_w_ntiles = output.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+            TT_FATAL(
+                out_w_ntiles == full_k_ntiles,
+                "Split-conv Program A (tilize-only): output tensor width is {} tiles but the tilize produces "
+                "full_K = {} tiles. The output was sized as the conv result [M, N] instead of the tilized "
+                "activation [M, full_K] -- compute_output_specs' tilize-only gate (keyed on the INPUT "
+                "activation's HEIGHT_SHARDED layout) disagreed with this factory's split_program_tilize_only "
+                "gate. Align compute_output_specs so both classify this conv as tilize-only.",
+                out_w_ntiles,
+                full_k_ntiles);
+            const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
+            dfb = m2::DataflowBufferSpec{
+                .unique_id = DFB_OUT,
+                .entry_size = tilized_info.page_size,
+                .num_entries = per_core_out_matrix_height_ntiles * full_k_ntiles,
+                .data_format_metadata = tilized_info.data_format,
+            };
+            // QSR OUT headroom REMOVED (red herring): the borrowed-output exact-fill it guarded doesn't stall
+            // (reserve waits free >= n; last block has free == n) and the matching +1 shard row broke the strict
+            // emulator sharded readback. num_entries = M*full_K exact.
+        } else {
+            dfb = make_dfb(DFB_OUT, Conv2dCb::OUT);
+            // QSR OUT headroom REMOVED (red herring): the borrowed-output exact-fill it guarded doesn't stall
+            // (reserve waits free >= n; the last block has free == n, so it passes — same as WH/BH's borrowed
+            // conv OUT, which uses no headroom). The matching +1 shard row broke the strict emulator sharded
+            // readback (tile_read_bytes 80 vs 81). The real stalls were the DEST-dvalid race (fixed via
+            // set_up_dest_dvalid_per_thread) and the trailing unpacker pop. num_entries stays exact.
+        }
         dfb.borrowed_from = TP_OUTPUT;
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
@@ -1039,11 +1642,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         return "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                "reader_conv_activations_padded_with_halo_3x3_weights_v2_metal2.cpp";
     }();
-    const std::string compute_kernel = is_conv_1d_depthwise_conv
-                                           ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                             "compute_depthwise_conv1d_metal2.cpp"
-                                           : "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                             "conv_bmm_tilize_metal2.cpp";
+    const std::string compute_kernel =
+        is_conv_1d_depthwise_conv     ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "compute_depthwise_conv1d_metal2.cpp"
+        : split_program_unpack_tilize ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "conv_unpack_tilize_probe_metal2.cpp"
+        : split_program_tilize_only   ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "conv_tilize_only_metal2.cpp"
+        : split_tilize_matmul         ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "conv_bmm_split_tilize_metal2.cpp"
+                                      : "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "conv_bmm_tilize_metal2.cpp";
     const std::string writer_sender_kernel =
         block_sharded ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                         "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp"
@@ -1359,7 +1968,11 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- writer mcast SENDER ----
     m2::DataMovementHardwareConfig writer_sender_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        writer_sender_hw = m2::DataMovementGen2Config{};
+        // The sender does explicit reserve_back/push_back on WEIGHTS/BIAS/ACT_SECOND to publish blocks to
+        // compute. On Quasar the implicit-sync ISR would ALSO bump those tile counters -> double-count ->
+        // 16-bit counter overflow -> TILE_COUNTERS fault on the compute unpack that consumes WEIGHTS. Opt out
+        // so explicit credits stay authoritative (mirrors the reader + matmul mcast fix).
+        writer_sender_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_sender_hw = m2::DataMovementGen1Config{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
@@ -1415,7 +2028,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- writer mcast RECEIVER ----
     m2::DataMovementHardwareConfig writer_receiver_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        writer_receiver_hw = m2::DataMovementGen2Config{};
+        // Same as the sender: the receiver does explicit reserve_back/push_back on WEIGHTS/BIAS/ACT_SECOND;
+        // opt out of implicit sync so those tile counters aren't double-bumped (else TILE_COUNTERS overflow
+        // on the compute unpack consuming WEIGHTS).
+        writer_receiver_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_receiver_hw = m2::DataMovementGen1Config{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
@@ -1473,7 +2089,48 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     //  COMPUTE kernel
     // ============================================================================
     std::vector<m2::DFBBinding> compute_dfb_bindings;
-    if (is_conv_1d_depthwise_conv) {
+    if (split_program_unpack_tilize) {
+        // UNPACK-TILIZE PROBE (diagnostic): compute consumes ACT + reduces into the PLAIN ACT_TILIZED DFB
+        // (PRODUCER + degenerate CONSUMER, throwaway) with the IN_SCALAR reduce-scalar as a self-loop. OUT is
+        // dead-but-bound so TP_OUTPUT stays satisfied. No weights / bias / matmul_partials.
+        compute_dfb_bindings = {
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_ACT, .accessor_name = "act", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_ACT_TILIZED,
+                .accessor_name = "act_tilized",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_ACT_TILIZED,
+                .accessor_name = "act_tilized",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_IN_SCALAR,
+                .accessor_name = "in_scalar",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_IN_SCALAR,
+                .accessor_name = "in_scalar",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        };
+    } else if (split_program_tilize_only) {
+        // OPTION B / Program A: compute consumes ACT (gathered by the reader) and tilizes it STRAIGHT INTO OUT
+        // (borrowed from the op's output tensor — the op output IS the tilized activation). Compute is the OUT
+        // PRODUCER only; the OUT CONSUMER is the dedicated credit-only drain DM kernel (KERNEL_OUT_DRAIN below),
+        // NOT a compute self-loop. On Quasar a borrowed-output ring holds num_entries-1, so a self-consumer that
+        // never pops makes the packer's LAST reserve_back exact-fill-stall (dprint_tr14). The drain DM pops OUT
+        // in lockstep on a free DM core so the ring never fills. No weights / act_tilized / matmul_partials.
+        compute_dfb_bindings = {
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_ACT, .accessor_name = "act", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        };
+    } else if (is_conv_1d_depthwise_conv) {
         // Depthwise: consumes ACT (raw RM) + WEIGHTS, produces ACT_TILIZED (tilize out) and consumes it,
         // produces OUT (dest-reuse accumulate, packer-into-output; no MATMUL_PARTIALS CB).
         compute_dfb_bindings = {
@@ -1519,10 +2176,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .endpoint_type = m2::DFBEndpointType::CONSUMER},
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            // OUT degenerate consumer self-loop (resolution #1) — see build_writer_dfb_bindings note.
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
+        // OUT: compute packs the borrowed OUTPUT shard in place (degenerate self-consumer).
+        compute_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER});
         if (block_sharded) {
             // 2D path: compute consumes ACT_ROW_MAJOR (tilize input) and PRODUCES ACT_TILIZED; the READER
             // consumes ACT_TILIZED (mcast source).  So ACT_TILIZED is producer-only on compute here (the
@@ -1569,8 +2226,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             {"in0_num_subblocks", act_num_subblocks},
             {"in0_block_num_tiles", act_block_num_tiles},
             {"in0_subblock_num_tiles", act_subblock_num_tiles},
+            // OPTION B / Program A (tilize-only, NOT the reduce probe): the tilize kernel computes
+            // num_blocks = in0_num_blocks_h * reader_num_h_subblocks and tilizes num_blocks x in0_block_w
+            // (=act_block_w) tiles. To cover the FULL im2col K it must produce M*full_K tiles total, so scale
+            // reader_num_h_subblocks by (full_K / act_block_w) = number of act_block_w-wide sub-blocks per K row.
+            // On WH/BH (no-spill) act_block_w == full_K so this is 1 (num_blocks == M); on Quasar act_block_w is
+            // one window-row so this is filter_h (num_blocks == M*filter_h). Using `filter_h` unconditionally
+            // over-counted 4x on WH -> starvation hang. (Only the tilize-only kernel reads this scaled value.)
             {"reader_num_h_subblocks",
-             enable_split_reader ? act_block_h_ntiles : act_subblock_h_ntiles * act_num_subblocks},
+             (enable_split_reader ? act_block_h_ntiles : act_subblock_h_ntiles * act_num_subblocks) *
+                 ((split_program_tilize_only && !split_program_unpack_tilize) ? (full_k_ntiles / act_block_w_ntiles)
+                                                                              : 1u)},
             {"in1_num_subblocks", weight_num_subblocks},
             {"in1_block_num_tiles", weight_block_num_tiles},
             {"in1_block_w", weight_block_w_ntiles},
@@ -1630,13 +2296,53 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             compute_kernel_spec.compiler_options.defines.insert({"CHECK_SKIP_COMPUTE", "1"});
             compute_kernel_spec.runtime_arg_schema = {.runtime_arg_names = {"skip_compute"}};
         }
+        if (split_program_unpack_tilize) {
+            // UNPACK-TILIZE PROBE: tilizeA_B_reduce_init + reduce_tile_math read REDUCE_OP / REDUCE_DIM macros
+            // (mirroring the pool). MAX / REDUCE_ROW — the reduce output is throwaway; only completion matters.
+            compute_kernel_spec.compiler_options.defines.insert({"REDUCE_OP", "PoolType::MAX"});
+            compute_kernel_spec.compiler_options.defines.insert({"REDUCE_DIM", "ReduceDim::REDUCE_ROW"});
+        }
     }
+
+    // OPTION B / Program A: credit-only OUT-drain DM kernel (drain_out_metal2.cpp). Pops DFB_OUT in lockstep
+    // with the compute's per-block push so the borrowed-output ring never exact-fill-stalls (dprint_tr14).
+    // RISCV_0 is free (the weights writer is skipped in Program A) and is a DIFFERENT DM processor than the
+    // reader (RISCV_1) -> per-node SPSC satisfied. Explicit pop_front -> opt out of implicit sync (mirrors the
+    // reader/writer). Gated to the PURE tilize path (not the reduce probe, which never fills OUT).
+    const bool build_out_drain = split_program_tilize_only && !split_program_unpack_tilize;
+    m2::KernelSpec out_drain_spec{
+        .unique_id = KERNEL_OUT_DRAIN,
+        .source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/drain_out_metal2.cpp"),
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        // Same three CTAs the compute kernel uses (conv_tilize_only_metal2.cpp), so num_blocks/block_width match
+        // 1:1 and the drain pops exactly what the tilize pushes. split_reader is forced off for this path.
+        .compile_time_args =
+            {{"in0_block_w", act_block_w_ntiles},
+             {"in0_num_blocks_h", num_blocks_act_h_per_core},
+             // Must MATCH the compute kernel's reader_num_h_subblocks exactly (num_blocks tracks 1:1). Scale by
+             // (full_K / act_block_w), NOT filter_h — see the compute CTA above (filter_h over-counted on WH).
+             {"reader_num_h_subblocks",
+              act_subblock_h_ntiles * act_num_subblocks * (full_k_ntiles / act_block_w_ntiles)}},
+        .hw_config =
+            (device->arch() == tt::ARCH::QUASAR)
+                ? m2::DataMovementHardwareConfig{m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}}
+                : m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                      .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}},
+    };
 
     // ---- Register kernels ----
     spec.kernels.push_back(std::move(reader_kernel_spec));
-    spec.kernels.push_back(std::move(writer_sender_spec));
-    if (create_writer_mcast_receiver) {
-        spec.kernels.push_back(std::move(writer_receiver_spec));
+    if (build_out_drain) {
+        spec.kernels.push_back(std::move(out_drain_spec));
+    }
+    // OPTION B / Program A has no weights/bias mcast: register only reader + compute (no writer kernels).
+    if (!split_program_tilize_only) {
+        spec.kernels.push_back(std::move(writer_sender_spec));
+        if (create_writer_mcast_receiver) {
+            spec.kernels.push_back(std::move(writer_receiver_spec));
+        }
     }
     spec.kernels.push_back(std::move(compute_kernel_spec));
 
@@ -1649,25 +2355,35 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // (a kernel may appear in several WUs — its placement is the union of their nodes). A sender core
     // runs reader+compute+writer_sender; a receiver core runs reader+compute+writer_receiver; any
     // remaining reader/compute cores (block-sharded: output cores outside input_cores) run reader+compute.
-    {
-        m2::WorkUnitSpec wu{.name = "sender", .target_nodes = mcast_sender_cores};
-        wu.kernels = {KERNEL_READER, KERNEL_COMPUTE, KERNEL_WRITER_SENDER};
-        spec.work_units.push_back(std::move(wu));
-    }
-    if (create_writer_mcast_receiver) {
-        m2::WorkUnitSpec wu{.name = "receiver", .target_nodes = mcast_receiver_cores};
-        wu.kernels = {KERNEL_READER, KERNEL_COMPUTE, KERNEL_WRITER_RECEIVER};
-        spec.work_units.push_back(std::move(wu));
-    }
-    {
-        CoreRangeSet reader_only_cores = reader_compute_cores.subtract(mcast_sender_cores);
-        if (create_writer_mcast_receiver) {
-            reader_only_cores = reader_only_cores.subtract(mcast_receiver_cores);
+    if (split_program_tilize_only) {
+        // OPTION B / Program A: reader + compute (+ OUT-drain) only (no writer), across all reader/compute cores.
+        m2::WorkUnitSpec wu{.name = "reader_compute", .target_nodes = reader_compute_cores};
+        wu.kernels = {KERNEL_READER, KERNEL_COMPUTE};
+        if (build_out_drain) {
+            wu.kernels.push_back(KERNEL_OUT_DRAIN);
         }
-        if (reader_only_cores.num_cores() > 0) {
-            m2::WorkUnitSpec wu{.name = "reader_compute", .target_nodes = reader_only_cores};
-            wu.kernels = {KERNEL_READER, KERNEL_COMPUTE};
+        spec.work_units.push_back(std::move(wu));
+    } else {
+        {
+            m2::WorkUnitSpec wu{.name = "sender", .target_nodes = mcast_sender_cores};
+            wu.kernels = {KERNEL_READER, KERNEL_COMPUTE, KERNEL_WRITER_SENDER};
             spec.work_units.push_back(std::move(wu));
+        }
+        if (create_writer_mcast_receiver) {
+            m2::WorkUnitSpec wu{.name = "receiver", .target_nodes = mcast_receiver_cores};
+            wu.kernels = {KERNEL_READER, KERNEL_COMPUTE, KERNEL_WRITER_RECEIVER};
+            spec.work_units.push_back(std::move(wu));
+        }
+        {
+            CoreRangeSet reader_only_cores = reader_compute_cores.subtract(mcast_sender_cores);
+            if (create_writer_mcast_receiver) {
+                reader_only_cores = reader_only_cores.subtract(mcast_receiver_cores);
+            }
+            if (reader_only_cores.num_cores() > 0) {
+                m2::WorkUnitSpec wu{.name = "reader_compute", .target_nodes = reader_only_cores};
+                wu.kernels = {KERNEL_READER, KERNEL_COMPUTE};
+                spec.work_units.push_back(std::move(wu));
+            }
         }
     }
 
@@ -1676,273 +2392,77 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ============================================================================
     m2::ProgramRunArgs run_args;
 
-    auto setup_mcast_args = [&](bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
-        return is_noc_0 ? std::array<uint32_t, 4>{start_x, start_y, end_x, end_y}
-                        : std::array<uint32_t, 4>{end_x, end_y, start_x, start_y};
-    };
-
     // ---- Reader RTAs ----
     m2::KernelRunArgs reader_run_args{.kernel = KERNEL_READER};
-    if (block_sharded) {
-        std::vector<uint32_t> act_mcast_noc_y;  // X table for non-transpose, Y table for transpose
-        if (transpose_mcast) {
-            act_mcast_noc_y.reserve(in_num_cores_y);
-            for (uint32_t core_idx_y = 0; core_idx_y < in_num_cores_y; ++core_idx_y) {
-                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
-            }
-        } else {
-            act_mcast_noc_y.reserve(in_num_cores_x);
-            for (uint32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
-                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
-            }
-        }
-        const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-        const CoreCoord out_bottom_right_core_physical = device->worker_core_from_logical_core(out_bottom_right_core);
-        const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
-
-        for (const CoreRange& core_range : all_cores.ranges()) {
-            for (const CoreCoord& core : core_range) {
-                const bool is_receiver_core = output_cores.contains(core);
-                const bool is_sender_core = input_cores.contains(core);
-                std::array<uint32_t, 4> mcast;
-                uint32_t act_mcast_sender_id, act_mcast_sender_noc_x;
-                if (transpose_mcast) {
-                    CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
-                    CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
-                    mcast = setup_mcast_args(
-                        reader_is_noc_0,
-                        bottom_core_physical.x,
-                        top_left_core_physical.y,
-                        bottom_core_physical.x,
-                        bottom_core_physical.y);
-                    act_mcast_sender_id = core.y;
-                    act_mcast_sender_noc_x = bottom_core_physical.x;
-                } else {
-                    CoreCoord core_physical = device->worker_core_from_logical_core(core);
-                    mcast = setup_mcast_args(
-                        reader_is_noc_0,
-                        top_left_core_physical.x,
-                        core_physical.y,
-                        out_bottom_right_core_physical.x,
-                        core_physical.y);
-                    act_mcast_sender_id = core.x;
-                    act_mcast_sender_noc_x = core_physical.y;
-                }
-                m2::AddRuntimeArgsForNode(
-                    reader_run_args.runtime_arg_values,
-                    core,
-                    {
-                        {"mcast_dest_noc_start_x", mcast[0]},
-                        {"mcast_dest_noc_start_y", mcast[1]},
-                        {"mcast_dest_noc_end_x", mcast[2]},
-                        {"mcast_dest_noc_end_y", mcast[3]},
-                        {"act_mcast_sender_id", act_mcast_sender_id},
-                        {"act_mcast_sender_noc_x", act_mcast_sender_noc_x},
-                        {"is_receiver_core", (uint32_t)is_receiver_core},
-                        {"is_sender_core", (uint32_t)is_sender_core},
-                        {"dram_config_reader_index", transpose_mcast ? core.x : core.y},
-                    });
-                m2::AdvancedKernelRunArgs::Varargs varargs(act_mcast_noc_y.begin(), act_mcast_noc_y.end());
-                reader_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
-            }
-        }
-    } else if (is_conv_1d_depthwise_conv) {
-        // Depthwise reader has no runtime args.
-    } else {
-        // Height-sharded reader: {core_index, remaining_tiles_to_push}.  Activation reuse is deferred, so
-        // remaining_tiles_to_push is always 0.
-        uint32_t core_index = 0;
-        for (const CoreRange& core_range : input_cores.ranges()) {
-            for (const CoreCoord& core : core_range) {
-                m2::AddRuntimeArgsForNode(
-                    reader_run_args.runtime_arg_values,
-                    core,
-                    {
-                        {"core_index", core_index},
-                        {"remaining_tiles_to_push", 0u},
-                    });
-                core_index++;
-            }
-        }
-    }
+    populate_reader_runtime_args(
+        reader_run_args,
+        block_sharded,
+        transpose_mcast,
+        is_conv_1d_depthwise_conv,
+        in_num_cores_x,
+        in_num_cores_y,
+        num_cores_x,
+        num_cores_y,
+        device,
+        reader_noc,
+        all_cores,
+        input_cores,
+        output_cores,
+        top_left_core_physical);
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
 
     // ---- Writer SENDER RTAs ----
-    m2::KernelRunArgs writer_sender_run_args{.kernel = KERNEL_WRITER_SENDER};
-    m2::KernelRunArgs::RuntimeArgValues& writer_sender_rtas = writer_sender_run_args.runtime_arg_values;
-    for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
-        for (const CoreCoord& core : core_range) {
-            if (populate_skipped_work_cores && !output_cores.contains(core)) {
-                // Pad-out path: zeros with only the bias-flag/skip slots populated.
-                m2::AddRuntimeArgsForNode(
-                    writer_sender_rtas,
-                    core,
-                    {
-                        {"out_start_tile_id_w", 0u},
-                        {"bias_tile_offset", 0u},
-                        {"mcast_dest_noc_start_x", 0u},
-                        {"mcast_dest_noc_start_y", 0u},
-                        {"mcast_dest_noc_end_x", 0u},
-                        {"mcast_dest_noc_end_y", 0u},
-                        {"weights_mcast_num_dests", 0u},
-                        {"weights_mcast_num_cores", 0u},
-                        {"is_sender_core", 1u},
-                        {"skip_work", 1u},
-                    });
-                continue;
-            }
-            uint32_t weight_slice_i = ((block_sharded && transpose_mcast) || !block_sharded) ? core.y : core.x;
-            uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
-            uint32_t bias_tile_offset = out_start_tile_id_w;
-            TT_FATAL(
-                bias_tile_offset < bias_ntiles || !has_bias,
-                "bias_tile_offset {} should be less than bias_ntiles {}",
-                bias_tile_offset,
-                bias_ntiles);
-
-            if (block_sharded) {
-                const bool is_sender_core = input_cores.contains(core);
-                std::array<uint32_t, 4> mcast;
-                if (transpose_mcast) {
-                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                    CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                    TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
-                    mcast = setup_mcast_args(
-                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                        top_left_core_plus_one_physical.x,
-                        right_core_physical.y,
-                        bottom_right_core_physical.x,
-                        right_core_physical.y);
-                    m2::AddRuntimeArgsForNode(
-                        writer_sender_rtas,
-                        core,
-                        {
-                            {"out_start_tile_id_w", out_start_tile_id_w},
-                            {"bias_tile_offset", bias_tile_offset},
-                            {"mcast_dest_noc_start_x", mcast[0]},
-                            {"mcast_dest_noc_start_y", mcast[1]},
-                            {"mcast_dest_noc_end_x", mcast[2]},
-                            {"mcast_dest_noc_end_y", mcast[3]},
-                            {"weights_mcast_num_dests", num_cores_x - 1},
-                            {"weights_mcast_num_cores", num_cores_x - 1},
-                            {"is_sender_core", (uint32_t)is_sender_core},
-                            {"skip_work", 0u},
-                        });
-                } else {
-                    CoreCoord top_core = {(std::size_t)core.x, 0};
-                    CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
-                    TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
-                    mcast = setup_mcast_args(
-                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                        top_core_physical.x,
-                        top_left_core_plus_one_physical.y,
-                        top_core_physical.x,
-                        bottom_right_core_physical.y);
-                    m2::AddRuntimeArgsForNode(
-                        writer_sender_rtas,
-                        core,
-                        {
-                            {"out_start_tile_id_w", out_start_tile_id_w},
-                            {"bias_tile_offset", bias_tile_offset},
-                            {"mcast_dest_noc_start_x", mcast[0]},
-                            {"mcast_dest_noc_start_y", mcast[1]},
-                            {"mcast_dest_noc_end_x", mcast[2]},
-                            {"mcast_dest_noc_end_y", mcast[3]},
-                            {"weights_mcast_num_dests", num_cores_y - 1},
-                            {"weights_mcast_num_cores", num_cores_y - 1},
-                            {"is_sender_core", (uint32_t)is_sender_core},
-                            {"skip_work", 0u},
-                        });
-                }
-            } else {
-                std::array<uint32_t, 4> mcast = setup_mcast_args(
-                    writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                    top_left_core_physical.x,
-                    top_left_core_physical.y,
-                    bottom_right_core_physical.x,
-                    bottom_right_core_physical.y);
-                m2::AddRuntimeArgsForNode(
-                    writer_sender_rtas,
-                    core,
-                    {
-                        {"out_start_tile_id_w", out_start_tile_id_w},
-                        {"mcast_dest_noc_start_x", mcast[0]},
-                        {"mcast_dest_noc_start_y", mcast[1]},
-                        {"mcast_dest_noc_end_x", mcast[2]},
-                        {"mcast_dest_noc_end_y", mcast[3]},
-                        {"weights_mcast_num_dests", total_active_num_cores - 1},
-                        {"weights_mcast_num_cores", total_num_cores - 1},
-                        // remaining_tiles_to_push is always in the 1D schema (activation reuse deferred -> 0).
-                        {"remaining_tiles_to_push", 0u},
-                    });
-                if (has_bias) {
-                    writer_sender_rtas["bias_tile_offset"][core] = bias_tile_offset;
-                }
-            }
-        }
-    }
-    run_args.kernel_run_args.push_back(std::move(writer_sender_run_args));
+    // OPTION B / Program A registers no writer kernels, so emit no writer run-args for it.
+    if (!split_program_tilize_only) {
+        m2::KernelRunArgs writer_sender_run_args{.kernel = KERNEL_WRITER_SENDER};
+        populate_writer_sender_runtime_args(
+            writer_sender_run_args,
+            mcast_sender_cores,
+            input_cores,
+            output_cores,
+            populate_skipped_work_cores,
+            block_sharded,
+            transpose_mcast,
+            has_bias,
+            per_core_out_matrix_width_ntiles,
+            bias_ntiles,
+            num_cores_x,
+            num_cores_y,
+            total_active_num_cores,
+            total_num_cores,
+            device,
+            writer_mcast_noc,
+            top_left_core_physical,
+            top_left_core_plus_one_physical,
+            bottom_right_core_physical);
+        run_args.kernel_run_args.push_back(std::move(writer_sender_run_args));
+    }  // if (!split_program_tilize_only) — writer SENDER RTAs
 
     // ---- Writer RECEIVER RTAs ----
-    if (create_writer_mcast_receiver) {
+    if (create_writer_mcast_receiver && !split_program_tilize_only) {
         m2::KernelRunArgs writer_receiver_run_args{.kernel = KERNEL_WRITER_RECEIVER};
-        m2::KernelRunArgs::RuntimeArgValues& writer_receiver_rtas = writer_receiver_run_args.runtime_arg_values;
-        for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
-            for (const CoreCoord& core : core_range) {
-                if (block_sharded) {
-                    uint32_t sender_noc_x, sender_noc_y;
-                    if (transpose_mcast) {
-                        CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                        CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                        sender_noc_x = top_left_core_physical.x;
-                        sender_noc_y = right_core_physical.y;
-                    } else {
-                        CoreCoord top_core = {(std::size_t)core.x, 0};
-                        CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
-                        sender_noc_x = top_core_physical.x;
-                        sender_noc_y = top_left_core_physical.y;
-                    }
-                    const bool is_sender_core = input_cores.contains(core);
-                    m2::AddRuntimeArgsForNode(
-                        writer_receiver_rtas,
-                        core,
-                        {
-                            {"weights_mcast_sender_noc_x", sender_noc_x},
-                            {"weights_mcast_sender_noc_y", sender_noc_y},
-                            {"is_sender_core", (uint32_t)is_sender_core},
-                        });
-                } else {
-                    bool is_no_op_core = !input_cores.contains(core);
-                    m2::AddRuntimeArgsForNode(
-                        writer_receiver_rtas,
-                        core,
-                        {
-                            {"noop", (uint32_t)is_no_op_core},
-                            {"weights_mcast_sender_noc_x", top_left_core_physical.x},
-                            {"weights_mcast_sender_noc_y", top_left_core_physical.y},
-                            // remaining_tiles_to_push is always in the 1D receiver schema (reuse deferred -> 0).
-                            {"remaining_tiles_to_push", 0u},
-                        });
-                }
-            }
-        }
+        populate_writer_receiver_runtime_args(
+            writer_receiver_run_args,
+            mcast_receiver_cores,
+            input_cores,
+            block_sharded,
+            transpose_mcast,
+            num_cores_x,
+            device,
+            top_left_core_physical);
         run_args.kernel_run_args.push_back(std::move(writer_receiver_run_args));
     }
 
     // ---- Compute RTAs ----
     m2::KernelRunArgs compute_run_args{.kernel = KERNEL_COMPUTE};
-    if (check_skip_compute && !is_conv_1d_depthwise_conv) {
-        CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
-        uint32_t end_coord_x = bottom_right_core_out.x;
-        uint32_t end_coord_y = bottom_right_core_out.y;
-        for (const CoreRange& range : all_cores.ranges()) {
-            for (const CoreCoord& core : range) {
-                bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
-                compute_run_args.runtime_arg_values["skip_compute"][core] = (uint32_t)skip_compute;
-            }
-        }
-    }
+    populate_compute_runtime_args(
+        compute_run_args, check_skip_compute, is_conv_1d_depthwise_conv, transpose_mcast, all_cores, output_cores);
     run_args.kernel_run_args.push_back(std::move(compute_run_args));
+
+    // OPTION B / Program A OUT-drain: no per-node runtime args (all block counts are compile-time).
+    if (build_out_drain) {
+        run_args.kernel_run_args.push_back(m2::KernelRunArgs{.kernel = KERNEL_OUT_DRAIN});
+    }
 
     // ---- Op-owned tensors ----
     std::vector<tt::tt_metal::MeshTensor> op_owned_tensors;
@@ -1953,9 +2473,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- Tensor args ----
     run_args.tensor_args.emplace(TP_INPUT, std::cref(a.mesh_tensor()));
     run_args.tensor_args.emplace(TP_OUTPUT, std::cref(output.mesh_tensor()));
-    run_args.tensor_args.emplace(TP_WEIGHTS, std::cref(b.mesh_tensor()));
-    if (has_bias) {
-        run_args.tensor_args.emplace(TP_BIAS, std::cref(bias.value().mesh_tensor()));
+    // Program A declares no TP_WEIGHTS/TP_BIAS parameters (see tensor-parameter block above) — the run args
+    // must match the declared parameters, so only pass them on the fused/matmul path.
+    if (!split_program_tilize_only) {
+        run_args.tensor_args.emplace(TP_WEIGHTS, std::cref(b.mesh_tensor()));
+        if (has_bias) {
+            run_args.tensor_args.emplace(TP_BIAS, std::cref(bias.value().mesh_tensor()));
+        }
     }
     run_args.tensor_args.emplace(TP_READER_INDICES, std::cref(reader_indices_owned));
 
