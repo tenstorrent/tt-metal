@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <bit>
 #include <cmath>
+#include <variant>
 
 namespace ttnn::prim {
 
@@ -198,24 +199,30 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     // otherwise carry the caller's math_approx_mode into sfpu_precision_mode and the caller's
     // dst_full_sync_en into double_buffer_dest, silently changing precision / Dest buffering.
     auto compute_hw = ttnn::to_compute_hardware_config(a.device().arch(), operation_attributes.compute_kernel_config);
-    if (auto* compute_gen1 = std::get_if<ComputeGen1Config>(&compute_hw)) {
-        compute_gen1->sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
-        compute_gen1->double_buffer_dest = true;                 // legacy dst_full_sync_en = false
-        // Legacy left unpack_to_dest_mode unset (all Default = UnpackToSrc). Metal 2.0 nonetheless
-        // requires an explicit mode for every Float32 buffer this kernel consumes under a 32-bit
-        // Dest register, so state the legacy value for those.
-        auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
-            if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
-                compute_gen1->unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
+    // std::visit rather than a Gen1-only get_if: to_compute_hardware_config yields a
+    // ComputeGen2Config on Quasar, and the three fields set below exist on both generations.
+    // The explicit-unpack-mode requirement in particular is enforced generation-agnostically, so a
+    // Gen1-only branch would leave FP32 + 32-bit-Dest programs failing ProgramSpec validation there.
+    std::visit(
+        [&](auto& compute_cfg) {
+            compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
+            compute_cfg.double_buffer_dest = true;                 // legacy dst_full_sync_en = false
+            // Legacy left unpack_to_dest_mode unset (all Default = UnpackToSrc). Metal 2.0 nonetheless
+            // requires an explicit mode for every Float32 buffer this kernel consumes under a 32-bit
+            // Dest register, so state the legacy value for those.
+            auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
+                if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
+                    compute_cfg.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
+                }
+            };
+            require_explicit_unpack_mode(IN_DFB, src0_cb_data_format);
+            require_explicit_unpack_mode(SCALER_DFB, scaler_cb_data_format);
+            if (operation_attributes.negate) {
+                require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
+                require_explicit_unpack_mode(INEG_DFB, dst_cb_data_format);
             }
-        };
-        require_explicit_unpack_mode(IN_DFB, src0_cb_data_format);
-        require_explicit_unpack_mode(SCALER_DFB, scaler_cb_data_format);
-        if (operation_attributes.negate) {
-            require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
-            require_explicit_unpack_mode(INEG_DFB, dst_cb_data_format);
-        }
-    }
+        },
+        compute_hw);
 
     Group<DFBBinding> compute_dfb_bindings = {
         DFBBinding{
