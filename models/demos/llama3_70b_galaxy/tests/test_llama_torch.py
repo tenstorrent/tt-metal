@@ -23,6 +23,7 @@ def test_llama_torch_inference(ensure_gc):
 
     reference_model = model_args.reference_transformer()
     reference_model.load_state_dict(state_dict)
+    reference_model.model.to(torch.float32)
 
     # Embedding on host
     embd = HostEmbedding(model_args)

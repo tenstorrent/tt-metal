@@ -183,6 +183,7 @@ def test_llama_model_inference(
     if run_ref_pt:
         reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
+        reference_model.model.to(torch.float32)
 
     # Embedding on host
     embd = HostEmbedding(model_args)
