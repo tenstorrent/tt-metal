@@ -17,6 +17,25 @@
  * Header-only (all functions `inline`): the only consumer today is a program factory
  * that already pulls these dependencies; splitting into a compiled .cpp + CMake
  * target is trivial later if the inline footprint grows.
+ *
+ * @par Authoring a CCL dataflow op — which helper for each step.
+ *   These are host-side C++ building blocks called from an op's PROGRAM FACTORY (point_to_point and
+ *   all_gather are the consumers today); they are not ttnn ops, so they are intentionally not
+ *   Python-bound. A typical fabric dataflow op builds its writer/reader args in this order:
+ *     1. @c ccl_packet_dims(dtype, page_size, num_pages, alignment) — frame pages into fabric
+ *        packets (packet size / pages-per-packet / segments); owns the bf16 case + the page regimes.
+ *     2. @c ccl_dm_route(mesh_device, sender, receiver, topology) — compute the 1-D {num_hops,
+ *        is_forward, neighbor} for a single point-to-point route (owns the fwd/bwd sign reversal +
+ *        the ring-vs-line shorter-path choice). The bidirectional (all_gather) case instead pairs the
+ *        existing ring-route configuration with @c append_ccl_line_route_ct_args (step 4).
+ *     3. @c append_ccl_fabric_rt_args(...) — append the fabric-CONNECTION runtime args in the exact
+ *        layout the kernel's FabricStreamSender opens (has_forward/has_backward + the connection
+ *        block). Generic across fabric paths.
+ *     4. @c append_ccl_line_route_ct_args(...) — bidirectional/all_gather only: append the four
+ *        line-ROUTE compile-time args (fwd/bwd × unicast/multicast) in the order the writer reads
+ *        them back. Distinct from step 3 — this is the ROUTE, not the connection.
+ *     5. @c make_ccl_semaphore(mesh_device) — allocate the cross-device GlobalSemaphore + run the
+ *        cache-miss Synchronize barrier; keep the returned handle alive for the workload's lifetime.
  */
 
 #include <bit>
