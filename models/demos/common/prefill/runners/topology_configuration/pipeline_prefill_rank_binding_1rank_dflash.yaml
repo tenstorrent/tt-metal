@@ -26,7 +26,7 @@ mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_to
 
 global_env:
   # Kimi verifier — DFlash requires the Kimi prefill model (the drafter taps its residual stream).
-  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi.json"
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi26.json"
 
   PREFILL_STANDALONE: "1"    # merged runner: standalone (bring-up/pipeline) mode, not the request loop
 
