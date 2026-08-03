@@ -507,6 +507,47 @@ def test_group_norm_non_tile_aligned_per_sample_DRAM(device, N, C, H, W, num_gro
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_non_tile_aligned_program_cache_aliasing_DRAM(device):
+    # The interleaved paths ship the scaler and K as compile-time args, so H*W=200 and H*W=224 --
+    # same padded 224, different logical -- must not share a cached program, or one of them runs the
+    # other's divisor. Safe today because the default program hash keys on logical_shape. The sharded
+    # path needs no equivalent: runtime args, and its own tests already cover a cache hit.
+    if device.core_grid.y == 7:
+        pytest.skip()
+
+    C, num_groups = 1024, 32
+    non_aligned_hw, aligned_hw = 200, 224  # both pad to 224
+    assert non_aligned_hw % 32 != 0 and aligned_hw % 32 == 0
+    assert ((non_aligned_hw + 31) // 32) * 32 == aligned_hw, "the two shapes must share a padded_hw"
+
+    # Non-aligned, aligned, non-aligned. Only the change across calls is meaningful: the helper's
+    # tilize and param-prep ops add entries of their own.
+    entries = []
+    for call_index, hw in enumerate((non_aligned_hw, aligned_hw, non_aligned_hw)):
+        expected, actual = run_group_norm_non_tile_aligned_DRAM(device, 1, C, 1, hw, num_groups, use_welford=False)
+        passed, message = assert_numeric_metrics(
+            expected,
+            actual,
+            atol=NON_TILE_ALIGNED_ATOL,
+            frobenius_threshold=0.03,
+            assert_on_fail=False,
+        )
+        assert passed, f"call {call_index} (H*W={hw}) wrong -- a shared cache entry does exactly this: {message}"
+        entries.append(device.num_program_cache_entries())
+
+    assert entries[1] > entries[0], (
+        f"H*W={aligned_hw} added no program-cache entry over H*W={non_aligned_hw} "
+        f"({entries[0]} -> {entries[1]}); the two logical shapes aliased onto one program"
+    )
+    # A hit here, plus call 3's numeric check above, is the proof: it reused call 1's entry and the
+    # aligned call between them did not poison it.
+    assert entries[2] == entries[1], (
+        f"repeating H*W={non_aligned_hw} added {entries[2] - entries[1]} entries "
+        f"({entries[1]} -> {entries[2]}); expected a program-cache hit"
+    )
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_NON_TILE_ALIGNED_GRID_DRAM_CASES
 )

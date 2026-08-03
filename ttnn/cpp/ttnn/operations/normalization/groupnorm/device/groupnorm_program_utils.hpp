@@ -20,7 +20,10 @@ enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RE
 // subtract K*E[x]^2 from the variance. Shared by all three two-pass factories so the scaler formula
 // has one definition. Kernels re-derive `active` from (padded_hw != logical_hw), which is why
 // `kernel_logical_hw` reports padded_hw when off -- otherwise the kernel flag could disagree with
-// the CB allocation and hang the compute kernel on cb_k.wait_front.
+// the CB allocation and hang the compute kernel on dfb_k.wait_front.
+// The interleaved factories ship these as compile-time args, so H*W=200 and H*W=224 (same padded
+// 224) must not share a cached program. They do not: the default program hash keys on TensorSpec's
+// logical_shape. A compute_program_hash that dropped it would serve one of them the wrong scaler.
 struct GroupNormPadCorrection {
     bool active = false;
     uint32_t logical_hw = 0;
@@ -29,14 +32,18 @@ struct GroupNormPadCorrection {
     uint32_t k_bits = 0;             // K = padded_hw/logical_hw - 1, as float bits
 
     // Reduce scaler that divides by the real element count rather than the padded one. The sqrt is
-    // because the AVG/REDUCE_SCALAR LLK applies the scaler twice (row then col).
+    // because the AVG/REDUCE_SCALAR LLK applies the scaler twice (row then col). Scaling the divisor
+    // rather than masking the scaler tile is forced: prepare_reduce_scaler's
+    // `valid_reduce_dim_elements_in_tile` is ignored under REDUCE_SCALAR. L/P being a ratio makes
+    // this invariant to how H*W splits across cores -- reduce_factor_c still yields L * C_g.
     uint32_t scaler_bits(uint32_t reduce_factor_w) const;
 };
 
 GroupNormPadCorrection make_group_norm_pad_correction(uint32_t logical_hw, uint32_t padded_hw, bool use_welford);
 
-// Appends the three single-tile pad-correction CBs when the correction is active: cb_k (written by
+// Appends the three single-tile pad-correction CBs when the correction is active: dfb_k (written by
 // the writer) plus two scratch tiles. The indices differ per path by what each already occupies.
+// Costs 3 tiles per core when active -- 6KB at bfloat16, 12KB at float32.
 void append_group_norm_pad_correction_cbs(
     tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs,
     const GroupNormPadCorrection& pad,
