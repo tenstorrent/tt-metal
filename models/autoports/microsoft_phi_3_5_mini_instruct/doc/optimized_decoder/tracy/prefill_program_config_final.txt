@@ -1,0 +1,44 @@
+Phi-3.5 optimized prefill tt-perf-report summary
+=================================================
+
+Commands
+--------
+OPT_PERF_BATCHES=1 OPT_PREFILL_CANDIDATES=optimized OPT_PREFILL_ITERATIONS=1 python -m tracy -r -p -v -m pytest -q -s \
+  models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py \
+  -k candidate_warmed_prefill
+tt-perf-report generated/profiler/reports/2026_07_30_07_35_46/ops_perf_results_2026_07_30_07_35_46.csv \
+  --start-signpost PERF_PREFILL_B1 --end-signpost PERF_PREFILL_B1_END --no-color --no-summary
+
+OPT_PERF_BATCHES=32 OPT_PREFILL_CANDIDATES=optimized OPT_PREFILL_ITERATIONS=1 \
+  python -m tracy -r -p -v -m pytest -q -s \
+  models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py \
+  -k candidate_warmed_prefill
+tt-perf-report generated/profiler/reports/2026_07_30_07_36_02/ops_perf_results_2026_07_30_07_36_02.csv \
+  --start-signpost PERF_PREFILL_B32 --end-signpost PERF_PREFILL_B32_END --no-color --no-summary
+
+Results
+-------
+B1 (one bounded shipped-BFP4 iteration):
+- 50 device ops, 0 host ops; device time 1,270 us; op-to-op gaps 470 us.
+- QKV: 95 us, 96 cores, in0_block_w=2, BFP4/HiFi2.
+- output: 86 us, 96 cores, in0_block_w=2, BFP4/HiFi2.
+- packed gate/up: 119 us, 103 cores, in0_block_w=2, BFP4/HiFi2.
+- selected down: 136 us, 32 cores, in0_block_w=8, BFP4/LoFi.
+- SDPA: 19 us on 110 cores.
+
+B32 (one bounded optimized iteration; the wider two-candidate collection
+overflowed the device/host join and is not used):
+- 176 device ops, 0 host ops; device time 29,905 us; op-to-op gaps 125 us.
+- QKV: 2,992 us, 96 cores, in0_block_w=2, BFP4/HiFi2.
+- output: 2,636 us, 96 cores, in0_block_w=2, BFP4/HiFi2.
+- packed gate/up: 3,729 us, 103 cores, in0_block_w=2, BFP4/HiFi2.
+- selected down: 768 us, 64 cores, in0_block_w=8, BFP4/LoFi.
+- SDPA: 469 us on 110 cores.
+
+Conclusion
+----------
+The final decoder retains automatic large configs for QKV/output/gate-up and
+uses the proven explicit 32-core (B1) or 64-core (B32) block8 down config.
+The larger-block experiment and exact QKV/gate-up B32 L1 blockers are preserved
+in `../prefill_explicit_config_runner.txt`. The profiler shows no host fallback
+or Torch conversion.

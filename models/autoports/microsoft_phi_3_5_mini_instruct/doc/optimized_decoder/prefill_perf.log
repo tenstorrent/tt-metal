@@ -1,0 +1,74 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items / 2 deselected / 2 selected
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-1-mesh_device0] 2026-07-30 06:48:27.999 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-30 06:48:27.999 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-30 06:48:27.999 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-30 06:48:27.999 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-30 06:48:28.000 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-30 06:48:28.000 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-30 06:48:28.004 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-30 06:48:28.226 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-30 06:48:28.226 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-30 06:48:28.226 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-30 06:48:28.226 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-30 06:48:28.227 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-30 06:48:28.410 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-30 06:48:28.536 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-30 06:48:28.536 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-30 06:48:28.536 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 06:48:28.536 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 06:48:28.536 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 06:48:28.536 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 06:48:28.536 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 06:48:28.536 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 06:48:28.536 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 06:48:28.536 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 06:48:28.536 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-30 06:48:28.536 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-30 06:48:28.542 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 06:48:28.542 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 06:48:28.542 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 06:48:28.542 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 06:48:28.570 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 06:48:28.610 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-30 06:48:29.188 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349978 GHz, device_time_at_sync=23823712199063 cycles (realtime_profiler_manager.cpp:1127)
+OPT_PREFILL batch=1 sequence=128 values={'fused': 1.5978035982698202, 'optimized': 1.4007949270308018}
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-32-mesh_device0] 2026-07-30 06:48:31.012 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 06:48:31.013 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 06:48:31.014 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 06:48:31.014 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 06:48:31.043 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+OPT_PREFILL batch=32 sequence=128 values={'fused': 37.30101240798831, 'optimized': 30.28587754815817}
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+2.70s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-32-mesh_device0]
+1.46s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-1-mesh_device0]
+1.41s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-1-mesh_device0]
+0.30s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-32-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-1-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-32-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-1-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_warmed_prefill[blackhole-32-mesh_device0]
+======================= 2 passed, 2 deselected in 6.77s ========================
+2026-07-30 06:48:35.689 | info     |    BuildKernels | JIT cache stats: 258/258 hits (100.0%) [258 cached, 172 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-30 06:48:35.689 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-30 06:48:35.703 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-30 06:48:35.703 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-30 06:48:36.157 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-30 06:48:36.158 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-30 06:48:36.158 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

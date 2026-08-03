@@ -1,0 +1,5 @@
+delta_ms = fused - functional (negative favors fused)
+batch=1 order=functional,fused files=10 pairs=10000 paired_mean=-0.002442 95%CI=[-0.002854,-0.001666] paired_median=-0.002555 95%CI=[-0.002606,-0.002503]
+batch=1 order=fused,functional files=10 pairs=10000 paired_mean=-0.002451 95%CI=[-0.002623,-0.002348] paired_median=-0.002405 95%CI=[-0.002465,-0.002353]
+batch=32 order=functional,fused files=10 pairs=10000 paired_mean=-0.002818 95%CI=[-0.003498,-0.002355] paired_median=-0.002686 95%CI=[-0.002806,-0.002575]
+batch=32 order=fused,functional files=10 pairs=10000 paired_mean=-0.002786 95%CI=[-0.003167,-0.002430] paired_median=-0.002674 95%CI=[-0.002834,-0.002534]

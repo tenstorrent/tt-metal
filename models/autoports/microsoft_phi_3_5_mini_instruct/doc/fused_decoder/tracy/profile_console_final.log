@@ -1,0 +1,213 @@
+2026-07-30 01:51:42.196 | INFO     | __main__:main:395 - Using port 8086
+2026-07-30 01:51:42.196 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-07-30 01:51:42.377 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/mvasiljevic/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-07-30 01:51:42.384 | INFO     | __main__:main:413 - Test process started
+2026-07-30 01:51:43.352 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-1-mesh_device0] 2026-07-30 01:51:45.647 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-30 01:51:45.647 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-30 01:51:45.647 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-30 01:51:45.647 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-30 01:51:45.649 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-30 01:51:45.649 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-30 01:51:45.653 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-30 01:51:45.874 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-30 01:51:45.874 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-30 01:51:45.874 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-30 01:51:45.874 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-30 01:51:45.876 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-30 01:51:46.020 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-30 01:51:46.159 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 01:51:46.159 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 01:51:46.159 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-30 01:51:46.159 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-30 01:51:46.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 01:51:46.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 01:51:46.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 01:51:46.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 01:51:46.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 01:51:46.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 01:51:46.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 01:51:46.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 01:51:46.159 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-30 01:51:46.159 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-30 01:51:46.200 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 01:51:46.207 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-07-30 01:51:46.248 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-30 01:51:46.828 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349977 GHz, device_time_at_sync=9036050981655 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-30 01:51:46.844 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+[transformers] This model config has set a `rope_parameters['original_max_position_embeddings']` field, to be used together with `max_position_embeddings` to determine a scaling factor. Please set the `factor` field of `rope_parameters`with this ratio instead -- we recommend the use of this field over `original_max_position_embeddings`, as it is compatible with most model architectures.
+2026-07-30 01:51:47.592 | INFO     | tracy:signpost:49 - FUSED_PREFILL_B1
+2026-07-30 01:51:47.690 | INFO     | tracy:signpost:49 - FUSED_PREFILL_B1_END
+PERF_RESULTS mode=prefill batch=1 sequence=128 values={'fused': (1.8433968846996625, 1.716114580631256)}
+PASSED2026-07-30 01:51:48.084 | info     |           Metal | Device kernel duration perf summary (device=3): count=205, min=1925ns, avg=35559.9ns, max=475715ns (profiler_analysis.cpp:675)
+2026-07-30 01:51:48.084 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=47400ns, range=[0..474000), underflow(<0ns)=0, overflow(>=474000ns)=1) (profiler_analysis.cpp:718)
+2026-07-30 01:51:48.084 | info     |           Metal |   [           0 ..        47400) |########################################|      181 (profiler_analysis.cpp:723)
+2026-07-30 01:51:48.084 | info     |           Metal |   [       47400 ..        94800) |#                                       |        4 (profiler_analysis.cpp:723)
+2026-07-30 01:51:48.084 | info     |           Metal |   [       94800 ..       142200) |#                                       |        4 (profiler_analysis.cpp:723)
+2026-07-30 01:51:48.084 | info     |           Metal |   [      142200 ..       189600) |#                                       |        5 (profiler_analysis.cpp:723)
+2026-07-30 01:51:48.084 | info     |           Metal |   [      189600 ..       237000) |#                                       |        4 (profiler_analysis.cpp:723)
+2026-07-30 01:51:48.084 | info     |           Metal |   [      237000 ..       284400) |#                                       |        3 (profiler_analysis.cpp:723)
+2026-07-30 01:51:48.084 | info     |           Metal |   [      284400 ..       331800) |                                        |        2 (profiler_analysis.cpp:723)
+2026-07-30 01:51:48.084 | info     |           Metal |   [      331800 ..       379200) |                                        |        1 (profiler_analysis.cpp:723)
+2026-07-30 01:51:48.084 | info     |           Metal |   [      379200 ..       426600) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:48.084 | info     |           Metal |   [      426600 ..       474000) |                                        |        0 (profiler_analysis.cpp:723)
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-1-mesh_device0] 2026-07-30 01:51:48.531 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 01:51:48.532 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 01:51:48.580 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 01:51:48.586 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-07-30 01:51:48.626 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-30 01:51:49.398 | INFO     | tracy:signpost:49 - FUSED_DECODE_B1
+2026-07-30 01:51:49.402 | INFO     | tracy:signpost:49 - FUSED_DECODE_B1_END
+PERF_RESULTS mode=decode batch=1 context=128 traced=true values={'fused': (1.095443032681942, 1.0912520810961723)}
+PASSED2026-07-30 01:51:49.692 | info     |           Metal | Device kernel duration perf summary (device=3): count=290, min=453ns, avg=21853.4ns, max=477807ns (profiler_analysis.cpp:675)
+2026-07-30 01:51:49.692 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=47800ns, range=[0..478000), underflow(<0ns)=0, overflow(>=478000ns)=0) (profiler_analysis.cpp:718)
+2026-07-30 01:51:49.692 | info     |           Metal |   [           0 ..        47800) |########################################|      261 (profiler_analysis.cpp:723)
+2026-07-30 01:51:49.692 | info     |           Metal |   [       47800 ..        95600) |##                                      |       10 (profiler_analysis.cpp:723)
+2026-07-30 01:51:49.692 | info     |           Metal |   [       95600 ..       143400) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:49.692 | info     |           Metal |   [      143400 ..       191200) |##                                      |       11 (profiler_analysis.cpp:723)
+2026-07-30 01:51:49.692 | info     |           Metal |   [      191200 ..       239000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:49.692 | info     |           Metal |   [      239000 ..       286800) |#                                       |        5 (profiler_analysis.cpp:723)
+2026-07-30 01:51:49.692 | info     |           Metal |   [      286800 ..       334600) |                                        |        1 (profiler_analysis.cpp:723)
+2026-07-30 01:51:49.692 | info     |           Metal |   [      334600 ..       382400) |                                        |        1 (profiler_analysis.cpp:723)
+2026-07-30 01:51:49.692 | info     |           Metal |   [      382400 ..       430200) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:49.692 | info     |           Metal |   [      430200 ..       478000) |                                        |        1 (profiler_analysis.cpp:723)
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-32-mesh_device0] 2026-07-30 01:51:50.113 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 01:51:50.113 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 01:51:50.156 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 01:51:50.162 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-07-30 01:51:50.202 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-30 01:51:50.948 | INFO     | tracy:signpost:49 - FUSED_PREFILL_B32
+2026-07-30 01:51:51.144 | INFO     | tracy:signpost:49 - FUSED_PREFILL_B32_END
+PERF_RESULTS mode=prefill batch=32 sequence=128 values={'fused': (37.28883589307467, 37.25656773895025)}
+PASSED2026-07-30 01:51:51.643 | info     |           Metal | Device kernel duration perf summary (device=3): count=709, min=1916ns, avg=211438.3ns, max=8751545ns (profiler_analysis.cpp:675)
+2026-07-30 01:51:51.643 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=875000ns, range=[0..8750000), underflow(<0ns)=0, overflow(>=8750000ns)=1) (profiler_analysis.cpp:718)
+2026-07-30 01:51:51.643 | info     |           Metal |   [           0 ..       875000) |########################################|      693 (profiler_analysis.cpp:723)
+2026-07-30 01:51:51.643 | info     |           Metal |   [      875000 ..      1750000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:51.643 | info     |           Metal |   [     1750000 ..      2625000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:51.643 | info     |           Metal |   [     2625000 ..      3500000) |                                        |        4 (profiler_analysis.cpp:723)
+2026-07-30 01:51:51.643 | info     |           Metal |   [     3500000 ..      4375000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:51.643 | info     |           Metal |   [     4375000 ..      5250000) |                                        |        4 (profiler_analysis.cpp:723)
+2026-07-30 01:51:51.643 | info     |           Metal |   [     5250000 ..      6125000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:51.643 | info     |           Metal |   [     6125000 ..      7000000) |                                        |        4 (profiler_analysis.cpp:723)
+2026-07-30 01:51:51.643 | info     |           Metal |   [     7000000 ..      7875000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:51.643 | info     |           Metal |   [     7875000 ..      8750000) |                                        |        3 (profiler_analysis.cpp:723)
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-32-mesh_device0] 2026-07-30 01:51:52.347 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 01:51:52.348 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 01:51:52.401 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 01:51:52.403 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-07-30 01:51:52.443 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-30 01:51:53.186 | INFO     | tracy:signpost:49 - FUSED_DECODE_B32
+2026-07-30 01:51:53.191 | INFO     | tracy:signpost:49 - FUSED_DECODE_B32_END
+PERF_RESULTS mode=decode batch=32 context=128 traced=true values={'fused': (1.2212231134374936, 1.2188050895929337)}
+PASSED2026-07-30 01:51:53.523 | info     |           Metal | Device kernel duration perf summary (device=3): count=275, min=869ns, avg=25098.4ns, max=475611ns (profiler_analysis.cpp:675)
+2026-07-30 01:51:53.523 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=47500ns, range=[0..475000), underflow(<0ns)=0, overflow(>=475000ns)=1) (profiler_analysis.cpp:718)
+2026-07-30 01:51:53.523 | info     |           Metal |   [           0 ..        47500) |########################################|      241 (profiler_analysis.cpp:723)
+2026-07-30 01:51:53.523 | info     |           Metal |   [       47500 ..        95000) |##                                      |       15 (profiler_analysis.cpp:723)
+2026-07-30 01:51:53.523 | info     |           Metal |   [       95000 ..       142500) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:53.523 | info     |           Metal |   [      142500 ..       190000) |##                                      |       11 (profiler_analysis.cpp:723)
+2026-07-30 01:51:53.523 | info     |           Metal |   [      190000 ..       237500) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:53.523 | info     |           Metal |   [      237500 ..       285000) |#                                       |        5 (profiler_analysis.cpp:723)
+2026-07-30 01:51:53.523 | info     |           Metal |   [      285000 ..       332500) |                                        |        1 (profiler_analysis.cpp:723)
+2026-07-30 01:51:53.523 | info     |           Metal |   [      332500 ..       380000) |                                        |        1 (profiler_analysis.cpp:723)
+2026-07-30 01:51:53.523 | info     |           Metal |   [      380000 ..       427500) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-30 01:51:53.523 | info     |           Metal |   [      427500 ..       475000) |                                        |        0 (profiler_analysis.cpp:723)
+
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+1.40s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-1-mesh_device0]
+0.99s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-32-mesh_device0]
+0.94s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-32-mesh_device0]
+0.85s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-1-mesh_device0]
+0.78s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-1-mesh_device0]
+0.75s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-32-mesh_device0]
+0.63s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-1-mesh_device0]
+0.60s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-32-mesh_device0]
+0.49s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-1-mesh_device0]
+0.31s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-32-mesh_device0]
+0.31s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-32-mesh_device0]
+0.31s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-1-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-1-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-1-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_warmed_prefill_before_after[blackhole-32-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/fused_decoder_perf.py::test_profile_traced_decode_before_after[blackhole-32-mesh_device0]
+============================== 4 passed in 9.18s ===============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f4059f02028 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7f4051688348 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_device_ids"
+ - leaked function "buffer_page_size"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "get_device_id"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-30 01:51:55.553 | info     |    BuildKernels | JIT cache stats: 288/288 hits (100.0%) [288 cached, 311 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-30 01:51:55.553 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-30 01:51:55.566 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-30 01:51:55.566 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-30 01:51:56.083 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-30 01:51:56.083 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-30 01:51:56.083 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 1:51:49
+Zones: 1,589,212
+Elapsed time: 12.81 s
+Saving trace... done!
+Trace size 14 MB (17.88% ratio)
+2026-07-30 01:51:56.290 | INFO     | __main__:main:452 - Copying /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/fused_decoder_perf_2026_07_30_01_51_56.tracy
+2026-07-30 01:51:56.294 | INFO     | __main__:main:455 - Copied /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/fused_decoder_perf_2026_07_30_01_51_56.tracy
+2026-07-30 01:51:56.294 | INFO     | __main__:main:464 - embed.tracy -> traces/fused_decoder_perf_2026_07_30_01_51_56.tracy
+2026-07-30 01:51:56.294 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-07-30 01:51:56.294 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-07-30 01:51:56.294 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-07-30 01:51:56.947 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-07-30 01:51:56.973 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-07-30 01:51:56.973 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+/home/mvasiljevic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-07-30 01:51:58.507 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-07-30 01:51:58.507 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-07-30 01:52:00.213 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-07-30 01:52:00.213 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-07-30 01:52:00.256 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-07-30 01:52:00.669 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /home/mvasiljevic/tt-metal/generated/profiler/reports/2026_07_30_01_52_00/ops_perf_results_2026_07_30_01_52_00.csv
