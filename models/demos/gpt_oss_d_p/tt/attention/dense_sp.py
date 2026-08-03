@@ -14,8 +14,7 @@ SP axis *internally* via online-softmax — no explicit AllGather):
 
 GPT-OSS vs M3: gpt-oss attention has **attention sinks** and **per-layer sliding-window** masking, so
 both paths thread ``attention_sink`` + ``sliding_window_size`` into the op (M3 has neither). These are
-Pavle's ``ring-joint-sdpa-attention-sinks`` additions (unmerged — needs his branch cherry-picked +
-rebuilt to run). ``attention_sink`` is our ``weights.sinks`` (stored ``sinks_div_scale`` = sink×√d, the
+Pavle's ``ring-joint-sdpa-attention-sinks`` additions, merged in #51438. ``attention_sink`` is our ``weights.sinks`` (stored ``sinks_div_scale`` = sink×√d, the
 convention the op expects); ``sliding_window_size`` is the per-layer window (None on full layers).
 
 Our GptOssKVCache is already the DeepSeek chunked-KV substrate M3 uses (same update_padded_kv_cache
@@ -77,6 +76,11 @@ def dense_sp_attention(
     attention_sink    per-query-head sink (weights.sinks, bf16); sliding_window_size None on full layers
     -> out            [1, n_q_local, chunk_local, head_dim]  block-cyclic over the chunk
     """
+    assert cache_k.dtype == ttnn.bfloat8_b and cache_v.dtype == ttnn.bfloat8_b, (
+        f"chunked ring cache-read requires a bf8 KV cache; got k={cache_k.dtype}, v={cache_v.dtype}. "
+        "KV_CACHE_DTYPE=bf16 is not supported for chunked prefill (the sliding RingJointSDPA path "
+        "and its gather buffers are bf8)."
+    )
     if write_chunk:
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache_k,

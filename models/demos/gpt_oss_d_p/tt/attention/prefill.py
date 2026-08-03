@@ -192,6 +192,9 @@ def attention_forward(
                 k_chunk_size=128,  # gpt-oss sliding op supports Q 64/128 and K 128 only (op asserts)
                 exp_approx_mode=False,
             )
+            # WormholeComputeKernelConfig is the generic compute-kernel config (legacy name); it is
+            # the same type the one-shot path uses via config.get_compute_kernel_config(), and runs on
+            # Blackhole. fp32_dest_acc_en=False is required by the ring op's streaming sink compute.
             sp_kcfg = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -214,7 +217,9 @@ def attention_forward(
                 ccl_manager=ccl_manager,
                 program_config=sp_prog,
                 compute_kernel_config=sp_kcfg,
-                scale=config.head_dim**-0.5,
+                # config.scaling (== 1/sqrt(head_dim) by default) so QK scaling stays consistent with
+                # the sink pre-division, which also uses config.scaling (matches the non-ring path).
+                scale=config.scaling,
                 cluster_axis=mesh_config.sp_axis,
                 # Sinks on ALL layers: the ring op folds the sink once across ring iterations, so both
                 # sliding (window 128) and full-attention layers are sink-correct.
