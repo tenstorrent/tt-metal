@@ -172,12 +172,15 @@ inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
         // coalesce the sticks into chunks
         std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
         stick_chunks_per_core.reserve(core_stick_map.size());
+        size_t num_chunks_total = 0;
         for (auto core_stick_pair : core_stick_map) {
             auto stick_chunks = group_contiguous_values_sharded(core_stick_pair.second);
+            num_chunks_total += stick_chunks.size();
             stick_chunks_per_core.push_back(stick_chunks);
 
             reader_varargs.push_back(stick_chunks.size());  // num_chunks for current core
         }
+        reader_varargs.reserve(reader_varargs.size() + (2 * num_chunks_total));
         for (const auto& stick_chunks : stick_chunks_per_core) {
             for (auto chunk : stick_chunks) {
                 reader_varargs.push_back(chunk[0]);      // start id of a chunk

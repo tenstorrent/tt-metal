@@ -217,6 +217,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     };
 
     std::vector<KernelSpec> kernels;
+    kernels.reserve(3);
     std::vector<KernelSpecName> wu_kernels;
     wu_kernels.reserve(3);
     kernels.push_back(std::move(reader_spec));
