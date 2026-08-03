@@ -158,7 +158,7 @@ class WeightCache:
         if os.path.isfile(final):
             try:
                 t = ttnn.load_tensor(final, device=device)
-                self._bump("hits")
+                self._bump(hit=True)
                 if memory_config is not None:
                     t = ttnn.to_memory_config(t, memory_config)
                 return t
@@ -174,18 +174,23 @@ class WeightCache:
             device=device,
             cache_file_name=base,
         )
-        self._bump("misses")
+        self._bump(hit=False)
         return t
 
     # ── internals ─────────────────────────────────────────────────────────
     def _join(self, name: str) -> str:
         return f"{self.prefix}.{name}" if self.prefix else name
 
-    def _bump(self, which: str) -> None:
+    def _bump(self, hit: bool) -> None:
+        # Walk up to the root so it accumulates the total across children. Explicit attribute
+        # updates (no setattr/getattr with a computed name) keep this off SAST dynamic-code checks.
         node = self
         while node is not None:
-            setattr(node, which, getattr(node, which) + 1)
-            node = getattr(node, "_parent", None)
+            if hit:
+                node.hits += 1
+            else:
+                node.misses += 1
+            node = node._parent
 
     _parent: Optional["WeightCache"] = None
 
