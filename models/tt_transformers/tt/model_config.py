@@ -565,6 +565,12 @@ class ModelArgs:
         self.attn_logit_softcapping = None
         self.final_logit_softcapping = None
         self.model_type = None
+        # Decode-SDPA tuning. Architecture-specific overrides are applied once in
+        # _set_model_specific_params(); these defaults preserve existing behaviour for
+        # every model (q/k chunk 0 => op auto-selects, forced framework compute config).
+        self.sdpa_decode_q_chunk_size = 0
+        self.sdpa_decode_k_chunk_size = 0
+        self.sdpa_decode_use_default_compute_config = False
         self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
@@ -1562,19 +1568,14 @@ class ModelArgs:
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
         """Get the SDPA program config for decode mode.
 
-        Gemma-2 (head_dim=256) requires an explicit small KV chunk. With the
-        auto chunk (q=k=0) the flash-decode op runs the whole KV as one large
-        chunk until it no longer fits, then switches to a multi-chunk path whose
-        cross-chunk reduction is numerically wrong for head_dim=256 — producing
-        a sharp accuracy cliff once the context exceeds one chunk. Pinning
-        q_chunk=32 / k_chunk=64 (matching the known-good Gemma-3 decode SDPA in
-        models/demos/gemma4/tt/attention/decode.py) keeps every step on the
-        correct chunked path. Non-Gemma-2 models keep the auto chunk (0, 0).
+        The KV chunk sizes come from self.sdpa_decode_{q,k}_chunk_size (default 0,
+        i.e. the op auto-selects). Architectures that need an explicit small chunk
+        set these in _set_model_specific_params(); e.g. Gemma-2 (head_dim=256), where
+        the auto chunk drives the flash-decode op into a multi-chunk path whose
+        cross-chunk reduction is numerically wrong for head_dim=256, producing a
+        sharp accuracy cliff once the context exceeds one chunk.
         """
-        if self.model_type is not None and str(self.model_type).lower() in ("gemma", "gemma2"):
-            q_chunk, k_chunk = 32, 64
-        else:
-            q_chunk, k_chunk = 0, 0
+        q_chunk, k_chunk = self.sdpa_decode_q_chunk_size, self.sdpa_decode_k_chunk_size
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
@@ -2690,6 +2691,14 @@ class ModelArgs:
         if self.model_type is not None and str(self.model_type).lower() in ("gemma", "gemma2"):
             self.rms_norm_add_unit_offset = True
             self.embed_scale = self.dim**0.5
+            # head_dim=256 decode-attention fix: pin a small KV chunk and use the
+            # flash-decode op's default compute config. Matches the known-good Gemma-3
+            # decode SDPA (models/demos/gemma4/tt/attention/decode.py); the framework's
+            # auto chunk + forced fp32-accum compute config corrupt the cross-chunk
+            # online-softmax reduction for head_dim=256.
+            self.sdpa_decode_q_chunk_size = 32
+            self.sdpa_decode_k_chunk_size = 64
+            self.sdpa_decode_use_default_compute_config = True
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
