@@ -1,0 +1,19 @@
+{
+  "mean_ms": 12.97547179274261,
+  "min_ms": 12.886040000012144,
+  "samples_ms": [
+    12.943518988322467,
+    12.886040000012144,
+    12.897540989797562,
+    13.04793800227344,
+    13.102320983307436
+  ],
+  "decoder": "optimized",
+  "candidate": "prefill_chunk32",
+  "real_weights": true,
+  "mode": "prefill",
+  "batch": 1,
+  "sequence": 128,
+  "layer": 1,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37"
+}

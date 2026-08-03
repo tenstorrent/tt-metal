@@ -1,0 +1,321 @@
+{
+  "mean_ms": 0.19663566587648043,
+  "min_ms": 0.1946300035342574,
+  "samples_ms": [
+    0.20159300765953958,
+    0.20353798754513264,
+    0.1960340014193207,
+    0.1964739931281656,
+    0.19578298088163137,
+    0.1956530031748116,
+    0.19639398669824004,
+    0.1962440146598965,
+    0.1962730020750314,
+    0.1959729997906834,
+    0.19583298126235604,
+    0.19634401542134583,
+    0.19786600023508072,
+    0.1952110033016652,
+    0.19572299788706005,
+    0.1965340052265674,
+    0.19599302322603762,
+    0.19544200040400028,
+    0.19621301908046007,
+    0.1955619954969734,
+    0.19678499666042626,
+    0.19640399841591716,
+    0.19667399465106428,
+    0.19710598280653358,
+    0.1946300035342574,
+    0.19680499099195004,
+    0.19686398445628583,
+    0.19600300583988428,
+    0.1956830092240125,
+    0.19743599114008248
+  ],
+  "decoder": "optimized",
+  "candidate": "default",
+  "real_weights": true,
+  "mode": "decode",
+  "batch": 1,
+  "sequence": 128,
+  "layer": 0,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "effective_configuration": {
+    "candidate": "default",
+    "policy": {
+      "attention_weight_dtype": "BFLOAT8_B",
+      "dense_gate_up_dtype": "BFLOAT4_B",
+      "dense_down_dtype": "BFLOAT8_B",
+      "cache_dtype": "BFLOAT8_B",
+      "attention_fidelity": "LoFi",
+      "dense_gate_up_fidelity": "LoFi",
+      "dense_down_fidelity": "LoFi",
+      "decode_expert_gate_up_dtype": "BFLOAT8_B",
+      "decode_expert_down_dtype": "BFLOAT8_B",
+      "prefill_expert_gate_up_dtype": "BFLOAT8_B",
+      "prefill_expert_down_dtype": "BFLOAT8_B",
+      "decode_expert_gate_up_fidelity": "HiFi2",
+      "decode_expert_down_fidelity": "HiFi2",
+      "prefill_expert_gate_up_fidelity": "HiFi2",
+      "prefill_expert_down_fidelity": "HiFi2",
+      "sparse_experts": true,
+      "gate_up_grid": [
+        8,
+        2
+      ],
+      "gate_up_in0_block_w": 16,
+      "gate_up_out_block_w": 3,
+      "gate_up_subblock_w": 3,
+      "down_grid": [
+        8,
+        2
+      ],
+      "down_in0_block_w": 24,
+      "down_out_block_w": 4,
+      "down_subblock_w": 4,
+      "prefill_chunk_size": 32,
+      "packed_expert_gate_up": true,
+      "dense_large_prefill_gate_up_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_down_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_gate_up_in0_block_w": 8,
+      "dense_large_prefill_down_in0_block_w": 8,
+      "dense_large_prefill_gate_up_subblock_w": 3,
+      "dense_large_prefill_down_subblock_w": 4,
+      "packed_dense_large_prefill": false,
+      "decode_sharded_residual": true,
+      "attention_dram_sharded": true,
+      "attention_dram_sharded_serving": false,
+      "decode_router_grid": null,
+      "decode_router_in0_block_w": 8,
+      "decode_router_out_block_w": 2,
+      "decode_router_subblock_w": 2,
+      "decode_exact_nnz": 8,
+      "prefill_functional_router_compute": true,
+      "dense_large_prefill_chunk_size": 1024,
+      "dense_large_prefill_functional_compute": false,
+      "packed_dense_mlp": true,
+      "dense_decode_unpacked_batch1": true,
+      "dense_decode_lofi_batch32": true,
+      "explicit_dense_decode_programs": true,
+      "dense_decode_gate_up_grid": [
+        8,
+        8
+      ],
+      "dense_decode_gate_up_in0_block_w": 2,
+      "dense_decode_gate_up_out_block_w": 3,
+      "dense_decode_gate_up_subblock_w": 3,
+      "dense_decode_gate_up_interleaved_input": false,
+      "dense_decode_down_grid": [
+        8,
+        4
+      ],
+      "dense_decode_down_in0_block_w": 8,
+      "dense_decode_down_out_block_w": 2,
+      "dense_decode_down_subblock_w": 2,
+      "dense_decode_down_dram_sharded": true,
+      "dense_decode_down_dram_sharded_batch1": false
+    },
+    "sparse_matmul_output_dtype": "BFLOAT8_B",
+    "execution_topology": {
+      "decode_experts": "routed_sparse_packed_gate_up",
+      "small_prefill_experts": "routed_sparse_separate_gate_up",
+      "large_prefill_experts": "dense_all_expert_composite",
+      "large_prefill_gate_up": "separate_same_input_matmuls",
+      "large_prefill_threshold_tokens": 1024,
+      "large_prefill_chunk_tokens": 1024,
+      "large_prefill_functional_router_compute": true,
+      "large_prefill_weights": "phase_native_weights",
+      "decode_prefill_down_storage": "separate_or_not_applicable",
+      "dense_gate_up": "batch1_decode_separate_else_packed",
+      "dense_decode_gate_up_input": "L1_interleaved_after_explicit_reshard",
+      "dense_decode_compute_fidelity": "phase_policy",
+      "dense_decode_down": "explicit_interleaved_1d",
+      "cache_initialization": "zero_filled"
+    },
+    "decode_sdpa_program": {
+      "compute_with_storage_grid_size": [
+        11,
+        10
+      ],
+      "exp_approx_mode": false,
+      "q_chunk_size": 0,
+      "k_chunk_size": 0
+    },
+    "decode_residual_norm": {
+      "sharded": true,
+      "layout": "L1_WIDTH_SHARDED",
+      "grid": [
+        8,
+        4
+      ],
+      "shard_shape": [
+        32,
+        64
+      ],
+      "program_class": "LayerNormShardedMultiCoreProgramConfig"
+    },
+    "decode_attention_projection": {
+      "dram_sharded_weights": true,
+      "weight_memory": "DRAM_WIDTH_SHARDED",
+      "qkv_program_class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+      "qkv_in0_block_w": 2,
+      "qkv_per_core_M": 1,
+      "qkv_per_core_N": 5,
+      "o_program_class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+      "o_in0_block_w": 4,
+      "o_per_core_M": 1,
+      "o_per_core_N": 2
+    },
+    "decode_router_program": {
+      "enabled": false,
+      "grid": null,
+      "in0_block_w": 8,
+      "out_block_w": 2,
+      "out_subblock_w": 2
+    },
+    "dense_decode_down_program": {
+      "enabled": true,
+      "program_class": "MatmulMultiCoreReuseMultiCast1DProgramConfig",
+      "weight_memory": "DRAM_INTERLEAVED",
+      "dram_sharded_selected_for_batch": false,
+      "grid": [
+        8,
+        4
+      ],
+      "in0_block_w": 8,
+      "out_block_w": 2,
+      "out_subblock_w": 2,
+      "per_core_M": 1,
+      "per_core_N": 2
+    },
+    "dense_decode_gate_up_program": {
+      "enabled": true,
+      "program_class": "MatmulMultiCoreReuseMultiCast1DProgramConfig",
+      "grid": [
+        8,
+        6
+      ],
+      "in0_block_w": 16,
+      "out_block_w": 2,
+      "out_subblock_w": 2,
+      "per_core_M": 1,
+      "per_core_N": 2
+    },
+    "expert_program": {
+      "decode_gate_up_cores": [
+        8,
+        2
+      ],
+      "decode_down_cores": [
+        8,
+        2
+      ],
+      "prefill_gate_up_cores": [
+        8,
+        4
+      ],
+      "prefill_down_cores": [
+        8,
+        4
+      ],
+      "decode_gate_up_in0_block_w": 16,
+      "decode_down_in0_block_w": 24,
+      "prefill_gate_up_in0_block_w": 8,
+      "prefill_down_in0_block_w": 12,
+      "decode_gate_up_out_block_w": 3,
+      "decode_down_out_block_w": 4,
+      "prefill_gate_up_out_block_w": 1,
+      "prefill_down_out_block_w": 1,
+      "decode_gate_up_subblock_w": 3,
+      "decode_down_subblock_w": 4,
+      "prefill_gate_up_subblock_w": 1,
+      "prefill_down_subblock_w": 1,
+      "sequence_chunk_size": 32,
+      "base_down_split_size": 32
+    },
+    "dense_large_prefill_program": {
+      "enabled": true,
+      "program_class": "MatmulMultiCoreReuseMultiCastProgramConfig",
+      "gate_up_grid": [
+        8,
+        8
+      ],
+      "down_grid": [
+        8,
+        8
+      ],
+      "gate_up_in0_block_w": 8,
+      "down_in0_block_w": 8,
+      "gate_up_subblock": [
+        1,
+        3
+      ],
+      "down_subblock": [
+        1,
+        4
+      ],
+      "input_memory": "DRAM_INTERLEAVED",
+      "weight_memory": "DRAM_INTERLEAVED",
+      "output_memory": "DRAM_INTERLEAVED",
+      "gate_up_compute_fidelity": "HiFi4",
+      "down_compute_fidelity": "HiFi4",
+      "fp32_dest_acc_en": true,
+      "output_dtype": "BFLOAT16",
+      "fuse_batch": false,
+      "packed_gate_up": false,
+      "functional_compute": false
+    }
+  },
+  "provenance": {
+    "git_head": "a2719cfecabce0124a96835b26eb31fb41928e2d",
+    "git_branch": "skillexp-work-northmini-fresh",
+    "sources": {
+      "models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py": {
+        "sha256": "21d222646cffcb8c09c0fba1b60b0c1f30f117e6dc6a53b49b3f1af340602ecd",
+        "computed_git_blob_oid": "f211bc250922d4c5a6509d9988d11751300c860f",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "AM models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py"
+      },
+      "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py": {
+        "sha256": "2f2d5b81e0b7a736f5bcc3fd970f213be957449beda44ccd580a73eaf2723eed",
+        "computed_git_blob_oid": "f97dd77b9505f87d997de96f88d384b8d6c84a0e",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "AM models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py"
+      }
+    }
+  },
+  "argv": [
+    "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py",
+    "--implementation",
+    "optimized",
+    "--mode",
+    "decode",
+    "--batch",
+    "1",
+    "--sequence",
+    "128",
+    "--layer",
+    "0",
+    "--real-weights",
+    "--warmups",
+    "10",
+    "--iterations",
+    "30",
+    "--json-out",
+    "models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/final_dense_optimized_decode_b1.json",
+    "--candidate",
+    "default"
+  ],
+  "correctness_binding": null,
+  "pcc": null,
+  "pcc_evidence": null
+}

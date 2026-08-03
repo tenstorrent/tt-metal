@@ -1,0 +1,341 @@
+{
+  "mean_ms": 3.8464947405736893,
+  "min_ms": 3.8319760060403496,
+  "samples_ms": [
+    3.8373649877030402,
+    3.8405519735533744,
+    3.83779700496234,
+    3.839790995698422,
+    3.83426999906078,
+    3.8425060047302395,
+    3.8319760060403496,
+    3.842385020107031,
+    3.8354820280801505,
+    3.8453010201919824,
+    3.8480160001199692,
+    3.8481160008814186,
+    3.8467239937745035,
+    3.8436469912994653,
+    3.847594984108582,
+    3.8409020053222775,
+    3.860439988784492,
+    3.8448399864137173,
+    3.8484170217998326,
+    3.8374860014300793,
+    3.846161998808384,
+    3.8561609981115907,
+    3.8484270044136792,
+    3.852685011224821,
+    3.8579850224778056,
+    3.8474550237879157,
+    3.8468540005851537,
+    3.8474549946840852,
+    3.846923995297402,
+    3.8505609845742583,
+    3.852555004414171,
+    3.847494983347133,
+    3.8378669996745884,
+    3.8525039853993803,
+    3.847735992167145,
+    3.842445003101602,
+    3.8527850119862705,
+    3.849218977848068,
+    3.8513319741468877,
+    3.846052015433088,
+    3.8471349980682135,
+    3.8455910107586533,
+    3.852544992696494,
+    3.845221013762057,
+    3.8508709985762835,
+    3.84789498639293,
+    3.85559001006186,
+    3.8456319889519364,
+    3.848507010843605,
+    3.851483023026958
+  ],
+  "decoder": "optimized",
+  "candidate": "default",
+  "real_weights": true,
+  "mode": "decode",
+  "batch": 32,
+  "sequence": 128,
+  "layer": 1,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "effective_configuration": {
+    "candidate": "default",
+    "policy": {
+      "attention_weight_dtype": "BFLOAT8_B",
+      "dense_gate_up_dtype": "BFLOAT4_B",
+      "dense_down_dtype": "BFLOAT8_B",
+      "cache_dtype": "BFLOAT8_B",
+      "attention_fidelity": "LoFi",
+      "dense_gate_up_fidelity": "LoFi",
+      "dense_down_fidelity": "LoFi",
+      "decode_expert_gate_up_dtype": "BFLOAT8_B",
+      "decode_expert_down_dtype": "BFLOAT8_B",
+      "prefill_expert_gate_up_dtype": "BFLOAT8_B",
+      "prefill_expert_down_dtype": "BFLOAT8_B",
+      "decode_expert_gate_up_fidelity": "HiFi2",
+      "decode_expert_down_fidelity": "HiFi2",
+      "prefill_expert_gate_up_fidelity": "HiFi2",
+      "prefill_expert_down_fidelity": "HiFi2",
+      "sparse_experts": true,
+      "gate_up_grid": [
+        8,
+        2
+      ],
+      "gate_up_in0_block_w": 16,
+      "gate_up_out_block_w": 3,
+      "gate_up_subblock_w": 3,
+      "down_grid": [
+        8,
+        2
+      ],
+      "down_in0_block_w": 24,
+      "down_out_block_w": 4,
+      "down_subblock_w": 4,
+      "prefill_chunk_size": 32,
+      "packed_expert_gate_up": true,
+      "dense_large_prefill_gate_up_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_down_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_gate_up_in0_block_w": 8,
+      "dense_large_prefill_down_in0_block_w": 8,
+      "dense_large_prefill_gate_up_subblock_w": 3,
+      "dense_large_prefill_down_subblock_w": 4,
+      "packed_dense_large_prefill": false,
+      "decode_sharded_residual": true,
+      "attention_dram_sharded": true,
+      "attention_dram_sharded_serving": false,
+      "decode_router_grid": null,
+      "decode_router_in0_block_w": 8,
+      "decode_router_out_block_w": 2,
+      "decode_router_subblock_w": 2,
+      "decode_exact_nnz": 8,
+      "prefill_functional_router_compute": true,
+      "dense_large_prefill_chunk_size": 1024,
+      "dense_large_prefill_functional_compute": false,
+      "packed_dense_mlp": true,
+      "dense_decode_unpacked_batch1": true,
+      "dense_decode_lofi_batch32": true,
+      "explicit_dense_decode_programs": true,
+      "dense_decode_gate_up_grid": [
+        8,
+        8
+      ],
+      "dense_decode_gate_up_in0_block_w": 2,
+      "dense_decode_gate_up_out_block_w": 3,
+      "dense_decode_gate_up_subblock_w": 3,
+      "dense_decode_gate_up_interleaved_input": false,
+      "dense_decode_down_grid": [
+        8,
+        4
+      ],
+      "dense_decode_down_in0_block_w": 8,
+      "dense_decode_down_out_block_w": 2,
+      "dense_decode_down_subblock_w": 2,
+      "dense_decode_down_dram_sharded": true,
+      "dense_decode_down_dram_sharded_batch1": false
+    },
+    "sparse_matmul_output_dtype": "BFLOAT8_B",
+    "execution_topology": {
+      "decode_experts": "routed_sparse_packed_gate_up",
+      "small_prefill_experts": "routed_sparse_separate_gate_up",
+      "large_prefill_experts": "dense_all_expert_composite",
+      "large_prefill_gate_up": "separate_same_input_matmuls",
+      "large_prefill_threshold_tokens": 1024,
+      "large_prefill_chunk_tokens": 1024,
+      "large_prefill_functional_router_compute": true,
+      "large_prefill_weights": "bf16_phase_specific",
+      "decode_prefill_down_storage": "shared",
+      "dense_gate_up": "batch1_decode_separate_else_packed",
+      "dense_decode_gate_up_input": "residual_chain_native",
+      "dense_decode_compute_fidelity": "LoFi",
+      "dense_decode_down": "generic_interleaved",
+      "cache_initialization": "zero_filled"
+    },
+    "decode_sdpa_program": {
+      "compute_with_storage_grid_size": [
+        11,
+        10
+      ],
+      "exp_approx_mode": false,
+      "q_chunk_size": 0,
+      "k_chunk_size": 0
+    },
+    "decode_residual_norm": {
+      "sharded": true,
+      "layout": "L1_WIDTH_SHARDED",
+      "grid": [
+        8,
+        4
+      ],
+      "shard_shape": [
+        1024,
+        64
+      ],
+      "program_class": "LayerNormShardedMultiCoreProgramConfig"
+    },
+    "decode_attention_projection": {
+      "dram_sharded_weights": false,
+      "weight_memory": "DRAM_INTERLEAVED",
+      "qkv_program_class": null,
+      "qkv_in0_block_w": null,
+      "qkv_per_core_M": null,
+      "qkv_per_core_N": null,
+      "o_program_class": null,
+      "o_in0_block_w": null,
+      "o_per_core_M": null,
+      "o_per_core_N": null
+    },
+    "decode_router_program": {
+      "enabled": false,
+      "grid": null,
+      "in0_block_w": 8,
+      "out_block_w": 2,
+      "out_subblock_w": 2
+    },
+    "dense_decode_down_program": {
+      "enabled": false,
+      "program_class": null,
+      "weight_memory": "DRAM_INTERLEAVED",
+      "dram_sharded_selected_for_batch": false,
+      "grid": [
+        8,
+        4
+      ],
+      "in0_block_w": 8,
+      "out_block_w": 2,
+      "out_subblock_w": 2,
+      "per_core_M": 1,
+      "per_core_N": 2
+    },
+    "dense_decode_gate_up_program": {
+      "enabled": false,
+      "program_class": null,
+      "grid": [
+        8,
+        8
+      ],
+      "in0_block_w": 2,
+      "out_block_w": 3,
+      "out_subblock_w": 3,
+      "per_core_M": 32,
+      "per_core_N": 1
+    },
+    "expert_program": {
+      "decode_gate_up_cores": [
+        8,
+        4
+      ],
+      "decode_down_cores": [
+        8,
+        4
+      ],
+      "prefill_gate_up_cores": [
+        8,
+        4
+      ],
+      "prefill_down_cores": [
+        8,
+        4
+      ],
+      "decode_gate_up_in0_block_w": 8,
+      "decode_down_in0_block_w": 12,
+      "prefill_gate_up_in0_block_w": 8,
+      "prefill_down_in0_block_w": 12,
+      "decode_gate_up_out_block_w": 1,
+      "decode_down_out_block_w": 1,
+      "prefill_gate_up_out_block_w": 1,
+      "prefill_down_out_block_w": 1,
+      "decode_gate_up_subblock_w": 1,
+      "decode_down_subblock_w": 1,
+      "prefill_gate_up_subblock_w": 1,
+      "prefill_down_subblock_w": 1,
+      "sequence_chunk_size": 32,
+      "base_down_split_size": 32
+    },
+    "dense_large_prefill_program": {
+      "enabled": true,
+      "program_class": "MatmulMultiCoreReuseMultiCastProgramConfig",
+      "gate_up_grid": [
+        8,
+        8
+      ],
+      "down_grid": [
+        8,
+        8
+      ],
+      "gate_up_in0_block_w": 8,
+      "down_in0_block_w": 8,
+      "gate_up_subblock": [
+        1,
+        3
+      ],
+      "down_subblock": [
+        1,
+        4
+      ],
+      "input_memory": "DRAM_INTERLEAVED",
+      "weight_memory": "DRAM_INTERLEAVED",
+      "output_memory": "DRAM_INTERLEAVED",
+      "gate_up_compute_fidelity": "HiFi4",
+      "down_compute_fidelity": "HiFi4",
+      "fp32_dest_acc_en": true,
+      "output_dtype": "BFLOAT16",
+      "fuse_batch": false,
+      "packed_gate_up": false,
+      "functional_compute": false
+    }
+  },
+  "provenance": {
+    "git_head": "a2719cfecabce0124a96835b26eb31fb41928e2d",
+    "git_branch": "skillexp-work-northmini-fresh",
+    "sources": {
+      "models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py": {
+        "sha256": "21d222646cffcb8c09c0fba1b60b0c1f30f117e6dc6a53b49b3f1af340602ecd",
+        "computed_git_blob_oid": "f211bc250922d4c5a6509d9988d11751300c860f",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "AM models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py"
+      },
+      "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py": {
+        "sha256": "2f2d5b81e0b7a736f5bcc3fd970f213be957449beda44ccd580a73eaf2723eed",
+        "computed_git_blob_oid": "f97dd77b9505f87d997de96f88d384b8d6c84a0e",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "AM models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py"
+      }
+    }
+  },
+  "argv": [
+    "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py",
+    "--implementation",
+    "optimized",
+    "--mode",
+    "decode",
+    "--batch",
+    "32",
+    "--sequence",
+    "128",
+    "--layer",
+    "1",
+    "--real-weights",
+    "--warmups",
+    "10",
+    "--iterations",
+    "50",
+    "--json-out",
+    "models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/final_decode_b32.json",
+    "--candidate",
+    "default"
+  ],
+  "correctness_binding": null,
+  "pcc": null,
+  "pcc_evidence": null
+}

@@ -1,0 +1,241 @@
+2026-07-30 19:43:28.155 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 32 items / 26 deselected / 6 selected
+
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-1-mesh_device0] 2026-07-30 19:43:29.541 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-30 19:43:29.541 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-30 19:43:29.541 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-30 19:43:29.541 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-30 19:43:29.543 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-30 19:43:29.543 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-30 19:43:29.547 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-30 19:43:29.625 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-30 19:43:29.625 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-30 19:43:29.625 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-07-30 19:43:29.625 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-30 19:43:29.626 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-30 19:43:29.891 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.79930000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17551360 B
+--------------------------------------------------------------------------
+2026-07-30 19:43:30.015 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 19:43:30.015 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 19:43:30.015 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-30 19:43:30.015 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-30 19:43:30.015 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:43:30.015 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:43:30.015 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:43:30.015 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:43:30.015 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:43:30.015 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:43:30.015 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:43:30.015 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:43:30.016 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-30 19:43:30.016 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-30 19:43:30.071 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-30 19:43:30.071 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-30 19:43:30.071 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-30 19:43:30.071 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-30 19:43:30.071 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-30 19:43:30.071 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-30 19:43:30.071 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:30.071 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 19:43:30.075 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:30.079 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:30.084 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:30.126 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-07-30 19:43:30.704 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349991 GHz, device_time_at_sync=140983409211380 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-30 19:43:30.721 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+optimized-dense-prefill-1: 0.9996495079781856
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-1-mesh_device0] 2026-07-30 19:43:32.753 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 19:43:32.753 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 19:43:32.753 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-30 19:43:32.753 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-30 19:43:32.753 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-30 19:43:32.753 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-30 19:43:32.753 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-30 19:43:32.816 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-30 19:43:32.816 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-30 19:43:32.816 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-30 19:43:32.816 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-30 19:43:32.816 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-30 19:43:32.816 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-30 19:43:32.816 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:32.816 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 19:43:32.820 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:32.824 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:32.828 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:32.872 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+optimized-dense-batch-1-trace: 0.99945141115544
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0] 2026-07-30 19:43:34.484 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 19:43:34.484 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 19:43:34.484 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-30 19:43:34.484 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-30 19:43:34.484 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-30 19:43:34.484 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-30 19:43:34.484 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-30 19:43:34.548 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-30 19:43:34.548 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-30 19:43:34.548 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-30 19:43:34.548 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-30 19:43:34.548 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-30 19:43:34.548 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-30 19:43:34.548 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:34.548 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 19:43:34.552 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:34.556 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:34.560 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:34.605 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+optimized-dense-prefill-31: 0.999440300556786
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-32-mesh_device0] 2026-07-30 19:43:35.810 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 19:43:35.811 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 19:43:35.811 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-30 19:43:35.811 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-30 19:43:35.811 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-30 19:43:35.811 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-30 19:43:35.811 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-30 19:43:35.873 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-30 19:43:35.873 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-30 19:43:35.873 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-30 19:43:35.873 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-30 19:43:35.873 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-30 19:43:35.873 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-30 19:43:35.873 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:35.873 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 19:43:35.877 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:35.881 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:35.885 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:35.930 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+optimized-dense-batch-32-trace: 0.9994919376564094
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0] 2026-07-30 19:43:37.714 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 19:43:37.714 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 19:43:37.714 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-30 19:43:37.714 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-30 19:43:37.714 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-30 19:43:37.714 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-30 19:43:37.714 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-30 19:43:37.777 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-30 19:43:37.777 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-30 19:43:37.777 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-30 19:43:37.777 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-30 19:43:37.777 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-30 19:43:37.777 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-30 19:43:37.777 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 19:43:37.777 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:37.781 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:37.785 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:37.789 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:37.833 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+optimized-dense-prefill-33: 0.9994410320723166
+PASSED
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0] 2026-07-30 19:43:39.703 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 19:43:39.703 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 19:43:39.703 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-30 19:43:39.703 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-30 19:43:39.703 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-30 19:43:39.703 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-30 19:43:39.703 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-30 19:43:39.766 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-30 19:43:39.766 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-30 19:43:39.766 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-30 19:43:39.766 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-30 19:43:39.766 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-30 19:43:39.766 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-30 19:43:39.766 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 19:43:39.766 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:39.770 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:39.774 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:39.778 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 19:43:39.822 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+optimized-dense-prefill-65: 0.9994747648937666
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+1.70s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-1-mesh_device0]
+1.55s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0]
+1.55s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0]
+1.46s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-32-mesh_device0]
+1.36s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-1-mesh_device0]
+1.28s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-1-mesh_device0]
+0.88s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0]
+0.33s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0]
+0.32s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-1-mesh_device0]
+0.32s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0]
+0.32s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-32-mesh_device0]
+0.31s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0]
+0.13s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0]
+0.13s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0]
+0.13s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-1-mesh_device0]
+0.13s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-32-mesh_device0]
+0.13s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-1-mesh_device0]
+0.12s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-1-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-1-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_traced_decode_batch_1_and_serving_batch_matches_reference[blackhole-32-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0]
+PASSED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_dense_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0]
+====================== 6 passed, 26 deselected in 12.69s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7e39fb084558 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7e39faaa84c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "volume"
+ - leaked function "get_tile"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "set_program_cache_misses_allowed"
+ - leaked function "__init__"
+ - leaked function "item"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-30 19:43:43.218 | info     |    BuildKernels | JIT cache stats: 239/274 hits (87.2%) [239 cached, 233 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-30 19:43:43.218 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-30 19:43:43.219 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-30 19:43:43.219 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-30 19:43:43.219 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-30 19:43:43.219 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-30 19:43:43.219 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-30 19:43:43.231 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-30 19:43:43.231 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-30 19:43:43.677 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-30 19:43:43.677 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-30 19:43:43.677 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

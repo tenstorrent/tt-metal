@@ -1,0 +1,57 @@
+{
+  "optimized_source_sha256": "21d222646cffcb8c09c0fba1b60b0c1f30f117e6dc6a53b49b3f1af340602ecd",
+  "performance_harness_sha256": "2f2d5b81e0b7a736f5bcc3fd970f213be957449beda44ccd580a73eaf2723eed",
+  "profiler_and_watcher_collected_separately": true,
+  "decode_batch_1": {
+    "command": "python -m tracy -r -p -v -m models.autoports.coherelabs_north_mini_code_1_0.tests.optimized_decoder_perf --mode decode --batch 1 --layer 1 --candidate default --real-weights --warmups 1 --iterations 1",
+    "generated_report": "generated/profiler/reports/2026_07_30_21_45_48/ops_perf_results_2026_07_30_21_45_48.csv",
+    "collection_log": "final_decode_b1_collection.log",
+    "rows_artifact": "final_decode_b1_rows.txt",
+    "summary_artifact": "final_decode_b1_rows_stacked.csv",
+    "device_operations_ms": 0.575504,
+    "op_to_op_gap_ms": 0.065656,
+    "profiled_window_ms": 0.64116,
+    "matmul_ms": 0.232316,
+    "overall_dram_roofline_percent": 19.4,
+    "modeled_dram_bandwidth_gb_per_s": 99
+  },
+  "prefill_batch_32_sequence_128": {
+    "command": "python -m tracy -r -p -v -m models.autoports.coherelabs_north_mini_code_1_0.tests.optimized_decoder_perf --mode prefill --batch 32 --sequence 128 --layer 1 --candidate default --real-weights --warmups 1 --iterations 1",
+    "generated_report": "generated/profiler/reports/2026_07_30_21_46_12/ops_perf_results_2026_07_30_21_46_12.csv",
+    "collection_log": "final_prefill_b32_collection.log",
+    "rows_artifact": "final_prefill_b32_rows.txt",
+    "summary_artifact": "final_prefill_b32_rows_stacked.csv",
+    "device_operations_ms": 129.725865,
+    "op_to_op_gap_ms": 1.22,
+    "profiled_window_ms": 130.945865,
+    "matmul_ms": 81.41295,
+    "overall_dram_roofline_percent": 20.9,
+    "modeled_dram_bandwidth_gb_per_s": 107
+  },
+  "dense_decode_batch_1": {
+    "command": "python -m tracy -r -p -v -m models.autoports.coherelabs_north_mini_code_1_0.tests.optimized_decoder_perf --mode decode --batch 1 --layer 0 --candidate default --real-weights --warmups 1 --iterations 1",
+    "generated_report": "generated/profiler/reports/2026_07_30_21_46_25/ops_perf_results_2026_07_30_21_46_25.csv",
+    "collection_log": "final_dense_decode_b1_collection.log",
+    "rows_artifact": "final_dense_decode_b1_rows.txt",
+    "summary_artifact": "final_dense_decode_b1_rows_stacked.csv",
+    "device_operations_ms": 0.172571,
+    "op_to_op_gap_ms": 0.02934,
+    "profiled_window_ms": 0.201911,
+    "matmul_ms": 0.106574,
+    "overall_dram_roofline_percent": 36.4,
+    "modeled_dram_bandwidth_gb_per_s": 186
+  },
+  "dense_decode_batch_32": {
+    "command": "python -m tracy -r -p -v -m models.autoports.coherelabs_north_mini_code_1_0.tests.optimized_decoder_perf --mode decode --batch 32 --layer 0 --candidate default --real-weights --warmups 1 --iterations 1",
+    "generated_report": "generated/profiler/reports/2026_07_30_21_46_37/ops_perf_results_2026_07_30_21_46_37.csv",
+    "collection_log": "final_dense_decode_b32_collection.log",
+    "rows_artifact": "final_dense_decode_b32_rows.txt",
+    "summary_artifact": "final_dense_decode_b32_rows_stacked.csv",
+    "device_operations_ms": 0.748219,
+    "op_to_op_gap_ms": 0.017734,
+    "profiled_window_ms": 0.765953,
+    "matmul_ms": 0.427454,
+    "overall_dram_roofline_percent": 11.0,
+    "modeled_dram_bandwidth_gb_per_s": 56
+  }
+}

@@ -1,0 +1,211 @@
+{
+  "mean_ms": 4.021813935833052,
+  "min_ms": 4.012277000583708,
+  "samples_ms": [
+    4.023398010758683,
+    4.038565995870158,
+    4.0140900237020105,
+    4.016002989374101,
+    4.022767010610551,
+    4.018879000796005,
+    4.036713013192639,
+    4.015062004327774,
+    4.012277000583708,
+    4.024630005005747,
+    4.021544009447098,
+    4.0197609923779964,
+    4.014450998511165,
+    4.025611007818952,
+    4.042312997626141,
+    4.0172970038838685,
+    4.01228602277115,
+    4.02655397192575,
+    4.02055200538598,
+    4.023918998427689,
+    4.020000982563943,
+    4.020221007522196,
+    4.037423990666866,
+    4.022256005555391,
+    4.018317995360121,
+    4.0173760207835585,
+    4.016615013824776,
+    4.023076995508745,
+    4.012877005152404,
+    4.019579995656386
+  ],
+  "decoder": "optimized",
+  "candidate": "bfp4_attention",
+  "real_weights": true,
+  "mode": "decode",
+  "batch": 32,
+  "sequence": 128,
+  "layer": 1,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "effective_configuration": {
+    "candidate": "bfp4_attention",
+    "policy": {
+      "attention_weight_dtype": "BFLOAT4_B",
+      "dense_gate_up_dtype": "BFLOAT4_B",
+      "dense_down_dtype": "BFLOAT8_B",
+      "cache_dtype": "BFLOAT8_B",
+      "attention_fidelity": "LoFi",
+      "dense_gate_up_fidelity": "LoFi",
+      "dense_down_fidelity": "LoFi",
+      "decode_expert_gate_up_dtype": "BFLOAT8_B",
+      "decode_expert_down_dtype": "BFLOAT8_B",
+      "prefill_expert_gate_up_dtype": "BFLOAT8_B",
+      "prefill_expert_down_dtype": "BFLOAT8_B",
+      "decode_expert_gate_up_fidelity": "HiFi2",
+      "decode_expert_down_fidelity": "HiFi2",
+      "prefill_expert_gate_up_fidelity": "HiFi2",
+      "prefill_expert_down_fidelity": "HiFi2",
+      "sparse_experts": true,
+      "gate_up_grid": [
+        8,
+        2
+      ],
+      "gate_up_in0_block_w": 16,
+      "gate_up_out_block_w": 3,
+      "gate_up_subblock_w": 3,
+      "down_grid": [
+        8,
+        2
+      ],
+      "down_in0_block_w": 24,
+      "down_out_block_w": 4,
+      "down_subblock_w": 4,
+      "prefill_chunk_size": 32,
+      "packed_expert_gate_up": true,
+      "dense_large_prefill_gate_up_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_down_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_gate_up_in0_block_w": 8,
+      "dense_large_prefill_down_in0_block_w": 8,
+      "dense_large_prefill_gate_up_subblock_w": 3,
+      "dense_large_prefill_down_subblock_w": 4
+    },
+    "sparse_matmul_output_dtype": "BFLOAT8_B",
+    "execution_topology": {
+      "decode_experts": "routed_sparse_packed_gate_up",
+      "small_prefill_experts": "routed_sparse_separate_gate_up",
+      "large_prefill_experts": "dense_all_expert_composite",
+      "large_prefill_threshold_tokens": 1024,
+      "large_prefill_chunk_tokens": 1024,
+      "large_prefill_weights": "bf16_phase_specific",
+      "decode_prefill_down_storage": "shared",
+      "cache_initialization": "zero_filled"
+    },
+    "decode_sdpa_program": {
+      "compute_with_storage_grid_size": [
+        11,
+        10
+      ],
+      "exp_approx_mode": false,
+      "q_chunk_size": 0,
+      "k_chunk_size": 0
+    },
+    "expert_program": {
+      "decode_gate_up_cores": [
+        6,
+        4
+      ],
+      "decode_down_cores": [
+        8,
+        4
+      ],
+      "prefill_gate_up_cores": [
+        8,
+        4
+      ],
+      "prefill_down_cores": [
+        8,
+        4
+      ],
+      "decode_gate_up_in0_block_w": 16,
+      "decode_down_in0_block_w": 24,
+      "prefill_gate_up_in0_block_w": 8,
+      "prefill_down_in0_block_w": 12,
+      "decode_gate_up_out_block_w": 2,
+      "decode_down_out_block_w": 2,
+      "prefill_gate_up_out_block_w": 1,
+      "prefill_down_out_block_w": 1,
+      "decode_gate_up_subblock_w": 2,
+      "decode_down_subblock_w": 2,
+      "prefill_gate_up_subblock_w": 1,
+      "prefill_down_subblock_w": 1,
+      "sequence_chunk_size": 32,
+      "base_down_split_size": 32
+    },
+    "dense_large_prefill_program": {
+      "enabled": true,
+      "program_class": "MatmulMultiCoreReuseMultiCastProgramConfig",
+      "gate_up_grid": [
+        8,
+        8
+      ],
+      "down_grid": [
+        8,
+        8
+      ],
+      "gate_up_in0_block_w": 8,
+      "down_in0_block_w": 8,
+      "gate_up_subblock": [
+        1,
+        3
+      ],
+      "down_subblock": [
+        1,
+        4
+      ],
+      "input_memory": "DRAM_INTERLEAVED",
+      "weight_memory": "DRAM_INTERLEAVED",
+      "output_memory": "DRAM_INTERLEAVED",
+      "gate_up_compute_fidelity": "HiFi4",
+      "down_compute_fidelity": "HiFi4",
+      "fp32_dest_acc_en": true,
+      "output_dtype": "BFLOAT16",
+      "fuse_batch": false
+    }
+  },
+  "provenance": {
+    "git_head": "a2719cfecabce0124a96835b26eb31fb41928e2d",
+    "git_branch": "skillexp-work-northmini-fresh",
+    "sources": {
+      "models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py": {
+        "sha256": "872961d521264780bf5efd487283a7805d28eab90c7ad8ce6c50c11cfd2d74f1",
+        "git_blob_sha": "534af3f524971abc381faf520b72d6cc8eb248a4",
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py"
+      },
+      "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py": {
+        "sha256": "a28a7e7d2dce76d4da469f1af01f8e300d30911b9df2ebc7622ef07a4431289a",
+        "git_blob_sha": "e826a498707e7781751e9d331c6c0e33c1737aac",
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py"
+      }
+    }
+  },
+  "argv": [
+    "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py",
+    "--mode",
+    "decode",
+    "--batch",
+    "32",
+    "--layer",
+    "1",
+    "--candidate",
+    "bfp4_attention",
+    "--real-weights",
+    "--warmups",
+    "10",
+    "--iterations",
+    "30",
+    "--json-out",
+    "models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/final_compare_bfp4_attention_decode_b32.json"
+  ],
+  "pcc": null,
+  "pcc_evidence": null
+}

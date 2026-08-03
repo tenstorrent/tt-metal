@@ -1,0 +1,85 @@
+{
+  "mean_ms": 13.686610452714376,
+  "min_ms": 13.623987004393712,
+  "samples_ms": [
+    13.714859989704564,
+    13.68331999401562,
+    13.71607300825417,
+    13.68461298989132,
+    13.71483100228943,
+    13.699320988962427,
+    13.700353010790423,
+    13.691105996258557,
+    13.686327001778409,
+    13.70744701125659,
+    13.623987004393712,
+    13.634368020575494,
+    13.688259990885854,
+    13.68929201271385,
+    13.628777000121772,
+    13.701896008569747,
+    13.697197020519525,
+    13.669124018633738,
+    13.689952989807352,
+    13.71110399486497
+  ],
+  "decoder": "functional",
+  "candidate": null,
+  "real_weights": true,
+  "mode": "prefill",
+  "batch": 32,
+  "sequence": 128,
+  "layer": 0,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "effective_configuration": null,
+  "provenance": {
+    "git_head": "a2719cfecabce0124a96835b26eb31fb41928e2d",
+    "git_branch": "skillexp-work-northmini-fresh",
+    "sources": {
+      "models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py": {
+        "sha256": "21d222646cffcb8c09c0fba1b60b0c1f30f117e6dc6a53b49b3f1af340602ecd",
+        "computed_git_blob_oid": "f211bc250922d4c5a6509d9988d11751300c860f",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "AM models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py"
+      },
+      "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py": {
+        "sha256": "2f2d5b81e0b7a736f5bcc3fd970f213be957449beda44ccd580a73eaf2723eed",
+        "computed_git_blob_oid": "f97dd77b9505f87d997de96f88d384b8d6c84a0e",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "AM models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py"
+      },
+      "models/autoports/coherelabs_north_mini_code_1_0/tt/functional_decoder.py": {
+        "sha256": "c0d24148df6f94097d7b42929bc8bd5d951ab4c5a9e7a49dcacad22f0cb65982",
+        "computed_git_blob_oid": "c4efb7178c3ed5ce1414a17d2e995323ac23c391",
+        "git_object_available": true,
+        "head_git_blob_oid": "c4efb7178c3ed5ce1414a17d2e995323ac23c391",
+        "git_status": ""
+      }
+    }
+  },
+  "argv": [
+    "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py",
+    "--implementation",
+    "functional",
+    "--mode",
+    "prefill",
+    "--batch",
+    "32",
+    "--sequence",
+    "128",
+    "--layer",
+    "0",
+    "--real-weights",
+    "--warmups",
+    "5",
+    "--iterations",
+    "20",
+    "--json-out",
+    "models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/final_dense_functional_prefill_b32.json"
+  ],
+  "correctness_binding": null,
+  "pcc": null,
+  "pcc_evidence": null
+}

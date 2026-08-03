@@ -1,0 +1,141 @@
+{
+  "mean_ms": 0.8549721969757229,
+  "min_ms": 0.853834004374221,
+  "samples_ms": [
+    0.8559780253563076,
+    0.8563989831600338,
+    0.855065998621285,
+    0.853834004374221,
+    0.8548559853807092,
+    0.853834004374221,
+    0.8561979921068996,
+    0.854875979712233,
+    0.8570399950258434,
+    0.8542950090486556,
+    0.8546359895262867,
+    0.8539339760318398,
+    0.8546049939468503,
+    0.855067017255351,
+    0.8553169900551438,
+    0.8544050215277821,
+    0.8549059857614338,
+    0.8538739930372685,
+    0.8547060133423656,
+    0.8556179818697274
+  ],
+  "decoder": "optimized",
+  "candidate": "sparse_bfp8",
+  "real_weights": true,
+  "mode": "decode",
+  "batch": 1,
+  "sequence": 128,
+  "layer": 1,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "effective_configuration": {
+    "candidate": "sparse_bfp8",
+    "policy": {
+      "attention_weight_dtype": "BFLOAT8_B",
+      "dense_gate_up_dtype": "BFLOAT4_B",
+      "dense_down_dtype": "BFLOAT8_B",
+      "cache_dtype": "BFLOAT16",
+      "attention_fidelity": "HiFi2",
+      "dense_gate_up_fidelity": "LoFi",
+      "dense_down_fidelity": "LoFi",
+      "decode_expert_gate_up_dtype": "BFLOAT8_B",
+      "decode_expert_down_dtype": "BFLOAT8_B",
+      "prefill_expert_gate_up_dtype": "BFLOAT8_B",
+      "prefill_expert_down_dtype": "BFLOAT8_B",
+      "decode_expert_gate_up_fidelity": "HiFi2",
+      "decode_expert_down_fidelity": "HiFi2",
+      "prefill_expert_gate_up_fidelity": "HiFi2",
+      "prefill_expert_down_fidelity": "HiFi2",
+      "sparse_experts": true,
+      "gate_up_grid": [
+        8,
+        4
+      ],
+      "gate_up_in0_block_w": 8,
+      "gate_up_subblock_w": 1,
+      "down_grid": [
+        8,
+        4
+      ],
+      "down_in0_block_w": 12,
+      "down_subblock_w": 1,
+      "prefill_chunk_size": 32,
+      "packed_expert_gate_up": true
+    },
+    "sparse_matmul_output_dtype": "BFLOAT8_B",
+    "decode_sdpa_program": {
+      "compute_with_storage_grid_size": [
+        11,
+        10
+      ],
+      "exp_approx_mode": false,
+      "q_chunk_size": 0,
+      "k_chunk_size": 0
+    },
+    "expert_program": {
+      "decode_gate_up_cores": [
+        8,
+        4
+      ],
+      "decode_down_cores": [
+        8,
+        4
+      ],
+      "prefill_gate_up_cores": [
+        8,
+        4
+      ],
+      "prefill_down_cores": [
+        8,
+        4
+      ],
+      "decode_gate_up_in0_block_w": 8,
+      "decode_down_in0_block_w": 12,
+      "prefill_gate_up_in0_block_w": 8,
+      "prefill_down_in0_block_w": 12,
+      "decode_gate_up_subblock_w": 1,
+      "decode_down_subblock_w": 1,
+      "prefill_gate_up_subblock_w": 1,
+      "prefill_down_subblock_w": 1,
+      "sequence_chunk_size": 32,
+      "base_down_split_size": 32
+    }
+  },
+  "provenance": {
+    "git_head": "a2719cfecabce0124a96835b26eb31fb41928e2d",
+    "git_branch": "skillexp-work-northmini-fresh",
+    "sources": {
+      "models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py": {
+        "sha256": "0ad597a3b9682f74cbe036611f77417f3a1be02bf1b5b8d509ebae9c8afd3283",
+        "git_blob_sha": "55d63a9ac721cbb755ea2a95bce292387e734ffe",
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py"
+      },
+      "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py": {
+        "sha256": "a28a7e7d2dce76d4da469f1af01f8e300d30911b9df2ebc7622ef07a4431289a",
+        "git_blob_sha": "e826a498707e7781751e9d331c6c0e33c1737aac",
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py"
+      }
+    }
+  },
+  "argv": [
+    "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py",
+    "--mode",
+    "decode",
+    "--batch",
+    "1",
+    "--candidate",
+    "sparse_bfp8",
+    "--real-weights",
+    "--warmups",
+    "5",
+    "--iterations",
+    "20",
+    "--json-out",
+    "models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/candidates/sparse_bfp8_decode_b1.json"
+  ],
+  "pcc": null,
+  "pcc_evidence": null
+}
