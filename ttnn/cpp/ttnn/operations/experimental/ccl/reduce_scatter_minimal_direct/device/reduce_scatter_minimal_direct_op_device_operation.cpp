@@ -24,13 +24,11 @@ namespace {
 //
 // SHARDED (the fast path): one L1 shard per worker core, aliased directly into that core's reduce CB, so
 // a sender's fabric packet lands in the exact CB slot the reducer unpacks from and the receive side never
-// reads staging at all. That readback is pure post-gate latency -- it happens strictly after the last
-// arrival, and even out of L1 it is N-1 NoC round trips plus a barrier on the critical path. Requires the
-// whole per-core shard (both parity halves, every source, every chunk this core owns) to fit the
-// per-core budget below.
+// reads staging at all. Requires the whole per-core shard (both parity halves, every source,
+// every chunk this core owns) to fit the per-core budget below.
 //
-// INTERLEAVED L1 / DRAM (fallbacks): the original layout, read back by the reader over the NoC. Anything
-// whose shard is too big for one core still runs, just without the aliasing win.
+// INTERLEAVED L1 / DRAM (fallbacks) read back by the reader over the NoC. Anything
+// whose shard is too big for one core.
 //
 // Both the factory and the persistent-buffer helper get this from compute_output_specs, so there is a
 // single decision point; the factory recognises the fast path by the memory layout being sharded.
@@ -65,13 +63,7 @@ static TensorSpec reduce_scatter_direct_staging_spec(
     const uint64_t shard_bytes = uint64_t{shard_rows} * geom.page_bytes;
 
     if (shard_bytes <= k_l1_shard_budget_bytes) {
-        // Sharded over the WHOLE compute grid, deliberately, rather than over the worker cores: this spec
-        // is also what reduce_scatter_minimal_direct_create_persistent_buffers allocates from, and that
-        // helper cannot know the resolved num_links / subdevice / sub_core_grid. Sizing the shard by
-        // chunks_per_slice (the most chunks any single worker could own) and covering every core the
-        // factory could possibly pick makes the spec depend only on the input, so a persistent buffer can
-        // never disagree with the program about the shard geometry. Workers are always a subset of this
-        // grid, and each of them finds its shard at the same address.
+        // Sharded over the WHOLE compute grid.
         const auto grid = input_tensor.device()->compute_with_storage_grid_size();
         const CoreRangeSet shard_grid(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
         const uint32_t num_shards = grid.x * grid.y;
@@ -94,8 +86,7 @@ static TensorSpec reduce_scatter_direct_staging_spec(
 
     // Opaque byte-staging, same layout contract as the ring op's intermediate: row-major UINT8, page (row)
     // = one chunk (page_bytes, DRAM-aligned). Interleaved so chunks spread across banks. The mesh
-    // allocator is lockstep, so the buffer lands at the same address on every device -- required, since a
-    // sender computes the destination address from its own accessor.
+    // allocator is lockstep, so the buffer lands at the same address on every device
     return TensorSpec(
         ttnn::Shape({2 * total_chunks, geom.page_bytes}),
         tt::tt_metal::TensorLayout(
@@ -217,7 +208,6 @@ std::uint64_t ReduceScatterMinimalDirectDeviceOperation::compute_program_hash(
         tensor_args.persistent_staging_tensor.has_value());
 }
 
-// Build the operation attributes + inputs by querying the machine/fabric setup, mirroring the unicast op.
 static std::tuple<ReduceScatterMinimalDirectParams, ReduceScatterMinimalDirectInputs> build_operation_args(
     const Tensor& input_tensor,
     int32_t dim,

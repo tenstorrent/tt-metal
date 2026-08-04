@@ -60,16 +60,10 @@ bool reduce_scatter_minimal_direct_is_applicable(
     if (num_devices < 2) {
         return false;
     }
-    // The axis must WRAP -- ring on a 1D fabric, torus on a 2D one. A line would need per-destination
-    // direction clamping; get_usable_topology reports what the placement actually resolves to, demoting
-    // a non-wrapping axis to linear/mesh.
     const auto usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, std::nullopt, cluster_axis);
     if (!::tt::tt_fabric::is_ring_or_torus(usable_topology)) {
         return false;
     }
-    // Same fabric rule the device op enforces (reduce_scatter_direct_fabric_supported): a 2D fabric is
-    // only usable when it collapses to one wrapping line, which needs a 1xN / Nx1 mesh on top of the
-    // torus axis above.
     if (!prim::reduce_scatter_direct_fabric_supported(
             *mesh_device, tt::tt_fabric::GetFabricConfig(), usable_topology)) {
         return false;

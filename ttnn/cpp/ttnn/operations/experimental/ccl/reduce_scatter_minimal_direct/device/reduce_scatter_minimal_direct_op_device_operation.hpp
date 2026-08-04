@@ -14,8 +14,7 @@
 
 namespace ttnn::experimental::prim {
 
-// Device operation for the direct (one-shot) reduce-scatter. Modern device_operation::launch pattern:
-// the primitive is the free function ttnn::prim::reduce_scatter_minimal_direct below.
+// Device operation for the direct (one-shot) reduce-scatter.
 struct ReduceScatterMinimalDirectDeviceOperation {
     using operation_attributes_t = ReduceScatterMinimalDirectParams;
     using tensor_args_t = ReduceScatterMinimalDirectInputs;

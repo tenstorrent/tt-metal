@@ -23,8 +23,6 @@ using address_t = uint32_t;
 //      absolute wait cannot be satisfied by a neighbour that has raced ahead), then feed the reducer
 //      num_devices blocks per chunk: block 0 = our own local slice read from the input tensor,
 //      blocks 1..N-1 = the other devices' contributions read out of staging (one coalesced read each).
-//      Our own block is read BEFORE the arrival waits (it depends on no arrival), so it lands for free
-//      while we spin instead of adding a DRAM round trip after the last packet arrives.
 //
 // Staging is double-buffered by invocation parity: a device that is one invocation ahead of us writes
 // into the other half, so it cannot clobber data we have not reduced yet. Two invocations ahead is
@@ -175,8 +173,5 @@ void kernel_main() {
         }
     }
 
-    // This invocation is done consuming the arrival counters; advance our private generation so the next
-    // one waits on absolute position invocation+2 (the counters themselves are deliberately never reset:
-    // a device that has already moved on would have its increments silently destroyed).
     noc_semaphore_set(gen_ptr, invocation + 1);
 }

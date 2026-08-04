@@ -19,7 +19,6 @@ namespace ttnn::experimental::prim {
 using namespace ::ttnn::ccl;
 
 namespace {
-// Prefixed because the ccl ops share a unity-build translation unit with their siblings.
 constexpr uint32_t direct_cb_send_id = tt::CBIndex::c_0;    // local input slices queued for the fabric
 constexpr uint32_t direct_cb_reduce_id = tt::CBIndex::c_1;  // num_devices blocks per chunk (own + arrivals)
 constexpr uint32_t direct_cb_out_id = tt::CBIndex::c_16;    // reduced result (compute -> writer)
@@ -58,7 +57,7 @@ ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
     const uint32_t num_devices = args.num_devices;
     TT_FATAL(input_tensor.layout() == ttnn::TILE_LAYOUT, "reduce_scatter_minimal_direct requires TILE layout");
 
-    const auto padded_shape = input_tensor.padded_shape();
+    const auto& padded_shape = input_tensor.padded_shape();
     const uint32_t rank = padded_shape.rank();
     TT_FATAL(rank >= 2, "reduce_scatter_minimal_direct requires a rank >= 2 input, got rank {}", rank);
     TT_FATAL(
@@ -108,11 +107,6 @@ ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
     TT_FATAL(
         num_input_pages % num_devices == 0, "input pages {} must divide num_devices {}", num_input_pages, num_devices);
 
-    // Chunk / packet sizing, matching the ring ops' contiguous path (a chunk = tile_granularity tiles
-    // stored contiguously, so one contribution chunk is one coalesced fabric write; the granularity is
-    // capped by what DST can hold for the reduce). Computed here rather than taken from
-    // reduce_scatter_ring_interm_staging_params: that helper's chunk COUNTS are per-4D-channel, so
-    // consuming it would drag this op's ND support back through a canonical-4D mapping it does not need.
     const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
     const uint32_t interm_tiles_per_packet =
         static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes()) / single_tile_bytes;
@@ -142,7 +136,7 @@ std::pair<CoreRangeSet, std::vector<CoreCoord>> reduce_scatter_direct_worker_cor
     const uint32_t num_links = reduce_scatter_direct_num_links(args, chunks_per_slice);
     auto [all_core_range, worker_cores_vec] = ttnn::ccl::choose_worker_cores(
         num_links,
-        /*num_cores_per_link=*/1,
+        /*num_workers_per_link=*/1,
         mesh_device,
         args.subdevice_id,
         /*core_grid_offset=*/CoreCoord{0, 0},
@@ -220,17 +214,9 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterMinimalDirectProgramFactory::creat
     }
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
 
-    // The writer's start barrier is needed only when the op allocates a buffer a peer writes into, since
-    // then its address is not pinned across invocations -- see the writer kernel's barrier comment. Both
-    // buffers gate it: staging is the address peers actually target, and the output is included because
-    // it is the caller's declaration that this call reuses a stable buffer set. Baked in as a compile-time
-    // arg so the fully-persistent path pays nothing; compute_program_hash folds the flag in, so the two
-    // variants can never share a cached program.
     const bool needs_init_sync =
         !(tensor_args.persistent_output_tensor.has_value() && tensor_args.persistent_staging_tensor.has_value());
 
-    // One descriptor per coordinate: the program depends on the sender coordinate (device_idx, ring
-    // neighbours, per-destination hop/direction/route table), so the mesh cannot share one.
     for (const auto& coord : tensor_coords.coords()) {
         workload_descriptor.programs.push_back(
             {ttnn::MeshCoordinateRange(coord),
@@ -305,13 +291,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     // owns both of its link's connections and fans out to every destination itself. Placement is
     // deterministic, so worker `link` sits at the same logical coords on every device -- which is what lets
     // a sender target the mirror core's staging slot + arrival counter without any exchange.
-    //
-    // MEASURED (2026-07-28, rs_8K): splitting the destination list across extra "helper" sender cores on
-    // the spare (link, direction) channels made it WORSE (device crit-path 7.7 -> 8.5us, within-iter spread
-    // 0.9 -> 1.9us). Every added core pays the per-core fixed cost (kernel launch + fabric connection
-    // open/close) and the op's duration is the max over its cores, so shortening the reducer's serial send
-    // work by ~3 units does not pay for it. Do not re-add destination-parallel senders without first
-    // shrinking that fixed cost.
     const uint32_t num_links = reduce_scatter_direct_num_links(operation_attributes, chunks_per_slice);
     auto [worker_core_range, worker_cores_vec] =
         reduce_scatter_direct_worker_cores(operation_attributes, mesh_device, chunks_per_slice);
@@ -362,9 +341,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             cb_reduce_pages,
             cb_page_size);
     }
-    // On the aliased path the reduce CB IS this core's staging shard, so it is backed by the staging
-    // buffer (the descriptor equivalent of set_globally_allocated_address). Handing the framework the
-    // Buffer* is also what lets it re-point the CB on a cache hit when the tensor moves.
+    // On the aliased path the reduce CB IS this core's staging shard, so it is backed by the staging buffer
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = cb_reduce_pages * cb_page_size,
         .core_ranges = worker_core_range,
@@ -407,9 +384,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     std::vector<uint32_t> compute_ct_args = {
         tile_granularity, num_devices, direct_cb_reduce_id, direct_cb_out_id, parity_stride_tiles};
 
-    // Push the kernels NOW, before the per-link runtime-arg loop, so they can be referred to by stable
-    // index -- both emplace_runtime_args() and the fabric helper's ProgramDescriptor overload take a
-    // KernelHandle that indexes into desc.kernels.
     constexpr const char* kernel_dir =
         "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/kernels/";
     desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
@@ -466,10 +440,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         const auto dest_node = mesh_device->get_fabric_node_id(*dest_coord);
         dests.push_back(Dest{j, use_fwd ? 0u : 1u, hops, dest_node.chip_id, static_cast<uint32_t>(*dest_node.mesh_id)});
     }
-    // On a 2D fabric, WE do not get to choose the direction. The header carries an absolute route from
-    // the routing table (fabric_set_unicast_route -> decode_route_to_buffer), and a packet must be handed
-    // to the router in that route's first-hop direction; push it into the other connection and it enters a
-    // router carrying a foreign route, which hangs. Our ring arithmetic above picks the shorter way round,
+    // On a 2D fabric, WE do not get to choose the direction. Our ring arithmetic above picks the shorter way round,
     // which for an even ring's antipode (and anywhere the table breaks a tie the other way) can disagree.
     // So on 2D, re-derive conn from the fabric's own answer. Purely a direction fix -- `hops` stays as
     // computed, since 2D ignores it and 1D never reaches this block.
@@ -480,14 +451,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         const auto bwd_dir =
             tt::tt_fabric::pipeline_get_forwarding_direction(self_node, mesh_device->get_fabric_node_id(*bwd_coord));
 
-        // The axis_topology we were handed is not trustworthy on its own: it binds a MESH-VIEW axis index
-        // to a fabric dimension (axis 1 -> X, axis 0 -> Y), while a torus fabric config wraps a PHYSICAL
-        // dimension. Open this box's 2x4 as 4x2 and the two disagree -- FABRIC_2D_TORUS_Y makes axis 0
-        // report Torus, but what it physically wraps is the length-2 dimension, not the 4-ring the
-        // collective runs on. The op then believes in a wrap that does not exist and hangs.
-        //
-        // So verify the wrap for real: a ring neighbour must be reachable in ONE hop (an actual cable in
-        // that direction), not by a long way round. Cheap, and it turns that hang into a clear message.
         auto assert_single_hop = [&](const ttnn::MeshCoordinate& neighbor_coord,
                                      const std::optional<tt::tt_fabric::RoutingDirection>& dir,
                                      const char* which) {
@@ -574,9 +537,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     }
 
     // --- Runtime args ---
-    // Tensor base addresses are pushed as Buffer* (see the RTArgList builds below) so the framework
-    // records a BufferBinding at that position and patches it on the cache-hit fast path. Everything else
-    // here is geometry- or semaphore-derived and fixed for the cached workload's lifetime.
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
     const auto& reader_gen_sem = sems[SemaphoreIndex::reader_gen(num_devices)];
     const auto& writer_gen_sem = sems[SemaphoreIndex::writer_gen(num_devices)];
@@ -593,10 +553,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         // Mirror core: deterministic placement means the peer's worker `link` is at these same coords.
         const CoreCoord peer_core = mesh_device->worker_core_from_logical_core(core);
 
-        // Built as a plain vector first, then promoted, exactly as the writer below does: positions 0/1
-        // are buffer base addresses and become Buffer* bindings, everything after is a plain value.
-        // GlobalSemaphore addresses ride along as plain values -- they are workload-scoped (parked on
-        // WorkloadDescriptor::semaphores) so they do not move across cache hits and need no binding.
         std::vector<uint32_t> reader_rt = {
             0u,  // input base address  -- replaced by a Buffer* binding below
             0u,  // staging base address -- replaced by a Buffer* binding below
@@ -626,8 +582,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         const std::vector<uint32_t> compute_rt = {chunk_count, tile_count, compute_gen_sem.address()};
         desc.kernels[compute_kernel_id].emplace_runtime_args(core, {compute_rt[0], compute_rt[1], compute_rt[2]});
 
-        // Built as a plain vector first: the fabric helper appends to one, and only positions 0/1 need to
-        // become Buffer* bindings, which happens in the RTArgList promotion below.
         std::vector<uint32_t> writer_rt = {
             0u,  // staging base address -- replaced by a Buffer* binding below
             0u,  // output base address  -- replaced by a Buffer* binding below
@@ -687,8 +641,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             writer_rt,
             tt::tt_fabric::FabricApiType::Linear);
 
-        // Promote to an RTArgList, swapping positions 0/1 for Buffer* so the framework records their
-        // BufferBindings; every other position keeps the value computed above.
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
         writer_rt_args.reserve(writer_rt.size());
         writer_rt_args.push_back(staging.buffer());

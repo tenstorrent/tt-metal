@@ -26,11 +26,6 @@ namespace ttnn::experimental::prim {
 // chunking, staging, the output write -- only ever sees the resulting linear page order of a slice.
 // The last dim is the degenerate case with stride == one row and run == the slice's width in tiles;
 // dim 0 is the other degenerate case with a single run (outer == 1), so the stride is never taken.
-//
-// This is also why the op needs no ND -> canonical-4D collapse (the (B, C, Ht, Wt) + normalized_dim
-// mapping the ring ops carry, whose kernels are a fixed 4-level nested loop): the pair above already IS
-// that collapse. Everything below the scatter dim folds into `inner_pages` and everything above folds
-// into the outer count, for any rank >= 2 -- rank never reaches a kernel.
 struct ReduceScatterDirectGeometry {
     uint32_t single_tile_bytes;        // bytes per tile
     uint32_t tile_granularity;         // tiles per chunk (compute/CB granularity)
@@ -53,14 +48,6 @@ ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
 // RoutingPlaneConnectionManager built as FabricApiType::Linear. The requirement is that the ACTIVE AXIS
 // be a TORUS: it wraps, so every destination is reachable by travelling one direction along a single
 // fabric dimension, with no turn (a plain 2D mesh resolves to Topology::Mesh and is rejected here).
-//
-// The mesh's OTHER extent is irrelevant -- cluster_axis already confines the collective to one axis, so a
-// 2x4 with a torus X axis is four independent 4-rings, each exactly the degenerate case above.
-//
-// What this cannot express, and what the factory rejects with a throw rather than a hang: a logical 1xN
-// VIEW that snakes across a larger physical grid (this 2x4 box opened as 1x8 maps to chips 0,1,2,3,7,6,5,4).
-// There the "ring" mixes X and Y hops, and 2D routing -- which is by DESTINATION NODE, not hop count --
-// cannot be made to follow it. See the factory's direction fix-up for why that matters.
 bool reduce_scatter_direct_fabric_supported(
     const ttnn::MeshDevice& mesh_device,
     tt::tt_fabric::FabricConfig fabric_config,
@@ -80,26 +67,6 @@ std::pair<CoreRangeSet, std::vector<CoreCoord>> reduce_scatter_direct_worker_cor
 // builds and caches the MeshWorkload from the descriptor we return. Returns two tensors -- [0] output
 // slice, [1] staging for the incoming contributions.
 //
-// create_workload_descriptor() runs ONCE per workload (cache miss):
-//   1. Allocates the GlobalSemaphores and parks them on WorkloadDescriptor::semaphores, which keeps them
-//      alive for the cached workload's lifetime -- every kernel takes their addresses as runtime args.
-//      Order is fixed and read back by index: [0 .. num_devices-1] the per-SOURCE arrival counters, then
-//      reader_gen, writer_gen, compute_gen, init_sync. See semaphore_index below.
-//        - arrival counters are indexed by SOURCE device, so each has exactly one sender and an absolute
-//          wait on it cannot be satisfied by a different (raced-ahead) device. Never reset.
-//        - the three *_gen counters are per-kernel private invocation counters, each bumped once per
-//          launch by its owner, so all three read the same invocation index with no cross-kernel
-//          handshake -- that index drives the staging double-buffer parity. (compute's body runs on all
-//          three TRISCs, so exactly one of them (PACK) does the increment.)
-//        - init_sync is the writer's start barrier, only read when that barrier is compiled in.
-//   2. Runs the distributed Synchronize so every device sees the semaphores before any program launches.
-//   3. Emits ONE ProgramDescriptor per mesh coordinate: the program depends on the sender coordinate
-//      (device_idx, ring neighbours, and the per-destination hop/direction/route table), so the mesh
-//      cannot share a single descriptor.
-//
-// Buffer base addresses are bound as Buffer* through emplace_runtime_args(), and the aliased reduce CB
-// via CBDescriptor::buffer, so the framework patches them on the cache-hit fast path -- no manual
-// override_runtime_arguments() hook.
 struct ReduceScatterMinimalDirectProgramFactory {
     using tensor_return_value_t = std::vector<Tensor>;
 
