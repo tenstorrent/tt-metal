@@ -144,11 +144,24 @@ constexpr auto xmc = McastArgs<CT_XMCAST, RT_XMCAST, HGROUPS>();
 // column r's reduce root. SPAN is the rect area (row-major sender list).
 constexpr auto hmc = McastArgs<CT_HMCAST, RT_HMCAST, HGROUPS * KGROUPS>();
 
-// POSTED h multicast. The Flag path already takes no acked write barrier, but the write is
+// The h multicast. `H_MCAST_POSTED` selects the ONE wire property that differs between the two
+// variants — whether the payload write posts — and nothing else: the linked chain, the flag, the
+// exclude-source fan-out and the barrier structure below are shared, so an A/B on this define is
+// an A/B on posting alone.
+//
+// POSTED (1, default). The Flag path already takes no acked write barrier, but the write is
 // non-posted, so all NUM_CORES-1 destinations return write-acks. Posting removes that traffic and
 // nothing else: the VALID flag stays NON-posted and LINKED on the same VC, so it cannot overtake
 // the payload — which is the invariant mcast_pipe's Flag path already depends on today. Posting
 // changes whether acks come back, never the wire order. See DESIGN_NOTES.md §3.
+//
+// NON-POSTED (0). The conservative fallback, and what mcast_pipe's library path already does for
+// the x multicast: acks return and the payload write is tracked, so correctness no longer rests
+// on the linked-chain ordering guarantee alone. Keep this reachable — the posted variant's failure
+// mode would be a receiver reading a half-written slot, i.e. a SILENT PCC drift rather than a
+// hang, so the cheap way to test the ordering claim is to measure both.
+constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
+
 inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size) {
     const auto hrect = hmc.template rect<noc_index>();
     const auto& rb = hrect.bounds();
@@ -159,7 +172,9 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size) {
     const uint32_t hf_addr = static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + slot));
     volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hf_addr);
 
-    // 1. the payload — POSTED (no return acks) and LINKED, so the flag below cannot overtake it.
+    // 1. the payload — LINKED, so the flag below cannot overtake it. POSTED (no return acks) only
+    //    when kHMcastPosted; otherwise all `ndest` destinations ack, which is the conservative
+    //    variant. Identical in every other argument.
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc_index,
         write_cmd_buf,
@@ -171,7 +186,7 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size) {
         /*linked=*/true,
         ndest,
         /*multicast_path_reserve=*/true,
-        /*posted=*/true);
+        /*posted=*/kHMcastPosted);
     // 2. re-assert VALID locally: `set_multicast` broadcasts THIS core's own cell as the source, and
     //    a core that also receives on this cell left it INVALID after its last receive.
     noc_semaphore_set(hf, VALID);

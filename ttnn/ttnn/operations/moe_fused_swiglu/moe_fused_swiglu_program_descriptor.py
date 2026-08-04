@@ -579,8 +579,12 @@ def create_program_descriptor(
 
             compute_rt[x][y] = [mailbox_addr, kr, hn, ec, x, y]
 
-    # ---- defines: the ablation hook only -------------------------------------------------------
+    # ---- defines: the ablation hook, plus the h-mcast posted switch -----------------------------
     dm_defines = [("ABLATE_" + a.upper(), "1") for a in _ablations(geo.ABLATE, geo.DM_ABLATIONS)]
+    # A DEFINE rather than a CT arg because it selects between two `ncrisc_noc_fast_write_any_len`
+    # forms; passing it as a value would leave both wire behaviours reachable from one build and
+    # make "which variant did this number come from" a runtime question instead of a build one.
+    dm_defines.append(("H_MCAST_POSTED", "1" if geo.H_MCAST_POSTED else "0"))
     compute_defines = []
     if "skip_compute" in geo.ABLATE.split("+"):
         compute_defines.append(("SKIP_COMPUTE", "1"))

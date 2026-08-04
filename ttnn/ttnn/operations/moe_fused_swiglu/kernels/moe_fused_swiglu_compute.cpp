@@ -246,6 +246,20 @@ void kernel_main() {
         const uint32_t gu_block_tiles = m_eff * HN_PAD;
         const uint32_t out_block_tiles = m_eff * EC_MAX;
 
+        // PAGE ACCOUNTING vs ARITHMETIC. Everything above is a PAGE count and stays on `m_eff`,
+        // because those are what must divide M_BLOCK and agree across cores without communication.
+        // `m_rows` is the ARITHMETIC count — the rows the GATE/UP matmul actually produces. It is
+        // <= m_eff, and strictly less exactly when this is a tail block whose remainder is not a
+        // power of two: m_t 5 computes 5 rows of an 8-row block, m_t 3 computes 3 of 4.
+        //
+        // Only gate/up may use it, and that is a property of the HELPER's input policy rather than a
+        // choice: gate/up runs with num_k_blocks == 1, so every call is the last K-block, so
+        // `WaitAndRetainOnLastBlock` never pops — this kernel pops x itself at `x_slot_tiles`
+        // (= m_eff * KR_PAD) below. Shrinking the shape therefore shrinks only the helper's
+        // `wait_front`, which is harmless: the reader pushed the full m_eff block and waiting for a
+        // prefix of it is always satisfied. `down` has no such freedom — see shape_dn.
+        const uint32_t m_rows = moe_fused_swiglu::m_tiles_real(m_t, b, M_BLOCK);
+
         // gate/up: [m_eff, HN_PAD] = x[m_eff, kr] @ W[kr, HN_PAD]. ONE K-block whose width is the
         // whole per-row K extent, which is what lets both matmuls read the same resident in0.
         // PERF 3 — the in1 sub-blocking is now WITHIN one N-chunk; the host keeps HN_BLOCK a divisor
@@ -258,6 +272,16 @@ void kernel_main() {
         // Both heights are powers of two and m_eff is a power of two, so min(.,.) DIVIDES m_eff
         // exactly — the `down` height never forces a larger m_eff (Refinement 1 stays intact).
         const uint32_t sbh_dn = (OUT_SUBBLOCK_H_DN < m_eff) ? OUT_SUBBLOCK_H_DN : m_eff;
+        // `down` STAYS ON m_eff — the `m_rows` shrink deliberately does not reach it. Its in0 is `h` under
+        // `InputPolicy::WaitAndPopPerKBlock`, and the helper derives BOTH the wait and the pop from
+        // the shape (`in0_block_num_tiles = in0_subblock_num_tiles * shape.in0_num_subblocks`,
+        // matmul_block_helpers.inl:196). Shrinking the shape shrinks the pop, so cb_h_local drifts by
+        // (m_eff - m_rows) * HN_PAD tiles per K-block and the op HANGS — measured at M 192.
+        //
+        // The escape hatch is in0_policy = NoWaitNoPop with a caller-owned wait/pop at m_eff, but
+        // that means ONE wait for the whole h block instead of one per K-block, which serialises the
+        // column gather against the matmul it currently overlaps. That trade is the opposite of the
+        // one this knob is trying to make, so `down` is left alone.
         const MatmulBlockShape shape_dn = MatmulBlockShape::of(m_eff / sbh_dn, 1, sbh_dn, ec, HN_PAD, HGROUPS);
 
         // ---- 1. fused tilize of the x tile-rows this core injects (bf16 ROW_MAJOR only) ----
@@ -301,7 +325,12 @@ void kernel_main() {
                     continue;
                 }
                 MatmulBlockShape shape_c = MatmulBlockShape::of(
-                    m_eff / OUT_SUBBLOCK_H_GU, GU_IN1_SUBBLOCKS, OUT_SUBBLOCK_H_GU, HN_BLOCK, KR_PAD, 1);
+                    moe_fused_swiglu::round_up_capped(m_rows, OUT_SUBBLOCK_H_GU, m_eff) / OUT_SUBBLOCK_H_GU,
+                    GU_IN1_SUBBLOCKS,
+                    OUT_SUBBLOCK_H_GU,
+                    HN_BLOCK,
+                    KR_PAD,
+                    1);
                 shape_c.last_in1_subblock_w_valid =
                     (valid < GU_CHUNK_W) ? (valid - (GU_IN1_SUBBLOCKS - 1) * HN_BLOCK) : 0;
 

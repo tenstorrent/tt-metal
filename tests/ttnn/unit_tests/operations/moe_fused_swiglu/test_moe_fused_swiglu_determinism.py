@@ -122,6 +122,11 @@ _REPORTED_KNOBS = (
     "HACK_AHEAD",
     "XPRIO",
     "WD_SPLIT",
+    # The h-multicast wire property this file's mechanism 1 is aimed at. Reported because a green
+    # determinism run proves the ordering claim for ONE of the two variants only, and which one is
+    # not otherwise recoverable from the output — the two builds are bit-identical when both are
+    # correct, so the pass line is the only place the distinction survives.
+    "H_MCAST_POSTED",
     "DEPTH_X",
     "DEPTH_H",
     "ABLATE",

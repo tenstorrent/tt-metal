@@ -90,6 +90,43 @@ inline uint32_t m_tiles_eff(uint32_t m_t, uint32_t b, uint32_t m_block, uint32_t
     return (p > m_block) ? m_block : p;
 }
 
+// `m_tiles_real` — the tile-rows of this block that carry REAL tokens: m_tiles_eff() WITHOUT the
+// power-of-two round-up. Guarantees 1 <= m_tiles_real <= m_tiles_eff for every block the M-loop
+// actually runs.
+//
+// This is the ARITHMETIC count, never a page count. m_tiles_eff() stays the unit of every CB
+// reserve/push/pop and of the reduce-scatter slice plan, because those are what must divide M_BLOCK
+// and agree across cores without communication. The FPU work does not have to: the gate/up output
+// block is m-MAJOR, so the real rows are a contiguous PREFIX, and a matmul over `m_real` sub-blocks
+// of height OUT_SUBBLOCK_H_GU writes exactly that prefix and leaves the pad rows stale. Rows
+// [count, m_eff*32) are UNDEFINED tile padding by contract — the op used to fill them with
+// silu(pad @ Wg) * (pad @ Wu) @ Wd, which is undefined in exactly the same way.
+//
+// WHICH CONSUMERS THIS IS SAFE FOR is not a free choice; see the m_rows comment in the compute
+// kernel. gate/up owns its own in0 lifecycle, so shrinking its shape shrinks only a wait_front.
+// `down` does not, and shrinking ITS shape shrank a cb_pop_front and hung the op.
+//
+// `rem` cannot be 0 for a block the loop runs: m_blocks = ceil(m_t / m_block), so b < m_blocks
+// implies b * m_block < m_t. The clamp is still here rather than an ASSERT because a 0-row matmul
+// shape is not a crash — it is a silently skipped block — and this is a three-kernel contract.
+inline uint32_t m_tiles_real(uint32_t m_t, uint32_t b, uint32_t m_block) {
+    const uint32_t done = b * m_block;
+    const uint32_t rem = (m_t > done) ? (m_t - done) : 0;
+    if (rem == 0) {
+        return 1;
+    }
+    return (rem > m_block) ? m_block : rem;
+}
+
+// Smallest multiple of `mult` that is >= v, capped at `cap`. Keeps a shrunk row count legal for a
+// sub-block height > 1: the matmul does `rows / height` sub-blocks and that division must be exact,
+// so the shrink rounds UP to the height rather than truncating rows away. At the shipped
+// OUT_SUBBLOCK_H_GU == 1 it is the identity; it is what makes the shrink safe if that is ever raised.
+inline uint32_t round_up_capped(uint32_t v, uint32_t mult, uint32_t cap) {
+    const uint32_t r = ((v + mult - 1) / mult) * mult;
+    return (r > cap) ? cap : r;
+}
+
 // ---------------------------------------------------------------------------
 // PERF 2 — the REDUCE-SCATTER slice plan (`MOE_SWIGLU_REDUCE=scatter`).
 //

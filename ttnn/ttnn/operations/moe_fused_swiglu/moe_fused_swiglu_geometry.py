@@ -13,6 +13,8 @@ point there; they do not re-argue it.
 
 from __future__ import annotations
 
+import os
+
 TILE = 32
 
 # --------------------------------------------------------------------------------------------
@@ -68,6 +70,24 @@ HACK_AHEAD = 2
 #: Eighths of every phase-2 W_down K-block read by the WRITER on NOC_1 instead of the reader's
 #: NOC_0. A real interior optimum: -4.7 / -2.6 / -1.1 % at 3.
 WD_SPLIT = 3
+
+#: Whether the phase-2 `h` all-gather multicast POSTS its payload (no return write-acks).
+#:
+#: A CORRECTNESS-RELEVANT knob, not just a perf one, which is why it is switchable rather than
+#: baked. Posting removes NUM_CORES-1 write-acks per round and nothing else — PROVIDED the wire
+#: order holds. The whole safety argument is that the VALID flag is NON-posted and LINKED on the
+#: same VC, so it cannot overtake the payload it announces; a receiver that saw the flag early
+#: would read a half-written slot and the failure mode is a silent PCC drift, not a hang. That
+#: argument is about the NoC's linked-chain ordering guarantee, so it is worth being able to
+#: DISPROVE by measurement rather than only asserting.
+#:
+#: False falls back to a non-posted payload: acks return and the write is tracked, which is
+#: strictly more conservative on the wire and is what the mcast_pipe library path already does
+#: for the x multicast. Everything else — the linked chain, the flag, the barrier structure —
+#: is identical, so the two variants differ in exactly one wire property.
+#:
+#: Override without editing: `MOE_H_MCAST_POSTED=0`.
+H_MCAST_POSTED = os.environ.get("MOE_H_MCAST_POSTED", "1") not in ("0", "false", "False")
 
 #: `/perf-measure` ablation hook: one transport stubbed, all CB scaffolding intact. NOT a
 #: correctness mode — edit this to measure, never to ship. `+`-separated, cumulative.

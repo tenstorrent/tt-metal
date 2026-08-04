@@ -73,6 +73,18 @@ CASES = [
     (6144, 5120, 256, "bf16_rm"),  # the other emb
     (6144, 1024, 1024, "bfp8_tile"),  # count == capacity
     (7168, 1024, 0, "bf16_rm"),  # zero-count: no rows written at all
+    # PADDED TAILS — m_t not a power of two, so `m_tiles_eff` rounds the tail block UP and the
+    # gate/up matmul runs over FEWER rows than the block's page count (`m_tiles_real`). Every case
+    # above happens to have m_t == m_eff, so none of them can tell that path from the old one: 128
+    # -> 4, 256 -> 8, 255 -> 8, 257 -> 8+1, 512/1024 -> whole blocks. Without these the gate would
+    # certify the change by not exercising it.
+    (7168, 1024, 96, "bf16_rm"),  # m_t 3 -> m_eff 4
+    (7168, 1024, 160, "bf16_rm"),  # m_t 5 -> m_eff 8, the widest single-block gap
+    (7168, 1024, 160, "bfp8_tile"),  # same gap on the tiled path
+    (7168, 1024, 224, "bf16_rm"),  # m_t 7 -> m_eff 8
+    (7168, 1024, 150, "bf16_rm"),  # ragged AND padded: m_t 5, written extent 160
+    (7168, 1024, 352, "bf16_rm"),  # two blocks, tail m_t 3 -> m_eff 4
+    (6144, 1024, 480, "bfp8_tile"),  # two blocks, tail m_t 7 -> m_eff 8, other emb
 ]
 
 
