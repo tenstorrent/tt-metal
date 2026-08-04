@@ -311,13 +311,37 @@ class ColParallelLinear(Module):
         return _apply_activation_fn(outputs[1], self.activation_fn)
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None, dtype=None
+        self,
+        x: ttnn.Tensor,
+        compute_kernel_config=None,
+        default_block_size=None,
+        parallel_config=None,
+        dtype=None,
+        addcmul_a=None,
+        addcmul_b=None,
+        addcmul_scalar: float = 1.0,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
         Return output fractured on columns.
         If chunks is set, returns a list of tensors split along the output dimension.
+
+        `addcmul_a` / `addcmul_b` fuse a gated residual into the matmul epilogue, returning
+        `addcmul_a + addcmul_scalar * matmul_result * addcmul_b`. Both must already be at the
+        per-TP-device output slice. Only the all-gather-matmul path supports it, so it requires
+        `parallel_config`; callers on the unfused path should apply the addcmul themselves.
         """
+        if addcmul_a is not None or addcmul_b is not None:
+            if (addcmul_a is None) != (addcmul_b is None):
+                msg = "addcmul_a and addcmul_b must be given together"
+                raise ValueError(msg)
+            if parallel_config is None or parallel_config.tensor_parallel.factor <= 1:
+                msg = "fused addcmul needs the all-gather-matmul path; pass parallel_config"
+                raise ValueError(msg)
+            if self.chunks is not None and self.chunks > 1:
+                msg = "fused addcmul is not supported alongside chunked output"
+                raise ValueError(msg)
+
         x = maybe_cast_activation(x, self.activation_dtype)
         if self.pin_output_bf16:
             dtype = resolve_output_dtype(dtype, x)
@@ -373,6 +397,9 @@ class ColParallelLinear(Module):
                 ),
                 dtype=dtype,
                 fuse_swiglu=self.fuse_swiglu,
+                scalar=addcmul_scalar if addcmul_a is not None else None,
+                addcmul_input_tensor1=addcmul_a,
+                addcmul_input_tensor2=addcmul_b,
             )
 
             if self.chunks is not None and (self.chunks > 1):

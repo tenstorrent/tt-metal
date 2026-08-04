@@ -291,6 +291,8 @@ class MiniMaxH3Attention(Module):
         N: int | None = None,
         rope_cos: ttnn.Tensor | None = None,
         rope_sin: ttnn.Tensor | None = None,
+        addcmul_residual: ttnn.Tensor | None = None,
+        addcmul_gate: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured hidden_size on TP; fractured N on SP when `is_sequence_parallel`,
@@ -298,9 +300,13 @@ class MiniMaxH3Attention(Module):
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP. Both
             None skips the rotary embedding entirely, as the token refiner requires.
         N: logical (unfractured) sequence length. Only needed for ring attention.
+        addcmul_residual/addcmul_gate: when both are given, the gated residual
+            `addcmul_residual + to_out(...) * addcmul_gate` is folded into the to_out matmul's
+            epilogue instead of running as separate ops. Both must be TP-fractured like the output.
 
         Returns the attention output with the same distribution as the input.
         """
+        assert (addcmul_residual is None) == (addcmul_gate is None), "addcmul residual/gate come as a pair"
         assert (rope_cos is None) == (rope_sin is None), "rope_cos and rope_sin must be given together"
         # The fused RoPE consumes head_dim-wide tables, not the reference's rotary_dim-wide ones: the
         # pass-through channels must be present as cos=1 / sin=0. Passing the raw reference tables
@@ -407,9 +413,17 @@ class MiniMaxH3Attention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis
             )
 
-        return self.to_out(
+        # The gated residual rides along in the matmul epilogue on the fused path; on the unfused
+        # path the op has no addcmul, so apply it afterwards.
+        fuse_gate = addcmul_residual is not None and self.use_fused_agmm
+        out = self.to_out(
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
             default_block_size=agmm_block_size(self.inner_dim, self.hidden_size // tp_factor),
+            addcmul_a=addcmul_residual if fuse_gate else None,
+            addcmul_b=addcmul_gate if fuse_gate else None,
         )
+        if addcmul_residual is not None and not fuse_gate:
+            out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
+        return out
