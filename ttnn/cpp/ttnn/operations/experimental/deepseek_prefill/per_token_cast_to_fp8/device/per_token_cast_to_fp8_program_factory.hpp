@@ -18,6 +18,10 @@ struct PerTokenCastToFp8SharedVariables {
     std::vector<CoreCoord> all_cores_vec;
 };
 
+// Single factory for both input layouts. create() reads the input layout and selects the ROW_MAJOR vs
+// TILE work-split / kernel define internally (compute skips input tilization only for TILE); everything
+// else is shared. ROW_MAJOR and TILE stay distinct program-cache entries via compute_program_hash, which
+// hashes input.layout().
 struct PerTokenCastToFp8ProgramFactory {
     using shared_variables_t = PerTokenCastToFp8SharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

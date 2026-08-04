@@ -6,42 +6,37 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "../../../device/kernels/accumulation_common.hpp"
 
 void kernel_main() {
     // Compile time args
     // -----------------
-    constexpr uint32_t total_tiles_per_core = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr uint32_t total_tiles_per_core = get_arg(args::total_tiles_per_core);
 
     // Runtime args
     // ------------
-    const uint32_t dst_base_addr = get_arg_val<uint32_t>(0);
-    const uint32_t dst_start_tile = get_arg_val<uint32_t>(1);
-
-    // CB indices
-    // ----------
-    constexpr auto dst_cb_idx = tt::CBIndex::c_1;
-
-    // Tile sizes
-    // ----------
-    constexpr uint32_t dst_tile_size = get_tile_size(dst_cb_idx);
+    const uint32_t dst_start_tile = get_arg(args::dst_start_tile);
 
     // Tensor accessor
     // ---------------
-    const auto dst_accessor = TensorAccessor(dst_args, dst_base_addr);
+    const auto dst_accessor = TensorAccessor(tensor::dst);
 
     Noc noc;
-    CircularBuffer cb_dst(dst_cb_idx);
+    DataflowBuffer dfb_dst(dfb::dst);
+
+    // Tile sizes
+    // ----------
+    const uint32_t dst_tile_size = dfb_dst.get_tile_size();
 
     //-------------------------------------------------------------------------
-    // Main loop - pull pages from dst_cb and push to dst
+    // Main loop - pull pages from the dst dataflow buffer and push to dst
     for (uint32_t tile_id = dst_start_tile; tile_id < (dst_start_tile + total_tiles_per_core); ++tile_id) {
-        cb_dst.wait_front(ONE_TILE);
-        noc.async_write(cb_dst, dst_accessor, dst_tile_size, {.offset_bytes = 0}, {.page_id = tile_id});
+        dfb_dst.wait_front(ONE_TILE);
+        noc.async_write(dfb_dst, dst_accessor, dst_tile_size, {.offset_bytes = 0}, {.page_id = tile_id});
         noc.async_write_barrier();
-        cb_dst.pop_front(ONE_TILE);
+        dfb_dst.pop_front(ONE_TILE);
     }
 }

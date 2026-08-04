@@ -587,6 +587,11 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
              get_soc_desc(chip_id).get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED)) {
             this->virtual_worker_cores_[chip_id].insert({core.x, core.y});
         }
+        this->virtual_dispatch_cores_[chip_id] = {};
+        for (const tt::umd::CoreCoord& core :
+             get_soc_desc(chip_id).get_cores(CoreType::DISPATCH, CoordSystem::TRANSLATED)) {
+            this->virtual_dispatch_cores_[chip_id].insert({core.x, core.y});
+        }
         this->virtual_eth_cores_[chip_id] = {};
         for (const tt::umd::CoreCoord& core : get_soc_desc(chip_id).get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
             this->virtual_eth_cores_[chip_id].insert({core.x, core.y});
@@ -654,6 +659,10 @@ bool Cluster::is_dram_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) 
     return this->virtual_dram_hw_cores_.contains(chip_id) and this->virtual_dram_hw_cores_.at(chip_id).contains(core);
 }
 
+bool Cluster::is_dispatch_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const {
+    return this->virtual_dispatch_cores_.contains(chip_id) and this->virtual_dispatch_cores_.at(chip_id).contains(core);
+}
+
 const std::unordered_set<tt::tt_metal::CoreCoord>& Cluster::get_virtual_worker_cores(ChipId chip_id) const {
     return this->virtual_worker_cores_.at(chip_id);
 }
@@ -671,13 +680,22 @@ tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates
     }
 
     // Keeping the old behavior, although UMD does define translation for other cores as well.
-    if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
+    if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH &&
+        core_type != CoreType::DISPATCH) {
         TT_THROW("Undefined conversion for core type.");
     }
 
     const auto& soc_desc = this->get_soc_desc(chip_id);
     if (core_type == CoreType::DRAM) {
         return soc_desc.get_physical_dram_core_from_logical(logical_coord);
+    }
+
+    if (core_type == CoreType::DISPATCH) {
+        const tt::tt_metal::CoreCoord noc0_coord =
+            soc_desc.get_physical_dispatch_engine_core_from_logical(logical_coord);
+        tt::umd::CoreCoord translated_coord = soc_desc.translate_coord_to(
+            {noc0_coord, CoreType::DISPATCH, CoordSystem::NOC0}, CoordSystem::TRANSLATED);
+        return {translated_coord.x, translated_coord.y};
     }
 
     tt::umd::CoreCoord translated_coord =
@@ -847,6 +865,7 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {core.x, core.y},
             addr,
             sz_in_bytes);
@@ -876,6 +895,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {core.x, core.y},
             addr,
             size_in_bytes);
@@ -901,6 +921,7 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {core.x, core.y},
             addr,
             sz_in_bytes);
@@ -932,6 +953,7 @@ void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {target.x, target.y},
             addr,
             size_in_bytes);
@@ -956,6 +978,7 @@ void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {target.x, target.y},
             addr,
             size_in_bytes);

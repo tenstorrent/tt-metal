@@ -154,6 +154,12 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py) for the config-population +
         protobuf-serialize boilerplate; supply only your model's table builder + chunk geometry."""
 
+    def kv_migration_base_address(self, kv_cache) -> int:
+        """This rank's KV base DRAM address — the anchor the engine all-gathers to merge every pipeline
+        stage into one table. Return `int(<your base tensor>.buffer_address())`; you pick which of your
+        cache tensors is the migratable base, since the engine treats `kv_cache` as opaque and cannot.
+        Required whenever migration is enabled."""
+
     def set_layer_ack_channel(self, channel) -> None:
         """Register the per-layer LayerAck channel (the engine creates and owns it); the
         runtime bumps it once per layer so the scheduler can drive migration."""

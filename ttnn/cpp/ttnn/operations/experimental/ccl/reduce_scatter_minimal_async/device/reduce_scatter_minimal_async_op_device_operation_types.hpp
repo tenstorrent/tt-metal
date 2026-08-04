@@ -87,6 +87,10 @@ struct ReduceScatterMinimalAsyncInputs {
     Tensor input_tensor;
     std::optional<Tensor> optional_intermediate_tensor;
     std::optional<Tensor> optional_output_tensor;
+    // Ring contiguous fast path only (Ring topology, scatter dim != 0): caller-provided persistent
+    // penult intermediate (see reduce_scatter_ring_penult_intermediate_staging_spec). When
+    // absent and the contiguous path applies, create_output_tensors allocates one and returns it at index 2.
+    std::optional<Tensor> optional_penult_intermediate_tensor;
 };
 
 }  // namespace ttnn::experimental::prim

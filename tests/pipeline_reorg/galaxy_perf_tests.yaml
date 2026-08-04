@@ -39,6 +39,7 @@
 - name: Galaxy DiT Wan2.2 model perf tests
   cmd: |
     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
     pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8_sp1tp0 and resolution_720p and t2v" --timeout=1200
   model: wan2-2
   skus:

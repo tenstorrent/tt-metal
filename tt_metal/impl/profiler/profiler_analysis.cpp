@@ -56,7 +56,32 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
      {RiscType::TRISC_1, "TRISC_1"},
      {RiscType::TRISC_2, "TRISC_2"},
      {RiscType::TENSIX_RISC_AGG, "TENSIX_RISC_AGG"},
-     {RiscType::ERISC, "ERISC"}});
+     {RiscType::ERISC, "ERISC"},
+     {RiscType::NONE, "NONE"},
+     {RiscType::QUASAR_DM0, "QUASAR_DM0"},
+     {RiscType::QUASAR_DM1, "QUASAR_DM1"},
+     {RiscType::QUASAR_DM2, "QUASAR_DM2"},
+     {RiscType::QUASAR_DM3, "QUASAR_DM3"},
+     {RiscType::QUASAR_DM4, "QUASAR_DM4"},
+     {RiscType::QUASAR_DM5, "QUASAR_DM5"},
+     {RiscType::QUASAR_DM6, "QUASAR_DM6"},
+     {RiscType::QUASAR_DM7, "QUASAR_DM7"},
+     {RiscType::QUASAR_NEO0_TRISC0, "QUASAR_NEO0_TRISC0"},
+     {RiscType::QUASAR_NEO0_TRISC1, "QUASAR_NEO0_TRISC1"},
+     {RiscType::QUASAR_NEO0_TRISC2, "QUASAR_NEO0_TRISC2"},
+     {RiscType::QUASAR_NEO0_TRISC3, "QUASAR_NEO0_TRISC3"},
+     {RiscType::QUASAR_NEO1_TRISC0, "QUASAR_NEO1_TRISC0"},
+     {RiscType::QUASAR_NEO1_TRISC1, "QUASAR_NEO1_TRISC1"},
+     {RiscType::QUASAR_NEO1_TRISC2, "QUASAR_NEO1_TRISC2"},
+     {RiscType::QUASAR_NEO1_TRISC3, "QUASAR_NEO1_TRISC3"},
+     {RiscType::QUASAR_NEO2_TRISC0, "QUASAR_NEO2_TRISC0"},
+     {RiscType::QUASAR_NEO2_TRISC1, "QUASAR_NEO2_TRISC1"},
+     {RiscType::QUASAR_NEO2_TRISC2, "QUASAR_NEO2_TRISC2"},
+     {RiscType::QUASAR_NEO2_TRISC3, "QUASAR_NEO2_TRISC3"},
+     {RiscType::QUASAR_NEO3_TRISC0, "QUASAR_NEO3_TRISC0"},
+     {RiscType::QUASAR_NEO3_TRISC1, "QUASAR_NEO3_TRISC1"},
+     {RiscType::QUASAR_NEO3_TRISC2, "QUASAR_NEO3_TRISC2"},
+     {RiscType::QUASAR_NEO3_TRISC3, "QUASAR_NEO3_TRISC3"}});
 }  // namespace tracy
 
 namespace tt::tt_metal {
@@ -256,8 +281,10 @@ bool matches_start_end_config(const tracy::TTDeviceMarker& marker, const Analysi
                marker.marker_name_keyword_flags, start_end_config.marker_name_keywords);
 }
 
-// Fixed per-processor-type clock (MHz) for Quasar. A DM core targets 2.0 GHz and a Neo TRISC
-// targets 1.4 GHz; the emulator reports aiclk=0, so these fixed clocks are used instead.
+// Fixed per-processor-type clock (MHz) for Quasar. NEO TRISCs run at 1.4 GHz; DMs read the NEO TRISC
+// wall clock for now, so DM and TRISC timestamps share one timeline and can be compared directly.
+// TODO: update the DM clock frequency once the DMs read their own clock counter and the DM and TRISC
+// clock domains are synchronized.
 // Returns nullopt for non-Quasar RISCs (WH/BH), which fall back to the runtime device aiclk.
 std::optional<int> quasar_processor_clock_mhz(tracy::RiscType risc) {
     using tracy::RiscType;
@@ -266,7 +293,7 @@ std::optional<int> quasar_processor_clock_mhz(tracy::RiscType risc) {
             static_cast<int>(RiscType::QUASAR_NEO3_TRISC3) - static_cast<int>(RiscType::QUASAR_NEO0_TRISC0) == 15,
         "quasar_processor_clock_mhz relies on contiguous QUASAR_DM*/QUASAR_NEO*_TRISC* enum blocks");
     if (risc >= RiscType::QUASAR_DM0 && risc <= RiscType::QUASAR_DM7) {
-        return 2000;  // DM: 2.0 GHz
+        return 1400;  // Quasar DM: 1.4 GHz (reads the NEO TRISC wall clock for now)
     }
     if (risc >= RiscType::QUASAR_NEO0_TRISC0 && risc <= RiscType::QUASAR_NEO3_TRISC3) {
         return 1400;  // Neo TRISC: 1.4 GHz

@@ -69,6 +69,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Fabric setup
     ////////////////////////////////////////////////////////////////
 
+    auto* mesh_device = input_tensor.device();
     const uint32_t num_devices = operation_attributes.num_devices;
     uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, sender_device_coord, operation_attributes.cluster_axis);
@@ -120,7 +121,29 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
         "No neighboring devices");
 
-    const uint32_t packet_size = operation_attributes.packet_size;
+    // Derive {E, W, N, S} physical directions, which depend on sender's mesh position + topology.
+    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+    auto physical_slot = [&](const MeshCoordinate& neighbor) {
+        const auto dir = tt::tt_fabric::get_eth_forwarding_direction(
+            sender_fabric_node_id, mesh_device->get_fabric_node_id(neighbor));
+        TT_FATAL(
+            dir.has_value() && static_cast<uint32_t>(dir.value()) < tt::tt_fabric::eth_chan_directions::Z,
+            "AllGather expected a cardinal (E/W/N/S) fabric forwarding direction to a mesh neighbor");
+        return static_cast<uint32_t>(dir.value());
+    };
+    uint32_t e_dir = 0, w_dir = 0, n_dir = 0, s_dir = 0;
+    if (e_coord.has_value()) {
+        e_dir = physical_slot(*e_coord);
+    }
+    if (w_coord.has_value()) {
+        w_dir = physical_slot(*w_coord);
+    }
+    if (n_coord.has_value()) {
+        n_dir = physical_slot(*n_coord);
+    }
+    if (s_coord.has_value()) {
+        s_dir = physical_slot(*s_coord);
+    }
 
     // Kernel alternates between ranges[] and ranges_alt[] hops on every packet send.
     // Enabled if any axis is an even-sized ring.
@@ -130,6 +153,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // matters when the output is freshly allocated by the op; a persistent/preallocated
     // output is guaranteed to already exist on every device before op kernel begins.
     const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
+
+    const uint32_t packet_size = operation_attributes.packet_size;
 
     ////////////////////////////////////////////////////////////////
     // Core selection
@@ -345,7 +370,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Runtime args
     ////////////////////////////////////////////////////////////////
 
-    auto* mesh_device = input_tensor.device();
     for (uint32_t link = 0; link < min_num_links; link++) {
         CoreCoord core = worker_cores[link];
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
@@ -403,8 +427,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
             ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
             ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
+            e_dir,                              // line_dir
+            e_dir,                              // rect_e_dir
+            w_dir,                              // rect_w_dir
+            s_dir,                              // rect_spine_dir
         };
-        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
         // Reader forward connection info: E-line (axis 1) then S-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> reader_dst_nodes;
         if (e_hops > 0 && e_coord.has_value()) {
@@ -444,8 +471,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
             ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
             ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
+            w_dir,                              // line_dir
+            e_dir,                              // rect_e_dir
+            w_dir,                              // rect_w_dir
+            n_dir,                              // rect_spine_dir
         };
-
         // Writer backward connections: W-line (axis 1) then N-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> writer_dst_nodes;
         if (w_hops > 0 && w_coord.has_value()) {
