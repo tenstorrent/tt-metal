@@ -49,7 +49,7 @@ export M3_PROFILE_ZONES=1      # arm the zone markers (utils/profiler_utils.py r
 # too much next to M3's weights.
 export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT="${TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT:-20000}"
 
-GOLDEN="${GOLDEN_DIR:-/data/philei/models/minimax-m3-prefill-cache/golden}"
+GOLDEN="${GOLDEN_DIR:-$HF_MODEL/golden}"
 HARNESS="models/demos/minimax_m3/tests/perf/profile_prefill.py"
 VISUALIZE="models/demos/minimax_m3/tests/perf/visualize_zones.py"
 CSVS=()

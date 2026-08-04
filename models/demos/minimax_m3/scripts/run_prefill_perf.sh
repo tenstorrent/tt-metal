@@ -40,7 +40,7 @@ export PREFILL_TPS_ITERS="${PREFILL_TPS_ITERS:-5}"
 export PREFILL_SKIP_PCC=1     # perf only — skip the per-layer golden KV PCC
 export LOGURU_LEVEL=INFO      # suppress python DEBUG logs at the source
 
-GOLDEN="${GOLDEN_DIR:-/data/philei/models/minimax-m3-prefill-cache/golden}"
+GOLDEN="${GOLDEN_DIR:-$HF_MODEL/golden}"
 HARNESS="models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py"
 WORKDIR="${PERF_WORKDIR:-/tmp/m3_prefill_perf_traces}"
 LOGDIR="${LOGDIR:-$TT_METAL_HOME/prefill_perf_logs}"
