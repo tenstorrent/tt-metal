@@ -194,24 +194,19 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     uint32_t num_cores = effective_num_links;
 
     // ==================== Core layout: senders + worker cores ====================
-    // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
-    // Each sender owns num_workers consecutive worker cores (u1..uN): cores are
-    // laid out [sender, u1, ..., uN] consecutively along x per sender group.
-    uint32_t sender_row_y = subdevice_cores.at(0).y;
-    std::vector<CoreCoord> all_row_cores;
-    for (const auto& core : subdevice_cores) {
-        if (core.y == sender_row_y) {
-            all_row_cores.push_back(core);
-        }
-    }
-    std::sort(
-        all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
+    // Pack sender-groups from ALL sub-device cores (row-major), spanning rows when a
+    // single row is too narrow. Each sender owns num_workers consecutive worker cores
+    // (u1..uN), laid out [sender, u1, ..., uN]. Inter-core comms (sender<->workers and
+    // the worker baton ring) use explicit NOC virtual coords passed as runtime args, so
+    // a sender-group need not be physically contiguous or confined to one row.
+    std::vector<CoreCoord> all_row_cores =
+        corerange_to_cores(worker_core_range_set, std::nullopt, /*row_wise=*/true);
 
     uint32_t total_row_cores = static_cast<uint32_t>(all_row_cores.size());
     uint32_t cores_per_sender = 1 + num_workers;  // 1 sender + N worker cores (u1..uN)
     TT_FATAL(
         total_row_cores >= cores_per_sender * num_cores,
-        "Same-row has only {} cores for {} senders — need {} cores per sender (>= {} required)",
+        "Sub-device has only {} cores for {} senders — need {} cores per sender (>= {} required)",
         total_row_cores,
         num_cores,
         cores_per_sender,
