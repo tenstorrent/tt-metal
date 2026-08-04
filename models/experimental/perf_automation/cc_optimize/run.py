@@ -364,14 +364,37 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
 
 
 def _reset_fullpipe_baselines() -> None:
-    """Delete the full-pipeline (trace+1cq) baseline file at task start so a fresh optimize
-    never inherits a stale best-so-far from a previous model, module, or run.
+    """Drop the full-pipeline (trace+1cq) bar ONLY when there is no usable one for this (model, task).
 
-    The 1-CQ file (`..._1cq.json`) is the ONLY full-pipeline baseline now (the tool is
-    trace+1cq end to end) and the one every compute win is banked against; an old higher-rank
-    entry left behind would veto every candidate for the whole run without ever being overwritten."""
+    This used to unlink the file unconditionally at task start, and that single line defeated every
+    protection built around the bar. The sequence each run was:
+
+        1. delete the bar
+        2. measure the BEFORE bookend
+        3. whatever that reading happened to be BECAME the bar
+
+    So the ratchet had nothing to ratchet against, and "is the bar readable?" was moot because the
+    file was genuinely absent -- establishing from the new reading is the correct behaviour when no
+    bar exists. On gemma-3-12b-it that is how a thermally clamped 68.3241 ms reading (14.6 tok/s/u,
+    against a true ~34) became the anchor for a whole run, and how a later run replaced a committed
+    33.981 with 35.9253.
+
+    The fear the delete was written for -- inheriting a stale best from a DIFFERENT model or module
+    -- is already handled: _fullpipe_1cq_name() keys the file by (model, task). The delete was
+    vestigial protection from when the file was global, and it was costing the thing it protected.
+
+    So: a usable bar for THIS (model, task) is kept and reused. Anything else -- no file, an
+    unparseable one, a non-positive value -- is cleared so the run establishes a fresh one.
+    PERF_MCP_FORCE_REBASELINE=1 forces the old unconditional behaviour."""
+    p = state_dir() / _fullpipe_1cq_name()
+    if str(os.environ.get("PERF_MCP_FORCE_REBASELINE", "")).lower() not in ("1", "true", "yes"):
+        try:
+            if float(json.loads(p.read_text()).get("full_pipeline_ms") or 0.0) > 0:
+                return
+        except Exception:  # noqa: BLE001
+            pass
     try:
-        (state_dir() / _fullpipe_1cq_name()).unlink()
+        p.unlink()
     except Exception:
         pass
 
@@ -3141,7 +3164,18 @@ def optimize_pipeline(
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
     _reset_fullpipe_baselines()
-    before_ms, before_mode = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
+    # The BEFORE bookend is a full-model run of several minutes AND it defines the bar every win is
+    # graded against. If this (model, task) already has one, re-measuring it can only move the bar to
+    # whatever the board felt like doing today -- which is exactly how a clamped 68.3241 ms replaced a
+    # true ~34. Reuse it and skip the run.
+    before_ms, before_mode = _read_fullpipe_best_1cq()
+    if before_ms and before_ms > 0:
+        print(
+            "  [optimize/cc] FULL-model end-to-end (BEFORE) = %.4f ms REUSED from the established "
+            "baseline (not re-measured; PERF_MCP_FORCE_REBASELINE=1 to re-take it)" % before_ms
+        )
+    else:
+        before_ms, before_mode = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
     rounds, can_stop, halted = 0, False, False
     stall_sec = adaptive_timer(repo_root, "round", env_key="PERF_MCP_ROUND_STALL_SEC", mult=0.5)
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
