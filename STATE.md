@@ -2057,3 +2057,95 @@ Parallelism stays the largest lever on paper (this is 1.5 s of device time on on
 32), but amendment 63's 1.30x at `t_factor=4` is explained by the same two causes: sharding T
 makes the deep stages' rows *fewer* while leaving the page 32 bytes wide, and it makes the
 s0 conv1d slicer fail at more shapes, not fewer.
+
+## Amendment 67 (2026-08-04) — why T-parallel audio only buys 1.30x: the shallow stages have no rows to shard
+
+Same sync-isolated per-module method as amendment 66, at the shipping `t_factor=4` axis=0 on the
+4x8 mesh. Wall 1001.9 ms (amendment 63's 0.988 s, reproduced), 962 ms accounted.
+
+| role | 1 device | t_factor=4 | scaling |
+|---|---|---|---|
+| `act.upsample` | 588.7 | **468.7** | **1.26x** |
+| `act.downsample` | 321.6 | 183.1 | 1.76x |
+| `act.snake` | 265.1 | 114.9 | 2.31x |
+| `DilatedConv1d` | 286.7 | 148.8 | 1.93x |
+| `ups[i]` | 21.8 | **38.5** | **0.57x — worse** |
+| total accounted | 1493 | 962 | 1.55x |
+
+Cost tracks **row count** (amendment 66), so 4x devices should buy close to 4x. It buys 1.55x
+because sharding divides rows the deep stages have plenty of and the shallow stages do not:
+
+| stage | up, 1 dev | up, factor 4 | scaling |
+|---|---|---|---|
+| s6 (T=165600) | 143.3 | 59.6 | 2.40x |
+| s5 (T=82800) | 71.1 | 50.6 | 1.41x |
+| s4 (T=41400) | 69.5 | 46.7 | 1.49x |
+| s3 (T=20700) | 58.3 | 43.9 | 1.33x |
+| s2 (T=10350) | 53.9 | 46.7 | 1.15x |
+| s1 (T=5175) | 43.7 | 42.8 | **1.02x** |
+| s0 (T=1035) | 140.9 | **178.4** | **0.79x — worse** |
+
+s1 gets nothing: at T=5175 the per-device extent is 1294 rows and fixed per-op cost already
+dominates. s0 gets *worse*, and is now the single largest line in the shipping profile at
+**178 ms of 1002 ms (17.8 %)** — the MAC fallback still fires 36 times, now at
+`(T_pad=326, C=512, K=7)`, on rows so short that the added halo exchange outweighs the
+smaller shard.
+
+**So T-parallelism is close to exhausted, not under-exploited.** More factor buys the deep
+stages only, and the deep stages are exactly where the page-width problem lives. Widening to
+two axes (`AudioTCParallelConfig`) inherits this ceiling; it is not the 20x.
+
+## Amendment 68 (2026-08-04) — the MAC "fallback" is the *fast* path: ttnn.conv1d is 2-3x slower at C=512
+
+The standing plan (amendments 62-64, and the premise of amendment 67's s0 line) was that
+`_depthwise_tap_mac` is a slow correctness path and the win is getting `ttnn.conv1d` to accept
+these shapes. **Measured, and it is backwards.** Single device, fp32, HiFi4/fp32-acc, min of 3,
+against the MAC chain on the identical input:
+
+| shape | MAC | conv1d best | verdict |
+|---|---|---|---|
+| `(B=2, T_pad=1041, C=512, K=7, s=1)` — s0 up, 1 device | **1.46 ms** | all 8 configs FAIL | — |
+| `(B=2, T_pad=326, C=512, K=7, s=1)` — s0 up, factor 4 | **1.30 ms** | all 8 configs FAIL | — |
+| `(B=2, T_pad=2081, C=512, K=12, s=2)` — s0 down, **succeeds today** | **2.13 ms** | 4.56 ms | **conv1d 2.1x slower** |
+
+Eight `Conv1dConfig` variants swept: HEIGHT/WIDTH/BLOCK/auto `shard_layout`,
+`reshard_if_not_optimal`, `act_block_h_override=32`, `act_block_w_div=2`, `full_inner_dim`.
+At K=7 every one fails — HEIGHT/auto in `op_slicing.cpp:266`, WIDTH in
+`conv2d_op_width_sharded_program_factory`, BLOCK in `program.cpp:330`. At the K=12 control the
+four that run land at 4.56-7.27 ms against the MAC chain's 2.13 ms, and are *less* accurate
+(rel_max 1.73e-03 vs the MAC reference).
+
+The comment at `audio_ops.py:225` calling the fallback "slower, but this is a correctness path"
+is wrong at H3's shapes. **Do not spend more time engaging conv1d at stage 0**, and note that
+the K=12 downsample at s0 would be ~2x faster on the MAC path than on the conv1d path it
+currently takes.
+
+Why the MAC chain wins: at `(2, 1035, 512)` it runs 12 slices + 12 multiplies + 10 adds at
+~130 us each, i.e. **~65 GB/s** — near the bandwidth the visual encoder's best op achieves.
+It is not inefficient per pass; it just makes **34 passes over the activation where the ideal
+is 2**. That is the real defect, and the fix is a fused multi-tap FIR (one read, one write),
+not a differently-configured conv1d.
+
+### What this leaves, ranked, for audio decode (0.988 s against 0.05 s)
+
+1. **A fused depthwise FIR** — one pass instead of 2K-1. `Activation1d` is 79 % of device
+   time and every millisecond of it is `depthwise_tap_filter`, up or down. Nothing in
+   `existing-fast-paths.md` covers depthwise-1D-over-rows at wide C; `ttnn.conv1d` is measured
+   worse. This is genuine kernel work and it is the whole ballgame.
+2. **T-folding the deep stages** — s4-s6 are 664 ms at `C = 32/16/8`, a 128/64/32-byte
+   ROW_MAJOR page. `(B, T, C) -> (B, T/S, S·C)` is a free row-major reshape; per-channel ops
+   (snake, tap multiplies) need only α/β tiled S times. Cuts rows by S where the row count is
+   the cost.
+3. **Trace** — see below. Not available until (1) and (2) land.
+4. T-parallelism beyond factor 4 — capped at ~1.55x by amendment 67, and factor 8 is still wrong.
+
+### On tracing
+
+Trace's ceiling here is set by the ratio of host dispatch to device time, and amendment 66
+measured both: **504 ms of host dispatch inside ~1235 ms of device time.** The host is already
+the faster party, so trace can only recover the tail — which is precisely the 1.07x amendment
+60 measured. Engaging `ttnn.conv1d` would cut the op count (720 of 1680 ops are the MAC
+chains) and so cut host dispatch, but amendment 68 measures it as *increasing* device time, so
+it moves the wrong number. Trace becomes the binding lever the moment device time drops under
+~500 ms — i.e. after (1) — and it will still be there. That is exactly why the skill puts it
+last.
