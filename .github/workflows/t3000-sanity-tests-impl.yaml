@@ -210,7 +210,7 @@ jobs:
       - name: 🤖 AI job summary
         if: always() && !cancelled()
         continue-on-error: true
-        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@ppetrovic/ai-summary-v1-endpoint
         with:
           config: |
             {

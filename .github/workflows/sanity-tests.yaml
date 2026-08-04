@@ -396,7 +396,7 @@ jobs:
           echo "Combined run-result: $RESULT"
       - id: ai-run-summary
         continue-on-error: true
-        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@ppetrovic/ai-summary-v1-endpoint
         with:
           config: |
             {
