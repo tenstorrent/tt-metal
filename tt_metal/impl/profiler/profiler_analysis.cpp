@@ -851,6 +851,7 @@ std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::p
     const nlohmann::json configs_json = nlohmann::json::parse(json_ifs);
 
     std::vector<AnalysisConfig> configs;
+    configs.reserve(configs_json.size());
     for (const auto& config_json : configs_json) {
         configs.push_back(config_json.get<AnalysisConfig>());
     }

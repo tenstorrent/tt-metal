@@ -142,7 +142,7 @@ safe-outputs:
       - single-card-demo-tests
       - tt-metal-l2-nightly
       - ttnn-run-sweeps
-      - vllm-nightly-tests
+      - vllm-model-tests
       - metal-run-microbenchmarks
       - sanity-tests-debug
       - merge-gate
@@ -654,7 +654,7 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
    ```
    That list currently spans the full tracked CI surface — sanity/e2e/demo/unit/integration/
    perf/profiler/stress suites across **Blackhole, Galaxy, T3000, and single-card**, the
-   `models-t1/t2/t3` suites, `tt-metal-l2-nightly`, `ttnn-run-sweeps`, `vllm-nightly-tests`,
+   `models-t1/t2/t3` suites, `tt-metal-l2-nightly`, `ttnn-run-sweeps`, `vllm-model-tests`,
    `metal-run-microbenchmarks`, the `runtime-*` suites, and the `pr-gate` / `merge-gate`
    gates (which invoke `build-artifact.yaml`, so **host compile / JIT / deprecated-declaration
    warnings are covered transitively** through the gate logs — you do not need a separate
