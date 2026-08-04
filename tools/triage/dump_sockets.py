@@ -86,6 +86,7 @@ class SenderMd:
     bytes_sent: int
     num_downstreams: int
     write_ptr: int
+    downstream_config_addr: int  # the peer receiver's config buffer address
     fifo_total_size: int
     is_d2h: int
     bytes_acked: list[int]
@@ -130,7 +131,7 @@ def read_md(ep: Endpoint) -> ReceiverMd | SenderMd:
         raw = read_from_device(ep.location, ep.config_addr, num_bytes=struct.calcsize(RECV_FMT))
         return ReceiverMd(*struct.unpack(RECV_FMT, raw))
 
-    sent, n_down, wr, _dstr_sent_addr, _dstr_fifo, fifo, is_d2h = struct.unpack(
+    sent, n_down, wr, dstr_config_addr, _dstr_fifo, fifo, is_d2h = struct.unpack(
         SEND_FMT, read_from_device(ep.location, ep.config_addr, num_bytes=struct.calcsize(SEND_FMT))
     )
     acked_base = ep.config_addr + ep.md_size
@@ -138,7 +139,7 @@ def read_md(ep: Endpoint) -> ReceiverMd | SenderMd:
         struct.unpack("<I", read_from_device(ep.location, acked_base + i * ep.acked_stride, num_bytes=4))[0]
         for i in range(max(n_down, 1))
     ]
-    return SenderMd(sent, n_down, wr, fifo, is_d2h, acked)
+    return SenderMd(sent, n_down, wr, dstr_config_addr, fifo, is_d2h, acked)
 
 
 def discover(inspector_data, id_mapping, run_checks) -> list[Endpoint]:
@@ -245,25 +246,67 @@ def receiver_row(rcv: Endpoint, device: str) -> SocketRow:
 Edge: TypeAlias = tuple[Endpoint, int, Endpoint | None]
 
 
-def pair(endpoints: list[Endpoint]) -> tuple[list[Edge], list[Endpoint]]:
-    """Match senders to local receivers using Inspector keys only, so no device reads are needed
-    and the row set cannot depend on the order devices are visited in.
+def match_receiver(snd: Endpoint, peer: Peer, candidates: list[Endpoint]) -> Endpoint | None:
+    """Pick which of the receiver endpoints on the peer core belongs to this sender's socket.
 
-    Returns (sender-anchored edges, receivers no edge covers).
+    (fabric node, core) identifies the core, not the socket: one core can terminate receiver
+    endpoints of several sockets at once, which is how the deepseek D2H stage gathers its upstreams
+    (host_io/op.py builds one socket per upstream, all landing on d2h_mesh_core_coord). The socket
+    is identified by sender_socket_md.downstream_bytes_sent_addr, which the host writes as the peer
+    receiver's config buffer address (mesh_socket_utils.cpp:310, :370).
     """
+    if not candidates:
+        return None
+    md = snd.md if isinstance(snd.md, SenderMd) else None
+    if md is None:
+        if len(candidates) == 1:
+            return candidates[0]
+        log_check_location(
+            snd.location,
+            False,
+            f"sender socket 0x{snd.config_addr:x}: {len(candidates)} receiver endpoints share {peer.label()} "
+            "and this sender's md could not be read, so the edge cannot be resolved",
+        )
+        return None
+
+    matches = [c for c in candidates if c.config_addr == md.downstream_config_addr]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        # A d2h sender's word +12 is a PCIe address, not an L1 config address, so it cannot match.
+        detail = (
+            "is a d2h sender, whose downstream address is on the host"
+            if md.is_d2h
+            else f"points at config 0x{md.downstream_config_addr:x}, which no receiver endpoint here owns"
+        )
+    else:
+        detail = f"matched {len(matches)} receiver endpoints at config 0x{md.downstream_config_addr:x}"
+    log_check_location(
+        snd.location,
+        False,
+        f"sender socket 0x{snd.config_addr:x} shares {peer.label()} with {len(candidates)} receiver "
+        f"endpoint(s) but {detail}; leaving the edge unpaired",
+    )
+    return None
+
+
+def pair(endpoints: list[Endpoint]) -> tuple[list[Edge], list[Endpoint]]:
+    """Match senders to local receivers. Returns (sender-anchored edges, receivers no edge covers)."""
     single_device = len({ep.location.device.id for ep in endpoints}) == 1
+    receivers: dict[tuple[int, int, int, int], list[Endpoint]] = {}
     if not single_device and all(ep.key[:2] == (0, 0) for ep in endpoints):
         log_check(False, "dump_sockets: fabric node ids unset on every endpoint, cannot pair sender/receiver")
-        receivers: dict[tuple[int, int, int, int], Endpoint] = {}
     else:
-        receivers = {ep.key: ep for ep in endpoints if ep.role == "receiver"}
+        for ep in endpoints:
+            if ep.role == "receiver":
+                receivers.setdefault(ep.key, []).append(ep)
 
     edges: list[Edge] = []
     for ep in endpoints:
         if ep.role != "sender":
             continue
         for i, peer in enumerate(ep.peers):
-            rcv = receivers.get(peer.key)
+            rcv = match_receiver(ep, peer, receivers.get(peer.key, []))
             if rcv:
                 rcv.claimed = True
             edges.append((ep, i, rcv))
