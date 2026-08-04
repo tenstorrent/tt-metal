@@ -1,19 +1,19 @@
-name: (triage) Grouping CI Failures
+# TEMPORARY VALIDATION WORKFLOW - DELETE BEFORE MERGE
+#
+# A copy of grouping-ci-failures.yaml that runs on push to the validation
+# branch. The real workflow is disabled_manually, and enabling it would re-arm
+# the hourly schedule on main, which still runs the version that writes GitHub
+# issues. This copy leaves that switch untouched.
+#
+# Identical to the real workflow except for the trigger and the workflow
+# filename it looks up its own previous run under.
+
+name: (triage) Grouping CI Failures VALIDATION
 
 on:
-  schedule:
-    # Run every hour at minute 0
-    - cron: '0 * * * *'
-  workflow_dispatch:
-    inputs:
-      start_date:
-        description: 'Start date for fetching Slack messages (format: January 1, 2026). Defaults to 3 days ago if empty.'
-        required: false
-        type: string
-      end_date:
-        description: "End date (cutoff) for fetching Slack messages (format: 'January 31, 2026'). Messages after this date are ignored. Leave empty for no cutoff."
-        required: false
-        default: ""
+  push:
+    branches:
+      - ebanerjee/json-state-ci-failure-grouping
 
 jobs:
   grouping-ci-failures:
@@ -58,7 +58,7 @@ jobs:
               const resp = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                workflow_id: 'grouping-ci-failures.yaml',
+                workflow_id: 'grouping-ci-failures-validation.yaml',
                 branch: context.ref.replace('refs/heads/', ''),
                 status: 'completed',
                 per_page: 20
@@ -90,11 +90,7 @@ jobs:
       - name: Run grouping ci failures
         uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@ebanerjee/json-state-ci-failure-grouping
         with:
-          # Every call the action makes is a read against this repository: run
-          # and job metadata for commit hashes and job names, the run list, and
-          # the previous error report artifact. The built-in token covers all of
-          # that under the actions: read permission above, so no personal access
-          # token is involved and there is nothing to expire.
+          # Validating that the built-in token can do every call this needs.
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # slack_token: Slack Bot Token for fetching messages
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
@@ -103,7 +99,7 @@ jobs:
           start_date: ${{ inputs.start_date || steps['calc-date'].outputs.start_date }}
           end_date: ${{ inputs.end_date || '' }}
           state_path: ${{ github.workspace }}/grouping-state
-          workflow_file: '.github/workflows/grouping-ci-failures.yaml'
+          workflow_file: '.github/workflows/grouping-ci-failures-validation.yaml'
 
       - name: Upload grouping state
         if: ${{ success() }}
