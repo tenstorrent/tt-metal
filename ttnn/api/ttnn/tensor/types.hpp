@@ -7,11 +7,14 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <variant>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn {
+
+using PadValue = std::variant<uint32_t, float>;
 
 enum class PyDType {
     FLOAT32,

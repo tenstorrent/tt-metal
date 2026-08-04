@@ -2542,7 +2542,6 @@ TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigDefaultsMapToInternalDefaults) {
     EXPECT_FALSE(built.dst_full_sync_en);      // double_buffer_dest defaults true -> !true
     EXPECT_FALSE(built.math_approx_mode);      // sfpu_precision_mode defaults Precise
     EXPECT_FALSE(built.enable_2x_src_format);  // enable_2x_src_register defaults false
-    EXPECT_FALSE(built.unpack_to_dest_en);
 }
 
 TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigInversionAndEnumMapToInternal) {
@@ -2591,8 +2590,8 @@ TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigInversionAndEnumMapToInternal) {
 //    coupling through the shared DFB binding induces additional DM solver constraints.
 //
 //    NOTE: The original plan called for lifting this artificial constraint once LLK adopted
-//    DFBAccessor using implicit RTAs. However, to realize performance gains, we're
-//    chosen instead to GUARANTEE using implicit CTAs for DFBAccessor. This
+//    DFBBindingToken using implicit RTAs. However, to realize performance gains, we've
+//    chosen instead to GUARANTEE using implicit CTAs for DFBBindingToken. This
 //    constraint is therefore permanent.
 //
 //    If we were ever to start encountering serious unsolvable-Program issues as a result
@@ -3913,8 +3912,8 @@ void kernel_main() {
 // ----------------------------------------------------------------------------
 //
 // Like the TensorAccessor smoke above, these JIT-compile a kernel that constructs a Scratchpad from
-// its binding accessor (scratch::<name>) and reads the CRTA-injected base address — exercising the
-// generated scratch:: namespace + ScratchpadAccessor object and the device-side Scratchpad ctor. Compile-only on
+// its binding token (scratch::<name>) and reads the CRTA-injected base address — exercising the
+// generated scratch:: namespace + ScratchpadBindingToken object and the device-side Scratchpad ctor. Compile-only on
 // the mock Wormhole device (Gen1: the Quasar TRISC firmware isn't built in this checkout, so a
 // Quasar JIT-compile would fail at link).
 

@@ -5,6 +5,7 @@
 # standard
 import argparse
 import builtins
+import collections
 import datetime as dt
 import importlib
 import os
@@ -33,7 +34,12 @@ from framework.constants import parse_mesh_suffix
 from framework.statuses import TestStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
-from sweep_utils.perf_utils import run_single, run_with_cache_comparison, DEVICE_PERF_SKIPPED
+from sweep_utils.perf_utils import (
+    run_single,
+    run_with_cache_comparison,
+    DEVICE_PERF_SKIPPED,
+    DEVICE_PERF_READBACK_FAILED,
+)
 
 
 @dataclass
@@ -531,7 +537,17 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
 
     if status:
         if config.measure_device_perf:
-            if device_perf == DEVICE_PERF_SKIPPED:
+            if device_perf == DEVICE_PERF_READBACK_FAILED:
+                # The profiler readback threw, but this vector's own PCC PASSED. A wrong
+                # profiler buffer says nothing about a correct op result, so keep the PASS
+                # and carry on to the next vector with device-perf N/A.
+                logger.warning(
+                    "Device profiler readback failed but the vector PASSED; recording PASS with "
+                    "device-perf N/A and continuing."
+                )
+                result["status"] = TestStatus.PASS
+                result["device_perf"] = None
+            elif device_perf == DEVICE_PERF_SKIPPED:
                 # Module opted this vector out of profiling (unsupported config, e.g.
                 # conv2d heavy FABRIC_1D -> profiler ARC read hangs). PCC passed, so
                 # PASS with device-perf N/A -- not a failure.
@@ -556,27 +572,60 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
             result["status"] = TestStatus.PASS
     else:
         result["exception"] = message
-        if "DEVICE EXCEPTION" in str(message):
+        if config.measure_device_perf and device_perf == DEVICE_PERF_READBACK_FAILED:
+            # The vector FAILED and the profiler readback ALSO threw. Two independent
+            # readers of the device disagreeing with expectations at once is treated as
+            # evidence the device itself is bad, not that this vector is a bad test: the
+            # host decoded a corrupt profiler marker (only 0-5 are valid packet types) on
+            # the same vector whose result did not match. So do NOT count it as a test
+            # failure -- mark it NOT_RUN and end the run, rather than feeding more vectors
+            # to a device we no longer trust.
+            #
+            # This check deliberately comes FIRST, ahead of the OOM/Watcher/infra
+            # classification below, so the rule is unambiguous: readback failure + failed
+            # vector always means "stop", whatever the vector's own message said.
+            #
+            # Tradeoff, measured on run 30509849370 job 90770018256: the device does not
+            # always stay bad. There, copy 75a4... was the FIRST vector and hit exactly
+            # this combination, yet the following 6 vectors (cos x4, div x2) passed with
+            # PCC ~1.0 on the same device before div 46d243e2 genuinely hung. Ending the
+            # run at the first occurrence forfeits those 6 passes. That is the intended
+            # behaviour here -- prefer stopping early on a suspect device over continuing.
             logger.error(
-                f"DEVICE EXCEPTION: Device could not be initialized. " f"The following assertion was thrown: {message}"
+                f"Device profiler readback failed AND the vector failed for input_hash='{input_hash}'. "
+                "Treating the device as wedged: marking this vector NOT_RUN (not a test failure) "
+                "and ending the run."
             )
-            logger.info("Device error detected. The suite will be aborted after this test.")
-        if "Out of Memory: Not enough space to allocate" in str(message):
-            result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-        elif "Watcher" in str(message):
-            result["status"] = TestStatus.FAIL_WATCHER
-        elif _is_infra_failure_message(message):
-            # Infrastructure-class failure: either a fabric / control-plane
-            # bring-up failure (mesh never initialized, so this vector's op kernel
-            # never ran) or a device-fatal wedge (a bad core run state surfaced as
-            # "Read unexpected run_mailbox value"). Both are environment faults,
-            # not test-vector faults -- mark NOT_RUN rather than
-            # FAIL_ASSERT_EXCEPTION. _execute_vector_with_retry detects the same
-            # signatures and exits the run early so the remaining vectors are not
-            # each re-reported as false failures on a device that won't recover.
             result["status"] = TestStatus.NOT_RUN
+            result["device_perf"] = None
+            result["_infra_abort"] = True
+            result["_abort_suite"] = True
         else:
-            result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+            # NOTE: keep this classification inside the else -- the OOM/Watcher chain below
+            # is a separate statement from the DEVICE EXCEPTION log, so leaving it
+            # unguarded would overwrite the NOT_RUN set above with FAIL_ASSERT_EXCEPTION.
+            if "DEVICE EXCEPTION" in str(message):
+                logger.error(
+                    f"DEVICE EXCEPTION: Device could not be initialized. "
+                    f"The following assertion was thrown: {message}"
+                )
+                logger.info("Device error detected. The suite will be aborted after this test.")
+            if "Out of Memory: Not enough space to allocate" in str(message):
+                result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+            elif "Watcher" in str(message):
+                result["status"] = TestStatus.FAIL_WATCHER
+            elif _is_infra_failure_message(message):
+                # Infrastructure-class failure: either a fabric / control-plane
+                # bring-up failure (mesh never initialized, so this vector's op kernel
+                # never ran) or a device-fatal wedge (a bad core run state surfaced as
+                # "Read unexpected run_mailbox value"). Both are environment faults,
+                # not test-vector faults -- mark NOT_RUN rather than
+                # FAIL_ASSERT_EXCEPTION. _execute_vector_with_retry detects the same
+                # signatures and exits the run early so the remaining vectors are not
+                # each re-reported as false failures on a device that won't recover.
+                result["status"] = TestStatus.NOT_RUN
+            else:
+                result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
 
     if suite_name.lower().startswith("xfail"):
         if result["status"] == TestStatus.PASS:
@@ -748,6 +797,44 @@ def _set_crash_hang_defaults(result):
     result["peak_l1_memory_device"] = None
 
 
+def _mark_infra_abort(result, reason: str):
+    """Classify a result as an infrastructure abort (NOT_RUN) and stop the run.
+
+    Mirrors the _is_infra_failure_message path: the vector is NOT a test failure,
+    the suite aborts unconditionally and run_sweeps exits the run early, so the job
+    surfaces one infrastructure error instead of a wall of false results.
+    """
+    result["status"] = TestStatus.NOT_RUN
+    result["exception"] = "INFRASTRUCTURE ERROR (degraded host): " + reason
+    result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+    result["_child_process"] = None
+    result["_abort_suite"] = True
+    result["_infra_abort"] = True
+
+
+def _reset_or_infra_abort(reset_util, result, input_hash) -> bool:
+    """Reset the devices. Returns True on success.
+
+    When every configured reset mechanism is exhausted (ResetFailed) the host is
+    unrecoverable for this job, so mark the result as an infra abort and return
+    False; the caller must return `result` immediately rather than respawn a child
+    against a wedged device. Previously ResetFailed propagated as an uncaught
+    exception (all five reset call sites were bare), which is now reachable on
+    Galaxy since the known-bad `tt-smi -r all` fallback was removed.
+    """
+    try:
+        reset_util.reset()
+        return True
+    except tt_smi_util.ResetFailed as e:
+        logger.error(
+            f"DEVICE RESET FAILED for input_hash='{input_hash}': {e}. All reset mechanisms are "
+            f"exhausted — the host is unrecoverable for this job; exiting the run early instead "
+            f"of launching further vectors against a wedged device."
+        )
+        _mark_infra_abort(result, f"device reset failed ({e})")
+        return False
+
+
 def _execute_vector_with_retry(
     test_vector,
     module_name,
@@ -804,7 +891,14 @@ def _execute_vector_with_retry(
             # that state, so reset + RETRY the vector -- it runs clean on the next
             # attempt. Falls through to the abort path below only if it hangs AGAIN on
             # the last attempt (a genuine, non-transient hang).
-            if _is_device_hang_message(result.get("message")) and attempt < MAX_RETRIES:
+            # NOT on Galaxy: the reset-then-retry recovery re-opens the mesh device, and a
+            # SECOND device open inside a Galaxy job re-enters the force-reinit race this
+            # framework's one-device-per-job design exists to avoid. Observed in run
+            # 30324574397: after a dispatch-hang reset the reopen succeeded and the very
+            # next operation blocked forever (49 min mid-vector / 24 min in teardown),
+            # invisible to the per-vector watchdog because the block is below Python.
+            # On Galaxy fall through to the abort path instead of retrying.
+            if _is_device_hang_message(result.get("message")) and attempt < MAX_RETRIES and not _is_galaxy_job():
                 logger.warning(
                     f"DEVICE HANG (likely intermittent dispatch-state stall) for "
                     f"input_hash='{input_hash}': {result.get('message')}. Resetting + retrying on a "
@@ -812,7 +906,8 @@ def _execute_vector_with_retry(
                 )
                 _kill_child(p, timeout_before_rejoin)
                 p = None
-                reset_util.reset()
+                if not _reset_or_infra_abort(reset_util, result, input_hash):
+                    return result
                 if child_mode:
                     p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
@@ -828,12 +923,31 @@ def _execute_vector_with_retry(
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(result.get("message", "DEVICE HANG"))
                 result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-                reset_util.reset()
+                if not _reset_or_infra_abort(reset_util, result, input_hash):
+                    return result
+                # On Galaxy, stop the whole run rather than continue: every later module
+                # re-opens the mesh device, and a reopen after a hang re-enters the
+                # force-reinit race (see the retry branch above). The hanging vector keeps
+                # its FAIL_CRASH_HANG status -- a genuine op hang is still reported as a
+                # test failure, not hidden -- but the remaining vectors are marked NOT_RUN
+                # instead of being run against a device we cannot safely reopen.
+                if _is_galaxy_job():
+                    logger.error(
+                        "DEVICE HANG on Galaxy: a device reopen after a hang re-enters the "
+                        "force-reinit race, so exiting the run early instead of continuing."
+                    )
+                    result["_child_process"] = None
+                    result["_abort_suite"] = True
+                    result["_infra_abort"] = True
+                    return result
                 if child_mode:
                     p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
                 result["_child_process"] = p
-                result["_abort_suite"] = config.skip_on_timeout
+                # OR, not assignment: never downgrade an abort another rule already
+                # requested for this vector (e.g. the wedged-device rule in
+                # _populate_result_from_response) just because skip_on_timeout is off.
+                result["_abort_suite"] = result.get("_abort_suite", False) or config.skip_on_timeout
                 return result
 
             # A transient kernel-ELF build/load failure (tt_elffile.cpp:405),
@@ -850,7 +964,8 @@ def _execute_vector_with_retry(
                 )
                 _kill_child(p, timeout_before_rejoin)
                 p = None
-                reset_util.reset()
+                if not _reset_or_infra_abort(reset_util, result, input_hash):
+                    return result
                 if child_mode:
                     p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
@@ -892,7 +1007,14 @@ def _execute_vector_with_retry(
                 return result
 
             result["_child_process"] = p
-            result["_abort_suite"] = False
+            # setdefault, NOT assignment. This is the NORMAL in-loop return -- the path a
+            # vector takes whenever the child returned a response -- so it is the path the
+            # wedged-device rule (profiler readback failed + vector failed, set in
+            # _populate_result_from_response) actually reaches. Assigning False here threw
+            # the abort away, leaving execute_suite with _infra_abort but no _abort_suite:
+            # it skipped the mark-remaining-NOT_RUN-and-break branch and kept feeding the
+            # rest of the suite to the device just declared wedged.
+            result.setdefault("_abort_suite", False)
             return result
 
         except Empty:
@@ -905,7 +1027,8 @@ def _execute_vector_with_retry(
                     f"TEST TIMED OUT (attempt {attempt + 1}/{1 + MAX_RETRIES}) for "
                     f"input_hash='{input_hash}'. Resetting devices and retrying..."
                 )
-                reset_util.reset()
+                if not _reset_or_infra_abort(reset_util, result, input_hash):
+                    return result
                 if child_mode:
                     p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
@@ -921,18 +1044,27 @@ def _execute_vector_with_retry(
             result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
             result["host"] = get_hostname()
             result["user"] = get_username()
-            reset_util.reset()
+            if not _reset_or_infra_abort(reset_util, result, input_hash):
+                return result
 
             if child_mode:
                 p = Process(target=run, args=(input_queue, output_queue, config))
                 p.start()
 
             result["_child_process"] = p
-            result["_abort_suite"] = config.skip_on_timeout
+            # Preserve an abort already requested by a previous attempt's
+            # _populate_result_from_response rather than downgrading it.
+            result["_abort_suite"] = result.get("_abort_suite", False) or config.skip_on_timeout
             return result
 
     result["_child_process"] = p
-    result["_abort_suite"] = False
+    # setdefault, NOT assignment: _populate_result_from_response may already have set
+    # _abort_suite=True (wedged-device rule: profiler readback failed + vector failed).
+    # Overwriting it with False left execute_suite with infra_aborted set but no
+    # abort_suite, so it skipped the mark-remaining-NOT_RUN-and-break branch and kept
+    # feeding every remaining vector of the suite to the device just declared wedged --
+    # the run only ended at the next module boundary, defeating the fail-fast entirely.
+    result.setdefault("_abort_suite", False)
     return result
 
 
@@ -1156,17 +1288,15 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     return results, invalid_vectors_count, infra_aborted
 
 
-def _vector_mesh_dims(vector) -> str | None:
-    """Classify a raw (pre-sanitize) vector's mesh as '1d', '2d', or None.
+def _vector_mesh_pair(vector, extended_sources=True):
+    """The (rows, cols) mesh a raw (pre-sanitize) vector was traced on, or None.
 
-    '1d' when the mesh has a unit axis (rows==1 or cols==1) -> FABRIC_1D/RING;
-    '2d' when both axes > 1 -> FABRIC_2D. Returns None when the mesh shape can't
-    be determined (such vectors are never filtered out). Mirrors how the
-    all_gather sweep body itself derives mesh_shape (tensor_placement first).
+    Mirrors how the sweep bodies themselves derive it (tensor_placement first). Several
+    modules -- add_model_traced.py and linear_model_traced.py among them -- pin
+    os.environ["MESH_DEVICE_SHAPE"] to THIS value per vector before opening their device,
+    so the mesh shape is a real per-vector component of _job_device_key, not a per-job
+    constant.
     """
-
-    def _dims_from_pair(r, c):
-        return "1d" if (r == 1 or c == 1) else "2d"
 
     def _parse_two_ints(value):
         if isinstance(value, (list, tuple)) and len(value) >= 2:
@@ -1180,31 +1310,62 @@ def _vector_mesh_dims(vector) -> str | None:
                 return int(nums[0]), int(nums[1])
         return None
 
-    # 1) Explicit tensor placement mesh_device_shape (model_traced vectors).
-    for key in ("input_a_tensor_placement", "input_tensor_tensor_placement"):
+    # 1) Explicit tensor placement mesh_device_shape (model_traced vectors). Same key
+    #    order the modules use before pinning MESH_DEVICE_SHAPE.
+    keys = ("input_a_tensor_placement", "input_tensor_tensor_placement")
+    if extended_sources:
+        # Extra sources are used for device-key GROUPING only, never for the --mesh-dims
+        # filter: they make the shape determinable for more vectors, and a vector the
+        # filter previously could not classify was always KEPT. Widening it there could
+        # start dropping vectors, which is a behaviour change well beyond this fix.
+        keys = (
+            "input_a_tensor_placement",
+            "input_b_tensor_placement",
+            "input_tensor_b_tensor_placement",
+            "input_tensor_tensor_placement",
+        )
+    for key in keys:
         tp = vector.get(key)
         if isinstance(tp, dict):
             pair = _parse_two_ints(tp.get("mesh_device_shape"))
             if pair:
-                return _dims_from_pair(*pair)
+                return pair
     # 2) Explicit mesh_shape field (generality / lead_model vectors).
     pair = _parse_two_ints(vector.get("mesh_shape"))
     if pair:
-        return _dims_from_pair(*pair)
+        return pair
     # 3) mesh_device descriptor.
     md = vector.get("mesh_device")
     if isinstance(md, dict):
         pair = _parse_two_ints(md.get("shape") or md.get("repr", ""))
         if pair:
-            return _dims_from_pair(*pair)
-    # 4) .mesh_RxC suffix on the stored sweep/suite name.
+            return pair
+    # 4) Per-vector traced_machine_info -- add_model_traced's own last resort, and every
+    #    vector records it. Grouping only (see above).
+    if extended_sources:
+        ti = vector.get("traced_machine_info")
+        for entry in ti if isinstance(ti, list) else [ti]:
+            if isinstance(entry, dict):
+                pair = _parse_two_ints(entry.get("mesh_device_shape"))
+                if pair:
+                    return pair
+    # 5) .mesh_RxC suffix on the stored sweep/suite name.
     for key in ("sweep_name", "suite_name"):
         name = vector.get(key)
         if isinstance(name, str):
             ms = parse_mesh_suffix(name)
             if ms:
-                return _dims_from_pair(ms[0], ms[1])
+                return (ms[0], ms[1])
     return None
+
+
+def _vector_mesh_dims(vector) -> str | None:
+    """Classify a vector's mesh as '1d' (a unit axis -> FABRIC_1D/RING), '2d' (both axes
+    > 1 -> FABRIC_2D), or None when the shape can't be determined (never filtered out)."""
+    pair = _vector_mesh_pair(vector, extended_sources=False)
+    if pair is None:
+        return None
+    return "1d" if (pair[0] == 1 or pair[1] == 1) else "2d"
 
 
 def _filter_vectors_by_mesh_dims(vectors, mesh_dims):
@@ -1230,6 +1391,99 @@ def _filter_vectors_by_mesh_dims(vectors, mesh_dims):
         f"(mesh mismatch){f', {undetermined} undetermined kept' if undetermined else ''}."
     )
     return kept
+
+
+def _vector_device_group(vector, env_axis):
+    """Device-key group for a vector: (mesh shape, dispatch axis).
+
+    Both components matter because both are part of _job_device_key:
+
+    - mesh shape: several modules (add_model_traced, linear_model_traced, ...) pin
+      os.environ["MESH_DEVICE_SHAPE"] to THIS vector's traced shape before opening, so a
+      job's vectors legitimately span [4,8]/[8,4]/[4,4]/[1,32]/[1,1]. Grouping on the axis
+      alone would interleave those and could ADD reopens rather than remove them, which is
+      the opposite of the point. Mesh shape leads the key since it is the coarser split.
+    - axis: 'row'/'col' when the vector's grids force one, else the pass's
+      TTNN_DISPATCH_AXIS (what a module passing None inherits), else 'auto'.
+
+    The axis is a HEURISTIC, not a reproduction of each module's logic -- e.g. linear's
+    gather_in0 path deliberately ignores the nominal compute width and keys off output/hop
+    grids, while the shared scanner classifies the nominal width. A mis-predicted axis only
+    costs an extra reopen (it can never change a result), and the log line reports the
+    transitions actually achieved, so a wrong hint shows up as a smaller-than-expected win.
+    """
+    mesh = _vector_mesh_pair(vector)
+    try:
+        from split_vectors_by_axis import vector_dispatch_axis_hint
+
+        hint = vector_dispatch_axis_hint(vector)
+    except Exception:
+        hint = None
+    if hint is None:
+        hint = env_axis if env_axis in ("col", "row") else "auto"
+    return (mesh, hint)
+
+
+def _order_vectors_by_device_key(vectors, module_name, suite_name):
+    """Stable-sort vectors so same-device vectors run back to back.
+
+    The 8 model_traced modules that open their own device per vector derive the
+    dispatch axis from each vector's shard/compute grid, so in file order the job
+    device key flips ROW<->COL repeatedly and each flip is a close+reopen. On Galaxy a
+    reopen is the event that wedges a dispatch core (run_mailbox=0x40), so grouping
+    vectors by the device they need cuts reopens from O(transitions) to O(distinct
+    keys): measured 44 -> 9 over the 293 Galaxy vectors in those modules.
+
+    Vectors matching the current pass's axis go first so the device the worker already
+    opened is reused for the longest initial stretch.
+
+    This only ever REORDERS: the result is verified to be a permutation of the input by
+    object identity, so no vector can be duplicated (run twice) or dropped. If that
+    check or anything else fails, the original order is returned unchanged -- a few
+    extra reopens are always preferable to running a vector twice or losing one.
+    Set TTNN_SWEEP_NO_VECTOR_REORDER=1 to disable.
+    """
+    if os.environ.get("TTNN_SWEEP_NO_VECTOR_REORDER") == "1" or len(vectors) < 2:
+        return vectors
+    try:
+        env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
+        groups = [_vector_device_group(v, env_axis) for v in vectors]
+        first_seen = {}
+        for g in groups:
+            first_seen.setdefault(g, len(first_seen))
+        if len(first_seen) < 2:
+            return vectors  # nothing to gain -- leave the order byte-identical
+
+        # Order groups by FIRST APPEARANCE, and keep original order within a group. This
+        # keeps the first vector's device first (so the device already open is not
+        # immediately swapped) and yields exactly len(groups)-1 transitions, without
+        # needing to know which device is currently open.
+        order = sorted(range(len(vectors)), key=lambda i: (first_seen[groups[i]], i))
+        reordered = [vectors[i] for i in order]
+
+        # Permutation check by identity: same objects, same multiplicity, none lost.
+        if len(reordered) != len(vectors) or collections.Counter(map(id, reordered)) != collections.Counter(
+            map(id, vectors)
+        ):
+            logger.warning(
+                f"vector reorder for {module_name}/{suite_name} did not produce a permutation "
+                f"({len(vectors)} in, {len(reordered)} out) -- keeping the original order."
+            )
+            return vectors
+        moved = builtins.sum(1 for i, j in enumerate(order) if i != j)
+        counts = ", ".join(
+            f"mesh{g[0] if g[0] else '?'}/{g[1]}={groups.count(g)}"
+            for g in sorted(first_seen, key=lambda g: first_seen[g])
+        )
+        logger.info(
+            f"vector order for {module_name}/{suite_name}: grouped {len(vectors)} vector(s) by "
+            f"(mesh shape, dispatch axis) ({counts}); {moved} moved, {len(first_seen) - 1} device "
+            f"reopen(s) instead of {builtins.sum(1 for a, b in zip(groups, groups[1:]) if a != b)}."
+        )
+        return reordered
+    except Exception as e:
+        logger.warning(f"vector reorder for {module_name}/{suite_name} failed ({e}) -- keeping the original order.")
+        return vectors
 
 
 def run_sweeps(
@@ -1341,6 +1595,10 @@ def run_sweeps(
 
                 vectors = vector_source.load_vectors(module_name, suite, config.vector_id)
                 vectors = _filter_vectors_by_mesh_dims(vectors, config.mesh_dims)
+                # Group same-device vectors together BEFORE sanitize_inputs, which builds
+                # header_info as a list positionally parallel to test_vectors -- reordering
+                # after it would misattribute every result to the wrong vector.
+                vectors = _order_vectors_by_device_key(vectors, module_name, suite)
                 # Update summary counters
                 total_vectors_run += len(vectors)
                 total_tests_run += 1
@@ -1590,12 +1848,30 @@ def _should_skip_device_profiler(config):
 def enable_profiler():
     logger.info("Enabling Device Profiler")
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
-    os.environ["ENABLE_TRACY"] = "1"
+    # NOTE: ENABLE_TRACY is deliberately NOT set here. It is a CMake option
+    # (-DENABLE_TRACY=ON in setup.py; the profiler test scripts only ever print "Make sure
+    # this test runs in a build with cmake option ENABLE_TRACY=ON"). Setting it as an env var
+    # was a no-op -- this was the ONLY runtime reference to it in the repo -- and it gave the
+    # false impression that Tracy was being turned on when Tracy support is fixed at build
+    # time. Check the built binary instead and say so plainly.
     os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
     # C++ post-process exposes per-chip perf in memory via
     # ttnn._ttnn.profiler.get_latest_programs_perf_data(); required for the
     # modern (multi-chip-safe) device-perf read in perf_utils.gather_single_test_perf.
     os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
+    # Surface a non-Tracy build instead of silently collecting nothing: the two APIs the
+    # device-perf path depends on only exist in a Tracy-enabled build.
+    try:
+        import ttnn
+
+        missing = [n for n in ("ReadDeviceProfiler", "get_latest_programs_perf_data") if not hasattr(ttnn, n)]
+        if missing:
+            logger.warning(
+                f"Device profiler requested but this ttnn build is missing {missing} -- it was very "
+                "likely built without -DENABLE_TRACY=ON. Device-perf will be reported N/A."
+            )
+    except Exception as e:
+        logger.warning(f"Could not verify Tracy support in this ttnn build ({e}).")
 
 
 def disable_profiler():

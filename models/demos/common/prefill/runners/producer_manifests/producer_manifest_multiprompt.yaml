@@ -1,0 +1,54 @@
+# Producer manifest: multi-prompt single-stage KV validation.
+#
+# Assigns a prompt (tokens + golden) per slot via `slot_prompts` and PCCs each slot's KV against its own
+# golden (check_pcc); per-slot depth is derived from each prompt's real length. Single stage (1 rank /
+# 1 galaxy), no migration endpoint needed.
+#
+# Needs a single-rank REQUEST-mode runner that publishes the KV table for the producer's device-less
+# read-back. Start from topology_configuration/pipeline_prefill_request_1rank.yaml and add to its
+# global_env:
+#   PREFILL_MOCK_MIGRATION: "1"       # serialize the KV table + device map; no migration_endpoint needed
+#   PREFILL_NUM_USERS: "2"            # one slot per prompt below
+#   PREFILL_MANIFEST + PREFILL_NUM_LAYERS                                    # your model
+# The runner stays open across producer runs, so you can re-run this manifest against the same runner.
+# Run:
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_multiprompt.yaml
+# Expect: [producer] KV cache PCC PASSED.
+#
+# For a SPARSE/DSA model the table also carries an index config. A trace that ships the indexer-key golden
+# (dsa/indexer_k_layer_*) has its index cache PCC'd alongside the KVPE cache; one that ships only
+# dsa/dsa_topk_indices_layer_* is validated on the KVPE cache alone (warned, not fatal).
+#
+# MODEL-AGNOSTIC: this file describes the multi-prompt SCENARIO only. The model + wire layout are NOT set
+# here; they must match the runner you launched. Supply them by exporting PREFILL_MODEL /
+# PREFILL_NUM_LAYERS / PREFILL_MAX_SEQ_LEN / PREFILL_CHUNK_SIZE, or add a `model:` block (see
+# prefill_producer_manifest.example.yaml), e.g.
+#   model: {variant: <adapter key>, num_layers: <MATCH RUNNER>, max_seq_len: ..., chunk_size: ...}
+# Left unset they fall back to the adapter defaults, which will NOT match a runner of a different depth
+# — the per-layer ack count is num_layers * chunks, so a mismatch hangs the ack drain.
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: ds_prefill
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2
+  max_requests: 2         # one resident request per slot (no recycling)
+  interleave: round_robin
+  check_pcc: true         # producer-side per-slot read-back PCC — this IS the validation gate
+  # One pre-tokenized golden trace dir (tokens + golden) per slot; index = slot id. Prompts are inherently
+  # model-specific — point these at traces for the PREFILL_MODEL you are running. Use DISTINCT traces for a
+  # true multi-prompt run; repeating one trace only exercises the plumbing.
+  slot_prompts:
+    - /path/to/golden/traces/prompt_a  # slot 0
+    - /path/to/golden/traces/prompt_b  # slot 1
+
+migration:
+  issue: false            # single-stage multi-prompt validation; no real migration
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/prefill_kv_device_map.json

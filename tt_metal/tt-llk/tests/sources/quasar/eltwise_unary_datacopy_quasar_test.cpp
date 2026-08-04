@@ -128,8 +128,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-        // Only the end-to-end path has an active PACK consumer.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        // End-to-end and math-isolate runs require FPU destination ownership.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
