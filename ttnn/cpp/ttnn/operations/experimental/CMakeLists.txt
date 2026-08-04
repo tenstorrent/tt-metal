@@ -18,11 +18,14 @@
 # metalium-developers-convolutions
 add_subdirectory(adaptive_pool)
 add_subdirectory(conv3d)
+add_subdirectory(yuv_conversion)
 add_subdirectory(cnn)
 
 # metalium-developers-ops-data-movement
 add_subdirectory(ccl)
 add_subdirectory(ccl/moe_gpt)
+add_subdirectory(ccl/neighbor_pad_conv3d)
+add_subdirectory(ccl/neighbor_pad_halo)
 
 # metalium-developers-mmfusedreduce
 add_subdirectory(matmul)
