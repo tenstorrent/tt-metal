@@ -1,0 +1,140 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Execute the diag suite (``diag_runner.py``) as a subprocess.
+
+This replaces the previous docker-in-docker model: when the whole health check
+runs inside the tt-metal image, the diag suite is a sibling script we invoke
+directly rather than a nested container.
+
+Subprocess (rather than importing ``diag_runner.run_diag`` in-process) is used so
+we retain a hard wall-clock budget: the diag suite drives destructive resets and
+long gtests that can hang, and a subprocess lets us kill the whole process group
+(gtest / tt-smi children included) when the timeout fires.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+log = logging.getLogger(__name__)
+
+# Grace period between SIGTERM and SIGKILL when killing a timed-out diag run.
+_TERM_GRACE_SECONDS = 10
+
+
+def default_diag_runner() -> Path:
+    """Locate diag_runner.py — two levels up from this module
+    (test_infrastructure/utils/ -> health_check_test_suite/diag_runner.py)."""
+    return Path(__file__).resolve().parents[2] / "diag_runner.py"
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """SIGTERM then SIGKILL the child's process group (gtest / tt-smi children)."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(timeout=_TERM_GRACE_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def run_diag_subprocess(
+    tier: str,
+    timeout_seconds: int,
+    results_dir: Path,
+    *,
+    diag_runner: Path | None = None,
+    tt_metal_path: Path | None = None,
+    extra_args: list[str] | None = None,
+) -> tuple[int, str, Path | None]:
+    """Run the diag suite, writing its JSON report + per-test logs into results_dir.
+
+    Invokes ``diag_runner.py --tier <tier> --output <results_dir>/diag_report.json``,
+    which also drops per-test gtest logs under ``<results_dir>/logs/``. The report
+    and logs land straight on the host filesystem (no copy-out step), so partial
+    results survive a timeout/kill.
+
+    Returns ``(exit_code, combined_console_output, results_dir | None)``. The diag
+    tool exits 1 on FAIL and 0 on PASS/WARN; that status is propagated unchanged.
+    A timeout is reported as exit code 137 (matching the previous SIGKILL model).
+    """
+    runner = Path(diag_runner) if diag_runner else default_diag_runner()
+    if not runner.is_file():
+        log.error("diag runner not found: %s", runner)
+        return 1, f"diag runner not found: {runner}", None
+
+    results_dir.mkdir(parents=True, exist_ok=True)
+    report_path = results_dir / "diag_report.json"
+
+    cmd = [sys.executable, str(runner), "--tier", tier, "--output", str(report_path)]
+    if tt_metal_path is not None:
+        cmd += ["--tt-metal-path", str(tt_metal_path)]
+    if extra_args:
+        cmd += list(extra_args)
+
+    env = os.environ.copy()
+    if tt_metal_path is not None:
+        env["TT_METAL_HOME"] = str(tt_metal_path)
+        env.setdefault("PYTHONPATH", str(tt_metal_path))
+        env.setdefault("LD_LIBRARY_PATH", str(Path(tt_metal_path) / "build" / "lib"))
+    # tt-smi often lives at ~/.local/bin or /usr/local/bin but isn't on PATH in
+    # non-login SSH sessions.
+    env["PATH"] = os.pathsep.join(
+        [env.get("PATH", ""), str(Path.home() / ".local" / "bin"), "/usr/local/bin"]
+    )
+
+    log.info("Running diag suite: %s", " ".join(cmd))
+    log.info("Results dir: %s", results_dir)
+    log.info("Timeout: %d seconds", timeout_seconds)
+
+    started_at = time.monotonic()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            # New session so the diag suite's gtest/tt-smi children share a process
+            # group we can signal as a unit on timeout.
+            start_new_session=True,
+        )
+    except OSError as exc:
+        log.error("Failed to start diag suite: %s", exc)
+        return 1, f"Failed to start diag suite: {exc}", None
+
+    try:
+        output, _ = proc.communicate(timeout=timeout_seconds)
+        exit_code = proc.returncode
+    except subprocess.TimeoutExpired:
+        elapsed = time.monotonic() - started_at
+        log.error(
+            "Diag suite timed out after %.0f seconds (budget %d); killing",
+            elapsed,
+            timeout_seconds,
+        )
+        _kill_process_group(proc)
+        # Keep whatever the suite emitted before it hung.
+        try:
+            output, _ = proc.communicate(timeout=_TERM_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            output = ""
+        exit_code = 137
+
+    return exit_code, output or "", results_dir
