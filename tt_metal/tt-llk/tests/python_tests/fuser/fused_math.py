@@ -398,9 +398,15 @@ class ComputePipeline:
             init_code += pack_only[0].reconfig(operation, config)
         init_code += pack_common.pack_reduce_mask_config(operation)
         init_code += self._pack_dest_init(operation, config)
-        if hoist:
+        if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].configure(operation, config, None)
         code += self._zone(config, "INIT", init_code)
+
+        init_fn = None
+        uninit_fn = None
+        if hoist and pack_only[0].packer.per_block_init:
+            init_fn = lambda block: pack_only[0].configure(operation, config, block)
+            uninit_fn = lambda block: pack_only[0].uninit(operation, config)
 
         def batch_body(block: BlockData):
             body = self._packer_wait_for_math(config)
@@ -428,11 +434,13 @@ class ComputePipeline:
             return body
 
         code += self._zone_loop(
-            config, "TILE_LOOP", self._batch_loop(operation, config, batch_body)
+            config,
+            "TILE_LOOP",
+            self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = self.packer_sync_with_unpacker(operation, config)
-        if hoist:
+        if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(operation, config)
         uninit_code += pack_common.pack_reduce_mask_clear(operation)
         code += self._zone(config, "INIT", uninit_code)
