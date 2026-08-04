@@ -180,6 +180,21 @@ def vision_rope_position_ids(grid_thw: torch.Tensor, *, spatial_merge_size: int)
     return torch.cat(out, dim=0)
 
 
+def vision_cu_seqlens(grid_thw: torch.Tensor) -> tuple[int, ...]:
+    """The attention block boundaries of a batch of images and videos.
+
+    `cu_seqlens = repeat_interleave(h * w, t).cumsum()` padded with a leading 0, matching the
+    reference. One image is one block; a video is one block *per frame*, since `t` repeats its spatial
+    extent. Attention never crosses a boundary, so `fl2va` (a single image) collapses to plain full
+    attention while `ref2va` needs the split.
+    """
+    bounds = [0]
+    for t, h, w in grid_thw.tolist():
+        for _ in range(int(t)):
+            bounds.append(bounds[-1] + int(h) * int(w))
+    return tuple(bounds)
+
+
 def vision_rope_tensors(
     grid_thw: torch.Tensor,
     *,
@@ -240,9 +255,11 @@ class Qwen3VlVisionAttention(Module):
     96 at load time and `scale` is passed explicitly as `72 ** -0.5`. Leaving `scale` to SDPA would
     make it `96 ** -0.5` and silently change the softmax temperature -- wrong output, not a crash.
 
-    One image is one attention block: `cu_seqlens = repeat_interleave(h*w, t).cumsum()`, so a single
-    image gives `[0, h*w]` and plain full attention is exact. Multiple images or video frames need
-    block-diagonal masking, which is not implemented here yet -- `forward` takes one block.
+    Attention is confined to one image, or to one frame of a video: `cu_seqlens` names the boundaries
+    (see [`vision_cu_seqlens`]). A single image is a single block, so `fl2va` reduces to plain full
+    attention. Multiple blocks are handled by attending within each in turn rather than by a
+    block-diagonal mask -- an `s x s` mask is 17 GiB for a full `ref2va` request of nine images and
+    three videos, where a dozen or so smaller attentions cost nothing extra.
     """
 
     def __init__(self, *, hidden_size: int, num_heads: int, mesh_device) -> None:
@@ -266,7 +283,13 @@ class Qwen3VlVisionAttention(Module):
         if (w := state.get("proj.weight")) is not None:
             state["proj.weight"] = _pad_head_dim(w, axis=1, **kw)
 
-    def forward(self, hidden_states: ttnn.Tensor, *, pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        *,
+        pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+        cu_seqlens: Sequence[int] | None = None,
+    ) -> ttnn.Tensor:
         seq_len = hidden_states.shape[-2]
         qkv = self.qkv.forward(hidden_states)
 
@@ -284,7 +307,25 @@ class Qwen3VlVisionAttention(Module):
         q = _apply_vision_rope(q, cos, sin, self.head_dim)
         k = _apply_vision_rope(k, cos, sin, self.head_dim)
 
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=self.scale)
+        if cu_seqlens is None or len(cu_seqlens) <= 2:
+            attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=self.scale)
+        else:
+            if cu_seqlens[0] != 0 or cu_seqlens[-1] != seq_len:
+                msg = f"cu_seqlens must span [0, {seq_len}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
+                raise ValueError(msg)
+            attn = ttnn.concat(
+                [
+                    ttnn.transformer.scaled_dot_product_attention(
+                        q[:, :, start:end, :],
+                        k[:, :, start:end, :],
+                        v[:, :, start:end, :],
+                        is_causal=False,
+                        scale=self.scale,
+                    )
+                    for start, end in zip(cu_seqlens[:-1], cu_seqlens[1:])
+                ],
+                dim=-2,
+            )
         attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (seq_len, self.num_heads * self.padded_head_dim))
         return self.proj.forward(attn)
 
@@ -319,8 +360,16 @@ class Qwen3VlVisionBlock(Module):
             mesh_device=mesh_device,
         )
 
-    def forward(self, hidden_states: ttnn.Tensor, *, pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
-        hidden_states = hidden_states + self.attn.forward(self.norm1.forward(hidden_states), pos_embeds=pos_embeds)
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        *,
+        pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+        cu_seqlens: Sequence[int] | None = None,
+    ) -> ttnn.Tensor:
+        hidden_states = hidden_states + self.attn.forward(
+            self.norm1.forward(hidden_states), pos_embeds=pos_embeds, cu_seqlens=cu_seqlens
+        )
         return hidden_states + self.mlp.forward(self.norm2.forward(hidden_states))
 
 
@@ -464,12 +513,18 @@ class Qwen3VlVisionModel(Module):
         *,
         pos_embeds: ttnn.Tensor,
         rope: tuple[ttnn.Tensor, ttnn.Tensor],
+        cu_seqlens: Sequence[int] | None = None,
     ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
+        """`cu_seqlens` confines attention to one image or video frame; see [`vision_cu_seqlens`].
+
+        Omitting it treats the whole input as one block, which is correct for a single image and wrong
+        for several -- pass it whenever `grid_thw` has more than one row or a `t` above 1.
+        """
         hidden_states = ttnn.add(self.patch_embed.forward(patches), pos_embeds)
 
         deepstack_features: list[ttnn.Tensor] = []
         for layer_idx, block in enumerate(self.blocks):
-            hidden_states = block.forward(hidden_states, pos_embeds=rope)
+            hidden_states = block.forward(hidden_states, pos_embeds=rope, cu_seqlens=cu_seqlens)
             if layer_idx in self.deepstack_visual_indexes:
                 merger = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_idx)]
                 deepstack_features.append(merger.forward(hidden_states))
