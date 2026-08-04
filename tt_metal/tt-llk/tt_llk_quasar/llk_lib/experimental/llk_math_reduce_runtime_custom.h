@@ -88,6 +88,8 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     LLK_ASSERT(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
+    LLK_ASSERT(
+        tensor_shape.num_faces_c_dim == 2, "block reduce_max_row requires a 32-wide operand (num_faces_c_dim == 2); narrow tiles (32x16, 16x16) unsupported");
 
     // A face_row is a term used for two faces in a 16x32 partial tile (F0&F1 or F2&F3).
     // The pool phase of the block reduce_max_row MOP only pools the two face_rows into two fixed DEST slots (slot0 for F0&F1, slot1 for F2&F3).
