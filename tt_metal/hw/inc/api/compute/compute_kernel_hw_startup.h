@@ -77,12 +77,12 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     // (error_handling.h). The tilize datacopy MOP on MATH reads SrcA fed by slow DM readers (e.g.
     // tilize_with_val_padding's padding fills + L2 flush), and the default budget can expire mid-block
     // before the operand is valid -> spurious fault on Neo0TRISC1. Done ONCE here in hw_startup (must not
-    // be re-run per block). 0x40000 is enough headroom without excess. Emitted on every TRISC thread (each
+    // be re-run per block). 0x100000 is enough headroom without excess. Emitted on every TRISC thread (each
     // raises its own per-thread CSR); harmless on threads that don't do the long datacopy wait.
 #ifndef CSR_TIMEOUT_COUNT
 #define CSR_TIMEOUT_COUNT 0xBD0
 #endif
-    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x40000));
+    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
 
     UNPACK((llk_unpack_hw_configure(src_a_cb, src_b_cb)));
 
