@@ -112,17 +112,38 @@ def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
     )
 
 
-def create_rope_caches(mesh_device, hf_config, max_seq_len):
+def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None):
     """Create HF-format cos/sin caches for both sliding and global layer types.
 
     Returns:
         caches_4d: dict mapping layer_type -> (cos_tt, sin_tt) [1,1,max_seq_len,head_dim] for prefill
         caches_2d: dict mapping layer_type -> (cos_tt, sin_tt) [max_seq_len,head_dim] for decode embedding lookup
+
+    Under context parallelism the 4D prefill caches are sharded along the position
+    axis instead of replicated, so rank ``r`` holds positions
+    ``[r*max_seq_len/cp, (r+1)*max_seq_len/cp)`` — exactly the tokens it owns. This
+    is how each rank gets its true absolute positions: ``_get_rope_mats`` slices
+    ``[0:seq_len]`` of the *local* shard with a mesh-wide scalar index, and a scalar
+    cannot differ per device, so the per-rank offset has to come from the sharding.
+
+    That alignment holds only when ``max_seq_len`` equals the prefill chunk, which
+    is the default in the prefill harness; the caller is expected to check.
+
+    The 2D decode caches stay replicated — decode is not context-parallel.
     """
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
+    from models.demos.gemma4.tt.ccl import cp_degree
+
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    cp = cp_degree(mesh_config) if (is_mesh and mesh_config is not None) else 1
+    if cp > 1:
+        assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
+        shard_dims = (-2, None) if mesh_config.sp_axis == 0 else (None, -2)
+        prefill_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
+    else:
+        prefill_mapper = replicate
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
     x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
@@ -139,20 +160,21 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
         cos = cos.to(torch.bfloat16)
         sin = sin.to(torch.bfloat16)
 
-        # 4D for prefill: [1, 1, max_seq_len, head_dim]
+        # 4D for prefill: [1, 1, max_seq_len, head_dim].
+        # Sharded along positions under CP (see docstring), replicated otherwise.
         cos_4d = ttnn.from_torch(
             cos.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=replicate,
+            mesh_mapper=prefill_mapper,
         )
         sin_4d = ttnn.from_torch(
             sin.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=replicate,
+            mesh_mapper=prefill_mapper,
         )
         caches_4d[layer_type] = (cos_4d, sin_4d)
 
@@ -327,7 +349,9 @@ class Gemma4Model:
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
         if hf_text_config is not None:
-            self.rope_caches, self.rope_caches_2d = create_rope_caches(mesh_device, hf_text_config, max_seq_len)
+            self.rope_caches, self.rope_caches_2d = create_rope_caches(
+                mesh_device, hf_text_config, max_seq_len, mesh_config=self.mesh_config
+            )
         else:
             # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
             self.rope_caches = {}
