@@ -66,14 +66,6 @@ def test_bucket_selection():
     logger.info("PASSED: bucket selection picks smallest pow2 >= num_active and never drops active rows")
 
 
-def test_async_capability_matches_device_sampling():
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
-
-    capabilities = Qwen36ForCausalLM.model_capabilities
-    assert capabilities["supports_sample_on_device"]
-    assert capabilities["supports_async_decode"] == capabilities["supports_sample_on_device"]
-
-
 def test_unsupported_device_sampling_fails_at_startup(expect_error):
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 
@@ -88,57 +80,6 @@ def test_unsupported_device_sampling_fails_at_startup(expect_error):
     Qwen36ForCausalLM._validate_device_sampling_request(wrapper, False)
     with expect_error(RuntimeError, "requires the certified 1x4 TP topology"):
         Qwen36ForCausalLM._validate_device_sampling_request(wrapper, True)
-
-
-def test_batched_prefill_requires_explicit_empty_slots(expect_error):
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
-
-    with expect_error(RuntimeError, "requires explicit empty_slots"):
-        Qwen36ForCausalLM._prefill_forward_tp_batched(
-            None,
-            SimpleNamespace(),
-            torch.zeros(2, 4, dtype=torch.int32),
-            torch.zeros(2, 1, dtype=torch.int32),
-            torch.tensor([4, 4]),
-            None,
-        )
-
-
-def test_positional_slot_remap_reaches_qwen_gdn(monkeypatch):
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
-    from models.tt_transformers.tt.generator import Generator
-
-    remaps = []
-    model = SimpleNamespace(
-        num_devices=4,
-        args=SimpleNamespace(max_batch_size=8),
-        sampling=None,
-        _remap_gdn_slots=lambda remap: remaps.append(remap),
-    )
-    wrapper = object.__new__(Qwen36ForCausalLM)
-    wrapper.model = [model]
-    wrapper.model_args = [SimpleNamespace(mesh_device=None)]
-    wrapper.data_parallel = 1
-    monkeypatch.setattr(Generator, "decode_forward", lambda self, *args, **kwargs: "decoded")
-
-    slot_remap = torch.arange(8, dtype=torch.int32)
-    result = wrapper.decode_forward(
-        torch.zeros(8, 1, dtype=torch.int32),
-        torch.zeros(8, dtype=torch.int32),
-        torch.zeros(8, 1, dtype=torch.int32),
-        None,
-        True,
-        True,
-        None,
-        False,
-        None,
-        None,
-        slot_remap,
-    )
-
-    assert result == "decoded"
-    assert len(remaps) == 1 and remaps[0] is slot_remap
-    wrapper.model = []
 
 
 def test_bucket_warmup_compiles_all_widths_before_capture(monkeypatch):
@@ -645,11 +586,7 @@ def test_decode_capacity_width1_traced(mesh_device, reset_seeds, ensure_gc):
 @torch.no_grad()
 @_parametrize_traced()
 def test_decode_step_host_overhead(mesh_device, reset_seeds, ensure_gc):
-    """Time our per-step host prep (prepare + H2D) vs device; remainder is vLLM / async.
-
-    Prep was ~0.03 ms (execute_trace overlaps prior device work); the TPOT gap was vLLM-side.
-    Device decode continuity later removed per-step staging (see test_async_decode.py).
-    """
+    """Time per-step host preparation and H2D copy against device replay."""
     from models.tt_transformers.tt.common import copy_host_to_device
 
     BMAX, ITERS, WIDTH = 8, 50, 1
@@ -697,10 +634,7 @@ def test_decode_step_host_overhead(mesh_device, reset_seeds, ensure_gc):
     ours = full_ms - replay_ms
     logger.info(f"replay only            : {replay_ms:.2f} ms/step")
     logger.info(f"replay + our host prep : {full_ms:.2f} ms/step   (our host cost = {ours:.2f} ms)")
-    logger.info(
-        f"SERVER TPOT was 46.7 ms at 4k/conc-1 -> vLLM-side overhead ~= "
-        f"{46.7 - full_ms:.2f} ms (only async scheduling hides that part)"
-    )
+    logger.info(f"SERVER TPOT was 46.7 ms at 4k/conc-1 -> vLLM-side overhead ~= {46.7 - full_ms:.2f} ms")
     ttnn.release_trace(mesh_device, tid)
     assert replay_ms > 0 and full_ms >= replay_ms
 

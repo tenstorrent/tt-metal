@@ -1369,16 +1369,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prefilled = getattr(self, "_slots_prefilled_since_decode", None)
                 if prefilled:
                     bs = tok_chunk.shape[0]
-                    if slot_remap is not None:
-                        # ``use_dev`` is indexed by POST-remap row, while the set holds the slots
-                        # the prefill actually wrote (PRE-remap). Row j came from slot remap[j].
-                        for j in range(bs):
-                            if int(remap[j]) in prefilled:
-                                use_dev[j] = False
-                    else:
-                        for slot in prefilled:
-                            if i * bs <= slot < (i + 1) * bs:
-                                use_dev[slot - i * bs] = False
+                    for slot in prefilled:
+                        if i * bs <= slot < (i + 1) * bs:
+                            use_dev[slot - i * bs] = False
                 merged = torch.where(use_dev, dev_toks.view(-1), tok_chunk.view(-1)).view(tok_chunk.shape)
                 new_tokens.append(merged.to(tok_chunk.dtype))
                 merged_pos = torch.where(use_dev, dev_pos, host_pos)
@@ -1515,16 +1508,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
 
-            prepare_host_inputs = getattr(
-                self.model[i], "prepare_decode_trace_inputs_host", self.model[i].prepare_decode_inputs_host
+            host_inputs = self.model[i].prepare_decode_inputs_host(
+                tokens[i], current_pos[i], page_table=user_page_table
             )
-            host_inputs = prepare_host_inputs(tokens[i], current_pos[i], page_table=user_page_table)
-            prepare_device_inputs = getattr(self.model[i], "prepare_decode_trace_inputs", None)
-            device_inputs_i = (
-                prepare_device_inputs(host_inputs)
-                if prepare_device_inputs is not None
-                else copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
-            )
+            device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             _mark_trace_buffers_corruptible(device_inputs_i)
             device_inputs.append(device_inputs_i)
 
@@ -1627,10 +1614,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # Full resets are required when host token/position inputs are
                 # authoritative again, or for models that explicitly opt out of
                 # partial decode trace input refreshes.
-                prepare_host_inputs = getattr(
-                    self.model[i], "prepare_decode_trace_inputs_host", self.model[i].prepare_decode_inputs_host
-                )
-                host_inputs_i = prepare_host_inputs(tokens[i], current_pos[i], user_page_table)
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_decode[on_device_sampling][i],
@@ -1641,10 +1625,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # them on device. Page tables still need refreshing when new KV
                 # blocks are allocated, so copy only that trace input and
                 # preserve device-produced tokens.
-                prepare_host_inputs = getattr(
-                    self.model[i], "prepare_decode_trace_inputs_host", self.model[i].prepare_decode_inputs_host
-                )
-                host_inputs_i = prepare_host_inputs(tokens[i], current_pos[i], user_page_table)
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
                 host_page_table = host_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
                 device_page_table = self.trace_inputs_decode[on_device_sampling][i][DECODE_PAGE_TABLE_INPUT_IDX]
                 if host_page_table is not None:
@@ -1773,14 +1754,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Must match the capture-time decision in _capture_decode_trace_text:
             # only feed the sampled token back into device_inputs[0] for models
             # that use on-device token feedback (see _decode_token_feedback_buffer).
-            feedback_inputs = (
-                self.trace_inputs_decode[True][i] if sampling_enable_trace and self.trace_inputs_decode[True] else None
-            )
-            if feedback_inputs is None and getattr(self.model[i], "_compile_decode_with_canonical_inputs", False):
-                feedback_inputs = getattr(self.model[i], "_canonical_decode_inputs", None)
             tt_out_tok = (
-                self._decode_token_feedback_buffer(self.model[i], feedback_inputs)
-                if feedback_inputs is not None
+                self._decode_token_feedback_buffer(self.model[i], self.trace_inputs_decode[True][i])
+                if sampling_enable_trace and self.trace_inputs_decode[True]
                 else None
             )
             sampled_outputs.append(
