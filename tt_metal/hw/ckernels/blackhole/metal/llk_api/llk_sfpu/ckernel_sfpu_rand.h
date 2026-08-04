@@ -39,7 +39,9 @@ inline void make_lane_salt() {
     // rand_tile is a shared API and other SFPU operations may clobber every
     // mutable LREG between calls. Reconstruct a lane-specific salt from the
     // read-only lane ID at the start of each tile instead of carrying it in an
-    // LREG. This is the conventional xorshift32 transformation.
+    // LREG. LTILEID is the ISA-defined LREG15: lane i contains 2*i, and a plain
+    // SFPMOV copies those values lane-wise. This is the conventional xorshift32
+    // transformation.
     TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG3, 0);
     TTI_SFPSHFT(13, p_sfpu::LREG3, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);

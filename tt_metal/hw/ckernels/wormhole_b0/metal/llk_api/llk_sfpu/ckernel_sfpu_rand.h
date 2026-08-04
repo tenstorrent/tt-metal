@@ -36,8 +36,10 @@ inline void rand_init(std::uint32_t seed) {
 
 inline void make_lane_salt() {
     // Reconstruct the salt for every tile so rand_tile remains valid after
-    // arbitrary SFPU operations have clobbered the mutable LREGs. This is the
-    // conventional xorshift32 transformation.
+    // arbitrary SFPU operations have clobbered the mutable LREGs. LTILEID is
+    // the ISA-defined LREG15: lane i contains 2*i, and a plain SFPMOV copies
+    // those values lane-wise. This is the conventional xorshift32
+    // transformation.
     TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG3, 0);
 
     TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
