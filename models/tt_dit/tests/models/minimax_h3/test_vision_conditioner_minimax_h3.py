@@ -3,53 +3,93 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # =============================================================================
-# MiniMax-H3 conditioner with an image, on the RELEASED weights: the fl2va path.
+# MiniMax-H3 conditioner with references, on the RELEASED weights: fl2va (one
+# reference) and ref2va (several). Companion to test_text_encoder_minimax_h3.py,
+# which covers t2va at PCC 99.9993%.
 #
-# WIP: test_fused_conditioner_real_weights FAILS at PCC 98.6224% against the
-# 0.99 threshold, and the cause is NOT established. The two vision-tower cases
-# pass. Do not read a green run of this file as fl2va being verified end to end.
+# READ THE RELATIVE-ERROR LINES, NOT THE PCC. One channel of the layer-50 tap
+# carries 97% of its energy (channel 731, |x| up to 23424 where the mean is 2.15,
+# a bf16 step of 128 at that magnitude), so the aggregate PCC is close to a
+# measurement of that one channel. Concretely, from this file's own outputs:
+#   - the tower's merged tokens read 99.65% PCC while carrying 7.75% mean
+#     relative error;
+#   - excluding the four dominant channels made the fused aggregate WORSE, 98.62%
+#     -> 96.22%, because the sink is the best-behaved part of the tensor;
+#   - the same ~29% relative error read 98.73% or 86.42% depending only on
+#     whether the test images were distinct.
+# Every test here logs mean relative error alongside assert_quality for that
+# reason. Four separate wrong conclusions were drawn from the aggregate before
+# this was understood.
 #
-# What is known about the failure:
-#   - reproducible: 98.4764% measured four times before the vision attention got
-#     its HiFi4 + fp32-accumulate SDPA config, and 98.6224% after. In-suite and
-#     in isolation (-k fused), before and after a device reboot. Not flaky, not
-#     cross-test interference, not hardware.
-#   - the gap is mostly NOT the vision tower. Giving the tower fp32 accumulation
-#     roughly halved its hidden-state error (block 26: 99.6893% -> 99.8272% on a
-#     784-patch image) and moved this number by only 0.146 points. If inherited
-#     tower error dominated, that change should have moved it far more, so the
-#     bulk of the ~1.4% shortfall lives downstream -- in the decoder with vision
-#     injected.
-#   - the next precision lever is layers/linear.py, documented as "HiFi2 +
-#     packer_l1_acc + bf16 acc". Every qkv, proj and MLP matmul still accumulates
-#     in bf16 and those carry most of the FLOPs. Changing it affects every tt_dit
-#     model, so it has not been touched here.
-#   - a standalone script feeding the SAME decoder the reference's own vision
-#     output scored 99.8789%, and our tower's 99.8006% -- which would say the
-#     injection is correct. But that script disagrees with this test by 1.3
-#     points on nominally identical work and had two defects of its own, so it is
-#     recorded as a lead, not a finding.
-#   - the reduced-geometry equivalent in
-#     tests/encoders/qwen3vl/test_qwen3vl_fused_conditioner.py passes at
-#     99.9917%, so whatever this is needs the real depth, width or tap index to
-#     show up -- 64 layers and a tap at 50, versus 4 layers and a tap at 3.
+# STATUS
+#   PASSING  the vision tower at real geometry (depth 27, hidden 1152, head_dim
+#            72 padded to 96, deepstack [8, 16, 24], a 48x48 position table) on
+#            the released 595M weights, for one reference and for several:
+#              448x448     tokens 99.6532%  rel err 7.75%
+#              1344x768    tokens 99.5953%
+#              two_images  tokens 99.6953%  rel err 7.47%   2 blocks
+#              nine_images tokens 99.6937%  rel err 7.59%   9 blocks
+#              mixed       tokens 99.6069%  rel err 8.59%   4 blocks, incl. t=2
+#   FAILING  every fused case, against the 0.99 threshold:
+#              fl2va         98.6224%  rel err 25.01%  (vision rows 26.58, text 2.25)
+#              two_images    86.4183%  rel err 28.30%  (vision rows 29.64, text 4.53)
+#              img_video_img 83.9064%  rel err 33.24%  (vision rows 33.92, text 16.30)
 #
-# The companion to test_text_encoder_minimax_h3.py, which covers t2va at PCC
-# 99.9993%. Everything above that point was verified with reduced geometry and
-# random weights -- structure, not fidelity. This closes that gap for the tower:
+# WHY THE FUSED CASES FAIL -- established, and NOT a defect. Bisected by
+# substituting reference values stage by stage, then by swapping each tower op's
+# IMPLEMENTATION in all 27 blocks with the reference's:
+#   - stage 2's INPUT is right: pos_embeds bit-exact, patch_embed 0.111%, block
+#     0's input 0.154% mean relative error.
+#   - the tower AMPLIFIES it ~16x, front-loaded: 0.154% -> 1.55% by block 8 ->
+#     2.49% by block 26. The residual stream grows 69x across the stack (mean
+#     |x| 0.264 at block 8, 18.19 at block 26), so it is ill-conditioned and
+#     magnifies perturbations along with signal.
+#   - no single op is at fault. Swapping one op's implementation in all 27 blocks
+#     lands everything in a 2.28-3.28% band against 5.41% for all of them, ordered
+#     by contraction size (sdpa 3.28, fc1 3.08, qkv 2.97; norms and gelu ~2.3).
+#     The elementwise floor at ~2.3% is bf16 storage of the residual stream
+#     between blocks, and caps what better matmul precision can buy.
+#   - the four mergers are clean: fed the reference's block outputs they read
+#     0.79-0.92%. They then amplify their input error a further ~1.6x through a
+#     LayerNorm over that outlier-heavy distribution.
+#   - decoder-side attribution, as mean relative error at the tap: replacing our
+#     merged tokens 25.01% -> 11.15%, then our deepstack 11.15% -> 7.72%.
+#     embed_tokens, its all-gather and both scatters contribute exactly nothing --
+#     substituting the reference's embeddings is bit-identical to our own chain.
+#   - a residual 7.72% remains with every vision input exact, and it is
+#     vision-specific: 8.12% on vision rows against 2.04% on text rows, where the
+#     same layers on text-only sequences reach 99.9993%. That is a second, smaller
+#     and still unexplained effect, separate from the tower.
 #
-#   - the vision tower at its real geometry (depth 27, hidden 1152, head_dim 72
-#     padded to 96, deepstack [8, 16, 24], a 48x48 position table) on the
-#     released 595M-parameter weights -- PASSES, but short of the four nines the
-#     rest of this port reaches:
-#         448x448    tokens 99.6532%   deepstack 99.9341 / 99.9046 / 99.7551
-#         1344x768   tokens 99.5953%   deepstack 99.8910 / 99.8719 / 99.6651
-#     Every block scores ~99.999% in isolation, so this is bf16 accumulation over
-#     27 of them rather than a bad op -- see the linear.py note above for the
-#     remaining lever;
-#   - the fused conditioner, with MiniMax-H3's exact presentation built by the
-#     real tokenizer and the real image processor, tapped at hidden_states[50]
-#     -- currently FAILING, see above.
+# RULED OUT by measurement, so as not to be re-run: row geometry (tokenizer
+# <|image_pad|>, config.image_token_id and mm_token_type_ids all agree on the
+# same 196 rows -- note the run starts at row 7, not 5, since "<Picture 1>: " is
+# six tokens); M-RoPE, including the interleaved path with genuinely divergent
+# axes (100.0000 / 100.0000 / 99.9998 for degenerate / compressed / divergent
+# position ids on identical content); bf16 input amplification (perturbing vision
+# inputs by 3e-2, ~8x bf16 epsilon, costs 0.15 points); multi-run scatter
+# ordering (bit-exact for up to nine runs, nothing written outside a run);
+# hardware, flakiness and cross-test interference.
+#
+# CORRECTION to what this header previously claimed: layers/linear.py does NOT
+# accumulate in bf16. fp32_dest_acc_en is already set in all three Linear
+# classes, so "every qkv, proj and MLP matmul still accumulates in bf16" was
+# wrong. Raising math fidelity globally to HiFi4 made the decoder WORSE, which
+# fits the picture above -- it reorders accumulation, and the dominant channel's
+# rounding moves with it.
+#
+# So the 0.99 threshold is probably unreachable on the fused path and these tests
+# are left failing rather than relaxed, because relaxing it needs a number chosen
+# from the precision work rather than from the current measurement. The remaining
+# lever is fp32 accumulation or higher fidelity in the FIRST THIRD of the tower,
+# where the 10x of the amplification lives; precision late in the stack buys
+# almost nothing.
+#
+# ref2va note: tower error does not grow with reference count -- attention never
+# crosses a block boundary, so error is per-token and only tower depth
+# accumulates. The decoder has no such protection: its attention is global over
+# the packed sequence, so error grows with how much of the sequence is vision, and
+# the text rows degrade with it (2.25% -> 4.53% -> 16.30% above).
 #
 # The conditioner is ~32B params, so the decoder runs TP=8 on a Galaxy while the
 # 595M tower rides along replicated. Large-host test: it needs the ~62 GiB of
@@ -57,9 +97,7 @@
 # =============================================================================
 
 import os
-import re
 
-import numpy as np
 import pytest
 import torch
 import transformers
@@ -69,9 +107,12 @@ from PIL import Image
 
 import ttnn
 
-from ....encoders.qwen3vl.loader_minimax_h3 import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
-from ....encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder
-from ....encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
+from ....encoders.qwen3vl.model_qwen3vl import (
+    Qwen3VlTextEncoder,
+    create_rope_tensors,
+    mrope_position_ids,
+    vision_token_runs,
+)
 from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -84,85 +125,29 @@ _HF_REPO = "MiniMaxAI/MiniMax-H3"
 _SUBFOLDER = "text_encoder"
 _PATTERNS = [f"{_SUBFOLDER}/*"]
 
-# The canvases `resolve_canvas_size` actually produces, as `(width, height)`. A keyframe is put onto
-# one of these *before* the processor sees it, so these are the only grids `fl2va` ever presents:
-#
-#   1344x768  16:9, max area   grid [1, 48, 84]   4032 patches   1008 image tokens
-#    768x768  1:1              grid [1, 48, 48]   2304 patches    576 image tokens
-#
-# 448x448 used to appear here and is gone: it is not a canvas `resolve_canvas_size` yields, so by
-# amendment 76's rule it was evidence about 448x448 alone. It was chosen to keep the 64-layer CPU
-# reference affordable, and that turned out not to be the binding cost -- the full 1008-token
-# presentation runs in a few minutes.
+# A 448x448 image is grid [1, 28, 28] -- 784 patches, 196 tokens. Real geometry throughout, sized so
+# the 64-layer CPU reference stays affordable; the full 768x1344 canvas is 4032 patches / 1008 tokens
+# and is exercised by the tower-only test.
+FUSED_IMAGE = (448, 448)
 KEYFRAME_IMAGE = (1344, 768)
-SQUARE_CANVAS = (768, 768)
-
-# Where the calibrated t2va generation lives; frame 0 of it is the keyframe these tests condition on.
-T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
-
-# Bars for the fused conditioner, all set from the production measurement below.
-#
-# Whole-tensor PCC is deliberately NOT one of them, and that is the main thing this gate learned. The
-# tap's row norms span 177 to 20612 -- a 79x spread, because a handful of rows carry massive activations
-# -- so a single flattened correlation over all 5.2 M elements is dominated by those few rows and says
-# almost nothing about the other 1011. Measured at production shape and content: whole-tensor PCC
-# 70.8949 % while the *median* per-row relative error is 9.0 % and the text rows are within 2.5 %.
-# Excluding the largest rows makes whole-tensor PCC *worse* (57 %, 50 %, 39 % as the top 1, 3, 5 are
-# dropped), which is the tell that the statistic is unstable here rather than informative.
-#
-# So the gate is per-row, split by row class, which is both robust and diagnostic.
-FUSED_MAX_TEXT_ROW_ERROR = 0.05  # measured median 0.0197, max 0.0247
-FUSED_MAX_MEDIAN_ROW_ERROR = 0.15  # measured median 0.0901 over all rows
-# Rows whose norm exceeds this multiple of the median are "massive activations". Emergent and
-# threshold-like: a small numerical difference decides whether a row blows up at all.
-MASSIVE_ROW_MULTIPLE = 10.0
 
 
-def _test_image(size):
-    """A real keyframe on the production canvas: frame 0 of the calibrated t2va generation.
+def _test_image(size, seed: int = 0):
+    """A deterministically textured image.
 
-    **Content is part of the gate, not a detail.** The measured spread on the released weights is 3.4
-    points -- a solid colour scores 96.2 % where texture scores 99.6 % -- because a flat image gives
-    near-identical patches, so the merged tokens are near-identical rows and PCC across them is
-    dominated by the small inter-row differences, which is exactly where bf16 noise lives. That makes
-    the metric content-sensitive in a way that has nothing to do with correctness.
+    Content matters here, not just geometry. A flat colour gives near-identical patches, so the merged
+    tokens are near-identical rows and PCC across them is dominated by the small inter-row differences
+    -- which is precisely where bf16 noise lives. Measured on the released weights: a solid colour
+    scores 96.2% where texture scores 99.6%, on identical code and the same mesh. The low number is a
+    property of the metric on a degenerate input, not of the port.
 
-    This used to be `torch.rand` uniform noise, which is invented content and *also* degenerate in the
-    relevant sense: every patch is statistically identical, so the rows are near-identical for the same
-    reason a flat colour's are, despite the image being high-frequency. A natural photograph has
-    spatially correlated structure and genuinely distinct patches, which is what production feeds.
-
-    Frame 0 of the t2va artifact specifically, rather than any photograph, because it is the content
-    the tier-6 thresholds were calibrated on and the exact keyframe
-    `test_pipeline_fl2va_minimax_h3.py` conditions on -- so this test becomes the unit-level
-    explanation of that gate's end-to-end result rather than a separate measurement of something else.
+    `seed` must differ per reference and per frame in the multi-reference tests. With one shared seed
+    every reference is the same image, so the merged tokens repeat and any bug that scattered one
+    reference's tokens into another's rows -- or reordered a video's frames -- would score perfectly.
     """
-    from pathlib import Path
-
-    import imageio.v3 as iio
-
-    from ....pipelines.minimax_h3.packing import prepare_keyframe_image
-
-    # Diagnostic escape hatch, not for gating: `MINIMAX_H3_TEST_CONTENT=noise` restores the uniform-noise
-    # image this test used to carry, which is what separates "the port regressed" from "the metric is
-    # content-sensitive" when a number moves after a content change. Default is the production content.
-    if os.environ.get("MINIMAX_H3_TEST_CONTENT") == "noise":
-        generator = torch.Generator().manual_seed(0)
-        pixels = (torch.rand(size[1], size[0], 3, generator=generator) * 255).to(torch.uint8)
-        return Image.fromarray(pixels.numpy())
-
-    source = Path(os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts") / "t2va.mp4"
-    if not source.is_file():
-        pytest.skip(
-            f"no calibrated t2va artifact at {source}; run test_pipeline_minimax_h3.py first. These are "
-            "released-weights production-shape gates, so they condition on real content rather than "
-            "inventing some"
-        )
-    frame = Image.fromarray(np.asarray(iio.imread(source, index=0, plugin="pyav"))).convert("RGB")
-    width, height = size
-    # The pipeline's own canvas rule, so the pixels the conditioner sees here are the pixels it sees in
-    # production. `stretch=True` is the first-keyframe (geometry anchor) case.
-    return prepare_keyframe_image(frame, height, width, True)
+    generator = torch.Generator().manual_seed(seed)
+    pixels = (torch.rand(size[1], size[0], 3, generator=generator) * 255).to(torch.uint8)
+    return Image.fromarray(pixels.numpy())
 
 
 def _conditioner_dir() -> str:
@@ -224,7 +209,7 @@ def _tower(reference_visual, submesh):
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
 )
-@pytest.mark.parametrize("size", [KEYFRAME_IMAGE, SQUARE_CANVAS], ids=["keyframe_768x1344", "square_768"])
+@pytest.mark.parametrize("size", [FUSED_IMAGE, KEYFRAME_IMAGE], ids=["448sq", "keyframe_768x1344"])
 def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size):
     """The released vision tower: merged tokens and all three deepstack features.
 
@@ -260,6 +245,21 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
         assert_quality(golden.float(), tensor.to_torch(feature, mesh_axes=[None, None]), pcc=0.99)
 
 
+# `ref2va` presentations. Grids rather than image counts, because the interesting axis is how many
+# ATTENTION BLOCKS the grid produces: an image is one block, a video is one block per frame, and the
+# tower must not let attention cross a boundary.
+_REF2VA = {
+    # two separate references -> two blocks from two grid rows
+    "two_images": [(1, 28, 28), (1, 28, 28)],
+    # one two-frame video -> two blocks from a SINGLE grid row, which the multi-row case cannot reach
+    "video_2_frames": [(2, 28, 28)],
+    # an image, a video and a keyframe-sized reference: four blocks of three different lengths
+    "mixed": [(1, 28, 28), (2, 28, 28), (1, 48, 84)],
+    # the documented ceiling for images
+    "nine_images": [(1, 28, 28)] * 9,
+}
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
     [pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1")],
@@ -268,55 +268,115 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
 )
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Massive-activation rows disagree: the reference produces 7 rows whose norm exceeds 10x the "
-        "median (up to 79x) and we reproduce 4 of them, missing 3 and inventing 1. Cause IS now "
-        "established, unlike the version of this xfail it replaces -- see STATE.md amendment 101. Text "
-        "rows (2.5% max) and the median vision row (9.0%) both pass; the shape, content and tap are all "
-        "production now. strict=True so improving the conditioner's precision forces a return here."
-    ),
-)
-@pytest.mark.parametrize("size", [KEYFRAME_IMAGE], ids=["keyframe_768x1344"])
-def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size):
-    """The `fl2va` conditioner with an image, on released weights, at the production canvas and tap.
+@pytest.mark.parametrize("preset", list(_REF2VA))
+def test_vision_tower_ref2va_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, preset):
+    """The released vision tower with SEVERAL references: the `ref2va` path.
 
-    Three things about this gate were wrong when it arrived and are fixed here, all of them named in the
-    `xfail` reason it used to carry (STATE.md amendments 90 and 95):
+    The multi-block blocking was verified at reduced geometry with dummy weights in
+    `tests/encoders/qwen3vl/test_qwen3vl_vision_blocks_multi.py`; this runs it at the real depth 27 /
+    hidden 1152 / head_dim 72 on the released weights, where 27 blocks of bf16 accumulate.
 
-    - **the shape.** 448x448 is not a canvas `resolve_canvas_size` produces, so by amendment 76 it was
-      evidence about 448x448 alone. Production is 1344x768 -> 1008 image tokens, seq 1028.
-    - **the content.** `torch.rand` uniform noise is invented *and* degenerate for this metric; see
-      `_test_image`.
-    - **the tap.** It read `hidden_states[51]` -- `activation_layers=(50,)` over 64 layers, with a hook
-      on `layers[50]`. Production reads `hidden_states[50]`, the output of layer **49**, which is what
-      `build_minimax_h3_text_encoder` builds at 50 layers. Self-consistent before, so not the PCC gap,
-      but it gated a tensor production never reads and paid for 14 layers it never needed.
+    Frame counts above 1 are synthesised by labelling a grid row `t > 1` and supplying `t * h * w`
+    patch rows, rather than by running the video processor. The tower has no temporal mixing beyond
+    the patch embedding, so this is a faithful exercise of the per-frame BLOCKING -- which is what is
+    under test -- but it is not a test of video preprocessing.
 
-    The bar is set from the production measurement rather than inherited, and the reason a *loose* bar
-    is a gate here rather than an admission is that the floor behind it has been measured. Amendment 93:
-    the reference vision tower's own bf16-vs-fp32 floor is 99.87 % at this canvas, against our tower's
-    99.5953 %, so ~0.28 points of the tower's error is `layers/linear.py`'s bf16 accumulation -- a
-    deliberate, repo-wide precision choice. Amendment 95: pushing a perturbation of *that magnitude*
-    through the **reference** decoder scores 98.97-99.49 % at this geometry, so the conditioner cannot
-    reach four nines with the tower it is fed, and the reference itself does not.
-
-    What this does gate, tightly, is regression: a wrong rotary layout, a mis-tagged vision block, a
-    scatter off by a tile or a deepstack feature at the wrong layer all move PCC by far more than the
-    margin below.
-
-    The presentation is built the way `encoders.py::encode_prompt` builds it -- `"<Picture 1>: "`, then
-    a vision block, then the prompt verbatim, no chat template and no special tokens -- using the
-    checkpoint's own tokenizer and image processor.
+    Reported with mean relative error alongside PCC. PCC alone is unreliable on these outputs: the
+    tower's merged tokens read 99.65% while carrying 7.75% mean relative error, because one channel
+    dominates the energy.
     """
+    path, reference = conditioner
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    processor = transformers.AutoImageProcessor.from_pretrained(path)
+    vc = reference.visual.config
+    merge = vc.spatial_merge_size
+
+    # One still image per FRAME, then relabel with the requested `t`. Patch order is frame-major
+    # either way, and every frame of a given row shares h and w, so the relabelling is consistent.
+    # A distinct image per reference AND per frame. Sharing one image would make every merged token
+    # repeat, and a bug that crossed a block boundary would still score perfectly.
+    rows = _REF2VA[preset]
+    patches, grid_rows, seed = [], [], 0
+    for t, h, w in rows:
+        size = (w * vc.patch_size, h * vc.patch_size)
+        frames = []
+        for _ in range(t):
+            seed += 1
+            one = processor(images=[_test_image(size, seed=seed)], return_tensors="pt")
+            got = tuple(one["image_grid_thw"][0].tolist())
+            assert got == (1, h, w), f"processor gave grid {got} for {size}, expected (1, {h}, {w})"
+            frames.append(one["pixel_values"])
+        patches.append(torch.cat(frames, dim=0))
+        grid_rows.append([t, h, w])
+    pixel_values = torch.cat(patches, dim=0)
+    grid = torch.tensor(grid_rows, dtype=torch.long)
+
+    cu_seqlens = vision_cu_seqlens(grid)
+    assert pixel_values.shape[0] == cu_seqlens[-1] == int((grid[:, 0] * grid[:, 1] * grid[:, 2]).sum())
+    assert len(cu_seqlens) - 1 == int(grid[:, 0].sum()), "one block per frame"
+
+    with torch.no_grad():
+        ref_out = reference.visual(pixel_values, grid_thw=grid, return_dict=True)
+
+    tower = _tower(reference.visual, submesh)
+    cos, sin = tower.prepare_rope(grid)
+    tokens, deepstack = tower.forward(
+        bf16_tensor(pixel_values.float(), device=submesh),
+        pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid), device=submesh),
+        rope=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
+        cu_seqlens=cu_seqlens,
+    )
+
+    def rel(golden, actual):
+        g, a = golden.float(), actual.float()[: golden.shape[0]]
+        return ((g - a).abs().mean() / g.abs().mean()).item() * 100
+
+    logger.info(
+        f"minimax-h3 vision tower [real, ref2va] {preset}: grid={grid.tolist()} "
+        f"patches={pixel_values.shape[0]} blocks={len(cu_seqlens) - 1} "
+        f"tokens={int((grid[:, 0] * grid[:, 1] * grid[:, 2]).sum()) // merge**2}"
+    )
+    got_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
+    logger.info(f"  merged tokens: mean relative error {rel(ref_out.pooler_output, got_tokens):.2f}%")
+    assert_quality(ref_out.pooler_output.float(), got_tokens, pcc=0.99)
+    for i, (feature, golden) in enumerate(zip(deepstack, ref_out.deepstack_features)):
+        got = tensor.to_torch(feature, mesh_axes=[None, None])
+        logger.info(
+            f"  deepstack {i} (vision layer {vc.deepstack_visual_indexes[i]}): "
+            f"mean relative error {rel(golden, got):.2f}%"
+        )
+        assert_quality(golden.float(), got, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
+    [pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
+)
+def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links):
+    """WIP -- FAILING at PCC 98.6224% against the 0.99 threshold, cause not established.
+
+    Left failing rather than relaxed or skipped: the number is bit-reproducible across four runs and
+    the reduced-geometry equivalent passes at 99.9917%, so there is something real here that only the
+    released depth and tap index expose. Relaxing the threshold would bury it; skipping would stop it
+    being measured. See the file header for what has been ruled out.
+
+    MiniMax-H3's presentation is built here the way `encoders.py::encode_prompt` builds it -- a
+    `"<Picture 1>: "` label, then a vision block, then the prompt verbatim, with no chat template and
+    no special tokens -- using the checkpoint's own tokenizer and image processor.
+    """
+    from diffusers.modular_pipelines.minimax_h3.packing import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
+
     path, reference = conditioner
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     tp_factor = tuple(submesh.shape)[tp_axis]
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(path)
     processor = transformers.AutoImageProcessor.from_pretrained(path)
-    vision = processor(images=[_test_image(size)], return_tensors="pt")
+    vision = processor(images=[_test_image(FUSED_IMAGE)], return_tensors="pt")
     pixel_values, grid = vision["pixel_values"], vision["image_grid_thw"]
     merge = reference.visual.config.spatial_merge_size**2
     num_image_tokens = int(grid[0].prod()) // merge
@@ -335,29 +395,24 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
     type_ids = (ids == image_pad).long()
     seq_len = ids.shape[1]
 
-    # --- golden: exactly what production reads, through the API production reads it with ---
-    # `MiniMaxH3TextEncoderStep.encode_prompt` does `output_hidden_states=True` then
-    # `hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER]`. No forward hook: the hook the old version used
-    # captured layer TAP's *output*, which is `hidden_states[TAP + 1]`, and that off-by-one is how this
-    # gate came to measure a tensor production never reads. Asking for the tensor by the index
-    # production uses cannot drift that way. The reference builds its own tower output and its own
-    # position ids here, so a disagreement in either surfaces as PCC.
+    # --- golden: the reference runs its own tower and builds its own position ids ---
+    captured: dict[int, torch.Tensor] = {}
+    handle = reference.language_model.layers[TAP].register_forward_hook(
+        lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
+    )
     with torch.no_grad():
-        outputs = reference(
+        reference(
             input_ids=ids,
             attention_mask=torch.ones_like(ids),
             mm_token_type_ids=type_ids,
             pixel_values=pixel_values,
             image_grid_thw=grid,
             use_cache=False,
-            output_hidden_states=True,
         )
-    golden = outputs.hidden_states[TAP].float()
+    handle.remove()
+    golden = captured[TAP].float()
     cfg = reference.language_model.config
     assert golden.shape == (1, seq_len, cfg.hidden_size)
-    # `hidden_states` is the embedding output plus one per layer, so index TAP is layer TAP - 1's output
-    # and a TAP-layer stack tapped at its last layer is exactly that.
-    assert len(outputs.hidden_states) == cfg.num_hidden_layers + 1
 
     # --- port ---
     tower = _tower(reference.visual, submesh)
@@ -371,29 +426,24 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 
     rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
     head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
-
-    # The production builder, not an inline construction: it is what the pipeline calls, so this gates
-    # the depth (TAP layers, not 64), the tap (`activation_layers=(TAP - 1,)`) and the explicit
-    # `head_dim` from config all at once. Built without weights and fed the reference's own state dict
-    # rather than re-reading 50 GB from disk, since the reference is already in RAM -- and truncated to
-    # the layers this stack has, because `load_torch_state_dict` is strict and layers TAP..63 are never
-    # evaluated.
-    encoder, _ = build_minimax_h3_text_encoder(
-        path,
-        mesh_device=submesh,
+    encoder = Qwen3VlTextEncoder(
+        vocab_size=cfg.vocab_size,
+        hidden_size=cfg.hidden_size,
+        intermediate_size=cfg.intermediate_size,
+        hidden_act=cfg.hidden_act,
+        num_hidden_layers=cfg.num_hidden_layers,
+        num_attention_heads=cfg.num_attention_heads,
+        num_key_value_heads=cfg.num_key_value_heads,
+        rms_norm_eps=cfg.rms_norm_eps,
+        rope_theta=rope_params["rope_theta"],
+        mrope_section=rope_params["mrope_section"],
+        head_dim=head_dim,
+        activation_layers=(TAP,),
+        device=submesh,
         parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
         ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
-        is_fsdp=False,
-        num_layers=TAP,
-        load_weights=False,
     )
-    layer_re = re.compile(r"^layers\.(\d+)\.")
-    truncated = {
-        key: value
-        for key, value in reference.language_model.state_dict().items()
-        if not (m := layer_re.match(key)) or int(m.group(1)) < TAP
-    }
-    encoder.load_torch_state_dict(truncated)
+    encoder.load_torch_state_dict(reference.language_model.state_dict())
 
     # A vision run makes the three M-RoPE axes diverge, so the interleaved layout is load-bearing here.
     assert rope_params.get("mrope_interleaved") is True, "this checkpoint is expected to be interleaved"
@@ -424,70 +474,182 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
     actual = tensor.to_torch(out, mesh_axes=[None, None, None])
 
     logger.info(
-        f"minimax-h3 fused conditioner [real] TP={tp_factor} hidden_states[{TAP}] "
-        f"(= layer {TAP - 1} of a {TAP}-layer stack), {size[0]}x{size[1]} grid={grid[0].tolist()}, "
+        f"minimax-h3 fused conditioner [real] TP={tp_factor} layer {TAP} of {cfg.num_hidden_layers}, "
         f"seq={seq_len} ({num_image_tokens} image tokens):"
     )
     assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
-    if os.environ.get("MINIMAX_H3_DUMP_FUSED"):
-        torch.save(
-            {"golden": golden, "actual": actual, "type_ids": type_ids, "label_len": len(label), "size": size},
-            os.environ["MINIMAX_H3_DUMP_FUSED"],
+    assert_quality(golden, actual, pcc=0.99)
+
+
+# Fused `ref2va` presentations. Unlike the tower-only cases these must place SEVERAL vision blocks in
+# one packed sequence, which is the only thing that exercises `_scatter_rows` with more than one run.
+_REF2VA_FUSED = {
+    "two_images": [(1, 28, 28), (1, 28, 28)],
+    # a still, a two-frame reference and a still: three runs of two different lengths, and a `t > 1`
+    # row so the temporal axis of the position grid is live
+    "img_video_img": [(1, 28, 28), (2, 28, 28), (1, 28, 28)],
+}
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
+    [pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
+)
+@pytest.mark.parametrize("preset", list(_REF2VA_FUSED))
+def test_fused_conditioner_ref2va_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, preset):
+    """The fused `ref2va` conditioner: several references in one packed sequence, released weights.
+
+    What this reaches that `test_fused_conditioner_real_weights` cannot: `vision_token_runs` returns
+    more than one run, so `_scatter_rows` must walk them in order and consume the tower's merged
+    tokens in matching order -- image 1's tokens into run 1, image 2's into run 2 -- for the embedding
+    substitution AND for all three deepstack adds. With a single image any ordering bug is invisible.
+    The reference's `masked_scatter` fills row-major over its mask, which is the same order, so a
+    mismatch shows up as a large error rather than a subtle one.
+
+    Expect this to sit near `test_fused_conditioner_real_weights`. The tower's own ref2va error does
+    not grow with reference count -- attention never crosses a block boundary, so error is per-token
+    and only tower DEPTH accumulates -- but the decoder-side shortfall applies to every vision row.
+
+    Frame counts above 1 come from labelling a grid row `t > 1` with `t * h * w` patch rows rather
+    than from the video processor; see `test_vision_tower_ref2va_real_weights`.
+    """
+    from diffusers.modular_pipelines.minimax_h3.packing import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
+
+    path, reference = conditioner
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    tp_factor = tuple(submesh.shape)[tp_axis]
+    vc = reference.visual.config
+    merge = vc.spatial_merge_size
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained(path)
+    processor = transformers.AutoImageProcessor.from_pretrained(path)
+    image_pad = tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
+    # one labelled vision block per reference, in encode_prompt's order, then the prompt verbatim
+    rows = _REF2VA_FUSED[preset]
+    patches, grid_rows, ids_list, expected_runs, per_ref_tokens = [], [], [], [], []
+    seed = 0
+    for index, (t, h, w) in enumerate(rows):
+        # distinct content per reference and per frame, so tokens landing in the wrong run is visible
+        size = (w * vc.patch_size, h * vc.patch_size)
+        frames = []
+        for _ in range(t):
+            seed += 1
+            one = processor(images=[_test_image(size, seed=seed)], return_tensors="pt")
+            assert tuple(one["image_grid_thw"][0].tolist()) == (1, h, w), f"processor grid for {size}"
+            frames.append(one["pixel_values"])
+        patches.append(torch.cat(frames, dim=0))
+        grid_rows.append([t, h, w])
+
+        num_tokens = t * h * w // merge**2
+        per_ref_tokens.append(num_tokens)
+        ids_list += tokenizer(f"<Picture {index + 1}>: ", add_special_tokens=False)["input_ids"]
+        ids_list.append(tokenizer.convert_tokens_to_ids("<|vision_start|>"))
+        expected_runs.append((len(ids_list), num_tokens))
+        ids_list += [image_pad] * num_tokens
+        ids_list.append(tokenizer.convert_tokens_to_ids("<|vision_end|>"))
+    ids_list += tokenizer("a robot dancing", add_special_tokens=False)["input_ids"]
+
+    pixel_values = torch.cat(patches, dim=0)
+    grid = torch.tensor(grid_rows, dtype=torch.long)
+    ids = torch.tensor([ids_list], dtype=torch.long)
+    type_ids = (ids == image_pad).long()
+    seq_len = ids.shape[1]
+    total_tokens = sum(per_ref_tokens)
+
+    # --- golden ---
+    captured: dict[int, torch.Tensor] = {}
+    handle = reference.language_model.layers[TAP].register_forward_hook(
+        lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
+    )
+    with torch.no_grad():
+        reference(
+            input_ids=ids,
+            attention_mask=torch.ones_like(ids),
+            mm_token_type_ids=type_ids,
+            pixel_values=pixel_values,
+            image_grid_thw=grid,
+            use_cache=False,
         )
+    handle.remove()
+    golden = captured[TAP].float()
+    cfg = reference.language_model.config
 
-    # Per-row relative L2 error, which is what the DiT's `context_embedder` actually consumes -- it
-    # takes the embedding as an absolute value, so a per-row magnitude error matters and a global
-    # correlation does not capture it. `assert_quality`'s whole-tensor numbers are logged for continuity
-    # with the rest of the port but are not the gate; see the note on the constants above.
-    g = golden[0].double()
-    p = actual.reshape(golden.shape)[0].double()
-    row_error = (p - g).norm(dim=1) / g.norm(dim=1)
-    is_text = ~type_ids[0].bool()
-    norms = g.norm(dim=1)
-    median_norm = float(norms.median())
-    golden_massive = norms > MASSIVE_ROW_MULTIPLE * median_norm
-    ours_massive = p.norm(dim=1) > MASSIVE_ROW_MULTIPLE * median_norm
-    ordinary = ~golden_massive & ~ours_massive
+    # --- port ---
+    tower = _tower(reference.visual, submesh)
+    vis_cos, vis_sin = tower.prepare_rope(grid)
+    merged, deepstack = tower.forward(
+        bf16_tensor(pixel_values.float(), device=submesh),
+        pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid), device=submesh),
+        rope=(bf16_tensor(vis_cos, device=submesh), bf16_tensor(vis_sin, device=submesh)),
+        cu_seqlens=vision_cu_seqlens(grid),
+    )
 
-    assert_quality(golden, actual)  # logs whole-tensor PCC / CCC / RMSE without gating on them
+    rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
+    head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
+    encoder = Qwen3VlTextEncoder(
+        vocab_size=cfg.vocab_size,
+        hidden_size=cfg.hidden_size,
+        intermediate_size=cfg.intermediate_size,
+        hidden_act=cfg.hidden_act,
+        num_hidden_layers=cfg.num_hidden_layers,
+        num_attention_heads=cfg.num_attention_heads,
+        num_key_value_heads=cfg.num_key_value_heads,
+        rms_norm_eps=cfg.rms_norm_eps,
+        rope_theta=rope_params["rope_theta"],
+        mrope_section=rope_params["mrope_section"],
+        head_dim=head_dim,
+        activation_layers=(TAP,),
+        device=submesh,
+        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
+        ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
+    )
+    encoder.load_torch_state_dict(reference.language_model.state_dict())
+
+    position_ids = mrope_position_ids(type_ids, image_grid_thw=grid, spatial_merge_size=merge)
+    cos, sin = create_rope_tensors(
+        1,
+        seq_len,
+        None,
+        head_dim,
+        rope_params["rope_theta"],
+        rope_params["mrope_section"],
+        position_ids=position_ids,
+        interleaved=True,
+    )
+
+    runs = vision_token_runs(ids, image_pad)
+    assert runs == expected_runs, f"vision layout drifted: {runs} != {expected_runs}"
+    assert len(runs) == len(rows), "one run per reference"
+    assert sum(length for _, length in runs) == total_tokens == merged.shape[-2]
+
+    out = encoder.forward(
+        ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh),
+        attention_mask=None,
+        pos_embeds=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
+        vision_embeds=merged,
+        vision_runs=runs,
+        deepstack_embeds=deepstack,
+    )[0]
+    actual = tensor.to_torch(out, mesh_axes=[None, None, None])
+
+    vision_rows = torch.zeros(seq_len, dtype=torch.bool)
+    for start, length in runs:
+        vision_rows[start : start + length] = True
+    rel = lambda g, a: ((g - a).abs().mean() / g.abs().mean()).item() * 100  # noqa: E731
+
     logger.info(
-        f"  row norms: median {median_norm:.1f}, max {float(norms.max()):.1f} "
-        f"({float(norms.max()) / median_norm:.0f}x median)"
+        f"minimax-h3 fused conditioner [real, ref2va] {preset}: grid={grid.tolist()} "
+        f"seq={seq_len} runs={runs} tokens={total_tokens}"
     )
-    for name, mask in (
-        ("text", is_text),
-        ("ordinary vision", ordinary & ~is_text),
-        ("massive (either side)", golden_massive | ours_massive),
-    ):
-        if mask.any():
-            e = row_error[mask]
-            logger.info(
-                f"  {name:22s} n={int(mask.sum()):4d}  median {float(e.median()) * 100:7.2f} %  "
-                f"max {float(e.max()) * 100:8.2f} %"
-            )
     logger.info(
-        f"  massive-activation rows: golden {int(golden_massive.sum())} at "
-        f"{golden_massive.nonzero().flatten().tolist()}, ours {int(ours_massive.sum())} at "
-        f"{ours_massive.nonzero().flatten().tolist()}"
+        f"  mean relative error: all {rel(golden[0], actual[0][:seq_len]):.2f}%  "
+        f"vision rows {rel(golden[0][vision_rows], actual[0][:seq_len][vision_rows]):.2f}%  "
+        f"text rows {rel(golden[0][~vision_rows], actual[0][:seq_len][~vision_rows]):.2f}%"
     )
-
-    # What passes, and is worth keeping tight.
-    assert float(row_error[is_text].max()) < FUSED_MAX_TEXT_ROW_ERROR, (
-        f"text rows are {float(row_error[is_text].max()) * 100:.2f} % off; the decoder path itself is wrong, "
-        "not just the vision fidelity"
-    )
-    assert float(row_error.median()) < FUSED_MAX_MEDIAN_ROW_ERROR, (
-        f"median per-row error {float(row_error.median()) * 100:.2f} % exceeds "
-        f"{FUSED_MAX_TEXT_ROW_ERROR * 100:.0f} %; the typical row has regressed"
-    )
-
-    # What does NOT pass, stated as the specific thing it is. See the file header.
-    missing = int((golden_massive & ~ours_massive).sum())
-    spurious = int((ours_massive & ~golden_massive).sum())
-    assert missing == 0 and spurious == 0, (
-        f"massive-activation rows disagree: {missing} present in the reference and absent from ours, "
-        f"{spurious} present in ours and absent from the reference "
-        f"(golden {int(golden_massive.sum())} such rows, ours {int(ours_massive.sum())}). These rows carry "
-        f"norms up to {float(norms.max()) / median_norm:.0f}x the median, so missing one dominates every "
-        "whole-tensor metric."
-    )
+    assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
+    assert_quality(golden, actual, pcc=0.99)
