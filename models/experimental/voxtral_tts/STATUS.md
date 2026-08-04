@@ -927,9 +927,39 @@ sdpa output both feed a single large op that dominates whatever the transfer cos
 in — prefill's `g` is [1,S,9216] with S up to 384, i.e. 6.8 MB, so it passes DRAM. That mirrors how
 `h` is already handled, and for the same reason: it is what the two paths do differently.
 
-**Still untried: Block 3.** This is the third finding in a row to point there — `ign/voxtral_opt`
-claims ~18 ms → ~6 ms from removing ~104 sharded/interleaved hops, which is this same idea again,
-and Block 3 is ~9% of wall with no optimization pass ever.
+**BLOCK 3 IS NOT THE NEXT TARGET, and the "~9% of wall" figure quoted in §6.6 and §6.8 was wrong.**
+That number came from `wall − prefill − generate` on the 15-case run, which lumps FIRST-CALL KERNEL
+COMPILATION for each new codec bucket in with the codec's actual compute. Measured directly:
+
+| | T=461 | T=512 |
+|---|---|---|
+| cold (a length not compiled yet) | **3399 ms** | 97 ms |
+| warm | 97 ms | 97 ms |
+| `_graph` at an UNBUCKETED length | **13245 ms** | 95 ms |
+
+So the decoder's steady-state compute is **97 ms against a 25.8 s generation — 0.4%**, and the
+seconds-scale figure is compile cost, paid once per distinct bucket (12 of them for the ~1500-frame
+ceiling, so a long-lived server pays it 12 times ever). Same class of mistake as reading case 0's
+RTF 1.89 as a slow case. **Optimizing codec compute is worth ~0.4% of wall; there is nothing there.**
+
+Two ideas were measured against it before that was understood, and both LOSE, so they are closed:
+- **Per-stage SLAB sized to the window.** The single global 512 computes a 512x512 score matrix where
+  only a (window+1)-wide band survives the mask — 97% waste at the last stage, 99.4% at the first.
+  Shrinking it is much worse, because the per-chunk machinery dominates the wasted arithmetic: at
+  L=4096, slab 64/128/256/512/1024 measures 40.4/19.5/12.1/**9.7**/11.5 ms. 512 is genuinely optimal
+  for three of four stages, as its comment claimed. The one win is tf1 (L=1024) at slab 1024, where
+  it becomes a single chunk — 2.7 ms of 94, and not bit-exact (2.4e-04).
+- **The score chain in L1**, the trick that paid in §6.10. It LOSES here, 0.82–0.94x. The score
+  tensor is 4.2 MB at slab 512, far past the ~100 KB scale where L1 helped in the other two blocks.
+  **That is the size boundary on the §6.10 finding**: L1 for intermediates works at
+  tens-to-hundreds of KB, not megabytes.
+
+Also a useful negative on `ign/voxtral_opt`'s lead: the transformer layers are **92%** of the codec
+(86.4 of 94.35 ms at T=512) and all the convs together are 8.5%, so their conv-split optimization
+would not have transferred either.
+
+If anything in Block 3 ever deserves attention it is the COMPILE cost, not the compute — and
+`BUCKET = 128` already exists to cap it.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
