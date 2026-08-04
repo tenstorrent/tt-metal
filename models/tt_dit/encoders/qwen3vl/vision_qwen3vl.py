@@ -293,14 +293,18 @@ class Qwen3VlVisionAttention(Module):
         seq_len = hidden_states.shape[-2]
         qkv = self.qkv.forward(hidden_states)
 
+        # Sliced rather than `ttnn.split`: split reports a *tile-padded* row count on its outputs, so
+        # a patch count that is not a multiple of 32 (784 for a 28x28 grid) made the reshape below
+        # disagree with `seq_len` and fail. Slicing the last dimension keeps the logical row count.
         q, k, v = (
             ttnn.permute(
-                ttnn.reshape(part, (1, seq_len, self.num_heads, self.padded_head_dim)),
+                ttnn.reshape(
+                    qkv[..., i * self.inner : (i + 1) * self.inner],
+                    (1, seq_len, self.num_heads, self.padded_head_dim),
+                ),
                 (0, 2, 1, 3),
             )
-            # `ttnn.split` takes a chunk *size*, as torch does -- passing 3 would give `inner`
-            # slices of width 3 rather than the three [q | k | v] blocks.
-            for part in ttnn.split(qkv, self.inner, dim=-1)
+            for i in range(3)
         )
 
         cos, sin = pos_embeds
