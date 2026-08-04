@@ -2,20 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Throwaway metadata-only ``torch`` for the dry-run spike.
+"""A metadata-only ``torch``, used only when the interpreter has no real torch.
 
-Only exists because this machine has no torch. A real dry run should use real
-torch with ``device='meta'`` tensors instead -- same idea, no fake to maintain.
-Covers just the surface the tt_dit import path and module construction touch.
+A dry run wants `torch.empty(shape, device='meta')`: shapes without bytes, which
+real torch does better than any fake. This module exists so the analyzer still
+runs on a bare interpreter (no torch, no numpy) -- CI for the dry run is meant to
+be a unit-test-cost job on a machine with no Tenstorrent hardware, and requiring
+a torch install would work against that.
+
+It covers only the slice of torch that tt_dit's import path and module
+construction touch. :func:`dit_analyzer.dryrun.hostenv.ensure_host_env` prefers
+real torch whenever it can import it.
 """
 
 from __future__ import annotations
 
+import sys
 import types
 from typing import Any, List, Sequence, Tuple
 
 
-class _DType:
+class DType:
     def __init__(self, name: str, itemsize: int = 2):
         self.name = name
         self.itemsize = itemsize
@@ -24,26 +31,25 @@ class _DType:
         return "torch." + self.name
 
 
-bfloat16 = _DType("bfloat16", 2)
-float16 = _DType("float16", 2)
-float32 = _DType("float32", 4)
-float64 = _DType("float64", 8)
-int32 = _DType("int32", 4)
-int64 = _DType("int64", 8)
+bfloat16 = DType("bfloat16", 2)
+float16 = DType("float16", 2)
+float32 = DType("float32", 4)
+float64 = DType("float64", 8)
+int8 = DType("int8", 1)
+int16 = DType("int16", 2)
+int32 = DType("int32", 4)
+int64 = DType("int64", 8)
 long = int64
-bool_ = _DType("bool", 1)
-uint8 = _DType("uint8", 1)
-uint16 = _DType("uint16", 2)
-uint32 = _DType("uint32", 4)
-int8 = _DType("int8", 1)
-int16 = _DType("int16", 2)
-globals()["bool"] = bool_  # torch.bool
+uint8 = DType("uint8", 1)
+uint16 = DType("uint16", 2)
+uint32 = DType("uint32", 4)
+bool_ = DType("bool", 1)
 
 
 class Tensor:
     """Shape + dtype only. Every op returns another metadata tensor."""
 
-    def __init__(self, shape: Sequence[int], dtype: _DType = bfloat16):
+    def __init__(self, shape: Sequence[int], dtype: DType = bfloat16):
         self._shape = tuple(int(d) for d in shape)
         self.dtype = dtype
 
@@ -97,6 +103,9 @@ class Tensor:
     def T(self) -> "Tensor":
         return Tensor(tuple(reversed(self._shape)), self.dtype)
 
+    def flip(self, *a, **k) -> "Tensor":
+        return self
+
     def unsqueeze(self, dim: int) -> "Tensor":
         s = list(self._shape)
         s.insert(dim if dim >= 0 else len(s) + dim + 1, 1)
@@ -120,8 +129,14 @@ class Tensor:
         s[dim] = s[dim] // n
         return [Tensor(s, self.dtype) for _ in range(n)]
 
+    def repeat(self, *reps) -> "Tensor":
+        if len(reps) == 1 and isinstance(reps[0], (list, tuple)):
+            reps = tuple(reps[0])
+        s = [1] * (len(reps) - len(self._shape)) + list(self._shape)
+        return Tensor([d * r for d, r in zip(s, reps)], self.dtype)
+
     def to(self, *a, **k) -> "Tensor":
-        dtype = k.get("dtype") or next((x for x in a if isinstance(x, _DType)), self.dtype)
+        dtype = k.get("dtype") or next((x for x in a if isinstance(x, DType)), self.dtype)
         return Tensor(self._shape, dtype)
 
     def float(self) -> "Tensor":
@@ -166,7 +181,7 @@ class Tensor:
     def item(self) -> int:
         # A dry run has no values. Anything that shapes the graph from a value
         # must be supplied by the caller; see roadmap blocker 39.
-        raise NotImplementedError("torch.Tensor.item() in a dry run: value-dependent shape")
+        raise NotImplementedError("torch.Tensor.item() in a dry run: value-dependent shape (roadmap blocker 39)")
 
     # -- indexing ------------------------------------------------------------
     def __getitem__(self, key) -> "Tensor":
@@ -186,7 +201,7 @@ class Tensor:
         pass  # metadata only: writes have no effect
 
     def __repr__(self) -> str:
-        return "FakeTorchTensor(%s, %s)" % (list(self._shape), self.dtype)
+        return "MetaTorchTensor(%s, %s)" % (list(self._shape), self.dtype)
 
 
 # -- factories ---------------------------------------------------------------
@@ -235,16 +250,23 @@ def _noop(*a, **k) -> Any:
     return None
 
 
-def install() -> types.ModuleType:
-    """Register the fake as ``torch`` (plus the submodules tt_dit imports)."""
-    import sys
+class _NullCtx:
+    def __enter__(self):
+        return self
 
+    def __exit__(self, *a):
+        return False
+
+
+def install() -> types.ModuleType:
+    """Register this module as ``torch`` (plus the submodules tt_dit imports)."""
     mod = types.ModuleType("torch")
     for name, value in globals().items():
-        if not name.startswith("_") or name in ("_DType",):
+        if not name.startswith("_"):
             setattr(mod, name, value)
     mod.bool = bool_
     mod.Tensor = Tensor
+    mod.dtype = DType
     mod.device = lambda *a, **k: "meta"
     mod.no_grad = lambda: _NullCtx()
     mod.inference_mode = lambda *a, **k: _NullCtx()
@@ -259,11 +281,3 @@ def install() -> types.ModuleType:
     sys.modules["torch.nn"] = nn
     sys.modules["torch.nn.functional"] = nn.functional
     return mod
-
-
-class _NullCtx:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False

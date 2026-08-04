@@ -4,11 +4,12 @@
 
 """Command line entry point.
 
+    ditcheck dryrun ltx_block --preset bh_4x8 --out ltx.graph.json --analyze
     ditcheck analyze example:sd35_block_double_gather --states
     ditcheck analyze captured_graph.json --top 5 --json findings.json
     ditcheck dump example:sd35_block > sd35_block.json
     ditcheck examples
-    ditcheck ops
+    ditcheck ops [--missing GRAPH | --check GRAPH]
 """
 
 from __future__ import annotations
@@ -59,14 +60,127 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("dump", help="print the graph as JSON")
     _add_common(d)
 
+    r = sub.add_parser("dryrun", help="run a model target against the metadata-only ttnn and emit its graph")
+    r.add_argument("target", nargs="?", default=None, help="target name; omit to list the available ones")
+    r.add_argument("--preset", default=None, help="mesh configuration (see the target listing)")
+    r.add_argument("--out", default=None, metavar="PATH", help="write the graph JSON here")
+    r.add_argument("--analyze", action="store_true", help="analyze the graph straight away")
+    r.add_argument(
+        "--check-oracle",
+        action="store_true",
+        help="diff collectives and findings against the preset's hand-written examples/ graph (drift test)",
+    )
+    r.add_argument("--top", type=int, default=10, help="findings to print with --analyze")
+    r.add_argument(
+        "--fail-on",
+        default=None,
+        choices=["provable", "likely", "suspicious"],
+        help="with --analyze, exit 1 if a finding at or above this confidence exists",
+    )
+
     sub.add_parser("examples", help="list built-in example graphs")
-    sub.add_parser("ops", help="list registered op semantics")
+    o = sub.add_parser("ops", help="list registered op semantics, or a graph's coverage gaps")
+    o.add_argument("--missing", default=None, metavar="GRAPH", help="list the ops a graph uses that have no spec")
+    o.add_argument("--check", default=None, metavar="GRAPH", help="exit 1 if a graph contains an uncovered op")
     return p
 
 
 def _confidence_at_least(level: str, threshold: str) -> bool:
     order = {"provable": 0, "likely": 1, "suspicious": 2}
     return order.get(level, 3) <= order[threshold]
+
+
+def _dryrun(args) -> int:
+    """Build a target's graph from source. Shadows `ttnn`, so run it in its own process."""
+    from .dryrun import provenance
+    from .dryrun.targets import TARGETS, build, describe
+
+    if not args.target:
+        print("dry-run targets:\n%s" % describe())
+        print("\nuse as:  ditcheck dryrun <target> --preset <preset>")
+        return 0
+    if args.target not in TARGETS:
+        raise SystemExit("unknown target '%s' (have: %s)" % (args.target, ", ".join(sorted(TARGETS))))
+
+    graph, preset = build(args.target, args.preset)
+    info = provenance()
+    print(
+        "dry run %s/%s: %d nodes, %d symbols, mesh %s %s"
+        % (args.target, preset.name, len(graph.nodes), len(graph.symbols), tuple(graph.mesh.shape), graph.mesh.topology)
+    )
+    print("torch: %s" % info["torch"])
+    for note in info["substitutions"]:
+        print("  substituted %s" % note)
+    if info["unregistered_ops"]:
+        print(
+            "\nunregistered ops (%d distinct) -- `ditcheck ops --missing` on the graph for detail:"
+            % len(info["unregistered_ops"])
+        )
+        for entry in info["unregistered_ops"]:
+            print("  %-58s x%-4d %s" % (entry["call"], entry["count"], entry["loc"] or ""))
+    else:
+        print("unregistered ops: none")
+
+    if args.out:
+        with open(args.out, "w") as fh:
+            fh.write(graph.to_json())
+        print("\nwrote %s" % args.out)
+
+    if args.check_oracle:
+        from .dryrun.verify import compare_with_oracle, render
+
+        if not preset.oracle:
+            raise SystemExit("preset '%s' has no oracle to check against" % preset.name)
+        diff = compare_with_oracle(graph, preset.oracle, unregistered={e["call"]: e for e in info["unregistered_ops"]})
+        print()
+        print(render(diff))
+        if diff["failures"]:
+            return 1
+
+    if not args.analyze:
+        return 0
+
+    report = analyze_graph(graph)
+    print()
+    print(render_report(report, top=args.top))
+    if args.fail_on:
+        hits = [f for f in report.findings if _confidence_at_least(f.confidence, args.fail_on)]
+        if hits:
+            print("\n%d finding(s) at confidence >= %s" % (len(hits), args.fail_on))
+            return 1
+    return 0
+
+
+def _ops_coverage(graph, fail: bool) -> int:
+    """Which ops in this graph have no semantics, and what that costs the analysis."""
+    from .ir import UNREGISTERED_OP
+
+    missing: dict = {}
+    for node in graph.nodes:
+        if node.op != UNREGISTERED_OP:
+            continue
+        call = node.attrs.get("call", node.op)
+        entry = missing.setdefault(call, {"count": 0, "locs": [], "arity": node.attrs.get("arity", 0)})
+        entry["count"] += 1
+        if node.call_site and node.call_site not in entry["locs"]:
+            entry["locs"].append(node.call_site)
+
+    if not missing:
+        print("op coverage: every op in '%s' has registered semantics." % graph.name)
+        return 0
+
+    report = analyze_graph(graph)
+    print("op coverage: %d call(s) in '%s' have no semantics.\n" % (len(missing), graph.name))
+    for call, entry in sorted(missing.items(), key=lambda kv: -kv[1]["count"]):
+        print("  %s  x%d  (%d tensor args)" % (call, entry["count"], entry["arity"]))
+        for where in entry["locs"][:3]:
+            print("      at %s" % where)
+    blocked = [w for w in report.withheld if any(op in missing for op in w.ops)]
+    print(
+        "\n%d finding(s) are withheld because their proof passes through these ops." % len(blocked)
+        + ("" if blocked else " Nothing is currently blocked on them.")
+    )
+    return 1 if fail else 0
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -78,7 +192,12 @@ def main(argv: Optional[list] = None) -> int:
         print("\nuse as:  ditcheck analyze example:<name>")
         return 0
 
+    if args.cmd == "dryrun":
+        return _dryrun(args)
+
     if args.cmd == "ops":
+        if args.missing or args.check:
+            return _ops_coverage(load_graph(args.missing or args.check), fail=bool(args.check))
         print(describe_registry())
         return 0
 
