@@ -608,6 +608,23 @@ class Gemma4Model:
         args.num_devices = mesh_device.get_num_devices()
         args.is_galaxy = mesh_device.shape[0] > 1
         args.model_config = {}
+        # Greedy fast path (#51186 follow-up). format_sampling_params maps
+        # temperature=0 to (k=1, p=0.0, temp=1.0), which is exactly what
+        # _is_force_argmax_sampling matches, so greedy decode can skip the
+        # top-k/top-p/RNG chain and use one all-gather + argmax instead.
+        # Measured on P300x2 TP=4 at [1,1,32,65536]/device: top-k chain 11.06 ms
+        # vs gather+untilize+argmax 0.56 ms (~20x). ttnn.topk alone is 10.89 ms
+        # of that chain and is flat in both k and batch rows.
+        # Off by default pending wider validation; non-greedy requests are
+        # unaffected either way (the predicate simply does not match).
+        if os.environ.get("GEMMA4_FORCE_ARGMAX_SAMPLING", "0").lower() not in ("0", "false", "no"):
+            args.model_config["SAMPLING_AG_CONFIG"] = {
+                "allow_force_argmax": True,
+                "num_links": 1,
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 1,
+                "topology": ttnn.Topology.Linear,
+            }
         args.use_topk_logprobs = False
         return args
 

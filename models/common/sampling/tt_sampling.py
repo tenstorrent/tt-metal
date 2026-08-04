@@ -490,6 +490,17 @@ class TTSampling(LightweightModule):
             return None
         return self.sampling_all_gather_axis
 
+    def _can_use_async_argmax_all_gather(self):
+        """True when ``tt_ccl`` can supply the async gather's semaphore handles.
+
+        ``all_gather_async`` needs both a multi-device global semaphore and a
+        barrier semaphore from the CCL object. Callers that construct the
+        sampling module with ``tt_ccl=None`` (Gemma4) have neither.
+        """
+        return callable(getattr(self.tt_ccl, "get_and_cycle_ag_semaphore_handles", None)) and callable(
+            getattr(self.tt_ccl, "get_and_cycle_barrier_semaphore_handle", None)
+        )
+
     def _get_force_argmax_all_gather_config(self, cluster_axis):
         num_links = self.num_argmax_gather_links
         if hasattr(self.tt_ccl, "get_num_links"):
@@ -608,20 +619,36 @@ class TTSampling(LightweightModule):
                     f"Force argmax sampling all-gather: cluster_axis={cluster_axis}, "
                     f"num_links={num_links}, topology={topology}"
                 )
-                x = ttnn.experimental.all_gather_async(
-                    x,
-                    persistent_output_buffer=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                    num_links=num_links,
-                    memory_config=x.memory_config(),
-                    cluster_axis=cluster_axis,
-                    topology=topology,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    chunks_per_sync=self.argmax_chunks_per_sync,
-                    num_workers_per_link=self.argmax_num_workers_per_link,
-                    num_buffers_per_channel=2,
-                )
+                if self._can_use_async_argmax_all_gather():
+                    x = ttnn.experimental.all_gather_async(
+                        x,
+                        persistent_output_buffer=None,
+                        dim=3,
+                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                        num_links=num_links,
+                        memory_config=x.memory_config(),
+                        cluster_axis=cluster_axis,
+                        topology=topology,
+                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                        chunks_per_sync=self.argmax_chunks_per_sync,
+                        num_workers_per_link=self.argmax_num_workers_per_link,
+                        num_buffers_per_channel=2,
+                    )
+                else:
+                    # Models that build the sampling module without a CCL object
+                    # (Gemma4 passes tt_ccl=None) cannot source the async
+                    # gather's semaphores. Fall back to the synchronous
+                    # all_gather, which needs none. Measured on P300x2 TP=4 this
+                    # gathers the full 262144-wide logits in ~0.40 ms, so the
+                    # argmax path stays ~20x cheaper than the top-k path.
+                    x = self._perform_all_gather(
+                        x,
+                        dim=3,
+                        cluster_axis=cluster_axis,
+                        memory_config=x.memory_config(),
+                        num_links=num_links,
+                        buffer_key="SAMPLING_ARGMAX",
+                    )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
             x_untilized = ttnn.untilize(x, use_multicore=True)
