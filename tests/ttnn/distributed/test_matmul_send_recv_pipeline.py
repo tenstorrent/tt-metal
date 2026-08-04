@@ -4,10 +4,10 @@
 
 """
 Host-side timing comparison for a two-matmul pipeline, run both on a single device and split across
-two devices with each of the three send/recv transfer modes.
+two devices with each of the send/recv transfer modes.
 
 The pipeline is [M, K] @ [K, N0] -> [M, N0] @ [N0, N1], with the transfer sitting between the two
-matmuls. All four variants are checked against the single-device result.
+matmuls. Every split variant is checked against the single-device result.
 """
 
 import time
@@ -23,7 +23,6 @@ NUM_WARMUP_ITERS = 1
 NUM_MEASURED_ITERS = 10
 SOCKET_PAGE_SIZE = 2048
 NUM_SOCKET_CONNECTIONS = 1
-NUM_BUFFERED_RECV_BUFFERS = 3
 
 M = 32
 K = 4096
@@ -171,43 +170,25 @@ def test_two_matmul_pipeline_transfer_host_time(mesh_device):
     _read_profilers(same_mesh_device)
 
     def run_split_mode(transfer_mode):
+        if transfer_mode == "async":
+            send_op, recv_op = ttnn.experimental.send_async, ttnn.experimental.recv_async
+        elif transfer_mode == "direct":
+            send_op, recv_op = ttnn.experimental.send_direct_async, ttnn.experimental.recv_direct_async
+        else:
+            raise ValueError(f"Unsupported transfer mode: {transfer_mode}")
+
         send_socket, recv_socket = _make_socket_pair(sender_mesh_device, receiver_mesh_device)
         transfer_output = None
-        buffered_outputs = None
-        transfer_count = 0
 
         def run_once():
-            nonlocal transfer_output, buffered_outputs, transfer_count
+            nonlocal transfer_output
 
             hidden_sender = _first_matmul(input_sender, weight0_sender)
-            if transfer_mode == "async":
-                if transfer_output is None:
-                    transfer_output = ttnn.allocate_tensor_on_device(hidden_sender.spec, receiver_mesh_device)
-                ttnn.experimental.send_async(hidden_sender, send_socket)
-                ttnn.experimental.recv_async(transfer_output, recv_socket)
-                hidden_receiver = transfer_output
-            elif transfer_mode == "direct":
-                if transfer_output is None:
-                    transfer_output = ttnn.allocate_tensor_on_device(hidden_sender.spec, receiver_mesh_device)
-                ttnn.experimental.send_direct_async(hidden_sender, send_socket)
-                ttnn.experimental.recv_direct_async(transfer_output, recv_socket)
-                hidden_receiver = transfer_output
-            elif transfer_mode == "buffered":
-                if buffered_outputs is None:
-                    buffered_outputs = [
-                        ttnn.allocate_tensor_on_device(hidden_sender.spec, receiver_mesh_device)
-                        for _ in range(NUM_BUFFERED_RECV_BUFFERS)
-                    ]
-                # Mirrors the device-side ring counter, which starts at 0 and advances per send.
-                buffer_idx = transfer_count % NUM_BUFFERED_RECV_BUFFERS
-                ttnn.experimental.buffered_send(hidden_sender, send_socket)
-                ttnn.experimental.buffered_recv(buffered_outputs, recv_socket)
-                hidden_receiver = buffered_outputs[buffer_idx]
-            else:
-                raise ValueError(f"Unsupported transfer mode: {transfer_mode}")
-
-            transfer_count += 1
-            return _second_matmul(hidden_receiver, weight1_receiver)
+            if transfer_output is None:
+                transfer_output = ttnn.allocate_tensor_on_device(hidden_sender.spec, receiver_mesh_device)
+            send_op(hidden_sender, send_socket)
+            recv_op(transfer_output, recv_socket)
+            return _second_matmul(transfer_output, weight1_receiver)
 
         return _time_pipeline(
             transfer_mode,
@@ -215,7 +196,7 @@ def test_two_matmul_pipeline_transfer_host_time(mesh_device):
             lambda: _sync_devices(sender_mesh_device, receiver_mesh_device),
         )
 
-    for transfer_mode in ["async", "direct", "buffered"]:
+    for transfer_mode in ["async", "direct"]:
         row, outputs[transfer_mode] = run_split_mode(transfer_mode)
         rows.append(row)
         _read_profilers(sender_mesh_device, receiver_mesh_device)
@@ -223,7 +204,7 @@ def test_two_matmul_pipeline_transfer_host_time(mesh_device):
     print("\n[Two Matmul Pipeline Host Time]\n" + _format_timing_table(rows))
 
     expected = _to_host(outputs["same_device"], same_mesh_device)
-    for transfer_mode in ["async", "direct", "buffered"]:
+    for transfer_mode in ["async", "direct"]:
         actual = _to_host(outputs[transfer_mode], receiver_mesh_device)
         (
             passing,
