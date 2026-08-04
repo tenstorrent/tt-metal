@@ -35,6 +35,7 @@ from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
+from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
@@ -212,6 +213,7 @@ _l1_acc_format = (
 
 PACKER_MAP = {
     "Packer": (Packer, [_l1_acc_format]),
+    "MatmulPacker": (MatmulPacker, [_l1_acc_format]),
 }
 
 _eltwise_dims = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]))

@@ -19,6 +19,7 @@ FORMAT_HEADERS = (
     "formats.register_A",
     "formats.register_B",
     "formats.output",
+    "formats.sfpu_math",
 )
 FLAG_HEADERS = ("unpack_to_dest", "dest_acc")
 
