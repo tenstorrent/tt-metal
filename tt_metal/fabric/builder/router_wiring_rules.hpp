@@ -39,14 +39,22 @@ struct IntermeshVCConfig;
  * derivation are all built from this single relation, so the connection map and the guard
  * derivation cannot drift apart -- there is no set form of the rule for them to disagree with.
  *
- * The rule, per case:
- * - No U-turn: a router never wires back over its own link.
- * - Non-express: every non-self cardinal direction wires in. The extra port exists in
- *   the set only as the boundary template, when the chip's extra port is INTERMESH_BOUNDARY.
- * - Express: a Z-facing producer fans out to every non-self direction; an intramesh X producer
- *   may only continue around the X ring (dimension order); any other producer wires into every
- *   non-self direction; and the extra port exists in the set only when the chip has one
- *   (chord or boundary).
+ * The rule keys on the producer port's role -- the reduction of its (direction, capability)
+ * pair, computed from both, substituting for neither:
+ * - UNRESTRICTED (a Y cardinal port of any capability, or an X landing): no dimension-order
+ *   limit; wires into every non-self egress the gates below admit.
+ * - X_RING_ONLY (a same-mesh X port): dimension order; may only continue around the X ring,
+ *   into the opposite X egress.
+ * - EXPRESS_CHORD (Z carrying a same-mesh chord): a Y resource, like N/S, so
+ *   likewise unrestricted; its feed rides every carrier VC.
+ * - BOUNDARY (Z crossing a mesh boundary): carries no routing direction, so it
+ *   sits outside the turn matrix; only the VC fact below applies to it.
+ *
+ * Two gates apply on the egress side. The mode gate: non-express is producer-blind -- every
+ * non-self cardinal wires in, whatever the producer's role. The Z-existence gate: a Z egress is
+ * wired only when the chip's Z port has a role at all (chord or boundary), and in
+ * non-express mode only as the boundary template's target. A U-turn is never wired, whatever
+ * the ports are.
  *
  * The VC matters exactly once: for a boundary producer (a Z-facing router whose edge is
  * INTERMESH). Its VC1 receiver fans out to every non-self VC1 sender (wired), while its VC0
@@ -190,7 +198,7 @@ struct RouterVcShape {
  *
  * The derivation emits prefix sums for every flat base and enforces the num_max_* ceilings,
  * turning the capacity comments elsewhere into guarantees at the one construction site. The
- * chip's extra port arrives as its ZPortRole (boundary, chord, or none) -- the same fact the
+ * chip's Z port arrives as its ZPortRole (boundary, chord, or none) -- the same fact the
  * turn-set derivation reads, with one spelling.
  */
 RouterVcShape router_vc_shape(
@@ -239,7 +247,7 @@ using RouterTurnSet = std::array<std::vector<ConnectionTarget>, builder_config::
  * - A routing-direction port gets its turn set from the wires_into primitive: 1D is the
  *   opposite direction; non-express 2D is every non-self cardinal; express adds the express rule
  *   (an intramesh X ingress unwires from intramesh Y, a landing X ingress does not).
- * - The chip's extra port enters the set only when it has one: an express chord is an ordinary
+ * - The chip's Z port enters the set only when it has one: an express chord is an ordinary
  *   same-VC target; an intermesh boundary is reached through the boundary target on VC0 (and on
  *   VC1 only in pass-through mode); nothing exists without the port.
  *

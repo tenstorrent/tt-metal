@@ -39,13 +39,9 @@ ZPortRole z_port_role(const ControlPlane& control_plane, FabricNodeId node) {
     return ZPortRole::NONE;
 }
 
-bool carries_routing_direction(RoutingDirection facing, EdgeCapability capability) {
-    return !(facing == RoutingDirection::Z && capability == EdgeCapability::INTERMESH);
-}
-
 void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability edge_capability, ZPortRole chip_z_role) {
     if (facing != RoutingDirection::Z) {
-        // The chord lives on the chip's extra port; a cardinal-facing router can never carry it.
+        // The chord lives on the chip's Z port; a cardinal-facing router can never carry it.
         TT_FATAL(
             edge_capability != EdgeCapability::INTRAMESH_EXPRESS,
             "Router facing {} carries INTRAMESH_EXPRESS, but an express chord lives on the chip's "
@@ -57,7 +53,7 @@ void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability ed
         case EdgeCapability::INTERMESH:
             TT_FATAL(
                 chip_z_role == ZPortRole::INTERMESH_BOUNDARY,
-                "A Z-facing intermesh edge means the chip's extra port is the boundary: role must be "
+                "A Z-facing intermesh edge means the chip's Z port is the boundary: role must be "
                 "INTERMESH_BOUNDARY, got {}",
                 to_string(chip_z_role));
             break;

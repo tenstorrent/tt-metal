@@ -440,5 +440,235 @@ TEST(ExpressConnectionWiringTest, ArityRespectsPerChipCapabilities) {
     EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::E, leaf), 4u);
 }
 
+// --- Primitive properties: each a sentence of policy, swept over the domain ---
+//
+// None of these record answers. Each names a rule the design relies on and checks it everywhere
+// the rule can be stated, so a deliberate policy change moves exactly one property.
+
+constexpr std::array<RoutingDirection, 5> k_all_directions = {
+    RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z};
+constexpr std::array<EdgeCapability, 3> k_all_capabilities = {
+    EdgeCapability::INTRAMESH_CARDINAL, EdgeCapability::INTRAMESH_EXPRESS, EdgeCapability::INTERMESH};
+constexpr std::array<ZPortRole, 3> k_all_z_roles = {
+    ZPortRole::NONE, ZPortRole::INTERMESH_BOUNDARY, ZPortRole::EXPRESS_CHORD};
+
+// The legal archetype space: which (facing, capability, chip role, mode) chips can be built at
+// all. Off the Z port, a cardinal facing never carries express capability, so
+// 4 facings x {INTRAMESH_CARDINAL, INTERMESH} x 3 roles = 24 triples, in either mode. On the
+// Z port there are exactly two consistent triples: the chord (INTRAMESH_EXPRESS,
+// EXPRESS_CHORD), buildable only with express enabled, and the boundary (INTERMESH,
+// INTERMESH_BOUNDARY), in either mode. 26 triples total. This is which chips exist, not what
+// the rule answers.
+bool archetype_buildable(RoutingDirection facing, EdgeCapability capability, ZPortRole role, bool express) {
+    if (facing == RoutingDirection::Z) {
+        if (is_z_boundary_router(facing, capability)) {
+            return role == ZPortRole::INTERMESH_BOUNDARY;
+        }
+        return capability == EdgeCapability::INTRAMESH_EXPRESS && role == ZPortRole::EXPRESS_CHORD && express;
+    }
+    return capability != EdgeCapability::INTRAMESH_EXPRESS;
+}
+
+bool turn_set_has_direction(const RouterTurnSet& turn_set, uint32_t vc, RoutingDirection direction) {
+    return std::any_of(turn_set[vc].begin(), turn_set[vc].end(), [&](const ConnectionTarget& target) {
+        return target.target_direction == direction;
+    });
+}
+
+TEST(ExpressConnectionWiringTest, TurnSetMembershipMatchesThePrimitive) {
+    // Every member of a router's VC0 turn set is what the primitive wires, and nothing the
+    // primitive wires is missing from it. The turn set and the guard derivation read the same
+    // relation, so checking containment both ways is what keeps them from diverging.
+    for (const auto facing : k_all_directions) {
+        for (const auto capability : k_all_capabilities) {
+            if (is_z_boundary_router(facing, capability)) {
+                continue;  // the boundary template, not turn-matrix-derived
+            }
+            for (const auto role : k_all_z_roles) {
+                for (const bool express : {false, true}) {
+                    if (!archetype_buildable(facing, capability, role, express)) {
+                        continue;
+                    }
+                    for (const auto topology : {Topology::Mesh, Topology::Torus}) {
+                        const auto turns =
+                            turn_set_for_router(topology, facing, capability, role, express, &k_full_mesh);
+                        for (const auto egress : k_all_directions) {
+                            EXPECT_EQ(
+                                turn_set_has_direction(turns, 0, egress),
+                                wires_into(facing, capability, egress, role, express, /*vc=*/0))
+                                << "facing " << static_cast<int>(facing) << " (" << to_string(capability)
+                                << "), chip role " << to_string(role) << ", express " << express << ", topology "
+                                << static_cast<int>(topology) << ", egress " << static_cast<int>(egress);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, OnlyTheBoundaryProducerIsVcSensitive) {
+    // express_vc1_sender_count() == express_vc0_sender_count() - 1 because the family max
+    // commutes with the worker-slot subtraction, and that holds only while no producer except
+    // the boundary answers differently per VC. Pin the premise where it can fail, not in a
+    // comment on the count.
+    for (const auto producer : k_all_directions) {
+        for (const auto capability : k_all_capabilities) {
+            if (is_z_boundary_router(producer, capability)) {
+                continue;  // the one intended exception
+            }
+            for (const auto egress : k_all_directions) {
+                for (const auto role : k_all_z_roles) {
+                    for (const bool express : {false, true}) {
+                        EXPECT_EQ(
+                            wires_into(producer, capability, egress, role, express, /*vc=*/0),
+                            wires_into(producer, capability, egress, role, express, /*vc=*/1))
+                            << "producer " << static_cast<int>(producer) << " (" << to_string(capability)
+                            << ") -> egress " << static_cast<int>(egress) << ", chip role " << to_string(role)
+                            << ", express " << express;
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, Vc1CarriesEveryVc0OutputExceptTheBoundaryTarget) {
+    // Cardinal and express outputs ride every carrier VC: a carrier that crossed a boundary
+    // stays on VC1 through later meshes and can still decode a Z action. The single exception
+    // is the boundary target, which stays off VC1 unless pass-through is on -- feeding the
+    // boundary's VC1 sender while it services no VC1 receiver would leave an undrained channel.
+    const auto pass_through = IntermeshVCConfig::full_mesh_with_pass_through();
+    const struct {
+        const IntermeshVCConfig* config;
+        bool pass_through;
+    } vc_cases[] = {{nullptr, false}, {&k_full_mesh, false}, {&pass_through, true}};
+    for (const auto facing : k_all_directions) {
+        for (const auto capability : k_all_capabilities) {
+            if (is_z_boundary_router(facing, capability)) {
+                continue;  // the boundary template has its own VC1 shape
+            }
+            for (const auto role : k_all_z_roles) {
+                for (const bool express : {false, true}) {
+                    if (!archetype_buildable(facing, capability, role, express)) {
+                        continue;
+                    }
+                    for (const auto& vc_case : vc_cases) {
+                        const auto turns =
+                            turn_set_for_router(Topology::Torus, facing, capability, role, express, vc_case.config);
+                        std::set<RoutingDirection> expected = target_directions(turns, 0);
+                        if (vc_case.config == nullptr) {
+                            expected.clear();
+                        } else if (role == ZPortRole::INTERMESH_BOUNDARY && !vc_case.pass_through) {
+                            expected.erase(RoutingDirection::Z);
+                        }
+                        EXPECT_EQ(target_directions(turns, 1), expected)
+                            << "facing " << static_cast<int>(facing) << " (" << to_string(capability) << "), chip role "
+                            << to_string(role) << ", express " << express;
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, SameMeshXIngressNeverReentersY) {
+    // Dimension order: under express, a same-mesh X producer is never wired into any intramesh Y
+    // egress -- N, S, or the chord. An X resource waiting on a Y one is the dependency arc the
+    // deadlock argument forbids. (INTRAMESH_EXPRESS on a cardinal port is an impossible chip; it
+    // folds into the same role and rides along in the sweep.)
+    for (const auto producer : {RoutingDirection::E, RoutingDirection::W}) {
+        for (const auto capability : {EdgeCapability::INTRAMESH_CARDINAL, EdgeCapability::INTRAMESH_EXPRESS}) {
+            for (const auto egress : {RoutingDirection::N, RoutingDirection::S, RoutingDirection::Z}) {
+                for (const auto role : k_all_z_roles) {
+                    for (const uint32_t vc : {0u, 1u}) {
+                        EXPECT_FALSE(wires_into(producer, capability, egress, role, k_express, vc))
+                            << "producer " << static_cast<int>(producer) << " (" << to_string(capability)
+                            << ") -> egress " << static_cast<int>(egress) << ", chip role " << to_string(role)
+                            << ", vc " << vc;
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, LandingXIngressIsExemptFromDimensionOrder) {
+    // A boundary landing is a route root, not a packet mid-X-phase: an INTERMESH producer on an X
+    // port keeps every non-self egress the chip has, intramesh Y included.
+    for (const auto producer : {RoutingDirection::E, RoutingDirection::W}) {
+        for (const auto role : k_all_z_roles) {
+            for (const uint32_t vc : {0u, 1u}) {
+                for (const auto egress :
+                     {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+                    if (egress == producer) {
+                        continue;
+                    }
+                    EXPECT_TRUE(wires_into(producer, EdgeCapability::INTERMESH, egress, role, k_express, vc))
+                        << "landing producer " << static_cast<int>(producer) << " -> egress "
+                        << static_cast<int>(egress) << ", chip role " << to_string(role) << ", vc " << vc;
+                }
+                EXPECT_EQ(
+                    wires_into(producer, EdgeCapability::INTERMESH, RoutingDirection::Z, role, k_express, vc),
+                    role != ZPortRole::NONE)
+                    << "landing producer " << static_cast<int>(producer) << " -> Z, chip role " << to_string(role)
+                    << ", vc " << vc;
+            }
+        }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, ZEgressIsWiredOnlyWhenTheChipHasThePort) {
+    // A chip with no Z port resolves a Z target to nothing -- or worse, to an intermesh Z
+    // router -- so no producer is ever wired into a Z egress on one, in either mode.
+    for (const auto producer : k_all_directions) {
+        for (const auto capability : k_all_capabilities) {
+            for (const bool express : {false, true}) {
+                for (const uint32_t vc : {0u, 1u}) {
+                    EXPECT_FALSE(wires_into(producer, capability, RoutingDirection::Z, ZPortRole::NONE, express, vc))
+                        << "producer " << static_cast<int>(producer) << " (" << to_string(capability) << "), express "
+                        << express << ", vc " << vc;
+                }
+            }
+        }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, NonExpressAdmitsEveryNonSelfCardinal) {
+    // The standing decision as an executable statement: non-express wiring is byte-identical on
+    // every existing 2D configuration, so non-express is producer-blind -- every non-self
+    // cardinal producer wires into every cardinal egress -- and Z is a target only
+    // as the boundary template's. The one VC-shaped exception (the boundary producer feeds
+    // nothing on VC0) is pinned separately by BoundaryProducerFeedsNothingOnVC0InEitherMode.
+    for (const auto producer : k_all_directions) {
+        for (const auto capability : k_all_capabilities) {
+            if (is_z_boundary_router(producer, capability)) {
+                continue;
+            }
+            for (const auto role : k_all_z_roles) {
+                for (const uint32_t vc : {0u, 1u}) {
+                    for (const auto egress :
+                         {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+                        if (egress == producer) {
+                            continue;
+                        }
+                        EXPECT_TRUE(wires_into(producer, capability, egress, role, k_no_express, vc))
+                            << "producer " << static_cast<int>(producer) << " (" << to_string(capability)
+                            << ") -> egress " << static_cast<int>(egress) << ", chip role " << to_string(role)
+                            << ", vc " << vc;
+                    }
+                    if (producer != RoutingDirection::Z) {  // a Z producer never faces a Z egress
+                        EXPECT_EQ(
+                            wires_into(producer, capability, RoutingDirection::Z, role, k_no_express, vc),
+                            role == ZPortRole::INTERMESH_BOUNDARY)
+                            << "producer " << static_cast<int>(producer) << " (" << to_string(capability)
+                            << ") -> Z, chip role " << to_string(role) << ", vc " << vc;
+                    }
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric

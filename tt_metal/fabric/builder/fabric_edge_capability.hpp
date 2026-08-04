@@ -28,43 +28,46 @@ enum class EdgeCapability : uint8_t {
 
 const char* to_string(EdgeCapability capability);
 
-// What the extra (non-grid) ethernet port on this chip is used for.
+// What this chip's Z port is used for.
 //
 // Historically this port had exactly one role, so "has a Z port" and "has an intermesh boundary"
 // were the same statement. They no longer are: an express chord gives the port a genuine intramesh
 // routing direction. Naming the role rather than the port keeps that distinction structural: a
-// chip has one extra port, so it can hold exactly one role -- the mutual exclusion between
+// chip has one Z port, so it can hold exactly one role -- the mutual exclusion between
 // "intermesh Z" and "express chord" is unrepresentable on a chip. validate_facing_role_consistency
 // (below) asserts the matching half of it: a Z-facing router's own capability must agree with the
 // chip's role, and both mapping factories run it first.
 enum class ZPortRole : uint8_t {
-    NONE,                // no extra port on this chip
+    NONE,                // no Z port on this chip
     INTERMESH_BOUNDARY,  // crosses a mesh boundary; carries no intramesh routing direction
     EXPRESS_CHORD,       // a same-mesh Y-axis express chord; an ordinary routing direction
 };
 
 const char* to_string(ZPortRole role);
 
-// The chip-level cross-check: a Z-facing router's own edge capability and the chip's extra-port
+// The chip-level cross-check: a Z-facing router's own edge capability and the chip's Z-port
 // role are two spellings of one fact and must agree -- a Z-facing intermesh edge means role
 // INTERMESH_BOUNDARY, a same-mesh Z edge (an express chord) means role EXPRESS_CHORD, and express
 // capability never sits on a cardinal facing. Anything else is an impossible chip, which the
 // factories' independent parameters would otherwise make representable again.
 void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability edge_capability, ZPortRole chip_z_role);
 
-// The role of this chip's extra port, from the neighbor graph. Pure structure: a same-mesh Z edge
+// The role of this chip's Z port, from the neighbor graph. Pure structure: a same-mesh Z edge
 // reports EXPRESS_CHORD, and its validity (validated express intent) is enforced separately at
 // capability classification, which fails the configuration for a same-mesh Z without it.
 ZPortRole z_port_role(const ControlPlane& control_plane, FabricNodeId node);
 
-// Does this router's own port carry an intramesh routing direction, i.e. participate in ordinary
-// dimension-ordered forwarding?
+// Is this router the chip's Z-facing intermesh boundary? The one spelling of the fact, shared by
+// the turn-set and shape derivations.
 //
-// Cardinal ports always do; that is what makes them cardinal. The extra port does exactly when it
-// carries an express chord (a Y-axis resource, like N/S). An extra port crossing a mesh boundary
-// does not -- it has no place in the turn matrix, and that, not the letter Z, is the whole reason
-// a separate boundary template ever existed.
-bool carries_routing_direction(RoutingDirection facing, EdgeCapability capability);
+// Every port except this one carries an intramesh routing direction: cardinal ports always do
+// (that is what makes them cardinal), and the Z port does exactly when it carries an express
+// chord (a Y-axis resource, like N/S). A Z port crossing a mesh boundary carries none -- it
+// has no place in the turn matrix, and that, not the letter Z, is the whole reason a separate
+// boundary template ever existed.
+inline bool is_z_boundary_router(RoutingDirection facing, EdgeCapability capability) {
+    return facing == RoutingDirection::Z && capability == EdgeCapability::INTERMESH;
+}
 
 // Classify one edge from `local` toward `remote` leaving through `direction`.
 //
