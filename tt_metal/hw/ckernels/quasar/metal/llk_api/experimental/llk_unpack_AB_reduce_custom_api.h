@@ -34,6 +34,8 @@
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape) {
+    static_assert(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
+    static_assert(!respect_trigger, "respect_trigger (MOP-split handshake) not supported on Quasar");
     (void)tensor_shape;  // the MOP (which uses the shape + buffer descriptor) is programmed at execute
     _llk_unpack_AB_reduce_block_max_row_cfg_(true);
 }
@@ -53,6 +55,7 @@ inline void llk_unpack_AB_reduce_block_max_row_init(const ckernel::TensorShape& 
 template <std::uint32_t block_ct_dim, bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t row_start_index) {
+    static_assert(!respect_trigger, "respect_trigger (MOP-split handshake) not supported on Quasar");
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
@@ -81,5 +84,6 @@ inline void llk_unpack_AB_reduce_block_max_row(
 
 template <bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row_uninit() {
+    static_assert(!respect_trigger, "respect_trigger (MOP-split handshake) not supported on Quasar");
     _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(respect_trigger, false /*overlap_first_half*/);
 }
