@@ -24,7 +24,7 @@ void push_reshard_generic_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    const MeshTensor* bound_tensor) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
@@ -33,7 +33,7 @@ void push_reshard_generic_cb_pair(
         .data_format = data_format,
         .page_size = page_size,
     });
-    cb.buffer = bound_buffer;
+    cb.tensor = bound_tensor;
     desc.cbs.push_back(std::move(cb));
 }
 
@@ -651,18 +651,19 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 
 ProgramDescriptor ReshardGenericFactory::create_descriptor(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input = tensor_args.input;
-    auto& output = output_tensor;
+    const auto& input_tensor = tensor_args.input;
+    const auto& input = input_tensor.mesh_tensor();
+    const auto& output = output_tensor.mesh_tensor();
 
-    auto* device = input.device();
-    auto* input_buffer = input.buffer();
-    auto* output_buffer = output.buffer();
+    auto* device = &input.mutable_device();
+    auto* input_buffer = input.mesh_buffer().get_reference_buffer();
+    auto* output_buffer = output.mesh_buffer().get_reference_buffer();
 
     auto grid = input_buffer->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
                                                                 : device->compute_with_storage_grid_size();
     auto input_core_type = input_buffer->core_type();
     uint32_t dst_cb_index = 16;
-    auto cores = get_optimal_worker_cores_for_sharded_tensor(output);
+    auto cores = get_optimal_worker_cores_for_sharded_tensor(output_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
 
     uint32_t total_size = 0;
@@ -688,7 +689,7 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
-    // Output sharded CB. Bind to output buffer for dynamic-CB rebinding on cache hits via cb.buffer.
+    // Output sharded CB. Bind to output tensor for dynamic-CB rebinding on cache hits via cb.tensor.
     push_reshard_generic_cb_pair(
         desc,
         dst_cb_index,
@@ -696,7 +697,7 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         total_size,
         output_buffer->page_size(),
         all_cores,
-        /*bound_buffer=*/output_buffer);
+        /*bound_tensor=*/&output);
 
     const std::string kernel_source = input_buffer->page_size() != output_buffer->page_size()
                                           ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
@@ -737,7 +738,7 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         std::vector<uint32_t> runtime_args_1;
         if (input_buffer->page_size() != output_buffer->page_size()) {
             auto output_core_to_page_range_pair =
-                detail::get_core_page_ranges_diff_width(input_buffer, output_buffer, input);
+                detail::get_core_page_ranges_diff_width(input_buffer, output_buffer, input_tensor);
             const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
             runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
                 physical_core_coords,
@@ -776,13 +777,13 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
                 page_stride_vector.size());
         }
 
-        // Patch arg index (grid.x + grid.y) to bind the input-buffer base address.
+        // Patch arg index (grid.x + grid.y) to bind the input MeshTensor base address.
         // The detail helpers already pre-compute physical_core_coords (size grid.x+grid.y) followed by input addr.
         KernelDescriptor::RTArgList rt_args_0;
         rt_args_0.reserve(runtime_args_0.size());
         for (size_t i = 0; i < runtime_args_0.size(); ++i) {
             if (i == grid.x + grid.y) {
-                rt_args_0.push_back(input_buffer);
+                rt_args_0.push_back(input);
             } else {
                 rt_args_0.push_back(runtime_args_0[i]);
             }
@@ -791,7 +792,7 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         rt_args_1.reserve(runtime_args_1.size());
         for (size_t i = 0; i < runtime_args_1.size(); ++i) {
             if (i == grid.x + grid.y) {
-                rt_args_1.push_back(input_buffer);
+                rt_args_1.push_back(input);
             } else {
                 rt_args_1.push_back(runtime_args_1[i]);
             }

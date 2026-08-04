@@ -26,7 +26,7 @@ void push_reshard_same_width_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    const MeshTensor* bound_tensor) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
@@ -35,7 +35,7 @@ void push_reshard_same_width_cb_pair(
         .data_format = data_format,
         .page_size = page_size,
     });
-    cb.buffer = bound_buffer;
+    cb.tensor = bound_tensor;
     desc.cbs.push_back(std::move(cb));
 }
 
@@ -44,40 +44,44 @@ void push_reshard_same_width_cb_pair(
 template <bool local_is_output>
 ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input = tensor_args.input;
-    const auto& output = output_tensor;
-    const auto& local_tensor = local_is_output ? output : input;
-    const auto& remote_tensor = local_is_output ? input : output;
+    const auto& input_tensor = tensor_args.input;
+    const auto& input = input_tensor.mesh_tensor();
+    const auto& local_tensor = local_is_output ? output_tensor : input_tensor;
+    const auto& remote_tensor = local_is_output ? input_tensor : output_tensor;
+    const auto& local = local_tensor.mesh_tensor();
+    const auto& remote = remote_tensor.mesh_tensor();
 
-    auto* device = input.device();
+    auto* device = &input.mutable_device();
+    auto* local_ref = local.mesh_buffer().get_reference_buffer();
+    auto* remote_ref = remote.mesh_buffer().get_reference_buffer();
 
-    const auto local_shard_spec = local_tensor.shard_spec().value();
-    const auto remote_shard_spec = remote_tensor.shard_spec().value();
+    const auto local_shard_spec = local.shard_spec().value();
+    const auto remote_shard_spec = remote.shard_spec().value();
 
-    auto remote_core_type = remote_tensor.buffer()->core_type();
+    auto remote_core_type = remote_ref->core_type();
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
     constexpr uint32_t cb_scratch_index = tt::CBIndex::c_1;
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
-    auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    auto remote_cores = remote_ref->buffer_distribution_spec().value().cores_with_data();
 
     uint32_t unit_size = 0;
     uint32_t local_units_per_shard = 0;
     uint32_t remote_units_per_shard = 0;
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local.dtype());
 
-    uint32_t num_units = local_tensor.buffer()->num_pages();
-    if (local_tensor.layout() == Layout::TILE) {
+    uint32_t num_units = local.mesh_buffer().num_pages();
+    if (local.layout() == Layout::TILE) {
         unit_size = tt::tile_size(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
         remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
     } else {
-        unit_size = static_cast<uint32_t>(local_shard_spec.shape[1] * local_tensor.element_size());
+        unit_size = static_cast<uint32_t>(local_shard_spec.shape[1] * local.element_size());
         local_units_per_shard = local_shard_spec.shape[0];
         remote_units_per_shard = remote_shard_spec.shape[0];
     }
-    uint32_t local_unit_size_padded = tt::align(unit_size, local_tensor.buffer()->alignment());
-    uint32_t remote_unit_size_padded = tt::align(unit_size, remote_tensor.buffer()->alignment());
+    uint32_t local_unit_size_padded = tt::align(unit_size, local_ref->alignment());
+    uint32_t remote_unit_size_padded = tt::align(unit_size, remote_ref->alignment());
     bool unaligned = false;
     if (remote_unit_size_padded != unit_size || local_unit_size_padded != unit_size) {
         unaligned = true;
@@ -92,17 +96,15 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
-    auto* local_buffer = local_tensor.buffer();
-    auto* remote_buffer = remote_tensor.buffer();
-    auto remote_buffer_type = remote_buffer->buffer_type();
+    auto remote_buffer_type = remote.memory_config().buffer_type();
 
     ProgramDescriptor desc;
 
-    // Local sharded CB. Bind to local buffer for dynamic-CB rebinding on cache hits via cb.buffer.
+    // Local sharded CB. Bind to local tensor for dynamic-CB rebinding on cache hits via cb.tensor.
     // Page size is the L1-aligned per-row stride so that total_size (= num_rows * padded stride)
     // stays divisible by the page size; when aligned, local_unit_size_padded == unit_size.
     push_reshard_same_width_cb_pair(
-        desc, cb_index, data_format, total_size, local_unit_size_padded, all_cores, /*bound_buffer=*/local_buffer);
+        desc, cb_index, data_format, total_size, local_unit_size_padded, all_cores, /*bound_tensor=*/&local);
 
     if (unaligned && local_is_output) {
         // Scratch CB used only by the reader path (local_is_output): it bulk-reads remote rows at
@@ -117,7 +119,7 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
             remote_units_per_shard * remote_unit_size_padded,
             remote_unit_size_padded,
             all_cores,
-            /*bound_buffer=*/nullptr);
+            /*bound_tensor=*/nullptr);
     }
 
     // Reader/writer kernels share the same source and compile-time args.
@@ -157,12 +159,12 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
         uint32_t local_units_per_kernel = tt::div_up(local_units_per_core, static_cast<uint32_t>(kernels.size()));
         uint32_t local_start_offset = 0;
         for (auto* kernel : kernels) {
-            // arg 0 is remote-buffer base address (binding via Buffer*).
+            // arg 0 is remote-tensor base address (binding via MeshTensor).
             // RTArgList doesn't expose operator[] for back-patching, so we build
             // a std::vector<variant> here and pass via the vector overload of
             // emplace_runtime_args.
-            std::vector<std::variant<uint32_t, Buffer*>> kernel_args;
-            kernel_args.emplace_back(remote_buffer);
+            std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> kernel_args;
+            kernel_args.emplace_back(std::cref(remote));
             kernel_args.emplace_back(uint32_t{0});
             kernel_args.emplace_back(uint32_t{0});
             uint32_t local_units_to_transfer = std::min(local_units_per_core, local_units_per_kernel);
