@@ -518,11 +518,6 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      # No dispatch-hang watchdog for this leg. The runner publishes readiness and then parks in the H2D
-      # recv (inbound_socket_service_sync), a device op with no timeout by design, until the producer --
-      # minutes of weight load away -- pushes its first chunk. dispatch_progress only advances when a
-      # command RETIRES, so that healthy idle wait is indistinguishable from a hang: tt-triage fires and
-      # TT_THROWs, killing the runner mid-serve. 0 is the runtime default, i.e. pre-#51679 behaviour.
       export TT_METAL_OPERATION_TIMEOUT_SECONDS=0
       python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
     '
