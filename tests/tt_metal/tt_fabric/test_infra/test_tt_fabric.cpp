@@ -211,6 +211,53 @@ void dump_erisc_debug_slots_from_host() {
     }
 }
 
+// [SYNC-PROBE] Teardown dump of the end-of-test sync semaphores on every Tensix worker core.
+//
+// The kernel-side ring-buffer POLL entries already carry the observed value, but the ring buffer is
+// small and wraps, so on a long wedge the interesting entries can be evicted. This reads the two
+// semaphores straight out of L1 instead, which is immune to that and gives the definitive value.
+//
+// Rather than plumb through the test's sender/sync core lists, this walks every worker core and
+// prints only those where a sync semaphore is non-zero -- which is exactly the set of cores that
+// participate in the barrier. Emits "SYNCSEM <dev> <x> <y> local=<v> global=<v>".
+void dump_sync_semaphores_from_host(uint32_t local_sync_addr, uint32_t global_sync_addr) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    log_info(
+        tt::LogTest,
+        "Sync semaphore dump (teardown): local_sync=0x{:X}, global_sync=0x{:X}",
+        local_sync_addr,
+        global_sync_addr);
+    for (auto chip_id : cluster.all_chip_ids()) {
+        const auto& soc_desc = cluster.get_soc_desc(chip_id);
+        for (const auto& core : soc_desc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL)) {
+            const CoreCoord logical_core{core.x, core.y};
+            const auto virtual_core =
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, tt::CoreType::WORKER);
+            std::vector<uint32_t> lv(1, 0);
+            std::vector<uint32_t> gv(1, 0);
+            try {
+                cluster.read_core(lv, sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), local_sync_addr);
+                cluster.read_core(gv, sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), global_sync_addr);
+            } catch (...) {
+                continue;
+            }
+            // Only the barrier participants ever have these non-zero; everything else is noise.
+            if (lv[0] == 0 && gv[0] == 0) {
+                continue;
+            }
+            log_info(
+                tt::LogTest,
+                "SYNCSEM {} {} {} local={} global={}",
+                chip_id,
+                logical_core.x,
+                logical_core.y,
+                lv[0],
+                gv[0]);
+        }
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -491,6 +538,14 @@ int main(int argc, char** argv) {
                 // hang detector); a hard-wedged run killed externally never gets here, which is why the
                 // out-of-process `run_link_control dump_dbg_slot` exists as well.
                 dump_erisc_debug_slots_from_host();
+
+                // [SYNC-PROBE] Companion dump of the end-of-test sync semaphores. Pairs with the
+                // kernel-side ring-buffer ENTER/POLL/EXIT entries: those say which barrier a core is
+                // parked in, this says what the semaphore it is waiting on actually holds.
+                {
+                    const auto& smm = test_context.get_sender_memory_map();
+                    dump_sync_semaphores_from_host(smm.get_local_sync_address(), smm.get_global_sync_address());
+                }
 
                 if (test_context.did_last_test_hang()) {
                     log_error(
