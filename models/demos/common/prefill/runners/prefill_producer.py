@@ -981,6 +981,7 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     )
     return slot_traces, slot_lengths, pools_by_trace
 
+
 # ---------------------------------------------------------------------------
 # Multi-rank coordination (device-less; GO/DONE over MPI collectives, not sync files)
 #
