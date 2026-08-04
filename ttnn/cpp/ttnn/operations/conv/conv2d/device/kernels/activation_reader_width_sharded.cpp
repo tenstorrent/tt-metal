@@ -55,14 +55,16 @@ void kernel_main() {
     constexpr uint32_t num_input_cores = get_compile_time_arg_val(9);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(17);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(18);
+    constexpr dataflow_kernel_lib::McastArgs<12, 3, num_input_cores> act_mcast_args;
+    constexpr uint32_t act_post_mcast_ct_offset = act_mcast_args.next_compile_time_args_offset();
+    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(act_post_mcast_ct_offset);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(act_post_mcast_ct_offset + 1);
 
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(20);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(21);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(22);
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(24);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(act_post_mcast_ct_offset + 3);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(act_post_mcast_ct_offset + 4);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(act_post_mcast_ct_offset + 5);
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(act_post_mcast_ct_offset + 7);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(act_post_mcast_ct_offset + 8);
 
     constexpr uint32_t num_mcast_cores = num_input_cores > num_output_cores ? num_input_cores : num_output_cores;
     uint32_t i = 0;  // Runtime arg index
@@ -91,11 +93,14 @@ void kernel_main() {
     DataflowBuffer sharded_act_dfb(cb_id_sharded_act);
     Noc noc;
 
-    constexpr dataflow_kernel_lib::McastArgs<12, 3, num_input_cores> act_mcast_args;
     auto act_send_pipe = act_mcast_args.sender(noc);
     auto act_recv_pipe = act_mcast_args.receiver(noc);
 
-    load_config_tensor_if_in_dram<26, 27, 28, cb_reader_indices>(noc, reader_indices_dfb, 0);
+    load_config_tensor_if_in_dram<
+        act_post_mcast_ct_offset + 9,
+        act_post_mcast_ct_offset + 10,
+        act_post_mcast_ct_offset + 11,
+        cb_reader_indices>(noc, reader_indices_dfb, 0);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_dfb.get_write_ptr());

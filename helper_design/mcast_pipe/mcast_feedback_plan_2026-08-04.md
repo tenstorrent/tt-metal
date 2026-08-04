@@ -182,4 +182,46 @@ This section is the durable record of the automated execution of this plan. Comm
   `38,583.22634221849 ns`; the result is below it by `185.465593414923 ns` — **PASS**. Raw results:
   `generated/mcast_migration_rt/gate1_restored_20260804{,_r2,_r3}_segformer_ws.json`.
 - Gate 1 is green under the updated 1.5% acceptance rule. The restored implementation is correctness- and
-  performance-verified; its stash remains present pending the Gate 1 commit.
+  performance-verified and committed as `a0fad936c89` (`Restore mcast source lifetime optimizations`). The recovery
+  stash remains present as an additional safety copy.
+
+### 2026-08-04 — Gate 2 (in progress)
+
+- Audited all 13 migrated kernel rows and all 12 migrated host-binding rows from
+  `helper_design/mcast_pipe/migration/ledger.json`.
+- Replaced helper-width assumptions in the migrated device kernels:
+  - Matmul sender runtime parsing now resumes at `McastArgs::next_runtime_args_offset()`; the receiver's compile-time
+    operation tail and tensor accessor now derive from `next_compile_time_args_offset()`.
+  - Width-sharded Conv's activation/config tail now derives from the activation `McastArgs` boundary.
+  - Both legacy and Welford GroupNorm sender/receiver kernels now name the full three-block mcast chain and derive the
+    operation tail from the last block. The receiver faces name the otherwise-unused first/last blocks so host and
+    kernel layouts cannot drift silently.
+- Reworked both legacy and descriptor Matmul 1D/2D host paths to insert each helper compile-time and runtime output as
+  one complete range. Cached-program output/bias patch indices are stored in shared variables and derived from the
+  emitted helper runtime range size.
+- Confirmed the migrated Conv, GroupNorm, and Sort host bindings already append, insert, assign, or move complete
+  helper ranges without indexing helper output.
+- Added `tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe_source_audit.py`. It derives the migrated inventory from the
+  ledger, rejects indexed access into host helper outputs, and rejects the known fixed-width/fixed-tail device
+  patterns. The audit passed 8/8.
+- Host rebuild with `./build_metal.sh` completed successfully.
+- Seven compile-focused device parametrizations passed sequentially through `run_safe_pytest.sh --dev
+  --no-precompile`, each with its own initially empty `TT_METAL_CACHE`: Matmul 2D (0/27 JIT hits), Conv height
+  (PCC `0.9999993139704398`, 0/27), Conv block (PCC `0.9999992596260122`, 0/29), Conv width
+  (PCC `0.9999992597711427`, 0/26), GroupNorm legacy (0/31), GroupNorm Welford (0/31), and Sort long-tensor
+  (0/29). The first Matmul invocation used the stale pre-collection node ID and was rejected by pytest without
+  running code; the corrected current node passed.
+- Complete helper validation is green: `McastHostFixture.*` passed 19/19 and
+  `test_mcast_pipe.py --dev --run-all` passed 73/73.
+- The complete mapped correctness inventory passed sequentially from initially empty per-family JIT caches:
+  - `MM-IN1-ALL`: 302 passed / 188 expected skips / 490 selected, exactly matching the recorded baseline (four
+    chunks: 56/72, 46/50, 46/50, and 154/16).
+  - `CONV-HEIGHT`, `CONV-BLOCK`, and `CONV-WIDTH`: each feature inventory passed 48/48 runnable cases with 16
+    expected row-major/BFLOAT8 skips; each matching DRAM-config node passed, and the shared DRAM inventory passed
+    14/14.
+  - `GN-SHARDED-PARAMETERIZED`: legacy passed 108/108 runnable cases with 2 expected offset-grid skips; Welford
+    passed the same 108/2 split; the fixed/default-routing inventory passed 19/19 runnable cases with 6 expected
+    20-core-only skips.
+  - `SORT-SINGLE-ROW-CONTROL`: all seven long-tensor cases and both `Ht=2` deadlock regressions passed.
+- Re-ran the durable opaque-ABI audit after the full inventory: 8/8 passed. `git diff --check` is clean.
+- Gate 2 is green. No helper wire-size change was started before this gate completed.

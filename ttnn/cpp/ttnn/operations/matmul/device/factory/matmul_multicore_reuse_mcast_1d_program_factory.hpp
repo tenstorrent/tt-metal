@@ -13,6 +13,12 @@
 namespace ttnn::prim {
 
 struct matmul_mcast_1d_common_override_variables_t {
+    struct McastIn1RuntimeArgIndices {
+        uint32_t sender_out_addr{};
+        uint32_t sender_bias_addr{};
+        uint32_t receiver_out_addr{};
+    };
+
     std::vector<tt::tt_metal::KernelHandle> kernels;
     std::vector<tt::tt_metal::CBHandle> cbs;
     bool extract_shard_sub_blocks{};
@@ -20,6 +26,7 @@ struct matmul_mcast_1d_common_override_variables_t {
     std::vector<CoreCoord> cores;
     uint32_t num_cores_with_work{};
     ttnn::prim::Matmul1DType type{};
+    McastIn1RuntimeArgIndices mcast_in1_runtime_arg_indices{};
 };
 
 struct MatmulMultiCoreReuseMcast1DProgramFactory {
