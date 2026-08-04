@@ -2066,12 +2066,23 @@ static void jit_compile_pending(
 static std::mutex g_core_map_mutex;
 static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>>
     g_core_map_cache;
+// The SWEmuleChip each cached core_map was built against. A device close+reopen mints
+// a NEW SWEmuleChip with fresh per-core L1 mmaps (single-process-galaxy L1 model), so a
+// core_map cached from the prior chip holds Core* into a now-disjoint L1 region. The NOC
+// path (this map) would then resolve a worker's semaphore to a different L1 backing than
+// that worker's own fiber (built from the CURRENT chip in setup_core_state) reads —
+// cross-core sems never observed → deadlock. Rebuild when the chip identity changes.
+static std::unordered_map<uint32_t, tt::umd::SWEmuleChip*> g_core_map_sw_emu;
 
 static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
     tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id) {
     std::lock_guard<std::mutex> lock(g_core_map_mutex);
     auto& core_map = g_core_map_cache[device_id];
+    if (core_map && g_core_map_sw_emu[device_id] != sw_emu) {
+        core_map.reset();  // stale: built against a different (now-replaced) SWEmuleChip
+    }
     if (!core_map && sw_emu) {
+        g_core_map_sw_emu[device_id] = sw_emu;
         core_map = std::make_shared<std::unordered_map<uint64_t, tt_emule::Core*>>();
         // Add ALL worker cores from the device grid
         auto grid = device->compute_with_storage_grid_size();
