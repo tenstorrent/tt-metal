@@ -239,11 +239,26 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
 # the 194 GB/s DRAM ceiling, so the weight dtype IS the speed; every matrix that can be halved has
 # been. Each was measured on its own:
 #
-#     weights                       decode PCC   ms/step   mean worst-sample   hang?
-#     bf16 (all)                      0.99991     45.8            -             no
-#     + BFP8 on FF1, FF3              0.999884    34.7          0.86%           no
-#     + BFP8 on wqkv, wo   <- this    0.999852    31.4          0.86%           no
-#     + BFP8 on w2 (i.e. all)  <- now  0.99977+    28.9            -             no (fixed)
+#     weights                        min PCC   ms/step   mean WS   p90 WS   hang?
+#     bf16 (all)                     0.999357    45.8      0.86%    1.18%    no
+#     + BFP8 on FF1, FF3               ~        34.7        -        -       no
+#     + BFP8 on wqkv, wo             0.998969    31.4      0.93%    1.35%    no
+#     + BFP8 on w2 (i.e. all) <- now 0.998045    28.9      1.17%    1.75%    no (fixed)
+#
+# RE-MEASURED on all 15 prompts x 22 frames in ONE session (STATUS.md 6.16). The older version of
+# this table read 0.86% -> 0.86% -> 0.84% and concluded each step was FREE. It was not: the total is
+# +0.31 pp mean / +0.57 pp p90, and it was measured on two unrecorded prompts where the gate's own
+# prompt spread (0.44 pp) is larger than each increment (~0.1 pp). Priced per ms from all-BFP8:
+#
+#     revert        mean recovered   ms/step back   pp per ms
+#     w2               -0.24 pp          2.5          0.096     <- 77% of the cost, 15% of the win
+#     wqkv + wo        -0.04 pp          3.3          0.012
+#     FF1 + FF3        -0.04 pp         11.1          0.004     <- 24x better value than w2
+#
+# The three are additive (0.32 vs a measured 0.31). STATUS.md 6.16 RECOMMENDS reverting w2 to bf16:
+# +2.5 ms/step, RTF ~0.60-0.65 -> ~0.63-0.68, buys back 77% of the loss. Not yet applied -- it is a
+# shipped-performance change. If 0.04 pp is ever wanted back instead, revert attn (3.3 ms), not FF
+# (11.1 ms): they buy identical quality.
 #
 # W2 IS THE HANG, not BFP8 in general -- a distinction that cost a long investigation and is worth
 # keeping straight, because "all-BFP8 hangs" was true but over-attributed and it froze this line of
