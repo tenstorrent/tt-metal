@@ -28,13 +28,13 @@ void kernel_main() {
     const std::uint32_t buf_id = get_compile_time_arg_val(0);
 
     // Reading tile_index 1 exercises the per-tile stride term that is always zero for tile 0.
-    const std::uint32_t v0 = read_tile_value(buf_id, 0, 0);
-    const std::uint32_t v1 = read_tile_value(buf_id, 0, 1);
-    const std::uint32_t v2 = read_tile_value(buf_id, 1, 0);
-    const std::uint32_t v3 = read_tile_value(buf_id, 1, 1);
+    const std::uint32_t v0 = read_tile_value(buf_id, 0 /*tile_index*/, 0 /*element_offset*/);
+    const std::uint32_t v1 = read_tile_value(buf_id, 0 /*tile_index*/, 1 /*element_offset*/);
+    const std::uint32_t v2 = read_tile_value(buf_id, 1 /*tile_index*/, 0 /*element_offset*/);
+    const std::uint32_t v3 = read_tile_value(buf_id, 1 /*tile_index*/, 1 /*element_offset*/);
     // get_tile_address must resolve to the same tile read_tile_value reads, and must be a usable
     // L1 address on the receiving threads too -- not merely a matching integer.
-    const std::uint32_t tile1_addr = get_tile_address(buf_id, 1);
+    const std::uint32_t tile1_addr = get_tile_address(buf_id, 1 /*tile_index*/);
 
     int slot = RESULT_SLOT_NONE;
     UNPACK(slot = 0;)

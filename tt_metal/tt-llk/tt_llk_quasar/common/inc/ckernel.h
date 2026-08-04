@@ -453,18 +453,28 @@ inline void csr_write(std::uint32_t val)
 // llk_assert.h (when ENABLE_LLK_ASSERT is set) pulls in api/debug/assert.h -> risc_common.h, whose
 // TRISC-side setup_isr_csrs() references ckernel::csr_read<CSR::TRISC_ID>() -- this include must
 // stay below the CSR/csr_read/csr_write definitions above, or that reference fails to compile.
+// It must also stay OUTSIDE namespace ckernel (which spans most of this file): with ENABLE_LLK_ASSERT
+// set, everything llk_assert.h transitively includes would otherwise be nested into ckernel::, and
+// global-scope users of those declarations (e.g. trisck.cc) would stop resolving.
+} // namespace ckernel
+
 #include "llk_assert.h"
 
-// CHECKME: does this need to change now that BRISC is gone?
+namespace ckernel
+{
+
 // NOTE: a mailbox slot must only ever be written/read by threads OTHER than the one that owns
 // that slot number -- a thread reading or writing its own slot (a "loopback") is what triggers
 // the Watcher IB-interrupt fault (0x19), not the MMIO access mechanism itself. The self-check below
 // only applies to TRISC callers (COMPILE_FOR_TRISC); a DM-context caller (COMPILE_FOR_DM) is never
 // one of the 4 TRISC roles this ThreadId enum represents, so it can never collide with itself here.
+// COMPILE_FOR_TRISC is the cluster-global processor id (NEO_n_COMPUTE_m = n*4 + m, see
+// QuasarComputeProcessor), while mailbox slots are indexed by NEO-cluster-local role (0..3), so the
+// self-check compares against the local id, COMPILE_FOR_TRISC % 4.
 inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
 {
 #ifdef COMPILE_FOR_TRISC
-    LLK_ASSERT(thread != COMPILE_FOR_TRISC, "mailbox_write: a thread cannot write to its own mailbox (loopback)");
+    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_write: a thread cannot write to its own mailbox (loopback)");
 #endif
     mailbox_base[thread][0] = data;
 }
@@ -473,13 +483,16 @@ inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
 inline std::uint32_t mailbox_read(const std::uint8_t thread)
 {
 #ifdef COMPILE_FOR_TRISC
-    LLK_ASSERT(thread != COMPILE_FOR_TRISC, "mailbox_read: a thread cannot read from its own mailbox (loopback)");
+    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_read: a thread cannot read from its own mailbox (loopback)");
 #endif
     return mailbox_base[thread][0];
 }
 
 inline bool mailbox_not_empty(const std::uint8_t thread)
 {
+#ifdef COMPILE_FOR_TRISC
+    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_not_empty: a thread cannot query its own mailbox (loopback)");
+#endif
     return mailbox_base[thread][1] > 0;
 }
 

@@ -39,8 +39,11 @@ enum register_space_e
     ADDR_COUNTERS = 0x2
 };
 
-// Mailbox slot index per Quasar Neo-cluster TRISC role (matches the COMPILE_FOR_TRISC processor_id
-// assigned in hal_2xx_common.cpp: 0=unpack, 1=math, 2=pack, 3=isolate-sfpu).
+// Mailbox slot index per Quasar Neo-cluster TRISC role: 0=unpack, 1=math, 2=pack, 3=isolate-sfpu.
+// The ground truth for this numbering is the mailbox aperture itself -- TENSIX_MAILBOX0..3_BASE in
+// quasar/tt_t6_trisc_map.h, which backs mailbox_base[4] in ckernel.h. Note hal_2xx_common.cpp's
+// COMPILE_FOR_TRISC=<processor_id> is the cluster-GLOBAL id (NEO_n_COMPUTE_m = n*4 + m, see
+// QuasarComputeProcessor in impl/kernels/kernel.hpp); it only agrees with this enum modulo 4.
 enum ThreadId
 {
     UnpackThreadId      = 0,
