@@ -508,14 +508,18 @@ def _write_markdown(report: dict, path: str) -> None:
             f"| Max per-file lag | {tok['max_abs_lag_samples']} samples |",
         ]
     if "content_preservation_wer" in report:
-        lines.append(f"| Content preservation (WER, source vs converted) | {report['content_preservation_wer']['wer'] * 100:.1f}% |")
+        lines.append(
+            f"| Content preservation (WER, source vs converted) | {report['content_preservation_wer']['wer'] * 100:.1f}% |"
+        )
     if "speaker_similarity" in report:
         spk = report["speaker_similarity"]
         if "to_target_mean" in spk:
             lines.append(f"| Speaker similarity to target (cosine) | {spk['to_target_mean']:.3f} |")
         if "target_consistency_mean" in spk:
             lines.append(f"| Target consistency (converted↔converted) | {spk['target_consistency_mean']:.3f} |")
-        lines.append(f"| Converted↔source similarity (lower = identity changed) | {spk['converted_vs_source_mean']:.3f} |")
+        lines.append(
+            f"| Converted↔source similarity (lower = identity changed) | {spk['converted_vs_source_mean']:.3f} |"
+        )
     if "audio_quality_dnsmos" in report:
         lines.append(f"| Audio quality (DNSMOS OVRL) | {report['audio_quality_dnsmos']['dnsmos_ovrl_mean']:.2f} / 5 |")
     Path(path).write_text("\n".join(lines) + "\n")
