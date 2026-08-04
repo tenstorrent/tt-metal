@@ -17,16 +17,18 @@ void kernel_main() {
     uint32_t num_tile_rows = get_arg_val<uint32_t>(1);
     uint32_t start_stick = get_arg_val<uint32_t>(2);
     uint32_t col_byte_offset = get_arg_val<uint32_t>(3);
+    // Width and chunking are per-core runtime args so cores with different
+    // block widths share one kernel binary (one program for ragged splits).
+    uint32_t num_col_chunks = get_arg_val<uint32_t>(4);  // sub-blocks per tile-row
+    uint32_t chunk_Wt = get_arg_val<uint32_t>(5);        // tiles per sub-block
 
-    constexpr uint32_t num_col_chunks = get_compile_time_arg_val(0);  // sub-blocks per tile-row
-    constexpr uint32_t H_per_tile = get_compile_time_arg_val(1);      // TILE_H (32)
-    constexpr uint32_t chunk_Wt = get_compile_time_arg_val(2);        // tiles per sub-block
-    constexpr uint32_t elem_w_bytes = get_compile_time_arg_val(3);    // TILE_W * elem_size
-    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr uint32_t H_per_tile = get_compile_time_arg_val(0);    // TILE_H (32)
+    constexpr uint32_t elem_w_bytes = get_compile_time_arg_val(1);  // TILE_W * elem_size
+    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
     constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr uint32_t chunk_read_bytes = chunk_Wt * elem_w_bytes;
+    const uint32_t chunk_read_bytes = chunk_Wt * elem_w_bytes;
 
     const auto s = TensorAccessor(src_args, src_addr, aligned_page_size);
 

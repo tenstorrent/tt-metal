@@ -15,10 +15,12 @@
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
-    constexpr uint32_t num_col_chunks = get_compile_time_arg_val(2);
-    constexpr uint32_t chunk_Wt = get_compile_time_arg_val(3);
 
+    // Width and chunking are per-core runtime args so cores with different
+    // block widths share one kernel binary (one program for ragged splits).
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+    uint32_t num_col_chunks = get_arg_val<uint32_t>(1);
+    uint32_t chunk_Wt = get_arg_val<uint32_t>(2);
 
     CircularBuffer cb_in_exp(cb_in);
     CircularBuffer cb_out_exp(cb_out);
