@@ -182,7 +182,7 @@ class TensorLayoutLegacyPaddingRoundtipTests : public ::testing::TestWithParam<L
 
 TEST_P(TensorLayoutLegacyPaddingRoundtipTests, Tensor_LagacyPaddingRoundtrip) {
     const auto& params = GetParam();
-    TensorLayout layout = tensor_layout_from_padded_shape(
+    TensorLayout layout = experimental::tensor_layout_from_padded_shape(
         DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.shape, params.padded_shape);
     EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
 
@@ -279,7 +279,7 @@ class TensorLayoutRowMajorPaddedShapeAlignmentTests
 
 TEST_P(TensorLayoutRowMajorPaddedShapeAlignmentTests, FromPaddedShape_ComputesFullAlignment) {
     const auto& params = GetParam();
-    TensorLayout layout = tensor_layout_from_padded_shape(
+    TensorLayout layout = experimental::tensor_layout_from_padded_shape(
         DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), DefaultMemoryConfig, params.shape, params.padded_shape);
 
     EXPECT_EQ(layout.get_alignment(), params.expected_alignment);
@@ -333,7 +333,7 @@ class TensorLayoutTilePaddedAlignmentTests : public ::testing::TestWithParam<Til
 
 TEST_P(TensorLayoutTilePaddedAlignmentTests, Tensor_TilePaddedAlignmentRegression) {
     const auto& params = GetParam();
-    TensorLayout layout = tensor_layout_from_padded_shape(
+    TensorLayout layout = experimental::tensor_layout_from_padded_shape(
         params.dtype, Layout::TILE, DefaultMemoryConfig, params.shape, params.padded_shape);
 
     EXPECT_EQ(layout.get_alignment(), params.expected_alignment);
@@ -411,7 +411,7 @@ class TensorLayoutTile2DInterleavedAlignmentTests
 
 TEST_P(TensorLayoutTile2DInterleavedAlignmentTests, FromPaddedShape_TileAlignmentUsesTileUnlessOverpadded) {
     const auto& params = GetParam();
-    TensorLayout layout = tensor_layout_from_padded_shape(
+    TensorLayout layout = experimental::tensor_layout_from_padded_shape(
         DataType::BFLOAT16,
         PageConfig(Layout::TILE, params.tile),
         DefaultMemoryConfig,
