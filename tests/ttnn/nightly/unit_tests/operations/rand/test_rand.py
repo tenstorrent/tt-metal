@@ -24,6 +24,11 @@ SHAPES = [tuple([32] * i) for i in range(6)]
 ALL_TYPES = get_types_from_binding_framework()
 SUPPORTED_DTYPES = (ttnn.bfloat16, ttnn.float32)
 UNSUPPORTED_DTYPES = tuple(dtype for dtype in ALL_TYPES if dtype not in SUPPORTED_DTYPES)
+FLOAT32_MIN_NORMAL = torch.finfo(torch.float32).tiny
+FLOAT32_MIN_SUBNORMAL = torch.nextafter(torch.tensor(0.0), torch.tensor(1.0)).item()
+FLOAT32_MIN_NORMAL_PLUS_TWO_ULPS = torch.nextafter(
+    torch.nextafter(torch.tensor(FLOAT32_MIN_NORMAL), torch.tensor(math.inf)), torch.tensor(math.inf)
+).item()
 
 
 def check_uniform_distribution(data, value_range=(0, 1)):
@@ -243,6 +248,51 @@ def test_rand_respects_bfloat16_ranges(device, low, high):
 def test_rand_rejects_range_without_bfloat16_value(device, expect_error):
     with expect_error(RuntimeError, "contains no value representable"):
         ttnn.rand((32, 32), device=device, dtype=ttnn.bfloat16, low=1.001, high=1.002, seed=17)
+
+
+@pytest.mark.parametrize("dtype", SUPPORTED_DTYPES)
+@pytest.mark.parametrize(
+    "low, high, expected",
+    [
+        (0.0, FLOAT32_MIN_NORMAL, 0.0),
+        (-FLOAT32_MIN_NORMAL, 0.0, -FLOAT32_MIN_NORMAL),
+    ],
+)
+def test_rand_respects_flush_to_zero_ranges(device, dtype, low, high, expected):
+    data = ttnn.to_torch(ttnn.rand((32, 32), device=device, dtype=dtype, low=low, high=high, seed=17)).float()
+
+    assert torch.all(data == expected)
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+
+
+@pytest.mark.parametrize("dtype", SUPPORTED_DTYPES)
+def test_rand_rejects_all_subnormal_range(device, dtype, expect_error):
+    with expect_error(RuntimeError, "contains no value representable"):
+        ttnn.rand(
+            (32, 32),
+            device=device,
+            dtype=dtype,
+            low=FLOAT32_MIN_SUBNORMAL,
+            high=FLOAT32_MIN_NORMAL,
+            seed=17,
+        )
+
+
+@pytest.mark.parametrize(
+    "low, high, error",
+    [
+        (math.nan, 1.0, "endpoints must be finite"),
+        (0.0, math.inf, "endpoints must be finite"),
+        (1.0, 1.0, "lower bound must be less than upper bound"),
+        (1.0, 0.0, "lower bound must be less than upper bound"),
+        (-torch.finfo(torch.float32).max, torch.finfo(torch.float32).max, "too wide"),
+        (FLOAT32_MIN_NORMAL, FLOAT32_MIN_NORMAL_PLUS_TWO_ULPS, "subnormal scale"),
+    ],
+)
+def test_rand_rejects_invalid_range(device, expect_error, low, high, error):
+    with expect_error(RuntimeError, error):
+        ttnn.rand((32, 32), device=device, dtype=ttnn.float32, low=low, high=high, seed=17)
 
 
 def test_rand_all_ones_seed_does_not_lock_prng(device):

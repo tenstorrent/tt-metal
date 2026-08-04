@@ -67,7 +67,6 @@ Tensor rand(
     TT_FATAL(
         dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16,
         "ttnn.rand supports only FLOAT32 and BFLOAT16 output dtypes");
-    TT_FATAL(from < to, "Rand: `from` argument must be < `to` argument");
 
     ttnn::Shape device_shape = shape;
     ttsl::SmallVector<bool> mesh_dim_is_sharded;
@@ -83,7 +82,7 @@ Tensor rand(
         mesh_dim_is_sharded = build_shard_mask(config);
     }
 
-    const auto output_range = ttnn::operations::uniform::detail::make_output_range(from, to, dtype);
+    const auto output_range = ttnn::operations::uniform::detail::make_inclusive_output_range(from, to, dtype);
 
     auto tensor = ttnn::prim::uniform(
         device_shape,

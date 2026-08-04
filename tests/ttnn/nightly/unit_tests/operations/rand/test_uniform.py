@@ -233,6 +233,24 @@ def test_uniform_rejects_range_without_bfloat16_value(device, expect_error):
         ttnn.uniform(npu, 1.001, 1.002, 17)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_uniform_respects_flush_to_zero_range_ending_at_zero(device, dtype):
+    min_normal = torch.finfo(torch.float32).tiny
+    npu = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.float32),
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    ttnn.uniform(npu, -min_normal, 0.0, 17)
+    data = ttnn.to_torch(npu).float()
+
+    assert torch.all(data == -min_normal)
+    assert torch.all(data >= -min_normal)
+    assert torch.all(data < 0.0)
+
+
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 2, 4, 70, 40]],

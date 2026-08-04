@@ -17,8 +17,7 @@ Tensor uniform(
     const uint32_t seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    TT_FATAL(from < to, "Uniform: from param must be < to");
-    const auto output_range = operations::uniform::detail::make_output_range(from, to, input.dtype());
+    const auto output_range = operations::uniform::detail::make_inclusive_output_range(from, to, input.dtype());
     return ttnn::prim::uniform(
         input, output_range.lower_bound, output_range.upper_bound, seed, memory_config, compute_kernel_config);
 }
