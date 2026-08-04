@@ -447,14 +447,12 @@ def run_request_loop(
     h2d_service=None,
     d2d_in=None,
     d2d_out=None,
-    migration_driver=None,
-) -> dict:
+) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
-    as a hard fallback, until SIGTERM/SIGKILL. No fixed chunk bound, no trace input, no PCC.
-
-    Returns (real_end_per_slot, total_chunks)."""
+    as a hard fallback, until SIGTERM/SIGKILL. No fixed chunk bound, no trace input, no PCC, no
+    migration — the runner serves; migration is issued from outside (migration_driver.py)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -465,7 +463,6 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
-    real_end_per_slot: dict = {}
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
@@ -481,24 +478,10 @@ def run_request_loop(
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
         t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
-        # Interleaved migration: register this chunk's correlation, then migrate any chunk whose layers
-        # have all acked (single-rank: chunk c's acks are visible the moment _compute_and_send returns).
-        if migration_driver is not None:
-            migration_driver.record_chunk(c, meta["slot_id"], meta["actual_start"], meta["actual_end"])
-            logger.info(
-                f"[interleave] prefilled chunk {c} (slot{meta['slot_id']} "
-                f"pos[{meta['actual_start']},{meta['actual_end']})); pumping migration driver"
-            )
-            migration_driver.pump(current_prefill_chunk=c)
-        # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
-        # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
-        s = meta["slot_id"]
-        real_end_per_slot[s] = max(real_end_per_slot.get(s, 0), meta["actual_end"])
         if first is None:
             first = t
         c += 1
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
-    return real_end_per_slot, c
 
 
 # ---------------------------------------------------------------------------
@@ -701,31 +684,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # every rank joins the cross-host all-gather (barrier) that merges the table, then ONLY the first
     # rank asks its model runtime to build the merged table and sends it to the worker (mirroring
     # tt-blaze where all ranks all-gather but only mesh 0 builds + sends). Previously single-rank only.
+    # The runner never migrates; it only publishes. Rank 0 holds the client here for the process's
+    # lifetime because dropping the reference destroys it and the worker loses the table it gated on.
     migration_endpoint = None
-    # Single opt-in: PREFILL_MIGRATION_SELFTEST=1 runs the post-loop migrate AND implies the table
-    # publish it depends on, so you don't also have to set PREFILL_ENABLE_MIGRATION. The latter still
-    # works on its own for production publish-without-selftest.
-    _selftest = os.environ.get("PREFILL_MIGRATION_SELFTEST", "0") == "1"
     # Mock integration: publish the KV chunk table + device map for an external reader
     # (prefill_producer.py's PREFILL_PRODUCER_CHECK_PCC) with NO migration worker. It must open this
     # block ON ITS OWN — gating it behind _migration_enabled made it unreachable, since
     # PREFILL_ENABLE_MIGRATION additionally drives the publish-and-block-on-WORKER_READY path below.
     _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
-    _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1" or _selftest
-    _interleaved = os.environ.get("PREFILL_MIGRATION_INTERLEAVED", "0") == "1"
-
-    # Both flags put a scheduler stand-in on the master's ack channel, and try_consume_all() is a
-    # destructive read against one shared cursor -- two consumers split the ack stream instead of each
-    # seeing it whole. Rank-invariant (env + num_ranks only) and checked before the bring-up all-gather,
-    # so every rank raises together rather than deadlocking the survivors. Single-rank never builds the
-    # check consumer, so the combination is harmless there.
-    if num_ranks > 1 and check_completions and _selftest and _interleaved:
-        raise ValueError(
-            "PREFILL_CHECK_COMPLETIONS=1 and PREFILL_MIGRATION_INTERLEAVED=1 cannot both be set in "
-            f"pipeline mode (num_ranks={num_ranks}): both consume {ack_shm_name}, so each sees only part "
-            "of the ack stream (the completion check can still report PASS while interleaved migration "
-            "silently drops its tail chunks). Set exactly one."
-        )
+    _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1"
 
     # Mock integration (prefill_producer.py's PREFILL_PRODUCER_CHECK_PCC): publish the KV chunk table +
     # device map for an external device-less reader, with NO migration worker. Deliberately OUTSIDE the
@@ -885,52 +852,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
             completion_check = CompletionCheckConsumer(ack_shm_name, num_layers=NUM_LAYERS)
 
-    # The self-test's migrate runs AFTER the request loop, and the loop only ends on the producer's
-    # shutdown sentinel — a producer that never sends one leaves every rank parked in recv and the
-    # migrate unreached (the runner cannot see the producer's env, hence a warning, not a check).
-    if _selftest:
-        logger.warning(
-            "[migration-selftest] the post-loop migrate needs the request loop to end: run the producer "
-            "with PREFILL_SEND_SHUTDOWN=1 (or have the scheduler close the stream)"
-        )
-
-    # Interleaved migration self-test: rank 0 stands in for the scheduler — consume the per-layer ack
-    # channel and migrate each chunk as its layers complete, overlapping later chunks' prefill (replaces
-    # the post-loop bulk migrate). Rank 0 only (it holds the migration client); other ranks just verify.
-    mig_driver = None
-    if _selftest and is_first_rank and _interleaved:
-        from models.demos.common.prefill.runners.scheduler_standins import InterleavedMigrationDriver
-
-        assert migration_endpoint is not None, "rank 0 must hold the migration client for interleaved migrate"
-        # Granularity flag: "layerwise" (default) migrates each chunk's layers as they ack — finer
-        # overlap; "chunkwise" waits for a chunk's full 61-layer ack then migrates it in one shot.
-        granularity = os.environ.get("PREFILL_MIGRATION_GRANULARITY", "layerwise").strip().lower()
-        if granularity not in ("layerwise", "chunkwise"):
-            raise ValueError(f"PREFILL_MIGRATION_GRANULARITY must be 'layerwise' or 'chunkwise', got {granularity!r}")
-        mig_driver = InterleavedMigrationDriver(
-            ack_shm_name,
-            migration_endpoint,
-            num_layers=NUM_LAYERS,
-            src_slot=int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0")),
-            dst_slot=int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1")),
-            endpoint_id=int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1")),
-            wait_complete_ms=int(os.environ.get("PREFILL_MIGRATE_WAIT_COMPLETE_MS", "120000")),
-            # Diagnostics: the master router (pipeline only; None in single-rank) exposes .processed so the
-            # driver can log injected-vs-consumed acks. router is None here in the single-rank path.
-            router=router,
-            granularity=granularity,
-        )
-        logger.info(
-            f"[interleave] migration mode = INTERLEAVED, granularity={granularity} "
-            f"(PREFILL_MIGRATION_INTERLEAVED=1, PREFILL_MIGRATION_GRANULARITY={granularity}): rank 0 migrates "
-            "as layers ack, overlapping later chunks' prefill; one blocking wait at drain"
-        )
-    elif _selftest and is_first_rank:
-        logger.info(
-            "[interleave] migration mode = BULK (single post-loop migrate); set PREFILL_MIGRATION_INTERLEAVED=1 "
-            "to interleave migrates with prefill"
-        )
-
     # Capture the trace (use_trace) after the D2D endpoints AND the per-layer completion wiring
     # (LayerAck channel / layer-completion sink) are set up, but before the request loop: the capture
     # must split at each completion point, and doing it here keeps the one-time cost out of the loop.
@@ -941,7 +862,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:
-        real_end_per_slot, total_chunks = run_request_loop(
+        run_request_loop(
             runtime,
             kv_caches,
             rank,
@@ -950,68 +871,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             h2d_service=h2d_service,
             d2d_in=d2d_in,
             d2d_out=d2d_out,
-            migration_driver=mig_driver,
         )
-
-        # Release services while the mesh + command queues are still alive (their dtors free a command
-        # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
-        import gc
-
-        if _selftest:
-            src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0"))
-            dst_slot = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1"))
-
-            # Interleaved-vs-bulk MUST be decided by an all-ranks-agree predicate (the env flag), NOT by
-            # `mig_driver is None`: mig_driver is set ONLY on rank 0, so keying the pre-migrate barrier on it
-            # made non-first ranks (mig_driver None) run an EXTRA barrier that rank 0 (draining) skipped ->
-            # distributed_context_barrier() is an anonymous collective, so the mismatched count deadlocks
-            # (rank 0's post-migrate barrier pairs with the others' pre-migrate barrier, then the others
-            # block forever on their second barrier). Every rank evaluates `_interleaved` identically.
-            if not _interleaved:
-                # Bulk migrate path: ALL ranks sync + barrier so the KV cache is fully written before rank 0
-                # issues the single post-loop migrate. (Interleaved mode instead drains on rank 0 below.)
-                ttnn.synchronize_device(runtime.mesh_device)
-                if num_ranks > 1:
-                    ttnn.distributed_context_barrier()
-
-            # RANK 0 ONLY issues the migrate (it holds the MigrationLayerClient).
-            if is_first_rank and mig_driver is not None:
-                # Interleaved: per-chunk migrates were already issued during the loop; drain the tail
-                # (consume any remaining acks + wait_complete the deferred copies).
-                mig_driver.drain(expected_chunks=total_chunks)
-            elif is_first_rank:
-                assert migration_endpoint is not None, "rank 0 must hold the migration client for the self-test"
-                # Loopback target is THIS endpoint's own id (A->B loopback; no peer, no connect_to).
-                self_ep = int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1"))
-                # Position range = the src slot's real prefilled length, aligned UP to the 32-token KV
-                # migration chunk (blaze's _align_up(S)). Migrate the FULL global layer range [0, NUM_LAYERS)
-                # the merged table was built for — the worker routes each layer to its owning stage.
-                POS_CHUNK = 32
-                real_end = real_end_per_slot.get(src_slot, 0)
-                pos_end = ((real_end + POS_CHUNK - 1) // POS_CHUNK) * POS_CHUNK
-                logger.info(
-                    f"[migration-selftest] loopback migrate slot{src_slot}->slot{dst_slot} "
-                    f"layers[0,{NUM_LAYERS}) pos[0,{pos_end}) (real_end={real_end}, self_ep={self_ep})"
-                )
-                # wait_complete's C++ default is only 30s; a full-prefill loopback copy (here ~2 GB:
-                # 56320 pos x 61 layers) can exceed that, so make it configurable.
-                wait_complete_ms = int(os.environ.get("PREFILL_MIGRATE_WAIT_COMPLETE_MS", "120000"))
-                tok = migration_endpoint.migrate(1, self_ep, src_slot, dst_slot, 0, NUM_LAYERS, 0, pos_end)
-                migration_endpoint.wait_complete(tok, wait_complete_ms)
-                logger.success(f"[migration-selftest] migrate slot{src_slot}->slot{dst_slot} complete")
-
-            # Barrier: rank 0's migrate copies EVERY stage's layers, so no rank may fall through to
-            # teardown (and free its mesh) until that migrate has completed.
-            if num_ranks > 1:
-                ttnn.distributed_context_barrier()
-            ttnn.synchronize_device(runtime.mesh_device)
     finally:
         # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
         # spin timing out on a stalled router); without this, producer/router/ack segments + the
         # router listener thread leak, and a downstream peer blocked in D2D recv deadlocks the pipeline.
-        # Release services while the mesh + command queues are still alive (their dtors free a command
-        # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
-
         # Release services while the mesh + command queues are still alive (their dtors free a command
         # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
         import gc
