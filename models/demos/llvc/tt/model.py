@@ -338,14 +338,12 @@ class LLVCModel:
         ctx = ops.scaled_dot_product_attention(q, k, v, n_heads=cfg.nhead, head_dim=head_dim)
         return ops.linear(ctx, spec["ow"], spec["ob"], dtype=self.dtype)
 
-    def _build_windows(self, seq, num_windows):
-        """Unfold ``[B, ctx_len + T, D]`` into ``[B * num_windows, ctx_len + chunk, D]``."""
+    def _build_windows(self, seq, start: int, end: int):
+        """Unfold windows ``[start, end)`` of ``seq`` into ``[B*(end-start), ctx+chunk, D]``."""
         cfg = self.config
         win = cfg.dec_buf_len + cfg.dec_chunk_size
         stride = cfg.dec_chunk_size
-        windows = []
-        for i in range(num_windows):
-            windows.append(ops.slice_time(seq, i * stride, i * stride + win))
+        windows = [ops.slice_time(seq, i * stride, i * stride + win) for i in range(start, end)]
         if len(windows) == 1:
             return windows[0]
         return ttnn.concat([ops.as_row_major(w) for w in windows], dim=0)
@@ -363,35 +361,48 @@ class LLVCModel:
         T = m.shape[1]
         num_windows = T // cs
 
-        # memory (cross-attention keys/values)
+        # memory (cross-attention keys/values) — full sequence, same as reference
         mem = ops.concat_time(state.dec_mem_ctx, e)
         self._carry(state.dec_mem_ctx, ops.slice_time(mem, mem.shape[1] - cfg.dec_buf_len, mem.shape[1]))
-        mem_ctx = ops.as_tile(self._build_windows(mem, num_windows))
-        if cfg.use_pos_enc:
-            mem_ctx = ttnn.add(mem_ctx, self.dec_pos_enc)
 
+        # Micro-batch decoder windows. The reference batches with K=1000; on TTNN
+        # a single mega-batch is size-sensitive (certain file lengths collapse to
+        # ~0.1 PCC while neighbouring lengths match at 0.999). Windows are
+        # independent given the unfolded context, so this does not change the math.
+        max_windows = 64
         tgt = m
         for li, spec in enumerate(self.dec_layers):
             seq = ops.concat_time(state.dec_tgt_ctx[li], tgt)
             self._carry(state.dec_tgt_ctx[li], ops.slice_time(seq, seq.shape[1] - cfg.dec_buf_len, seq.shape[1]))
-            tgt_ctx = ops.as_tile(self._build_windows(seq, num_windows))
-            if cfg.use_pos_enc and li == 0:
-                tgt_ctx = ttnn.add(tgt_ctx, self.dec_pos_enc)
 
-            last = ops.slice_time(tgt_ctx, tgt_ctx.shape[1] - cs, tgt_ctx.shape[1])  # query = last chunk
-            # self-attention
-            sa = self._mha(spec["self_attn"], last, tgt_ctx, tgt_ctx)
-            x = ops.layernorm_channels(ttnn.add(last, sa), spec["n1_w"], spec["n1_b"])
-            # cross-attention
-            ca = self._mha(spec["cross_attn"], x, mem_ctx, mem_ctx)
-            x = ops.layernorm_channels(ttnn.add(x, ca), spec["n2_w"], spec["n2_b"])
-            # feed-forward
-            ff = ops.linear(x, spec["l1_w"], spec["l1_b"], dtype=self.dtype, activation="relu")
-            ff = ops.linear(ff, spec["l2_w"], spec["l2_b"], dtype=self.dtype)
-            x = ops.layernorm_channels(ttnn.add(x, ff), spec["n3_w"], spec["n3_b"])
+            chunks = []
+            for w0 in range(0, num_windows, max_windows):
+                w1 = min(w0 + max_windows, num_windows)
+                mem_ctx = ops.as_tile(self._build_windows(mem, w0, w1))
+                if cfg.use_pos_enc:
+                    mem_ctx = ttnn.add(mem_ctx, self.dec_pos_enc)
+                tgt_ctx = ops.as_tile(self._build_windows(seq, w0, w1))
+                if cfg.use_pos_enc and li == 0:
+                    tgt_ctx = ttnn.add(tgt_ctx, self.dec_pos_enc)
 
-            # [B*nw, cs, D] -> [B, T, D]
-            tgt = ttnn.reshape(ops.as_row_major(x), (B, T, cfg.dec_dim))
+                last = ops.slice_time(tgt_ctx, tgt_ctx.shape[1] - cs, tgt_ctx.shape[1])
+                sa = self._mha(spec["self_attn"], last, tgt_ctx, tgt_ctx)
+                x = ops.layernorm_channels(ttnn.add(last, sa), spec["n1_w"], spec["n1_b"])
+                ca = self._mha(spec["cross_attn"], x, mem_ctx, mem_ctx)
+                x = ops.layernorm_channels(ttnn.add(x, ca), spec["n2_w"], spec["n2_b"])
+                ff = ops.linear(x, spec["l1_w"], spec["l1_b"], dtype=self.dtype, activation="relu")
+                ff = ops.linear(ff, spec["l2_w"], spec["l2_b"], dtype=self.dtype)
+                x = ops.layernorm_channels(ttnn.add(x, ff), spec["n3_w"], spec["n3_b"])
+                chunks.append(ops.as_row_major(x))
+
+            # Reshape each micro-batch to time then concat — avoids one mega
+            # [nw, cs, D] -> [B, T, D] reshape that is fragile with TILE padding.
+            tgt = None
+            for i, piece in enumerate(chunks):
+                w0 = i * max_windows
+                w1 = min(w0 + max_windows, num_windows)
+                timed = ttnn.reshape(piece, (B, (w1 - w0) * cs, cfg.dec_dim))
+                tgt = timed if tgt is None else ops.concat_time(tgt, timed)
         if T != orig_T:
             tgt = ops.slice_time(tgt, 0, orig_T)
         return tgt
@@ -469,15 +480,25 @@ class LLVCModel:
         return ops.tanh(wav)  # [B, T_out, 1]
 
     def __call__(self, waveform: torch.Tensor) -> torch.Tensor:
-        """Non-streaming conversion of ``[B, 1, T]`` (or ``[T]``) torch waveform -> ``[B, 1, T]``."""
-        x, mod, original_len = self._pad_input(waveform)
-        x_btc = _to_device(x.transpose(1, 2), device=self.device, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        state = self.init_state(x.shape[0])
-        wav = self.forward_chunk(x_btc, state)
-        out = ops.to_torch(wav).float().transpose(1, 2)  # [B, 1, T_out]
-        if mod != 0:
-            out = out[:, :, :-mod]
-        return out[:, :, :original_len]
+        """Offline conversion of ``[B, 1, T]`` (or ``[T]``) torch waveform -> ``[B, 1, T]``.
+
+        Runs the causal graph in decoder-aligned chunks (same path as
+        :meth:`stream`) rather than one mega ``forward_chunk`` over the whole
+        file. A single full-sequence shot is size-sensitive on TTNN — certain
+        lengths diverge from the PyTorch reference at ~0.1 PCC while neighbours
+        match at 0.999 — while the chunked path stays in the validated regime
+        and is mathematically equivalent for this causal model.
+        """
+        if waveform.dim() == 3:
+            if waveform.shape[0] != 1:
+                raise ValueError("LLVCModel offline path supports batch size 1")
+            audio = waveform.reshape(-1)
+        elif waveform.dim() == 2:
+            audio = waveform.reshape(-1)
+        else:
+            audio = waveform
+        out, _, _ = self.stream(audio, chunk_factor=1)
+        return out
 
     def stream(self, waveform: torch.Tensor, *, chunk_factor: int = 1) -> tuple[torch.Tensor, float, float]:
         """Streaming conversion mirroring KoeAI ``infer_stream``.

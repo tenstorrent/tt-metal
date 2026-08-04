@@ -47,13 +47,59 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import logging
 import os
 from pathlib import Path
 
 import torch
-from loguru import logger
 
-from models.demos.llvc.demo.demo import _glob_audio, _load_audio, _safe_output_path, _save_audio
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(message)s")
+logger = logging.getLogger("llvc-eval")
+
+
+# --------------------------------------------------------------------- audio io
+# Inlined (rather than imported from demo.py) so this module stays ttnn-free:
+# the `metrics` stage must import cleanly in a lightweight venv that only has the
+# quality-eval deps (whisper / resemblyzer / torchmetrics), not the tt-metal stack.
+def _glob_audio(path: str) -> list[str]:
+    if os.path.isfile(path):
+        return [path]
+    files: list[str] = []
+    for ext in ("wav", "mp3", "flac"):
+        files.extend(str(p) for p in Path(path).rglob(f"*.{ext}"))
+    return sorted(files)
+
+
+def _resample(audio: torch.Tensor, sr: int, target: int) -> torch.Tensor:
+    if sr == target:
+        return audio
+    n = int(round(audio.shape[-1] * target / sr))
+    a = audio.reshape(1, 1, -1)
+    a = torch.nn.functional.interpolate(a, size=n, mode="linear", align_corners=False)
+    return a.reshape(-1)
+
+
+def _load_audio(path: str, sample_rate: int) -> torch.Tensor:
+    import soundfile as sf
+
+    data, sr = sf.read(path, dtype="float32", always_2d=True)
+    audio = torch.from_numpy(data).mean(dim=1)
+    return _resample(audio, sr, sample_rate)
+
+
+def _save_audio(audio: torch.Tensor, path: str, sample_rate: int) -> None:
+    import soundfile as sf
+
+    sf.write(path, audio.detach().cpu().reshape(-1).float().numpy(), sample_rate)
+
+
+def _safe_output_path(out_dir: str, name: str) -> str:
+    """Resolve ``name`` inside ``out_dir``, rejecting path-traversal in ``name``."""
+    out_dir_abs = os.path.abspath(out_dir)
+    dest = os.path.abspath(os.path.join(out_dir_abs, os.path.basename(name)))
+    if os.path.commonpath([out_dir_abs, dest]) != out_dir_abs:
+        raise ValueError(f"Unsafe output path derived from {name!r}")
+    return dest
 
 
 # --------------------------------------------------------------------- metrics
@@ -118,6 +164,45 @@ def global_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return max(-1.0, min(1.0, (xv * yv).sum().item() / (denom + 1e-8)))
 
 
+def best_lag(est: torch.Tensor, ref: torch.Tensor, max_lag: int = 4096) -> int:
+    """Integer sample lag (via FFT cross-correlation) that best aligns ``est`` to ``ref``.
+
+    Positive lag means ``est`` is delayed w.r.t. ``ref`` (align by dropping ``lag``
+    leading samples of ``est``). Used to tell a genuine numerical divergence apart
+    from a benign fixed latency offset: a time-shifted-but-correct waveform scores
+    terribly on per-sample PCC / SI-SDR yet is perceptually fine (good WER).
+    """
+    e = est.flatten().float()
+    r = ref.flatten().float()
+    n = min(e.numel(), r.numel())
+    if n == 0:
+        return 0
+    e = e[:n] - e[:n].mean()
+    r = r[:n] - r[:n].mean()
+    size = 1
+    while size < 2 * n:
+        size <<= 1
+    cc = torch.fft.irfft(torch.fft.rfft(e, size) * torch.conj(torch.fft.rfft(r, size)), size)
+    lags = torch.arange(size)
+    true_lag = torch.where(lags <= size // 2, lags, lags - size)
+    cc = cc.masked_fill(true_lag.abs() > min(max_lag, n - 1), float("-inf"))
+    return int(true_lag[int(torch.argmax(cc))])
+
+
+def aligned_scores(est: torch.Tensor, ref: torch.Tensor) -> tuple[int, float, float]:
+    """``(lag, global_pcc, si_sdr_db)`` after removing the best integer sample lag."""
+    e = est.flatten().float()
+    r = ref.flatten().float()
+    n = min(e.numel(), r.numel())
+    e, r = e[:n], r[:n]
+    lag = best_lag(e, r)
+    if lag > 0:
+        e, r = e[lag:], r[: n - lag]
+    elif lag < 0:
+        e, r = e[: n + lag], r[-lag:]
+    return lag, global_pcc(e, r), si_sdr_db(e, r)
+
+
 def decoder_throughput(rtf: float, sample_rate: int, hop: int) -> dict:
     """Latent-frame throughput derived from RTF.
 
@@ -147,7 +232,10 @@ def try_wer(source_paths: list[str], converted_paths: list[str]) -> dict | None:
     asr = whisper.load_model("base.en")
 
     def transcribe(path: str) -> str:
-        return asr.transcribe(path, fp16=False)["text"].strip().lower()
+        # Decode with soundfile and hand Whisper the raw 16 kHz mono waveform;
+        # passing a path would make Whisper shell out to ffmpeg (not installed here).
+        wav = _load_audio(path, 16000).numpy().astype("float32")
+        return asr.transcribe(wav, fp16=False)["text"].strip().lower()
 
     refs, hyps = [], []
     for src, conv in zip(source_paths, converted_paths):
@@ -216,7 +304,7 @@ def try_dnsmos(converted_paths: list[str], sample_rate: int) -> dict | None:
 
         metric = DeepNoiseSuppressionMeanOpinionScore(fs=sample_rate, personalized=False)
     except (ImportError, ModuleNotFoundError) as exc:
-        logger.warning("DNSMOS skipped ({}): install torchmetrics[audio] + onnxruntime + librosa + requests.", exc)
+        logger.warning("DNSMOS skipped (%s): install torchmetrics[audio] + onnxruntime + librosa + requests.", exc)
         return None
 
     import soundfile as sf
@@ -230,6 +318,39 @@ def try_dnsmos(converted_paths: list[str], sample_rate: int) -> dict | None:
 
 
 # ------------------------------------------------------------------- stages
+def reference_stream(reference, audio: torch.Tensor, *, L: int, dec_chunk_size: int, chunk_factor: int) -> torch.Tensor:
+    """Run the PyTorch reference with the same chunking as ``LLVCModel.stream``.
+
+    Offline ``reference(wav)`` and streaming inference use different padding /
+    lookahead alignment; comparing TTNN stream against offline reference can
+    look like a correctness bug when it is only an alignment mismatch. Scoring
+    both sides with identical chunking isolates real numerical divergence.
+    """
+    chunk_len = dec_chunk_size * L * chunk_factor
+    waveform = audio.reshape(-1)
+    original_len = int(waveform.shape[0])
+    if original_len % chunk_len != 0:
+        waveform = torch.nn.functional.pad(waveform, (0, chunk_len - (original_len % chunk_len)))
+    waveform = torch.cat((waveform[L:], torch.zeros(L)))
+    chunks = list(torch.split(waveform, chunk_len))
+
+    enc_buf, dec_buf, out_buf = reference.init_buffers(1, waveform.device)
+    convnet_ctx = None
+    if hasattr(reference, "convnet_pre"):
+        convnet_ctx = reference.convnet_pre.init_ctx_buf(1, waveform.device)
+
+    outputs = []
+    with torch.no_grad():
+        for i, c in enumerate(chunks):
+            front = torch.zeros(L * 2) if i == 0 else chunks[i - 1][-L * 2 :]
+            chunk = torch.cat([front, c]).reshape(1, 1, -1)
+            out, enc_buf, dec_buf, out_buf, convnet_ctx = reference(
+                chunk, enc_buf, dec_buf, out_buf, convnet_ctx, pad=False
+            )
+            outputs.append(out)
+    return torch.cat(outputs, dim=-1)[:, :, :original_len]
+
+
 def convert_stage(args: argparse.Namespace) -> dict:
     """Device stage: convert wavs, time streaming, score token-level accuracy."""
     import ttnn
@@ -256,23 +377,32 @@ def convert_stage(args: argparse.Namespace) -> dict:
         os.makedirs(args.out_dir, exist_ok=True)
         source_paths, converted_paths = [], []
         rtfs, latencies, si_sdrs, global_pccs, frame_corrs = [], [], [], [], []
+        aligned_pccs, aligned_si_sdrs, lags = [], [], []
         voiced_total, frame_total = 0, 0
 
         for fname in files:
             audio = _load_audio(fname, sr)
-            wav = audio.reshape(1, 1, -1)
 
-            with torch.no_grad():
-                ref_out = reference(wav)
-            tt_ns = model(wav)
-            corr, n_voiced, n_frames = per_frame_pcc(tt_ns, ref_out, hop)
+            # Score the shipped streaming path against the reference run with the
+            # same chunking (apples-to-apples). Offline mega-shot on TTNN is
+            # size-sensitive; model() now uses the chunked graph as well.
+            ref_out = reference_stream(
+                reference, audio, L=config.L, dec_chunk_size=config.dec_chunk_size, chunk_factor=args.chunk_factor
+            )
+            stream_out, rtf, latency = model.stream(audio, chunk_factor=args.chunk_factor)
+            tt_out = stream_out
+
+            corr, n_voiced, n_frames = per_frame_pcc(tt_out, ref_out, hop)
             frame_corrs.append(corr)
             voiced_total += n_voiced
             frame_total += n_frames
-            global_pccs.append(global_pcc(tt_ns, ref_out))
-            si_sdrs.append(si_sdr_db(tt_ns, ref_out))
+            global_pccs.append(global_pcc(tt_out, ref_out))
+            si_sdrs.append(si_sdr_db(tt_out, ref_out))
+            lag, apcc, asdr = aligned_scores(tt_out, ref_out)
+            lags.append(lag)
+            aligned_pccs.append(apcc)
+            aligned_si_sdrs.append(asdr)
 
-            stream_out, rtf, latency = model.stream(audio, chunk_factor=args.chunk_factor)
             rtfs.append(rtf)
             latencies.append(latency)
             out_path = _safe_output_path(args.out_dir, os.path.basename(fname))
@@ -280,12 +410,14 @@ def convert_stage(args: argparse.Namespace) -> dict:
             source_paths.append(os.path.abspath(fname))
             converted_paths.append(os.path.abspath(out_path))
             logger.info(
-                "[{}] RTF={:.3f} latency={:.2f}ms voiced_frame_pcc={:.4f} si_sdr={:.1f}dB",
+                "[%s] RTF=%.3f latency=%.2fms raw_pcc=%.4f lag=%d aligned_pcc=%.4f aligned_si_sdr=%.1fdB",
                 os.path.basename(fname),
                 rtf,
                 latency,
-                corr.mean().item(),
-                si_sdrs[-1],
+                global_pccs[-1],
+                lag,
+                apcc,
+                asdr,
             )
     finally:
         ttnn.close_device(device)
@@ -308,6 +440,12 @@ def convert_stage(args: argparse.Namespace) -> dict:
             "frac_voiced_frames_pcc_above_0.9": (all_corr > 0.9).float().mean().item(),
             "voiced_frames": voiced_total,
             "total_frames": frame_total,
+            # Lag-corrected: if these are high while the raw numbers above are low,
+            # the divergence is a per-file latency offset, not a correctness bug.
+            "aligned_global_pcc_mean": sum(aligned_pccs) / len(aligned_pccs),
+            "aligned_si_sdr_db_mean": sum(aligned_si_sdrs) / len(aligned_si_sdrs),
+            "per_file_lag_samples": {os.path.basename(f): lag for f, lag in zip(files, lags)},
+            "max_abs_lag_samples": max(abs(x) for x in lags),
         },
         "_manifest": {"sample_rate": sr, "sources": source_paths, "converted": converted_paths},
     }
@@ -356,13 +494,19 @@ def _write_markdown(report: dict, path: str) -> None:
         f"| Mean chunk latency | {st['mean_chunk_latency_ms']:.2f} ms |",
         f"| Decoder throughput | {thr['achieved_frames_per_s']:.0f} frames/s ({thr['speed_vs_realtime']:.2f}× real-time) |",
         f"| Real-time frame rate needed | {thr['realtime_frames_per_s']:.0f} frames/s |",
-        f"| Token-level accuracy (global PCC) | {tok['global_pcc_mean']:.4f} |",
-        f"| Token-level accuracy (SI-SDR) | {tok['si_sdr_db_mean']:.1f} dB |",
+        f"| Token-level accuracy (global PCC, raw) | {tok['global_pcc_mean']:.4f} |",
+        f"| Token-level accuracy (SI-SDR, raw) | {tok['si_sdr_db_mean']:.1f} dB |",
         f"| Voiced-frame PCC (mean) | {tok['voiced_frame_pcc_mean']:.4f} |",
         f"| Voiced-frame PCC (min) | {tok['voiced_frame_pcc_min']:.4f} |",
         f"| Voiced frames with PCC > 0.9 | {tok['frac_voiced_frames_pcc_above_0.9'] * 100:.1f}% |",
         f"| Voiced / total frames | {tok['voiced_frames']} / {tok['total_frames']} |",
     ]
+    if "aligned_global_pcc_mean" in tok:
+        lines += [
+            f"| Token-level accuracy (global PCC, lag-aligned) | {tok['aligned_global_pcc_mean']:.4f} |",
+            f"| Token-level accuracy (SI-SDR, lag-aligned) | {tok['aligned_si_sdr_db_mean']:.1f} dB |",
+            f"| Max per-file lag | {tok['max_abs_lag_samples']} samples |",
+        ]
     if "content_preservation_wer" in report:
         lines.append(f"| Content preservation (WER, source vs converted) | {report['content_preservation_wer']['wer'] * 100:.1f}% |")
     if "speaker_similarity" in report:
@@ -417,7 +561,7 @@ def main() -> None:
         _write_report(report, args.out_dir)
 
     json_path, md_path = os.path.join(args.out_dir, "eval_report.json"), os.path.join(args.out_dir, "eval_report.md")
-    logger.info("Wrote {} and {}", json_path, md_path)
+    logger.info("Wrote %s and %s", json_path, md_path)
     print(json.dumps({k: v for k, v in report.items() if k != "_manifest"}, indent=2))
 
 
