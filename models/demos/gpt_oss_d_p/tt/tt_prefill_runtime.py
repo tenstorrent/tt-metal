@@ -337,7 +337,13 @@ class TtPrefillRuntime:
 
     def top1_check(self, our_top1, trace_dir):
         """Compare our per-position top-1 to the golden reference (reference_top1.safetensors, key
-        top1_token_ids [n_tokens]). Returns (agreement_fraction, n_compared, first_token_match)."""
+        top1_token_ids [n_tokens]). Returns (agreement_fraction, n_positions, gen_token_match).
+
+        gen_token_match is the FIRST GENERATED token — the argmax at the LAST prompt position
+        (our_top1[-1]), i.e. the token the model would emit after the prompt. (Position 0 is a
+        teacher-forced next-token, not the generation.) Requires a FULL-length reference: a truncated /
+        mismatched golden is rejected, not silently partially compared, since this is the definitive
+        full-prompt sign-off."""
         from safetensors import safe_open
 
         ref_path = Path(trace_dir) / "reference_top1.safetensors"
@@ -348,10 +354,15 @@ class TtPrefillRuntime:
             )
         with safe_open(str(ref_path), framework="pt") as h:
             ref = h.get_tensor("top1_token_ids").reshape(-1).long()
-        n = min(ref.numel(), our_top1.numel())
-        agree = float((our_top1[:n].long() == ref[:n]).float().mean())
-        first = bool(our_top1[0].long() == ref[0].long()) if n else False
-        return agree, n, first
+        our = our_top1.long()
+        if ref.numel() != our.numel():
+            raise ValueError(
+                f"reference_top1 has {ref.numel()} positions but prefill produced {our.numel()}; the "
+                f"sign-off needs a full-prompt reference — regenerate the golden for this exact prompt."
+            )
+        agree = float((our == ref).float().mean())
+        gen_match = bool(our[-1] == ref[-1])  # first generated token = argmax at the last prompt position
+        return agree, our.numel(), gen_match
 
     def kv_cache_pcc_check(
         self, kv_caches=None, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0

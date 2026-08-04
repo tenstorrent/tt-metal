@@ -209,41 +209,54 @@ def main():
         # is the definitive "does prefill predict the right tokens" check (KV PCC is only a proxy).
         # Gate on GPT_OSS_TOP1_MIN when set (CI); needs the golden to carry reference_top1.safetensors.
         if os.getenv("PREFILL_TOP1", "0") == "1":
+            _top1_min = os.environ.get("GPT_OSS_TOP1_MIN")
             if n_chunks != 1:
-                print("[prefill-pcc] TOP1 needs one-shot (PREFILL_CHUNKED=0); skipping top-1", flush=True)
-            else:
-                inp = runtime.make_chunk_input(padded[:chunk])
-                out = runtime.prefill_chunk(inp, slot_id=0, actual_start=0, actual_end=n_tokens, skip_lm_head=False)
-                our_top1 = runtime.logits_top1_oneshot(out, n_tokens)
-                out.deallocate(True)
+                # Top-1 is one-shot only; a chunked run can't exercise it. Fail loudly rather than
+                # silently no-op, so a CI job that asked for the sign-off can't go green without it.
+                print(
+                    f"[prefill-pcc] FAIL: PREFILL_TOP1 is one-shot only — set PREFILL_CHUNKED=0 "
+                    f"(got n_chunks={n_chunks})",
+                    flush=True,
+                )
+                return 1
+            inp = runtime.make_chunk_input(padded[:chunk])
+            out = runtime.prefill_chunk(inp, slot_id=0, actual_start=0, actual_end=n_tokens, skip_lm_head=False)
+            our_top1 = runtime.logits_top1_oneshot(out, n_tokens)
+            out.deallocate(True)
+            try:
+                agree, ncmp, gen_match = runtime.top1_check(our_top1, golden_dir)
+                print(
+                    f"[prefill-pcc] TOP-1 agreement vs golden: {agree * 100:.2f}% over {ncmp} positions "
+                    f"(gen-token match={gen_match})",
+                    flush=True,
+                )
+                if _top1_min is not None and agree < float(_top1_min):
+                    print(f"[prefill-pcc] FAIL: TOP-1 {agree:.4f} < GPT_OSS_TOP1_MIN={_top1_min}", flush=True)
+                    return 1
+            except FileNotFoundError as e:
+                # A configured gate must not pass without an HF comparison.
+                if _top1_min is not None:
+                    print(
+                        f"[prefill-pcc] FAIL: GPT_OSS_TOP1_MIN={_top1_min} set but no golden reference ({e})",
+                        flush=True,
+                    )
+                    return 1
+                # Ungated bring-up: report our own prediction so the device path is still validated.
+                tok0, gen = int(our_top1[0]), int(our_top1[-1])
+                dec0 = dec_gen = ""
                 try:
-                    agree, ncmp, first = runtime.top1_check(our_top1, golden_dir)
-                    print(
-                        f"[prefill-pcc] TOP-1 agreement vs golden: {agree * 100:.2f}% over {ncmp} positions "
-                        f"(first-token match={first})",
-                        flush=True,
-                    )
-                    _top1_min = os.environ.get("GPT_OSS_TOP1_MIN")
-                    if _top1_min is not None and agree < float(_top1_min):
-                        print(f"[prefill-pcc] FAIL: TOP-1 {agree:.4f} < GPT_OSS_TOP1_MIN={_top1_min}", flush=True)
-                        return 1
-                except FileNotFoundError as e:
-                    # No reference yet: report our own prediction so the device path is still validated.
-                    tok0, gen = int(our_top1[0]), int(our_top1[-1])
-                    dec0 = dec_gen = ""
-                    try:
-                        from transformers import AutoTokenizer
+                    from transformers import AutoTokenizer
 
-                        _tk = AutoTokenizer.from_pretrained(os.environ["HF_MODEL"])
-                        dec0, dec_gen = repr(_tk.decode([tok0])), repr(_tk.decode([gen]))
-                    except Exception:
-                        pass
-                    print(
-                        f"[prefill-pcc] TOP1: no golden reference ({e}); device path OK "
-                        f"({our_top1.numel()} positions). pos0 pred id={tok0} {dec0}; "
-                        f"generation (after prompt) id={gen} {dec_gen}",
-                        flush=True,
-                    )
+                    _tk = AutoTokenizer.from_pretrained(os.environ["HF_MODEL"])
+                    dec0, dec_gen = repr(_tk.decode([tok0])), repr(_tk.decode([gen]))
+                except Exception:
+                    pass
+                print(
+                    f"[prefill-pcc] TOP1: no golden reference ({e}); device path OK "
+                    f"({our_top1.numel()} positions). pos0 pred id={tok0} {dec0}; "
+                    f"generation (after prompt) id={gen} {dec_gen}",
+                    flush=True,
+                )
 
         print("[prefill-pcc] DONE", flush=True)
     finally:
