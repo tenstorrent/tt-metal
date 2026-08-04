@@ -35,3 +35,12 @@ logs/run_evaluation/
 # spec-decode / bg-run logs (run_bg.sh archives)
 doc/vllm_integration/_runs/
 *.rawout
+
+# bench / eval OUTPUT artifacts (regenerable; keep report HTML + script + STATUS instead)
+doc/vllm_integration/stage_d*/
+doc/vllm_integration/w1_diag/
+doc/vllm_integration/**/r_*.json
+doc/vllm_integration/**/sweep.tsv
+doc/vllm_integration/**/sweep.log
+swebench_*.json
+doc/optimized_multichip_decoder/perf_before_after_layer4.json
