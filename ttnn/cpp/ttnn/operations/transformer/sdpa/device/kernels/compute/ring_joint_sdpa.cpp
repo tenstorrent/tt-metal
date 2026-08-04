@@ -9,7 +9,6 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/cb_api.h"  // ckernel::read_tile_value (UNPACK-mailbox CB scalar read; no cb_interface)
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -76,6 +75,9 @@ void kernel_main() {
     constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(46);
     constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
+    constexpr bool use_attention_sink = get_compile_time_arg_val(49) == 1;
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(50);
+    constexpr bool has_sliding_window = sliding_window_size > 0;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -83,7 +85,7 @@ void kernel_main() {
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.
-    constexpr bool diag_tile_enabled = is_causal || chunked_enabled;
+    constexpr bool diag_tile_enabled = (is_causal || chunked_enabled) && !has_sliding_window;
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
@@ -91,16 +93,17 @@ void kernel_main() {
     constexpr bool global_n_has_padding = logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled || has_sliding_window;
 
     constexpr uint32_t neginf_tile_idx = 0;
     constexpr uint32_t causal_diag_tile_idx = diag_tile_enabled ? 1 : 0;
-    constexpr uint32_t base_partial_offset = 1 + (diag_tile_enabled ? 1 : 0);
+    constexpr uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
+    constexpr uint32_t base_partial_offset = 1 + edge_mask_tiles;
     constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? base_partial_offset : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
         (joint_l_partial_col > 0) ? (base_partial_offset + (global_n_partial_col > 0 ? 1 : 0)) : 0;
     constexpr uint32_t total_mask_tiles =
-        1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+        1 + edge_mask_tiles + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     constexpr uint32_t q_start_idx_t =
         chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Nt * ring_size : 0;
@@ -114,8 +117,6 @@ void kernel_main() {
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_writes_expected = get_arg_val<uint32_t>(argidx++);
-    // Mutable: on the kv_pad_from_metadata path these are overridden below from cb_kv_pad_derived
-    // (produced by the reader from metadata[1]), since compute cannot NoC-read the metadata DRAM tensor.
     uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     uint32_t kv_pad_q_pre_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t kv_pad_q_pre_wrap_tile_count = get_arg_val<uint32_t>(argidx++);
@@ -132,9 +133,8 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    // Compute fixed slot 49: trace-safe KV-pad derivation flag (cb_arg_offset bumped 49 -> 50).
-    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(49) == 1;
-    constexpr uint32_t cb_arg_offset = 50;
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(51) == 1;
+    constexpr uint32_t cb_arg_offset = 52;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -162,18 +162,12 @@ void kernel_main() {
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
 
-    // Trace-safe KV-pad derivation: the reader computed logical_nt / q-mapping / active_ring_iter_mask
-    // from metadata[1] and handed them over via cb_kv_pad_derived (compute can't NoC-read DRAM). Override
-    // the (trace-frozen) runtime args with the reader's values before the ring loop uses them.
     if constexpr (kv_pad_from_metadata) {
-        // Read the reader-produced scalars via ckernel::read_tile_value (UNPACK-mailbox CB read) -- the
-        // TRISC-safe way to pull a scalar out of a CB, mirroring sparse_sdpa_compute's cb_ctrl. The
-        // CircularBuffer::get_read_ptr() path references the cb_interface global which does not link on
-        // this compute kernel. wait_front/pop_front are LLK intrinsics and link fine.
         CircularBuffer cb_derived(cb_kv_pad_derived);
         cb_derived.wait_front(1);
-        logical_nt = ckernel::read_tile_value(cb_kv_pad_derived, /*tile=*/0, /*element_offset=*/0);
+        logical_nt = ckernel::read_tile_value(cb_kv_pad_derived, 0, 0);
         kv_pad_q_pre_wrap_start_tile = ckernel::read_tile_value(cb_kv_pad_derived, 0, 1);
         kv_pad_q_pre_wrap_tile_count = ckernel::read_tile_value(cb_kv_pad_derived, 0, 2);
         kv_pad_q_post_wrap_start_tile = ckernel::read_tile_value(cb_kv_pad_derived, 0, 3);
@@ -224,11 +218,14 @@ void kernel_main() {
             kv_pad_q_valid_tile_count}};
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        // Sliding folds all local/halo source ranges into one synthetic local iteration.
+        // The dataflow reader has already waited for the required halo completion signals.
+        uint32_t ring_id = has_sliding_window ? ring_index : fused_op_indexer.get_next_ring_id_and_sync();
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
-        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -282,7 +279,7 @@ void kernel_main() {
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
         }
 
-        const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+        const bool is_last_ring_iter = has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
 
         // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
         // (sdpa_ring_v2) paths.
@@ -291,14 +288,16 @@ void kernel_main() {
         //     late-half columns are -inf-masked via lw_mask.straddle_*).
         //   rix < rid && balanced (Case 2): skip first-half (L) Q-chunks.
         uint32_t iter_num_kv_chunks = num_kv_chunks;
-        if (is_causal && is_balanced && ring_index > ring_id) {
-            if constexpr (has_straddle) {
-                iter_num_kv_chunks = straddle_chunk_id + 1;
-            } else {
-                iter_num_kv_chunks /= 2;
+        if constexpr (!has_sliding_window) {
+            if (is_causal && is_balanced && ring_index > ring_id) {
+                if constexpr (has_straddle) {
+                    iter_num_kv_chunks = straddle_chunk_id + 1;
+                } else {
+                    iter_num_kv_chunks /= 2;
+                }
             }
         }
-        const bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
+        const bool skip_first_half_q = !has_sliding_window && (ring_index >= ring_id ? false : is_balanced);
 
         if constexpr (use_streaming_compute) {
             sdpa_ring_v2<
@@ -344,7 +343,11 @@ void kernel_main() {
                 kv_pad_rotation_enabled,
                 v_cb_physical_width_t,
                 v_shares_k_buffer,
-                kt_inplace_v>(
+                kt_inplace_v,
+                sliding_window_size,
+                ring_size,
+                use_attention_sink,
+                cb_attention_sink>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,

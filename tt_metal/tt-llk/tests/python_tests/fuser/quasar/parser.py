@@ -35,17 +35,24 @@ from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
+from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
+from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
 
 _no_broadcast = (
     lambda s, a, b: s.broadcast_type != BroadcastType.None_,
     "Quasar does not support broadcast in fuser",
+)
+
+_no_unpack_to_dest = (
+    lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes,
+    "unpack_to_dest is not supported for this kernel",
 )
 
 _no_transpose_unpack_to_dest = (
@@ -121,6 +128,11 @@ _datacopy_unpacker = (
     "Datacopy: unpacker must be UnpackerA or UnpackerTilizeA",
 )
 
+_block_full_width = (
+    lambda s, a, b: s._block_size[1] != a.dimensions[1],
+    "block width must be same as operand width",
+)
+
 _forced_unpacker = lambda name: (
     lambda s, a, b: s.unpacker is not None and s.unpacker != name,
     f"unpacker must be {name}",
@@ -145,6 +157,10 @@ UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(reuse_dest=s.reuse_dest),
         [_no_transpose_unpack_to_dest, _no_transpose_mismatch],
+    ),
+    "UnpackerTilizeA": (
+        lambda s: UnpackerTilizeA(),
+        [_no_transpose, _block_full_width, _no_unpack_to_dest],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
@@ -212,6 +228,7 @@ _l1_acc_format = (
 
 PACKER_MAP = {
     "Packer": (Packer, [_l1_acc_format]),
+    "MatmulPacker": (MatmulPacker, [_l1_acc_format]),
 }
 
 _eltwise_dims = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]))
