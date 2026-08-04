@@ -143,6 +143,14 @@ class LagunaForCausalLM:
         self._spec_probed = False
         self._spec_buf: list = []  # pending committed token ids, returned one per vLLM step
         self._spec_hist: list = []  # running token history for the single served request (ngram source)
+        # Diagnostic sink: MPI-worker stdout isn't captured in the readiness log, so spec/probe verdicts go
+        # to a file readable regardless of process. Only touched when spec mode is set (no normal-run noise).
+        self._spec_log_path = (
+            "/home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1/"
+            "doc/vllm_integration/_runs/spec_probe.txt"
+        )
+        if self._spec_mode:
+            self._spec_log(f"__init__ pid={os.getpid()} spec_mode={self._spec_mode!r}")
         # vLLM-owned cache dtype (from the selected precision policy), used for allocation.
         self._kv_dtype = self.model.precision_policy.kv_cache
 
@@ -802,6 +810,23 @@ class LagunaForCausalLM:
         logits = torch.stack([self._row_logits(h, r, L, st) for r in rows], dim=0)  # [len(rows), vocab]
         return logits
 
+    def _spec_log(self, msg):
+        """Append a diagnostic line to the spec-probe file AND stdout. The model runs in an MPI worker
+        whose stdout is not captured in the readiness log, so the file is the reliable sink."""
+        line = f"[laguna spec] {msg}"
+        try:
+            print(line, flush=True)
+        except Exception:
+            pass
+        try:
+            import os as _os
+
+            _os.makedirs(_os.path.dirname(self._spec_log_path), exist_ok=True)
+            with open(self._spec_log_path, "a") as _f:
+                _f.write(line + "\n")
+        except Exception:
+            pass
+
     def _spec_feasibility_probe(self, tokens, pos, page_table, kv_cache, page_tables_per_layer):
         """PHASE-2 FEASIBILITY PROBE (TT_LAGUNA_SPEC_DECODE=probe): run ONE eager batched-decode VERIFY
         (K1=2 = anchor + 1 dummy draft) under the RESIDENT decode trace and report whether it completes
@@ -816,23 +841,32 @@ class LagunaForCausalLM:
             toks = [anchor, anchor]  # K1=2: anchor + one dummy draft at the next position
             positions = [p0, p0 + 1]
             pt_arg = None if page_tables_per_layer is not None else page_table
-            t0 = _t.perf_counter()
-            g = self.verify_greedy_decode(
-                toks,
-                positions,
-                page_table=pt_arg,
-                kv_cache=kv_cache,
-                page_tables_per_layer=page_tables_per_layer,
-                traced=False,
+            self._spec_log(
+                f"PROBE START pid={os.getpid()} anchor={anchor} pos={p0} hybrid={page_tables_per_layer is not None}"
             )
-            dt = (_t.perf_counter() - t0) * 1000.0
-            print(
-                f"[laguna] SPEC-PROBE OK: eager verify under resident decode trace returned "
-                f"{[int(x) for x in g]} in {dt:.0f}ms (no hang) -> eager in-adapter spec-decode FEASIBLE.",
-                flush=True,
+            # Run 3x: iter 0 = compile (slow), iters 1-2 = WARM. Warm eager-verify time vs a ~35ms traced
+            # decode step is the go/no-go for eager spec-serving (decode is dispatch-bound; eager = full
+            # host dispatch, which tracing eliminates). Compare warm ms to draft_len to judge break-even.
+            for it in range(3):
+                t0 = _t.perf_counter()
+                g = self.verify_greedy_decode(
+                    toks,
+                    positions,
+                    page_table=pt_arg,
+                    kv_cache=kv_cache,
+                    page_tables_per_layer=page_tables_per_layer,
+                    traced=False,
+                )
+                dt = (_t.perf_counter() - t0) * 1000.0
+                self._spec_log(
+                    f"PROBE iter{it} ({'compile' if it == 0 else 'WARM'}): {dt:.0f}ms -> {[int(x) for x in g]}"
+                )
+            self._spec_log(
+                "PROBE OK: eager verify under resident decode trace completed (no hang) -> FEASIBLE. "
+                "Compare the WARM ms above to a ~35ms traced decode step to judge if eager spec can win."
             )
         except Exception as e:  # noqa: BLE001 - diagnostic probe, report any failure verbatim
-            print(f"[laguna] SPEC-PROBE FAILED under resident decode trace: {type(e).__name__}: {e}", flush=True)
+            self._spec_log(f"PROBE FAILED under resident decode trace: {type(e).__name__}: {e}")
 
     def verify_forward_decode(
         self,
@@ -1157,15 +1191,24 @@ class LagunaForCausalLM:
         B = tokens.shape[0]
         pos = torch.as_tensor(start_pos, dtype=torch.int32).reshape(B)
 
+        if self._spec_mode and not self._spec_probed:
+            # One-time diagnostic + Phase-2 feasibility probe. Placed BEFORE the host-sampling return and
+            # gated only on "once" (not B==1: served decode is padded to max_batch_size, so B is never 1).
+            self._spec_probed = True
+            self._spec_log(
+                f"decode_forward#1 pid={os.getpid()} B={B} reset_batch={reset_batch} "
+                f"host_sampling={sampling_params is None} hybrid={page_tables_per_layer is not None} "
+                f"spec_mode={self._spec_mode!r}"
+            )
+            if self._spec_mode == "probe":
+                # Run ONE eager verify under the resident decode trace on row 0; fall through to normal
+                # decode (throwaway KV at pos+1 — probe boot only).
+                self._spec_feasibility_probe(tokens, pos, page_table, kv_cache, page_tables_per_layer)
+
         if sampling_params is None:
             return self._decode_host_sampling(tokens, pos, page_table, kv_cache, read_from_device)
 
         hybrid = page_tables_per_layer is not None
-        if self._spec_mode == "probe" and B == 1 and not reset_batch and not self._spec_probed:
-            # Phase-2 feasibility probe: run ONE eager verify under the resident decode trace, then fall
-            # through to normal decode (output unaffected except throwaway KV at pos+1 — probe boot only).
-            self._spec_probed = True
-            self._spec_feasibility_probe(tokens, pos, page_table, kv_cache, page_tables_per_layer)
         st = self._decode.get(B)
         if st is None:
             # item 3.2: the decode trace for this batch B was NOT pre-captured by warmup, so we compile +

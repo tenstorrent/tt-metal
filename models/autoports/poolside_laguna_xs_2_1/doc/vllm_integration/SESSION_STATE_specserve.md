@@ -134,6 +134,28 @@ right before a boundary, where the next committed token allocates a fresh 64-slo
 concrete path to make in-adapter eager spec-serving correct. STILL needs the eager-verify-under-resident-
 decode-trace interaction validated (may relate to W1) + greedy-parity smoke test. Implement with mesh present.
 
+## PHASE-2 PROBE RESULT (2026-08-04, on device) — eager spec-serving FEASIBLE but MARGINAL
+Ran a gated one-shot probe (`TT_LAGUNA_SPEC_DECODE=probe`) that executes ONE eager batched-decode verify
+under the RESIDENT decode trace, logging to `_runs/spec_probe.txt` (MPI-worker stdout isn't captured in the
+readiness log). Findings:
+- **Eager verify under the resident decode trace does NOT hang/deadlock** — the core Phase-2 unknown: answered
+  YES, feasible. (allocator.cpp:123 warns but the op completes and serving continues coherently.)
+- **Served decode is padded to B=max_batch_size (B=8), NEVER B==1**, and reset_batch=True on the first step.
+  So the plan's "B==1 greedy" gate is WRONG — spec must operate on ONE ROW of the padded B=8 batch. Design
+  implication for the full loop.
+- **Env passthrough:** `TT_LAGUNA_*` is NOT in the plugin's default worker allowlist (`launcher.py:261`
+  default_env_patterns = VLLM_*/MESH_DEVICE). Pass `"env_passthrough": ["VLLM_*","MESH_DEVICE","TT_LAGUNA_*",
+  "TT_METAL_*","PYTHONPATH"]` in `--tt-config` so model-side env flags reach the worker.
+- **Warm eager verify ≈ 123 ms** (compile 219, warm 121/125) vs a **~35 ms traced decode step** = ~3.5×.
+  Break-even: a spec round costs ~123 ms and commits m+1 tokens vs (m+1)×35 ms native → **wins only if mean
+  accept ≥ ~3**. Real agentic accept ~2.5 → **break-even/marginal**, NOT the standalone traced ~2×. Decode is
+  dispatch-bound; eager verify pays the full host dispatch tracing removes.
+- **VERDICT: do NOT build the full eager in-adapter loop** — it's a large padded-batch change for a
+  break-even result. The real win needs the TRACED verify served, which requires solving the two-resident-CCL-
+  trace deadlock (decode trace + verify trace) — release/recapture on spec on/off, or decode-trace omission
+  for the spec-eligible batch. That is the true Phase-2 follow-up, gated on the trace-coexistence fix.
+- Probe code (gated OFF by default) is committed as the reusable feasibility harness.
+
 ## HANDOFF — remaining work (do with mesh in front of you)
 1. W1 fix: after the on-device repro pins the exact unseen prefill shape, extend warmup_model_prefill to warm
    that shape (row-count set and/or the width the stall recompiled). Validate: C=16→C=1 no 8-min outlier.
