@@ -1551,3 +1551,29 @@ had to be killed, then `tt-smi -glx_reset`, then a stale process holding
 chunk sizes were never measured, so **128 is the best of {default, 128}, not a proven
 optimum** -- 192/256/384/512 remain untested. Note also that a `serve_wasm.py` process from
 another user was mistaken earlier for an unkillable leak of mine; it is not.
+
+## Amendment 55 (2026-08-04) — SDPA chunk sweep continued: 192 marginally beats 128
+
+Amendment 54 shipped `q=k=128` while noting it was "the best of {default, 128}, not a proven
+optimum". Continued the sweep with each configuration in its **own process** -- the combined
+loop is what hung -- and with a hard per-config timeout:
+
+| config | ms | TF/s (32 dev) | vs default |
+|---|---|---|---|
+| ttnn defaults | 1.448 | 602.4 | 1.00x |
+| q=k=128 + HiFi2 | 0.502 | 1737.0 | 2.88x |
+| **q=k=192 + HiFi2** | **0.491** | **1776.6** | **2.95x** |
+| q=k=256 + HiFi2 | -- | -- | hangs, no result |
+
+192 is now applied. The gain over 128 is **2.2 %**, which is small but is a single-op
+min-of-15 measurement rather than a whole-model wall clock, so it is above this harness's
+noise floor.
+
+**256 and above remain unmeasured**: the process produced no output and had to be killed, the
+same failure that ended the amendment-54 sweep. Running each configuration in its own process
+did *not* avoid it, so the hang is specific to those chunk sizes at this shape rather than to
+sweeping several in sequence. Anyone continuing should treat 256+ as suspect and be ready to
+`tt-smi -glx_reset` -- and note that a hung run leaves a process holding `CHIP_IN_USE_0_PCIe`
+which must be killed by PID before the device will initialise again.
+
+Gates unchanged: 5 passed, PCC 99.9997 % / 99.9877 %.

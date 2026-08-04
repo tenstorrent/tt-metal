@@ -88,15 +88,16 @@ class MiniMaxH3ViTAttention(Module):
         # there, and it roughly doubles matmul throughput against the HiFi4 default.
         # Swept at the decoder's exact SDPA shape ([1, 32, 1824, 64] bf16) with a
         # single-op min-of-20 benchmark, which is measurable where whole-model wall clock is
-        # not: default 1.448 ms (602 TF/s) -> q=k=128 + HiFi2 0.502 ms (1737 TF/s), **2.88x**.
+        # not: default 1.448 ms (602 TF/s) -> q=k=192 + HiFi2 0.491 ms (1777 TF/s), **2.95x**. 128 gave 0.502 ms; 256 and above hang
+        # the sweep and remain unmeasured.
         #
         # An earlier attempt at q=k=256 was judged a regression on whole-decoder wall clock;
         # that reading was noise (the same code measures 0.34-0.99 s/wave). SDPA is 40 % of
         # layer device time, so this is the largest single decoder win available.
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=128,
-            k_chunk_size=128,
+            q_chunk_size=192,
+            k_chunk_size=192,
             exp_approx_mode=False,  # False is more correct, matching wan/ltx
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
