@@ -388,6 +388,13 @@ single fixed-precision step inside the fused pipeline. Pinning it further needs 
 
 ## 6. Open items
 
+### Accuracy bookkeeping — one thing to fix before trusting §6.8
+- **§6.8's absolute worst-sample levels do not reproduce.** Re-measuring the config it records at
+  mean 0.84% / p90 1.06% reads 0.94% / 1.56% today. Every "indistinguishable from shipped on
+  mean/p90" call in that section rests on those levels. Reconcile before relying on them again —
+  full detail and what has already been ruled out in **§6.15**. A/B comparisons run inside one
+  session remain sound; only cross-session absolute numbers are in doubt.
+
 ### Block 3 — closed, with two deferred decisions (not defects)
 - **`chunk_min` should probably be 1024, not 512.** Measured crossover is S ~ 2000: at S=1024
   unchunked is 1.5x faster (1.40 vs 2.10 ms). Worth 1.06x on attention, ~1.7% of the block,
@@ -1187,6 +1194,57 @@ the arithmetic said was expensive (118 MiB of redundant reads) and it was worth 
 actually costing 49% was six lines of index bookkeeping nobody had timed. Decompose before
 optimising — and when a decomposition contains an item that *cannot* cost what it measures, that
 item is the finding.
+
+### 6.15 — w2 in BFP8, finally gated deterministically (and §6.8's levels do not reproduce)
+
+§6.13 shipped w2 in BFP8 on end-to-end WER alone — 1/1/0 wrong words of 298 across seeds 0/1/2 —
+which §6.7 had already shown is **below the resolution of that gate**. §6.8's deterministic table
+stops at `wqkv + wo BFP8 + sharded norm`, before w2. So the largest single precision drop in Block 1
+shipped without the measurement every other precision change in this port was held to. Closed here.
+
+Same session, same fixture, 44 teacher-forced real frames on 2 real prompts, only `WEIGHT_DTYPE`
+differing:
+
+| Block 1 decode | min PCC | mean WS | p90 WS | max WS | prefill WS |
+|---|---|---|---|---|---|
+| w2 **bf16** | 0.999756 | **0.94%** | 1.56% | 2.36% | 0.51 / 0.52 |
+| w2 **BFP8** ← shipped | 0.999737 | **1.04%** | 1.55% | 1.97% | 0.46 / 0.50 |
+
+**The cost is real and it is +0.10 pp on mean worst-sample.** Not scatter: the gate was re-run and
+reproduced **bit-identically**, so it is deterministic and 0.10 is signal. But it appears on the mean
+and nowhere else — p90 is flat, max improves, prefill improves. **Kept**, for 2.5 ms/frame (~5% of
+frame time). Decision recorded so it can be revisited with a number rather than a WER reading that
+could not see it.
+
+**THE TWO CHANGES ARE NOW DECOUPLED, which they were not before.** w2 in BFP8 was only possible
+because the codec stopped calling `ttnn.conv1d`; the codec fix now stands on its own. So w2 can be
+reverted **alone** — one line, `ttnn_voxtral_gpt.py` `WEIGHT_DTYPE` — for ~2.5 ms/frame (RTF
+0.60–0.65 → ~0.63–0.68), and it does **not** reintroduce the hang, which needed `conv1d`.
+
+**⚠ §6.8'S ABSOLUTE LEVELS DO NOT REPRODUCE — treat that table's numbers as suspect.** §6.8 records
+mean 0.84% / p90 1.06% for the config that is exactly today's minus w2. Re-measuring that same config
+reads **0.94% / 1.56%**. Ruled out: the prefill rows (folding them in gives 0.92%, not 0.84%). Cause
+unknown — a different case pair, a different step count, or drift in `real_frames_fixture` /
+`fixture_embeds` since. **Only the A/B above is trustworthy**, because both sides ran in one session
+against one fixture. Several "indistinguishable from shipped on mean/p90" conclusions in §6.8 were
+drawn against those levels, so reconciling this is worth a session before any of them is relied on
+again. The lesson is §6.9's, once more: re-measure against the config you ship, never a recorded number.
+
+**Where quality stands overall, all measured on the current build:**
+
+| | value |
+|---|---|
+| Block 1 decode | min PCC 0.999737, mean WS 1.04%, p90 1.55% |
+| Block 2 velocity | PCC 0.99998164, semantic code exact, 3 of 74 codes differ |
+| Block 3 codec | waveform PCC 0.999915 — unchanged by the hang fix, bit-identical after §6.14 |
+| end-to-end | long-form WER 0.34% = **1 word of 298**, 15/15 on `[END_AUDIO]` |
+| voice identity | PASS (same-voice pair most similar, F0 109–197 Hz) |
+
+**One measurement trap in this gate, so nobody quotes it.** `--gate decode` prints ms/step, and it
+read 69 ms for BFP8 against 59 for bf16 — i.e. BFP8 "slower", which is backwards. It runs a 3.4B
+fp32 reference step on the CPU between device steps, starving host dispatch. **The accuracy columns
+are what this gate is for; its timings are host-contended.** Real numbers come from the pipeline:
+0.05 s/frame, RTF 0.60–0.65.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
