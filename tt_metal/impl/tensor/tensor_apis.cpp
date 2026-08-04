@@ -30,6 +30,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 
@@ -89,7 +90,7 @@ MeshTensor enqueue_write_tensor(
         const auto& old_spec = host_tensor.tensor_spec();
         tensor_spec_overriden_memory_config = TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(
+            experimental::tensor_layout_with_custom_alignment(
                 old_spec.tensor_layout().get_data_type(),
                 old_spec.tensor_layout().get_page_config(),
                 *memory_config,
@@ -219,7 +220,7 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         std::move(*mesh_buffer),
         TensorSpec(
             host_tensor.tensor_spec().logical_shape(),
-            TensorLayout(
+            experimental::tensor_layout_with_custom_alignment(
                 host_tensor.tensor_spec().tensor_layout().get_data_type(),
                 host_tensor.tensor_spec().tensor_layout().get_page_config(),
                 device_tensor.memory_config(),
@@ -260,7 +261,7 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
     // Construct the new tensor spec first to verify that this is a supported Tensor configuration
     TensorSpec new_tensor_spec(
         tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        experimental::tensor_layout_from_padded_shape(
             tensor.dtype(),
             PageConfig(Layout::ROW_MAJOR),
             MemoryConfig{},
@@ -296,7 +297,7 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
 
         auto output_spec = TensorSpec(
             tensor.logical_shape(),
-            TensorLayout(
+            experimental::tensor_layout_with_custom_alignment(
                 tensor.dtype(),
                 PageConfig(Layout::TILE, tile),
                 tensor.memory_config(),
@@ -510,7 +511,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
 
     auto output_spec = TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             dtype,
             page_config,
             input_tensor.tensor_spec().memory_config(),
@@ -586,45 +587,6 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
 
 namespace host_buffer {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-template <typename T>
-void validate_datatype(DataType dtype) {
-    using BaseType = std::remove_cvref_t<T>;
-    if constexpr (std::is_same_v<BaseType, uint32_t>) {
-        TT_FATAL(
-            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B,
-            "Incorrect data type {}",
-            dtype);
-    } else if constexpr (std::is_same_v<BaseType, int32_t>) {
-        TT_FATAL(dtype == DataType::INT32, "Incorrect data type {}", dtype);
-    } else if constexpr (std::is_same_v<BaseType, float>) {
-        TT_FATAL(dtype == DataType::FLOAT32, "Incorrect data type {}", dtype);
-    } else if constexpr (std::is_same_v<BaseType, bfloat16>) {
-        TT_FATAL(dtype == DataType::BFLOAT16, "Incorrect data type {}", dtype);
-    } else if constexpr (std::is_same_v<BaseType, uint16_t>) {
-        TT_FATAL(dtype == DataType::UINT16, "Incorrect data type {}", dtype);
-    } else if constexpr (std::is_same_v<BaseType, uint8_t>) {
-        TT_FATAL(dtype == DataType::UINT8, "Incorrect data type {}", dtype);
-    } else {
-        static_assert(sizeof(BaseType) == 0, "Unsupported DataType");
-    }
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
-HostBuffer get_host_buffer(const HostTensor& tensor) {
-    std::vector<HostBuffer> buffers;
-    tensor.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-    TT_FATAL(
-        buffers.size() == 1,
-        "Can't get a single buffer from host storage distributed over mesh shape {}",
-        tensor.buffer().shape());
-    return buffers.front();
-}
-
 template <typename T>
 ttsl::Span<const T> get_as(const HostBuffer& buffer) {
     return buffer.view_as<T>();
@@ -635,30 +597,12 @@ ttsl::Span<T> get_as(HostBuffer& buffer) {
     return buffer.view_as<T>();
 }
 
-template <typename T>
-ttsl::Span<const T> get_as(const HostTensor& tensor) {
-    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor.dtype());
-    HostBuffer buffer = get_host_buffer(tensor);
-    return buffer.template view_as<T>();
-}
-
-template <typename T>
-ttsl::Span<T> get_as(HostTensor& tensor) {
-    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor.dtype());
-    HostBuffer buffer = get_host_buffer(tensor);
-    return buffer.template view_as<T>();
-}
-
 // Explicit template instantiations
 #define INSTANTIATE_HOST_BUFFER_FUNCTIONS(T)                         \
     template ttsl::Span<const T> get_as<T>(const HostBuffer&);       \
     template ttsl::Span<const T> get_as<const T>(const HostBuffer&); \
     template ttsl::Span<T> get_as<T>(HostBuffer&);                   \
-    template ttsl::Span<const T> get_as<const T>(HostBuffer&);       \
-    template ttsl::Span<const T> get_as<T>(const HostTensor&);       \
-    template ttsl::Span<const T> get_as<const T>(const HostTensor&); \
-    template ttsl::Span<T> get_as<T>(HostTensor&);                   \
-    template ttsl::Span<const T> get_as<const T>(HostTensor&);
+    template ttsl::Span<const T> get_as<const T>(HostBuffer&);
 
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint32_t)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(int32_t)

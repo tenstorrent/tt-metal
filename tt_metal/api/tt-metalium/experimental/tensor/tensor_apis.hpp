@@ -70,20 +70,11 @@ HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec)
 
 namespace host_buffer {
 
-// TODO(#40348): This function has single device assumptions over inheritely multi-device constructs.
-HostBuffer get_host_buffer(const HostTensor& tensor);
-
 template <typename T>
 ttsl::Span<const T> get_as(const HostBuffer& buffer);
 
 template <typename T>
 ttsl::Span<T> get_as(HostBuffer& buffer);
-
-template <typename T>
-ttsl::Span<const T> get_as(const HostTensor& tensor);
-
-template <typename T>
-ttsl::Span<T> get_as(HostTensor& tensor);
 
 }  // namespace host_buffer
 

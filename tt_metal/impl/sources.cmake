@@ -143,6 +143,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/page_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout_apis_with_custom_alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/memory_config/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/distributed_tensor_configs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
