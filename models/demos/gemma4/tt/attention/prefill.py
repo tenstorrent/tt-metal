@@ -556,6 +556,22 @@ def _prefill_forward_single(
     # a Python scalar, which cannot vary per device within one mesh-wide program.
     use_cp_attention = cp_attn_mask is not None and not sliding_chunked and not need_cross_chunk
     if use_cp_attention:
+        # This branch uses the NON-chunked SDPA, which silently returns wrong
+        # results once the shared/K sequence reaches PREFILL_SDPA_MAX_SEQ (32768).
+        # Under CP the K length is the whole chunk (cp * local), not the local
+        # length, so guard on the mask's key extent rather than on `long_seq`
+        # (which is computed from the local Q length and would under-report by cp).
+        # Failing loudly beats silent corruption: the chunked fallbacks below take a
+        # scalar position offset and cannot express a per-rank offset, so there is no
+        # correct path to fall through to yet.
+        cp_global_seq = cp_attn_mask.shape[-1]
+        if cp_global_seq >= PREFILL_SDPA_MAX_SEQ:
+            raise NotImplementedError(
+                f"Context-parallel prefill needs the whole chunk's K/V in one non-chunked SDPA, "
+                f"but the chunk is {cp_global_seq} tokens and that op is only correct below "
+                f"{PREFILL_SDPA_MAX_SEQ}. Use a smaller prefill chunk (the chunked/paged SDPA "
+                f"cannot be used under CP: it takes a scalar position offset and rejects attn_mask)."
+            )
         # dim 2 is the sequence axis of [1, num_kv_heads, seq, head_dim].
         tt_k = ccl_cp_allgather(tt_k, mesh_config, ccl_manager, dim=2)
         tt_v = ccl_cp_allgather(tt_v, mesh_config, ccl_manager, dim=2)
