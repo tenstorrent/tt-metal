@@ -24,14 +24,15 @@ void kernel_main() {
     constexpr MidMcastArgs mid_mcast_args;
     constexpr FirstMcastArgs first_mcast_args;
     constexpr LastMcastArgs last_mcast_args;
+    constexpr uint32_t post_mcast_ct_offset = LastMcastArgs::next_compile_time_args_offset();
 
-    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(15);
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(16);
+    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(post_mcast_ct_offset);
+    constexpr uint32_t num_batch_group = get_compile_time_arg_val(post_mcast_ct_offset + 1);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(17);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(18);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(19);
-    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(post_mcast_ct_offset + 2);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(post_mcast_ct_offset + 3);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(post_mcast_ct_offset + 4);
+    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(post_mcast_ct_offset + 5);
     // Per-core slots in dfb_ex_external are hardcoded to a dfb_ex_external_slot_pitch_bytes
     // pitch (see the `l1_write_addr_external += dfb_ex_external_slot_pitch_bytes`
     // increments below). Each NOC read writes datum_size_bytes into its slot, so
@@ -42,8 +43,8 @@ void kernel_main() {
         datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
         "dfb_ex_external slot pitch is hardcoded; "
         "datum_size_bytes must be <= dfb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(21);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(22);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(post_mcast_ct_offset + 6);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(post_mcast_ct_offset + 7);
 
     tt_l1_ptr uint32_t* noc_coord_x =
         reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(LastMcastArgs::next_runtime_args_offset()));

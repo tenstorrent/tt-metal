@@ -19,8 +19,10 @@ void kernel_main() {
 #ifdef MCAST_ARGS
     constexpr auto in1_mcast_args = dataflow_kernel_lib::McastArgs<10, 2>();
     constexpr uint32_t in1_post_mcast_ct_offset = in1_mcast_args.next_compile_time_args_offset();
+    constexpr uint32_t in1_post_mcast_rt_offset = in1_mcast_args.next_runtime_args_offset();
 #else
     constexpr uint32_t in1_post_mcast_ct_offset = 14;
+    constexpr uint32_t in1_post_mcast_rt_offset = 6;
 #endif
 
     // READER
@@ -28,8 +30,7 @@ void kernel_main() {
     // in1 tensor args
     const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
-    // The mcast wire occupies four runtime words in both the legacy SKIP_MCAST ABI and McastArgs ABI.
-    rt_args_idx += 4;
+    rt_args_idx = in1_post_mcast_rt_offset;
 
     // sparsity args
     const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);

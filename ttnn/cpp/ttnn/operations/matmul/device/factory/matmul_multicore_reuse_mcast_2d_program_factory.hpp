@@ -13,6 +13,12 @@ namespace ttnn::prim {
 
 struct MatmulMultiCoreReuseMcast2DProgramFactory {
     struct shared_variables_t {
+        struct McastIn1RuntimeArgIndices {
+            uint32_t sender_out_addr{};
+            uint32_t sender_bias_addr{};
+            uint32_t receiver_out_addr{};
+        };
+
         tt::tt_metal::KernelHandle mm_kernel_in0_sender_id{};
         std::vector<CoreCoord> in0_sender_interleaved_cores;
         tt::tt_metal::KernelHandle mm_kernel_in1_sender_writer_id{};
@@ -29,6 +35,7 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         uint32_t start_core_y{};
         bool transpose_mcast{};
         std::vector<CoreCoord> cores;
+        McastIn1RuntimeArgIndices mcast_in1_runtime_arg_indices{};
     };
 
     static void override_runtime_arguments(

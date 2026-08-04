@@ -22,23 +22,24 @@ void kernel_main() {
     constexpr MidMcastArgs mid_mcast_args;
     constexpr FirstMcastArgs first_mcast_args;
     constexpr LastMcastArgs last_mcast_args;
+    constexpr uint32_t post_mcast_ct_offset = LastMcastArgs::next_compile_time_args_offset();
 
-    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(15);
-    constexpr uint32_t num_batches = get_compile_time_arg_val(16);
+    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(post_mcast_ct_offset);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(post_mcast_ct_offset + 1);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(17);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(18);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(19);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(21);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(22);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(post_mcast_ct_offset + 2);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(post_mcast_ct_offset + 3);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(post_mcast_ct_offset + 4);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(post_mcast_ct_offset + 6);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(post_mcast_ct_offset + 7);
 
     // These are numbers in absolute terms, on a per group, per batch, per core with tiling
-    constexpr uint32_t block_hw = get_compile_time_arg_val(23);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(24);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(25);
+    constexpr uint32_t block_hw = get_compile_time_arg_val(post_mcast_ct_offset + 8);
+    constexpr uint32_t num_groups = get_compile_time_arg_val(post_mcast_ct_offset + 9);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(post_mcast_ct_offset + 10);
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16, and the cross-core stride
     // is in fp32 elements.
-    constexpr bool stats_is_fp32 = get_compile_time_arg_val(26) != 0;
+    constexpr bool stats_is_fp32 = get_compile_time_arg_val(post_mcast_ct_offset + 11) != 0;
 
     tt_l1_ptr uint32_t* noc_coord_x =
         reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(LastMcastArgs::next_runtime_args_offset()));
