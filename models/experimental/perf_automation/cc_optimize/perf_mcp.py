@@ -2329,6 +2329,41 @@ def _run_full_pipeline_ms():
     )
 
 
+_GATE_REPS = max(1, int(os.environ.get("PERF_MCP_GATE_REPS", "3")))
+
+
+def _measure_full_pipeline_median():
+    """Measure the pipeline _GATE_REPS times; return (median_ms, method, err, path, spread).
+
+    A single reading cannot grade a win smaller than the board's spread. Six interleaved runs of
+    identical code on gemma-3-12b-it gave 33.34 / 34.72 / 35.19 / 35.21 / 35.29 / 35.62 -- 2.28 ms,
+    or 28.1 to 30.0 tok/s/u. The wins the ladder hunts are 0.7-1.3 ms, so one reading is a coin flip
+    in BOTH directions and every outcome is written conclusive: a neutral lever banked as a win, a
+    real win discarded and never revisited. 145 attempts on this model produced one "win" of
+    -0.79 ms that re-measured at +0.32.
+
+    MEDIAN, not mean: this bench emits 55-66 ms readings, and a mean would let one of those invent
+    or destroy a win outright.
+
+    The spread rides along so a caller can see when a delta is smaller than the measurement it came
+    from. PERF_MCP_GATE_REPS=1 restores single-shot exactly.
+    """
+    vals, method, path, err = [], None, None, None
+    for _ in range(_GATE_REPS):
+        _ms, _m, _e, _p = _run_full_pipeline_ms()
+        if _ms is None:
+            err = _e or err
+            continue
+        vals.append(float(_ms))
+        method, path = _m, _p
+    if not vals:
+        return None, method, (err or "all measurement attempts failed"), path, None
+    vals.sort()
+    n = len(vals)
+    med = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2.0
+    return med, method, None, path, round(vals[-1] - vals[0], 4)
+
+
 def _fullpipe_gate_log():
     """Resolved per call: a module constant freezes the path at import, before any redirect."""
     return state_dir() / "perf_mcp_fullpipe_gate.log"
@@ -2886,7 +2921,9 @@ def check_full_pipeline_latency() -> dict:
     gap_to_target_ms?, reached_target?}."""
     # The tool is trace+1cq end to end: one track, one baseline, no 2-CQ bookend.
     cq = 1
-    ms, method, err, path = _run_full_pipeline_ms()
+    # N readings, median. One reading cannot grade a win smaller than the board's 2.28 ms
+    # spread -- see _measure_full_pipeline_median.
+    ms, method, err, path, _spread = _measure_full_pipeline_median()
     if ms is None:
         return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
