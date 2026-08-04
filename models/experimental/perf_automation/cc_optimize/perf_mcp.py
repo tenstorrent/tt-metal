@@ -2224,7 +2224,18 @@ def _run_full_pipeline_ms():
     # read by model builders as "build zero layers", so this gate measured nothing and could only
     # report "no markers". See agent/layer_depth.py.
     _set_depth(env, None)
-    env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
+    # OSL: the DECLARED unit, not 1. This defaulted to "1" with no comment, and one decode step is not
+    # a decode measurement -- it makes TTFT unmeasurable (no first-token boundary), forces TS == TSU,
+    # and blends prefill into a number the report then calls "per token". gemma-3-12b-it's 33.98 ms is
+    # prefill of 128 tokens PLUS one decode step, so the 29.4 tok/s/u it implies is not a decode rate
+    # and prefill work cannot be scored against anything.
+    #
+    # The test already declares the unit (TT_PERF_ISL_TOKENS / TT_PERF_OSL_TOKENS, both 128). Honour it:
+    # take OSL from the declared value so the measured unit and the reported unit are the same thing.
+    # PERF_MCP_FULLPIPE_TOKENS still overrides for a cheap steering measurement.
+    env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS") or os.environ.get(
+        "TT_PERF_OSL_TOKENS", "128"
+    )
     env.setdefault("TT_PERF_TRACE", "1")
     env["TT_PERF_PREFILL_TRACE"] = "1"
     # Start the trace region at the DRAM-derived size, not the perf test's hardcoded default. This gate
@@ -2353,7 +2364,7 @@ def _run_full_pipeline_ms():
     pf = statistics.median(prefills) if prefills else None
     if dec is not None or pf is not None:
         isl = env.get("TT_PERF_SEQ_LEN", os.environ.get("TT_PERF_SEQ_LEN", "128"))
-        osl = env.get("TT_PERF_MAX_NEW_TOKENS", "1")
+        osl = env.get("TT_PERF_MAX_NEW_TOKENS") or os.environ.get("TT_PERF_OSL_TOKENS", "128")
         tsu = (1000.0 / dec) if dec else 0.0
         # mesh/TP/DP/shard come solely from the run's marker; when it is absent they stay None and we
         # print 'unknown' rather than a fabricated topology.

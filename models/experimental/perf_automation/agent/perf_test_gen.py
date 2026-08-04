@@ -27,7 +27,7 @@ import pytest
 import ttnn
 # from <model>.tt.<generator> import <Generator>   # lift the import from the demo
 
-PERF_MAX_NEW_TOKENS = int(os.environ.get("TT_PERF_MAX_NEW_TOKENS", "4"))
+PERF_MAX_NEW_TOKENS = int(os.environ.get("TT_PERF_MAX_NEW_TOKENS") or os.environ.get("TT_PERF_OSL_TOKENS", "128"))
 PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
 # ISL / OSL -- THE MEASUREMENT CONDITIONS, and they default to a REALISTIC operating point rather
 # than to whatever example prompt reads naturally. Left unspecified, a generated perf test used the
