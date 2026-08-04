@@ -38,12 +38,12 @@ the teacher-forced gates in tests/tt_gates.py to judge a numerical change.
 
 PERFORMANCE, steady state on one N150, long-form cases:
 
-    Block 1 decode      ~26.6 ms/frame   ~51%
-    Block 2 flow        ~24.2 ms/frame   ~46%
+    Block 1 decode      ~26.6 ms/frame   ~52%
+    Block 2 flow        ~23.0 ms/frame   ~45%
     host embed_frame      0.2 ms/frame    0.4%
-    TOTAL               50.8-54.6 ms/frame, mean 52.3 over the 15-case fixture
+    TOTAL               50.0-52.6 ms/frame, mean 50.9 over the 15-case fixture
     prefill 0.1-1.5 s once; Block 3 codec ~9% of wall time
-    RTF 0.65-0.74 on 14 of 15 cases   (RTF = generation / audio, lower is better)
+    RTF 0.63-0.71 on 14 of 15 cases   (RTF = generation / audio, lower is better)
 
 The 15th is case 0 at RTF 1.89, and that is COLD-START, not a slow case: it pays the first codec
 bucket's kernel compiles and the first prefill shape. Every later case with the same shapes runs

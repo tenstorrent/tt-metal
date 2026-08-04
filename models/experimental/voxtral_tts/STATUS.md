@@ -33,8 +33,8 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → 50.8-54.6 ms/frame (mean 52.3), RTF 0.65-0.74 on 14 of 15 cases.** Per frame:
-Block 1 ~26.6 ms, Block 2 ~24.2 ms, host 0.2 ms. The two are now about even.
+**Performance: 83.7 → 50.0-52.6 ms/frame (mean 50.9), RTF 0.63-0.71 on 14 of 15 cases.** Per frame:
+Block 1 ~26.6 ms, Block 2 ~23.0 ms, host 0.2 ms. Block 1 is now the larger half.
 goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
 width-sharded RMSNorm in Block 2, qkv fusion) and §6.8 (BFP8 on wqkv/wo, semantic head on device) —
 and §6.7 is the one to read first: it explains why the WER headline cannot gate any of this.
@@ -888,9 +888,28 @@ trade was 1.147x for fourteen (7→21). This is 1.106x for two.
 
 **Generalisable lesson: for the small tensors in this block, WHERE a tensor lives matters as much as
 how big the kernel is.** Every previous win here came from making kernels bigger; this one came from
-keeping an operand in L1 across its consumers. Worth trying on other short-lived intermediates —
-though note it is not universally good: feeding a width-SHARDED activation to a matmul with a
-DRAM-interleaved weight is slower (§6.6), so interleaved-L1 is the useful middle.
+keeping an operand in L1 across its consumers.
+
+**That generalised, and was worth another 1.15 ms.** Applying the same idea to the rest of
+`_block`'s intermediates, cumulatively, at IDENTICAL accuracy throughout (9/288 differing codes in
+every row):
+
+| | ms/frame | vs q/k/v-only |
+|---|---|---|
+| q/k/v L1 only | 24.18 | — |
+| + attention interior (scores, scaled, av) | 23.85 | 1.014x |
+| + MLP intermediates (g, w3_out, u) | 23.22 | 1.041x |
+| + residual stream | **23.04** | **1.049x** ← shipped |
+
+The one candidate that does NOT pay is the `_norm` output: **0.999x alone**, so it stays DRAM. So
+this is not "L1 everywhere is better" — it is specifically values with a consumer close behind, and
+the norm's output is immediately eaten by a big DRAM-weight matmul that dominates it. The LIMIT is
+still §6.6: a width-SHARDED activation into a DRAM-weight matmul is slower. Interleaved-L1 is the
+useful middle.
+
+**Where this has NOT been tried yet: Block 1's interior and Block 3.** Block 1 forces sdpa_decode's
+output to DRAM and leaves its MLP intermediates on the default; Block 3 is where `ign/voxtral_opt`
+claims ~18 ms → ~6 ms from removing ~104 sharded/interleaved hops, which is the same idea again.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
