@@ -13,6 +13,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/compile_time_args.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 // Shared dataflow helpers for the fused-experts pipeline (used by every DM kernel).
 //
@@ -53,13 +54,11 @@ inline void publish_input(uint32_t cb_input_id, uint32_t k_tiles) {
     cb_input.push_back(k_tiles);
 }
 
-// gate_up weight layout: each SwiGLU core owns a 2-tile (64-column) slice of the SwiGLU
-// output I dim, needing the gate columns [64c, 64c+64) and paired up columns
-// [I+64c, I+64c+64) of the [K, 2I] weight. The host permutes the weight into per-core
-// [gate_64 | up_64] blocks so each DRAM shard is this core's [K, 128] slice (tile cols
-// 0,1 == gate, 2,3 == up), read in one NoC read. Shard id == col_start_tile / 2.
-constexpr uint32_t kOutTilesPerCore = 2;
-constexpr uint32_t kGateUpShardTileCols = 2 * kOutTilesPerCore;  // gate 2 | up 2
+// gate_up weight layout: each SwiGLU core owns an `swiglu_tiles` slice of the SwiGLU output I
+// dim (I/32 tiles spread over the 64 cores), needing the matching gate columns and paired up
+// columns of the [K, 2I] weight. The host permutes the weight into per-core [gate | up]
+// blocks so each DRAM shard is this core's [K, 64*swiglu_tiles] slice (the first half of the
+// tile cols is gate, the second up), read in one NoC read. Shard id == this core's grid index.
 
 // Read this core's weight slice for the i-th selected ("hit") expert into a double-buffered
 // weight CB. The CB's reserve_back/push_back provide compute-side flow control: with two
@@ -174,16 +173,20 @@ inline void build_routing_scalars(
 
     constexpr uint32_t kTileElems = 1024;            // 32x32 bf16 elements per tile
     constexpr uint32_t kTileBytes = kTileElems * 2;  // bf16 tile = 2048 bytes
+    // Zero and splat through 32-bit stores (two bf16 lanes each): this loop runs on every core
+    // ahead of the DRAM-bound phases, so halving its store count is pure critical-path savings.
+    constexpr uint32_t kTileWords = kTileElems / 2;
     for (uint32_t e = 0; e < num_active; ++e) {
-        CoreLocalMem<volatile uint16_t> tile(rscalar_l1 + e * kTileBytes);
-        for (uint32_t j = 0; j < kTileElems; ++j) {
+        CoreLocalMem<volatile uint32_t> tile(rscalar_l1 + e * kTileBytes);
+        for (uint32_t j = 0; j < kTileWords; ++j) {
             tile[j] = 0;
         }
-        // fp32 bit pattern -> bf16 == high 16 bits.
-        const uint16_t w_bf16 = static_cast<uint16_t>(bcast[weight_base + e] >> 16);
-        for (uint32_t k = 0; k < 4; ++k) {       // 4 faces
-            for (uint32_t j = 0; j < 16; ++j) {  // first row of each face
-                tile[k * 256 + j] = w_bf16;
+        // fp32 bit pattern -> bf16 == high 16 bits, packed into both lanes of a 32-bit store.
+        const uint32_t w_bf16 = bcast[weight_base + e] >> 16;
+        const uint32_t w_pair = (w_bf16 << 16) | w_bf16;
+        for (uint32_t k = 0; k < 4; ++k) {      // 4 faces
+            for (uint32_t j = 0; j < 8; ++j) {  // first row (16 bf16) of each face
+                tile[k * 128 + j] = w_pair;
             }
         }
     }
@@ -196,14 +199,16 @@ inline void build_routing_scalars(
 //            kernel produces every expert's SwiGLU activation, which the writer scatters to
 //            the leader.
 //   Sync:    the leader gathers all experts' activations and broadcasts the whole
-//            [num_active, I] block to every core in one shot; everyone else waits for it.
-//   Phase 2: fetch this core's down slice for ALL experts (all cores). The compute kernel
-//            runs the down matmul for every expert against the now-resident activations.
+//            [num_active, I] block to every core in one shot; everyone else waits for it --
+//            and, while waiting, prefetches up to `down_prefetch` down slices so DRAM keeps
+//            streaming through the barrier.
+//   Phase 2: fetch this core's remaining down slices. The compute kernel runs the down matmul
+//            for every expert against the now-resident activations.
 template <bool IsLeader, typename GateUpArgs, typename DownArgs>
 inline void run_reader_loop(
     const Noc& noc,
     uint32_t num_active,
-    uint32_t col_start_tile,
+    uint32_t core_index,
     uint32_t i_tiles,
     uint32_t k_tiles,
     uint32_t gate_up_tile_bytes,
@@ -227,57 +232,46 @@ inline void run_reader_loop(
     const DownArgs& down_args,
     uint32_t ct_down_addr_base,
     uint32_t cb_rscalar_id,
-    uint32_t weight_base) {
-    const bool swiglu_core = col_start_tile < i_tiles;
-    const uint32_t shard_id = col_start_tile / kOutTilesPerCore;
-
-    // Build this core's routing-weight scalar tiles (one per active expert) for the down-output
-    // weighted accumulation. The bcast buffer (ids + scalars) is already resident on every core.
-    build_routing_scalars(cb_bcast_id, cb_rscalar_id, num_active, weight_base);
+    uint32_t weight_base,
+    uint32_t down_prefetch) {
+    // Both the gate_up and the down DRAM shards for this core are shard `core_index`; the
+    // first `num_producers` cores also own a slice of the SwiGLU I dim.
+    const bool swiglu_core = core_index < num_producers;
+    const uint32_t shard_id = core_index;
+    const uint32_t swiglu_tiles = i_tiles / num_producers;
 
     // ---- Phase 1: gate_up weights for all experts (SwiGLU cores only). ----
     // cb_weights is double-buffered, so the reader can hold one expert's slice ready while
     // compute consumes the previous expert's -- overlapping data movement with computation.
-    if (swiglu_core) {
-        const uint32_t gate_up_slice_tiles = k_tiles * kGateUpShardTileCols;
-        for (uint32_t e = 0; e < num_active; ++e) {
-            fetch_weight_one(
-                noc,
-                cb_bcast_id,
-                cb_weights_id,
-                e,
-                gate_up_slice_tiles,
-                gate_up_tile_bytes,
-                shard_id,
-                gate_up_args,
-                ct_gu_addr_base);
+    {
+        DeviceZoneScopedN("FE_PHASE1_GATE_UP");
+        if (swiglu_core) {
+            const uint32_t gate_up_slice_tiles = k_tiles * (2u * swiglu_tiles);
+            for (uint32_t e = 0; e < num_active; ++e) {
+                fetch_weight_one(
+                    noc,
+                    cb_bcast_id,
+                    cb_weights_id,
+                    e,
+                    gate_up_slice_tiles,
+                    gate_up_tile_bytes,
+                    shard_id,
+                    gate_up_args,
+                    ct_gu_addr_base);
+            }
         }
     }
 
-    // ---- Single synchronization: gather all activations + broadcast the whole block. ----
-    const uint32_t act_total_tiles = num_active * i_tiles;
-    if constexpr (IsLeader) {
-        leader_gather_broadcast_all(
-            noc,
-            cb_act_id,
-            act_total_tiles,
-            act_tile_bytes,
-            num_producers * num_active,
-            sem_gather_id,
-            sem_bcast_id,
-            mcast_start_x,
-            mcast_start_y,
-            mcast_end_x,
-            mcast_end_y,
-            num_dests);
-    } else {
-        receiver_recv_act_all(cb_act_id, act_total_tiles, sem_bcast_id);
+    // Build this core's routing-weight scalar tiles (one per active expert) for the down-output
+    // weighted accumulation. Deliberately placed after phase 1: it is a few thousand serial L1
+    // stores that nothing needs until the down phase, so running it here buries it in the
+    // gather/broadcast wait below instead of delaying the first DRAM read.
+    {
+        DeviceZoneScopedN("FE_RSCALARS");
+        build_routing_scalars(cb_bcast_id, cb_rscalar_id, num_active, weight_base);
     }
 
-    // ---- Phase 2: down weights for all experts (all cores). ----
-    // cb_down_w reuses the (now-dead) cb_weights CB, which is double-buffered and at least
-    // as large as the down slice, so the same reader/compute overlap applies.
-    for (uint32_t e = 0; e < num_active; ++e) {
+    auto fetch_down = [&](uint32_t e) {
         fetch_weight_one(
             noc,
             cb_bcast_id,
@@ -288,5 +282,53 @@ inline void run_reader_loop(
             shard_id,
             down_args,
             ct_down_addr_base);
+    };
+
+    // ---- Down-weight prefetch across the sync (receivers only). ----
+    // The down weights depend on nothing but the expert ids, while the gather/broadcast below is
+    // a chip-wide barrier during which DRAM would otherwise sit idle. Receivers therefore start
+    // streaming down slices before waiting on the broadcast. `down_prefetch` is capped below the
+    // CB's slot count by the host so that reserve_back cannot block forever here -- the reader
+    // must reach receiver_recv_act_all to publish cb_act to its compute kernel.
+    // The leader is excluded: its broadcast gates every other core, so it syncs first.
+    uint32_t e_down = 0;
+    if constexpr (!IsLeader) {
+        DeviceZoneScopedN("FE_DOWN_PREFETCH");
+        for (; e_down < down_prefetch; ++e_down) {
+            fetch_down(e_down);
+        }
+    }
+
+    // ---- Single synchronization: gather all activations + broadcast the whole block. ----
+    const uint32_t act_total_tiles = num_active * i_tiles;
+    {
+        DeviceZoneScopedN("FE_SYNC");
+        if constexpr (IsLeader) {
+            leader_gather_broadcast_all(
+                noc,
+                cb_act_id,
+                act_total_tiles,
+                act_tile_bytes,
+                num_producers * num_active,
+                sem_gather_id,
+                sem_bcast_id,
+                mcast_start_x,
+                mcast_start_y,
+                mcast_end_x,
+                mcast_end_y,
+                num_dests);
+        } else {
+            receiver_recv_act_all(cb_act_id, act_total_tiles, sem_bcast_id);
+        }
+    }
+
+    // ---- Phase 2: the down weights not already prefetched. ----
+    // cb_down_w reuses the (now-dead) cb_weights CB, which is large enough for several down
+    // slices, so the same reader/compute overlap applies.
+    {
+        DeviceZoneScopedN("FE_PHASE2_DOWN");
+        for (; e_down < num_active; ++e_down) {
+            fetch_down(e_down);
+        }
     }
 }
