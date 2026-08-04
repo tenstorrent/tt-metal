@@ -11,12 +11,8 @@
 
 namespace ckl = compute_kernel_lib;
 
-#ifdef INP_FLOAT32
-constexpr bool kIsFloat32 = true;
-#else
-constexpr bool kIsFloat32 = false;
-#endif
-constexpr bool kIsFloat = !kIsFloat32;
+constexpr bool kIsFloat32 = get_compile_time_arg_val(0) == 1;
+constexpr bool kIsFloat = get_compile_time_arg_val(1) == 1;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -40,7 +36,10 @@ void kernel_main() {
         ckl::OptionalChainElement<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
         ckl::OptionalChainElement<
             kIsFloat,
-            ckl::DestReuseBinary<ckl::input(cb_input), ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{},
+            ckl::DestReuseBinary<
+                ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::BinaryFpuOp::Mul,
+                ckl::DestReuseType::DEST_TO_SRCA>>{},
         ckl::PackTile<ckl::output(
             cb_output, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

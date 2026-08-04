@@ -169,7 +169,7 @@ void kernel_main() {
         const bool last_tile_is_partial = W % tile_width > 0;
         for (auto block : generic::blocks(Wt, block_size)) {
             const auto block_shape =
-                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
+                ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
             tilize_row_major_block(cb_in_rm_obj, cb_in_obj, block_size, block);
 #ifdef RMSNORM
@@ -276,7 +276,7 @@ void kernel_main() {
         //  √(Var(X)+ε)
         for (auto block : generic::blocks(Wt, block_size)) {
             const auto block_shape =
-                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
+                ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
             // Reader supplies this second pass of data after the variance data.
             tilize_row_major_block(cb_in_rm_obj, cb_in_obj, block_size, block);

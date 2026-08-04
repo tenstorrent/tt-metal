@@ -508,6 +508,12 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     compute_desc.kernel_source = compute_path;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_device_cores;
+    if (ops_chain[0].type() == UnaryOpType::HARDSWISH) {
+        compute_desc.compile_time_args = {
+            static_cast<uint32_t>(unary_defines.count("INP_FLOAT32") != 0),
+            static_cast<uint32_t>(unary_defines.count("INP_FLOAT") != 0),
+        };
+    }
     compute_desc.defines = {unary_defines.begin(), unary_defines.end()};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,

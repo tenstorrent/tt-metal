@@ -5,7 +5,7 @@
 // Equivalent exp(x) chains under three setup placements:
 //   0: one multi-tile call, so the chain hoists uniform setup;
 //   1: one single-tile call per tile, so each call emits setup;
-//   2: raw LLK setup followed by SetupOwner::Caller.
+//   2: raw LLK setup followed by InitReconfigOwner::Caller.
 //
 // CT args: [n, mode].
 
@@ -33,7 +33,7 @@ void kernel_main() {
     } else {
         copy_tile_init(cb_in);
         exp_tile_init();
-        eltwise_chain<SetupOwner::Caller>(
+        eltwise_chain<InitReconfigOwner::Caller>(
             EltwiseShape::tiles(n),
             CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{},
             Exp<>{},

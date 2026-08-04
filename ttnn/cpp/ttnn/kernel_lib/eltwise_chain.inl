@@ -26,79 +26,20 @@
 
 namespace compute_kernel_lib {
 
-#if ASSERT_ENABLED
-namespace detail {
-
-// Keep device-side ASSERT assembly out of constexpr functions: LLK assertions lower ASSERT to
-// ebreak, which is not permitted directly in a C++17 constexpr body. Valid constant evaluations
-// never take this path; runtime-invalid shapes still retain the device assertion.
-inline void assert_valid_blocking_settings(bool valid) { ASSERT(valid); }
-
-}  // namespace detail
-#endif
-
-constexpr BlockingSettings::BlockingSettings(uint32_t block_size, BlockTailSync tail_sync) :
-    block_size(block_size), total_tiles(0), tail_sync(tail_sync) {}
-
-constexpr BlockingSettings::BlockingSettings(uint32_t block_size, uint32_t total_tiles, BlockTailSync tail_sync) :
-    block_size(block_size), total_tiles(total_tiles), tail_sync(tail_sync) {}
-
-constexpr uint32_t BlockingSettings::total_tiles_or(uint32_t shape_total_tiles) const {
-    return total_tiles == 0 ? shape_total_tiles : total_tiles;
-}
-
-constexpr uint32_t BlockingSettings::num_blocks(uint32_t Ht, uint32_t Wt) const {
-#if ASSERT_ENABLED
-    const bool valid = block_size > 0 && Ht > 0 && Wt > 0 && total_tiles_or(Ht * Wt) == Ht * Wt;
-    if (!valid) {
-        detail::assert_valid_blocking_settings(valid);
-    }
-#endif
-    return Ht * ((Wt / block_size) + (Wt % block_size != 0));
-}
-
-constexpr uint32_t BlockingSettings::physical_tiles(uint32_t Ht, uint32_t Wt) const {
-    return num_blocks(Ht, Wt) * block_size;
-}
-
-constexpr uint32_t BlockingSettings::last_block_size(uint32_t Ht, uint32_t Wt) const {
-#if ASSERT_ENABLED
-    const bool valid = block_size > 0 && Ht > 0 && Wt > 0 && total_tiles_or(Ht * Wt) == Ht * Wt;
-    if (!valid) {
-        detail::assert_valid_blocking_settings(valid);
-    }
-#endif
-    const uint32_t remainder = Wt % block_size;
-    return remainder == 0 ? block_size : remainder;
-}
-
-constexpr EltwiseShape::EltwiseShape(uint32_t H, uint32_t W, uint32_t blk) :
-    Ht(H), Wt(W), block_size(blk), tail_sync(BlockTailSync::ValidTiles), blocking_total_tiles(0) {}
+constexpr EltwiseShape::EltwiseShape(uint32_t H, uint32_t W, uint32_t blk, BlockTailSync tail_sync) :
+    Ht(H), Wt(W), block_size(blk), tail_sync(tail_sync) {}
 
 constexpr EltwiseShape::EltwiseShape(uint32_t n_tiles) :
-    Ht(1), Wt(n_tiles), block_size(1), tail_sync(BlockTailSync::ValidTiles), blocking_total_tiles(0) {}
+    Ht(1), Wt(n_tiles), block_size(1), tail_sync(BlockTailSync::ValidTiles) {}
 
-constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> EltwiseShape::tiles(uint32_t n, uint32_t blk) {
-    return {1, n, blk};
-}
-
-constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> EltwiseShape::tiles(uint32_t n, BlockingSettings blocking) {
-    TypedEltwiseShape<EltwiseShapeKind::Tiles> shape{1, n, blocking.block_size};
-    shape.tail_sync = blocking.tail_sync;
-    shape.blocking_total_tiles = blocking.total_tiles_or(n);
-    return shape;
-}
-
-constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::grid(uint32_t H, uint32_t W, uint32_t blk) {
-    return {H, W, blk};
+constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> EltwiseShape::tiles(
+    uint32_t n, uint32_t blk, BlockTailSync tail_sync) {
+    return {1, n, blk, tail_sync};
 }
 
 constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::grid(
-    uint32_t H, uint32_t W, BlockingSettings blocking) {
-    TypedEltwiseShape<EltwiseShapeKind::Grid> shape{H, W, blocking.block_size};
-    shape.tail_sync = blocking.tail_sync;
-    shape.blocking_total_tiles = blocking.total_tiles_or(H * W);
-    return shape;
+    uint32_t H, uint32_t W, uint32_t blk, BlockTailSync tail_sync) {
+    return {H, W, blk, tail_sync};
 }
 
 constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::of(uint32_t r, uint32_t c) { return {r, c, 1}; }
@@ -242,7 +183,7 @@ struct OutputSpecConfig {
     using PushField = ConfigField<PushPolicy, ReserveField::end, PushPolicy::OneAtEnd>;
     using ReconfigField = ConfigField<DataFormatReconfig, PushField::end, DataFormatReconfig::Enabled>;
     using ReluField = ConfigField<PackRelu, ReconfigField::end, PackRelu::Zero>;
-    using L1AccumulationField = ConfigField<L1Accumulation, ReluField::end, L1Accumulation::SeedFirst>;
+    using L1AccumulationField = ConfigField<L1Accumulation, ReluField::end, L1Accumulation::AddToExisting>;
     using DestAccumulationField =
         ConfigField<DestAccumulation, L1AccumulationField::end, DestAccumulation::WholeShape>;
     using OffsetField = ConfigField<TileOffset, DestAccumulationField::end, TileOffset::Strided>;
@@ -855,7 +796,7 @@ constexpr uint32_t dfb_for_side() {
 }
 
 // True iff NO element in the pack requests any srca / srcb / pack reconfig — i.e. every element's
-// reconfig knob is None. Under SetupOwner::Caller the chain emits zero reconfig, so a non-None knob
+// reconfig knob is None. Under InitReconfigOwner::Caller the chain emits zero reconfig, so a non-None knob
 // is inert and lies about what the helper does; eltwise_chain uses this to forbid that, forcing the
 // caller to declare None — which honestly reflects "the chain does no reconfig, I own the format."
 template <class... Es>
@@ -1038,7 +979,7 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     static constexpr uint32_t pack_dfb_id() { return Cb; }
     static constexpr Dst pack_dst_slot = DstSlot;
     static constexpr bool uses_l1_accumulation = L1AccumulationMode != L1Accumulation::Disabled;
-    static constexpr bool seeds_l1_accumulation = L1AccumulationMode == L1Accumulation::SeedFirst;
+    static constexpr bool seeds_l1_accumulation = L1AccumulationMode == L1Accumulation::Enabled;
     static constexpr bool manages_l1_accumulation_lifecycle =
         ((Reserve == ReservePolicy::OneUpfront) && (Push == PushPolicy::OneAtEnd));
     static constexpr bool uses_dest_accumulation_lifecycle = DestAccumulationMode != DestAccumulation::Disabled;
@@ -2308,7 +2249,7 @@ struct chain_hoist_pack : std::true_type {};
 template <class... Es>
 struct chain_hoist_pack<EltwiseChain<Es...>> : std::bool_constant<!detail::ChainTraits<Es...>::pack_hetero> {};
 
-// True iff no element requests any reconfig. SetupOwner::Caller requires this so an enabled but
+// True iff no element requests any reconfig. InitReconfigOwner::Caller requires this so an enabled but
 // inert operand reconfig (which the helper would silently ignore) is a compile error
 // instead of a lie about what runs inside the chain.
 template <class Chain>
@@ -2930,12 +2871,12 @@ ALWI void emit_push_per_row(uint32_t cb) {
 
 }  // namespace detail
 
-// eltwise_chain_impl — the walk. SetupOwner::Chain (default) emits the chain's one-time setup
+// eltwise_chain_impl — the walk. InitReconfigOwner::Chain (default) emits the chain's one-time setup
 // (pack boot init + the uniform math-MOP / SFPU init + their srca/srcb reconfig) before walking.
-// SetupOwner::Caller skips ALL of it: the caller emitted the chain's whole one-time setup itself,
-// once, before its own loop, so this call is pure per-tile compute. SetupOwner is about WHO emits
+// InitReconfigOwner::Caller skips ALL of it: the caller emitted the chain's whole one-time setup itself,
+// once, before its own loop, so this call is pure per-tile compute. InitReconfigOwner is about WHO emits
 // the hoistable setup — it never changes which init is hoistable (that's deduced from uniformity).
-template <SetupOwner SO = SetupOwner::Chain, std::size_t... Is, class... Es>
+template <InitReconfigOwner Owner = InitReconfigOwner::Chain, std::size_t... Is, class... Es>
 ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices, EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
     static_assert(
@@ -2990,36 +2931,36 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
     static_assert(
         !chain_pack_writes_collide_v<Chain>, "eltwise_chain: two PackTile elements collide on (dfb, dst_slot).");
-    // SetupOwner::Caller means "the caller did the chain's whole one-time setup itself, once,
+    // InitReconfigOwner::Caller means "the caller did the chain's whole one-time setup itself, once,
     // before the loop." That's only achievable if EVERY part of it is boot-hoistable: uniform
     // math MOP + SFPU init (so input/srca-srcb reconfig is boot-only) AND homogeneous pack CBs
     // (so output/pack reconfig is boot-only — no per-stage pack reconfig in the loop). Otherwise
     // some setup must re-emit per tile, the caller can't pre-do it once, and the knob silently
     // skips a needed init/reconfig — a footgun. Forbid it at compile time.
     static_assert(
-        SO == SetupOwner::Chain ||
+        Owner == InitReconfigOwner::Chain ||
             (chain_hoist_math_mop_v<Chain> && chain_hoist_sfpu_v<Chain> && chain_hoist_pack_v<Chain>),
-        "SetupOwner::Caller requires a chain whose entire one-time setup is boot-hoistable "
+        "InitReconfigOwner::Caller requires a chain whose entire one-time setup is boot-hoistable "
         "(uniform math MOP + SFPU init AND homogeneous pack CBs) so that input AND output "
         "reconfig are boot-only and nothing self-emits per tile. This chain has setup that "
-        "must re-emit per tile, so the caller cannot own it once — use SetupOwner::Chain.");
-    // Honesty: under SetupOwner::Caller the chain emits NO reconfig at all (the caller owns the
+        "must re-emit per tile, so the caller cannot own it once — use InitReconfigOwner::Chain.");
+    // Honesty: under InitReconfigOwner::Caller the chain emits NO reconfig at all (the caller owns the
     // setup), so enabled operand reconfig on any element is inert and lies about what runs inside
     // the helper. Require each input/output spec to disable it.
     static_assert(
-        SO == SetupOwner::Chain || chain_no_reconfig_requested_v<Chain>,
-        "SetupOwner::Caller with enabled operand reconfig: under Caller the chain emits no "
+        Owner == InitReconfigOwner::Chain || chain_no_reconfig_requested_v<Chain>,
+        "InitReconfigOwner::Caller with enabled operand reconfig: under Caller the chain emits no "
         "reconfig (the caller owns the setup), so the setting is inert and misleading. Disable "
         "reconfig in every input/output spec — the caller's manual setup owns the format.");
     static_assert(
-        SO == SetupOwner::Chain || ((!is_runtime_conditional_op_v<Es>) && ...),
-        "SetupOwner::Caller cannot be used with runtime-conditional elements because their "
+        Owner == InitReconfigOwner::Chain || ((!is_runtime_conditional_op_v<Es>) && ...),
+        "InitReconfigOwner::Caller cannot be used with runtime-conditional elements because their "
         "selected init must execute inside each chain invocation.");
     // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
     // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
     constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
-    if constexpr (SO == SetupOwner::Chain && !detail::eltwise_chain_skip_compute_v) {
+    if constexpr (Owner == InitReconfigOwner::Chain && !detail::eltwise_chain_skip_compute_v) {
         (detail::elem_pack_init(detail::select_element<
                                 is_pack_tile_op_v<Es>,
                                 detail::TransitionFacts<
@@ -3043,7 +2984,6 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     ASSERT(shape.Ht > 0);
     ASSERT(shape.Wt > 0);
     ASSERT(block_size > 0);
-    ASSERT(shape.blocking_total_tiles == 0 || shape.blocking_total_tiles == shape.Ht * shape.Wt);
     const bool synchronize_full_blocks = shape.tail_sync == BlockTailSync::FullBlock;
     if constexpr (!chain_supports_block_v<Chain>) {
         ASSERT(!synchronize_full_blocks || block_size == 1);
@@ -3234,18 +3174,18 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
 // Passing the marker through the folds leaves it inert and transparent to neighboring elements.
 // =============================================================================
 
-// Public entry. `SetupOwner SO` (default Chain) says who emits the chain's one-time setup:
+// Public entry. `InitReconfigOwner Owner` (default Chain) says who emits the chain's one-time setup:
 // Chain = this call emits it; Caller = the caller emitted it once, outside its loop (see the
-// SetupOwner enum doc). It never changes which init is hoistable. (default lives on the
+// InitReconfigOwner enum doc). It never changes which init is hoistable. (default lives on the
 // declaration in eltwise_chain.hpp.)
-template <SetupOwner SO, EltwiseShapeKind Kind, class... Es>
+template <InitReconfigOwner Owner, EltwiseShapeKind Kind, class... Es>
 ALWI void eltwise_chain(TypedEltwiseShape<Kind> shape, Es... elts) {
     static_assert(
         Kind != EltwiseShapeKind::Tiles ||
             detail::ChainTraits<Es...>::dest_accumulation_mode != DestAccumulation::PerRow,
         "eltwise_chain: DestAccumulation::PerRow requires EltwiseShape::grid(...); "
         "use DestAccumulation::WholeShape with EltwiseShape::tiles(...)");
-    eltwise_chain_impl<SO>(std::index_sequence_for<Es...>{}, shape, elts...);
+    eltwise_chain_impl<Owner>(std::index_sequence_for<Es...>{}, shape, elts...);
 }
 
 // =============================================================================

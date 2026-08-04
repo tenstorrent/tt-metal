@@ -109,7 +109,7 @@ void kernel_main() {
         REL();
         rotated_in_interm_dfb_obj.push_back(Wt);
         mul_bcast_rows_init(rotated_in_interm_dfb, sin_dfb);
-        ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
             ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
             ckl::BinaryFpu<
                 bulk_block_input(rotated_in_interm_dfb),
@@ -118,7 +118,7 @@ void kernel_main() {
                 ckl::BroadcastDim::Row>{},
             ckl::PackTile<bulk_output(sin_interm_dfb)>{});
 
-        ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
             ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
             ckl::BinaryFpu<
                 ckl::input(

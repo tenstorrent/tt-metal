@@ -118,7 +118,7 @@ void kernel_main() {
         if constexpr (fuse_pre_add) {
             for (auto block : generic::blocks(Wt, blk)) {
                 const auto block_shape =
-                    ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
+                    ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
                 if constexpr (welford_fp32_alias) {
                     cb_x_welford_obj.reserve_back(block.full_block_size());
                 }
@@ -292,7 +292,7 @@ void kernel_main() {
         cb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
             const auto block_shape =
-                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
+                ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
             ckl::eltwise_chain(
                 block_shape,
                 ckl::BinaryFpu<

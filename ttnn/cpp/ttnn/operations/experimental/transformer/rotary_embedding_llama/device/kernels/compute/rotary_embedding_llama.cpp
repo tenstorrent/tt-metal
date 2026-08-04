@@ -130,7 +130,7 @@ void kernel_main() {
                 reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, in_dfb, sin_dfb);
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
                 mul_init(rotated_in_interm_dfb, sin_dfb);
-                ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+                ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                     ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     ckl::BinaryFpu<
                         bulk_block_input(rotated_in_interm_dfb),
@@ -141,7 +141,7 @@ void kernel_main() {
 
                 reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
                 pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
-                ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+                ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                     ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     ckl::BinaryFpu<
                         ckl::input(
