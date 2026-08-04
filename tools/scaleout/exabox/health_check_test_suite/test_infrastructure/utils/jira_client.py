@@ -37,10 +37,7 @@ def _build_failure_body(
 
     telemetry_section = ""
     if telemetry_summary:
-        telemetry_section = (
-            f"\n*Telemetry Metrics:*\n"
-            f"{{noformat}}\n{telemetry_summary}\n{{noformat}}\n"
-        )
+        telemetry_section = f"\n*Telemetry Metrics:*\n" f"{{noformat}}\n{telemetry_summary}\n{{noformat}}\n"
 
     attachment_section = ""
     if attachment_names:
@@ -81,8 +78,8 @@ def find_open_ticket_for_node(
     expected_summary = f"[Fabric Health Check] Test failed on {node}"
     jql = (
         f"project = {jira_project_key} "
-        f"AND labels = \"fabric-health-check\" "
-        f"AND summary ~ \"\\\"Test failed on {node}\\\"\" "
+        f'AND labels = "fabric-health-check" '
+        f'AND summary ~ "\\"Test failed on {node}\\"" '
         f"AND statusCategory != Done "
         f"ORDER BY created DESC"
     )
@@ -153,8 +150,8 @@ def _version_fields(versions: dict[str, str]) -> dict:
     the two never drift: Firmware / TT-SMI / KMD versions."""
     return {
         "customfield_16168": versions["fw_bundle"],  # Firmware Version
-        "customfield_16169": versions["tt_smi"],     # TT-SMI Version
-        "customfield_16170": versions["tt_kmd"],     # KMD Version
+        "customfield_16169": versions["tt_smi"],  # TT-SMI Version
+        "customfield_16170": versions["tt_kmd"],  # KMD Version
     }
 
 
@@ -175,9 +172,7 @@ def update_jira_versions(
 
     log.info("Updating version fields on %s ...", ticket_key)
     try:
-        resp = requests.put(
-            url, headers=headers, json={"fields": _version_fields(versions)}, timeout=30
-        )
+        resp = requests.put(url, headers=headers, json={"fields": _version_fields(versions)}, timeout=30)
     except requests.RequestException as exc:
         log.warning("Failed to update version fields on %s: %s", ticket_key, exc)
         return False
@@ -212,17 +207,14 @@ def create_jira_ticket(
 ) -> str | None:
     """Create a JIRA ticket for a failed health check. Returns ticket key or None."""
 
-    description = (
-        f"Fabric System Health Check failed on node {node}.\n\n"
-        + _build_failure_body(
-            node=node,
-            slurm_job_id=slurm_job_id,
-            exit_code=exit_code,
-            versions=versions,
-            telemetry_summary=telemetry_summary,
-            test_output=test_output,
-            attachment_names=attachment_names,
-        )
+    description = f"Fabric System Health Check failed on node {node}.\n\n" + _build_failure_body(
+        node=node,
+        slurm_job_id=slurm_job_id,
+        exit_code=exit_code,
+        versions=versions,
+        telemetry_summary=telemetry_summary,
+        test_output=test_output,
+        attachment_names=attachment_names,
     )
 
     payload = {
@@ -252,9 +244,7 @@ def create_jira_ticket(
 
     log.info("JIRA API response: HTTP %d", resp.status_code)
     if not resp.ok:
-        log.warning(
-            "Failed to create JIRA ticket (HTTP %d): %s", resp.status_code, resp.text
-        )
+        log.warning("Failed to create JIRA ticket (HTTP %d): %s", resp.status_code, resp.text)
         return None
 
     try:
@@ -294,29 +284,20 @@ def transition_jira_ticket(
         return
 
     transitions = resp.json().get("transitions", [])
-    transition_id = next(
-        (t["id"] for t in transitions if t["name"] == target_transition), None
-    )
+    transition_id = next((t["id"] for t in transitions if t["name"] == target_transition), None)
     if not transition_id and fallback_to_done:
         transition_id = next(
-            (
-                t["id"]
-                for t in transitions
-                if t.get("to", {}).get("statusCategory", {}).get("key") == "done"
-            ),
+            (t["id"] for t in transitions if t.get("to", {}).get("statusCategory", {}).get("key") == "done"),
             None,
         )
         if transition_id:
             log.info(
-                "Transition '%s' not found for %s; falling back to a done-category "
-                "transition",
+                "Transition '%s' not found for %s; falling back to a done-category " "transition",
                 target_transition,
                 ticket_key,
             )
     if not transition_id:
-        log.warning(
-            "Could not find '%s' transition for %s", target_transition, ticket_key
-        )
+        log.warning("Could not find '%s' transition for %s", target_transition, ticket_key)
         return
 
     log.info("Transitioning %s to '%s' ...", ticket_key, target_transition)
@@ -366,9 +347,7 @@ def attach_log_to_jira(
             log.info("Log file attached to %s", ticket_key)
             return filename
         else:
-            log.warning(
-                "Failed to attach log file (HTTP %d): %s", resp.status_code, resp.text
-            )
+            log.warning("Failed to attach log file (HTTP %d): %s", resp.status_code, resp.text)
             return None
     except requests.RequestException as exc:
         log.warning("Failed to attach log file: %s", exc)

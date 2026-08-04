@@ -136,9 +136,7 @@ def upload_csv_sftp(
         log.info("No CSV files to upload")
         return
 
-    log.info(
-        "Uploading %d CSV file(s) to %s@%s ...", len(csv_files), sftp_user, sftp_host
-    )
+    log.info("Uploading %d CSV file(s) to %s@%s ...", len(csv_files), sftp_user, sftp_host)
     transport = None
     try:
         transport = paramiko.Transport((sftp_host, 22))

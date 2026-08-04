@@ -100,19 +100,13 @@ class CheckRecord(BaseModel):
     is_warn: Flag = Field(description="1 if status is WARN.")
     is_fail: Flag = Field(description="1 if status is FAIL.")
     is_skip: Flag = Field(description="1 if status is SKIP.")
-    is_covered: Flag = Field(
-        description="1 if the check actually ran; a stress test that executed 0 cases is 0."
-    )
+    is_covered: Flag = Field(description="1 if the check actually ran; a stress test that executed 0 cases is 0.")
     acknowledged: Flag = Field(
         description="1 for known-benign fleet-wide WARNs (e.g. cpld_fw_old), excluded from actionable rollups."
     )
 
-    testcases_passed: Optional[int] = Field(
-        None, description="gtest sub-cases passed; None for non-test checks."
-    )
-    testcases_failed: Optional[int] = Field(
-        None, description="gtest sub-cases failed; None for non-test checks."
-    )
+    testcases_passed: Optional[int] = Field(None, description="gtest sub-cases passed; None for non-test checks.")
+    testcases_failed: Optional[int] = Field(None, description="gtest sub-cases failed; None for non-test checks.")
     executed: Flag = Field(description="0 if a stress test executed 0 cases (check-level fail-closed).")
 
     details_short: Optional[str] = Field(None, description="Human-readable check detail, newlines flattened.")
@@ -134,9 +128,7 @@ class CheckRecord(BaseModel):
         }.get(self.status)
         if expected is not None and getattr(self, expected) != 1:
             raise ValueError(f"{expected}=1 expected for status={self.status.value}")
-        if self.status is CheckStatus.EXCLUDED and (
-            self.is_pass or self.is_warn or self.is_fail or self.is_skip
-        ):
+        if self.status is CheckStatus.EXCLUDED and (self.is_pass or self.is_warn or self.is_fail or self.is_skip):
             raise ValueError("EXCLUDED must have all is_* flags = 0")
         return self
 
@@ -165,7 +157,9 @@ class RunRecord(BaseModel):
 
     # exclude non-real runs (dry-run / maintenance / manual) from fleet stats.
     discard: Flag = Field(description="1 = exclude this run from fleet statistics.")
-    discard_reason: Optional[str] = Field(None, description="Reason when discard=1 (dry_run/maintenance/manual_test/…).")
+    discard_reason: Optional[str] = Field(
+        None, description="Reason when discard=1 (dry_run/maintenance/manual_test/…)."
+    )
 
     # history: computed by the Data team across the day-series; empty on a lone run.
     prev_status: Optional[OverallStatus] = Field(None, description="This host's previous run status (Data team).")
@@ -191,7 +185,8 @@ class RunRecord(BaseModel):
     pct_covered: Optional[float] = Field(None, description="100 * checks_covered / checks_total.")
     checks_warn_actionable: int = Field(description="WARNs excluding acknowledged fleet-wide benign ones.")
     top_fail_category: Optional[str] = Field(
-        None, description="Worst category (FAIL first, then actionable WARN); 'run' for ERROR; empty if only benign WARNs."
+        None,
+        description="Worst category (FAIL first, then actionable WARN); 'run' for ERROR; empty if only benign WARNs.",
     )
 
     # subsystem rollups
@@ -210,7 +205,9 @@ class RunRecord(BaseModel):
     telemetry_available: Flag = Field(description="1 if tt-telemetry was reachable for this run.")
     eth_retrain_total: Optional[int] = Field(None, description="Per-machine Ethernet retrains (tt-telemetry).")
     eth_crc_total: Optional[int] = Field(None, description="Per-machine Ethernet CRC errors (tt-telemetry).")
-    eth_uncorr_cw_total: Optional[int] = Field(None, description="Per-machine Ethernet uncorrectable codewords (tt-telemetry).")
+    eth_uncorr_cw_total: Optional[int] = Field(
+        None, description="Per-machine Ethernet uncorrectable codewords (tt-telemetry)."
+    )
 
     jira_ticket: Optional[str] = Field(None, description="JIRA key if a ticket was filed for this run.")
 

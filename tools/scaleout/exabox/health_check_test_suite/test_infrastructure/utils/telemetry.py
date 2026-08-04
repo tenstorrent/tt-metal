@@ -14,42 +14,50 @@ from prometheus_client.parser import text_string_to_metric_families
 log = logging.getLogger(__name__)
 
 
-TELEMETRY_METRICS = frozenset({
-    "tt_cable_present",
-    "tt_chip_count",
-    "tt_dram_trained",
-    "tt_eth_firmware_signature",
-    "tt_ethernet_cable_present",
-    "tt_ethernet_corrected_codeword_count",
-    "tt_ethernet_crc_error_count",
-    "tt_ethernet_heartbeat",
-    "tt_ethernet_link_up",
-    "tt_ethernet_retrain_count",
-    "tt_ethernet_uncorrected_codeword_count",
-    "tt_noc_alive",
-    "tt_pcie_link_alive",
-})
+TELEMETRY_METRICS = frozenset(
+    {
+        "tt_cable_present",
+        "tt_chip_count",
+        "tt_dram_trained",
+        "tt_eth_firmware_signature",
+        "tt_ethernet_cable_present",
+        "tt_ethernet_corrected_codeword_count",
+        "tt_ethernet_crc_error_count",
+        "tt_ethernet_heartbeat",
+        "tt_ethernet_link_up",
+        "tt_ethernet_retrain_count",
+        "tt_ethernet_uncorrected_codeword_count",
+        "tt_noc_alive",
+        "tt_pcie_link_alive",
+    }
+)
 
-_STATUS_METRICS = frozenset({
-    "tt_cable_present",
-    "tt_dram_trained",
-    "tt_ethernet_cable_present",
-    "tt_ethernet_heartbeat",
-    "tt_ethernet_link_up",
-    "tt_noc_alive",
-    "tt_pcie_link_alive",
-})
+_STATUS_METRICS = frozenset(
+    {
+        "tt_cable_present",
+        "tt_dram_trained",
+        "tt_ethernet_cable_present",
+        "tt_ethernet_heartbeat",
+        "tt_ethernet_link_up",
+        "tt_noc_alive",
+        "tt_pcie_link_alive",
+    }
+)
 
-_COUNTER_METRICS = frozenset({
-    "tt_ethernet_corrected_codeword_count",
-    "tt_ethernet_crc_error_count",
-    "tt_ethernet_retrain_count",
-    "tt_ethernet_uncorrected_codeword_count",
-})
+_COUNTER_METRICS = frozenset(
+    {
+        "tt_ethernet_corrected_codeword_count",
+        "tt_ethernet_crc_error_count",
+        "tt_ethernet_retrain_count",
+        "tt_ethernet_uncorrected_codeword_count",
+    }
+)
 
-_VALUE_METRICS = frozenset({
-    "tt_chip_count",
-})
+_VALUE_METRICS = frozenset(
+    {
+        "tt_chip_count",
+    }
+)
 
 
 def collect_prometheus_metrics(port: int = 8080) -> dict[str, list[dict]] | None:
@@ -123,28 +131,18 @@ def format_prometheus_metrics(metrics: dict[str, list[dict]]) -> str:
                     "tt_ethernet_uncorrected_codeword_count",
                     "tt_ethernet_crc_error_count",
                 ):
-                    for s in sorted(nonzero, key=lambda x: x["value"], reverse=True)[
-                        :5
-                    ]:
-                        lines.append(
-                            f"    {_sample_ident(s['labels'])}: {int(s['value'])}"
-                        )
+                    for s in sorted(nonzero, key=lambda x: x["value"], reverse=True)[:5]:
+                        lines.append(f"    {_sample_ident(s['labels'])}: {int(s['value'])}")
 
         elif name == "tt_eth_firmware_signature":
             unique_sigs = sorted(set(int(s["value"]) for s in samples))
-            lines.append(
-                f"    unique signatures: {', '.join(hex(s) for s in unique_sigs)}"
-            )
+            lines.append(f"    unique signatures: {', '.join(hex(s) for s in unique_sigs)}")
 
         elif name in _VALUE_METRICS:
             for s in samples:
                 ident = _sample_ident(s["labels"])
                 if not ident:
-                    extra = {
-                        k: v
-                        for k, v in s["labels"].items()
-                        if k not in ("hostname", "__name__")
-                    }
+                    extra = {k: v for k, v in s["labels"].items() if k not in ("hostname", "__name__")}
                     ident = " ".join(f"{k}={v}" for k, v in sorted(extra.items()))
                 suffix = f" [{ident}]" if ident else ""
                 lines.append(f"    {name}={int(s['value'])}{suffix}")

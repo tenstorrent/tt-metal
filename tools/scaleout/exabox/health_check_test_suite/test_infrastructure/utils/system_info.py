@@ -26,9 +26,7 @@ def collect_version_info() -> dict[str, str]:
     versions = {"tt_smi": "N/A", "tt_kmd": "N/A", "fw_bundle": "N/A"}
 
     try:
-        result = subprocess.run(
-            ["tt-smi", "--version"], capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run(["tt-smi", "--version"], capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
             versions["tt_smi"] = result.stdout.strip()
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -45,6 +43,7 @@ def collect_version_info() -> dict[str, str]:
                 text=True,
                 timeout=10,
             )
+
             if result.returncode == 0:
                 versions["tt_kmd"] = result.stdout.strip()
         except (FileNotFoundError, subprocess.TimeoutExpired):
