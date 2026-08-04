@@ -254,7 +254,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
                                                          // factory, the output has the same shard spec as the input.
         return {tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
-            tensor_layout_from_padded_shape(
+            experimental::tensor_layout_from_padded_shape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE, operation_attributes.tile),
                 mem_config,

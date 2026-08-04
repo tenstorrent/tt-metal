@@ -70,7 +70,7 @@ tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
             args.memory_config.memory_layout(), args.memory_config.buffer_type(), shard_spec);
         return tt::tt_metal::TensorSpec(
             output_shape,
-            tt::tt_metal::tensor_layout_with_custom_alignment(
+            tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                 args.dtype,
                 tt::tt_metal::PageConfig(output_layout),
                 mem_config,
@@ -82,7 +82,7 @@ tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
     }
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::tensor_layout_from_padded_shape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             args.dtype,
             tt::tt_metal::PageConfig(output_layout),
             args.memory_config,

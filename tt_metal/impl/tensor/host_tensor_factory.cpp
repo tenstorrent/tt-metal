@@ -33,7 +33,7 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
     auto buffer_dtype = convert_to_data_type<T>();
     auto buffer_spec = TensorSpec(
         spec.logical_shape(),
-        tensor_layout_with_custom_alignment(
+        experimental::tensor_layout_with_custom_alignment(
             buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
 
     size_t volume = spec.logical_shape().volume();
@@ -103,7 +103,7 @@ HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, Tenso
     auto buffer_dtype = convert_to_data_type<T>();
     auto buffer_spec = TensorSpec(
         spec.logical_shape(),
-        tensor_layout_with_custom_alignment(
+        experimental::tensor_layout_with_custom_alignment(
             buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
 
     auto host_buffer =

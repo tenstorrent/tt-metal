@@ -248,7 +248,7 @@ tt::tt_metal::TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tensor_layout_from_padded_shape(
+        experimental::tensor_layout_from_padded_shape(
             args.dtype.value_or(input_tensor.dtype()),
             PageConfig(Layout::TILE),
             mem_config,

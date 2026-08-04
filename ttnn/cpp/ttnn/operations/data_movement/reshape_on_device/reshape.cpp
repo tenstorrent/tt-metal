@@ -34,7 +34,7 @@ static Tensor manual_insertion(
     auto cpu_tensor = input_tensor.cpu();
     auto output_spec = tt::tt_metal::TensorSpec(
         logical_shape,
-        tt::tt_metal::tensor_layout_from_padded_shape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape));
     auto output = Tensor(
                       tt::tt_metal::host_tensor_from_buffer_with_topology(

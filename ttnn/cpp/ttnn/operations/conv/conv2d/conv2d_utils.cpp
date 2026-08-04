@@ -874,7 +874,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 Tensor resharded_input_tensor = ttnn::create_device_tensor(
                     tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
-                        tt::tt_metal::tensor_layout_with_custom_alignment(
+                        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                             input_tensor.dtype(),
                             tt::tt_metal::PageConfig(input_tensor.layout()),
                             input_tensor_sharded_memory_config_to_layout,
@@ -922,7 +922,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 Tensor resharded_input_tensor = ttnn::create_device_tensor(
                     tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
-                        tt::tt_metal::tensor_layout_with_custom_alignment(
+                        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                             input_tensor.dtype(),
                             tt::tt_metal::PageConfig(input_tensor.layout()),
                             input_tensor_sharded_memory_config_to_layout,

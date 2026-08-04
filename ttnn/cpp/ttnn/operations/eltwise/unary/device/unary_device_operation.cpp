@@ -128,7 +128,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const auto output_layout = tensor_args.input.layout();
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tensor_layout_from_padded_shape(
+        experimental::tensor_layout_from_padded_shape(
             args.output_dtype,
             PageConfig(output_layout),
             args.memory_config,

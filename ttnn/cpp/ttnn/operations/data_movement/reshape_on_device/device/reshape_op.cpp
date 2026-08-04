@@ -68,7 +68,7 @@ ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_outp
     const auto& input_tensor = tensor_args.input_tensor;
     return tt::tt_metal::TensorSpec(
         operation_attributes.logical_output_shape,
-        tensor_layout_from_padded_shape(
+        experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             input_tensor.tensor_spec().page_config(),
             operation_attributes.output_mem_config,
