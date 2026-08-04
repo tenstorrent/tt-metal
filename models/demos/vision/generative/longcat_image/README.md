@@ -71,41 +71,22 @@ PCC, not rounding in any one matmul. That's why the DiT tolerates aggressive qua
 
 ## Run
 
+4-chip tensor-parallel, all-resident warm server (needs a QB2 4-chip mesh). Warms up
+once, then prompts for text at a REPL — see Performance below for numbers.
+
 ```bash
-# Call 1: text -> image (writes a PNG). Defaults to 512px/50 steps/512 tokens
-# (matches HF except resolution — add --size 1024 to match HF's default exactly).
-./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_text_to_image \
-    --prompt "a photograph of a cat sitting on a red sofa" --out my_image.png
-
-# Call 2: image + text -> image
-./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_image_edit \
-    --image <path.jpg> --prompt "change the cat to a dog"
-
-# Fastest path: 4-chip tensor-parallel, all-resident warm server (needs a QB2 4-chip mesh).
-# Warms up once, then prompts for text at a REPL — see Performance below for numbers.
+# 512px (HF steps=50) — 15.4s end-to-end after warmup
 ./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_4chip \
     --steps 50 --size 512 --max_length 512 --cq 2
 
-# e2e correctness gates (on device)
-./python_env/bin/python -m pytest models/demos/vision/generative/longcat_image/tests/e2e/ -s
+# 1024px (HF reference resolution) — 43.6s end-to-end after warmup
+./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_4chip \
+    --steps 50 --size 1024 --max_length 512 --cq 2
 ```
-
-Common flags (all three demos):
-
-| Flag | Effect |
-| --- | --- |
-| `--size 1024` | match the HF reference resolution exactly (default 512; use ≥ 512 — 256px is out-of-distribution for this 1024px-class model) |
-| `--cq 2` | run the denoise loop under trace + 2 command queues (default on `demo_4chip.py`) |
-| `--compare_golden` | also run the slow CPU HF reference and print e2e PCC (minutes; omit for a normal run) |
-| `--profile` | print per-stage wall-clock timing (`LONGCAT_PROFILE=1` env var works too) |
 
 One HF default we do **not** match: `enable_prompt_rewrite` — HF rewrites the prompt via
 the encoder's autoregressive `generate()` before encoding; the TT path skips it, so images
 correspond to HF with prompt-rewrite off.
-
-E2e gate caps (steps / size / token budget) are small by default for a fast on-device
-check and applied identically to the TT run and the (disk-cached) HF golden — override via
-`LONGCAT_E2E_{STEPS,SIZE,MAXLEN,GUIDANCE,PROMPT}`.
 
 ## Performance (tp=4, all-resident, 4 chips)
 
