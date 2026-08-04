@@ -87,13 +87,13 @@ ALL_MESH_CONFIGS = [
     ),
     # 2D mesh topologies
     _mesh_param(
-        (2, 2), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-2x2"
+        (2, 2), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-2x2", "mesh-2x2"
     ),
     _mesh_param(
         (4, 2), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-4x2"
     ),
     _mesh_param(
-        (2, 4), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-4x2", "mesh-2x4"
+        (2, 4), ttnn.FabricConfig.FABRIC_1D, get_max_payload_size(), 1, ttnn.Topology.Linear, "mesh-2x4", "mesh-2x4"
     ),
     # 8-chip linear
     _mesh_param(
@@ -210,6 +210,16 @@ ALL_MESH_CONFIGS = [
         ttnn.Topology.Ring,
         "mesh-8x4",
         "fabric2d-torus-xy-8x4-1link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+    ),
+    _mesh_param(
+        (8, 4),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        get_max_payload_size(),
+        2,
+        ttnn.Topology.Ring,
+        "mesh-8x4",
+        "fabric2d-torus-xy-8x4-2link",
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
 ]
