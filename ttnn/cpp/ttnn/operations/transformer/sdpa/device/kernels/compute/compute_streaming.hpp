@@ -482,7 +482,7 @@ void sub_exp_block_bcast_cols(
 
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
-        sub_bcast_cols_init_custom(inout_cb, max_cb, tiles_per_column);
+        sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
     }
 
     // inout_cb assumed ready (max_cb was already computed from it)

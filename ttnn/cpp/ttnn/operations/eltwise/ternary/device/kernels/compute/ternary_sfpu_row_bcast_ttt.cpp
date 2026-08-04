@@ -55,13 +55,13 @@ void kernel_main() {
     // Initialize pack/format for SFPU-style ternary kernels (matches existing ternary SFPU kernels)
     unary_op_init_common(dfb_eff_a.get_id(), dfb_out.get_id());
 
-    compute_kernel_hw_startup(dfb_pre_a.get_id(), dfb_bcast_a.get_id());
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
 #if BCAST_A
         {
             dfb_pre_a.wait_front(num_tiles_per_cycle);
             dfb_bcast_a.reserve_back(num_tiles_per_cycle);
             reconfig_data_format_srca(dfb_pre_a.get_id());
+            pack_reconfig_data_format(dfb_bcast_a.get_id());
             unary_bcast_init<BroadcastType::ROW>(dfb_pre_a.get_id());
 
             tile_regs_acquire();
@@ -82,6 +82,7 @@ void kernel_main() {
             dfb_pre_b.wait_front(num_tiles_per_cycle);
             dfb_bcast_b.reserve_back(num_tiles_per_cycle);
             reconfig_data_format_srca(dfb_pre_b.get_id());
+            pack_reconfig_data_format(dfb_bcast_b.get_id());
             unary_bcast_init<BroadcastType::ROW>(dfb_pre_b.get_id());
 
             tile_regs_acquire();
@@ -102,6 +103,7 @@ void kernel_main() {
             dfb_pre_c.wait_front(num_tiles_per_cycle);
             dfb_bcast_c.reserve_back(num_tiles_per_cycle);
             reconfig_data_format_srca(dfb_pre_c.get_id());
+            pack_reconfig_data_format(dfb_bcast_c.get_id());
             unary_bcast_init<BroadcastType::ROW>(dfb_pre_c.get_id());
 
             tile_regs_acquire();

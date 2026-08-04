@@ -166,7 +166,7 @@ void matmul_relu_pass_headmajor(
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
 inline void set_mul_mode_custom() {
     set_mul_reconfig<qk_cb, w_cb, acc_cb>();
-    mul_bcast_cols_init_custom(qk_cb, w_cb);
+    mul_bcast_cols_init_short_custom(qk_cb, w_cb);
 }
 
 /** Per-column (qk_col_batch==1) head reduction for tile (q_row, k_col): acc_cb[acc_slot] =
