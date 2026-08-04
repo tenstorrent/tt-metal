@@ -126,6 +126,41 @@ def test_binary_int32_float_scalar_promotion_with_sub_device_id(device, op_fn):
         teardown_sub_device(device, sub_device_manager)
 
 
+@pytest.mark.parametrize("op_fn", [ttnn.remainder, ttnn.fmod])
+@skip_for_slow_dispatch()
+def test_binary_sharded_int32_float_scalar_promotion_with_sub_device_id(device, op_fn):
+    """Promotion of an L1-sharded INT32 input stays on the requested sub-device."""
+    sub_device_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 4))})
+    torch_input = torch.arange(-80, 80, dtype=torch.int32).reshape(1, 1, 160, 1).expand(1, 1, 160, 32).contiguous()
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=sub_device_cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_input = ttnn.to_memory_config(tt_input, sharded_memory_config)
+
+    scalar = 1.5
+    sub_device_manager = setup_sub_device(device)
+    try:
+        result = op_fn(tt_input, scalar, sub_device_id=ttnn.SubDeviceId(1))
+        actual = ttnn.to_torch(result)
+        expected = torch.remainder(torch_input, scalar) if op_fn == ttnn.remainder else torch.fmod(torch_input, scalar)
+
+        assert result.is_sharded()
+        assert torch.equal(expected, actual)
+    finally:
+        teardown_sub_device(device, sub_device_manager)
+
+
 # ---------------------------------------------------------------------------
 # Mutual exclusion: sub_core_grids + sub_device_id = TT_FATAL
 # ---------------------------------------------------------------------------
