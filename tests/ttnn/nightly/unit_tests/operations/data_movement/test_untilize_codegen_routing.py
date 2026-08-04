@@ -346,29 +346,20 @@ _EXECUTION_CONTROLS = [
     ({"sub_core_grids": _SUB_CORE_GRIDS}, "sub_core_grids"),
 ]
 
-# The native-golden leg needs native to actually run the control. `ttnn.untilize` with
-# `sub_core_grids` hangs on **both** archs for any grid or shape tried, including the range
-# test_to_layout.py::test_to_layout_subcore uses -- the native sub-core-grids factory has no direct
-# test coverage anywhere and its only model caller is wormhole galaxy. Unrelated to routing: it
-# reproduces under implementation="native", which never reaches the codegen gate.
-#
-# The hang is below the pytest-timeout signal boundary, so an arch-conditional skip does not fail
-# fast on the arch it does not cover -- it burns the whole job timeout in `ttnn.to_torch` waiting on
-# a program that never completes. Hence unconditional: there is no arch where this passes.
+# Each control carries its own shape because this leg has to run native to have a golden: native's
+# sub-core-grid factory only accepts tensors one tile row tall (UntilizeDeviceOperation validate).
+# Both shapes are in scope for the codegen gate, so only the execution control can drive the route.
 _NATIVE_GOLDEN_CONTROLS = [
-    pytest.param({"use_multicore": False}, "use_multicore_false"),
-    pytest.param(
-        {"sub_core_grids": _SUB_CORE_GRIDS},
-        "sub_core_grids",
-        marks=pytest.mark.skip(reason="native ttnn.untilize(sub_core_grids=...) hangs on wormhole_b0 and blackhole"),
-    ),
+    ({"use_multicore": False}, [64, 128], "use_multicore_false"),
+    ({"sub_core_grids": _SUB_CORE_GRIDS}, [32, 128], "sub_core_grids"),
 ]
 
 
-@pytest.mark.parametrize("controls,control_id", _NATIVE_GOLDEN_CONTROLS)
-def test_untilize_execution_controls_route_to_native(device, controls, control_id):
-    # In-scope shape/dtype for the codegen gate, so only the execution control can drive the route.
-    x = torch.rand([64, 128], dtype=torch.bfloat16)
+@pytest.mark.parametrize(
+    "controls,shape,control_id", _NATIVE_GOLDEN_CONTROLS, ids=[c[2] for c in _NATIVE_GOLDEN_CONTROLS]
+)
+def test_untilize_execution_controls_route_to_native(device, controls, shape, control_id):
+    x = torch.rand(shape, dtype=torch.bfloat16)
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, **controls}
     golden = ttnn.to_torch(ttnn.untilize(xt, **kwargs, implementation=_NATIVE))
