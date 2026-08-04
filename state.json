@@ -1,7 +1,7 @@
 {
-  "last_run": "2026-08-03T19:04:28Z",
-  "run_id": "30843246194",
-  "tasks_run": ["task2_comment_investigate_no_action", "task3_fix_issues", "task5_maintain_prs_check", "task8_monthly_summary"],
+  "last_run": "2026-08-04T12:59:50Z",
+  "run_id": "30911307121",
+  "tasks_run": ["task5_maintain_prs_check", "task6_stale_prs", "task8_monthly_summary"],
   "monthly_activity_issue": {
     "number": 51865,
     "month": "2026-08",
@@ -13,20 +13,21 @@
   "welcomed_contributors": [],
   "stale_pr_actions": {
     "51024": {"action": "codeowners_ping", "timestamp": "2026-07-28T06:46:32Z", "note": "merged same day, no longer tracked"},
-    "50525": {"action": "codeowners_ping_by_author", "timestamp": "2026-07-30T06:52:26Z", "note": "not re-checked this run"}
+    "50525": {"action": "codeowners_ping", "timestamp": "2026-08-04T12:59:50Z", "note": "re-pinged, still pending metalium-developers-infra approval; CI green, Copilot review recommended merge"}
   },
   "backlog_cursor": {
     "issues": 51420,
     "last_processed_date": "2026-08-03",
-    "note": "reviewed fresh issues from ~51294 through ~51439; many are internal team epics/CI-auto-triage clusters (Minimax M3, ds_prefill, llk-ai-codegen, CI auto triage) out of scope for manual triage. #51303/#51304 already covered by kinginu's own PR #51138. Next run should continue scanning past 51439 forward."
+    "note": "reviewed fresh issues from ~51294 through ~51439; many are internal team epics/CI-auto-triage clusters out of scope. Also spot-checked oldest-first issue list (2023-2024 vintage) on 2026-08-04 - all already labeled/long-standing tracking issues, no fresh triage candidates found there. Next run should continue scanning forward past #51439 for fresh issues, and separately continue oldest-first legacy sweep if time allows."
   },
   "open_prs": [
     {
-      "branch": "repo-assist/fix-issue-51420-rsqrt-legacy-compat",
+      "branch": "repo-assist/fix-issue-51420-rsqrt-legacy-compat-f4c2a90682495826",
+      "pr_number": 51999,
       "issue": 51420,
       "title": "fix(ttnn): use non-legacy rsqrt in fused_rms_minimal compute kernel",
       "created": "2026-08-03",
-      "ci_status": "queued - check pr-gate/build-artifact run on next repo-assist run"
+      "ci_status": "pr-gate.yaml run 30844343235 stuck at action_required (0 jobs run) as of 2026-08-04 - needs maintainer approval to run, not a build failure. Already flagged via PR comment on 2026-08-04 run before this one; skipped duplicate comment this run since no new info."
     }
   ],
   "closed_or_merged_prs": [
@@ -34,6 +35,6 @@
     {"pr_number": 51809, "merged_at": null, "note": "closed unmerged - superseded by human PR #51686 which more thoroughly fixed the same moe_routing_remap issue (#51757/#51860); correct outcome, no further action"},
     {"pr_number": 51111, "merged_at": "2026-07-28T19:35:44Z", "note": "repeat_program_factory_last_dim precedence fix"}
   ],
-  "next_tasks": ["task1_triage", "task2_comment", "task4_improvements", "task6_stale_prs", "task7_welcome"],
-  "notes": "2026-08-03: Verified terminal states of both PRs tracked in memory (51663 merged, 51809 closed-superseded by #51686 - correct, no duplicate). Investigated Task2 candidates #51303/#51304 (quantize/dequantize rounding bugs, reporter kinginu) - both covered by kinginu's own PR #51138 (confirms closes #51303; #51304 rounding fix scope overlaps same PR) - skipped commenting, no redundant noise added. Investigated #51420 (fused_rms_minimal hardcoded rsqrt_tile<true> legacy-compat vs decomposed rms_norm's legacy_rsqrt=false default) - confirmed root cause directly against tt_metal/hw/inc/api/compute/eltwise_unary/rsqrt.h and layernorm_types.hpp, fixed by dropping <true> template arg to match library/decomposed-path defaults. Opened ready-for-review PR (Closes #51420). Noted maintainer PR #51791 (blozano-tt, still open/unmerged) proposes tightening Task2 instructions to require verified/attributed claims for bug root-causes and benchmark numbers - kept language hedged and cited concrete file:line evidence in this run's PR body accordingly. Did not get to task1 (labeling)/task4/task6/task7 this run due to time - next run should resume Task1/2 triage past cursor #51420, re-check task6 stale PRs (#50525 not re-checked), and attempt task7 welcome scan. Fresh issues #51294-51439 include many internal-team epics/CI-auto-triage clusters (Minimax M3, ds_prefill, llk-ai-codegen, CI auto triage) - low value for manual repo-assist triage/comments, confirmed again this run; #51297 (disk cache design proposal) and #51354 (per-core buffer address bug, well-documented by esmalTT) are candidates worth a look next run but not yet acted on."
+  "next_tasks": ["task1_triage", "task2_comment", "task3_fix_issues", "task4_improvements", "task7_welcome"],
+  "notes": "2026-08-04: Task5 - checked PR #51999 CI: still action_required/awaiting maintainer approval, no new info vs. yesterday's comment, skipped duplicate. Task6 - re-pinged /codeowners on PR #50525 (3+ days since last ping on 2026-07-30, still reviewer-blocked pending metalium-developers-infra team approval; CI fully green, Copilot review recommended merge). Noted human PR #51421 (gengelageTT, fused_rms_minimal stats-buffer fix) references our #51420/#51999 as a complementary follow-up - no action needed on our end. Spot-checked oldest-first issue backlog (2023-2024 era issues) for fresh triage candidates - all already well-labeled/long-standing tracking issues (do-not-close tags etc), nothing actionable found in this quick pass. Did not get to Task1/2/3/4/7 this run - next run should prioritize those, particularly continuing the fresh-issue scan past #51439 (Task 1/2) and revisiting the three unfixed bug candidates noted in Suggested Actions (#51660 erfinv, #51845 sin/cos Cody-Waite, #51861 hypot range) for Task 3 fix attempts."
 }
