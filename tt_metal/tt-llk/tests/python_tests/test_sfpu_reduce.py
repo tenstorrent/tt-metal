@@ -59,10 +59,18 @@ dimension_combinations = [
 ]
 
 
-def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
+def get_format_input_bounds(
+    reduce_pool: ReducePool, formats: InputOutputFormat
+) -> list[tuple[int, int]]:
     """Get valid stimuli bounds based on data format.
     - range needs to be cut off at 1000 for Sum reduction kernels with UInt16 input format to avoid overflow.
+    - Product multiplies 32 values per output element, so magnitudes must stay near 1.0 or the
+      product overflows/underflows the float range (e.g. 1000**32 >> fp32 max). A tight band around
+      1.0 keeps the 32-term products O(1) — meaningful (well above the PCC signal floor) yet in range
+      for both Float32 and Float16_b.
     """
+    if reduce_pool == ReducePool.Product:
+        return [(0.9, 1.1)]
     if formats.input_format in [DataFormat.UInt32, DataFormat.UInt16]:
         return [(0, 1000)]
     return [(-1000, 1000), (0, 1000), (-1000, 0)]
@@ -76,9 +84,13 @@ def get_supported_reduce_axioms(
     # divides exactly; integer AVG stays column-only). See ckernel_sfpu_reduce.h::calculate_reduce.
     if reduce_pool in (ReducePool.Sum, ReducePool.Max, ReducePool.Min):
         return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
-    # Only Float32/Float16_b: the kernel's `is_float_format` AVG row gate treats just these two as
-    # float, so a Float16 row AVG would hit the calculate_reduce static_assert at compile time.
-    if reduce_pool == ReducePool.Average and formats.input_format in (
+    # Product is a float-only SFPU reduce (SFPMUL is a float multiply). Both column and row are
+    # supported; the row sweep is capped to a single column tile (see the dimension filter) so every
+    # product stays a 32-term product and cannot overflow. get_reduce_formats already restricts
+    # Product to float, so this branch only ever sees float input formats.
+    # Only Float32/Float16_b: the kernel's `is_float_format` AVG/PROD row gate treats just these two
+    # as float, so a Float16 row AVG/PROD would hit the calculate_reduce static_assert at compile time.
+    if reduce_pool in (ReducePool.Average, ReducePool.Product) and formats.input_format in (
         DataFormat.Float32,
         DataFormat.Float16_b,
     ):
@@ -177,7 +189,7 @@ def get_reduce_extents(
     if (
         mathop != MathOperation.ReduceColumn
         or dimension_combinations != [TILE_DIM, TILE_DIM]
-        or reduce_pool == ReducePool.Average
+        or reduce_pool in (ReducePool.Average, ReducePool.Product)
     ):
         return full
     if formats.input_format == DataFormat.Int32:
@@ -204,6 +216,14 @@ def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
     cases; the SFPU already accumulates in 32-bit and stores the full word into a 32-bit (fp32) dest.
     Every other case keeps input == output.
     """
+    # Product is a float-only SFPU reduce (SFPMUL is a float multiply; an integer product would need
+    # a different primitive), so it is exercised only on the float formats.
+    if reduce_pool == ReducePool.Product:
+        return [
+            InputOutputFormat(fmt, fmt)
+            for fmt in (DataFormat.Float32, DataFormat.Float16_b)
+        ]
+
     widening = reduce_pool in (ReducePool.Sum, ReducePool.Average)
     return [
         (
@@ -286,11 +306,25 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
     mathop=get_supported_reduce_axioms,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_bounds=get_format_input_bounds,
-    reduce_pool=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
-    dimension_combinations=lambda mathop, dest_acc, formats: [
+    reduce_pool=[
+        ReducePool.Min,
+        ReducePool.Max,
+        ReducePool.Sum,
+        ReducePool.Average,
+        ReducePool.Product,
+    ],
+    dimension_combinations=lambda mathop, dest_acc, formats, reduce_pool: [
         dim
         for dim in dimension_combinations
         if is_valid_reduce_dimension(mathop, dest_acc, formats, dim)
+        # Product row reduce is capped to a single column tile (n == 32): a row reduce over n
+        # columns multiplies n values, and n > 32 would push the 32-term-safe product out of range.
+        # Column reduce always folds exactly 32 rows, so every column-tile count stays in range.
+        and not (
+            reduce_pool == ReducePool.Product
+            and mathop == MathOperation.ReduceRow
+            and dim[1] != TILE_DIM
+        )
     ],
     reduced_extent=get_reduce_extents,
 )

@@ -34,6 +34,7 @@ enum class PoolType : std::uint8_t
     AVG,
     MAX,
     MIN,
+    PROD,
 };
 
 enum class DataCopyType : std::uint8_t
