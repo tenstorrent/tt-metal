@@ -10,20 +10,27 @@ for owning this is in STATUS.md's Block 1 section.
 Measured against the fp32 CPU reference on REAL prompts (never random ones -- STATUS.md trap #12),
 with `tt_transformers` on the same metric for comparison:
 
-                             ours            ours all-BFP8   tt_transformers
-    prefill, last position     0.999883        0.999881        0.999564
-    decode step                0.99985+        0.99986         0.981
-    decode ms/step             25.7            33.6            48
+                          ours, SHIPPED   ours all-BFP8   ours all-bf16   tt_transformers
+    decode min PCC              0.998969        0.998045        0.999357        0.981
+    decode mean worst-sample      0.93%           1.17%           0.86%          -
+    decode p90  worst-sample      1.35%           1.75%           1.18%          -
+    decode ms/step                31.4            28.9            45.8           48
+    prefill PCC, last position  0.999883              -               -        0.999564
+
+Decode rows are 15 prompts x 22 teacher-forced frames, all in one session (STATUS.md 6.16). An
+earlier version of this table quoted two-prompt numbers, which this gate cannot support -- its
+prompt-to-prompt spread is 0.45 pp. Always run all 15: `tt_gates.py --gate decode`.
 
 There is deliberately no end-to-end WER row: the same code at three seeds spans 0.88-2.06% on that
 metric, so it cannot separate two builds. The gate is long-form WER (0.00% over 298 words) plus the
 teacher-forced numbers above. STATUS.md 6.7 has the seed table; read it before quoting any WER.
 
-W2 IS THE ONE WEIGHT STILL IN bf16, and w2 is the hang -- not BFP8 in general. wqkv, wo, FF1 and
-FF3 are all BFP8 and were each measured on their own; only w2 brings back the card-wedging hang in
-multi-utterance runs. Diagnosis in ttnn_voxtral_pipeline, repro at WEIGHT_DTYPE below.
+W2 IS THE ONE WEIGHT IN bf16, and as of STATUS.md 6.16 that is an ACCURACY choice, not the hang --
+the hang was fixed in 6.13 and BFP8 there is now safe. It costs 0.24 pp of mean worst-sample for
+2.5 ms/step, which is 8x the worst trade of the other two, so it stays bf16. wqkv, wo, FF1 and FF3
+are all BFP8. See WEIGHT_DTYPE below for the full five-arm table and how to flip it.
 
-The decode gap against tt_transformers (0.99985+ vs 0.981) is real and reproduces at every weight
+The decode gap against tt_transformers (0.9990 vs 0.981) is real and reproduces at every weight
 dtype we tried, so it is not ours to explain -- but note it is NOT caused by sdpa_decode, which is
 nearly free at these shapes.
 
@@ -37,7 +44,8 @@ DECODE IS BOUND BY WEIGHT BYTES, so the weight dtype is the speed. At the shippe
 six linears stream ~3.9 GB per step and measure ~20.3 ms, i.e. 194 GB/s -- the ceiling a plain
 interleaved matmul reaches, and hand-tuned matmul program configs measured SLOWER (169 vs 193 GB/s
 on wq). There is no layout trick left in them: only fewer BYTES help, and the only weight still in
-bf16 is w2, which is the pinned hang trigger (see WEIGHT_DTYPE). So this line is finished.
+bf16 is w2, which is held there for accuracy (see WEIGHT_DTYPE). So this line is finished unless
+0.24 pp of worst-sample becomes acceptable, and 6.16 argues it should not be.
 
 WHERE THE TIME GOES, per decode frame, steady state on one N150 (measure with
 the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
@@ -46,27 +54,36 @@ the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
                                                  interleaved matmul cannot do better here.
                                                  Tuned matmul program configs are SLOWER
                                                  (169 vs 193 GB/s on wq). Only fewer BYTES help.
-    rms_norm x2                         6.0 ms   CLOSED, twice. Dropping fp32 accumulation is
-                                                 2.4x and takes model PCC to 0.992; width-sharding
-                                                 it (which KEEPS fp32 acc) is 1.46x on the
-                                                 norm+linear pair and still doubles the worst
-                                                 sample, 1.06% -> 1.95%. See _norm.
+    rms_norm x2                         1.1 ms   WIDTH-SHARDED and shipped -- was 6.0 ms, worth
+                                                 4.4 ms/frame (STATUS.md 6.9). It was rejected once
+                                                 on a max-worst-sample reading of 1.06% -> 1.95%,
+                                                 measured against weights we no longer ship; on the
+                                                 CURRENT config it is 0.86% -> 0.84% mean. Dropping
+                                                 fp32 accumulation is a SEPARATE idea and is still
+                                                 closed: 2.4x, model PCC 0.992. See _norm.
     sdpa_decode                         1.8 ms   68 us/layer at pos~200; grows with cache length
     everything else                    ~2.9 ms   qkv heads, rope, 2x cache write, reshapes,
                                                  residual adds -- all of it under 4% now, which
                                                  is the decode-native layout's payoff
     ------------------------------------------
-    Block 1 total                      25.7 ms   (Block 2 is now ~28, so Block 1 is still
+    Block 1 total                      25.7 ms   (Block 2 is now ~23, so Block 1 is still
                                                  the larger half -- see ttnn_voxtral_flow)
 
-So the only remaining lever on Block 1 is WEIGHT BYTES, and that is capped by the hang: BFP8 on
-FF1_FF3 is safe, adding FF2 reintroduces it (see WEIGHT_DTYPE). Everything else is small change --
-and the one thing that looked like an exception, a width-sharded RMSNorm worth ~5 ms, failed the
-WER gate; read _norm before trying it again.
+    CAVEAT on that total: the breakdown came from probe_perf.py, the gate ladder above reads
+    ms/STEP on a host-contended harness, and the pipeline reports ~50 ms/frame for BOTH blocks.
+    The three do not reconcile and only the PIPELINE number is safe to quote end-to-end. The
+    breakdown's SHARES are what it is for; its absolute total predates w2 returning to bf16
+    (+2.5 ms) and has not been re-derived.
 
-That idea is now spent: wqkv and wo ARE in BFP8 as of the second sweep, worth 3.32 ms/frame with
-no accuracy cost on mean or p90 worst-sample and no hang. w2 is the only weight left in bf16, and
-it is the pinned hang trigger, so the byte lever is finished unless that changes.
+So the only remaining lever on Block 1 is WEIGHT BYTES, and it is now capped by ACCURACY rather than
+by the hang: every weight that can be halved cheaply has been, and the last one (w2) costs 0.24 pp of
+mean worst-sample for 2.5 ms/step -- see WEIGHT_DTYPE. Everything else is small change, and the one
+thing that looked like an exception, a width-sharded RMSNorm worth ~5 ms, shipped after all once
+re-measured against the config it would actually run in (STATUS.md 6.9); read _norm.
+
+That idea is now spent: wqkv and wo ARE in BFP8, worth 3.32 ms/frame for 0.04 pp of mean
+worst-sample. w2 is the only weight left in bf16 -- BFP8 there is safe since 6.13 but costs 0.24 pp
+for 2.5 ms (6.16), so the byte lever is finished at any precision worth having.
 
 TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 
@@ -242,8 +259,8 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
 #     weights                        min PCC   ms/step   mean WS   p90 WS   hang?
 #     bf16 (all)                     0.999357    45.8      0.86%    1.18%    no
 #     + BFP8 on FF1, FF3               ~        34.7        -        -       no
-#     + BFP8 on wqkv, wo             0.998969    31.4      0.93%    1.35%    no
-#     + BFP8 on w2 (i.e. all) <- now 0.998045    28.9      1.17%    1.75%    no (fixed)
+#     + BFP8 on wqkv, wo   <- SHIPS  0.998969    31.4      0.93%    1.35%    no
+#     + BFP8 on w2 (i.e. all)        0.998045    28.9      1.17%    1.75%    no (fixed)
 #
 # RE-MEASURED on all 15 prompts x 22 frames in ONE session (STATUS.md 6.16). The older version of
 # this table read 0.86% -> 0.86% -> 0.84% and concluded each step was FREE. It was not: the total is
@@ -255,43 +272,37 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
 #     wqkv + wo        -0.04 pp          3.3          0.012
 #     FF1 + FF3        -0.04 pp         11.1          0.004     <- 24x better value than w2
 #
-# The three are additive (0.32 vs a measured 0.31). STATUS.md 6.16 RECOMMENDS reverting w2 to bf16:
-# +2.5 ms/step, RTF ~0.60-0.65 -> ~0.63-0.68, buys back 77% of the loss. Not yet applied -- it is a
-# shipped-performance change. If 0.04 pp is ever wanted back instead, revert attn (3.3 ms), not FF
-# (11.1 ms): they buy identical quality.
+# The three are additive (0.32 vs a measured 0.31), so w2 IS the accuracy story here: 77% of the
+# cost for 15% of the win. It is back in bf16 on that basis -- 2.5 ms/step for 0.24 pp of mean and
+# 0.40 of p90 is the worst trade of the three by 8x. If 0.04 pp is ever wanted back on top, revert
+# ATTN (3.3 ms), never FF (11.1 ms): they buy identical quality at a third of the price.
 #
-# W2 IS THE HANG, not BFP8 in general -- a distinction that cost a long investigation and is worth
-# keeping straight, because "all-BFP8 hangs" was true but over-attributed and it froze this line of
-# work for a while. wqkv and wo were simply never tried alone; when they were, they cost 3.32
-# ms/frame with mean and p90 worst-sample unchanged, and no hang.
+# W2 IS IN bf16 FOR ACCURACY NOW, NOT BECAUSE IT HANGS. Those were two different eras and conflating
+# them will waste someone's week:
+#   - It USED to be pinned to bf16 because BFP8 there wedged the card. That is FIXED, and it was
+#     never a Block 1 bug: an out-of-range NOC write in ttnn's conv `halo_gather` kernel, on the
+#     second execution of the CODEC's output-projection conv. That conv was OUR call, so we stopped
+#     making it -- see ttnn_voxtral_codec._graph. 45 utterances clean in BFP8.
+#   - So BFP8 here is AVAILABLE and SAFE. It is simply not worth 0.24 pp. Flip it and you get
+#     28.9 ms/step and mean/p90 1.17%/1.75%; leave it and you get 31.4 and 0.93%/1.35%.
+# STATUS.md 6.12 (diagnosis), 6.13 (fix), 6.16 (the accuracy measurement that put it back).
 #
-# W2 WAS RETRIED, AFTER wqkv AND wo TURNED OUT FINE, AND IT STILL HANGS -- so the pin is real and
-# specific to w2, not an artefact of the old all-BFP8 test. It is worth 2.5 ms/step (31.4 -> 28.9)
-# and PCC holds at 0.99977-0.99985, so the only thing stopping it is the hang.
+# THE CODEC'S MATMUL PROJECTION MUST STAY even though w2 no longer needs it. It is now FASTER than
+# the conv it replaced (3.45 vs 4.29 ms, STATUS.md 6.14) and it dodges a live ttnn bug. It is also
+# still the thing standing between w2-in-BFP8 and a wedged card, for anyone who flips the line above.
 #
-# What the retry added: it now hangs EARLIER and HARDER than documented. The old repro died on the
-# third utterance inside Block 3; this died during the FIRST case, right after the first compute
-# op, with no pipeline output at all. So the trigger is no longer the five-condition sequence
-# below -- today's op mix (row fold, sharded norm, qkv fusion, device semantic head) reaches it
-# sooner. Do not expect the documented repro to be the minimal one any more.
+# If a hang ever appears here again: TT_METAL_WATCHER=10 turns it into a clean abort naming the stuck
+# kernel instead of a wedged card, and recovery is a board reset -- `tt-smi` is not on PATH, the
+# Wormhole build is /home/software/syseng/wh/tt-smi and the command is `-wr 0` (this vintage has no
+# plain `-r`). open_device just hangs until you do it. The cheapest repro of the OLD hang, still the
+# best test of any change meant to affect it: short gen + 128-bucket codec decode, then two long gens
+# that both land in the 512 bucket, the second a pure cache HIT.
 #
-# Recovery is a board reset. `tt-smi` is not on PATH here; the Wormhole build lives at
-# /home/software/syseng/wh/tt-smi and the command is `-wr 0` (this vintage has no plain `-r`).
-# open_device simply hangs until you do it.
-#
-# THE HANG IS FIXED and w2 SHIPS IN BFP8. It was never a Block 1 bug: an out-of-range NOC write in
-# ttnn's conv `halo_gather` kernel, on the second execution of the CODEC's output-projection conv.
-# That conv was OUR call, so we stopped making it -- see ttnn_voxtral_codec._graph, which computes
-# the projection as matmuls instead. 45 utterances clean. STATUS.md 6.12 (diagnosis) and 6.13 (fix).
-# If you ever need to debug a hang here again: TT_METAL_WATCHER=10 turns it into a clean abort with
-# the stuck kernel named, instead of a wedged card.
-#
-# The old five-condition repro, still the cheapest way to test a CHANGE meant to fix this: short gen + 128-bucket codec decode, then two long gens that both land in the
-# 512 bucket, the second a pure cache HIT. The shipped config clears it and the full 15-case set. Full diagnosis in ttnn_voxtral_pipeline.
-#
-# Judge any change here on MEAN and P90 worst-sample, never on max: max is an order statistic and
-# moved 1.28-4.28% across configs non-monotonically (STATUS.md 6.8).
-WEIGHT_DTYPE = ttnn.bfloat8_b         # w2 -- BFP8, unlocked by the codec conv dodge
+# Judge any change here on MEAN and P90 worst-sample over ALL 15 PROMPTS, never on max and never on
+# two prompts. max is an unstable order statistic (moved 1.28-4.28% non-monotonically), and the
+# gate's own prompt-to-prompt spread is 0.45 pp -- larger than most changes measured with it, which
+# is exactly how the increments in the table above were once recorded as free. STATUS.md 6.15/6.16.
+WEIGHT_DTYPE = ttnn.bfloat16          # w2 -- bf16 for ACCURACY (6.16), not for the hang (6.13)
 FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
 ATTN_WEIGHT_DTYPE = ttnn.bfloat8_b    # wqkv and wo
 
