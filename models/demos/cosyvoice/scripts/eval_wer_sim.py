@@ -48,7 +48,15 @@ import numpy as np
 # Languages scored by character error rate rather than word error rate: they are
 # not whitespace-delimited, so word-level scoring is meaningless.
 CER_LANGS = {"zh", "yue", "ja", "ko"}
-WHISPER_LANG = {"zh": "zh", "en": "en", "ja": "ja", "yue": "zh", "ko": "ko"}
+
+# Whisper's tokenizer knows 100 languages INCLUDING Cantonese ("yue"), but only
+# large-v3 was trained with the 100-token set -- medium and large-v2 have 99 and
+# would reject it. Falling back to "zh" scores Cantonese as Mandarin, which does
+# not work: it produced 52-87% CER on audio that is perfectly intelligible.
+# That is a measurement artifact, so the fallback is recorded per-utterance
+# (`asr_lang_fallback`) rather than quietly folded into the aggregate.
+WHISPER_LANG = {"zh": "zh", "en": "en", "ja": "ja", "yue": "yue", "ko": "ko"}
+WHISPER_LANG_FALLBACK = {"yue": "zh"}
 
 SIM_MODEL = "microsoft/wavlm-base-plus-sv"
 
@@ -122,6 +130,25 @@ class ASR:
         print(f"[asr ] loading whisper {name} (cpu) ...", flush=True)
         self.model = whisper.load_model(name, device="cpu")
         self.name = name
+        # 100 => trained with the Cantonese token; 99 => it must be faked as zh.
+        self.num_languages = getattr(self.model, "num_languages", 99)
+        self.fallbacks: dict[str, str] = {}
+
+    def language_for(self, lang: str) -> tuple[str, bool]:
+        """Returns (whisper language code, whether we had to substitute)."""
+        want = WHISPER_LANG.get(lang, lang)
+        if self.num_languages < 100 and want in WHISPER_LANG_FALLBACK:
+            sub = WHISPER_LANG_FALLBACK[want]
+            if want not in self.fallbacks:
+                print(
+                    f"[asr ] !! whisper '{self.name}' has {self.num_languages} language "
+                    f"tokens and cannot score '{want}'; falling back to '{sub}'. "
+                    f"Those numbers are NOT comparable -- use --asr-model large-v3.",
+                    flush=True,
+                )
+                self.fallbacks[want] = sub
+            return sub, True
+        return want, False
 
     @staticmethod
     def _load_16k_mono(wav_path: str):
@@ -140,15 +167,16 @@ class ASR:
             wav = torchaudio.functional.resample(wav, sr, 16000)
         return wav.contiguous().float().numpy()
 
-    def transcribe(self, wav_path: str, lang: str) -> str:
+    def transcribe(self, wav_path: str, lang: str) -> tuple[str, bool]:
+        code, fell_back = self.language_for(lang)
         out = self.model.transcribe(
             self._load_16k_mono(wav_path),
-            language=WHISPER_LANG.get(lang, lang),
+            language=code,
             fp16=False,
             temperature=0.0,
             beam_size=None,
         )
-        return out["text"].strip()
+        return out["text"].strip(), fell_back
 
 
 class SpeakerSim:
@@ -234,7 +262,7 @@ def score_run(run_dir, asr, sim, campplus, prompt_for):
         lang = r["lang"]
         unit = "cer" if lang in CER_LANGS else "wer"
 
-        hyp = asr.transcribe(wav, lang)
+        hyp, fell_back = asr.transcribe(wav, lang)
         ref_u, hyp_u = normalize(r["text"], lang), normalize(hyp, lang)
         dist, s, i, d = edit_distance(ref_u, hyp_u)
         rate = 100.0 * dist / max(1, len(ref_u))
@@ -247,6 +275,7 @@ def score_run(run_dir, asr, sim, campplus, prompt_for):
                 f"{unit}_percent": round(rate, 2),
                 "ref_units": len(ref_u),
                 "errors": {"sub": s, "ins": i, "del": d},
+                "asr_lang_fallback": fell_back,
             }
         )
 
@@ -254,15 +283,14 @@ def score_run(run_dir, asr, sim, campplus, prompt_for):
         if prompt and os.path.exists(prompt):
             entry["sim"] = round(100.0 * sim.score(wav, prompt), 2)
             entry["sim_model"] = sim.name
+            entry["sim_reference"] = os.path.basename(prompt)
             if campplus:
                 entry["sim_campplus_diagnostic"] = round(100.0 * campplus.score(wav, prompt), 2)
         scored.append(entry)
 
-        print(
-            f"  {r['mode']:<14}{lang:<4} {unit.upper()} {rate:6.2f}%"
-            f"  SIM {entry.get('sim', float('nan')):6.2f}   {hyp[:52]}",
-            flush=True,
-        )
+        simtxt = f"{entry['sim']:6.2f}" if "sim" in entry else "   n/a"
+        flag = "  [asr-lang substituted]" if fell_back else ""
+        print(f"  {r['mode']:<14}{lang:<4} {unit.upper()} {rate:6.2f}%  SIM {simtxt}   {hyp[:52]}{flag}", flush=True)
 
     run["scored"] = scored
     run["asr_model"] = asr.name
@@ -292,14 +320,30 @@ def aggregate(run: dict) -> dict:
         "rtf_mean": mean([r.get("rtf") for r in ok]),
         "tokens_per_second_mean": mean([r.get("tokens_per_second") for r in ok]),
     }
+
     # R9 / R8 gates, evaluated but never enforced here -- the pytest perf suite owns
     # enforcement. This is the number, stated plainly.
+    def gate(value, ok):
+        """A metric that was not measured is 'n/a', NOT a failure.
+
+        Scoring an instruct-only run has no speaker similarity to report -- those
+        modes have no reference wav -- and reporting that as FAIL would look like a
+        quality regression where there is simply no measurement.
+        """
+        return "n/a" if value is None else bool(ok(value))
+
     agg["gates"] = {
-        "R9_wer_lt_3.0": (agg["wer_percent_en"] is not None and agg["wer_percent_en"] < 3.0),
-        "R9_sim_gt_60": (agg["sim_mean"] is not None and agg["sim_mean"] > 60.0),
-        "R8_rtf_lt_0.5": (agg["rtf_mean"] is not None and agg["rtf_mean"] < 0.5),
-        "R8_tok_per_s_ge_30": (agg["tokens_per_second_mean"] is not None and agg["tokens_per_second_mean"] >= 30.0),
+        "R9_wer_lt_3.0": gate(agg["wer_percent_en"], lambda v: v < 3.0),
+        "R9_sim_gt_60": gate(agg["sim_mean"], lambda v: v > 60.0),
+        "R8_rtf_lt_0.5": gate(agg["rtf_mean"], lambda v: v < 0.5),
+        "R8_tok_per_s_ge_30": gate(agg["tokens_per_second_mean"], lambda v: v >= 30.0),
     }
+    # Any utterance whose ASR language had to be substituted is not comparable;
+    # surface the count rather than letting it disappear into the corpus average.
+    subs = [r for r in ok if r.get("asr_lang_fallback")]
+    if subs:
+        agg["asr_lang_substituted"] = sorted({r["lang"] for r in subs})
+        agg["asr_lang_substituted_n"] = len(subs)
     return agg
 
 
@@ -323,15 +367,27 @@ def main() -> int:
     xling_prompt = os.path.join(root, "asset", "cross_lingual_prompt.wav")
 
     def prompt_for(r):
+        """The reference wav a synthesised utterance should be compared against.
+
+        SIM is a *voice-cloning* metric: it asks whether the output sounds like a
+        given reference speaker. That question only has an answer for the modes that
+        take a reference wav.
+
+        SFT and instruct speak as a checkpoint-internal speaker with no reference
+        recording at all, so they get None. An earlier version anchored them to the
+        same mode's Chinese utterance -- which is wrong, because the language sweep
+        deliberately uses a DIFFERENT speaker per language (英文女 for en, 中文女 for
+        zh, ...). That compared two different voices and duly reported ~39-49
+        similarity, a number that looked like a quality problem and was actually a
+        harness bug. Scoring SFT/instruct properly needs two utterances from the
+        same speaker; until the sweep generates those, reporting nothing is the
+        honest answer.
+        """
         if r["mode"] == "zero_shot":
             return zero_shot_prompt
         if r["mode"] == "cross_lingual":
             return xling_prompt
-        # SFT/instruct speak as a checkpoint-internal speaker with no reference wav.
-        # Self-consistency is scored instead: same speaker across languages should
-        # cluster, so the zh utterance of that speaker acts as the anchor.
-        anchor = os.path.join(args.run_dir, f"{r['mode']}_zh.wav")
-        return anchor if os.path.exists(anchor) and r["lang"] != "zh" else None
+        return None
 
     asr = ASR(args.asr_model)
     sim = SpeakerSim()
@@ -355,7 +411,7 @@ def main() -> int:
             print(f"  {k:<34} {v}")
     print("  gates:")
     for k, v in a["gates"].items():
-        print(f"    {k:<28} {'PASS' if v else 'FAIL'}")
+        print(f"    {k:<28} {'n/a  (not measured)' if v == 'n/a' else ('PASS' if v else 'FAIL')}")
 
     if args.baseline:
         with open(os.path.join(args.baseline, "scores.json")) as fh:
