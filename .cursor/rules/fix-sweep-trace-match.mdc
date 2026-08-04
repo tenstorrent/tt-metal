@@ -1,0 +1,120 @@
+---
+description: Guide for fixing a model_traced sweep module so its traced output exactly matches the model trace config_hash. Use after running validation (validate-sweep-trace.mdc) reveals mismatches.
+globs: tests/sweep_framework/sweeps/model_traced/*_model_traced.py
+alwaysApply: false
+---
+
+# Fixing a Sweep Module for Exact Model Trace Match
+
+## Core Principle
+
+`config_hash` is `sha256(json.dumps({"operation", "arguments", "hardware", "mesh"}))` (see `generic_ops_tracer.py` lines 448–507). The `arguments` dict includes every kwarg passed to the op AND per-tensor `tensor_placement`. The sweep must call the op with **exactly the same kwargs** as the model — no extra, no missing, no altered values.
+
+## Workflow
+
+1. Run validation per `validate-sweep-trace.mdc` to get the mismatch report.
+2. For each DIFF field, identify which category below applies.
+3. Apply the fix in the sweep module's `run()` function.
+4. Re-run the sweep, re-validate. Repeat until 100% exact match.
+
+## Common Mismatch Categories
+
+### 1. Extra kwargs (sweep passes a kwarg the model didn't)
+
+**Symptom**: Sweep trace has `"memory_config": null` or `"subdevice_id": ...` but model trace has no such key.
+
+**Fix**: Only include optional kwargs in the op call when they are non-None. Build `op_kwargs` incrementally:
+
+```python
+op_kwargs = {"dim": dim, "num_links": num_links}  # always-present args
+if output_memory_config is not None:
+    op_kwargs["memory_config"] = output_memory_config
+if subdevice_id is not None:
+    op_kwargs["subdevice_id"] = worker_sub_device_id
+# ... same for chunks_per_sync, num_workers_per_link, use_broadcast, etc.
+result = ttnn.some_op(input_tensor, **op_kwargs)
+```
+
+### 2. Missing kwargs (model passed a kwarg the sweep doesn't)
+
+**Symptom**: Model trace has `"mesh_device": {...}` but sweep trace does not.
+
+**Fix**: Add the kwarg to the op call. For `mesh_device`, pass `mesh_device=device` (the MeshDevice object). For other kwargs, thread them through from the `run()` signature (they arrive from `MasterConfigLoader`).
+
+### 3. Argument value normalization (sweep alters a value)
+
+**Symptom**: Model has `"dim": -1`, sweep has `"dim": 3`.
+
+**Fix**: Preserve the original value for the op call. If you need the resolved value internally (e.g., for tensor shaping), use a separate variable:
+
+```python
+effective_dim = dim if dim >= 0 else len(input_shape) + dim  # internal only
+# ... use effective_dim for shape math ...
+result = ttnn.some_op(input_tensor, dim=dim)  # pass original dim to op
+```
+
+### 4. tensor_placement mismatch (sweep distributes tensors differently)
+
+**Symptom**: Model has `tensor_placement.placement = "['PlacementShard(2)', 'PlacementShard(1)']"`, sweep has `"['PlacementReplicate', 'PlacementShard(1)']"`.
+
+**Fix**: Parse the model's actual placement and use it for `ShardTensor2dMesh`. The input tensor (per-device shape from the trace) is the post-shard shape. Build a global tensor that, when sharded with the model's placement, yields the correct per-device shape:
+
+```python
+import re
+
+def _parse_shard_dims_from_placement(tensor_placement):
+    if not tensor_placement:
+        return None
+    placement = tensor_placement.get("placement", "")
+    if isinstance(placement, list):
+        placement = " ".join(str(p) for p in placement)
+    dims = []
+    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement):
+        dims.append(int(m.group(1)) if m.group(1) is not None else None)
+    return tuple(dims) if len(dims) == 2 else None
+
+shard_dims = _parse_shard_dims_from_placement(input_a_tensor_placement)
+
+# Build global shape: per-device shape scaled by devices on each sharded axis
+global_shape = list(per_device_shape)
+for axis_idx, sd in enumerate(shard_dims):
+    if sd is not None:
+        esd = sd if sd >= 0 else len(per_device_shape) + sd
+        global_shape[esd] *= mesh_shape[axis_idx]
+
+torch_global = torch.rand(global_shape).bfloat16()
+tt_input = ttnn.from_torch(
+    torch_global, ...,
+    mesh_mapper=ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
+)
+```
+
+For ops that gather/reduce along a dim (e.g., all_gather), the golden reference for device 0 is the global tensor sliced on non-gathered axes:
+
+```python
+ref_slices = [slice(None)] * len(global_shape)
+for axis_idx, sd in enumerate(shard_dims):
+    if sd is not None and axis_idx != cluster_axis:
+        esd = sd if sd >= 0 else len(per_device_shape) + sd
+        ref_slices[esd] = slice(0, per_device_shape[esd])
+torch_reference = torch_global[tuple(ref_slices)]
+```
+
+For non-gathering ops (add, reshape, etc.) where every device runs independently, the golden reference is simply the per-device input — use `mesh_tensor_to_torch` to read device 0's output and compare with the torch reference computed from device 0's input slice.
+
+### 5. run() signature missing model-traced params
+
+**Symptom**: `MasterConfigLoader` provides kwargs like `use_broadcast`, `subdevice_id`, etc. but they hit `**kwargs` and are silently ignored.
+
+**Fix**: Add explicit parameters to `run()` for every kwarg the model trace may include. Check the model trace JSON's `arguments` keys for the op. Any key that isn't a positional tensor arg (`arg0`, `arg1`, ...) should be a named parameter or handled via `**kwargs`.
+
+## Reference: all_gather_async_model_traced.py
+
+The canonical example of a fully fixed sweep module is `all_gather_async_model_traced.py`. Key patterns applied there:
+
+- `effective_dim` for internal math, original `dim` passed to op
+- `_parse_shard_dims_from_placement()` to derive 2D shard dims from model trace
+- Global tensor built for ALL sharded axes, golden reference sliced for device 0
+- `op_kwargs` built incrementally: only non-None optional kwargs included
+- `mesh_device=device` passed explicitly for model-traced runs
+- `barrier_semaphore`, `persistent_output_buffer`, `subdevice_id`, `chunks_per_sync`, `num_workers_per_link`, `num_buffers_per_channel`, `use_broadcast` all conditional

@@ -1,0 +1,5 @@
+subcontext_id_to_rank_bindings:
+  0: rank0_binding.yaml
+  1: rank1_binding.yaml
+  2: rank2_binding.yaml
+  3: rank3_binding.yaml

@@ -1,0 +1,60 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+
+void kernel_main() {
+    auto src0_addr = get_arg_val<uint32_t>(0);
+    auto packed_scalar = get_arg_val<uint32_t>(1);
+    auto num_tiles = get_arg_val<uint32_t>(2);
+    auto HtWt = get_arg_val<uint32_t>(3);
+    auto base_start_id_HtWt = get_arg_val<uint32_t>(4);
+    auto curr_id_from_base = get_arg_val<uint32_t>(5);
+    auto bcast_id = get_arg_val<uint32_t>(6);
+
+#ifndef IN0_SHARDED
+    constexpr auto src0_args = TensorAccessorArgs<0>();
+#endif
+
+    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t onetile = 1;
+
+    Noc noc;
+    DataflowBuffer dfb_in0(cb_id_in0);
+    const uint32_t tile_bytes_0 = get_tile_size(cb_id_in0);
+
+#ifndef IN0_SHARDED
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+#else
+    dfb_in0.reserve_back(num_tiles);
+    dfb_in0.push_back(num_tiles);
+#endif
+
+    generate_bcast_unary_scalar(CircularBuffer(cb_id_in1), packed_scalar);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        uint32_t curr_id = base_start_id_HtWt + curr_id_from_base;
+
+#ifndef IN0_SHARDED
+        dfb_in0.reserve_back(onetile);
+        noc.async_read(s0, dfb_in0, tile_bytes_0, {.page_id = curr_id, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_in0.push_back(onetile);
+#endif
+
+        curr_id_from_base++;
+
+        if (curr_id_from_base == HtWt) {
+            base_start_id_HtWt += HtWt;
+            curr_id_from_base = 0;
+        }
+    }
+}

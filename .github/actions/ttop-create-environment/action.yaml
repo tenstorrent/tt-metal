@@ -1,0 +1,130 @@
+name: 'Create SSH Environment'
+description: 'A composable action to create an SSH environment'
+
+inputs:
+  environmentName:
+    description: 'Environment name'
+    required: true
+  allocationName:
+    description: 'Allocation name'
+    required: true
+  allocationNamespace:
+    description: 'Allocation namespace'
+    required: false
+    default: 'ttop-ci'
+  workerRepository:
+    description: 'Worker repository'
+    required: true
+  workerTag:
+    description: 'Worker tag'
+    required: true
+  ranks:
+    description: 'Node-to-rank JSON mapping'
+    required: false
+    default: ''
+  sharedVolumeEnabled:
+    description: 'Whether to mount volume shared with the runner (multihost-with-nfs runner required)'
+    required: false
+    default: 'false'
+  namespace:
+    description: 'Target namespace for the environment'
+    required: false
+    default: 'ttop-ci'
+  useDevHostMount:
+    description: 'Whether to use /dev host mount instead of /dev/tenstorrent'
+    required: false
+    default: 'false'
+  path:
+    description: 'Path to dump configs'
+    required: false
+    default: '/etc/ttop'
+  timeoutSeconds:
+    description: 'Max seconds to keep retrying before failing.'
+    required: false
+    default: '300'
+  retries:
+    description: 'Number of retries minting the OIDC in one attempt before giving up'
+    required: false
+    default: '3'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate SSH key
+      shell: bash
+      run: |
+        ssh-keygen -t ed25519 -f /home/runner/.ssh/id_ed25519 -N ""
+        echo "SSH_PUBLIC_KEY=$(cat /home/runner/.ssh/id_ed25519.pub)" >> $GITHUB_ENV
+    - name: Construct Environment manifest
+      shell: bash
+      id: explicit
+      run: |
+        cat <<EOF >> $GITHUB_ENV
+        ENVIRONMENT_MANIFEST<<ENVIRONMENT_EOF
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: ${{ inputs.environmentName }}
+        spec:
+          interval: 5m
+          chart:
+            spec:
+              chart: ./charts/ttop-ssh
+              reconcileStrategy: Revision
+              sourceRef:
+                kind: GitRepository
+                name: tt-orchestration
+                namespace: ttop
+          values:
+            nodeSelector:
+              allocation.tenstorrent.com/allocated-by: ${{inputs.allocationNamespace}}--${{ inputs.allocationName }}
+            image:
+              repository: ${{ inputs.workerRepository }}
+              tag: ${{ inputs.workerTag }}
+            deviceMountTypes:
+              hostPath: ${{ inputs.useDevHostMount == 'false' }}
+              hostPathInsecureDev: ${{ inputs.useDevHostMount == 'false' }}
+            cardsPerHost: $TT_CARDS_PER_HOST
+            clientAuthorizedKeys: $SSH_PUBLIC_KEY
+            volume:
+              enabled: ${{ inputs.sharedVolumeEnabled }}
+              pvcName: $HOSTNAME
+              mountPath: "/ci"
+            configMapMounts:
+              - name: ${{ inputs.allocationName }}-ttop
+                path: ${{ inputs.path }}
+        ENVIRONMENT_EOF
+        EOF
+
+    - name: Get github ID token
+      shell: bash
+      id: token
+      run: |
+        IDTOKEN=$(curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL -H "Accept: application/json; api-version=2.0" -H "Content-Type: application/json" -d "{}" | jq -r '.value')
+        echo "::add-mask::${IDTOKEN}"
+        echo "idToken=${IDTOKEN}" >> $GITHUB_OUTPUT
+
+    - name: Create Environment
+      shell: bash
+      run: |
+        echo "Creating environment..."
+        echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl --token ${{ steps.token.outputs.idToken }} -n${{ inputs.namespace }} apply -f -
+
+    - name: Wait for environment
+      uses: ./.github/actions/ttop-await-resource
+      with:
+        namespace: ${{ inputs.namespace }}
+        resource: helmrelease/${{ inputs.environmentName }}
+        mode: poll
+        jsonpath: '{.status.conditions[?(@.type=="Ready")].status}'
+        expected: 'True'
+        timeoutSeconds: ${{ inputs.timeoutSeconds }}
+        retries: ${{ inputs.retries }}
+
+    - name: Connect to the environment
+      shell: bash
+      run: |
+        echo "Connecting to environment..."
+        IDTOKEN=$(curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL -H "Accept: application/json; api-version=2.0" -H "Content-Type: application/json" -d "{}" | jq -r '.value')
+        echo "::add-mask::${IDTOKEN}"
+        kubectl --token "$IDTOKEN" -n ${{ inputs.namespace }} get configmap ${{ inputs.environmentName }}-connection -o jsonpath='{.data.podNodeMapping}' 2>/dev/null | .github/scripts/environment-ssh-setup.sh

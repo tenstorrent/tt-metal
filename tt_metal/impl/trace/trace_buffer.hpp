@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <stdint.h>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/sub_device_types.hpp>
+
+namespace tt::tt_metal {
+
+// Bounds on the interleaved trace buffer page size (see compute_interleaved_trace_buf_page_size).
+// Min is bounded by NOC transfer efficiency; max by the prefetcher CmdDatQ size.
+inline constexpr uint32_t kMinTraceBufPageSize = 1024;
+inline constexpr uint32_t kMaxTraceBufPageSize = 8192;
+
+// Forward decl to avoid including header
+class Buffer;
+
+struct TraceWorkerDescriptor {
+    uint32_t num_completion_worker_cores = 0;
+    uint32_t num_traced_programs_needing_go_signal_multicast = 0;
+    uint32_t num_traced_programs_needing_go_signal_unicast = 0;
+    bool operator==(const TraceWorkerDescriptor& other) const {
+        return num_completion_worker_cores == other.num_completion_worker_cores &&
+               num_traced_programs_needing_go_signal_multicast ==
+                   other.num_traced_programs_needing_go_signal_multicast &&
+               num_traced_programs_needing_go_signal_unicast == other.num_traced_programs_needing_go_signal_unicast;
+    }
+};
+
+struct TraceDescriptor {
+    // Mapping of sub_device_id to descriptor
+    std::unordered_map<SubDeviceId, TraceWorkerDescriptor> descriptors;
+    // Store the keys of the map in a vector after descriptor has finished being populated
+    // This is an optimization since we sometimes need to only pass the keys in a container
+    std::vector<SubDeviceId> sub_device_ids;
+    std::vector<uint32_t> data;
+};
+
+struct TraceBuffer {
+    std::shared_ptr<TraceDescriptor> desc;
+    std::shared_ptr<Buffer> buffer;
+
+    TraceBuffer(std::shared_ptr<TraceDescriptor> desc, std::shared_ptr<Buffer> buffer);
+    ~TraceBuffer();
+
+    void validate();
+};
+
+}  // namespace tt::tt_metal

@@ -1,0 +1,44 @@
+name: "Wrap a bash command with retries"
+description: "Wrap a bash command with retries so it attempts it again on failure after a backoff period"
+inputs:
+  command:
+    description: "Command to run"
+    required: true
+  timeout-seconds:
+    description: "Timeout period in seconds for command to complete"
+    required: true
+  backoff-seconds:
+    description: "Backoff period in seconds to wait before trying command again"
+    default: 5
+  max-retries:
+    description: "Max number of retries to retry command"
+    default: 3
+runs:
+  using: "composite"
+  steps:
+    - name: "Invoke command with retries"
+      shell: bash
+      run: |
+        set +e
+
+        max_retries="${{ inputs.max-retries }}"
+        count=0
+
+        while (( count < max_retries )); do
+          echo "Attempt $((count + 1)) of $max_retries..."
+
+          # Execute the command with timeout
+          if timeout ${{ inputs.timeout-seconds }} "${{ inputs.command }}"; then
+            echo "Command succeeded."
+            exit 0
+          else
+            echo "Command failed or timed out. Backing off..."
+            count=$((count + 1))
+          fi
+
+          # Optional: Add a delay between retries
+          sleep ${{ inputs.backoff-seconds }}
+        done
+
+        echo "Command failed after $max_retries attempts."
+        exit 1

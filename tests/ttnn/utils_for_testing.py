@@ -1,0 +1,963 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+import json
+import time
+
+from loguru import logger
+from models.common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
+from models.common.utility_functions import ulp as compute_ulp
+from typing import Tuple, Union
+
+import ttnn
+import torch
+import numpy as np
+
+
+# Dictionaries for converting dtypes
+tt_dtype_to_torch_dtype = {
+    ttnn.uint8: torch.uint8,
+    ttnn.uint16: torch.uint16,
+    ttnn.uint32: torch.uint32,
+    ttnn.int32: torch.int32,
+    ttnn.float32: torch.float,
+    ttnn.bfloat16: torch.bfloat16,
+    ttnn.bfloat8_b: torch.float,
+    ttnn.bfloat4_b: torch.float,
+    # FP8_E4M3 maps to torch.float because the ttnn dlpack importer does not yet
+    # recognise FP8 dlpack codes (torch.float8_e4m3fn round-trips via from_torch
+    # fail today). The C++ side converts the float32 input to FP8 on the way in
+    # via the FP8_E4M3 <-> FLOAT32 path in transform_buffers.
+    ttnn.fp8_e4m3: torch.float,
+}
+
+tt_dtype_to_np_dtype = {
+    ttnn.uint8: np.ubyte,
+    ttnn.uint16: np.uint16,
+    ttnn.uint32: np.uint32,
+    ttnn.int32: np.int32,
+    ttnn.float32: np.float32,
+    ttnn.bfloat8_b: np.float32,
+    ttnn.bfloat4_b: np.float32,
+}
+
+TORCH_INTEGER_DTYPES = [torch.int16, torch.int32, torch.int64, torch.uint16, torch.uint32, torch.uint64, torch.uint8]
+NP_INTEGER_DTYPES = [np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
+
+
+def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
+    messages = []
+    messages.append(message)
+    # messages.append("Expected")
+    # messages.append(str(expected_pytorch_result))
+    # messages.append("Actual")
+    # messages.append(str(actual_pytorch_result))
+    messages = [str(m) for m in messages]
+    return "\n".join(messages)
+
+
+def _post_to_torch_conversion(tensor):
+    # Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
+    # This was changed to convert to unsigned types instead to address issue with the value truncation
+    # https://github.com/tenstorrent/tt-metal/issues/31150
+
+    # Torch does not support max/abs operation on the unsigned tensors, failing with "RuntimeError: "add_stub" not implemented for 'UInt32'"
+    # so ttnn tensor must have a post-conversion correction to avoid this error.
+    if tensor.dtype == torch.uint16:
+        return tensor.to(torch.int32)
+
+    elif tensor.dtype == torch.uint32:
+        return tensor.to(torch.int64)
+
+    else:
+        return tensor
+
+
+def _normalize_tensor(tensor):
+    if isinstance(tensor, ttnn.Tensor):
+        tensor = ttnn.to_torch(tensor)
+
+    tensor = _post_to_torch_conversion(tensor)
+
+    return tensor
+
+
+# since torch.norm(error, p="fro"), rejects non-float input
+def _to_float_for_norm(t: torch.Tensor) -> torch.Tensor:
+    if t.dtype in (torch.float32, torch.bfloat16):
+        return t
+    return t.to(torch.float32)
+
+
+def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
+    """
+    Assert that two PyTorch tensors are similar within a specified Pearson Correlation Coefficient (PCC) threshold.
+
+    This function compares two tensors using PCC, which measures the linear correlation between them.
+    It's particularly useful for floating-point comparisons where exact equality is not expected due to
+    numerical precision differences.
+
+    Args:
+        expected_pytorch_result (torch.Tensor): The expected reference tensor
+        actual_pytorch_result (torch.Tensor): The actual tensor to compare against the reference
+        pcc (float, optional): The minimum PCC threshold for the comparison to pass. Defaults to 0.9999.
+                              Values closer to 1.0 indicate stronger correlation.
+
+    Returns:
+        tuple: A tuple containing:
+            - pcc_passed (bool): True if the PCC check passed, False otherwise
+            - pcc_message (str): A message describing the PCC comparison result
+
+    Raises:
+        AssertionError: If the tensor shapes don't match or if the PCC is below the specified threshold
+    """
+
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
+    pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
+    assert pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
+    return pcc_passed, pcc_message
+
+
+def assert_allclose(
+    expected_result: Union[ttnn.Tensor, torch.Tensor],
+    actual_result: Union[ttnn.Tensor, torch.Tensor],
+    rtol=1e-05,
+    atol=1e-08,
+):
+    r"""
+     Assert that two tensors are similar.
+
+     Two tensors are considered close if
+     ``
+     |actual - expected| \leq atol + rtol \cdot |expected|
+     ``
+
+    Args:
+         expected_result (Union[ttnn.Tensor, torch.Tensor]): The expected reference tensor
+         actual_result (Union[ttnn.Tensor, torch.Tensor]): The actual tensor to compare against the reference
+         rtol (float, optional): Relative tolerance. Defaults to 1e-05.
+         atol (float, optional): Absolute tolerance. Defaults to 1e-08
+
+     Returns:
+         tuple: A tuple containing:
+             - allclose_passed (bool): True if allclose check passed, False otherwise
+             - allclose_message (str): A message describing comparison result
+
+     Raises:
+         AssertionError: If the tensor shapes don't match or if tensors are not close enough according to
+                         the aforementioned formula.
+    """
+
+    expected_result = _normalize_tensor(expected_result)
+    actual_result = _normalize_tensor(actual_result)
+
+    assert list(expected_result.shape) == list(
+        actual_result.shape
+    ), f"list(expected_pytorch_result.shape)={list(expected_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_result.shape)}"
+    allclose_passed, allclose_message = comp_allclose(expected_result, actual_result, rtol, atol)
+    assert allclose_passed, allclose_message
+    return allclose_passed, allclose_message
+
+
+def assert_with_ulp(
+    expected_result: Union[ttnn.Tensor, torch.Tensor],
+    actual_result: Union[ttnn.Tensor, torch.Tensor],
+    ulp_threshold=10,
+    allow_nonfinite=False,
+):
+    """
+    Assert that two tensors are similar within a given distance expressed in Units of Least Precision (ULP)
+
+    The error is measured using the following formula:
+    ``
+        | actual - expected | / ULP(expected)
+    ``
+
+    Where ULP(expected) returns, for each element, the length of a single Unit of Least Precision (ULP).
+
+    ``expected_result`` is the reference (golden) tensor and ``actual_result`` is the tensor under test.
+    On failure the message reports the worst element as ``|calculated <actual> - golden <expected>| /
+    ULP(golden)``, i.e. the first printed operand is ``actual_result`` and the divisor is the ULP of
+    ``expected_result``.
+
+
+    Args:
+        expected_result (Union[ttnn.Tensor, torch.Tensor]): The expected reference tensor
+        actual_result (Union[ttnn.Tensor, torch.Tensor]): The actual tensor to compare against the reference
+        ulp_threshold (float, optional): Maximum tolerated ULP distance. Defaults to 10.
+        allow_nonfinite (bool, optional): If disabled, any non-finite value (NaN, +inf, -inf) will trigger an assertion. If enabled, differences between non-finite values at the same positions will trigger an assertion.
+
+    Notes:
+        The length of a single ULP is measured using the difference between two consecutive floating point numbers.
+
+        ULP should be preferred when errors between `calculated` and `golden` outputs are known to be small (difference < 10s of ULPs).
+        This is typically the case for element-wise operations that approximate common numerical functions (e.g. exp, pow, log, ...).
+
+        For more significant differences, where `calculated` and `golden` differ by orders of magnitude, ULPs may be harder to compare
+        Indeed, with current definition, on bfloat16:
+        - ULP-Delta(4, 0) = 128
+        - ULP-Delta(0, 4) = 4.36e+40
+
+        Generally, if the ULP error exceeds the 2**(#mantissa bits) (128-ULP for bfloat16, 8388608 for float32), then it means that both outputs are different by more than an order of magnitude.
+        For these cases, functions such as `assert_allclose(golden, calculated, rtol, atol)` should be used instead.
+
+        To measure the accuracy in ULP of operations on bfloat8_b data type, the ttnn bfloat8_b tensor should be either passed directly to the
+        function, or converted to bfloat16 beforehand (bfloat16 has the 'same' resolution as bfloat8_b).
+        Indeed, ttnn.to_torch() converts bfloat8_b to float32 by default, which would lead to assert_with_ulp() measuring ULP error as if
+        data type was computed as float32.
+
+    Returns:
+        tuple: A tuple containing:
+            - ulp_passed (bool): True if ulp check passed, False otherwise
+            - ulp_message (str): A message describing comparison result
+
+    Raises:
+        AssertionError: If the tensor shapes don't match or if tensor difference is greater than ulp_threshold.
+    """
+
+    def tt_dtype_to_torch_dtype_for_ulp(tt_dtype):
+        # By default, ttnn converts ttnn.bfloat8_b to torch.float
+        # However, the resolution of a bfloat8_b value is the same as bfloat16
+        # (assuming all elements within the block share the same exponent)
+        # Thus, for ULP measurement, we convert bfloat8_b to bfloat16 instead of float32
+        if tt_dtype == ttnn.bfloat8_b:
+            return torch.bfloat16
+        if tt_dtype not in tt_dtype_to_torch_dtype:
+            raise ValueError(f"Trying to measure ULP on unknown dtype: {tt_dtype}")
+        return tt_dtype_to_torch_dtype[tt_dtype]
+
+    if isinstance(expected_result, ttnn.Tensor):
+        expected_result = ttnn.to_torch(expected_result, dtype=tt_dtype_to_torch_dtype_for_ulp(expected_result.dtype))
+    if isinstance(actual_result, ttnn.Tensor):
+        actual_result = ttnn.to_torch(actual_result, dtype=tt_dtype_to_torch_dtype_for_ulp(actual_result.dtype))
+
+    assert list(expected_result.shape) == list(
+        actual_result.shape
+    ), f"list(expected_result.shape)={list(expected_result.shape)} vs list(actual_result.shape)={list(actual_result.shape)}"
+
+    maximum_meaningful_ulp_thresholds = {
+        torch.float64: 2**52,
+        torch.float32: 2**23,
+        torch.float16: 2**10,
+        torch.bfloat16: 2**7,
+    }
+    maximum_meaningful_ulp_threshold = (
+        maximum_meaningful_ulp_thresholds[torch.float32]
+        if expected_result.dtype in maximum_meaningful_ulp_thresholds
+        else maximum_meaningful_ulp_thresholds[expected_result.dtype]
+    )
+
+    if ulp_threshold > maximum_meaningful_ulp_threshold:
+        logger.warning(
+            f"ULP threshold {ulp_threshold} is greater than the maximum meaningful ULP threshold of {maximum_meaningful_ulp_threshold} for dtype {expected_result.dtype}"
+        )
+
+    ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite)
+    assert ulp_passed, ulp_message
+    return ulp_passed, ulp_message
+
+
+def ulp_distance(a: torch.Tensor, b: torch.Tensor, treat_zero_signs_equal: bool = True) -> torch.Tensor:
+    """Per-element integer ULP distance for matching-dtype BF16 or FP32 tensors.
+
+    Maps each value's sign-magnitude bit pattern to a monotonic int (negatives
+    -> all_ones - bits, positives -> bits + sign_bit) so float ordering is
+    preserved by int subtraction; per-element ULP = |mono(a) - mono(b)|.
+
+    Differs from ``comp_ulp`` (which divides by ``ulp(golden)``) in two ways:
+      * Integer-valued across power-of-2 boundaries (``comp_ulp`` can return
+        fractional ULPs there because ``ulp(a)`` differs above vs below the
+        boundary).
+      * Optionally treats +0 and -0 as 0 ULP apart -- they are numerically
+        equal per IEEE 754, and some Tenstorrent SFPU pack/convert paths
+        canonicalise -0 to +0, so the 1-ULP gap the bit mapping would
+        otherwise report is an artefact.
+    """
+    assert a.dtype == b.dtype, f"dtype mismatch: {a.dtype} vs {b.dtype}"
+    if a.dtype == torch.bfloat16:
+        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int16, torch.int32, 0x8000, 0xFFFF
+    elif a.dtype == torch.float32:
+        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int32, torch.int64, 0x80000000, 0xFFFFFFFF
+    else:
+        raise ValueError(f"ulp_distance: unsupported dtype {a.dtype}; only bfloat16 and float32 are supported")
+
+    a_bits = a.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
+    b_bits = b.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
+    a_mono = torch.where((a_bits & sign_mask) != 0, all_mask - a_bits, a_bits + sign_mask)
+    b_mono = torch.where((b_bits & sign_mask) != 0, all_mask - b_bits, b_bits + sign_mask)
+    diff = (a_mono - b_mono).abs()
+    if treat_zero_signs_equal:
+        magnitude_mask = all_mask ^ sign_mask
+        both_zero = ((a_bits & magnitude_mask) == 0) & ((b_bits & magnitude_mask) == 0)
+        diff = torch.where(both_zero, torch.zeros_like(diff), diff)
+    return diff
+
+
+def measure_ulp_with_near_zero_atol(
+    expected_result: Union[ttnn.Tensor, torch.Tensor],
+    actual_result: Union[ttnn.Tensor, torch.Tensor],
+    ulp_threshold: float,
+    near_zero_atol_fraction: float,
+    near_zero_relative_fraction: float = 1e-2,
+):
+    """
+    Measure ULP distribution while handling near-zero expected values with scaled absolute tolerance.
+
+    This helper is intended for reductions and normalization-style tests where
+    cancellation commonly produces outputs near zero. Raw ULP becomes unstable in
+    that regime because ``ULP(expected)`` can be extremely small, so a tiny
+    absolute difference may inflate to a misleadingly large ULP count.
+
+    Policy:
+    - For elements with ``|expected| >= near_zero_relative_fraction * max(|expected|)``,
+      measure ULP using ``compute_ulp`` on the expected values and report the full
+      distribution (mean, P95, P99, max) plus worst-case element details.
+    - For smaller-magnitude elements, skip ULP and require absolute error
+      ``<= near_zero_atol_fraction * max(|expected|)``.
+
+    The default ``near_zero_relative_fraction=1e-2`` is intentionally simple and
+    scale-relative: values below 1% of the tensor's dynamic range are treated as
+    near zero. This is not meant as a universal elementwise helper; it is for
+    characterization tests where reduction ordering can create tiny residuals.
+
+    Returns:
+        tuple: ``(passed, max_ulp, max_atol_err, scaled_atol, msg, ulp_stats)``
+
+        ``ulp_stats`` is a dict with keys ``mean``, ``p95``, ``p99`` computed over
+        the normal (non-near-zero) elements, and ``worst`` with the formula string
+        ``|actual - golden| / ulp(golden) = max_ulp`` for the worst element.
+        All values are 0.0 / empty string when there are no normal elements.
+
+        ``p95`` and ``p99`` are computed via ``torch.quantile`` only when there are
+        enough normal elements to make the percentile meaningful: p95 requires
+        ``n >= 20``, p99 requires ``n >= 100``.  Below those counts both fall back
+        to ``max_ulp``.  Callers should not interpret p95/p99 as true percentiles
+        for very small tensors.
+    """
+    expected_result = _normalize_tensor(expected_result)
+    actual_result = _normalize_tensor(actual_result)
+
+    assert list(expected_result.shape) == list(
+        actual_result.shape
+    ), f"list(expected_result.shape)={list(expected_result.shape)} vs list(actual_result.shape)={list(actual_result.shape)}"
+
+    if expected_result.dtype != actual_result.dtype:
+        actual_result = actual_result.to(expected_result.dtype)
+
+    abs_expected = torch.abs(expected_result.float())
+    expected_max = abs_expected.max().item()
+    _empty_stats = {"mean": 0.0, "p95": 0.0, "p99": 0.0, "worst": ""}
+    if expected_max == 0:
+        abs_err = torch.abs(actual_result.float()).max().item()
+        return abs_err == 0, 0.0, abs_err, 0.0, f"All-zero golden; max |actual|={abs_err:.6e}", _empty_stats
+
+    dynamic_threshold = near_zero_relative_fraction * expected_max
+    normal_mask = abs_expected >= dynamic_threshold
+    near_zero_mask = ~normal_mask
+    n_near_zero = near_zero_mask.sum().item()
+
+    scaled_atol = near_zero_atol_fraction * expected_max
+
+    max_ulp = 0.0
+    ulp_msg = ""
+    ulp_stats = _empty_stats.copy()
+    if normal_mask.any():
+        g = expected_result[normal_mask]
+        a = actual_result[normal_mask]
+        ulp_values = compute_ulp(g)
+        ulp_diffs = torch.abs(a.float() - g.float()) / ulp_values.float()
+        max_ulp = torch.max(ulp_diffs).item()
+        # Distribution statistics over all normal elements
+        n = ulp_diffs.numel()
+        ulp_stats["mean"] = ulp_diffs.mean().item()
+        ulp_stats["p95"] = ulp_diffs.quantile(0.95).item() if n >= 20 else max_ulp
+        ulp_stats["p99"] = ulp_diffs.quantile(0.99).item() if n >= 100 else max_ulp
+        worst = torch.argmax(ulp_diffs)
+        ulp_stats[
+            "worst"
+        ] = f"|{a[worst].item():.6e} - {g[worst].item():.6e}| / {ulp_values[worst].item():.6e} = {max_ulp:.4g}"
+        if max_ulp > ulp_threshold:
+            ulp_msg = (
+                f"Max ULP: {max_ulp:.1f} "
+                f"(golden={g[worst].item()}, actual={a[worst].item()}, "
+                f"ulp@golden={ulp_values[worst].item()})"
+            )
+
+    max_atol_err = 0.0
+    atol_msg = ""
+    if n_near_zero > 0:
+        g_nz = expected_result[near_zero_mask].float()
+        a_nz = actual_result[near_zero_mask].float()
+        abs_diffs = torch.abs(a_nz - g_nz)
+        max_atol_err = torch.max(abs_diffs).item()
+        if max_atol_err > scaled_atol:
+            worst = torch.argmax(abs_diffs)
+            atol_msg = (
+                f"Max atol err: {max_atol_err:.6e} > {scaled_atol:.6e} "
+                f"(golden={g_nz[worst].item()}, actual={a_nz[worst].item()}) "
+                f"[{n_near_zero} near-zero elems]"
+            )
+
+    ulp_ok = max_ulp <= ulp_threshold
+    atol_ok = max_atol_err <= scaled_atol
+
+    parts = [f"ULP: max={max_ulp:.1f} (threshold={ulp_threshold})"]
+    if n_near_zero > 0:
+        parts.append(
+            f"Near-zero atol: max={max_atol_err:.6e} "
+            f"(threshold={scaled_atol:.6e}, count={n_near_zero}/{expected_result.numel()})"
+        )
+    msg = "; ".join(parts)
+    if not ulp_ok:
+        msg += f" | FAIL ULP: {ulp_msg}"
+    if not atol_ok:
+        msg += f" | FAIL atol: {atol_msg}"
+
+    return ulp_ok and atol_ok, max_ulp, max_atol_err, scaled_atol, msg, ulp_stats
+
+
+def assert_equal(expected_pytorch_result, actual_pytorch_result):
+    """
+    Assert that two PyTorch tensors are exactly equal.
+
+    This function performs an exact equality comparison between two tensors, checking that
+    all corresponding elements are identical. Both tensor shapes and values must match exactly.
+
+    Args:
+        expected_pytorch_result (torch.Tensor): The expected reference tensor
+        actual_pytorch_result (torch.Tensor): The actual tensor to compare against the reference
+
+    Returns:
+        tuple: A tuple containing:
+            - equal_passed (bool): True if the tensors are exactly equal, False otherwise
+            - equal_message (str): A message describing the equality comparison result
+
+    Raises:
+        AssertionError: If the tensor shapes don't match or if the tensors are not exactly equal
+    """
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
+    equal_passed, equal_message = comp_equal(expected_pytorch_result, actual_pytorch_result)
+    assert equal_passed, equal_message
+    return equal_passed, equal_message
+
+
+def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
+    """
+    Compute the relative Frobenius norm of the difference between two tensors.
+    Uses relative Frobenius norm: ||error||_F / ||expected||_F.
+    If ||expected||_F == 0, returns the absolute Frobenius error.
+
+    Args:
+        expected_pytorch_result (torch.Tensor or ttnn.Tensor): The expected reference tensor.
+        actual_pytorch_result (torch.Tensor or ttnn.Tensor): The actual tensor to compare against the reference.
+
+    Returns:
+        float: The (relative or absolute) Frobenius norm of the error.
+        bool: True if the expected norm is zero, False otherwise.
+    """
+    if isinstance(expected_pytorch_result, ttnn.Tensor):
+        expected_pytorch_result = ttnn.to_torch(expected_pytorch_result)
+    if isinstance(actual_pytorch_result, ttnn.Tensor):
+        actual_pytorch_result = ttnn.to_torch(actual_pytorch_result)
+
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
+
+    expected_pytorch_result = _to_float_for_norm(expected_pytorch_result)
+    actual_pytorch_result = _to_float_for_norm(actual_pytorch_result)
+
+    error = expected_pytorch_result - actual_pytorch_result
+    frob_error = torch.norm(error, p="fro")
+    frob_expected = torch.norm(expected_pytorch_result, p="fro")
+
+    expected_norm_is_zero = frob_expected == 0
+    rel_norm_value = float(frob_error / frob_expected) if not expected_norm_is_zero else float(frob_error)
+
+    return rel_norm_value, expected_norm_is_zero
+
+
+def assert_relative_frobenius(expected_pytorch_result, actual_pytorch_result, threshold=0.01):
+    """
+    Assert that the relative Frobenius norm of the difference between two tensors is below a specified threshold.
+    Uses relative Frobenius norm: ||error||_F / ||expected||_F. If ||expected||_F == 0, uses absolute Frobenius error.
+
+    Args:
+        expected_pytorch_result (torch.Tensor or ttnn.Tensor): The expected reference tensor.
+        actual_pytorch_result (torch.Tensor or ttnn.Tensor): The actual tensor to compare against the reference.
+        threshold (float): The maximum allowed relative Frobenius norm of the error.
+
+    Returns:
+        tuple: A tuple containing:
+            - relative_frobenius_passed (bool): True if the relative Frobenius norm is below the threshold, False otherwise
+            - relative_frobenius_message (str): A message describing the relative Frobenius norm comparison result
+
+    Raises:
+        AssertionError: If the tensor shapes don't match or if the relative Frobenius norm is above the threshold.
+    """
+    rel_norm_value, expected_norm_is_zero = comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result)
+
+    relative_frobenius_passed = rel_norm_value <= threshold
+    relative_frobenius_message = f"Relative Frobenius norm {rel_norm_value} is below threshold {threshold}."
+    if not relative_frobenius_passed:
+        if expected_norm_is_zero:
+            relative_frobenius_message = (
+                f"Frobenius norm of expected is 0. Absolute error {rel_norm_value} exceeds threshold {threshold}."
+            )
+        else:
+            relative_frobenius_message = (
+                f"Relative Frobenius norm of error {rel_norm_value} exceeds threshold {threshold}."
+            )
+    assert relative_frobenius_passed, relative_frobenius_message
+    return relative_frobenius_passed, relative_frobenius_message
+
+
+def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
+    if expected_pytorch_result.shape != actual_pytorch_result.shape:
+        return (
+            False,
+            f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}",
+        )
+    pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
+    return pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
+
+
+def check_with_pcc_without_tensor_printout(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
+    if expected_pytorch_result.shape != actual_pytorch_result.shape:
+        return (
+            False,
+            f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}",
+        )
+    pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
+    return pcc_passed, pcc_message
+
+
+def set_slow_dispatch_mode(set_var):
+    prev_value = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+
+    if set_var != "" and set_var is not None:
+        os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = set_var
+        logger.info("Setting slow dispatch mode")
+    else:
+        logger.info("Setting fast dispatch mode")
+
+    return prev_value
+
+
+def update_process_id():
+    print(f"Debugging PID: {os.getpid()}")
+    cwd = os.getcwd()
+    launch_json_path = os.path.join(cwd, ".vscode", "launch.json")
+    with open(launch_json_path, "r") as f:
+        launch_data = json.load(f)
+
+    for config in launch_data.get("configurations", []):
+        if config.get("name") == "C++: Attach to Python":
+            config["processId"] = str(os.getpid())
+            break
+
+    with open(launch_json_path, "w") as f:
+        json.dump(launch_data, f, indent=4)
+
+
+def get_per_core_size_and_num_cores(
+    size: int, num_cores_choices: Tuple[int, ...], min_per_core_size: int = 32, max_per_core_size: int = None
+) -> Tuple[int, int]:
+    if max_per_core_size is None:
+        max_per_core_size = size
+
+    for num_cores in num_cores_choices:
+        per_core_size = roundup(divup(size, num_cores), 32)  # Divide, round up, then round up to nearest 32
+        if per_core_size > min_per_core_size and per_core_size < max_per_core_size:
+            # Actual num_cores might be less after we round up to nearest 32
+            num_cores_actual = divup(size, per_core_size)  # Divide and round up
+            yield per_core_size, num_cores_actual
+
+
+def start_measuring_time() -> int:
+    return time.time_ns()
+
+
+def stop_measuring_time(start_time) -> int:
+    return time.time_ns() - start_time
+
+
+def maybe_trace(op_func, enable_trace, device):
+    if enable_trace:
+        # Compile the op
+        output = op_func()
+        ttnn.synchronize_device(device)
+
+        # Capture the trace
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        output = op_func()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+
+        # Execute trace
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.release_trace(device, trace_id)
+        ttnn.synchronize_device(device)
+    else:
+        output = op_func()
+    return output
+
+
+def is_unsigned_tensor(py_tensor):
+    return py_tensor.dtype in TORCH_INTEGER_DTYPES
+
+
+def align_tensor_dtype(roundtrip_tensor, dtype):
+    if isinstance(roundtrip_tensor, torch.Tensor):
+        return roundtrip_tensor.to(dtype)
+
+    elif isinstance(roundtrip_tensor, np.ndarray):
+        return roundtrip_tensor.astype(dtype)
+
+    else:
+        raise ValueError(f"Expected torch.Tensor or np.ndarray, got {type(roundtrip_tensor)}")
+
+
+def generate_all_bfloat16_bitpatterns(dtype=torch.bfloat16):
+    """
+    Generate all possible bfloat16 bit patterns as a test tensor.
+
+    This function creates an exhaustive test dataset by generating all 65,536 (2^16) possible
+    bfloat16 bit patterns. This is useful for comprehensive testing of operations across the
+    entire bfloat16 value space, including edge cases like infinities, NaNs, and subnormals.
+
+    Args:
+        dtype (torch.dtype, optional): The target dtype to cast the bit patterns to.
+                                       Defaults to torch.bfloat16.
+
+    Returns:
+        torch.Tensor: A tensor of shape (256, 256) containing all possible bfloat16 values,
+                     cast to the specified dtype. The tensor is shaped as a square grid for
+                     convenient TILE_LAYOUT compatibility (32x32 tile divisibility).
+
+    Notes:
+        - The function generates values by iterating through all 16-bit integer patterns
+          and reinterpreting them as bfloat16 values.
+        - The resulting tensor includes all special values: +/-0, +/-infinity, NaNs,
+          subnormals, and all normal values in the bfloat16 range.
+        - When dtype is set to a higher precision format (e.g., torch.float32), the bfloat16
+          values are promoted without loss of information.
+
+    Example:
+        >>> all_bf16 = generate_all_bfloat16_bitpatterns(torch.float32)
+        >>> all_bf16.shape
+        torch.Size([256, 256])
+    """
+    # Generate all possible bfloat16 bit patterns (2^16 = 65536 values)
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    bf16_bitpatterns = all_bitpatterns.view(torch.bfloat16)  # Reinterpret as bfloat16
+
+    # Cast to target dtype
+    bitpatterns = bf16_bitpatterns.to(dtype)
+
+    # Reshape tensor to 256 x 256 for tile layout compatibility
+    bitpatterns = bitpatterns.reshape(256, 256)
+
+    return bitpatterns
+
+
+def flush_subnormal_values_to_zero(tensor):
+    """
+    Flush subnormal (denormalized) floating-point values to zero.
+
+    Subnormal numbers are floating-point values smaller than the smallest normalized number.
+    Tenstorrent hardware flushes subnormals to zero for performance reasons.
+    This function replicates that behavior for testing purposes.
+
+    Args:
+        tensor (torch.Tensor): Input tensor with floating-point values.
+
+    Returns:
+        torch.Tensor: The input tensor with all subnormal values replaced by zero.
+                     The tensor is modified in-place.
+
+    Notes:
+        - This function only works for float32 and bfloat16 as they share the same exponent range.
+        - For float32 and bfloat16, subnormal values are those where the exponent bits are all zero,
+          which corresponds to absolute values less than 2^(-126).
+    """
+    # Float32 and bfloat16 numbers are subnormal if exponent == 0
+    # This corresponds to absolute values < 2^(-126)
+    SUBNORMAL_THRESHOLD = 2.0 ** (-126)
+    mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
+    tensor[mask] = 0.0
+    return tensor
+
+
+def assert_numeric_metrics(
+    expected_result,
+    actual_result,
+    rtol=1e-05,
+    atol=1e-08,
+    frobenius_threshold=0.01,
+    pcc_threshold=0.999,
+    ulp_threshold=10,
+    check_allclose=True,
+    check_frobenius=True,
+    check_pcc=True,
+    check_ulp=False,
+    assert_on_fail=True,
+):
+    """
+    Run one or more numeric similarity checks between a golden tensor and an actual tensor.
+
+    Intended for TTNN tests that compare PyTorch reference output against device or CPU
+    round-trip results. Individual checks can be disabled when a metric does not apply
+    (for example, skip Frobenius for degenerate or non-finite cases).
+
+    This enhanced version evaluates ALL enabled metrics before asserting, providing
+    comprehensive debugging information even when multiple metrics fail.
+
+    Args:
+        expected_result (Union[ttnn.Tensor, torch.Tensor]): Reference (golden) tensor.
+        actual_result (Union[ttnn.Tensor, torch.Tensor]): Tensor under test; cast to ``expected_result.dtype`` if dtypes differ.
+        rtol (float, optional): Relative tolerance for ``assert_allclose``. Defaults to 1e-05.
+        atol (float, optional): Absolute tolerance for ``assert_allclose``. Defaults to 1e-08.
+        frobenius_threshold (float, optional): Maximum allowed relative Frobenius error for
+            ``assert_relative_frobenius``. Defaults to 0.01.
+        pcc_threshold (float, optional): Minimum Pearson correlation for ``comp_pcc``. Defaults to 0.999.
+        ulp_threshold (float, optional): Maximum ULP distance for ``assert_with_ulp``. Defaults to 10.
+        check_allclose (bool, optional): If True, run element-wise allclose. Defaults to True.
+        check_frobenius (bool, optional): If True, run relative Frobenius check. Defaults to True.
+        check_pcc (bool, optional): If True, run PCC when the tensor has more than one element. Defaults to True.
+        check_ulp (bool, optional): If True, run ULP comparison (non-finite mismatches fail). Defaults to False.
+        assert_on_fail (bool, optional): If True, assert when any check fails. If False, return (passed, message) tuple.
+            Defaults to True.
+
+    Returns:
+        None if assert_on_fail=True (default behavior)
+        (bool, str) tuple if assert_on_fail=False: (all_checks_passed, detailed_message)
+
+    Raises:
+        AssertionError: If assert_on_fail=True and any enabled check fails (shape mismatch, tolerance exceeded, or PCC/ULP below threshold).
+
+    Notes:
+        - PCC is skipped when ``torch.numel(expected_result) == 1`` because correlation is undefined for a scalar.
+        - Allclose and Frobenius use helpers that normalize ``ttnn.Tensor`` inputs to PyTorch tensors.
+        - All enabled metrics are evaluated before asserting, allowing comprehensive debugging.
+    """
+    # Normalize tensors
+    expected_result = _normalize_tensor(expected_result)
+    actual_result = _normalize_tensor(actual_result)
+
+    # Validate shapes
+    expected_shape = list(expected_result.shape)
+    actual_shape = list(actual_result.shape)
+    if expected_shape != actual_shape:
+        message = f"Shape mismatch: expected {expected_shape} vs actual {actual_shape}"
+        if assert_on_fail:
+            raise AssertionError(message)
+        return False, message
+
+    # Align dtypes first so all downstream numeric checks compare values in the same precision.
+    if expected_result.dtype != actual_result.dtype:
+        actual_result = actual_result.type(expected_result.dtype)
+
+    # Collect all metric results
+    overall_passed = True
+    messages = []
+    num_checks_enabled = 0
+    num_checks_passed = 0
+
+    # Check 1: Element-wise tolerance check (absolute + relative).
+    if check_allclose:
+        num_checks_enabled += 1
+        passed, message = comp_allclose(expected_result, actual_result, rtol, atol)
+        # Convert to Python boolean if it's a tensor
+        passed = bool(passed.item() if hasattr(passed, "item") else passed)
+        if passed:
+            num_checks_passed += 1
+            messages.append(f"[ALLCLOSE PASSED] {message}")
+        else:
+            messages.append(f"[ALLCLOSE FAILED] {message}")
+        overall_passed = overall_passed and passed
+
+    # Check 2: Global error-magnitude check using relative Frobenius norm.
+    if check_frobenius:
+        num_checks_enabled += 1
+        rel_frob, is_zero = comp_relative_frobenius(expected_result, actual_result)
+        passed = rel_frob <= frobenius_threshold
+        if passed:
+            num_checks_passed += 1
+            prefix = "[FROBENIUS PASSED]"
+        else:
+            prefix = "[FROBENIUS FAILED]"
+
+        if is_zero:
+            message = f"Expected norm is 0. Absolute error {rel_frob:.6e} {'<=' if passed else '>'} threshold {frobenius_threshold}"
+        else:
+            message = (
+                f"Relative Frobenius norm {rel_frob:.6e} {'<=' if passed else '>'} threshold {frobenius_threshold}"
+            )
+        messages.append(f"{prefix} {message}")
+        overall_passed = overall_passed and passed
+
+    # Check 3: PCC is undefined/degenerate for scalars, so only run it for tensors with more than one element.
+    if check_pcc:
+        if torch.numel(expected_result) == 1:
+            messages.append("[PCC SKIPPED] PCC undefined for scalar tensors")
+        else:
+            num_checks_enabled += 1
+            passed, pcc_value = comp_pcc(expected_result, actual_result, pcc_threshold)
+            # Convert to Python boolean if it's a tensor
+            passed = bool(passed.item() if hasattr(passed, "item") else passed)
+            if passed:
+                num_checks_passed += 1
+                messages.append(f"[PCC PASSED] PCC={pcc_value:.6f} >= threshold {pcc_threshold}")
+            else:
+                messages.append(f"[PCC FAILED] PCC={pcc_value:.6f} < threshold {pcc_threshold}")
+            overall_passed = overall_passed and passed
+
+    # Check 4: ULP-based comparison is stricter for floating-point representation differences.
+    if check_ulp:
+        num_checks_enabled += 1
+        passed, message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite=False)
+        # Convert to Python boolean if it's a tensor
+        passed = bool(passed.item() if hasattr(passed, "item") else passed)
+        if passed:
+            num_checks_passed += 1
+            messages.append(f"[ULP PASSED] {message}")
+        else:
+            messages.append(f"[ULP FAILED] {message}")
+        overall_passed = overall_passed and passed
+
+    # Build final message
+    if num_checks_enabled == 0:
+        header = "No checks enabled"
+    else:
+        header = f"Numeric metrics: {num_checks_passed}/{num_checks_enabled} checks passed"
+        if not overall_passed:
+            header = f"Numeric metrics comparison failed: {num_checks_passed}/{num_checks_enabled} checks passed"
+
+    details = "\n".join(messages)
+    full_message = header if not details else header + "\n" + details
+    # Return or assert based on flag
+    if assert_on_fail:
+        assert overall_passed, full_message
+    else:
+        return overall_passed, full_message
+
+
+def assert_div_by_zero_outputs(
+    golden_tensor: torch.Tensor, device_tensor: torch.Tensor, *, ulp_threshold: int = 3
+) -> None:
+    """Assert correctness of divide-by-zero outputs (golden assumed all-±inf after zero-replacement).
+
+    Three-part check:
+    1. Non-finite position mask matches exactly.
+    2. Inf sign matches where both sides are inf.
+    3. ULP safety net on any finite elements (not reached under current parametrization
+       when the numerator contains no zeros and divisor is 0.0).
+    """
+    g_nonfinite = ~torch.isfinite(golden_tensor)
+    d_nonfinite = ~torch.isfinite(device_tensor)
+    assert torch.equal(g_nonfinite, d_nonfinite), "Non-finite positions differ between golden and device"
+    both_inf = torch.isinf(golden_tensor) & torch.isinf(device_tensor)
+    if both_inf.any():
+        assert torch.equal(
+            torch.sign(golden_tensor[both_inf]),
+            torch.sign(device_tensor[both_inf]),
+        ), "Inf sign mismatch between golden and device"
+    finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(device_tensor)
+    if finite_mask.any():
+        # Safety net: not reached when golden is all ±inf after zero replacement.
+        assert_with_ulp(golden_tensor[finite_mask], device_tensor[finite_mask], ulp_threshold=ulp_threshold)
+
+
+# ---------------------------------------------------------------------------
+# Sharded memory-config helpers (shared by universal-input TM test suites)
+# ---------------------------------------------------------------------------
+
+_DTYPE_ELEM_SIZE = {
+    ttnn.bfloat16: 2,
+    ttnn.float32: 4,
+    ttnn.uint32: 4,
+    ttnn.int32: 4,
+    ttnn.uint16: 2,
+    ttnn.uint8: 1,
+    ttnn.bfloat8_b: 1,
+}
+
+
+def _divisible_grid_1d(total_dim, max_cores, step):
+    """Return the largest n <= max_cores such that total_dim % (n * step) == 0."""
+    for n in range(max_cores, 0, -1):
+        if total_dim % (n * step) == 0:
+            return n
+    raise ValueError(f"No valid 1D grid size for total_dim={total_dim}, max_cores={max_cores}, step={step}")
+
+
+def make_sharded_memory_config(device, shape, strategy, layout, dtype=ttnn.bfloat16, buffer_type=ttnn.BufferType.L1):
+    """Create a valid sharded MemoryConfig for `shape` on `device`.
+
+    For TILE layout the shard dims must be tile-aligned (multiples of 32).
+    For ROW_MAJOR, shard_width * element_size must be a multiple of the
+    recommended L1 alignment (64 bytes today), so the shard-width step is
+    derived from the `dtype` argument.
+
+    `buffer_type` defaults to L1 (via create_sharded_memory_config). Pass
+    ttnn.BufferType.DRAM to build an equivalent DRAM-sharded config.
+    """
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = grid.x, grid.y
+    tile_h, tile_w = 32, 32
+
+    shape_for_memcfg = list(shape)
+    if layout == ttnn.TILE_LAYOUT and len(shape) >= 2:
+        padded_h_dim = ((shape[-2] + tile_h - 1) // tile_h) * tile_h
+        padded_w_dim = ((shape[-1] + tile_w - 1) // tile_w) * tile_w
+        total_h = padded_h_dim
+        for d in shape[:-2]:
+            total_h *= d
+        total_w = padded_w_dim
+        shape_for_memcfg[-2] = padded_h_dim
+        shape_for_memcfg[-1] = padded_w_dim
+    else:
+        total_h = 1
+        for d in shape[:-1]:
+            total_h *= d
+        total_w = shape[-1]
+
+    step_h = tile_h if layout == ttnn.TILE_LAYOUT else 1
+    recommended_alignment_bytes = 64
+    element_size = _DTYPE_ELEM_SIZE.get(dtype, 2)
+    rm_step_w = max(1, recommended_alignment_bytes // element_size)
+    step_w = tile_w if layout == ttnn.TILE_LAYOUT else rm_step_w
+
+    if strategy == ttnn.ShardStrategy.HEIGHT:
+        ny = _divisible_grid_1d(total_h, max_y, step_h)
+        core_grid = ttnn.CoreGrid(y=ny, x=1)
+    elif strategy == ttnn.ShardStrategy.WIDTH:
+        nx = _divisible_grid_1d(total_w, max_x, step_w)
+        core_grid = ttnn.CoreGrid(y=1, x=nx)
+    else:  # BLOCK
+        ny = _divisible_grid_1d(total_h, max_y, step_h)
+        nx = _divisible_grid_1d(total_w, max_x, step_w)
+        core_grid = ttnn.CoreGrid(y=ny, x=nx)
+
+    l1_cfg = ttnn.create_sharded_memory_config(
+        shape=shape_for_memcfg,
+        core_grid=core_grid,
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    if buffer_type == ttnn.BufferType.L1:
+        return l1_cfg
+    return ttnn.MemoryConfig(l1_cfg.memory_layout, buffer_type, l1_cfg.shard_spec)

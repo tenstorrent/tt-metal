@@ -1,0 +1,1 @@
+../../../../models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_image_classification.py

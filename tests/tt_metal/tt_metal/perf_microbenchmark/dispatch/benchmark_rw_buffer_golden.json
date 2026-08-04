@@ -1,0 +1,438 @@
+{
+  "context": {
+    "date": "2025-12-02T22:13:25+00:00",
+    "host_name": "tt-metal-ci-vm-23",
+    "executable": "./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer",
+    "num_cpus": 14,
+    "mhz_per_cpu": 3000,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 524288,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 16777216,
+        "num_sharing": 1
+      }
+    ],
+    "load_avg": [
+      5.49121,
+      4.29639,
+      4.0249
+    ],
+    "library_version": "v1.9.1",
+    "library_build_type": "debug",
+    "json_schema_version": 1
+  },
+  "benchmarks": [
+    {
+      "name": "Write/32/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 530137025.25824946
+    },
+    {
+      "name": "Write/64/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 1053852458.1161923
+    },
+    {
+      "name": "Write/128/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 2076705518.5278306
+    },
+    {
+      "name": "Write/256/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4150537976.6702657
+    },
+    {
+      "name": "Write/512/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 7832713159.001258
+    },
+    {
+      "name": "Write/1024/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 12700992246.171448
+    },
+    {
+      "name": "Write/2048/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 14017217618.451519
+    },
+    {
+      "name": "Write/32/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 569244914.6781343
+    },
+    {
+      "name": "Write/64/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 1134550184.686285
+    },
+    {
+      "name": "Write/128/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 2249597648.4407406
+    },
+    {
+      "name": "Write/256/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4436944947.83471
+    },
+    {
+      "name": "Write/512/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 8712703006.654844
+    },
+    {
+      "name": "Write/1024/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 14022386215.524458
+    },
+    {
+      "name": "Write/2048/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 13996860443.976845
+    },
+    {
+      "name": "Read/32/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 647904456.7066457
+    },
+    {
+      "name": "Read/64/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 1238638131.3638163
+    },
+    {
+      "name": "Read/128/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 2385208725.9137616
+    },
+    {
+      "name": "Read/256/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4255933998.5591526
+    },
+    {
+      "name": "Read/512/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 6960798902.562902
+    },
+    {
+      "name": "Read/1024/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 10153391630.317862
+    },
+    {
+      "name": "Read/2048/67108864/0/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 12642587585.201319
+    },
+    {
+      "name": "Read/32/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 659872370.3245592
+    },
+    {
+      "name": "Read/64/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 1278168621.8497746
+    },
+    {
+      "name": "Read/128/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 2416179383.2803802
+    },
+    {
+      "name": "Read/256/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4330079094.022473
+    },
+    {
+      "name": "Read/512/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 7132655145.376784
+    },
+    {
+      "name": "Read/1024/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 10521277006.030144
+    },
+    {
+      "name": "Read/2048/67108864/1/0/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 13168783493.458136
+    },
+    {
+      "name": "Write/32/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 568728209.793729
+    },
+    {
+      "name": "Write/64/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 1133440555.1377661
+    },
+    {
+      "name": "Write/128/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 2238723859.7383265
+    },
+    {
+      "name": "Write/256/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4398065471.081065
+    },
+    {
+      "name": "Write/512/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 8690731703.534557
+    },
+    {
+      "name": "Write/1024/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 9433662421.061338
+    },
+    {
+      "name": "Write/2048/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 9407337142.706299
+    },
+    {
+      "name": "Write/32/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 505099228.2321797
+    },
+    {
+      "name": "Write/64/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 1006391326.3425521
+    },
+    {
+      "name": "Write/128/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 1997451783.2725627
+    },
+    {
+      "name": "Write/256/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 3929677408.7316585
+    },
+    {
+      "name": "Write/512/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 7770773223.358871
+    },
+    {
+      "name": "Write/1024/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 9465296711.219114
+    },
+    {
+      "name": "Write/2048/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 9442747159.750542
+    },
+    {
+      "name": "Read/32/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 598771488.5440114
+    },
+    {
+      "name": "Read/64/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 1181011869.159102
+    },
+    {
+      "name": "Read/128/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 2279779575.61695
+    },
+    {
+      "name": "Read/256/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4190478799.99727
+    },
+    {
+      "name": "Read/512/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4796074463.989728
+    },
+    {
+      "name": "Read/1024/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4799899553.425623
+    },
+    {
+      "name": "Read/2048/67108864/0/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4796010482.665639
+    },
+    {
+      "name": "Read/32/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 654141322.1493918
+    },
+    {
+      "name": "Read/64/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 1283150154.092076
+    },
+    {
+      "name": "Read/128/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 2449628818.0552487
+    },
+    {
+      "name": "Read/256/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4500947459.821664
+    },
+    {
+      "name": "Read/512/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4810632639.195288
+    },
+    {
+      "name": "Read/1024/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4810903534.151265
+    },
+    {
+      "name": "Read/2048/67108864/1/1/real_time_median",
+      "run_type": "aggregate",
+      "repetitions": 11,
+      "aggregate_name": "median",
+      "bytes_per_second": 4787908185.165733
+    }
+  ]
+}

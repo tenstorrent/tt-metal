@@ -1,0 +1,441 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import torch
+import pytest
+import ttnn
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_with_ulp,
+    assert_allclose,
+    flush_subnormal_values_to_zero,
+)
+from tests.ttnn.unit_tests.operations.eltwise.test_unary_pow import generate_clean_bf16_tensor
+
+pytestmark = pytest.mark.use_module_device
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("exponent", [0.5, 2.0, 4])
+def test_unary_pow_ttnn(input_shapes, exponent, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+
+    cq_id = 0
+    ttnn.pow(input_tensor, exponent, output_tensor=output_tensor, queue_id=cq_id)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    golden_tensor = golden_fn(in_data, exponent)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor], pcc=0.9)
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ([20, 20], [2, 32, 320], [1, 1, 32, 32], [1, 3, 320, 384], [1, 2, 32, 64, 64]),
+)
+@pytest.mark.parametrize("input", [10.0, 5.5, -5.0, -2.5, -10, -3, 9.5, -7.25, -6.15])
+@pytest.mark.parametrize("exponent", [2.75, 2.5, 1.5, 4, 5.75, 0, -1.5, -2.25, -3, -4.25, -5.5])
+# Both input and exponent are -ve and exponent is a non-integer, TT and Torch output = nan
+# input = non-zero and exponent = 0, TT and Torch output = 1
+# Both input and exponent are 0, TT = 1 and Torch output = 0
+def test_binary_pow_scalar_input(input_shapes, input, exponent, device):
+    torch_input_tensor_b = torch.full(input_shapes, exponent, dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(input, torch_input_tensor_b)
+
+    cq_id = 0
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.pow(input, input_tensor_b, queue_id=cq_id)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.999)
+
+
+def generate_torch_tensor(shape, low, high, step=0.0025, dtype=torch.float32):
+    num_elements = torch.prod(torch.tensor(shape))
+    values = torch.arange(low, high + step, step, dtype=dtype)
+
+    if values.numel() < num_elements:
+        values = values.repeat((num_elements // values.numel()) + 1)
+    values = values[:num_elements]
+    return values.reshape(shape)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [[64, 640], [2, 32, 320], [2, 1, 32, 1024], [1, 1, 32, 32], [1, 3, 320, 384], [1, 2, 32, 64, 128]],
+)
+def test_binary_sfpu_pow(device, input_shapes):
+    torch_input_tensor_a = generate_torch_tensor(input_shapes, -30, 30, step=0.0022)
+    torch_input_tensor_b = generate_torch_tensor(input_shapes, -20, 20)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
+    assert pcc >= 0.99
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [[64, 640], [2, 32, 320], [2, 1, 1024, 1024], [1, 1, 32, 32], [1, 3, 320, 384], [1, 2, 32, 64, 64]],
+)
+def test_binary_sfpu_pow_bf16(device, input_shapes):
+    torch_input_tensor_a = generate_torch_tensor(input_shapes, -30, 30, step=0.0021, dtype=torch.bfloat16)
+    torch_input_tensor_b = generate_torch_tensor(input_shapes, -20, 20, dtype=torch.bfloat16)
+    torch_output_tensor = torch.pow(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
+    assert pcc >= 0.99
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [[2, 1, 32, 1024], [1, 3, 320, 384], [1, 2, 32, 64, 128], [1, 1, 32, 64]],
+)
+def test_binary_sfpu_pow_pos(device, input_shapes):
+    torch_input_tensor_a = generate_torch_tensor(input_shapes, 0, 30, step=0.0111)
+    torch_input_tensor_b = generate_torch_tensor(input_shapes, -20, 20)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
+    assert pcc >= 0.99
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [[2, 1, 32, 1024], [1, 3, 320, 384], [1, 2, 32, 64, 128]],
+)
+def test_binary_sfpu_pow_neg(device, input_shapes):
+    torch_input_tensor_a = generate_torch_tensor(input_shapes, -30, 0, step=0.0111)
+    torch_input_tensor_b = generate_torch_tensor(input_shapes, 0, 10)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
+    assert pcc >= 0.99
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_pow(device, dtype):
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    x_torch = torch.tensor([[0.98828125, 0.47851562, 1.1875, -1.59375]], dtype=torch_dtype)
+    y_torch = torch.tensor([[0.0751953125, 0.53125, -0.6640625, 0.1533203125]], dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    z_torch = golden_fn(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    z_tt_pow = ttnn.pow(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt_pow)
+    # output - bfloat16
+    # Due to HW limitations for bfloat16 dtype, NaN value gets packed as inf.
+    # z_tt_pow ttnn.Tensor([[ 0.99609,  0.67969,  ...,  0.89844,      inf]])
+    # z_torch tensor([[1.0000, 0.6758, 0.8906,    nan]], dtype=torch.bfloat16)
+    # output - float32
+    # z_tt_pow ttnn.Tensor([[ 0.99930,  0.68274,  ...,  0.90147,      nan]])
+    # z_torch tensor([[0.9991, 0.6760, 0.8922,    nan]])
+
+    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.99
+    assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        [32, 64],
+        [1, 128, 96],
+        [5, 3, 64, 128],
+    ),
+)
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_sfpu_pow_bug(device, input_shapes, dtype):
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    torch_input_tensor_a = torch.randn(input_shapes, dtype=torch_dtype)
+    torch_input_tensor_b = torch.randn(input_shapes, dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
+    assert pcc >= 0.999
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_sfpu_accuracy(device, dtype):
+    torch.manual_seed(0)
+
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    torch_input_tensor_a = torch.tensor([[10.0, 10.0, 9.0, 9.0, 5.0, 100000, 10.0, 10.0, 2.0, 2.0]], dtype=torch_dtype)
+    torch_input_tensor_b = torch.tensor([[2.0, 3.0, 2.0, 3.0, 3.0, 1.7984, -1.0, -2.0, 1.0, 10.0]], dtype=torch_dtype)
+
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    if dtype == "bfloat16":
+        assert_with_ulp(torch_output_tensor, output, 1)
+    else:
+        assert_allclose(torch_output_tensor, output, rtol=0.005, atol=1e-3)  # Ensures > 99.5% accuracy
+
+
+def test_special_input_fp32(device):
+    a = torch.tensor(
+        [[1.0, 0.999, 0.999, 0.999, 0.999, 0.234, 0.985, 1.456, 0.0, -1.0, 1.2, -5.3, 6.7, 9.8, -10.9, 5.999]],
+        dtype=torch.float32,
+    )
+    b = torch.tensor(
+        [[0.999, 1.0, 2.0, 3.0, 9.0, 0.123, 2.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]],
+        dtype=torch.float32,
+    )
+
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(a, b)
+
+    input_tensor_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=2)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_pow_determinism(device, dtype):
+    torch.manual_seed(0)
+
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    shape = [512, 512]
+
+    torch_a = torch.randn(shape, dtype=torch_dtype)
+    torch_b = torch.randn(shape, dtype=torch_dtype)
+
+    # Run the operations twice, and check that results are the same
+    # This ensures that, by default, ttnn.pow is deterministic (expected behavior from MLIR)
+
+    ttnn_a = ttnn.from_torch(torch_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(torch_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # First round
+    ttnn_result_1 = ttnn.pow(ttnn_a, ttnn_b)
+    ttnn_result_1_torch = ttnn.to_torch(ttnn_result_1)
+
+    # Second round
+    ttnn_result_2 = ttnn.pow(ttnn_a, ttnn_b)
+    ttnn_result_2_torch = ttnn.to_torch(ttnn_result_2)
+
+    mask = torch.isnan(ttnn_result_1_torch) | torch.isnan(ttnn_result_2_torch)
+    assert torch.equal(ttnn_result_1_torch[~mask], ttnn_result_2_torch[~mask])
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_sfpu_accuracy_pos(device, dtype):
+    torch.manual_seed(0)
+
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    def gen_uniform(shape, dtype, a, b):
+        tensor = torch.rand(shape, dtype=dtype)
+        tensor = tensor * (b - a) + a
+        return tensor
+
+    torch_input_tensor_a = gen_uniform([256, 256], torch_dtype, 1e-9, 1e3)
+    torch_input_tensor_b = gen_uniform([256, 256], torch_dtype, 0.125, 4)
+
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    if dtype == "bfloat16":
+        assert_with_ulp(torch_output_tensor, output, 5)
+    else:
+        assert_allclose(torch_output_tensor, output, rtol=0.02, atol=1e-5)  # Ensure > 98% accuracy
+
+
+@pytest.mark.parametrize(
+    "input_a, input_b",
+    [
+        ([32, 64], [32, 64]),
+        ([1, 128, 96], [1, 128, 1]),
+        ([5, 3, 1, 128], [5, 1, 64, 128]),
+        ([2, 1, 1, 1, 1], [2, 1, 2, 64, 128]),
+        ([], [128]),
+    ],
+)
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_ng_pow(device, input_a, input_b, dtype):
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    torch_input_tensor_a = torch.randn(input_a, dtype=torch_dtype)
+    torch_input_tensor_b = torch.randn(input_b, dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
+    assert pcc >= 0.999
+
+
+# unary power FP32 tests
+@pytest.mark.parametrize("exponent", [2.0, -2.0, -3.56, 0.5, -0.5, -0.566, -2])
+def test_pow(exponent, device):
+    torch.manual_seed(42)
+
+    torch_base = torch.rand([4, 4], dtype=torch.float32)
+    torch_output = torch.pow(torch_base, exponent)
+    ttnn_base = ttnn.from_torch(torch_base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_output = ttnn.pow(ttnn_base, exponent)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_allclose(torch_output, ttnn_output, atol=2.5e-4, rtol=5e-7)
+
+
+# Dense log-spaced base sweep accuracy for non-integer exponents (issue #49625).
+# fp32 pow(x, y) must stay < 3 ULP for the CogVideo/DeepSeek regime x in [0.5, 50000],
+# while integer exponents stay bit-exact (0 ULP). Covers the long-mantissa 1.7984 case.
+@pytest.mark.parametrize("exponent", [0.5, 1.5, 1.7984, 2.5])
+def test_unary_pow_fp32_ulp_noninteger(exponent, device):
+    base = torch.logspace(-0.3, 4.7, 1024, dtype=torch.float32).reshape(32, 32)  # ~0.5 .. ~50000
+    golden = torch.pow(base, exponent)
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.pow(tt_base, exponent)
+    result = ttnn.to_torch(tt_out)
+
+    assert_with_ulp(golden, result, ulp_threshold=3)
+
+
+@pytest.mark.parametrize("exponent", [2.0, 3.0])
+def test_unary_pow_fp32_ulp_integer_exact(exponent, device):
+    base = torch.logspace(-0.3, 4.7, 1024, dtype=torch.float32).reshape(32, 32)
+    golden = torch.pow(base, exponent)
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.pow(tt_base, exponent)
+    result = ttnn.to_torch(tt_out)
+
+    assert_with_ulp(golden, result, ulp_threshold=0)
+
+
+# Overflow must saturate to +inf, not wrap. The non-integer fp32 path scales by 2**k via
+# setexp, which writes the 8-bit exponent field and wraps instead of saturating, so a
+# missing clamp turns an overflowing result into a finite garbage value. Exponents are
+# non-integer on purpose: integer exponents take a separate exact iterative path that is
+# not affected. base=50000, y=9.5 gives ~1e42 -> +inf in fp32. Covers both the unary
+# (scalar y) and binary (tensor y) paths, which apply the 2**k scale independently.
+@pytest.mark.parametrize("exponent", [9.5, 20.5, 50.5])
+def test_unary_pow_fp32_overflow_to_inf(exponent, device):
+    base = torch.full((32, 32), 50000.0, dtype=torch.float32)
+    golden = torch.pow(base, exponent)
+    assert torch.isinf(golden).all()  # sanity: this exponent really overflows fp32
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
+
+    assert torch.isinf(result).all(), "overflow wrapped to a finite value instead of +inf"
+    assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
+
+
+@pytest.mark.parametrize("exponent", [9.5, 20.5, 50.5])
+def test_binary_pow_fp32_overflow_to_inf(exponent, device):
+    base = torch.full((32, 32), 50000.0, dtype=torch.float32)
+    exp = torch.full((32, 32), exponent, dtype=torch.float32)
+    golden = torch.pow(base, exp)
+    assert torch.isinf(golden).all()  # sanity: this exponent really overflows fp32
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_exp = ttnn.from_torch(exp, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(tt_base, tt_exp))
+
+    assert torch.isinf(result).all(), "overflow wrapped to a finite value instead of +inf"
+    assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
+
+
+@pytest.mark.parametrize("exponent", [0.25, 0.5, 0.75, -0.25, -0.5, -0.75])
+def test_pow_arange_masking_fp32(exponent, device):
+    tt_input = generate_clean_bf16_tensor(torch.float32)
+
+    tt_input = flush_subnormal_values_to_zero(tt_input)
+    in_range = (tt_input.abs() >= 1e-4) & (tt_input.abs() <= 1e4)
+    tt_input = tt_input[in_range]
+
+    tt_in = ttnn.from_torch(
+        tt_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.pow)
+    golden = golden_function(tt_input, exponent, device=device)
+
+    tt_result = ttnn.pow(tt_in, exponent)
+    result = ttnn.to_torch(tt_result)
+    result = flush_subnormal_values_to_zero(result)
+    golden = flush_subnormal_values_to_zero(golden)
+
+    assert_allclose(golden, result, atol=5e-4, rtol=8e-7)

@@ -1,0 +1,200 @@
+﻿2024-09-02T07:01:59.6183347Z Current runner version: '2.319.1'
+2024-09-02T07:01:59.6190184Z Runner name: 'tt-metal-ci-bm-f14cs02-02'
+2024-09-02T07:01:59.6191175Z Runner group name: 'Default'
+2024-09-02T07:01:59.6192199Z Machine name: 'f14cs02'
+2024-09-02T07:01:59.6210070Z Testing runner upgrade compatibility
+2024-09-02T07:01:59.6845664Z ##[group]GITHUB_TOKEN Permissions
+2024-09-02T07:01:59.6849963Z Actions: read
+2024-09-02T07:01:59.6851219Z Contents: read
+2024-09-02T07:01:59.6852421Z Metadata: read
+2024-09-02T07:01:59.6853456Z Pages: write
+2024-09-02T07:01:59.6854513Z ##[endgroup]
+2024-09-02T07:01:59.6859495Z Secret source: Actions
+2024-09-02T07:01:59.6860999Z Prepare workflow directory
+2024-09-02T07:01:59.8081009Z Prepare all required actions
+2024-09-02T07:01:59.8322068Z Getting action download info
+2024-09-02T07:02:00.0364280Z Download action repository 'tenstorrent-metal/metal-workflows@v2.0.0' (SHA:22c747950076e4c9627125e14734e287c08287a7)
+2024-09-02T07:02:00.3974918Z Download action repository 'actions/upload-artifact@v4' (SHA:834a144ee995460fba8ed112a2fc961b36a5ec5a)
+2024-09-02T07:02:01.1463003Z Getting action download info
+2024-09-02T07:02:01.2878737Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:02:01.9146936Z Uses: tenstorrent/tt-metal/.github/workflows/build-artifact.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:02:01.9149506Z ##[group] Inputs
+2024-09-02T07:02:01.9149993Z   arch: ["grayskull", "wormhole_b0"]
+2024-09-02T07:02:01.9150604Z   build-type: Release
+2024-09-02T07:02:01.9151366Z   tracy: false
+2024-09-02T07:02:01.9151772Z ##[endgroup]
+2024-09-02T07:02:01.9152531Z Complete job name: build-artifact / build-artifact (grayskull)
+2024-09-02T07:02:02.0729647Z ##[group]Run tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+2024-09-02T07:02:02.0730812Z with:
+2024-09-02T07:02:02.0731367Z   token: ***
+2024-09-02T07:02:02.0731752Z   fetch-depth: 1
+2024-09-02T07:02:02.0732167Z env:
+2024-09-02T07:02:02.0732609Z   TT_METAL_ENV: dev
+2024-09-02T07:02:02.0732980Z   ARCH_NAME: grayskull
+2024-09-02T07:02:02.0733385Z   SILENT: 0
+2024-09-02T07:02:02.0733753Z   VERBOSE: 1
+2024-09-02T07:02:02.0734083Z ##[endgroup]
+2024-09-02T07:02:02.0997388Z ##[group]Run actions/checkout@v4
+2024-09-02T07:02:02.0997846Z with:
+2024-09-02T07:02:02.0998391Z   token: ***
+2024-09-02T07:02:02.0998834Z   fetch-depth: 1
+2024-09-02T07:02:02.0999188Z   lfs: true
+2024-09-02T07:02:02.0999563Z   submodules: recursive
+2024-09-02T07:02:02.0999970Z   clean: true
+2024-09-02T07:02:02.1000333Z   repository: tenstorrent/tt-metal
+2024-09-02T07:02:02.1000837Z   ssh-strict: true
+2024-09-02T07:02:02.1001293Z   ssh-user: git
+2024-09-02T07:02:02.1001846Z   persist-credentials: true
+2024-09-02T07:02:02.1002346Z   sparse-checkout-cone-mode: true
+2024-09-02T07:02:02.1002797Z   fetch-tags: false
+2024-09-02T07:02:02.1003189Z   show-progress: true
+2024-09-02T07:02:02.1003621Z   set-safe-directory: true
+2024-09-02T07:02:02.1003999Z env:
+2024-09-02T07:02:02.1004338Z   TT_METAL_ENV: dev
+2024-09-02T07:02:02.1004755Z   ARCH_NAME: grayskull
+2024-09-02T07:02:02.1005128Z   SILENT: 0
+2024-09-02T07:02:02.1005479Z   VERBOSE: 1
+2024-09-02T07:02:02.1005842Z ##[endgroup]
+2024-09-02T07:02:02.2351038Z Syncing repository: tenstorrent/tt-metal
+2024-09-02T07:02:02.2352996Z ##[group]Getting Git version info
+2024-09-02T07:02:02.2353990Z Working directory is '/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal'
+2024-09-02T07:02:02.2354973Z [command]/usr/bin/git version
+2024-09-02T07:02:02.2355540Z git version 2.25.1
+2024-09-02T07:02:02.2356824Z [command]/usr/bin/git lfs version
+2024-09-02T07:02:02.2400794Z git-lfs/2.9.2 (GitHub; linux amd64; go 1.13.5)
+2024-09-02T07:02:02.2421346Z ##[endgroup]
+2024-09-02T07:02:02.2453084Z Temporarily overriding HOME='/home/ubuntu/actions-runner-2/_work/_temp/df598ef7-b870-4cb2-ac1e-55b0ec0e10ab' before making global git config changes
+2024-09-02T07:02:02.2455849Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:02.2458774Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal
+2024-09-02T07:02:02.2516400Z [command]/usr/bin/git config --local --get remote.origin.url
+2024-09-02T07:02:02.2546012Z https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:02.2575873Z ##[group]Removing previously created refs, to avoid conflicts
+2024-09-02T07:02:02.2584343Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+2024-09-02T07:02:02.2611777Z refs/heads/hyungsuk/remove_unnecessary_double_semicolons
+2024-09-02T07:02:02.2630368Z [command]/usr/bin/git checkout --detach
+2024-09-02T07:02:02.3669213Z HEAD is now at de148d2e #12127: remove unnecessary double semicolons
+2024-09-02T07:02:02.4318289Z [command]/usr/bin/git branch --delete --force hyungsuk/remove_unnecessary_double_semicolons
+2024-09-02T07:02:02.4370591Z Deleted branch hyungsuk/remove_unnecessary_double_semicolons (was de148d2e).
+2024-09-02T07:02:02.4519967Z ##[endgroup]
+2024-09-02T07:02:02.4523752Z [command]/usr/bin/git submodule status
+2024-09-02T07:02:02.4985264Z  7b11d073376b905b46edaa757f0bfde5c38a9636 models/demos/t3000/llama2_70b/reference/llama (heads/main)
+2024-09-02T07:02:02.5081844Z  2ba5a2973915aa1c5afbf6f1524e87e0c43bc058 tt_metal/third_party/lfs (heads/main)
+2024-09-02T07:02:02.5186380Z  b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84 tt_metal/third_party/pybind11 (b8f2855)
+2024-09-02T07:02:02.5295761Z  3008daa0abc9f37fe757aa8ac7fee26f410947bb tt_metal/third_party/sfpi (remotes/origin/HEAD)
+2024-09-02T07:02:02.5398979Z  7d9e85b6b2e9bf501021f857f2f3cbe43bc37c85 tt_metal/third_party/taskflow (7d9e85b)
+2024-09-02T07:02:02.5505990Z  71d4c8d378b52af7da7012b9b595a61e9304f0bb tt_metal/third_party/tracy (71d4c8d)
+2024-09-02T07:02:02.5610613Z  b3d5095528537db52e069b0daa54aaee2e609437 tt_metal/third_party/tt_llk_blackhole (remotes/origin/HEAD)
+2024-09-02T07:02:02.5714924Z  c31765c694399ef82ae634019881fe8c431223de tt_metal/third_party/tt_llk_grayskull (heads/main)
+2024-09-02T07:02:02.5819749Z  035329c69a984c48c562054dc1618b19ea47e543 tt_metal/third_party/tt_llk_wormhole_b0 (remotes/origin/HEAD)
+2024-09-02T07:02:02.5916073Z  9d60964a8fe304dca5f6444d3b70b3b5c1a75967 tt_metal/third_party/umd (9d60964)
+2024-09-02T07:02:02.5933417Z ##[group]Cleaning the repository
+2024-09-02T07:02:02.5954393Z [command]/usr/bin/git clean -ffdx
+2024-09-02T07:02:03.1365421Z Removing .cpmcache/
+2024-09-02T07:02:03.1366458Z Removing build/
+2024-09-02T07:02:03.1367214Z Removing runtime/
+2024-09-02T07:02:03.1368171Z Removing ttm_grayskull.tar
+2024-09-02T07:02:03.1369084Z Removing ttnn/ttnn/_ttnn.so
+2024-09-02T07:02:03.1387086Z [command]/usr/bin/git reset --hard HEAD
+2024-09-02T07:02:03.1759150Z HEAD is now at de148d2e #12127: remove unnecessary double semicolons
+2024-09-02T07:02:03.1768606Z ##[endgroup]
+2024-09-02T07:02:03.1771653Z ##[group]Disabling automatic garbage collection
+2024-09-02T07:14:59.3338769Z build/test/tt_eager/tensors/test_host_device_loopback
+2024-09-02T07:14:59.3340495Z build/test/tt_eager/tensors/test_async_tensor_apis
+2024-09-02T07:14:59.3345958Z build/test/tt_eager/tensors/test_copy_and_move
+2024-09-02T07:14:59.3348204Z build/test/tt_eager/integration_tests/
+2024-09-02T07:14:59.3348990Z build/test/tt_eager/integration_tests/test_bert
+2024-09-02T07:14:59.3353802Z build/tools/
+2024-09-02T07:14:59.3354289Z build/tools/watcher_dump
+2024-09-02T07:14:59.3356319Z runtime/
+2024-09-02T07:14:59.3356882Z runtime/hw/
+2024-09-02T07:14:59.3357423Z runtime/hw/toolchain/
+2024-09-02T07:14:59.3357983Z runtime/hw/toolchain/trisc1.ld
+2024-09-02T07:14:59.3358590Z runtime/hw/toolchain/ierisc.ld
+2024-09-02T07:14:59.3359190Z runtime/hw/toolchain/trisc0.ld
+2024-09-02T07:14:59.3359814Z runtime/hw/toolchain/ncrisc.ld
+2024-09-02T07:14:59.3360491Z runtime/hw/toolchain/brisc.ld
+2024-09-02T07:14:59.3361082Z runtime/hw/toolchain/trisc2.ld
+2024-09-02T07:14:59.3361654Z runtime/hw/lib/
+2024-09-02T07:14:59.3362145Z runtime/hw/lib/noc.o
+2024-09-02T07:14:59.3362666Z runtime/hw/lib/substitutes.o
+2024-09-02T07:14:59.3363428Z runtime/hw/lib/tmu-crt0.o
+2024-09-02T07:14:59.3364062Z runtime/hw/lib/tmu-crt0k.o
+2024-09-02T07:14:59.3364622Z runtime/hw/lib/tdma_xmov.o
+2024-09-02T07:14:59.3365275Z runtime/hw/lib/ncrisc-halt.o
+2024-09-02T07:14:59.3508881Z ##[group]Run actions/upload-artifact@v4
+2024-09-02T07:14:59.3509338Z with:
+2024-09-02T07:14:59.3509638Z   name: TTMetal_build_grayskull
+2024-09-02T07:14:59.3510053Z   path: ttm_grayskull.tar
+2024-09-02T07:14:59.3510439Z   if-no-files-found: warn
+2024-09-02T07:14:59.3510808Z   compression-level: 6
+2024-09-02T07:14:59.3511174Z   overwrite: false
+2024-09-02T07:14:59.3511485Z env:
+2024-09-02T07:14:59.3511764Z   TT_METAL_ENV: dev
+2024-09-02T07:14:59.3512108Z   ARCH_NAME: grayskull
+2024-09-02T07:14:59.3512445Z   SILENT: 0
+2024-09-02T07:14:59.3512742Z   VERBOSE: 1
+2024-09-02T07:14:59.3513227Z   TT_METAL_HOME: /home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal
+2024-09-02T07:14:59.3513811Z ##[endgroup]
+2024-09-02T07:14:59.6021781Z With the provided path, there will be 1 file uploaded
+2024-09-02T07:14:59.6027385Z Artifact name is valid!
+2024-09-02T07:14:59.6028269Z Root directory input is valid!
+2024-09-02T07:14:59.8198545Z Beginning upload of artifact content to blob storage
+2024-09-02T07:15:02.5095497Z Uploaded bytes 8388608
+2024-09-02T07:15:04.1748360Z Uploaded bytes 16777216
+2024-09-02T07:15:05.8717542Z Uploaded bytes 25165824
+2024-09-02T07:15:08.0610211Z Uploaded bytes 33554432
+2024-09-02T07:15:09.3798877Z Uploaded bytes 41943040
+2024-09-02T07:15:09.7537933Z Uploaded bytes 45509595
+2024-09-02T07:15:09.8219413Z Finished uploading artifact content to blob storage!
+2024-09-02T07:15:09.8225164Z SHA256 hash of uploaded artifact zip is 40325e4107aefa5f436243d0c641c5d2c0dc22221e842238211897cc997aad59
+2024-09-02T07:15:09.8227129Z Finalizing artifact upload
+2024-09-02T07:15:10.0155061Z Artifact TTMetal_build_grayskull.zip successfully finalized. Artifact ID 1880964329
+2024-09-02T07:15:10.0157377Z Artifact TTMetal_build_grayskull has been successfully uploaded! Final size is 45509595 bytes. Artifact ID is 1880964329
+2024-09-02T07:15:10.0166568Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/10662355710/artifacts/1880964329
+﻿2024-09-02T07:15:10.0433157Z Post job cleanup.
+2024-09-02T07:15:10.0510234Z Post job cleanup.
+2024-09-02T07:15:10.1540914Z [command]/usr/bin/git version
+2024-09-02T07:15:10.1607200Z git version 2.25.1
+2024-09-02T07:15:10.1698123Z Temporarily overriding HOME='/home/ubuntu/actions-runner-2/_work/_temp/e10dcc88-8be0-4076-a809-ec93283aea69' before making global git config changes
+2024-09-02T07:15:10.1700833Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:15:10.1704441Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal
+2024-09-02T07:15:10.1753006Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:15:10.1801665Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:15:10.2154761Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:15:10.2213068Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:15:10.2272319Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:15:10.2337050Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:15:10.2404603Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:15:10.2476465Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:15:10.2541670Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:15:10.2605161Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:15:10.2665354Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:15:10.2728881Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:15:10.2791919Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:15:10.2887524Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:15:10.2915512Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.2933954Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-02T07:15:10.2981358Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:15:10.3312573Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:15:10.3347371Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.3395725Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:15:10.3431855Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.3478893Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:15:10.3516478Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.3563626Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:15:10.3598664Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.3652989Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:15:10.3688533Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.3740851Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:15:10.3776925Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.3824463Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:15:10.3861702Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.3904289Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:15:10.3940248Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.3987834Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:15:10.4022079Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.4067173Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:15:10.4102905Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.4148800Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:15:10.4185432Z http.https://github.com/.extraheader
+2024-09-02T07:15:10.4575009Z Cleaning up orphan processes

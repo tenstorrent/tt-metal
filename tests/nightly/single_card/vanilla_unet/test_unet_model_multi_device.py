@@ -1,0 +1,1 @@
+../../../../models/demos/vision/segmentation/vanilla_unet/tests/test_unet_model_multi_device.py

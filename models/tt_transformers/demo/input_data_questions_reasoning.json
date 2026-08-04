@@ -1,0 +1,20 @@
+[
+  {
+    "prompt": "Find all integer solutions (x, y) to the equation x^2 - 3y^2 = 1."
+  },
+  {
+    "prompt": "Find the least odd prime factor of 2019^8 + 1"
+  },
+  {
+    "prompt": "Compose a maximally-catchy piece of piano music; the left hand should only play chords and the right hand a simple melody. The song should get stuck in the listener's head for days."
+  },
+  {
+    "prompt": "Compose the most beautiful and maximally-elegant haiku that captures the poignancy of the human condition; think carefully about how to make sure it packs the maximum possible emotional punch for the reader."
+  },
+  {
+    "prompt": "A fair coin is tossed 8 times.  What is the probability (in simplest fractional form) of getting exactly 5 heads?"
+  },
+  {
+    "prompt": "How many 7-digit integers have digits strictly increasing from left to right? (For example, 1234567 is valid, 1357899 is not because of the repeated 9.)"
+  }
+]

@@ -1,0 +1,200 @@
+﻿2024-09-02T07:01:58.2815536Z Current runner version: '2.319.1'
+2024-09-02T07:01:58.2821739Z Runner name: 'tt-metal-ci-bm-e03cs02'
+2024-09-02T07:01:58.2822624Z Runner group name: 'Default'
+2024-09-02T07:01:58.2823480Z Machine name: 'e03cs02'
+2024-09-02T07:01:58.2840536Z Testing runner upgrade compatibility
+2024-09-02T07:01:58.3485563Z ##[group]GITHUB_TOKEN Permissions
+2024-09-02T07:01:58.3489698Z Actions: read
+2024-09-02T07:01:58.3490862Z Contents: read
+2024-09-02T07:01:58.3491945Z Metadata: read
+2024-09-02T07:01:58.3493142Z Pages: write
+2024-09-02T07:01:58.3494136Z ##[endgroup]
+2024-09-02T07:01:58.3501280Z Secret source: Actions
+2024-09-02T07:01:58.3502959Z Prepare workflow directory
+2024-09-02T07:01:58.4652364Z Prepare all required actions
+2024-09-02T07:01:58.4875892Z Getting action download info
+2024-09-02T07:01:58.6571721Z Download action repository 'tenstorrent-metal/metal-workflows@v2.0.0' (SHA:22c747950076e4c9627125e14734e287c08287a7)
+2024-09-02T07:01:59.2284123Z Getting action download info
+2024-09-02T07:01:59.3657004Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:01:59.9600719Z Uses: tenstorrent/tt-metal/.github/workflows/build.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:01:59.9604428Z Complete job name: build / RelWithDebInfo clang++-17 grayskull ubuntu-20.04
+2024-09-02T07:02:00.0810232Z A job started hook has been configured by the self-hosted runner administrator
+2024-09-02T07:02:00.0980484Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/grayskull/reset.sh'
+2024-09-02T07:02:00.0997649Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-02T07:02:00.0998467Z ##[endgroup]
+2024-09-02T07:02:00.1284079Z Current date / time is Mon Sep 2 07:02:00 UTC 2024
+2024-09-02T07:02:00.7631255Z tt-smi reset was successful
+2024-09-02T07:02:01.2281714Z 
+2024-09-02T07:02:01.2283805Z [95m Detected Chips: [93m1[0m
+2024-09-02T07:02:01.2306273Z [1A[J
+2024-09-02T07:02:01.2307333Z [95m Detected Chips: [93m1[0m
+2024-09-02T07:02:01.2308033Z 
+2024-09-02T07:02:01.2308701Z [94m Detecting ARC: [93m|[0m
+2024-09-02T07:02:01.2309382Z 
+2024-09-02T07:02:01.2309860Z [94m Detecting DRAM: [93m|[0m
+2024-09-02T07:02:01.2310484Z 
+2024-09-02T07:02:01.2310956Z  [95m[][94m ETH: [93m|[0m
+2024-09-02T07:02:01.2311908Z [4A[J
+2024-09-02T07:02:01.2313133Z [95m Detected Chips: [93m2[0m
+2024-09-02T07:02:01.2333137Z [1A[J
+2024-09-02T07:02:01.2334154Z [95m Detected Chips: [93m2[0m
+2024-09-02T07:02:01.2334840Z 
+2024-09-02T07:02:01.2335318Z [94m Detecting ARC: [93m/[0m
+2024-09-02T07:02:01.2335985Z 
+2024-09-02T07:02:01.2336548Z [94m Detecting DRAM: [93m/[0m
+2024-09-02T07:02:01.2337196Z 
+2024-09-02T07:02:01.2337688Z  [95m[][94m ETH: [93m/[0m
+2024-09-02T07:02:01.2338649Z [4A[J
+2024-09-02T07:02:01.2339538Z [95m Detected Chips: [93m3[0m
+2024-09-02T07:02:01.2351291Z [1A[J
+2024-09-02T07:02:01.2352279Z [95m Detected Chips: [93m3[0m
+2024-09-02T07:02:01.2352956Z 
+2024-09-02T07:02:01.2353566Z [94m Detecting ARC: [93m-[0m
+2024-09-02T07:02:01.2354219Z 
+2024-09-02T07:02:01.2354673Z [94m Detecting DRAM: [93m-[0m
+2024-09-02T07:02:01.2355355Z 
+2024-09-02T07:02:01.2355780Z  [95m[][94m ETH: [93m-[0m
+2024-09-02T07:02:01.2356788Z [4A[J
+2024-09-02T07:02:01.2357630Z [95m Detected Chips: [93m4[0m
+2024-09-02T07:02:01.2373342Z [1A[J
+2024-09-02T07:02:01.2374445Z [95m Detected Chips: [93m4[0m
+2024-09-02T07:02:01.2375169Z 
+2024-09-02T07:02:01.2375609Z [94m Detecting ARC: [93m\[0m
+2024-09-02T07:02:01.2376223Z 
+2024-09-02T07:02:01.2376744Z [94m Detecting DRAM: [93m\[0m
+2024-09-02T07:02:01.2377401Z 
+2024-09-02T07:02:01.2377860Z  [95m[][94m ETH: [93m\[0m
+2024-09-02T07:02:01.2378741Z [4A[J
+2024-09-02T07:02:01.2379597Z [95m Detected Chips: [93m5[0m
+2024-09-02T07:02:01.2439262Z [1A[J
+2024-09-02T07:02:01.2441060Z [95m Detected Chips: [93m5[0m
+2024-09-02T07:02:01.2442124Z 
+2024-09-02T07:02:01.2442645Z [94m Detecting ARC: [93m|[0m
+2024-09-02T07:02:01.2443605Z 
+2024-09-02T07:02:01.2444054Z [94m Detecting DRAM: [93m|[0m
+2024-09-02T07:02:01.2446127Z 
+2024-09-02T07:02:01.2446653Z  [95m[][94m ETH: [93m|[0m
+2024-09-02T07:02:01.2447973Z [4A[J
+2024-09-02T07:02:01.2448928Z [95m Detected Chips: [93m6[0m
+2024-09-02T07:02:01.2461906Z [1A[J
+2024-09-02T07:02:01.2463372Z [95m Detected Chips: [93m6[0m
+2024-09-02T07:02:01.2464120Z 
+2024-09-02T07:02:01.2464668Z [94m Detecting ARC: [93m/[0m
+2024-09-02T07:02:01.2465303Z 
+2024-09-02T07:02:01.2465828Z [94m Detecting DRAM: [93m/[0m
+2024-09-02T07:02:01.2466443Z 
+2024-09-02T07:02:01.2466949Z  [95m[][94m ETH: [93m/[0m
+2024-09-02T07:02:01.2467909Z [4A[J
+2024-09-02T07:02:01.2468884Z [95m Detected Chips: [93m7[0m
+2024-09-02T07:02:01.2506724Z [1A[J
+2024-09-02T07:02:01.2507807Z [95m Detected Chips: [93m7[0m
+2024-09-02T07:02:01.2508513Z 
+2024-09-02T07:02:01.2508985Z [94m Detecting ARC: [93m-[0m
+2024-09-02T07:02:01.2509795Z 
+2024-09-02T07:02:01.2510245Z [94m Detecting DRAM: [93m-[0m
+2024-09-02T07:02:01.2510868Z 
+2024-09-02T07:02:01.2511347Z  [95m[][94m ETH: [93m-[0m
+2024-09-02T07:02:01.2512269Z [4A[J
+2024-09-02T07:02:01.2513197Z [95m Detected Chips: [93m8[0m
+2024-09-02T07:02:01.2603955Z [1A[J
+2024-09-02T07:02:01.2605360Z [95m Detected Chips: [93m8[0m
+2024-09-02T07:13:04.4963658Z /dev/loop5                          92M   92M     0 100% /snap/lxd/24061
+2024-09-02T07:13:04.4965030Z /dev/loop6                         2.0G   70M  2.0G   4% /opt/weka/logs
+2024-09-02T07:13:04.4966492Z tmpfs                              252G  8.0K  252G   1% /opt/weka/data/agent/tmpfss/cleanup
+2024-09-02T07:13:04.4969511Z tmpfs                              252G  367M  252G   1% /opt/weka/data/agent/tmpfss/client-persistent-tmpfs
+2024-09-02T07:13:04.4971479Z tmpfs                              252G  4.0K  252G   1% /opt/weka/data/agent/tmpfss/cleanup_before_stop_and_delete
+2024-09-02T07:13:04.4973159Z MLPerf                              25T   14T   12T  55% /mnt/MLPerf
+2024-09-02T07:13:04.4974668Z /dev/loop15                         92M   92M     0 100% /snap/lxd/29619
+2024-09-02T07:13:04.5111403Z Post job cleanup.
+2024-09-02T07:13:04.5166787Z Post job cleanup.
+2024-09-02T07:13:04.6268170Z [command]/usr/bin/git version
+2024-09-02T07:13:04.6331065Z git version 2.25.1
+2024-09-02T07:13:04.6429999Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/9b6209b3-e769-4b9e-8255-ef906692c621' before making global git config changes
+2024-09-02T07:13:04.6432710Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:13:04.6437086Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:13:04.6497523Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:13:04.6548482Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:13:04.6936998Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:13:04.7003826Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:13:04.7075859Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:13:04.7142937Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:13:04.7216195Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:13:04.7291596Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:13:04.7355817Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:13:04.7424675Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:13:04.7495169Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:13:04.7560365Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:13:04.7629705Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:13:04.7734771Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:13:04.7766493Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.7788295Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-02T07:13:04.7839051Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:13:04.8213538Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:13:04.8252935Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.8305896Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:13:04.8344072Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.8392987Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:13:04.8432119Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.8480254Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:13:04.8520928Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.8577234Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:13:04.8617676Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.8679872Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:13:04.8721332Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.8771062Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:13:04.8811011Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.8861726Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:13:04.8899210Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.8949815Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:13:04.8989671Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.9039026Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:13:04.9080434Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.9129024Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:13:04.9166541Z http.https://github.com/.extraheader
+2024-09-02T07:13:04.9372939Z A job completed hook has been configured by the self-hosted runner administrator
+2024-09-02T07:13:04.9428776Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/grayskull/cleanup.sh'
+2024-09-02T07:13:04.9453010Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-02T07:13:04.9454453Z ##[endgroup]
+2024-09-02T07:13:04.9512518Z Current date / time is Mon Sep 2 07:13:04 UTC 2024
+2024-09-02T07:13:04.9513706Z Printing out cpu information...
+2024-09-02T07:13:04.9940592Z Architecture:                       x86_64
+2024-09-02T07:13:04.9942214Z CPU op-mode(s):                     32-bit, 64-bit
+2024-09-02T07:13:04.9943686Z Byte Order:                         Little Endian
+2024-09-02T07:13:04.9945039Z Address sizes:                      43 bits physical, 48 bits virtual
+2024-09-02T07:13:04.9946264Z CPU(s):                             96
+2024-09-02T07:13:04.9947371Z On-line CPU(s) list:                0-95
+2024-09-02T07:13:04.9948440Z Thread(s) per core:                 2
+2024-09-02T07:13:04.9949515Z Core(s) per socket:                 24
+2024-09-02T07:13:04.9950476Z Socket(s):                          2
+2024-09-02T07:13:04.9951402Z NUMA node(s):                       2
+2024-09-02T07:13:04.9952400Z Vendor ID:                          AuthenticAMD
+2024-09-02T07:13:04.9953503Z CPU family:                         23
+2024-09-02T07:13:04.9954445Z Model:                              49
+2024-09-02T07:13:04.9955756Z Model name:                         AMD EPYC 7352 24-Core Processor
+2024-09-02T07:13:04.9956961Z Stepping:                           0
+2024-09-02T07:13:04.9957931Z Frequency boost:                    enabled
+2024-09-02T07:13:04.9958982Z CPU MHz:                            1448.770
+2024-09-02T07:13:04.9960052Z CPU max MHz:                        2300.0000
+2024-09-02T07:13:04.9961106Z CPU min MHz:                        1500.0000
+2024-09-02T07:13:04.9962151Z BogoMIPS:                           4599.54
+2024-09-02T07:13:04.9963230Z Virtualization:                     AMD-V
+2024-09-02T07:13:04.9964290Z L1d cache:                          1.5 MiB
+2024-09-02T07:13:04.9965332Z L1i cache:                          1.5 MiB
+2024-09-02T07:13:04.9966372Z L2 cache:                           24 MiB
+2024-09-02T07:13:04.9967606Z L3 cache:                           256 MiB
+2024-09-02T07:13:04.9968818Z NUMA node0 CPU(s):                  0-23,48-71
+2024-09-02T07:13:04.9970039Z NUMA node1 CPU(s):                  24-47,72-95
+2024-09-02T07:13:04.9971230Z Vulnerability Gather data sampling: Not affected
+2024-09-02T07:13:04.9972456Z Vulnerability Itlb multihit:        Not affected
+2024-09-02T07:13:04.9973634Z Vulnerability L1tf:                 Not affected
+2024-09-02T07:13:04.9974822Z Vulnerability Mds:                  Not affected
+2024-09-02T07:13:04.9975957Z Vulnerability Meltdown:             Not affected
+2024-09-02T07:13:04.9977149Z Vulnerability Mmio stale data:      Not affected
+2024-09-02T07:13:04.9978342Z Vulnerability Retbleed:             Vulnerable
+2024-09-02T07:13:04.9980134Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2024-09-02T07:13:04.9982473Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2024-09-02T07:13:04.9985368Z Vulnerability Spectre v2:           Mitigation; Retpolines, IBPB conditional, IBRS_FW, STIBP conditional, RSB filling, PBRSB-eIBRS Not affected
+2024-09-02T07:13:04.9987459Z Vulnerability Srbds:                Not affected
+2024-09-02T07:13:04.9988627Z Vulnerability Tsx async abort:      Not affected
+2024-09-02T07:13:04.9999045Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr wbnoinvd arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif umip rdpid overflow_recov succor smca sme sev sev_es
+2024-09-02T07:13:05.0221619Z Cleaning up orphan processes

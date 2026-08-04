@@ -1,0 +1,92 @@
+# This file defines the test matrix for the T3000 profiler tests pipeline.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: Function name from tests/scripts/t3000/run_t3000_profiler_tests.sh.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: T3000 mid-run device data dump
+  cmd: run_mid_run_data_dump
+  skus:
+    wh_llmbox:
+      timeout: 8
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 async tracing resnet50 (legacy vs runtime comparison)
+  cmd: run_async_tracing_T3000_test
+  skus:
+    wh_llmbox:
+      timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 async tracing resnet50 (mid-run dump cross-comparison)
+  cmd: run_async_tracing_mid_run_dump_T3000_test
+  skus:
+    wh_llmbox:
+      timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 CCL AllGather profiling
+  cmd: run_ccl_T3000_test
+  skus:
+    wh_llmbox:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 trace-only resnet50
+  cmd: run_trace_only_resnet
+  skus:
+    wh_llmbox:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 multi-host tracy smoke
+  cmd: run_multi_host_tracy_smoke
+  skus:
+    wh_llmbox:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 device profiler regressions
+  cmd: run_device_profiler_test
+  skus:
+    wh_llmbox:
+      timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 perf op report
+  cmd: run_perf_op_report_test
+  skus:
+    wh_llmbox:
+      timeout: 8
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 process_ops_logs
+  cmd: run_process_ops_logs_test
+  skus:
+    wh_llmbox:
+      timeout: 5
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 tracy wasm gui HTTP integration
+  cmd: run_tracy_wasm_gui_http_integration
+  skus:
+    wh_llmbox:
+      timeout: 8
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285

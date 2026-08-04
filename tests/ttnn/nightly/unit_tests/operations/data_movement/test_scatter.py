@@ -1,0 +1,639 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+import ttnn
+
+from tests.ttnn.utils_for_testing import assert_allclose
+
+
+def select_torch_dtype(ttnn_dtype):
+    if ttnn_dtype is ttnn.bfloat16:
+        return torch.bfloat16
+    if ttnn_dtype is ttnn.float32:
+        return torch.float32
+    if ttnn_dtype is ttnn.uint8:
+        return torch.uint8
+    if ttnn_dtype is ttnn.uint16:
+        return torch.int64
+    if ttnn_dtype is ttnn.int32:
+        return torch.int64
+    if ttnn_dtype is ttnn.uint32:
+        return (
+            torch.int64
+        )  # !!! there is a strict requirement for the index tensor in Torch to be int64, and there is no int64 in ttnn
+
+
+def rand_permutations(shape, dim, dtype):
+    r = torch.rand(*shape)
+    return torch.argsort(r, dim=dim).to(dtype)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout",
+    [
+        ([1], 0, [1], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
+        ([100], 0, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
+        ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
+        ([2, 2, 2, 2, 2, 2, 2, 2], -1, [2, 2, 2, 2, 2, 2, 2, 2], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        ([1, 128256], -1, [1, 128256], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        ([50, 200], 0, [50, 200], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        ##################
+        # these cases fail due to the to_layout precision issue (fp32 tiled <-> row-major) : #23405
+        # ([10, 50, 10, 50, 100], -1, [10, 50, 10, 50, 100], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        # ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        # ([10, 50, 10, 50, 100], 0, [10, 50, 10, 50, 100], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        # ([2, 30, 200], 0, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        ##################
+        # these cases fail due to the to_layout integer issue (integer dtype size>256 tiled -> row-major): #23407
+        # ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        # ([100, 151936], -1, [100, 151936], ttnn.float32, ttnn.int32, ttnn.Layout.TILE),
+        # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        # ([1, 151936], -1, [1, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
+        # ([100, 151936], -1, [100, 151936], ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE),
+        # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
+    ],
+)
+def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device):
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+    torch_index_dtype = select_torch_dtype(index_dtype)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+
+    torch_index = torch.randint(0, input_shape[dim], index_and_source_shape, dtype=torch_index_dtype)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+
+    torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, index_shape, source_shape, input_dtype, index_dtype, layout, expected_num_cache_entries",
+    [
+        ([100], -1, [80], [90], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 8),
+        ([6, 8, 200], -1, [2, 5, 100], [3, 40, 1000], ttnn.float32, ttnn.uint32, ttnn.Layout.ROW_MAJOR, 2),
+        ([1, 3 * 151936], -1, [1, 2 * 151936], [2, 5 * 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 2),
+        # ([1, 3 * 151936], -1, [1, 3 * 151936], [2, 4 * 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 2),
+        ([2, 2, 100000], 0, [1, 2, 80000], [4, 4, 80001], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 6),
+        (
+            [2, 2, 100000],
+            1,
+            [1, 2, 79000],
+            [4, 4, 180001],
+            ttnn.bfloat16,
+            ttnn.int32,
+            ttnn.Layout.ROW_MAJOR,
+            6,
+        ),
+        ([50, 20], 0, [50, 20], [200, 80], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 5),
+        ([10, 10, 10], 1, [2, 30, 10], [2, 30, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 8),
+        ([10, 30, 6, 10], -1, [2, 30, 6, 5], [2, 30, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 2),
+        ([10, 30, 6, 10], 2, [2, 30, 6, 5], [2, 30, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 6),
+        ([50, 200], 0, [49, 199], [51, 201], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 10),
+        ([10, 20], 0, [9, 19], [11, 21], ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE, 10),
+    ],
+)
+def test_scatter_partial(
+    input_shape, dim, index_shape, source_shape, input_dtype, index_dtype, layout, expected_num_cache_entries, device
+):
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+
+    torch_index = torch.randint(0, input_shape[dim], index_shape)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+
+    torch_src = torch.randn(source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    if torch_dtype is torch.float32:
+        assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+    else:
+        assert_allclose(torch_result_from_ttnn, torch_result)
+    assert device.num_program_cache_entries() == expected_num_cache_entries
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, expected_num_cache_entries",
+    [
+        ([100], -1, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 5),
+        ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR, 1),
+        ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 5),
+        ([2, 2, 2, 2, 2, 2, 2, 2], -1, [2, 2, 2, 2, 2, 2, 2, 2], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR, 1),
+        ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR, 3),
+        ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 1),
+        ([50, 20], 0, [50, 20], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 4),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 6),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 6),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
+        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 7),
+        ##################
+        # these cases fail due to the to_layout precision issue (fp32 tiled <-> row-major) : #23405
+        # ([10, 50, 10, 50, 100], -1, [10, 50, 10, 50, 100], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        # ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        # ([10, 50, 10, 50, 100], 0, [10, 50, 10, 50, 100], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        # ([2, 30, 200], 0, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        ##################
+        # these cases fail due to the to_layout integer issue (integer dtype size>256 tiled -> row-major): #23407
+        # ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        # ([100, 151936], -1, [100, 151936], ttnn.float32, ttnn.int32, ttnn.Layout.TILE),
+        # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        # ([1, 151936], -1, [1, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
+        # ([100, 151936], -1, [100, 151936], ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE),
+        # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
+    ],
+)
+def test_scatter_normal_with_callback(
+    input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, expected_num_cache_entries, device
+):
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+    torch_index_dtype = select_torch_dtype(index_dtype)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+
+    torch_index = rand_permutations(index_and_source_shape, dim, torch_index_dtype)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+
+    torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+    for _ in range(2):
+        torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+        ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+        torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+        assert torch_result_from_ttnn.shape == torch_result.shape
+        assert torch_result_from_ttnn.dtype == torch_result.dtype
+        if torch_dtype is torch.float32:
+            assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+        else:
+            assert_allclose(torch_result_from_ttnn, torch_result)
+    assert device.num_program_cache_entries() == expected_num_cache_entries
+
+
+##### !!!! WARNING !!!! #####
+##### DO NOT FEED CORE RANGE SETS CONTAINING ONLY **ONE** CORE INSIDE - split_work_to_cores DOES NOT HANDLE THAT GRACEFULLY!!!
+@pytest.mark.parametrize(
+    "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, sub_core_grids, expected_num_cache_entries",
+    [
+        ([100], -1, [80], ttnn.int32, ttnn.uint16, ttnn.Layout.ROW_MAJOR, None, 1),
+        (
+            [2, 30, 200],
+            -1,
+            [2, 30, 200],
+            ttnn.int32,
+            ttnn.uint16,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+            1,
+        ),
+        (
+            [1, 1, 20, 20, 200],
+            -1,
+            [1, 1, 20, 20, 20],
+            ttnn.int32,
+            ttnn.uint16,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(4, 3)),
+                ]
+            ),
+            1,
+        ),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.int32, ttnn.int32, ttnn.Layout.ROW_MAJOR, None, 2),
+        (
+            [10, 10, 10, 10, 10],
+            2,
+            [10, 10, 10, 10, 10],
+            ttnn.int32,
+            ttnn.int32,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 4), ttnn.CoreCoord(3, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(6, 5)),
+                ]
+            ),
+            2,
+        ),
+        (
+            [50, 200],
+            0,
+            [50, 200],
+            ttnn.int32,
+            ttnn.int32,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 4), ttnn.CoreCoord(3, 5)),
+                ]
+            ),
+            3,
+        ),
+        (
+            [32, 128 * 1024],
+            1,
+            [32, 128 * 1024],
+            ttnn.int32,
+            ttnn.int32,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+            1,
+        ),
+    ],
+)
+def test_scatter_reduction_row_major_int32_with_callback_and_sub_cores(
+    input_shape,
+    dim,
+    index_and_source_shape,
+    input_dtype,
+    index_dtype,
+    layout,
+    sub_core_grids,
+    expected_num_cache_entries,
+    device,
+):
+    torch.manual_seed(0)
+
+    torch_dtype = torch.float32
+
+    torch_input = torch.randint(0, input_shape[dim], input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+
+    torch_index = torch.randint(0, input_shape[dim], index_and_source_shape, dtype=torch.int64)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+
+    torch_src = torch.randint(0, input_shape[dim], index_and_source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+    for _ in range(2):
+        torch_result = torch.scatter_add(torch_input, dim, index=torch_index, src=torch_src)
+        ttnn_result = ttnn.scatter_add(ttnn_input, dim, ttnn_index, ttnn_src, sub_core_grids=sub_core_grids)
+
+        torch_result_from_ttnn = ttnn.to_torch(ttnn_result).to(torch.int64)
+        assert torch_result_from_ttnn.shape == torch_result.shape
+        if torch_dtype is torch.float32:
+            assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+        else:
+            assert_allclose(torch_result_from_ttnn, torch_result)
+    assert device.num_program_cache_entries() == expected_num_cache_entries
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, reduction, expected_num_cache_entries",
+    [
+        ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR, "add", 1),
+        (
+            [2, 2, 2, 2, 2, 2, 2, 2],
+            -1,
+            [2, 2, 2, 2, 2, 2, 2, 2],
+            ttnn.float32,
+            ttnn.uint16,
+            ttnn.Layout.ROW_MAJOR,
+            "multiply",
+            1,
+        ),
+        ([50, 20], 0, [50, 20], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, "add", 4),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, "add", 3),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, "multiply", 3),
+        ([100], -1, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, "add", 5),
+        ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, "add", 5),
+        ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR, "multiply", 3),
+        ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, "add", 1),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, "multiply", 6),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, "add", 6),
+        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, "add", 7),
+    ],
+)
+def test_scatter_reduction(
+    input_shape,
+    dim,
+    index_and_source_shape,
+    input_dtype,
+    index_dtype,
+    layout,
+    reduction,
+    expected_num_cache_entries,
+    device,
+):
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+
+    torch_index = torch.randint(0, input_shape[dim], index_and_source_shape)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+
+    torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src, reduce=reduction)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src, reduce=reduction)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    if torch_dtype is torch.float32:
+        assert_allclose(torch_result_from_ttnn, torch_result, atol=0.1, rtol=1e-2)
+    else:
+        assert_allclose(torch_result_from_ttnn, torch_result)
+    assert device.num_program_cache_entries() == expected_num_cache_entries
+
+
+@pytest.mark.parametrize(
+    "dim, input_shape, index_shape, source_shape, torch_dtype, input_dtype, index_dtype, source_dtype",
+    [
+        (
+            10,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+        ),  # input_rank vs dim
+        (
+            -10,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+        ),  # input_rank vs dim
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+        ),  # index_shape vs source_shape
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+        ),  # index_dtype is integer
+    ],
+)
+def test_scatter_failing_cases(
+    dim,
+    input_shape,
+    index_shape,
+    source_shape,
+    torch_dtype,
+    input_dtype,
+    index_dtype,
+    source_dtype,
+    device,
+):
+    torch.manual_seed(0)
+    torch_index_dtype = select_torch_dtype(index_dtype)
+    torch_source_dtype = select_torch_dtype(source_dtype)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    max_range = input_shape[dim] if (-len(input_shape) <= dim and dim < len(input_shape)) else 1
+    torch_index = torch.randint(0, max_range, index_shape, dtype=torch_index_dtype)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_src = torch.randn(source_shape, dtype=torch_source_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=source_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    with pytest.raises(RuntimeError):
+        ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+
+@pytest.mark.parametrize(
+    "input_shape, index_and_source_shape",
+    [
+        ([1, 1, 32, 32], [1, 1, 32, 32]),
+        ([1, 1, 320, 384], [1, 1, 320, 384]),
+        ([1, 3, 32, 32], [1, 3, 32, 32]),
+        ([1, 1, 32, 32], [1, 1, 64, 64]),
+        ([1, 1, 320, 320], [1, 1, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_scatter_forge(input_shape, index_and_source_shape, input_dtype, device):
+    import math
+
+    if math.prod(input_shape[:-1]) != math.prod(index_and_source_shape[:-1]):
+        pytest.xfail(
+            f"unsupported shapes configuration: input_shape has a non-last dimension of a different length than index_and_source_shape ({math.prod(input_shape[:-1])} vs {math.prod(index_and_source_shape[:-1])})"
+        )
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+    torch_index_dtype = select_torch_dtype(ttnn.int32)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_index = torch.randint(0, input_shape[-1], index_and_source_shape, dtype=torch_index_dtype)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_result = torch.scatter(torch_input, -1, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, -1, ttnn_index, ttnn_src)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    if torch_dtype is torch.float32:
+        assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+    else:
+        assert_allclose(torch_result_from_ttnn, torch_result)
+
+
+@pytest.mark.parametrize("shape", [(100,), (4, 128), (2, 3, 4), (1, 2, 3, 4)])
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_scatter_negative_dim(device, shape, dim, dtype):
+    """
+    Regression test for negative dimension support in ttnn.scatter.
+    Verifies that negative dimension values work correctly and match PyTorch behavior.
+    Includes 1D tensors to cover the logical_shape vs padded_shape bug (PR #41762).
+    """
+    # Skip invalid dim combinations (e.g., dim=-2 for 1D tensor)
+    if abs(dim) > len(shape):
+        pytest.skip(f"dim={dim} invalid for rank={len(shape)} tensor")
+
+    torch_input = torch.rand(shape, dtype=dtype)
+
+    # Create index and source tensors for scattering
+    index_shape = list(shape)
+    index_shape[dim] = min(index_shape[dim], 2)  # Scatter subset
+    torch_index = torch.randint(0, shape[dim], index_shape, dtype=torch.int32)
+    torch_source = torch.rand(index_shape, dtype=dtype)
+
+    # PyTorch reference with negative dim
+    torch_output_neg = torch_input.clone()
+    torch_output_neg.scatter_(dim, torch_index.long(), torch_source)
+
+    # Convert to ttnn using the matching test dtype
+    torch_to_ttnn_dtype = {
+        torch.bfloat16: ttnn.bfloat16,
+        torch.float32: ttnn.float32,
+    }
+    ttnn_dtype = torch_to_ttnn_dtype[dtype]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_index = ttnn.from_torch(torch_index, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_source = ttnn.from_torch(torch_source, device=device, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # Test with negative dim
+    ttnn_output = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_source)
+    output = ttnn.to_torch(ttnn_output)
+
+    assert (
+        output.shape == torch_output_neg.shape
+    ), f"Output shape {output.shape} does not match expected {torch_output_neg.shape}"
+    # Use tighter tolerance for float32 as per existing scatter tests
+    rtol = 1e-3 if dtype == torch.float32 else 1e-2
+    assert_allclose(torch_output_neg, output, rtol=rtol)
+
+
+@pytest.mark.parametrize(
+    "shape,dim",
+    [
+        ((100,), -1),  # 1D tensor (regression for PR #41762)
+        ((4, 128), -1),  # Last dimension
+        ((4, 128), -2),  # First dimension
+        ((2, 3, 4), -1),  # 3D tensor, last dim
+        ((2, 3, 4), -2),  # 3D tensor, middle dim
+        ((2, 3, 4), -3),  # 3D tensor, first dim
+    ],
+)
+def test_scatter_negative_dim_equals_positive(device, shape, dim):
+    """
+    Verify that negative and positive dim produce identical results.
+    Includes 1D tensors to cover the logical_shape vs padded_shape bug (PR #41762).
+    """
+    positive_dim = len(shape) + dim
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    index_shape = list(shape)
+    index_shape[dim] = min(index_shape[dim], 2)
+    torch_index = torch.randint(0, shape[dim], index_shape, dtype=torch.int32)
+    torch_source = torch.rand(index_shape, dtype=torch.bfloat16)
+
+    # Get results for both negative and positive dims
+    torch_output_neg = torch_input.clone()
+    torch_output_neg.scatter_(dim, torch_index.long(), torch_source)
+
+    torch_output_pos = torch_input.clone()
+    torch_output_pos.scatter_(positive_dim, torch_index.long(), torch_source)
+
+    # Verify PyTorch results match
+    assert torch.allclose(torch_output_neg, torch_output_pos)
+
+    # Test ttnn
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_index = ttnn.from_torch(torch_index, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_source = ttnn.from_torch(torch_source, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    ttnn_output_neg = ttnn.to_torch(ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_source))
+
+    ttnn_input_pos = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_output_pos = ttnn.to_torch(ttnn.scatter(ttnn_input_pos, positive_dim, ttnn_index, ttnn_source))
+
+    assert_allclose(ttnn_output_neg, ttnn_output_pos, rtol=1e-3)
+    assert_allclose(torch_output_neg, ttnn_output_neg, rtol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "shape,index_shape",
+    [
+        ((100,), (80,)),  # 1D tensor
+        ((50,), (50,)),  # 1D tensor, full scatter
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_scatter_1d_tile_layout_negative_dim(device, shape, index_shape, dtype):
+    """
+    Regression test for PR #41762: 1D tensors in TILE_LAYOUT with negative dim.
+
+    The bug was that dim normalization used padded_shape().rank() instead of
+    logical_shape().rank(). For a 1D tensor [100] in TILE_LAYOUT, the padded
+    shape becomes [1, 128] (rank 2), causing dim=-1 to normalize to 1 instead
+    of 0, which then fails validation.
+    """
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16
+
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+    torch_index = torch.randint(0, shape[0], index_shape, dtype=torch.int64)
+    torch_src = torch.randn(index_shape, dtype=torch_dtype)
+
+    # PyTorch reference with dim=-1 (should be equivalent to dim=0 for 1D)
+    torch_result = torch.scatter(torch_input, dim=-1, index=torch_index, src=torch_src)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # This would fail before PR #41762 with:
+    # "dim must follow the condition -input_rank <= dim < input_rank (dim: 1, rank: 1)"
+    ttnn_result = ttnn.scatter(ttnn_input, -1, ttnn_index, ttnn_src)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert result.shape == torch_result.shape
+    assert_allclose(result, torch_result)

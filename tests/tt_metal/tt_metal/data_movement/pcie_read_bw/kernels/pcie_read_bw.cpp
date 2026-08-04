@@ -1,0 +1,34 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "api/compile_time_args.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
+
+void kernel_main() {
+    constexpr uint32_t num_of_transactions = get_named_compile_time_arg_val("num_transactions");
+    constexpr uint32_t bytes_per_transaction = get_named_compile_time_arg_val("bytes_per_tx");
+    constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
+    constexpr uint32_t packed_subordinate_core_coordinates = get_named_compile_time_arg_val("sub_coords");
+    constexpr uint32_t pcie_l1_local_addr = get_named_compile_time_arg_val("pcie_l1_addr");
+    constexpr uint32_t l1_local_addr = get_named_compile_time_arg_val("l1_addr");
+    constexpr uint32_t clock_freq_mhz = get_named_compile_time_arg_val("clock_freq_mhz");
+
+    uint32_t pcie_x_coord = packed_subordinate_core_coordinates >> 16;
+    uint32_t pcie_y_coord = packed_subordinate_core_coordinates & 0xFFFF;
+
+    uint64_t noc_addr = NOC_XY_PCIE_ENCODING(pcie_x_coord, pcie_y_coord) | pcie_l1_local_addr;
+    {
+        DeviceZoneScopedN("RISCV0");
+        for (uint32_t i = 0; i < num_of_transactions; i++) {
+            noc_async_read(noc_addr, l1_local_addr, bytes_per_transaction);
+        }
+        noc_async_read_barrier();
+    }
+
+    DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
+    DeviceTimestampedData("Clock frequency MHz", clock_freq_mhz);
+}

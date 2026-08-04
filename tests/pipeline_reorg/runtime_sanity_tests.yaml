@@ -1,0 +1,113 @@
+# This file defines the test matrix for the Runtime sanity tests.
+# These are a small curated subset of the most critical runtime tests,
+# designed to run quickly (<15 min) as a health check.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# --- Dispatch: RandomizeProgram (core dispatch health check) ---
+- name: runtime_sanity_dispatch
+  cmd: |
+    [ "$ARCH_NAME" = "wormhole_b0" ] && export TT_METAL_GTEST_ETH_DISPATCH=1
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='*RandomProgram*:-*NIGHTLY*'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Device: init, cluster API, mock API (excluding NIGHTLY) ---
+- name: runtime_sanity_device
+  cmd: ./build/test/tt_metal/unit_tests_device --gtest_filter='*:-*NIGHTLY*'
+  skus:
+    wh_n150_civ2:
+      timeout: 3
+    bh_p150b_civ2:
+      timeout: 3
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- API: DRAM R/W + L1 R/W + kernel compile (core API health check) ---
+- name: runtime_sanity_api
+  cmd: ./build/test/tt_metal/unit_tests_api --gtest_filter='*DRAMLoopbackSingleCore*:*TestSimpleL1*:*CompileProgram*'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- BH Multi-Card: System Health ---
+- name: bh_multicard_system_health
+  cmd: ./build/test/tt_metal/tt_fabric/test_system_health
+  skus:
+    bh_loudbox:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# =============================================================================
+# TTSim simulator coverage for runtime C++ unit tests (sim_* SKUs only, no HW).
+# Migrated from .github/workflows/ttsim.yaml; runs under ttsim on ubuntu-latest
+# (the *_galaxy SKUs run on tt-ubuntu-2204-large-stable for the mock 6U cluster).
+# runtime-sanity-tests-impl.yaml invokes setup-ttsim for every sim_* SKU.
+# See .github/actions/setup-ttsim/action.yml and .github/sku_config.yaml.
+#
+# Exclude *TestQuasar fixtures (configure_mock_mode(QUASAR) triggers a dispatch-core
+# assertion in TTSim) and ProgramSpecHWTest.* (real HW tests that time out in TTSim)
+# until they gain TTSim-aware GTEST_SKIP() guards in SetUp().
+# =============================================================================
+- name: runtime_sim_cpp_unit_tests
+  cmd: >-
+    ./build/test/tt_metal/unit_tests_api --gtest_filter='-ProgramRunArgsTestQuasar.*:ProgramSpecTestQuasar.*:ProgramSpecHWTest.*' &&
+    ./build/test/tt_metal/unit_tests_data_movement &&
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='DevicePrintFixture.IdleEthTestPrint' &&
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.TestWatcherRingBufferIErisc' &&
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.TestWatcherStackUsage0' &&
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.TestWatcherStackUsage16' &&
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='MeshDispatchFixture.TensixIdleEthTestSemaphores' &&
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='MeshDispatchFixture.EthTestBlank' &&
+    ./build/test/tt_metal/unit_tests_eth &&
+    ./build/test/tt_metal/unit_tests_legacy
+  skus:
+    sim_wormhole_b0:
+      timeout: 30
+    sim_blackhole:
+      timeout: 30
+  owner_id: U08PR765YJ1 # Matt Craighead
+  team: runtime
+
+- name: runtime_sim_galaxy_cpp_unit_tests (wormhole_b0)
+  cmd: >-
+    TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
+    ./build/test/tt_metal/unit_tests_api --gtest_filter='*StreamRegWrite*' &&
+    TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
+    ./build/test/tt_metal/unit_tests_api --gtest_filter='*InlineWrite*'
+  skus:
+    sim_wormhole_b0_galaxy:
+      timeout: 10
+  owner_id: U08PR765YJ1 # Matt Craighead
+  team: runtime
+
+- name: runtime_sim_galaxy_cpp_unit_tests (blackhole)
+  cmd: >-
+    TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml
+    ./build/test/tt_metal/unit_tests_api --gtest_filter='*StreamRegWrite*' &&
+    TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml
+    ./build/test/tt_metal/unit_tests_api --gtest_filter='*InlineWrite*'
+  skus:
+    sim_blackhole_galaxy:
+      timeout: 10
+  owner_id: U08PR765YJ1 # Matt Craighead
+  team: runtime

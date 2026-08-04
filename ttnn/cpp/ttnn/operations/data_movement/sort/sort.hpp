@@ -1,0 +1,20 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+
+std::vector<Tensor> sort(
+    const Tensor& input_tensor,
+    int8_t dim = -1,
+    bool descending = false,
+    bool stable = false,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors = std::nullopt);
+
+}  // namespace ttnn

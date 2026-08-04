@@ -1,0 +1,34 @@
+---
+test-list:
+  - eltwise-nextafter:
+      shape:
+        start-shape: [1, 1, 32, 32]
+        end-shape: [6, 12, 256, 256]
+        interval: [1, 1, 32, 32]
+        num-dims: [4]
+        num-shapes: 2
+        num-samples: 128
+        args-sampling-strategy: "all"
+      env:
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
+      datagen:
+        function: gen_rand
+        args:
+          low: -100
+          high: 100
+      comparison:
+        function: comp_pcc
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
+      args:
+        inputs:
+          - input-1:
+            data-layout: ["TILE"]
+            data-type: ["BFLOAT16"]
+            buffer-type: ["DRAM", "L1"]
+          - input-2:
+            data-layout: ["TILE"]
+            data-type: ["BFLOAT16", "BFLOAT8_B"]
+            buffer-type: ["DRAM", "L1"]
+        out-buffer-type: ["DRAM", "L1"]
+      output-file: nextafter_sweep.csv

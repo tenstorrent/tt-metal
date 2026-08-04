@@ -1,0 +1,19 @@
+---
+test-list:
+  reduce-sum-w:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 2048, 2048]
+      interval: 32
+      num-shapes: 1
+    datagen:
+      function: gen_checkerboard
+      args:
+        low: 0
+        high: 100
+    comparison:
+      function: comp_allclose
+      args:
+        rtol: 0
+        atol: 0.1
+    output-file: reduce_sum_w_sweep.csv

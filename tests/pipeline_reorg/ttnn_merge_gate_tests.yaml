@@ -1,0 +1,20 @@
+# TTNN merge-gate smoke matrix (subset of former ttnn_sanity_tests.yaml merge_gate entries).
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+#
+# sim_wormhole_b0 / sim_blackhole SKUs run the same cmd under the ttsim simulator
+# on ubuntu-latest; ttnn-smoke-tests-impl.yaml invokes setup-ttsim for these.
+# See .github/actions/setup-ttsim/action.yml.
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
+
+- name: "ttnn example tests"
+  cmd: "./tests/scripts/run_ttnn_examples.sh"
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+    sim_wormhole_b0:
+      timeout: 15
+    sim_blackhole:
+      timeout: 15
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev

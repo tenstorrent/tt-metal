@@ -1,0 +1,137 @@
+---
+test-list:
+  bcast-add-h:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+      method: bcast_h
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bcast_add_h_parallelization_pcc_stresstest_range_32_to_7712.csv
+  bcast-add-w:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+      method: bcast_w
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bcast_add_w_parallelization_pcc_stresstest_range_32_to_7712.csv
+  bcast-add-hw:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+      method: bcast_hw
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bcast_add_hw_parallelization_pcc_stresstest_range_32_to_7712.csv
+  bcast-mul-h:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+      method: bcast_h
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bcast_mul_h_parallelization_pcc_stresstest_range_32_to_7712.csv
+  bcast-mul-w:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+      method: bcast_w
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bcast_mul_w_parallelization_pcc_stresstest_range_32_to_7712.csv
+  bcast-mul-hw:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+      method: bcast_hw
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bcast_mul_hw_parallelization_pcc_stresstest_range_32_to_7712.csv
+  bcast-sub-h:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+      method: bcast_h
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bcast_sub_h_parallelization_pcc_stresstest_range_32_to_7712.csv
+  bcast-sub-w:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+      method: bcast_w
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bcast_sub_w_parallelization_pcc_stresstest_range_32_to_7712.csv
+  bcast-sub-hw:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+      method: bcast_hw
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bcast_sub_hw_parallelization_pcc_stresstest_range_32_to_7712.csv

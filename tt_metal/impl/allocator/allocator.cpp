@@ -1,0 +1,664 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <memory>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/allocator.hpp>
+#include "allocator_state.hpp"
+#include "allocator_types.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <enchantum/enchantum.hpp>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <mutex>
+
+#include <tt_stl/assert.hpp>
+#include "buffer_types.hpp"
+#include "impl/allocator/bank_manager.hpp"
+#include "impl/allocator/allocator_types.hpp"
+#include "impl/trace/trace_buffer.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include "impl/allocator/allocator.hpp"
+
+namespace tt::tt_metal {
+
+AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
+    config_(std::make_unique<AllocatorConfig>(alloc_config)), view_(std::make_unique<Allocator>(this)) {}
+
+void AllocatorImpl::validate_bank_assignments() const {
+    TT_ASSERT(not bank_id_to_dram_channel_.empty() and not dram_channel_to_bank_ids_.empty());
+    TT_ASSERT(dram_channel_to_bank_ids_.size() == config_->num_dram_channels);
+    TT_ASSERT(not bank_id_to_logical_core_.empty() and not logical_core_to_bank_ids_.empty());
+}
+
+void AllocatorImpl::init_one_bank_per_channel() {
+    // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
+    // trace_region_size is the TOTAL trace budget across all DRAM banks (not per-bank). Trace buffers are
+    // interleaved evenly across banks, so each bank reserves ceil(trace_region_size / num_banks). This is
+    // rounded up to a whole multiple of the max trace buffer page size (rather than just dram_alignment) so
+    // that the per-bank reservation always holds a whole number of trace pages: a trace whose total size fits
+    // the budget but whose pages skew onto a subset of banks (interleaving biases the leading pages toward the
+    // low banks) still fits per-bank. The aggregate reserved capacity (per_bank_trace_size * num_banks) is
+    // therefore >= trace_region_size.
+    DeviceAddr per_bank_trace_size = 0;
+    if (config_->trace_region_size > 0) {
+        per_bank_trace_size = round_up(
+            div_up(config_->trace_region_size, static_cast<size_t>(config_->num_dram_channels)), kMaxTraceBufPageSize);
+    }
+    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - per_bank_trace_size;
+    std::vector<int64_t> bank_offsets(config_->num_dram_channels);
+    for (uint32_t channel_id = 0; channel_id < config_->num_dram_channels; channel_id++) {
+        bank_offsets.at(channel_id) = static_cast<int32_t>(config_->dram_bank_offsets.at(channel_id));
+    }
+    dram_manager_ = std::make_unique<BankManager>(
+        BufferType::DRAM,
+        bank_offsets,
+        dram_bank_size,
+        config_->dram_alignment,
+        config_->dram_alignment,
+        config_->dram_unreserved_base,
+        config_->disable_interleaved);
+    for (uint32_t bank_id = 0; bank_id < config_->num_dram_channels; bank_id++) {
+        CoreCoord logical_core = CoreCoord{bank_id, 0};
+        bank_id_to_dram_channel_.insert({bank_id, bank_id});
+        dram_channel_to_bank_ids_.insert({bank_id, {bank_id}});
+        logical_core_to_bank_ids_[BufferType::DRAM].insert({logical_core, {bank_id}});
+    }
+    // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED
+    // offset
+    trace_buffer_manager_ = std::make_unique<BankManager>(
+        BufferType::TRACE,
+        bank_offsets,
+        per_bank_trace_size,
+        config_->dram_alignment,
+        config_->dram_alignment,
+        dram_bank_size + config_->dram_unreserved_base,
+        config_->disable_interleaved);
+    for (uint32_t bank_id = 0; bank_id < config_->num_dram_channels; bank_id++) {
+        CoreCoord logical_core = CoreCoord{bank_id, 0};
+        bank_id_to_dram_channel_.insert({bank_id, bank_id});
+        dram_channel_to_bank_ids_.insert({bank_id, {bank_id}});
+        logical_core_to_bank_ids_[BufferType::TRACE].insert({logical_core, {bank_id}});
+    }
+}
+
+void AllocatorImpl::init_one_bank_per_l1() {
+    TT_ASSERT(config_->l1_small_size == 0);
+    uint32_t num_l1_banks = config_->worker_grid.num_cores();
+    // Space up to L1 unreserved base is reserved for risc binaries, kernel args, debug and perf monitoring tools
+    DeviceAddr l1_bank_size = config_->worker_l1_size - config_->l1_unreserved_base;
+    std::vector<int64_t> bank_offsets(num_l1_banks, 0);
+    l1_manager_ = std::make_unique<BankManager>(
+        BufferType::L1,
+        bank_offsets,
+        l1_bank_size,
+        config_->l1_alignment,
+        config_->dram_alignment,
+        config_->l1_unreserved_base,
+        config_->disable_interleaved);
+
+    uint32_t bank_id = 0;
+    const auto& cores = corerange_to_cores(config_->worker_grid, std::nullopt, true);
+    for (const auto& logical_core : cores) {
+        bank_id_to_logical_core_.insert({bank_id, logical_core});
+        logical_core_to_bank_ids_[BufferType::L1].insert({logical_core, {bank_id}});
+        bank_id++;
+    }
+}
+
+void AllocatorImpl::verify_safe_allocation() const {
+    // Inform the user that its unsafe to allocate buffers when a trace is live on device.
+    // If the user does this, they are meant to ensure that buffers allocated when a trace is active,
+    // have a lifetime that ends before the trace is executed.
+    // Print the warning once per device, to ensure that user output is not clobbered.
+    thread_local static bool warning_generated = false;
+    if (allocations_unsafe_ and not warning_generated) {
+        log_warning(
+            tt::LogMetal,
+            "Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be "
+            "corrupted once a trace is executed.");
+        warning_generated = true;
+    }
+}
+
+DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    DeviceAddr address = 0;
+    auto size = buffer->aligned_size();
+    auto page_size = buffer->aligned_page_size();
+    auto buffer_type = buffer->buffer_type();
+    auto bottom_up = buffer->bottom_up();
+    auto num_cores = buffer->num_cores();
+    this->verify_safe_allocation();
+    if (config_->disable_interleaved) {
+        TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
+    }
+
+    // Per-core allocation path: each core gets an independent address
+    if (buffer->per_core_allocation_) {
+        TT_FATAL(
+            config_->allocator_mode == AllocatorMode::HYBRID,
+            "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");
+        const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
+        bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+        auto cores = corerange_to_cores(grid, std::nullopt, row_major);
+        TT_FATAL(!cores.empty(), "per_core_allocation: shard grid resolved to zero cores");
+        DeviceAddr alloc_size = buffer->aligned_size_per_bank();
+
+        std::unordered_map<CoreCoord, DeviceAddr> addrs;
+        for (const auto& core : cores) {
+            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            addrs[core] = l1_manager_->allocate_buffer(
+                alloc_size, page_size, bottom_up, config_->compute_grid, /*num_shards=*/1, AllocatorID{bank_id + 1});
+        }
+        buffer->set_per_core_addresses(std::move(addrs));
+        allocated_buffers_.insert(buffer);
+        return buffer->per_core_addresses_.at(cores[0]);
+    }
+
+    switch (buffer_type) {
+        case BufferType::DRAM:
+            address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
+            break;
+        case BufferType::L1: {
+            // In HYBRID mode, gather per-bank ranges from device allocators so lockstep avoids occupied regions.
+            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
+            if (!hybrid_device_allocators_.empty()) {
+                using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+                uint32_t num_banks = l1_manager_->num_banks();
+                for (auto* dev_alloc : hybrid_device_allocators_) {
+                    for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+                        auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
+                        additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
+                    }
+                }
+            }
+            address = l1_manager_->allocate_buffer(
+                size,
+                page_size,
+                bottom_up,
+                config_->compute_grid,
+                num_cores,
+                BankManager::AllocatorDependencies::AllocatorID{0},
+                additional_ranges);
+            break;
+        }
+        case BufferType::L1_SMALL: {
+            TT_FATAL(num_cores.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
+            address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
+            break;
+        }
+        case BufferType::TRACE:
+            address =
+                trace_buffer_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
+            break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+    allocated_buffers_.insert(buffer);
+
+    return address;
+}
+
+void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto address = buffer->address();
+    auto buffer_type = buffer->buffer_type();
+
+    // Per-core deallocation path
+    if (buffer->per_core_allocation_) {
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        for (const auto& [core, addr] : buffer->per_core_addresses_) {
+            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
+        }
+        allocated_buffers_.erase(buffer);
+        return;
+    }
+
+    switch (buffer_type) {
+        case BufferType::DRAM: dram_manager_->deallocate_buffer(address); break;
+        case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
+        case BufferType::L1_SMALL: l1_small_manager_->deallocate_buffer(address); break;
+        case BufferType::TRACE: trace_buffer_manager_->deallocate_buffer(address); break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+    allocated_buffers_.erase(buffer);
+}
+
+void AllocatorImpl::deallocate_buffers() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dram_manager_->deallocate_all();
+    l1_manager_->deallocate_all();
+    l1_small_manager_->deallocate_all();
+    trace_buffer_manager_->deallocate_all();
+}
+
+void AllocatorImpl::set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hybrid_device_allocators_ = device_allocators;
+}
+
+void AllocatorImpl::clear_hybrid_device_allocators() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hybrid_device_allocators_.clear();
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto state = l1_manager_->extract_state(allocator_id);
+    return state.allocated_regions;
+}
+
+void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    l1_manager_->mark_allocated(AllocatorID{0}, address, size);
+}
+
+void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    l1_manager_->mark_deallocated(AllocatorID{0}, address);
+}
+
+std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocated_buffers_;
+}
+
+size_t AllocatorImpl::get_num_allocated_buffers() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocated_buffers_.size();
+}
+
+uint32_t AllocatorImpl::get_num_banks(const BufferType& buffer_type) const {
+    // Don't lock mutex_ because the number of banks is a constant and does not change.
+    switch (buffer_type) {
+        case BufferType::DRAM: return dram_manager_->num_banks();
+        case BufferType::L1: return l1_manager_->num_banks();
+        case BufferType::L1_SMALL: return l1_small_manager_->num_banks();
+        case BufferType::TRACE: return trace_buffer_manager_->num_banks();
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+    return 0;
+}
+
+DeviceAddr AllocatorImpl::get_bank_size(const BufferType& buffer_type) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    switch (buffer_type) {
+        case BufferType::DRAM: return dram_manager_->bank_size();
+        case BufferType::L1: return l1_manager_->bank_size();
+        case BufferType::L1_SMALL: return l1_small_manager_->bank_size();
+        case BufferType::TRACE: return trace_buffer_manager_->bank_size();
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+    return 0;
+}
+
+uint32_t AllocatorImpl::get_dram_channel_from_bank_id(uint32_t bank_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_ASSERT(bank_id_to_dram_channel_.contains(bank_id));
+    return bank_id_to_dram_channel_.at(bank_id);
+}
+
+CoreCoord AllocatorImpl::get_logical_core_from_bank_id(uint32_t bank_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_ASSERT(bank_id_to_logical_core_.contains(bank_id));
+    return bank_id_to_logical_core_.at(bank_id);
+}
+
+int32_t AllocatorImpl::get_bank_offset(BufferType buffer_type, uint32_t bank_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    switch (buffer_type) {
+        case BufferType::DRAM: return dram_manager_->bank_offset(bank_id);
+        case BufferType::L1: return l1_manager_->bank_offset(bank_id);
+        case BufferType::L1_SMALL: return l1_small_manager_->bank_offset(bank_id);
+        case BufferType::TRACE: return trace_buffer_manager_->bank_offset(bank_id);
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
+
+const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_dram_channel(uint32_t dram_channel) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!dram_channel_to_bank_ids_.contains(dram_channel)) {
+        TT_THROW("No DRAM bank exists for DRAM channel {}", dram_channel);
+    }
+    return dram_channel_to_bank_ids_.at(dram_channel);
+}
+
+const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_logical_core(
+    BufferType buffer_type, const CoreCoord& logical_core) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!logical_core_to_bank_ids_.at(buffer_type).contains(logical_core)) {
+        TT_THROW("No {} bank exists for core {}", enchantum::to_string(buffer_type), logical_core.str());
+    }
+    return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);
+}
+
+const AllocatorConfig& AllocatorImpl::get_config() const { return *config_; }
+
+uint32_t AllocatorImpl::get_alignment(BufferType buffer_type) const {
+    switch (buffer_type) {
+        case BufferType::DRAM:
+        case BufferType::TRACE: return config_->dram_alignment;
+        case BufferType::L1:
+        case BufferType::L1_SMALL: return config_->l1_alignment;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
+
+size_t AllocatorImpl::get_worker_l1_size() const { return config_->worker_l1_size; }
+
+DeviceAddr AllocatorImpl::get_base_allocator_addr(const HalMemType& mem_type) const {
+    switch (mem_type) {
+        case HalMemType::DRAM: return config_->dram_unreserved_base;
+        case HalMemType::L1: return config_->l1_unreserved_base;
+        default: {
+            TT_THROW("Allocator does not support allocating in {}", enchantum::to_string(mem_type));
+        }
+    }
+    return 0;
+}
+
+Statistics AllocatorImpl::get_statistics(const BufferType& buffer_type) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    Statistics stats;
+    switch (buffer_type) {
+        case BufferType::DRAM: return dram_manager_->get_statistics();
+        case BufferType::L1: return l1_manager_->get_statistics();
+        case BufferType::L1_SMALL: return l1_small_manager_->get_statistics();
+        case BufferType::TRACE: return trace_buffer_manager_->get_statistics();
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+    return stats;
+}
+
+MemoryBlockTable AllocatorImpl::get_memory_block_table(const BufferType& buffer_type) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    switch (buffer_type) {
+        case BufferType::DRAM: return dram_manager_->get_memory_block_table();
+        case BufferType::L1: return l1_manager_->get_memory_block_table();
+        case BufferType::L1_SMALL: return l1_small_manager_->get_memory_block_table();
+        case BufferType::TRACE: return trace_buffer_manager_->get_memory_block_table();
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
+
+void AllocatorImpl::dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    switch (buffer_type) {
+        case BufferType::DRAM: dram_manager_->dump_blocks(out); break;
+        case BufferType::L1: l1_manager_->dump_blocks(out); break;
+        case BufferType::L1_SMALL: l1_small_manager_->dump_blocks(out); break;
+        case BufferType::TRACE: trace_buffer_manager_->dump_blocks(out); break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
+
+std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_address(uint32_t bank_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    auto lowest = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{0});
+    // In HYBRID mode, also check this bank's per-core allocator (AllocatorID{bank_id + 1}), since it may
+    // have occupied a lower address range in this bank.
+    if (config_->allocator_mode == AllocatorMode::HYBRID) {
+        auto per_core = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{bank_id + 1});
+        if (per_core.has_value()) {
+            lowest = lowest.has_value() ? std::make_optional(std::min(*lowest, *per_core)) : per_core;
+        }
+    }
+    return lowest;
+}
+
+void AllocatorImpl::shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    switch (buffer_type) {
+        case BufferType::DRAM: dram_manager_->shrink_size(shrink_size, bottom_up); break;
+        case BufferType::L1: l1_manager_->shrink_size(shrink_size, bottom_up); break;
+        case BufferType::L1_SMALL: l1_small_manager_->shrink_size(shrink_size, bottom_up); break;
+        case BufferType::TRACE: trace_buffer_manager_->shrink_size(shrink_size, bottom_up); break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
+
+void AllocatorImpl::reset_allocator_size(const BufferType& buffer_type) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    switch (buffer_type) {
+        case BufferType::DRAM: dram_manager_->reset_size(); break;
+        case BufferType::L1: l1_manager_->reset_size(); break;
+        case BufferType::L1_SMALL: l1_small_manager_->reset_size(); break;
+        case BufferType::TRACE: trace_buffer_manager_->reset_size(); break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
+
+void AllocatorImpl::mark_allocations_unsafe() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    allocations_unsafe_ = true;
+}
+
+void AllocatorImpl::mark_allocations_safe() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    allocations_unsafe_ = false;
+}
+
+void AllocatorImpl::begin_dram_high_water_mark_tracking() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dram_manager_->begin_high_water_mark_tracking();
+}
+
+DeviceAddr AllocatorImpl::end_dram_high_water_mark_tracking() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->end_high_water_mark_tracking();
+}
+
+DeviceAddr AllocatorImpl::get_dram_high_water_mark() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_high_water_mark();
+}
+
+DeviceAddr AllocatorImpl::get_dram_allocation_high_water_mark() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_allocation_high_water_mark();
+}
+
+DeviceAddr AllocatorImpl::get_dram_deletion_high_water_mark() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_deletion_high_water_mark();
+}
+
+void AllocatorImpl::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dram_manager_->clear();
+    l1_manager_->clear();
+    l1_small_manager_->clear();
+    trace_buffer_manager_->clear();
+}
+
+void AllocatorConfig::reset() {
+    dram_bank_offsets.clear();
+    core_type_from_noc_coord_table.clear();
+    worker_log_to_virtual_routing_x.clear();
+    worker_log_to_virtual_routing_y.clear();
+    l1_bank_remap.clear();
+}
+
+AllocatorImpl::~AllocatorImpl() {
+    bank_id_to_dram_channel_.clear();
+    dram_channel_to_bank_ids_.clear();
+    bank_id_to_logical_core_.clear();
+    for (auto& [buffer_type, submap] : logical_core_to_bank_ids_) {
+        submap.clear();
+    }
+
+    dram_manager_->clear();
+    l1_manager_->clear();
+    l1_small_manager_->clear();
+    trace_buffer_manager_->clear();
+    allocated_buffers_.clear();
+}
+
+AllocatorState AllocatorImpl::extract_state() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto* buf : allocated_buffers_) {
+        TT_FATAL(!buf->per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
+    }
+
+    std::unordered_map<BufferType, AllocatorState::BufferTypeState> states_per_buffer_type;
+
+    // Extract state for each supported buffer type
+    constexpr std::array<BufferType, 4> BUFFER_TYPES = {
+        BufferType::DRAM, BufferType::L1, BufferType::L1_SMALL, BufferType::TRACE};
+
+    for (const auto& buffer_type : BUFFER_TYPES) {
+        const BankManager* manager = nullptr;
+        switch (buffer_type) {
+            case BufferType::DRAM: manager = dram_manager_.get(); break;
+            case BufferType::L1: manager = l1_manager_.get(); break;
+            case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+            case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+            default: continue;
+        }
+
+        if (manager) {
+            auto buffer_type_state = manager->extract_state(BankManager::AllocatorDependencies::AllocatorID{0});
+            states_per_buffer_type[buffer_type] = std::move(buffer_type_state);
+        }
+    }
+
+    // Copy allocated buffer pointers
+    std::vector<Buffer*> all_allocated_buffers(allocated_buffers_.begin(), allocated_buffers_.end());
+    return AllocatorState(std::move(states_per_buffer_type), std::move(all_allocated_buffers));
+}
+
+void AllocatorImpl::override_state(const AllocatorState& state) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto* buf : allocated_buffers_) {
+        TT_FATAL(!buf->per_core_allocation_, "override_state does not yet support per-core L1 allocations");
+    }
+
+    // Clear all buffer types
+    dram_manager_->deallocate_all();
+    l1_manager_->deallocate_all();
+    l1_small_manager_->deallocate_all();
+    trace_buffer_manager_->deallocate_all();
+    allocated_buffers_.clear();
+
+    // Apply state for each buffer type
+    for (const auto& [buffer_type, type_state] : state.get_states_per_buffer_type()) {
+        BankManager* manager = nullptr;
+        switch (buffer_type) {
+            case BufferType::DRAM: manager = dram_manager_.get(); break;
+            case BufferType::L1: manager = l1_manager_.get(); break;
+            case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+            case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+            case BufferType::SYSTEM_MEMORY: TT_THROW("Unsupported buffer type: {}", enchantum::to_string(buffer_type));
+        }
+
+        if (manager) {
+            manager->override_state(type_state, BankManager::AllocatorDependencies::AllocatorID{0});
+        }
+    }
+}
+
+const std::unique_ptr<Allocator>& AllocatorImpl::view() const { return view_; };
+
+namespace detail {
+
+DeviceAddr calculate_bank_size_spread(
+    DeviceAddr size_bytes, DeviceAddr page_size_bytes, uint32_t num_banks, uint32_t alignment_bytes) {
+    TT_ASSERT(
+        page_size_bytes == 0 ? size_bytes == 0 : size_bytes % page_size_bytes == 0,
+        "Page size {} should be divisible by buffer size {}",
+        page_size_bytes,
+        size_bytes);
+    DeviceAddr num_pages = page_size_bytes == 0 ? 0 : size_bytes / page_size_bytes;
+    DeviceAddr num_equally_distributed_pages = num_pages == 0 ? 0 : 1 + ((num_pages - 1) / num_banks);
+    return num_equally_distributed_pages * round_up(page_size_bytes, static_cast<DeviceAddr>(alignment_bytes));
+}
+
+}  // namespace detail
+
+// External facing Allocator
+Allocator::Allocator(AllocatorImpl* _impl) : impl(_impl) {}
+
+void Allocator::deallocate_buffers() { impl->deallocate_buffers(); }
+
+std::unordered_set<Buffer*> Allocator::get_allocated_buffers() const { return impl->get_allocated_buffers(); }
+
+uint32_t Allocator::get_num_banks(const BufferType& buffer_type) const { return impl->get_num_banks(buffer_type); }
+
+DeviceAddr Allocator::get_bank_size(const BufferType& buffer_type) const { return impl->get_bank_size(buffer_type); }
+
+CoreCoord Allocator::get_logical_core_from_bank_id(uint32_t bank_id) const {
+    return impl->get_logical_core_from_bank_id(bank_id);
+}
+
+int32_t Allocator::get_bank_offset(BufferType buffer_type, uint32_t bank_id) const {
+    return impl->get_bank_offset(buffer_type, bank_id);
+}
+
+const std::vector<uint32_t>& Allocator::get_bank_ids_from_logical_core(
+    BufferType buffer_type, const CoreCoord& logical_core) const {
+    return impl->get_bank_ids_from_logical_core(buffer_type, logical_core);
+}
+
+DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const {
+    return impl->get_base_allocator_addr(mem_type);
+}
+
+uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl->get_alignment(buffer_type); }
+
+Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl->get_statistics(buffer_type); }
+
+AllocatorState Allocator::extract_state() const { return impl->extract_state(); }
+
+void Allocator::override_state(const AllocatorState& state) { impl->override_state(state); }
+
+size_t Allocator::get_worker_l1_size() const { return impl->get_worker_l1_size(); }
+
+}  // namespace tt::tt_metal
+
+namespace tt::tt_metal::experimental {
+
+void synchronize_allocator_state(Allocator* target, const std::vector<Allocator*>& sources) {
+    AllocatorState merged_state;
+    for (auto* source : sources) {
+        merged_state.merge(source->extract_state());
+    }
+    target->override_state(merged_state);
+}
+
+}  // namespace tt::tt_metal::experimental

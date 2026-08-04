@@ -1,0 +1,158 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+
+import torch
+
+import ttnn
+
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
+from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
+
+bfloat4_pcc = 0.960
+torch.manual_seed(0)
+
+
+def is_ttnn_float_type(tt_dtype) -> bool:
+    match tt_dtype:
+        case ttnn.bfloat16 | ttnn.float32 | ttnn.bfloat8_b | ttnn.bfloat4_b:
+            return True
+        case _:
+            return False
+
+
+def get_types_from_binding_framwork():
+    if hasattr(ttnn.DataType, "_member_map_"):
+        # nanobind
+        ALL_TYPES = [
+            dtype
+            for _, dtype in ttnn.DataType._member_map_.items()
+            # skipping FP8_E4M3 for now, until it is fully supported in tt-metal
+            if dtype != ttnn.DataType.INVALID and dtype != ttnn.DataType.FP8_E4M3
+        ]
+        FLOAT_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if is_ttnn_float_type(dtype)]
+    else:
+        raise Exception("test_to_dtype.py: ttnn.DataType has unexpected way of holding values. Not matching nanobind.")
+
+    return ALL_TYPES, FLOAT_TYPES
+
+
+ALL_TYPES, FLOAT_TYPES = get_types_from_binding_framwork()
+
+
+@pytest.mark.parametrize("height", [32])
+@pytest.mark.parametrize("width", [32])
+@pytest.mark.parametrize("to_dtype", ALL_TYPES)
+@pytest.mark.parametrize("from_dtype", ALL_TYPES)
+def test_to_dtype(height, width, from_dtype, to_dtype):
+    torch_input_tensor = torch.randint(0, 10, (height, width), dtype=tt_dtype_to_torch_dtype[from_dtype])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    output_tensor = ttnn.to_dtype(input_tensor, to_dtype)
+
+    assert output_tensor.dtype == to_dtype
+    assert tuple(output_tensor.shape) == (height, width)
+    if to_dtype == ttnn.bfloat8_b or to_dtype == ttnn.bfloat4_b:
+        assert output_tensor.layout == ttnn.TILE_LAYOUT
+    else:
+        assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    # integers 0-9 are exactly representable in BFP8 (shared exponent), so exact equality holds for bf8
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
+    if to_dtype == ttnn.bfloat4_b:
+        assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc)
+    else:
+        assert_equal(torch_input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("height", [32])
+@pytest.mark.parametrize("width", [32])
+@pytest.mark.parametrize("to_dtype", FLOAT_TYPES)
+@pytest.mark.parametrize("from_dtype", FLOAT_TYPES)
+def test_to_float_dtype(height, width, from_dtype, to_dtype):
+    torch_input_tensor = torch.rand((height, width), dtype=tt_dtype_to_torch_dtype[from_dtype])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    output_tensor = ttnn.to_dtype(input_tensor, to_dtype)
+
+    assert output_tensor.dtype == to_dtype
+    assert tuple(output_tensor.shape) == (height, width)
+    if to_dtype == ttnn.bfloat8_b or to_dtype == ttnn.bfloat4_b:
+        assert output_tensor.layout == ttnn.TILE_LAYOUT
+    else:
+        assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
+    # bf8/bf4/float32 all use torch.float internally
+    if to_dtype == ttnn.bfloat16 and from_dtype != ttnn.bfloat16:
+        assert_with_ulp(
+            torch_input_tensor.to(torch.bfloat16),
+            output_tensor.to(torch.bfloat16),
+            ulp_threshold=1,
+        )
+    else:
+        # bf8 atol=0.008: rand([0,1)) input; bf8 ULP in this range is ~2^-7 ≈ 0.0078
+        assert_quality(torch_input_tensor, output_tensor, to_dtype, bf4_pcc=bfloat4_pcc, bf8_atol=0.008)
+
+
+@pytest.mark.parametrize("height", [36])
+@pytest.mark.parametrize("width", [36])
+@pytest.mark.parametrize("to_dtype", ALL_TYPES)
+@pytest.mark.parametrize("from_dtype", ALL_TYPES)
+def test_to_dtype_unaligned_shape(height, width, from_dtype, to_dtype):
+    if (
+        from_dtype == ttnn.bfloat4_b
+        or from_dtype == ttnn.bfloat8_b
+        or to_dtype == ttnn.bfloat4_b
+        or to_dtype == ttnn.bfloat8_b
+    ):
+        pytest.skip("bfloat4_b and bfloat8_b require align shape divisible by tile")
+
+    torch_input_tensor = torch.randint(0, 10, (height, width), dtype=tt_dtype_to_torch_dtype[from_dtype])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    output_tensor = ttnn.to_dtype(input_tensor, to_dtype)
+
+    assert output_tensor.dtype == to_dtype
+    assert tuple(output_tensor.shape) == (height, width)
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    # integers 0-9 are exactly representable in BFP8 (shared exponent), so exact equality holds for bf8
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
+    if to_dtype == ttnn.bfloat4_b:
+        assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc)
+    else:
+        assert_equal(torch_input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("height", [32])
+@pytest.mark.parametrize("width", [32])
+@pytest.mark.parametrize("to_dtype", ALL_TYPES)
+@pytest.mark.parametrize("from_dtype", ALL_TYPES)
+def test_to_dtype_with_tile_layout(height, width, from_dtype, to_dtype):
+    torch_input_tensor = torch.randint(0, 10, (height, width), dtype=tt_dtype_to_torch_dtype[from_dtype])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
+    assert input_tensor.layout == ttnn.TILE_LAYOUT
+
+    output_tensor = ttnn.to_dtype(input_tensor, to_dtype)
+
+    assert output_tensor.dtype == to_dtype
+    assert tuple(output_tensor.shape) == (height, width)
+    assert output_tensor.layout == ttnn.TILE_LAYOUT
+
+    # integers 0-9 are exactly representable in BFP8 (shared exponent), so exact equality holds for bf8
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
+    if to_dtype == ttnn.bfloat4_b:
+        assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc)
+    else:
+        assert_equal(torch_input_tensor, output_tensor)

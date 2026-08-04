@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Usage:
+    inspector_data [--inspector-rpc-port=<inspector_rpc_port>] [--inspector-rpc-host=<inspector_rpc_host>] [--inspector-disable-rank] [--inspector-log-path=<inspector_log_path>]
+
+Options:
+    --inspector-rpc-port=<inspector_rpc_port>  Port for the inspector RPC server. [default: 50051]
+    --inspector-rpc-host=<inspector_rpc_host>  Host for the inspector RPC server. [default: localhost]
+    --inspector-log-path=<inspector_log_path>  Path to the inspector log directory.
+    --inspector-disable-rank                   If you want to manually connect to the RPC and do not want rank to be automatically added to the RPC port and log directory.
+
+Description:
+    Provides inspector data for other scripts.
+    This script will try to connect to Inspector RPC.
+    If RPC is not available, it will try to load serialized RPC data from the log directory.
+    If RPC data is not available, it will try to parse inspector logs.
+
+Owner:
+    tt-vjovanovic
+"""
+
+from triage import triage_singleton, ScriptConfig, TTTriageError, log_warning, run_script
+from parse_inspector_logs import get_log_directory
+import asyncio
+import atexit
+import capnp
+import os
+import threading
+import inspector_capnp
+
+script_config = ScriptConfig(
+    data_provider=True,
+)
+
+InspectorData = inspector_capnp.Inspector
+
+
+class InspectorException(TTTriageError):
+    pass
+
+
+class InspectorRpcRemoteException(InspectorException):
+    pass
+
+
+class InspectorRpcController(InspectorData):
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.running = None
+        self.queue: asyncio.Queue[object | None] = asyncio.Queue()
+        self.loop = asyncio.new_event_loop()
+        self.task = self.loop.create_task(self.__connect_client())
+        self.background_thread = threading.Thread(target=self.__asyncio_background)
+        self.background_thread.daemon = True
+        self.background_thread.start()
+        while not self.running:
+            if self.task.done():
+                self.stop()
+                exception = self.task.exception()
+                assert exception is not None
+                raise exception
+        # The asyncio loop runs on a daemon thread. If that thread is still
+        # alive at interpreter shutdown, CPython curtails finalization and
+        # nanobind reports its still-registered objects (ELF/DWARF/frame
+        # wrappers held by cached data providers) as leaked. Since this
+        # controller is cached for the whole run, __del__ won't fire in time,
+        # so stop the loop and join the thread via atexit instead.
+        atexit.register(self.stop)
+
+    def __del__(self):
+        if self.running:
+            self.stop()
+
+    def __asyncio_background(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    async def __connect_client(self):
+        try:
+            # `capnp` is a compiled extension module; its async/RPC API and the dynamically loaded
+            # `capnp_scheme` are invisible to static checkers but exist at runtime.
+            async with capnp.kj_loop():  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+                try:
+                    connection = await capnp.AsyncIoStream.create_connection(host=self.host, port=self.port)
+                    client = capnp.TwoPartyClient(connection)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+                    self.inspector_rpc = client.bootstrap().cast_as(inspector_capnp.capnp_scheme.Inspector)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+                    self.running = True
+                except:
+                    self.loop.stop()
+                    raise
+                while True:
+                    request = await self.queue.get()
+
+                    # If the request is None, stop has been initiated
+                    if request is None:
+                        self.running = False
+                        break
+
+        finally:
+            self.loop.stop()
+
+    async def __call_rpc(self, method_name: str, *args, **kwargs):
+        if not self.running:
+            raise RuntimeError("RPC client is not running")
+
+        method = getattr(self.inspector_rpc, method_name)
+        return await method(*args, **kwargs)
+
+    REMOTE_EXCEPTION_TEXT_START = "remote exception: e.what() = "
+
+    def __getattr__(self, name: str):
+        def method(*args, **kwargs):
+            try:
+                return asyncio.run_coroutine_threadsafe(self.__call_rpc(name, *args, **kwargs), self.loop).result()
+            except capnp.lib.capnp.KjException as e:  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+                if e.description.startswith(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START):
+                    message = e.description[len(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START) :]
+                    raise InspectorRpcRemoteException(message)
+
+        return method
+
+    async def __async_stop(self):
+        await self.queue.put(None)
+
+    def stop(self):
+        if self.running:
+            asyncio.run_coroutine_threadsafe(self.__async_stop(), self.loop).result()
+            self.background_thread.join()
+
+
+class InspectorUnserializedMethod(InspectorException):
+    pass
+
+
+class InspectorRpcSerialized(InspectorData):
+    def __init__(self, directory: str):
+        self.__directory = directory
+        self.__methods = inspector_capnp.capnp_scheme.Inspector.schema.methods  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        if not os.path.exists(directory) or not os.path.exists(os.path.join(directory, "getPrograms.capnp.bin")):
+            raise ValueError(f"Serialized RPC data not found in directory {directory}")
+
+    def __getattr__(self, method_name: str):
+        if method_name in self.__methods:
+            serialized_path = os.path.join(self.__directory, f"{method_name}.capnp.bin")
+            if not os.path.exists(serialized_path):
+                raise InspectorUnserializedMethod(
+                    f"Serialized file for method {method_name} not found at {serialized_path}"
+                )
+            method_name_cap = method_name[0].upper() + method_name[1:]
+            with open(serialized_path, "rb") as f:
+                results_schema = self.__methods[method_name].result_type
+                results_name = f"{method_name_cap}Results"
+                results_struct = capnp.lib.capnp._StructModule(results_schema, results_name)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+                message = results_struct.read_packed(f)
+                method = lambda: message
+                setattr(self, method_name, method)
+                return method
+        else:
+            raise AttributeError(f"Method {method_name} not found in Inspector RPC interface")
+
+    def stop(self):
+        # Do nothing
+        pass
+
+
+# TODO: parse_inspector_logs types should have different field names and different return types (not dictionary, but named tuple with array of elements)
+
+
+@triage_singleton
+def run(args, context) -> InspectorData:
+    log_directory = args["--inspector-log-path"]
+    rpc_port = args["--inspector-rpc-port"]
+    rpc_host = args["--inspector-rpc-host"]
+    rank: int | None = None
+
+    if not args["--inspector-disable-rank"]:
+        # If MPI rank is available, add rank to the RPC host and port
+        try:
+            rank_env = os.environ.get("TT_RUN_RANK")
+            if rank_env is not None:
+                rank = int(rank_env)
+        except Exception as e:
+            log_warning(f"Warning: MPI rank is not available or failed to parse, running in rank-less mode. Error: {e}")
+            pass
+
+    # First try to connect to Inspector RPC
+    try:
+        if rank is not None:
+            rpc_port = int(rpc_port) + rank
+        return InspectorRpcController(rpc_host, rpc_port)
+    except Exception:
+        pass
+
+    # Check for Inspector log directory
+    log_directory = get_log_directory(log_directory)
+    if rank is not None:
+        log_directory = os.path.join(log_directory, f"_rank_{rank}")
+    if not os.path.exists(log_directory):
+        raise ValueError(
+            f"\n\tLog directory {log_directory} does not exist."
+            f"\n\tMetal runtime is not running. Do not kill host process, but open triage in parallel."
+            f"\n\tIf you have generated inspector logs, you can load them with --inspector-log-path"
+            f"\n\tor defining TT_METAL_LOGS_PATH environment variable."
+        )
+
+    # Try to load serialized RPC data
+    try:
+        return InspectorRpcSerialized(log_directory)
+    except:
+        raise InspectorException(
+            f"Inspector unavailable (no live RPC at {rpc_host}:{rpc_port}, no serialized logs at {log_directory}). "
+            "This usually means no Metal workload is currently running - there's nothing to triage.\n"
+            "  If you're debugging a live hang, keep the process alive while running triage in another terminal.\n"
+            "  If you're analyzing a past run, point --inspector-log-path at the saved logs."
+        )
+
+
+if __name__ == "__main__":
+    run_script()

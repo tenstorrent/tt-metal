@@ -1,0 +1,1446 @@
+name: "ttnn - run sweeps"
+
+run-name: >-
+  ${{
+    github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' && 'ttnn - run sweeps nightly' ||
+    github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' && 'ttnn - run sweeps comprehensive' ||
+    github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' && 'ttnn - run sweeps model traced' ||
+    github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' && 'ttnn - run sweeps lead models' ||
+    github.event.inputs.sweep_name && format('ttnn - run sweeps ({0})', github.event.inputs.sweep_name) ||
+    github.event.schedule == '0 3 * * *' && 'ttnn - run sweeps model traced (scheduled)' ||
+    github.event.schedule == '0 2 * * *' && 'ttnn - run sweeps lead models (scheduled)' ||
+    'ttnn - Run sweeps scheduled'
+  }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sweep_name:
+        type: choice
+        description: "Which sweep module to run?"
+        required: true
+        default: "ALL SWEEPS (Nightly)"
+        options:
+          - ALL SWEEPS (Nightly)
+          - ALL SWEEPS (Comprehensive)
+          - ALL SWEEPS (Model Traced)
+          - ALL SWEEPS (Lead Models)
+          - add
+          - ccl.generality.all_broadcast
+          - ccl.generality.all_gather
+          - ccl.generality.all_reduce
+          - ccl.generality.all_to_all_combine
+          - ccl.generality.all_to_all_dispatch
+          - ccl.generality.all_to_all
+          - ccl.generality.point_to_point
+          - ccl.generality.reduce_scatter
+          - composite.binary.gcd.gcd
+          - composite.binary.lcm.lcm
+          - conv2d.short.conv2d_short_sweep
+          - conv2d.short.conv2d_ttforge_sweep
+          - conv_transpose2d.short.conv_transpose2d_short_sweep
+          - creation.empty.empty
+          - creation.zeros.zeros
+          - creation.zeros_like.zeros_like
+          - data_movement.backward.concat_bw.concat_bw
+          - data_movement.concat.concat_interleaved
+          - data_movement.concat.concat_interleaved_n_tensors
+          - data_movement.concat.concat_pytorch2
+          - data_movement.concat.concat_sharded
+          - data_movement.copy.copy
+          - data_movement.embedding.embedding_pytorch2
+          - data_movement.expand.expand_pytorch2
+          - data_movement.fill.fill_pytorch2
+          - data_movement.index_select.index_select_pytorch2
+          - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
+          - data_movement.nonzero.nonzero
+          - data_movement.pad.pad
+          - data_movement.permute.permute
+          - data_movement.permute.permute_pytorch2_rm
+          - data_movement.permute.permute_pytorch2_tiled
+          - data_movement.repeat.repeat
+          - data_movement.repeat.repeat_pytorch2
+          - data_movement.repeat_interleave.repeat_interleave
+          - data_movement.reshape.reshape
+          - data_movement.slice.slice_forge
+          - data_movement.slice.slice_pytorch2_rm
+          - data_movement.slice.slice_pytorch2_tiled
+          - data_movement.sort.sort
+          - data_movement.split.split_pytorch2
+          - data_movement.squeeze.squeeze_pytorch2
+          - data_movement.stack.stack_pytorch2
+          - data_movement.transpose.t_pytorch2
+          - data_movement.transpose.transpose_forge
+          - data_movement.transpose.transpose_interleaved
+          - data_movement.transpose.transpose_pytorch2
+          - data_movement.unsqueeze.unsqueeze_pytorch2
+          - data_movement.view.view_pytorch2
+          - data_movement.view.view_tt_torch
+          - eltwise.binary.add.add_all_pytorch2
+          - eltwise.binary.add.add_different_memory_configs
+          - eltwise.binary.add.add_forge
+          - eltwise.binary.add.add_llama
+          - eltwise.binary.add.add_set2_pytorch2
+          - eltwise.binary.atan2.atan2
+          - eltwise.binary.atan2.atan2_sharded
+          - eltwise.binary.bcast.bcast
+          - eltwise.binary.bcast.bcast_h_sharded
+          - eltwise.binary.div.div
+          - eltwise.binary.div.div_forge
+          - eltwise.binary.div.div_tensor_pytorch2
+          - eltwise.binary.div_no_nan.div_no_nan
+          - eltwise.binary.eq.eq_forge
+          - eltwise.binary.eq.eq_scalar_pytorch2
+          - eltwise.binary.floor_divide.floor_divide
+          - eltwise.binary.floor_divide.floor_divide_pytorch2
+          - eltwise.binary.fmod.fmod
+          - eltwise.binary.fmod.fmod_unary
+          - eltwise.binary.fmod.fmod_unary_sharded
+          - eltwise.binary.ge.ge_forge
+          - eltwise.binary.gt.gt_forge
+          - eltwise.binary.gt.gt_scalar_pytorch2
+          - eltwise.binary.hypot.hypot
+          - eltwise.binary.isclose.isclose
+          - eltwise.binary.isclose.isclose_sharded
+          - eltwise.binary.ldexp.ldexp
+          - eltwise.binary.ldexp.ldexp_sharded
+          - eltwise.binary.le.le_tensor_pytorch2
+          - eltwise.binary.logaddexp.logaddexp
+          - eltwise.binary.logaddexp.logaddexp_sharded
+          - eltwise.binary.logaddexp2.logaddexp2
+          - eltwise.binary.logaddexp2.logaddexp2_sharded
+          - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_and.logical_and_
+          - eltwise.binary.logical_and.logical_and_forge
+          - eltwise.binary.logical_and.logical_and_output
+          - eltwise.binary.logical_and.logical_and_sharded
+          - eltwise.binary.logical_or.logical_or
+          - eltwise.binary.logical_or.logical_or_
+          - eltwise.binary.logical_or.logical_or_forge
+          - eltwise.binary.logical_or.logical_or_output
+          - eltwise.binary.logical_or.logical_or_sharded
+          - eltwise.binary.logical_xor.logical_xor
+          - eltwise.binary.logical_xor.logical_xor_
+          - eltwise.binary.logical_xor.logical_xor_sharded
+          - eltwise.binary.lt.lt_forge
+          - eltwise.binary.lt.lt_scalar_pytorch2
+          - eltwise.binary.lt.lt_tensor_pytorch2
+          - eltwise.binary.multiply.mul_no_act_llama
+          - eltwise.binary.multiply.mul_tensor_pytorch2
+          - eltwise.binary.multiply.multiply
+          - eltwise.binary.multiply.multiply_forge
+          - eltwise.binary.multiply.multiply_llama
+          - eltwise.binary.multiply.multiply_scalar_pytorch2
+          - eltwise.binary.ne.ne_forge
+          - eltwise.binary.ne.ne_scalar_pytorch2
+          - eltwise.binary.polyval.polyval
+          - eltwise.binary.polyval.polyval_sharded
+          - eltwise.binary.remainder.remainder
+          - eltwise.binary.remainder.remainder_forge
+          - eltwise.binary.remainder.remainder_scalar_pytorch2
+          - eltwise.binary.remainder.remainder_shape
+          - eltwise.binary.remainder.remainder_unary
+          - eltwise.binary.remainder.remainder_unary_sharded
+          - eltwise.binary.rpow.rpow
+          - eltwise.binary.rpow.rpow_sharded
+          - eltwise.binary.squared_difference.squared_difference
+          - eltwise.binary.squared_difference_output.squared_difference_output
+          - eltwise.binary.subtract.subtract
+          - eltwise.binary.subtract.subtract_forge
+          - eltwise.binary.subtract.subtract_tensor_pytorch2
+          - eltwise.binary.xlogy.xlogy
+          - eltwise.binary_backward.add_bw.add_bw
+          - eltwise.binary_backward.addalpha_bw.addalpha_bw
+          - eltwise.binary_backward.div_bw.div_bw
+          - eltwise.binary_backward.fmod_bw.fmod_bw
+          - eltwise.binary_backward.hypot_bw.hypot_bw
+          - eltwise.binary_backward.ldexp_bw.ldexp_bw
+          - eltwise.binary_backward.ldexp_bw.ldexp_bw_sharded
+          - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw
+          - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw_sharded
+          - eltwise.binary_backward.logaddexp_bw.logaddexp_bw
+          - eltwise.binary_backward.logaddexp_bw.logaddexp_bw_sharded
+          - eltwise.binary_backward.mul_bw.mul_bw
+          - eltwise.binary_backward.remainder_bw.remainder_bw
+          - eltwise.binary_backward.rsub_bw.rsub_bw
+          - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
+          - eltwise.binary_backward.sub_bw.sub_bw
+          - eltwise.binary_backward.sub_bw.sub_bw_sharded
+          - eltwise.binary_backward.subalpha_bw.subalpha_bw
+          - eltwise.binary_backward.xlogy_bw.xlogy_bw
+          - eltwise.binary_complex.add_bw.add_bw
+          - eltwise.binary_complex.div_bw.div_bw
+          - eltwise.binary_complex.mul_bw.mul_bw
+          - eltwise.binary_complex.sub_bw.sub_bw
+          - eltwise.composite.binary.addalpha.addalpha
+          - eltwise.composite.binary.maximum.maximum
+          - eltwise.composite.binary.maximum.maximum_forge
+          - eltwise.composite.binary.maximum.maximum_pytorch2
+          - eltwise.composite.binary.maximum.maximum_sharded
+          - eltwise.composite.binary.maximum.maximum_unary
+          - eltwise.composite.binary.maximum.maximum_unary_sharded
+          - eltwise.composite.binary.minimum.minimum
+          - eltwise.composite.binary.minimum.minimum_forge
+          - eltwise.composite.binary.minimum.minimum_pytorch2
+          - eltwise.composite.binary.minimum.minimum_sharded
+          - eltwise.composite.binary.minimum.minimum_unary
+          - eltwise.composite.binary.minimum.minimum_unary_sharded
+          - eltwise.composite.binary.pow.pow_pytorch2
+          - eltwise.composite.binary.pow.pow_scalar_pytorch2
+          - eltwise.composite.binary.pow.pow_tensor_pytorch2
+          - eltwise.composite.binary.subalpha.subalpha
+          - eltwise.ternary.addcdiv.addcdiv
+          - eltwise.ternary.addcdiv.addcdiv_sharded
+          - eltwise.ternary.addcmul.addcmul
+          - eltwise.ternary.addcmul.addcmul_sharded
+          - eltwise.ternary.lerp.lerp
+          - eltwise.ternary.mac.mac
+          - eltwise.ternary.where.where
+          - eltwise.ternary.where.where_forge
+          - eltwise.ternary.where.where_pytorch2
+          - eltwise.ternary_backward.addcdiv_bw
+          - eltwise.ternary_backward.addcmul_bw
+          - eltwise.unary.abs.abs
+          - eltwise.unary.abs.abs_forge
+          - eltwise.unary.abs.abs_pytorch2
+          - eltwise.unary.abs.abs_sharded
+          - eltwise.unary.acos.acos
+          - eltwise.unary.acos.acos_sharded
+          - eltwise.unary.acosh.acosh
+          - eltwise.unary.acosh.acosh_sharded
+          - eltwise.unary.asinh.asinh
+          - eltwise.unary.asinh.asinh_sharded
+          - eltwise.unary.atan.atan
+          - eltwise.unary.atan.atan_sharded
+          - eltwise.unary.atanh.atanh
+          - eltwise.unary.atanh.atanh_sharded
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and_sharded
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary_sharded
+          - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift
+          - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_sharded
+          - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary
+          - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary_sharded
+          - eltwise.unary.bitwise.bitwise_not.bitwise_not
+          - eltwise.unary.bitwise.bitwise_not.bitwise_not_pytorch2
+          - eltwise.unary.bitwise.bitwise_not.bitwise_not_sharded
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or_sharded
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or_unary
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or_unary_sharded
+          - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift
+          - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_sharded
+          - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_unary
+          - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_unary_sharded
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_sharded
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary_sharded
+          - eltwise.unary.cbrt.cbrt
+          - eltwise.unary.ceil.ceil
+          - eltwise.unary.ceil.ceil_pytorch2
+          - eltwise.unary.ceil.ceil_sharded
+          - eltwise.unary.clamp.clamp
+          - eltwise.unary.clamp.clamp_forge
+          - eltwise.unary.clamp.clamp_min_pytorch2
+          - eltwise.unary.clamp.clamp_pytorch2
+          - eltwise.unary.clip.clip
+          - eltwise.unary.clone.clone
+          - eltwise.unary.cos.cos
+          - eltwise.unary.cos.cos_forge
+          - eltwise.unary.cos.cos_pytorch2
+          - eltwise.unary.cos.cos_sharded
+          - eltwise.unary.cosh.cosh
+          - eltwise.unary.cosh.cosh_sharded
+          - eltwise.unary.deg2rad.deg2rad
+          - eltwise.unary.deg2rad.deg2rad_sharded
+          - eltwise.unary.digamma.digamma
+          - eltwise.unary.digamma.digamma_sharded
+          - eltwise.unary.elu.elu
+          - eltwise.unary.elu.elu_pytorch2
+          - eltwise.unary.elu.elu_sharded
+          - eltwise.unary.eqz.eqz
+          - eltwise.unary.eqz.eqz_sharded
+          - eltwise.unary.erf.erf
+          - eltwise.unary.erf.erf_sharded
+          - eltwise.unary.erfc.erfc
+          - eltwise.unary.erfc.erfc_sharded
+          - eltwise.unary.erfinv.erfinv
+          - eltwise.unary.erfinv.erfinv_sharded
+          - eltwise.unary.exp.exp
+          - eltwise.unary.exp.exp_forge
+          - eltwise.unary.exp.exp_pytorch2
+          - eltwise.unary.exp.exp_sharded
+          - eltwise.unary.exp2.exp2
+          - eltwise.unary.exp2.exp2_sharded
+          - eltwise.unary.expm1.expm1
+          - eltwise.unary.expm1.expm1_sharded
+          - eltwise.unary.floor.floor
+          - eltwise.unary.floor.floor_forge
+          - eltwise.unary.floor.floor_pytorch2
+          - eltwise.unary.frac.frac
+          - eltwise.unary.frac.frac_sharded
+          - eltwise.unary.geglu.geglu
+          - eltwise.unary.gelu.gelu
+          - eltwise.unary.gelu.gelu_pytorch2
+          - eltwise.unary.gez.gez
+          - eltwise.unary.glu.glu
+          - eltwise.unary.gtz.gtz
+          - eltwise.unary.hardshrink.hardshrink
+          - eltwise.unary.hardshrink.hardshrink_sharded
+          - eltwise.unary.hardsigmoid.hardsigmoid
+          - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
+          - eltwise.unary.hardsigmoid.hardsigmoid_sharded
+          - eltwise.unary.hardswish.hardswish
+          - eltwise.unary.hardswish.hardswish_pytorch2
+          - eltwise.unary.hardswish.hardswish_sharded
+          - eltwise.unary.hardtanh.hardtanh
+          - eltwise.unary.hardtanh.hardtanh_pytorch2
+          - eltwise.unary.hardtanh.hardtanh_sharded
+          - eltwise.unary.heaviside.heaviside
+          - eltwise.unary.heaviside.heaviside_sharded
+          - eltwise.unary.i0.i0
+          - eltwise.unary.identity.identity
+          - eltwise.unary.identity.identity_sharded
+          - eltwise.unary.isfinite.isfinite
+          - eltwise.unary.isfinite.isfinite_sharded
+          - eltwise.unary.isinf.isinf
+          - eltwise.unary.isinf.isinf_sharded
+          - eltwise.unary.isnan.isnan
+          - eltwise.unary.isnan.isnan_sharded
+          - eltwise.unary.isneginf.isneginf
+          - eltwise.unary.isneginf.isneginf_sharded
+          - eltwise.unary.isposinf.isposinf
+          - eltwise.unary.isposinf.isposinf_sharded
+          - eltwise.unary.leaky_relu.leaky_relu
+          - eltwise.unary.leaky_relu.leaky_relu_pytorch2
+          - eltwise.unary.leaky_relu.leaky_relu_sharded
+          - eltwise.unary.lez.lez
+          - eltwise.unary.lez.lez_sharded
+          - eltwise.unary.lgamma.lgamma
+          - eltwise.unary.lgamma.lgamma_sharded
+          - eltwise.unary.log.log
+          - eltwise.unary.log.log_forge
+          - eltwise.unary.log.log_pytorch2
+          - eltwise.unary.log.log_sharded
+          - eltwise.unary.log10.log10
+          - eltwise.unary.log10.log10_sharded
+          - eltwise.unary.log1p.log1p
+          - eltwise.unary.log1p.log1p_sharded
+          - eltwise.unary.log2.log2
+          - eltwise.unary.log2.log2_sharded
+          - eltwise.unary.log_sigmoid.log_sigmoid
+          - eltwise.unary.logical_not.logical_not
+          - eltwise.unary.logical_not.logical_not_
+          - eltwise.unary.logical_not.logical_not_forge
+          - eltwise.unary.logical_not.logical_not_output
+          - eltwise.unary.logical_not.logical_not_pytorch2
+          - eltwise.unary.logical_not.logical_not_sharded
+          - eltwise.unary.logit.logit
+          - eltwise.unary.logit.logit_forge
+          - eltwise.unary.logit.logit_sharded
+          - eltwise.unary.ltz.ltz
+          - eltwise.unary.mish.mish
+          - eltwise.unary.mish.mish_sharded
+          - eltwise.unary.multigammaln.multigammaln
+          - eltwise.unary.multigammaln.multigammaln_sharded
+          - eltwise.unary.neg.neg
+          - eltwise.unary.neg.neg_forge
+          - eltwise.unary.neg.neg_pytorch2
+          - eltwise.unary.neg.neg_sharded
+          - eltwise.unary.nez.nez
+          - eltwise.unary.nez.nez_sharded
+          - eltwise.unary.normalize_global.normalize_global
+          - eltwise.unary.normalize_hw.normalize_hw
+          - eltwise.unary.prelu.prelu
+          - eltwise.unary.prelu.prelu_sharded
+          - eltwise.unary.rad2deg.rad2deg
+          - eltwise.unary.rdiv.rdiv
+          - eltwise.unary.rdiv.rdiv_sharded
+          - eltwise.unary.reciprocal.reciprocal
+          - eltwise.unary.reciprocal.reciprocal_sharded
+          - eltwise.unary.reglu.reglu
+          - eltwise.unary.relu.relu
+          - eltwise.unary.relu.relu_pytorch2
+          - eltwise.unary.relu6.relu6
+          - eltwise.unary.relu6.relu6_sharded
+          - eltwise.unary.relu_max.relu_max
+          - eltwise.unary.relu_max.relu_max_sharded
+          - eltwise.unary.relu_min.relu_min
+          - eltwise.unary.relu_min.relu_min_sharded
+          - eltwise.unary.round.round_sharded
+          - eltwise.unary.rsqrt.rsqrt_forge
+          - eltwise.unary.rsqrt.rsqrt_pytorch2
+          - eltwise.unary.rsub.rsub
+          - eltwise.unary.rsub.rsub_pytorch2
+          - eltwise.unary.rsub.rsub_sharded
+          - eltwise.unary.selu.selu
+          - eltwise.unary.selu.selu_sharded
+          - eltwise.unary.sigmoid.sigmoid
+          - eltwise.unary.sigmoid.sigmoid_pytorch2
+          - eltwise.unary.sigmoid.sigmoid_sharded
+          - eltwise.unary.sigmoid_accurate.sigmoid_accurate
+          - eltwise.unary.sigmoid_accurate.sigmoid_accurate_sharded
+          - eltwise.unary.sign.sign
+          - eltwise.unary.silu.silu
+          - eltwise.unary.silu.silu_llama
+          - eltwise.unary.silu.silu_pytorch2
+          - eltwise.unary.sin.sin
+          - eltwise.unary.sin.sin_forge
+          - eltwise.unary.sin.sin_pytorch2
+          - eltwise.unary.sin.sin_sharded
+          - eltwise.unary.sinh.sinh
+          - eltwise.unary.sinh.sinh_sharded
+          - eltwise.unary.softplus.softplus
+          - eltwise.unary.softplus.softplus_sharded
+          - eltwise.unary.softshrink.softshrink_sharded
+          - eltwise.unary.sqrt.sqrt_forge
+          - eltwise.unary.swiglu.swiglu
+          - eltwise.unary.tanh.tanh
+          - eltwise.unary.tanh.tanh_forge
+          - eltwise.unary.tanh.tanh_pytorch2
+          - eltwise.unary.tril.tril
+          - eltwise.unary.tril.tril_pytorch2
+          - eltwise.unary.tril.tril_sharded
+          - eltwise.unary.triu.triu
+          - eltwise.unary.triu.triu_sharded
+          - eltwise.unary.trunc.trunc
+          - eltwise.unary.trunc.trunc_sharded
+          - eltwise.unary_backward.abs_bw.abs_bw
+          - eltwise.unary_backward.acos_bw.acos_bw
+          - eltwise.unary_backward.acos_bw.acos_bw_sharded
+          - eltwise.unary_backward.acosh_bw.acosh_bw
+          - eltwise.unary_backward.acosh_bw.acosh_bw_sharded
+          - eltwise.unary_backward.add_bw.add_bw
+          - eltwise.unary_backward.add_bw.add_bw_sharded
+          - eltwise.unary_backward.assign_bw.assign_bw
+          - eltwise.unary_backward.atan_bw.atan_bw
+          - eltwise.unary_backward.atan_bw.atan_bw_sharded
+          - eltwise.unary_backward.bias_gelu_bw.bias_gelu_bw
+          - eltwise.unary_backward.celu_bw.celu_bw
+          - eltwise.unary_backward.clamp_bw.clamp_bw
+          - eltwise.unary_backward.clamp_bw.clamp_bw_sharded
+          - eltwise.unary_backward.clip_bw.clip_bw
+          - eltwise.unary_backward.clip_bw.clip_bw_sharded
+          - eltwise.unary_backward.cos_bw.cos_bw
+          - eltwise.unary_backward.cos_bw.cos_bw_sharded
+          - eltwise.unary_backward.div_bw.div_bw
+          - eltwise.unary_backward.elu_bw.elu_bw
+          - eltwise.unary_backward.exp_bw.exp_bw
+          - eltwise.unary_backward.exp_bw.exp_bw_sharded
+          - eltwise.unary_backward.fill_bw.fill_bw
+          - eltwise.unary_backward.fill_bw.fill_bw_sharded
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw_sharded
+          - eltwise.unary_backward.floor_bw.floor_bw
+          - eltwise.unary_backward.frac_bw.frac_bw
+          - eltwise.unary_backward.frac_bw.frac_bw_sharded
+          - eltwise.unary_backward.hardshrink_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw_sharded
+          - eltwise.unary_backward.hardswish_bw.hardswish_bw
+          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
+          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw_sharded
+          - eltwise.unary_backward.i0_bw.i0_bw
+          - eltwise.unary_backward.i0_bw.i0_bw_sharded
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw_sharded
+          - eltwise.unary_backward.lgamma_bw.lgamma_bw
+          - eltwise.unary_backward.lgamma_bw.lgamma_bw_sharded
+          - eltwise.unary_backward.log10_bw.log10_bw
+          - eltwise.unary_backward.log_bw.log_bw
+          - eltwise.unary_backward.log_bw.log_bw_sharded
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw_sharded
+          - eltwise.unary_backward.logit_bw
+          - eltwise.unary_backward.mul_bw.mul_bw
+          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
+          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw_sharded
+          - eltwise.unary_backward.neg_bw.neg_bw
+          - eltwise.unary_backward.neg_bw.neg_bw_sharded
+          - eltwise.unary_backward.pow_bw.pow_bw
+          - eltwise.unary_backward.pow_bw.pow_bw_sharded
+          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
+          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw_sharded
+          - eltwise.unary_backward.rdiv_bw.rdiv_bw
+          - eltwise.unary_backward.rdiv_bw.rdiv_bw_sharded
+          - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary_backward.relu6_bw.relu6_bw_sharded
+          - eltwise.unary_backward.relu_bw.relu_bw
+          - eltwise.unary_backward.relu_bw.relu_bw_sharded
+          - eltwise.unary_backward.round_bw.round_bw
+          - eltwise.unary_backward.rpow_bw.rpow_bw
+          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
+          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
+          - eltwise.unary_backward.selu_bw.selu_bw
+          - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
+          - eltwise.unary_backward.silu_bw.silu_bw
+          - eltwise.unary_backward.sin_bw.sin_bw
+          - eltwise.unary_backward.sinh_bw.sinh_bw
+          - eltwise.unary_backward.softplus_bw.softplus_bw
+          - eltwise.unary_backward.softplus_bw.softplus_bw_sharded
+          - eltwise.unary_backward.softshrink_bw
+          - eltwise.unary_backward.sqrt_bw.sqrt_bw
+          - eltwise.unary_backward.sqrt_bw.sqrt_bw_sharded
+          - eltwise.unary_backward.square_bw.square_bw
+          - eltwise.unary_backward.sub_bw.sub_bw
+          - eltwise.unary_backward.sub_bw.sub_bw_sharded
+          - eltwise.unary_backward.tan_bw.tan_bw
+          - eltwise.unary_backward.tan_bw.tan_bw_sharded
+          - eltwise.unary_backward.tanh_bw.tanh_bw
+          - eltwise.unary_backward.tanh_bw.tanh_bw_sharded
+          - eltwise.unary_backward.tanhshrink_bw.tanhshrink_bw
+          - eltwise.unary_backward.threshold_bw.threshold_bw
+          - eltwise.unary_backward.threshold_bw.threshold_bw_sharded
+          - eltwise.unary_backward.trunc_bw.trunc_bw
+          - eltwise.unary_backward.trunc_bw.trunc_bw_sharded
+          - eltwise.unary_complex.angle.angle
+          - eltwise.unary_complex.angle_bw.angle_bw
+          - eltwise.unary_complex.conj
+          - eltwise.unary_complex.conj_bw
+          - eltwise.unary_complex.is_imag
+          - eltwise.unary_complex.is_real
+          - eltwise.unary_complex.polar.polar
+          - eltwise.unary_complex.polar_bw.polar_bw
+          - eltwise.unary_complex.reciprocal.reciprocal
+          - eltwise.unary_complex.reciprocal.reciprocal_sharded
+          - eltwise.unary_complex.reciprocal_bw
+          - embedding.embedding
+          - embedding_bw.embedding_bw
+          - fused.layer_norm_traces
+          - fused.softmax_traces
+          - losses.l1_loss
+          - losses.mse_loss
+          - matmul.full.matmul_default_block_sharded
+          - matmul.full.matmul_default_height_sharded
+          - matmul.full.matmul_default_interleaved
+          - matmul.full.matmul_default_width_sharded
+          - matmul.generality.linear
+          - matmul.generality.matmul
+          - matmul.short.matmul
+          - matmul.short.matmul_create_program_config
+          - matmul.short.matmul_default
+          - matmul.short.matmul_default_sharded
+          - matmul.short.matmul_traces
+          - matmul.short.matmul_user_program_config
+          - matmul.short.matmul_user_program_config_mcast_1d
+          - matmul.short.matmul_user_program_config_mcast_2d
+          - matmul.sparse.sparse_matmul
+          - matmul.sparse.batched_sparse_matmul
+          - pool2d.full.max_pool2d_large_dims
+          - pool2d.full.max_pool2d_params
+          - pool2d.short.avg_pool2d_short_sweep
+          - pool2d.short.max_pool2d_short_sweep
+          - pool2d.global_avg_pool2d
+          - pool2d.max_pool2d
+          - normalization.batch_norm.batch_norm
+          - normalization.generality.layernorm
+          - normalization.generality.softmax
+          - normalization.generality.softmax_fused
+          - normalization.softmax.softmax
+          - normalization.softmax.softmax_sharded
+          - reduction.argmax.argmax
+          - reduction.argmax.argmax_output
+          - reduction.backward.prod_bw.prod_bw
+          - reduction.cross_entropy_loss.cross_entropy_loss
+          - reduction.generality.argmax
+          - reduction.generality.reduction_all_ranks
+          - reduction.mean.mean
+          - reduction.prod
+          - reduction.std.std
+          - reduction.sum
+          - reduction.topk.topk
+          - reduction.topk.topk_output
+          - reduction.traces.argmax_traces
+          - reduction.traces.max_traces
+          - reduction.traces.mean_traces
+          - reduction.traces.sum_traces
+          - reduction.traces.topk_traces
+          - reduction.var.var
+          - tilize
+          - tilize_with_val_padding
+          - transformer.attention_softmax.attention_softmax
+          - transformer.attention_softmax.attention_softmax_
+          - transformer.concatenate_heads.concatenate_heads
+          - transformer.rotary_embedding.rotary_embedding
+          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads
+          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads_kv_input
+          - untilize
+          - untilize_with_unpadding
+      suite_name:
+        description: "Which sweep suite to run?"
+        type: string
+      skip_on_timeout:
+        description: "Skip remaining tests in running suite after first timeout?"
+        type: boolean
+        default: true
+      generate_sweeps_group_by:
+        required: false
+        type: choice
+        default: "hw"
+        options:
+          - hw
+          - mesh
+        description: "How to group exported sweep vector files in ttnn-generate-sweeps"
+      upload_results:
+        description: "Upload sweep results to Superset?"
+        type: boolean
+        default: true
+      measure_device_perf:
+        description: "Measure device performance using device profiler (--device-perf flag)."
+        type: boolean
+        default: true
+      measure_e2e_perf:
+        description: "Measure end-to-end performance with cold/cached comparison (--perf-with-cache flag)"
+        type: boolean
+        default: false
+      measure_memory:
+        description: "Capture peak L1 memory usage using graph trace (--measure-memory flag)."
+        type: boolean
+        default: false
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: "wormhole_b0"
+      runner-label:
+        description: "Single sweep only"
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P100a
+          - P150b
+          - n300-llmbox
+          - topology-6u
+          - BH-LoudBox
+        default: "N150"
+      log-level:
+        description: "Log level for sweep execution. INFO level may overwhelm runners for long sweeps."
+        required: true
+        type: choice
+        options:
+          - DEBUG
+          - INFO
+          - WARNING
+          - CRITICAL
+        default: "INFO"
+      mesh_shape:
+        description: "Filter by mesh shape (e.g., '2x4')."
+        type: string
+        required: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+
+  schedule:
+    - cron: "0 3 * * *" # This cron schedule runs the workflow at 3:00 AM UTC daily (model traced runs)
+    - cron: "0 2 * * *" # This cron schedule runs the workflow at 2:00 AM UTC daily (lead model runs)
+
+jobs:
+  # Pre-compute all inputs so they can be passed to the impl via needs outputs.
+  # GitHub Actions does not support complex expressions (e.g. event_name comparisons)
+  # directly in the `with:` block of a reusable workflow call — values must come
+  # from literal strings/booleans or job outputs.
+  resolve-inputs:
+    name: Resolve workflow inputs
+    runs-on: ubuntu-slim
+    outputs:
+      sweep-name: ${{ steps.resolve.outputs.sweep-name }}
+      suite-name: ${{ steps.resolve.outputs.suite-name }}
+      skip-on-timeout: ${{ steps.resolve.outputs.skip-on-timeout }}
+      generate-sweeps-group-by: ${{ steps.resolve.outputs.generate-sweeps-group-by }}
+      upload-results: ${{ steps.resolve.outputs.upload-results }}
+      measure-device-perf: ${{ steps.resolve.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ steps.resolve.outputs.measure-e2e-perf }}
+      measure-memory: ${{ steps.resolve.outputs.measure-memory }}
+      arch: ${{ steps.resolve.outputs.arch }}
+      runner-label: ${{ steps.resolve.outputs.runner-label }}
+      log-level: ${{ steps.resolve.outputs.log-level }}
+      mesh-shape: ${{ steps.resolve.outputs.mesh-shape }}
+      fail-on-test-failure: ${{ steps.resolve.outputs.fail-on-test-failure }}
+      platform: ${{ steps.resolve.outputs.platform }}
+      build-type: ${{ steps.resolve.outputs.build-type }}
+      enable-lto: ${{ steps.resolve.outputs.enable-lto }}
+      tracy: ${{ steps.resolve.outputs.tracy }}
+    steps:
+      - id: resolve
+        run: |
+          IS_SCHEDULED="${{ github.event_name == 'schedule' }}"
+
+          # Resolve sweep name: map schedule cron to friendly name, or use dispatch input
+          if [[ "$IS_SCHEDULED" == "true" ]]; then
+            case "${{ github.event.schedule }}" in
+              "0 3 * * *")            SWEEP_NAME="ALL SWEEPS (Model Traced)" ;;
+              "0 2 * * *")            SWEEP_NAME="ALL SWEEPS (Lead Models)" ;;
+              *)                      SWEEP_NAME="ALL SWEEPS (Nightly)" ;;
+            esac
+          else
+            SWEEP_NAME="${{ github.event.inputs.sweep_name }}"
+          fi
+
+          # For scheduled runs, all measurement/upload flags default to true
+          if [[ "$IS_SCHEDULED" == "true" ]]; then
+            SKIP_ON_TIMEOUT=true
+            GENERATE_SWEEPS_GROUP_BY="hw"
+            UPLOAD_RESULTS=true
+            MEASURE_DEVICE_PERF=true
+            MEASURE_E2E_PERF=false
+            MEASURE_MEMORY=true
+            TRACY=true
+          else
+            SKIP_ON_TIMEOUT=${{ github.event.inputs.skip_on_timeout || 'true' }}
+            GENERATE_SWEEPS_GROUP_BY="${{ github.event.inputs.generate_sweeps_group_by || 'hw' }}"
+            UPLOAD_RESULTS=${{ github.event.inputs.upload_results || 'true' }}
+            MEASURE_DEVICE_PERF=${{ github.event.inputs.measure_device_perf || 'true' }}
+            MEASURE_E2E_PERF=${{ github.event.inputs.measure_e2e_perf || 'false' }}
+            MEASURE_MEMORY=${{ github.event.inputs.measure_memory || 'false' }}
+            TRACY=${{ github.event.inputs.measure_device_perf || 'true' }}
+          fi
+
+          echo "sweep-name=$SWEEP_NAME" >> $GITHUB_OUTPUT
+          echo "suite-name=${{ github.event.inputs.suite_name || '' }}" >> $GITHUB_OUTPUT
+          echo "skip-on-timeout=$SKIP_ON_TIMEOUT" >> $GITHUB_OUTPUT
+          echo "generate-sweeps-group-by=$GENERATE_SWEEPS_GROUP_BY" >> $GITHUB_OUTPUT
+          echo "upload-results=$UPLOAD_RESULTS" >> $GITHUB_OUTPUT
+          echo "measure-device-perf=$MEASURE_DEVICE_PERF" >> $GITHUB_OUTPUT
+          echo "measure-e2e-perf=$MEASURE_E2E_PERF" >> $GITHUB_OUTPUT
+          echo "measure-memory=$MEASURE_MEMORY" >> $GITHUB_OUTPUT
+          echo "arch=${{ github.event.inputs.arch || 'wormhole_b0' }}" >> $GITHUB_OUTPUT
+          echo "runner-label=${{ github.event.inputs['runner-label'] || 'N150' }}" >> $GITHUB_OUTPUT
+          echo "log-level=${{ github.event.inputs['log-level'] || 'INFO' }}" >> $GITHUB_OUTPUT
+          echo "mesh-shape=${{ github.event.inputs.mesh_shape || '' }}" >> $GITHUB_OUTPUT
+
+          # Fail sweep jobs on test failures for Lead Models and Model Traced suites
+          if [[ "$SWEEP_NAME" == *"Lead Models"* ]] || [[ "$SWEEP_NAME" == *"Model Traced"* ]]; then
+            echo "fail-on-test-failure=true" >> $GITHUB_OUTPUT
+          else
+            echo "fail-on-test-failure=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "platform=${{ github.event.inputs.platform || 'Ubuntu 22.04' }}" >> $GITHUB_OUTPUT
+          echo "build-type=${{ github.event.inputs['build-type'] || 'Release' }}" >> $GITHUB_OUTPUT
+          echo "enable-lto=${{ github.event.inputs['enable-lto'] || 'false' }}" >> $GITHUB_OUTPUT
+          echo "tracy=$TRACY" >> $GITHUB_OUTPUT
+
+  display-workflow-options:
+    name: 📋 Display workflow options
+    needs: [resolve-inputs]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    steps:
+      - name: Display selected workflow options
+        run: |
+          echo "::group::🔧 Workflow Configuration Options"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                    TTNN Run Sweeps Configuration            │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Trigger:              ${{ github.event_name }}"
+          echo "│ Sweep Name:           ${{ needs.resolve-inputs.outputs.sweep-name }}"
+          echo "│ Suite Name:           ${{ needs.resolve-inputs.outputs.suite-name || 'Not specified' }}"
+          echo "│ Skip on Timeout:      ${{ needs.resolve-inputs.outputs.skip-on-timeout }}"
+          echo "│ Group By:             ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }}"
+          echo "│ Upload Results:       ${{ needs.resolve-inputs.outputs.upload-results }}"
+          echo "│ Measure Device Perf:  ${{ needs.resolve-inputs.outputs.measure-device-perf }}"
+          echo "│ Measure E2E Perf:     ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}"
+          echo "│ Measure Memory:       ${{ needs.resolve-inputs.outputs.measure-memory }}"
+          echo "│ Tracy:                ${{ needs.resolve-inputs.outputs.tracy }}"
+          echo "│ Architecture:         ${{ needs.resolve-inputs.outputs.arch }}"
+          echo "│ Runner Label:         ${{ needs.resolve-inputs.outputs.runner-label }}"
+          echo "│ Log Level:            ${{ needs.resolve-inputs.outputs.log-level }}"
+          echo "│ Use Database:         ${{ needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)' }}"
+          echo "│ Mesh Shape Filter:    ${{ needs.resolve-inputs.outputs.mesh-shape || 'none' }}"
+          echo "│ Platform:             ${{ needs.resolve-inputs.outputs.platform }}"
+          echo "│ Build Type:           ${{ needs.resolve-inputs.outputs.build-type }}"
+          echo "│ Enable LTO:           ${{ needs.resolve-inputs.outputs.enable-lto }}"
+          echo "│ Cron (if scheduled):  ${{ github.event.schedule || 'N/A' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+
+          echo "::group::📊 Workflow Context Information"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch/Ref: ${{ github.ref_name }}"
+          echo "::endgroup::"
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+  build-artifact:
+    needs: [check-harbor, resolve-inputs]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      tracy: ${{ fromJSON(needs.resolve-inputs.outputs.tracy) }}
+      build-wheel: true
+      platform: ${{ needs.resolve-inputs.outputs.platform }}
+      enable-lto: ${{ fromJSON(needs.resolve-inputs.outputs.enable-lto) }}
+
+  generate-master-json-from-db:
+    name: 🗄️ Generate Master JSON from Database
+    needs: [resolve-inputs]
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    if: >-
+      needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' ||
+      needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: pip install psycopg2-binary pyyaml tqdm
+      - name: Generate JSON for lead_models run
+        if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        run: |
+          mkdir -p model_tracer/traced_operations
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+            model_tracer/trace_selection_registry.yaml \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            lead_models
+      - name: Generate JSON for model_traced run
+        if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        run: |
+          mkdir -p model_tracer/traced_operations
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+            model_tracer/trace_selection_registry.yaml \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            model_traced
+      - name: Upload master JSON artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ttnn-operations-master-json
+          path: model_tracer/traced_operations/ttnn_operations_master.json
+          retention-days: 1
+
+  ttnn-generate-sweeps:
+    name: Generate Sweep Vectors ${{ needs.resolve-inputs.outputs.arch }} ${{ needs.resolve-inputs.outputs.runner-label }}
+    needs: [resolve-inputs, build-artifact, generate-master-json-from-db]
+    if: >-
+      always() &&
+      needs.build-artifact.result == 'success' &&
+      (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ needs.resolve-inputs.outputs.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 30
+    runs-on: >-
+      ${{
+        (needs.resolve-inputs.outputs.runner-label == 'topology-6u' || needs.resolve-inputs.outputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', needs.resolve-inputs.outputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', needs.resolve-inputs.outputs.runner-label)
+      }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: 📥 Download database-generated JSON
+        if: >-
+          needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' ||
+          needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ttnn-operations-master-json
+          path: docker-job/model_tracer/traced_operations/
+      - name: Run ttnn sweeps generation (single sweep)
+        if: >-
+          needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
+          needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Comprehensive)' &&
+          needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Model Traced)' &&
+          needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Lead Models)'
+        run: |
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ needs.resolve-inputs.outputs.sweep-name }} --group-by ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }} --tag ci-main
+      - name: Run ttnn sweeps generation (all sweeps - model traced)
+        if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)'
+        run: |
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --suite-name model_traced --group-by ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }} --tag ci-main
+      - name: Run ttnn sweeps generation (all sweeps - lead models)
+        if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+        run: |
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --suite-name model_traced --group-by ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }} --tag ci-main
+      - name: Run ttnn sweeps generation (nightly/comprehensive)
+        if: >-
+          needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Nightly)' ||
+          needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Comprehensive)'
+        run: |
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --group-by ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }} --tag ci-main
+      - name: Upload sweep vectors
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sweeps-vectors
+          path: /work/tests/sweep_framework/vectors_export/
+          retention-days: 1
+
+  ttnn-compute-module-matrix:
+    name: Compute module matrix
+    needs: [resolve-inputs, ttnn-generate-sweeps]
+    if: |
+      always() &&
+      needs.ttnn-generate-sweeps.result == 'success' &&
+      (needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Nightly)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Comprehensive)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)')
+    runs-on: ubuntu-22.04
+    outputs:
+      n150-matrix: ${{ steps.set-matrix.outputs.n150-matrix }}
+      n300-matrix: ${{ steps.set-matrix.outputs.n300-matrix }}
+      p150b-matrix: ${{ steps.set-matrix.outputs.p150b-matrix }}
+      p100a-matrix: ${{ steps.set-matrix.outputs.p100a-matrix }}
+      p300a-matrix: ${{ steps.set-matrix.outputs.p300a-matrix }}
+      t3k-matrix: ${{ steps.set-matrix.outputs.t3k-matrix }}
+      galaxy-matrix: ${{ steps.set-matrix.outputs.galaxy-matrix }}
+    steps:
+      - name: Show run identifiers
+        run: |
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sweeps-vectors
+          path: /tmp/vectors
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          clean: false
+      - id: set-matrix
+        shell: bash
+        env:
+          SWEEP_NAME: ${{ needs.resolve-inputs.outputs.sweep-name }}
+          MEASURE_DEVICE_PERF: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+          VECTORS_DIR: /tmp/vectors
+        run: |
+          # Compute combined + per-hardware matrices once.
+          python3 tests/sweep_framework/framework/compute_sweep_matrix.py \
+            --write-to-file /tmp/sweep_matrix.pretty.json \
+            > /tmp/sweep_matrix.outputs.txt
+
+          # Export compact key=value outputs for downstream jobs.
+          cat /tmp/sweep_matrix.outputs.txt >> "$GITHUB_OUTPUT"
+
+      - name: Show module matrix
+        shell: bash
+        run: |
+          echo "::group::Sweep module matrix"
+          jq . /tmp/sweep_matrix.pretty.json
+          echo "::endgroup::"
+
+      - name: Verify sweep budget
+        shell: bash
+        run: |
+          pip3 install PyYAML > /dev/null 2>&1
+          python3 .github/scripts/utils/verify_time_budget.py \
+            tests/pipeline_reorg/ttnn_sweep_tests.yaml \
+            .github/time_budget.yaml \
+            sweep
+
+  ttnn-run-single-sweep:
+    name: Run single sweep
+    needs: [resolve-inputs, build-artifact, ttnn-generate-sweeps]
+    if: |
+      needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
+      needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Comprehensive)' &&
+      needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Model Traced)' &&
+      needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Lead Models)'
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: ttnn sweep tests ${{ needs.resolve-inputs.outputs.arch }} ${{ needs.resolve-inputs.outputs.runner-label }}
+            arch: ${{ needs.resolve-inputs.outputs.arch }}
+            runner_label: ${{ needs.resolve-inputs.outputs.runner-label }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        RUNNER_LABEL: ${{ matrix.test-group.runner_label }}
+        LOGURU_LEVEL: ${{ needs.resolve-inputs.outputs.log-level }}
+        TT_LOGGER_LEVEL: ${{ needs.resolve-inputs.outputs.log-level }}
+        GITHUB_ACTIONS: true
+        TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
+        TRACY_NO_INVARIANT_CHECK: 1
+        TTNN_OPS_DATABASE_URL: ${{ (needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: >-
+        --device /dev/tenstorrent
+        --device /dev/ipmi0
+        --privileged
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 720
+    runs-on: >-
+      ${{
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
+      }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: 📋 Display single sweep configuration
+        run: |
+          echo "::group::🔧 Single Sweep Execution - Configuration"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                 Single Sweep Configuration                  │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Target Sweep:         ${{ needs.resolve-inputs.outputs.sweep-name }}"
+          echo "│ Suite Name:           ${{ needs.resolve-inputs.outputs.suite-name || 'Default' }}"
+          echo "│ Architecture:         ${{ needs.resolve-inputs.outputs.arch }}"
+          echo "│ Runner Label:         ${{ needs.resolve-inputs.outputs.runner-label }}"
+          echo "│ Log Level:            ${{ needs.resolve-inputs.outputs.log-level }}"
+          echo "│ Skip on Timeout:      ${{ needs.resolve-inputs.outputs.skip-on-timeout }}"
+          echo "│ Measure Device Perf:  ${{ needs.resolve-inputs.outputs.measure-device-perf }}"
+          echo "│ Upload Results:       ${{ needs.resolve-inputs.outputs.upload-results }}"
+          echo "│ Use Database:         ${{ needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)' }}"
+          echo "│ Mesh Shape Filter:    ${{ needs.resolve-inputs.outputs.mesh-shape || 'none' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+      - name: Download sweep vectors
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sweeps-vectors
+          path: /work/tests/sweep_framework/vectors_export
+      - name: Run ttnn sweeps (single sweep) ${{ needs.resolve-inputs.outputs.runner-label }} ${{ needs.resolve-inputs.outputs.sweep-name }} ${{ needs.resolve-inputs.outputs.suite-name }}
+        run: |
+          SUITE_NAME="${{ needs.resolve-inputs.outputs.suite-name }}"
+
+          SKIP_ON_TIMEOUT_FLAG=""
+          if [[ "${{ needs.resolve-inputs.outputs.skip-on-timeout }}" == "true" ]]; then
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+          fi
+
+          DEVICE_PERF_FLAG=""
+          if [[ "${{ needs.resolve-inputs.outputs.measure-device-perf }}" == "true" ]]; then
+            DEVICE_PERF_FLAG="--device-perf"
+          fi
+
+          MEMORY_FLAG=""
+          if [[ "${{ needs.resolve-inputs.outputs.measure-memory }}" == "true" ]]; then
+            MEMORY_FLAG="--measure-memory"
+          fi
+
+          E2E_PERF_FLAG=""
+          if [[ "${{ needs.resolve-inputs.outputs.measure-e2e-perf }}" == "true" ]]; then
+            E2E_PERF_FLAG="--perf-with-cache"
+          fi
+
+          CMD=(
+            python3 tests/sweep_framework/sweeps_runner.py
+            --module-name ${{ needs.resolve-inputs.outputs.sweep-name }}
+            --vector-source vectors_export
+            --result-dest results_export
+            --tag ci-main
+            --summary
+          )
+
+          if [[ -n "$SKIP_ON_TIMEOUT_FLAG" ]]; then
+            CMD+=("$SKIP_ON_TIMEOUT_FLAG")
+          fi
+
+          if [[ -n "$DEVICE_PERF_FLAG" ]]; then
+            CMD+=("$DEVICE_PERF_FLAG")
+          fi
+
+          if [[ -n "$E2E_PERF_FLAG" ]]; then
+            CMD+=("$E2E_PERF_FLAG")
+          fi
+
+          if [[ -n "$SUITE_NAME" ]]; then
+            CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          if [[ -n "$MEMORY_FLAG" ]]; then
+            CMD+=("$MEMORY_FLAG")
+          fi
+
+          "${CMD[@]}"
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sweeps-run-result
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+
+  ttnn-sweeps-n150:
+    name: ttnn sweeps N150
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.n150-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.n150-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.n150-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-n300:
+    name: ttnn sweeps N300
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.n300-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.n300-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.n300-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-p150b:
+    name: ttnn sweeps P150b
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.p150b-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.p150b-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p150b-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-p100a:
+    name: ttnn sweeps P100a
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.p100a-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.p100a-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p100a-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-p300a:
+    name: ttnn sweeps P300a
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.p300a-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.p300a-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p300a-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-t3k:
+    name: ttnn sweeps T3K
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.t3k-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.t3k-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.t3k-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-galaxy:
+    name: ttnn sweeps Galaxy
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.galaxy-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.galaxy-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.galaxy-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-homogenize-run-result:
+    name: Homogenize run result
+    needs:
+      - resolve-inputs
+      - build-artifact
+      - ttnn-sweeps-n150
+      - ttnn-sweeps-n300
+      - ttnn-sweeps-p150b
+      - ttnn-sweeps-p100a
+      - ttnn-sweeps-p300a
+      - ttnn-sweeps-t3k
+      - ttnn-sweeps-galaxy
+    if: |
+      always() &&
+      !cancelled() &&
+      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n150.result == 'failure' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-n300.result == 'failure' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-p150b.result == 'failure' || needs.ttnn-sweeps-p100a.result == 'success' || needs.ttnn-sweeps-p100a.result == 'failure' || needs.ttnn-sweeps-p300a.result == 'success' || needs.ttnn-sweeps-p300a.result == 'failure' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-t3k.result == 'failure' || needs.ttnn-sweeps-galaxy.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'failure')
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download all sweep results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sweeps-results*
+          path: /work/tests/sweep_framework/results_export
+          merge-multiple: true
+      - name: Homogenize sweep results
+        run: |
+          # Determine run type based on sweep name
+          RUN_TYPE="nightly"
+          if [[ "${{ needs.resolve-inputs.outputs.sweep-name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+            RUN_TYPE="comprehensive"
+          elif [[ "${{ needs.resolve-inputs.outputs.sweep-name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+            RUN_TYPE="model_traced"
+          elif [[ "${{ needs.resolve-inputs.outputs.sweep-name }}" == "ALL SWEEPS (Lead Models)" ]]; then
+            RUN_TYPE="lead_models"
+          fi
+          echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
+          python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
+      - name: Upload runs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sweeps-run-result
+          path: /work/tests/sweep_framework/results_export/oprun_*.json
+          retention-days: 7
+      - name: Generate sweep summary
+        continue-on-error: true
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ARCH_NAME: ${{ needs.resolve-inputs.outputs.arch }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 /work/.github/actions/sweep-run-analysis/scripts/push_sweep_results.py \
+            --summary-only \
+            /work/tests/sweep_framework/results_export/ \
+            "$RUN_TYPE"
+      - name: Upload test results CSV
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sweep-test-results-csv
+          path: /tmp/sweep_test_results.csv
+          retention-days: 14
+      - name: Push results to database (lead models only)
+        if: env.RUN_TYPE == 'lead_models'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ARCH_NAME: ${{ needs.resolve-inputs.outputs.arch }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          pip install psycopg2-binary
+          python /work/.github/actions/sweep-run-analysis/scripts/push_sweep_results.py \
+            /work/tests/sweep_framework/results_export/ \
+            "lead models"
+
+  ttnn-upload-results:
+    name: Upload sweep results to SFTP server
+    needs:
+      - resolve-inputs
+      - ttnn-homogenize-run-result
+      - ttnn-run-single-sweep
+    if: |
+      always() &&
+      !cancelled() &&
+      (needs.ttnn-homogenize-run-result.result == 'success' || needs.ttnn-run-single-sweep.result == 'success') &&
+      needs.resolve-inputs.outputs.upload-results == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository (actions only)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github/actions
+      - name: Download sweep results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sweeps-run-result
+          path: tests/sweep_framework/results_export
+      - name: List all downloaded files
+        run: |
+          ls -hal tests/sweep_framework/results_export
+      - name: Upload via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: ${{ github.workspace }}

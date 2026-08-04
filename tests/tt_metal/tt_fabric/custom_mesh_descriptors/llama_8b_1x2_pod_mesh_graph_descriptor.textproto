@@ -1,0 +1,45 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# Two 4x16 BLACKHOLE meshes that differ only in how their hosts span the grid:
+#   M0: host_topology [1, 8]  -> 8 hosts laid along the 16-col axis (2 cols each, 4 rows).
+#   M1: host_topology [4, 8]  -> 32 hosts tiling the grid (1 row x 2 cols each).
+# Both use a RING 4-row axis and a LINE 16-col axis.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 16 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 8 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 16 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 4, 8 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Graph (two meshes + intermesh links) ----------------------------------
+# M0 and M1 are joined by intermesh ethernet links (any device may realize them).
+# The pipeline's forward crossing (last 4x2 stage -> first 1x2 stage) and loopback
+# (last 1x2 stage -> embedding) both ride these links; routing is logical (sockets),
+# not a physical torus wrap.
+graph_descriptors {
+  name: "G0"
+  # MGD 1.0 compatibility requires the single top-level graph to be a FABRIC graph
+  # (a "POD"/other type trips "There can only be one FABRIC level graph").
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  # Only 8 connections due to mapper bug, but should be able to specify 16
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1  } }
+    channels { count: 8 policy: STRICT }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

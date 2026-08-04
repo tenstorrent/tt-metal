@@ -1,0 +1,20 @@
+Siparişim ne zaman kargoya verilecek?                # When will my order be shipped?
+Kargo takip numaramı nereden bulabilirim?            # Where can I find my cargo tracking number?
+Ürünüm hasarlı geldi, ne yapmalıyım?                 # My product arrived damaged, what should I do?
+İade işlemi nasıl yapılır?                           # How do I return a product?
+Siparişimi nasıl iptal edebilirim?                   # How can I cancel my order?
+Kredi kartı ile ödeme yapabilir miyim?               # Can I pay by credit card?
+Kapıda ödeme seçeneğiniz var mı?                     # Do you offer cash on delivery?
+Siparişimde değişiklik yapabilir miyim?              # Can I make changes to my order?
+Faturamı nasıl alabilirim?                           # How can I get my invoice?
+Kampanya ve indirimlerden nasıl haberdar olabilirim? # How can I be informed about campaigns and discounts?
+Ürün stokta yoksa ne yapmalıyım?                     # What should I do if the product is out of stock?
+Teslimat süresi ne kadar?                            # How long is the delivery time?
+Kargo ücreti ne kadar?                               # How much is the shipping fee?
+Siparişim eksik geldi, ne yapmalıyım?                # My order arrived incomplete, what should I do?
+Ürün garantisi var mı?                               # Is there a warranty for the product?
+Hangi kargo firması ile çalışıyorsunuz?              # Which cargo company do you work with?
+Siparişimi başka bir adrese gönderebilir miyim?      # Can I send my order to another address?
+Sipariş verirken nelere dikkat etmeliyim?            # What should I pay attention to when placing an order?
+Ürünleriniz orijinal mi?                             # Are your products original?
+Müşteri hizmetlerine nasıl ulaşabilirim?             # How can I contact customer service?

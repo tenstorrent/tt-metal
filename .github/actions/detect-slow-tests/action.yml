@@ -1,0 +1,21 @@
+name: "Detect slow tests"
+description: "Scan a test report and fail if any individual test is slower than a given threshold"
+
+inputs:
+  report-dir:
+    description: "Path that contains the test report"
+    required: false
+    default: "/work/test-reports"
+  threshold:
+    description: "Threshold for slow tests in seconds"
+    required: true
+    default: "5.0"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Find changed files
+      id: find-changed-files
+      shell: bash
+      run: |
+        python3 ${GITHUB_ACTION_PATH}/detect-slow-tests.py ${{ inputs.report-dir }} ${{ inputs.threshold }}

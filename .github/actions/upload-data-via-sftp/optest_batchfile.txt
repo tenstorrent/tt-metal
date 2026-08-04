@@ -1,0 +1,11 @@
+# Batchfile for uploading oprun files from /work/tests/sweep_framework/results_export/
+# This will upload all files starting with "oprun_" (typically oprun_*.json files)
+# a batchfile in the context of SFTP is a text file that contains a series of SFTP commands to be executed in sequence like a script.
+lcd tests/sweep_framework/results_export/
+lpwd
+pwd
+# Upload all oprun files from the local results_export directory to server home directory
+mput -f oprun_*.json
+
+# List files to verify upload
+ls -hal oprun_*.json

@@ -1,0 +1,740 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import gc
+import inspect
+import os
+
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
+from models.tt_transformers.tt.common import (
+    Mode,
+    calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
+)
+from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
+from models.tt_transformers.tt.model_config import (
+    HfAttentionWrapper,
+    HfDecoderWrapper,
+    HfModelWrapper,
+    MathFidelitySetting,
+)
+from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.tt_transformers.tt.model_config import ModelOptimizations, OpGroup
+from models.tt_transformers.tt.prefetcher import Prefetcher
+
+# file names for performance and accuracy mode override files
+PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
+ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
+
+# SDPA decode k_chunk when force_fixed_decode_k_chunk is True (paged text path; see text_demo).
+_GEMMA3_SDPA_DECODE_K_CHUNK_DEFAULT = 256
+# Under program trace, use the smallest valid k_chunk (pow2, multiple of 32) to reduce L1 vs static CB limits.
+_GEMMA3_SDPA_DECODE_K_CHUNK_PROGRAM_TRACE = 32
+
+
+class ModelArgs(TTModelArgs):
+    OP_KEYS = (
+        # Embedding
+        "EMB_WEIGHTS",
+        # Feed forward
+        "MLP_WEIGHTS",
+        "FF1_OUTPUT",
+        "FF3_OUTPUT",
+        "FF2_OUTPUT",
+        "MLP_W_LAYOUT",
+        # Attention
+        "ATTN_WEIGHTS",
+        "XQKV_MM_OUTPUT",
+        "QKV_HEADS_OUTPUT",
+        "QV_ROT_EMB_OUTPUT",
+        "KV_UNPAD_OUTPUT",
+        "QK_MM_OUTPUT",
+        "QKV_MM_OUTPUT",
+        "CONCAT_HEADS_OUTPUT",
+        "ATTN_OUTPUT",
+        "ATTN_W_LAYOUT",
+        # Decoder
+        "DECODE_RESIDUAL",
+        "OUTPUT_MM",
+    )
+
+    MAX_QKV_MM_SEQ_LEN = 2048
+
+    def __init__(
+        self,
+        mesh_device,
+        instruct=False,
+        dummy_weights=False,
+        max_batch_size=1,
+        max_seq_len=1024 * 128,
+        optimizations=None,
+        cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
+        enable_program_trace: bool = False,
+    ):
+        # Resolve HF_MODEL to a local snapshot path before super().__init__() so that
+        # all HF calls (AutoConfig, tokenizer, weights) skip the refs/main lookup,
+        # which is absent on some CI machines.  Left in env so sub-tests in the same
+        # pytest session (e.g. siglip/test_attention.py) also get the absolute path.
+        hf_model = os.environ.get("HF_MODEL", "")
+        if hf_model and not os.path.isabs(hf_model):
+            snapshot = ModelArgs._resolve_hf_snapshot(hf_model)
+            if snapshot:
+                logger.info(f"[Gemma3] Resolved HF model '{hf_model}' to snapshot: {snapshot}")
+                os.environ["HF_MODEL"] = str(snapshot)
+        self._enable_program_trace = enable_program_trace
+        # Trace path needs fixed k_chunk and flags before super().__init__: base __init__ may consult attention config.
+        if enable_program_trace:
+            self.force_fixed_decode_k_chunk = True
+            self._gemma3_sdpa_decode_k_chunk_override = _GEMMA3_SDPA_DECODE_K_CHUNK_PROGRAM_TRACE
+
+        super().__init__(
+            mesh_device,
+            instruct=instruct,
+            dummy_weights=dummy_weights,
+            max_batch_size=max_batch_size,
+            max_seq_len=max_seq_len,
+            optimizations=optimizations,
+            cache_hf=cache_hf,
+        )
+
+        # For Gemma3 we still need a real tokenizer even when using dummy_weights,
+        # because prompt encoding relies on HF chat templates, not on checkpoint weights.
+        if dummy_weights and self.tokenizer is None:
+            self.tokenizer = self.create_tokenizer()
+
+        self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
+        self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
+        self.padded_vocab_size = 262400
+        # Raise the per-device cap so on-device sampling is enabled for Gemma3's 131200-wide shard.
+        self.device_sampling_max_per_device_vocab = 192 * 1024
+
+        if enable_program_trace:
+            self._relax_attention_ops_for_program_trace()
+
+        # HiFi2 NA fixes single-device decode token drift. It increases SDPA decode L1 usage and can
+        # overlap Metal's static circular-buffer region used for program tracing (or multi-device
+        # layouts), causing TT_THROW in validate_circular_buffer_region. Skip in those cases.
+        if not enable_program_trace:
+            self._force_sdpa_decode_hifi2_na()
+
+        if self.num_devices == 1:
+            # Turn off fp32_dest_acc_en to not trigger L1 OOM
+            self._force_sdpa_prefill_hifi4_fp16()
+
+    def _relax_attention_ops_for_program_trace(self):
+        """Lower L1 for prefill+decode attention under program tracing (minimal_matmul / SDPA / linear)."""
+        trace_groups = (
+            OpGroup.LI_QKV_PREFILL,
+            OpGroup.LI_O_PREFILL,
+            OpGroup.SDPA_PREFILL,
+            OpGroup.LI_QKV_DECODE,
+            OpGroup.LI_O_DECODE,
+            OpGroup.SDPA_DECODE,
+        )
+        for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
+            tensor_precision = {k: v for k, v in conf.tensor_dtype_settings.items() if v is not None}
+            op_fidelity = dict(conf.op_fidelity_settings)
+            for grp in trace_groups:
+                if grp in op_fidelity:
+                    op_fidelity[grp] = MathFidelitySetting.HIFI2_FP16
+            fixed_conf = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
+            fixed_conf.__name__ = getattr(conf, "__name__", fixed_conf.__name__)
+            self.optimizations.set_decoder_conf(decoder_id, fixed_conf)
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+
+    def _force_sdpa_decode_hifi2_na(self):
+        """Gemma3 decode SDPA requires no-accumulation HiFi2 for correctness (single-device)."""
+        for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
+            tensor_precision = {key: value for key, value in conf.tensor_dtype_settings.items() if value is not None}
+            op_fidelity = dict(conf.op_fidelity_settings)
+            op_fidelity[OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2_NA
+            fixed_conf = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
+            fixed_conf.__name__ = getattr(conf, "__name__", fixed_conf.__name__)
+            self.optimizations.set_decoder_conf(decoder_id, fixed_conf)
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+
+    def _force_sdpa_prefill_hifi4_fp16(self):
+        for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
+            tensor_precision = {key: value for key, value in conf.tensor_dtype_settings.items() if value is not None}
+            op_fidelity = dict(conf.op_fidelity_settings)
+            op_fidelity[OpGroup.SDPA_PREFILL] = MathFidelitySetting.HIFI4_FP16
+            fixed_conf = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
+            fixed_conf.__name__ = getattr(conf, "__name__", fixed_conf.__name__)
+            self.optimizations.set_decoder_conf(decoder_id, fixed_conf)
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+
+    @staticmethod
+    def _resolve_hf_snapshot(hf_model_name):
+        hf_cache = os.path.normpath(
+            os.environ.get("HF_HUB_CACHE")
+            or os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub")
+        )
+        model_slug = "models--" + hf_model_name.replace("/", "--")
+        snapshots_dir = os.path.normpath(os.path.join(hf_cache, model_slug, "snapshots"))
+        # Prevent path traversal: ensure the resolved path stays within hf_cache.
+        if not snapshots_dir.startswith(hf_cache + os.sep):
+            return None
+        if not os.path.isdir(snapshots_dir):
+            return None
+        snaps = [
+            os.path.join(snapshots_dir, s)
+            for s in os.listdir(snapshots_dir)
+            if os.path.isdir(os.path.join(snapshots_dir, s))
+        ]
+        return max(snaps, key=os.path.getmtime) if snaps else None
+
+    def get_max_prefill_chunk_size(self):
+        model_overrides = {
+            "gemma-3-4b": {"P150": 128},
+            "medgemma-4b": {"P150": 128},
+            "gemma-3-27b": {"P150": 128},
+            "medgemma-27b": {"P150": 128},
+        }
+        model_name = self.base_model_name
+        device_name = self.device_name
+        if model_name in model_overrides and device_name in model_overrides[model_name]:
+            return model_overrides[model_name][device_name] * 1024
+        return super().get_max_prefill_chunk_size()
+
+    def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+        """Smaller MinimalMatmul blocks for traced long prefill (default 8³ overflows static CB vs L1)."""
+        if self._enable_program_trace and mode == Mode.PREFILL and seq_len > 128:
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=4,
+                K_block_size=4,
+                N_block_size=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
+            )
+        return super().get_attn_qkv_program_config(mode, seq_len, prefetcher)
+
+    def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
+        force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False)
+        if not force_fixed_k_chunk:
+            return super().get_attn_sdpa_decode_program_config(prefetcher)
+
+        override = getattr(self, "_gemma3_sdpa_decode_k_chunk_override", None)
+        k_chunk_tokens = _GEMMA3_SDPA_DECODE_K_CHUNK_DEFAULT if override is None else int(override)
+        if prefetcher is not None:
+            sdpa_grid_size = (8, 8)
+            start_core = ttnn.CoreCoord(1, 0)
+            num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=sdpa_grid_size,
+                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
+                ),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=k_chunk_tokens,
+            )
+
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=k_chunk_tokens,
+        )
+
+    def get_warmup_prefill_supported_seq_lens(self):
+        DEFAULT_VALUE = self.capped_warmup_seq_len
+
+        # This dictionary is used to override the default ceil warmup prefill value
+        # Longer seqlens take too much time to warmup, so CI times out
+        model_specific_ceil_warmup_lengths = {
+            "gemma-3-4b": 2048,
+            "gemma-3-27b": 2048,
+        }
+
+        max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
+            max_seq_len_to_warmup = self.capped_warmup_seq_len
+
+        to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
+        )
+
+        to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
+
+        return to_warmup_seq_lens
+
+    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        # TODO: Add more model-specific filtering here
+        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+        return to_warmup_seq_lens
+
+    def get_trace_prefill_supported_seq_lens(self):
+        default_supported_seq_lens = {
+            # for gemma we have different default supported seq lens than in tt_transformers
+            # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
+            "N150": [],
+            "N300": [],
+            "T3K": [],
+            "TG": [],
+            "P150": [],
+        }
+
+        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
+        model_specific_supported_seq_lens = {
+            # EXAMPLE: "gemma-3-4b": {
+            #     "N150": [128, 1024, 2048],
+            # }
+        }
+
+        model_name = self.base_model_name
+        device_name = self.device_name
+
+        # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(
+            device_name, default_supported_seq_lens.get(device_name)
+        )
+
+        if result is not None:
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
+        else:
+            return []
+
+    def _set_model_specific_params(self):
+        self.rms_norm_add_unit_offset = True
+        self.embed_scale = self.dim**0.5
+
+    # def _set_vision_params(self, vision_config):
+    #     self.vision_dim = vision_config.get("hidden_size", 1280)
+    #     self.vision_mlp_ratio = vision_config.get("intermediate_size", self.vision_dim * 4) // self.vision_dim
+    #     self.vision_hidden_dim = vision_config.get("intermediate_size", self.vision_dim * self.vision_mlp_ratio)
+    #     self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
+    #     self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+    #     self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
+    #     self.vision_patch_size = vision_config.get("patch_size", 14)
+    #     self.vision_in_channels = vision_config.get("num_channels", 3)
+    #     self.vision_act_layer = ttnn.UnaryOpType.GELU  # or read from config if variable
+    #     self.vision_dropout = vision_config.get("attention_dropout", 0.0)
+    #     self.vision_max_num_tiles = 4
+    #     self.vision_n_global_layers = 8
+
+    def _set_vision_params(self, vision_config):
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
+        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
+        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 8)
+        self.vision_dim = vision_config.get("hidden_size", 1152)
+
+        intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
+        self.vision_mlp_ratio = intermediate_size // self.vision_dim
+        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
+        self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
+        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+
+        self.vision_n_layers = vision_config.get("num_hidden_layers", 27)
+        self.vision_patch_size = vision_config.get("patch_size", 14)
+        self.vision_in_channels = vision_config.get("num_channels", 3)
+
+        self.vision_dropout = vision_config.get("attention_dropout", 0.0)
+        self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", 256)
+
+        # Optional vision activation layer, defaults to GELU
+        act_layer = vision_config.get("act_layer", "gelu").lower()
+        self.vision_act_layer = {
+            "gelu": ttnn.UnaryOpType.GELU,
+            "relu": ttnn.UnaryOpType.RELU,
+            "silu": ttnn.UnaryOpType.SILU,
+        }.get(act_layer, ttnn.UnaryOpType.GELU)
+
+        self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
+
+    def _set_hf_params(self, checkpoint_dir):
+        def merge_text_config(base_config):
+            text_config = base_config.get("text_config", {})
+            # Merge non-nested keys into text_config
+            text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return text_config
+
+        def merge_vision_config(base_config):
+            vision_config = base_config.get("vision_config", {})
+            # Merge non-nested keys into vision_config
+            vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return vision_config
+
+        from transformers import AutoConfig
+
+        # For dummy_weights we still load only the small HF config,
+        # but we avoid loading checkpoint weights.
+        self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+
+        if "text_config" in self.hf_config or "vision_config" in self.hf_config:
+            self._set_params_from_dict(self.hf_config)
+            if "vision_config" in self.hf_config:
+                merged_vision_config = merge_vision_config(self.hf_config)
+                self._set_vision_params(merged_vision_config)
+        else:
+            self._set_params_from_dict(self.hf_config)
+
+    def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
+        if is_vision:
+            text_prefix = "model.vision_tower.vision_model.encoder."
+        else:
+            text_prefix = ""
+
+        layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
+
+        module_map = {
+            "MLP": "feed_forward",
+            "Attention": "attention",
+            "TransformerBlock": "",
+            "": "",  # If no module is given, just get layer prefix
+        }
+
+        vision_module_map = {
+            "MLP": "mlp.",
+            "Attention": "self_attn.",
+            "TransformerBlock": "",
+            "": "",
+        }
+
+        module_map = vision_module_map if is_vision else module_map
+
+        return text_prefix + layer_prefix + module_map[module_name]
+
+    def _gemma_dummy_hf_model(self):
+        """Build Gemma3 from HF config only (random init), matching tt_transformers ModelArgs dummy_weights flow.
+
+        Uses from_config + layer truncation + bfloat16 to avoid fp32 OOM on host when allocating the full model.
+        """
+        from transformers import AutoConfig, Gemma3ForConditionalGeneration
+
+        logger.info("Gemma3 ModelArgs: building HF dummy model from config (dummy_weights=True)")
+
+        config = AutoConfig.from_pretrained(self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf)
+        if hasattr(config, "text_config") and config.text_config is not None:
+            config.text_config.num_layers = self.n_layers
+            config.text_config.num_hidden_layers = self.n_layers
+        else:
+            if hasattr(config, "num_layers"):
+                config.num_layers = self.n_layers
+            if hasattr(config, "num_hidden_layers"):
+                config.num_hidden_layers = self.n_layers
+
+        model_cls = Gemma3ForConditionalGeneration
+        from_config_exc = None
+        try:
+            try:
+                model = model_cls.from_config(
+                    config, torch_dtype=torch.bfloat16, trust_remote_code=self.trust_remote_code_hf
+                )
+            except TypeError:
+                try:
+                    model = model_cls.from_config(config, torch_dtype=torch.bfloat16)
+                except TypeError:
+                    try:
+                        model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                    except TypeError:
+                        model = model_cls.from_config(config)
+        except Exception as exc:
+            from_config_exc = exc
+            logger.info("Error loading dummy Gemma3 using .from_config. Error: {}", exc)
+            if hasattr(model_cls, "_from_config"):
+                try:
+                    try:
+                        model = model_cls._from_config(
+                            config, torch_dtype=torch.bfloat16, trust_remote_code=self.trust_remote_code_hf
+                        )
+                    except TypeError:
+                        model = model_cls._from_config(config, torch_dtype=torch.bfloat16)
+                except Exception as fallback_exc:
+                    logger.info("Error loading dummy Gemma3 using ._from_config. Error: {}", fallback_exc)
+                    if from_config_exc is not None:
+                        raise fallback_exc from from_config_exc
+                    raise
+            else:
+                raise
+
+        gc.collect()
+        return model
+
+    # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
+    def load_state_dict(self):
+        from transformers import Gemma3ForConditionalGeneration
+
+        if self.dummy_weights:
+            logger.info("Gemma3 ModelArgs: using dummy_weights path; NOT loading checkpoints from HF_MODEL")
+            model = self._gemma_dummy_hf_model()
+            state_dict = model.state_dict()
+            del model
+            gc.collect()
+        else:
+            model = Gemma3ForConditionalGeneration.from_pretrained(
+                self.CKPT_DIR,
+                torch_dtype="auto",
+            )
+            if self.cache_hf_flag:
+                self.cached_hf_model = model
+            state_dict = model.state_dict()
+
+        if self.is_multimodal:
+            state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+        else:
+            state_dict = standardize_hf_keys(state_dict)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+
+        keys_dict = list(state_dict.keys())[:]
+        remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
+        for k in keys_dict:
+            if any([r in k for r in remv]):
+                state_dict.pop(k)
+
+        return state_dict
+
+    @staticmethod
+    def _gemma3_multi_modal_projector(model):
+        # transformers 5.x wraps the inner Gemma3Model as `model.model`, moving
+        # multi_modal_projector off the top-level Gemma3ForConditionalGeneration.
+        mmp = getattr(model, "multi_modal_projector", None)
+        if mmp is None:
+            mmp = model.model.multi_modal_projector
+        return mmp
+
+    @staticmethod
+    def _gemma3_vision_tower(model):
+        # transformers 5.x wraps the inner Gemma3Model as `model.model`, moving
+        # vision_tower off the top-level Gemma3ForConditionalGeneration (same as
+        # multi_modal_projector above).
+        vt = getattr(model, "vision_tower", None)
+        if vt is None:
+            vt = model.model.vision_tower
+        return vt
+
+    @classmethod
+    def _gemma3_vision_transformer(cls, model):
+        # transformers 5.x flattened SiglipVisionModel (dropped the `.vision_model` /
+        # SiglipVisionTransformer wrapper); embeddings/encoder/post_layernorm are now direct
+        # attributes. Return that transformer level on <5 (`.vision_model`) and >=5 (the tower itself).
+        vt = cls._gemma3_vision_tower(model)
+        return vt.vision_model if hasattr(vt, "vision_model") else vt
+
+    def reference_vision_multi_modal(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_multi_modal_projector(model)
+        return layer
+
+    def reference_vision_rms_norm(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_multi_modal_projector(model).mm_soft_emb_norm
+        return layer
+
+    def reference_rms_norm(self, i=0):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[i].self_attn.q_norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_rms_norm_text(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def get_hf_model_cls(self):
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
+        if not self.is_multimodal:
+            return AutoModelForCausalLM
+
+        # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
+        # was folded into AutoModelForImageTextToText (available since 4.46).
+        for model_cls in (AutoModelForImageTextToText,):
+            if type(self.hf_config) == dict:
+                return model_cls
+
+        raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+
+    def reference_mlp(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].mlp
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
+        from transformers import Gemma3ForConditionalGeneration
+
+        if self.dummy_weights and not load_checkpoint:
+            model = self._gemma_dummy_hf_model()
+        else:
+            model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+        # transformers 5.x from_pretrained honors the checkpoint dtype (bf16); force float32 so the
+        # golden reference matches float32 inputs (e.g. the multi_modal_projector matmul, which
+        # otherwise raises "expected m1 and m2 to have the same dtype, but got: float != BFloat16").
+        model = model.float()
+        if wrap:
+            wrapper = HfModelWrapper(model, self.head_dim)
+            return wrapper
+        else:
+            return model
+
+    def reference_gemma_model(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_model(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_vision_transformer(model)
+        return layer
+
+    def reference_vision_mlp(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_vision_transformer(model).encoder.layers[0].mlp
+        return layer
+
+    def reference_siglip_patch_embed(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_vision_transformer(model).embeddings.patch_embedding
+        return layer
+
+    def reference_vision_pos_embedding(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_vision_transformer(model).embeddings.position_embedding
+        return layer
+
+    def reference_vision_embedding(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_vision_transformer(model).embeddings
+        return layer
+
+    def reference_vision_layernorm(self, layer_name="layer_norm1"):
+        model = self.reference_vision_transformer(wrap=False)
+        if layer_name == "layer_norm1":
+            layer = self._gemma3_vision_transformer(model).encoder.layers[0].layer_norm1
+        elif layer_name == "layer_norm2":
+            layer = self._gemma3_vision_transformer(model).encoder.layers[0].layer_norm2
+        else:
+            layer = self._gemma3_vision_transformer(model).post_layernorm
+        return layer
+
+    def reference_vision_attention(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_vision_transformer(model).encoder.layers[0].self_attn  # Common naming
+        return layer
+
+    def reference_vision_encoder_block(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_vision_transformer(model).encoder.layers[0]
+        return layer
+
+    def reference_vision_encoder(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = self._gemma3_vision_transformer(model).encoder
+        return layer
+
+    def reference_decoder(self, i=0):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[i]
+        rotary_emb = model.model.rotary_emb
+
+        rotary_emb_local = model.model.rotary_emb_local
+        wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
+
+        return wrapper
+
+    def reference_decoder_text(self, i=0):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0]
+        use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
+        if hasattr(model.model, "rotary_emb_local"):
+            rotary_emb_local = model.model.rotary_emb_local
+        else:
+            rotary_emb_local = None
+        wrapper = HfDecoderWrapper(
+            layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None, rotary_emb_local
+        )
+        return wrapper
+
+    def reference_attention(self, rope_embeddings="global"):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].self_attn
+        use_position_embeddings = layer.__class__.__name__ in ("Gemma3Attention",)
+        rope_layer_type = None
+        if "gemma-3" in self.model_name:
+            if rope_embeddings == "local":
+                rotary_emb = model.model.rotary_emb_local
+                rope_layer_type = "sliding_attention"
+            else:
+                rotary_emb = model.model.rotary_emb
+                rope_layer_type = "full_attention"
+        else:
+            rotary_emb = model.model.rotary_emb
+        # transformers 5.x Gemma3 consolidated RoPE into one module that selects `{layer_type}_inv_freq`.
+        # Layer 0 is a sliding (local) layer, so the attention's own layer_type would force LOCAL rope,
+        # but this unit test compares against the explicitly requested rope module (global by default)
+        # and the TT RotarySetup uses the global rope_theta. Pin the layer_type to the chosen module so
+        # reference and TT use the same rope (matches the pre-5.x behavior).
+        wrapper = HfAttentionWrapper(
+            layer,
+            self.head_dim,
+            rotary_emb if use_position_embeddings else None,
+            rope_layer_type=rope_layer_type,
+        )
+        return wrapper
+
+
+class HfGemmaDecoderWrapper:
+    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local):
+        from transformers import DynamicCache
+
+        self.decoder = decoder
+        self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
+        self.rotary_emb_local = rotary_emb_local
+        self.past_key_values = DynamicCache()
+
+    def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        # TODO: Generalize for other HF models
+
+        # transformers 5.x consolidated Gemma3 RoPE into a module that selects `{layer_type}_inv_freq`
+        # (layer_type=None -> AttributeError 'None_inv_freq'). Pass the matching layer_type when the
+        # rotary forward accepts it; <5 rotaries don't take the kwarg.
+        _takes_layer_type = "layer_type" in inspect.signature(self.rotary_emb.forward).parameters
+        if _takes_layer_type:
+            position_embeddings_global = self.rotary_emb(x, position_ids, layer_type="full_attention")
+            position_embeddings_local = self.rotary_emb_local(x, position_ids, layer_type="sliding_attention")
+        else:
+            position_embeddings_global = self.rotary_emb(x, position_ids)
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
+        if mask is not None:
+            while len(mask.shape) < 4:
+                mask = mask.unsqueeze(0)
+        # transformers 5.x renamed the decoder cache kwarg past_key_value -> past_key_values.
+        cache_kw = (
+            "past_key_values"
+            if "past_key_values" in inspect.signature(self.decoder.forward).parameters
+            else "past_key_value"
+        )
+        result = self.decoder.forward(
+            x,
+            position_embeddings_global=position_embeddings_global,
+            position_embeddings_local=position_embeddings_local,
+            use_cache=True,
+            position_ids=position_ids,
+            attention_mask=mask,
+            **{cache_kw: self.past_key_values},
+        )
+        # transformers 5.x decoder layers return the hidden-states tensor directly instead of a
+        # tuple; only unwrap [0] when it's actually a tuple (otherwise result[0] drops a leading dim).
+        output = result[0] if isinstance(result, tuple) else result
+        return output
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))

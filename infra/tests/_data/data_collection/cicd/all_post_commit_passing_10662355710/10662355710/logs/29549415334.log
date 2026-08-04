@@ -1,0 +1,200 @@
+﻿2024-09-02T07:02:02.1084018Z Current runner version: '2.319.1'
+2024-09-02T07:02:02.1108608Z ##[group]Operating System
+2024-09-02T07:02:02.1109370Z Ubuntu
+2024-09-02T07:02:02.1109728Z 22.04.4
+2024-09-02T07:02:02.1110013Z LTS
+2024-09-02T07:02:02.1110447Z ##[endgroup]
+2024-09-02T07:02:02.1110821Z ##[group]Runner Image
+2024-09-02T07:02:02.1111210Z Image: ubuntu-22.04
+2024-09-02T07:02:02.1111697Z Version: 20240825.1.0
+2024-09-02T07:02:02.1112691Z Included Software: https://github.com/actions/runner-images/blob/ubuntu22/20240825.1/images/ubuntu/Ubuntu2204-Readme.md
+2024-09-02T07:02:02.1114082Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu22%2F20240825.1
+2024-09-02T07:02:02.1115970Z ##[endgroup]
+2024-09-02T07:02:02.1116388Z ##[group]Runner Image Provisioner
+2024-09-02T07:02:02.1116922Z 2.0.384.1
+2024-09-02T07:02:02.1117280Z ##[endgroup]
+2024-09-02T07:02:02.1132052Z ##[group]GITHUB_TOKEN Permissions
+2024-09-02T07:02:02.1133653Z Actions: read
+2024-09-02T07:02:02.1134193Z Contents: read
+2024-09-02T07:02:02.1134732Z Metadata: read
+2024-09-02T07:02:02.1135285Z Pages: write
+2024-09-02T07:02:02.1135655Z ##[endgroup]
+2024-09-02T07:02:02.1138690Z Secret source: Actions
+2024-09-02T07:02:02.1139384Z Prepare workflow directory
+2024-09-02T07:02:02.1758200Z Prepare all required actions
+2024-09-02T07:02:02.1921948Z Getting action download info
+2024-09-02T07:02:02.3875801Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:02:02.5782362Z Uses: tenstorrent/tt-metal/.github/workflows/all-static-checks.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:02:02.5785087Z Complete job name: static-checks / check-forbidden-imports
+2024-09-02T07:02:03.0471675Z ##[group]Run actions/checkout@v4
+2024-09-02T07:02:03.0472287Z with:
+2024-09-02T07:02:03.0472699Z   repository: tenstorrent/tt-metal
+2024-09-02T07:02:03.0473552Z   token: ***
+2024-09-02T07:02:03.0474006Z   ssh-strict: true
+2024-09-02T07:02:03.0474715Z   ssh-user: git
+2024-09-02T07:02:03.0475251Z   persist-credentials: true
+2024-09-02T07:02:03.0475781Z   clean: true
+2024-09-02T07:02:03.0476163Z   sparse-checkout-cone-mode: true
+2024-09-02T07:02:03.0476759Z   fetch-depth: 1
+2024-09-02T07:02:03.0477186Z   fetch-tags: false
+2024-09-02T07:02:03.0477611Z   show-progress: true
+2024-09-02T07:02:03.0478221Z   lfs: false
+2024-09-02T07:02:03.0478570Z   submodules: false
+2024-09-02T07:02:03.0478993Z   set-safe-directory: true
+2024-09-02T07:02:03.0479570Z ##[endgroup]
+2024-09-02T07:02:03.2804432Z Syncing repository: tenstorrent/tt-metal
+2024-09-02T07:02:03.2806591Z ##[group]Getting Git version info
+2024-09-02T07:02:03.2807460Z Working directory is '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:02:03.2808777Z [command]/usr/bin/git version
+2024-09-02T07:02:03.2811869Z git version 2.46.0
+2024-09-02T07:02:03.2836757Z ##[endgroup]
+2024-09-02T07:02:03.2850982Z Temporarily overriding HOME='/home/runner/work/_temp/51df82c8-398c-4fb5-994d-5c1dce0b21dc' before making global git config changes
+2024-09-02T07:02:03.2852681Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:03.2862790Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:03.2898547Z Deleting the contents of '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:02:03.2901927Z ##[group]Initializing the repository
+2024-09-02T07:02:03.2906028Z [command]/usr/bin/git init /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:03.2969824Z hint: Using 'master' as the name for the initial branch. This default branch name
+2024-09-02T07:02:03.2971416Z hint: is subject to change. To configure the initial branch name to use in all
+2024-09-02T07:02:03.2972781Z hint: of your new repositories, which will suppress this warning, call:
+2024-09-02T07:02:03.2974367Z hint:
+2024-09-02T07:02:03.2975146Z hint: 	git config --global init.defaultBranch <name>
+2024-09-02T07:02:03.2976301Z hint:
+2024-09-02T07:02:03.2977784Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2024-09-02T07:02:03.2980243Z hint: 'development'. The just-created branch can be renamed via this command:
+2024-09-02T07:02:03.2981755Z hint:
+2024-09-02T07:02:03.2982684Z hint: 	git branch -m <name>
+2024-09-02T07:02:03.2984163Z Initialized empty Git repository in /home/runner/work/tt-metal/tt-metal/.git/
+2024-09-02T07:02:03.2988268Z [command]/usr/bin/git remote add origin https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:03.3024815Z ##[endgroup]
+2024-09-02T07:02:03.3026367Z ##[group]Disabling automatic garbage collection
+2024-09-02T07:02:03.3029097Z [command]/usr/bin/git config --local gc.auto 0
+2024-09-02T07:02:03.3062193Z ##[endgroup]
+2024-09-02T07:02:03.3063667Z ##[group]Setting up auth
+2024-09-02T07:02:03.3069612Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:03.3103398Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:03.3401958Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:02:03.3434988Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:02:03.3671064Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-02T07:02:03.3718298Z ##[endgroup]
+2024-09-02T07:02:03.3719892Z ##[group]Fetching the repository
+2024-09-02T07:02:03.3729744Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a9bcd03b1775ab989aebab822ec2e4f821abac41:refs/remotes/origin/main
+2024-09-02T07:02:04.7144870Z From https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:04.7145988Z  * [new ref]         a9bcd03b1775ab989aebab822ec2e4f821abac41 -> origin/main
+2024-09-02T07:02:04.7168096Z ##[endgroup]
+2024-09-02T07:02:04.7168700Z ##[group]Determining the checkout info
+2024-09-02T07:02:04.7170488Z ##[endgroup]
+2024-09-02T07:02:04.7175515Z [command]/usr/bin/git sparse-checkout disable
+2024-09-02T07:02:04.7218415Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2024-09-02T07:02:04.7247754Z ##[group]Checking out the ref
+2024-09-02T07:02:04.7251859Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2024-09-02T07:02:05.2646654Z Switched to a new branch 'main'
+2024-09-02T07:02:05.2648143Z branch 'main' set up to track 'origin/main'.
+2024-09-02T07:02:05.2674879Z ##[endgroup]
+2024-09-02T07:02:05.2714770Z [command]/usr/bin/git log -1 --format='%H'
+2024-09-02T07:02:05.2738150Z 'a9bcd03b1775ab989aebab822ec2e4f821abac41'
+2024-09-02T07:02:05.3054011Z ##[group]Run if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi
+2024-09-02T07:02:05.3055023Z [36;1mif (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi[0m
+2024-09-02T07:02:05.3238842Z shell: /usr/bin/bash -e {0}
+2024-09-02T07:02:05.3239332Z ##[endgroup]
+2024-09-02T07:02:05.3557315Z ##[group]Run if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
+2024-09-02T07:02:02.1134193Z Contents: read
+2024-09-02T07:02:02.1134732Z Metadata: read
+2024-09-02T07:02:02.1135285Z Pages: write
+2024-09-02T07:02:02.1135655Z ##[endgroup]
+2024-09-02T07:02:02.1138690Z Secret source: Actions
+2024-09-02T07:02:02.1139384Z Prepare workflow directory
+2024-09-02T07:02:02.1758200Z Prepare all required actions
+2024-09-02T07:02:02.1921948Z Getting action download info
+2024-09-02T07:02:02.3875801Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:02:02.5782362Z Uses: tenstorrent/tt-metal/.github/workflows/all-static-checks.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:02:02.5785087Z Complete job name: static-checks / check-forbidden-imports
+2024-09-02T07:02:03.0471675Z ##[group]Run actions/checkout@v4
+2024-09-02T07:02:03.0472287Z with:
+2024-09-02T07:02:03.0472699Z   repository: tenstorrent/tt-metal
+2024-09-02T07:02:03.0473552Z   token: ***
+2024-09-02T07:02:03.0474006Z   ssh-strict: true
+2024-09-02T07:02:03.0474715Z   ssh-user: git
+2024-09-02T07:02:03.0475251Z   persist-credentials: true
+2024-09-02T07:02:03.0475781Z   clean: true
+2024-09-02T07:02:03.0476163Z   sparse-checkout-cone-mode: true
+2024-09-02T07:02:03.0476759Z   fetch-depth: 1
+2024-09-02T07:02:03.0477186Z   fetch-tags: false
+2024-09-02T07:02:03.0477611Z   show-progress: true
+2024-09-02T07:02:03.0478221Z   lfs: false
+2024-09-02T07:02:03.0478570Z   submodules: false
+2024-09-02T07:02:03.0478993Z   set-safe-directory: true
+2024-09-02T07:02:03.0479570Z ##[endgroup]
+2024-09-02T07:02:03.2804432Z Syncing repository: tenstorrent/tt-metal
+2024-09-02T07:02:03.2806591Z ##[group]Getting Git version info
+2024-09-02T07:02:03.2807460Z Working directory is '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:02:03.2808777Z [command]/usr/bin/git version
+2024-09-02T07:02:03.2811869Z git version 2.46.0
+2024-09-02T07:02:03.2836757Z ##[endgroup]
+2024-09-02T07:02:03.2850982Z Temporarily overriding HOME='/home/runner/work/_temp/51df82c8-398c-4fb5-994d-5c1dce0b21dc' before making global git config changes
+2024-09-02T07:02:03.2852681Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:03.2862790Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:03.2898547Z Deleting the contents of '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:02:03.2901927Z ##[group]Initializing the repository
+2024-09-02T07:02:03.2906028Z [command]/usr/bin/git init /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:03.2969824Z hint: Using 'master' as the name for the initial branch. This default branch name
+2024-09-02T07:02:03.2971416Z hint: is subject to change. To configure the initial branch name to use in all
+2024-09-02T07:02:03.2972781Z hint: of your new repositories, which will suppress this warning, call:
+2024-09-02T07:02:03.2974367Z hint:
+2024-09-02T07:02:03.2975146Z hint: 	git config --global init.defaultBranch <name>
+2024-09-02T07:02:03.2976301Z hint:
+2024-09-02T07:02:03.2977784Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2024-09-02T07:02:03.2980243Z hint: 'development'. The just-created branch can be renamed via this command:
+2024-09-02T07:02:03.2981755Z hint:
+2024-09-02T07:02:03.2982684Z hint: 	git branch -m <name>
+2024-09-02T07:02:03.2984163Z Initialized empty Git repository in /home/runner/work/tt-metal/tt-metal/.git/
+2024-09-02T07:02:03.2988268Z [command]/usr/bin/git remote add origin https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:03.3024815Z ##[endgroup]
+2024-09-02T07:02:03.3026367Z ##[group]Disabling automatic garbage collection
+2024-09-02T07:02:03.3029097Z [command]/usr/bin/git config --local gc.auto 0
+2024-09-02T07:02:03.3062193Z ##[endgroup]
+2024-09-02T07:02:03.3063667Z ##[group]Setting up auth
+2024-09-02T07:02:03.3069612Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:03.3103398Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:03.3401958Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:02:03.3434988Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:02:03.3671064Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-02T07:02:03.3718298Z ##[endgroup]
+2024-09-02T07:02:03.3719892Z ##[group]Fetching the repository
+2024-09-02T07:02:03.3729744Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a9bcd03b1775ab989aebab822ec2e4f821abac41:refs/remotes/origin/main
+2024-09-02T07:02:04.7144870Z From https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:04.7145988Z  * [new ref]         a9bcd03b1775ab989aebab822ec2e4f821abac41 -> origin/main
+2024-09-02T07:02:04.7168096Z ##[endgroup]
+2024-09-02T07:02:04.7168700Z ##[group]Determining the checkout info
+2024-09-02T07:02:04.7170488Z ##[endgroup]
+2024-09-02T07:02:04.7175515Z [command]/usr/bin/git sparse-checkout disable
+2024-09-02T07:02:04.7218415Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2024-09-02T07:02:04.7247754Z ##[group]Checking out the ref
+2024-09-02T07:02:04.7251859Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2024-09-02T07:02:05.2646654Z Switched to a new branch 'main'
+2024-09-02T07:02:05.2648143Z branch 'main' set up to track 'origin/main'.
+2024-09-02T07:02:05.2674879Z ##[endgroup]
+2024-09-02T07:02:05.2714770Z [command]/usr/bin/git log -1 --format='%H'
+2024-09-02T07:02:05.2738150Z 'a9bcd03b1775ab989aebab822ec2e4f821abac41'
+2024-09-02T07:02:05.3054011Z ##[group]Run if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi
+2024-09-02T07:02:05.3055023Z [36;1mif (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi[0m
+2024-09-02T07:02:05.3238842Z shell: /usr/bin/bash -e {0}
+2024-09-02T07:02:05.3239332Z ##[endgroup]
+2024-09-02T07:02:05.3557315Z ##[group]Run if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
+2024-09-02T07:02:05.3558230Z [36;1mif (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi[0m
+2024-09-02T07:02:05.3559119Z [36;1mif (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi[0m
+2024-09-02T07:02:05.3623613Z shell: /usr/bin/bash -e {0}
+2024-09-02T07:02:05.3624025Z ##[endgroup]
+2024-09-02T07:02:05.3968579Z Post job cleanup.
+2024-09-02T07:02:05.4899340Z [command]/usr/bin/git version
+2024-09-02T07:02:05.4935804Z git version 2.46.0
+2024-09-02T07:02:05.4980307Z Temporarily overriding HOME='/home/runner/work/_temp/ab4115fb-0280-48f6-8fa6-9d90f424ef34' before making global git config changes
+2024-09-02T07:02:05.4982420Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:05.4995081Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:05.5031530Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:05.5064843Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:05.5317593Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:02:05.5340737Z http.https://github.com/.extraheader
+2024-09-02T07:02:05.5352776Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-02T07:02:05.5387050Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:02:05.5837192Z Cleaning up orphan processes

@@ -1,0 +1,78 @@
+---
+test-list:
+  eltwise-add:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 64, 64]
+      interval: 32
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_add_sweep.csv
+  eltwise-sub:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 64, 64]
+      interval: 32
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_sub_sweep.csv
+  matmul:
+    shape:
+      start-shape:
+        - [1, 1, 32, 32]
+        - [1, 1, 32, 32]
+      end-shape:
+        - [1, 1, 64, 64]
+        - [1, 1, 64, 64]
+      interval: 32
+      num-shapes: 2
+      method: matmul
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: matmul_sweep.csv
+  # Hardcoded shapes example
+  eltwise-exp:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]]
+        - [[1, 1, 32, 64]]
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -5
+        high: 5
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_exp_sweep.csv
+  eltwise-mul:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 32, 32]]
+        - [[1, 1, 32, 64], [1, 1, 32, 64]]
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_mul_sweep.csv

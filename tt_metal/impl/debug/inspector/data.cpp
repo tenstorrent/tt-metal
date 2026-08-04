@@ -1,0 +1,790 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <tt_stl/reflection.hpp>
+#include "data.hpp"
+#include <cstdlib>
+#include <iterator>
+#include <stdexcept>
+#include "rpc_server_controller.hpp"
+#include "logger.hpp"
+#include <tt-metalium/experimental/inspector_config.hpp>
+#include "context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "distributed/mesh_workload_impl.hpp"
+#include <program_cache.hpp>
+#include <system_mesh.hpp>
+#include "jit_build/build_env_manager.hpp"
+#include "device/device_manager.hpp"
+#include <llrt/tt_cluster.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+
+#include <fmt/format.h>
+
+namespace tt::tt_metal::inspector {
+
+std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) {
+    if (tensor_specs.empty()) {
+        return "Not captured";
+    }
+
+    constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
+    fmt::memory_buffer buf;
+    buf.reserve(TENSOR_ARGS_BUFFER_SIZE);
+    for (size_t i = 0; i < tensor_specs.size(); ++i) {
+        if (i > 0) {
+            fmt::format_to(std::back_inserter(buf), ", ");
+        }
+        fmt::format_to(std::back_inserter(buf), "[{}]: {}", i, tensor_specs[i]);
+    }
+    return std::string(buf.data(), buf.size());
+}
+
+Data::Data(std::optional<int> rank, ContextId context_id) :
+    context_id(context_id), logger(MetalContext::instance().rtoptions().get_inspector_log_path(), rank) {
+    // Initialize RPC server if enabled
+    const auto& rtoptions = MetalContext::instance().rtoptions();
+    if (rtoptions.get_inspector_rpc_server_enabled()) {
+        try {
+            int port = rtoptions.get_inspector_rpc_server_port();
+            std::string host = rtoptions.get_inspector_rpc_server_host();
+            if (rank.has_value()) {
+                port += *rank;  // Offset port by rank to allow multiple instances on the same machine
+            }
+            std::string address = host + ":" + std::to_string(port);
+            rpc_server_controller.start(address);
+
+            // Connect callbacks that we want to respond to
+            get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
+            get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
+            get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
+            get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
+                [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
+            get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
+            get_rpc_server().setGetKernelCallback(
+                [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
+            get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
+            get_rpc_server().setGetAllDispatchCoreInfosCallback(
+                [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
+            get_rpc_server().setGetBlocksByTypeCallback([this](auto result) { this->rpc_get_blocks_by_type(result); });
+            get_rpc_server().setGetMetalDeviceIdMappingsCallback(
+                [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
+            get_rpc_server().setGetConfigurationCallback([this](auto result) { this->rpc_get_configuration(result); });
+            get_rpc_server().setGetSystemMeshCallback([this](auto result) { this->rpc_get_system_mesh(result); });
+        } catch (const std::exception& e) {
+            TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
+        }
+    }
+}
+
+Data::~Data() {
+    rpc_server_controller.stop();
+}
+
+RpcServer& Data::get_rpc_server() {
+    return rpc_server_controller.get_rpc_server();
+}
+
+void Data::serialize_rpc() {
+    rpc_server_controller.get_rpc_server().serialize(logger.get_logging_path());
+}
+
+void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(programs_mutex);
+    auto programs = results.initPrograms(programs_data.size());
+    uint32_t i = 0;
+
+    for (const auto& [program_id, program_data] : programs_data) {
+        auto program = programs[i++];
+
+        // Set basic program info
+        program.setProgramId(program_id);
+
+        // Check if program is compiled (has finished compilation)
+        bool compiled = program_data.compile_finished_timestamp != inspector::time_point{};
+        program.setCompiled(compiled);
+
+        // Set binary status per device
+        auto binary_status_list = program.initBinaryStatusPerDevice(program_data.binary_status_per_device.size());
+        uint32_t j = 0;
+        for (const auto& [device_id, status] : program_data.binary_status_per_device) {
+            auto device_status = binary_status_list[j++];
+            device_status.setMetalDeviceId(static_cast<uint64_t>(device_id));
+            device_status.setStatus(convert_binary_status(status));
+        }
+
+        // Set kernels
+        auto kernels_list = program.initKernels(program_data.kernels.size());
+        j = 0;
+        for (const auto& [kernel_id, kernel_data] : program_data.kernels) {
+            auto kernel = kernels_list[j++];
+            kernel.setWatcherKernelId(kernel_data.watcher_kernel_id);
+            kernel.setName(kernel_data.name);
+            kernel.setPath(kernel_data.path);
+            kernel.setSource(kernel_data.source);
+            kernel.setProgramId(program_id);
+            auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
+            for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
+                elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
+            }
+        }
+    }
+}
+
+void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(mesh_devices_mutex);
+    auto mesh_devices = results.initMeshDevices(mesh_devices_data.size());
+    uint32_t i = 0;
+    for (const auto& [mesh_id, mesh_device_data] : mesh_devices_data) {
+        auto mesh_device = mesh_devices[i++];
+        mesh_device.setMeshId(mesh_id);
+
+        uint32_t j = 0;
+        auto devices_view = mesh_device_data.mesh_device->get_devices();
+        auto devices = mesh_device.initDevices(devices_view.size());
+        for (const auto& device : devices_view) {
+            devices.set(j++, device->id());
+        }
+
+        const auto& shape_view = mesh_device_data.mesh_device->get_view().shape();
+        auto shape = mesh_device.initShape(shape_view.dims());
+        for (size_t k = 0; k < shape_view.dims(); ++k) {
+            shape.set(k, shape_view[k]);
+        }
+
+        mesh_device.setParentMeshId(mesh_device_data.parent_mesh_id.value_or(-1));
+        mesh_device.setInitialized(mesh_device_data.initialized);
+        mesh_device.setProgramCacheEnabled(
+            const_cast<distributed::MeshDeviceImpl*>(mesh_device_data.mesh_device)->get_program_cache().is_enabled());
+    }
+}
+
+void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(mesh_workloads_mutex);
+    auto mesh_workloads = results.initMeshWorkloads(mesh_workloads_data.size());
+    uint32_t i = 0;
+    for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
+        auto mesh_workload = mesh_workloads[i++];
+        mesh_workload.setMeshWorkloadId(mesh_workload_id);
+
+        const auto& programs = mesh_workload_data.mesh_workload->get_programs();
+        auto programs_data = mesh_workload.initPrograms(programs.size());
+        uint32_t j = 0;
+        for (const auto& [device_range, program] : programs) {
+            auto program_data = programs_data[j++];
+            program_data.setProgramId(program.impl().get_id());
+            auto coordinates_list = program_data.initCoordinates(device_range.shape().mesh_size());
+            uint32_t k = 0;
+            for (const auto& device_coordinate : device_range) {
+                auto mesh_coordinate = coordinates_list[k++];
+                auto coords = device_coordinate.coords();
+                auto coordinates = mesh_coordinate.initCoordinates(coords.size());
+                for (size_t l = 0; l < coords.size(); ++l) {
+                    coordinates.set(l, coords[l]);
+                }
+            }
+        }
+
+        auto binary_status_list =
+            mesh_workload.initBinaryStatusPerMeshDevice(mesh_workload_data.binary_status_per_device.size());
+        j = 0;
+        for (const auto& [mesh_id, status] : mesh_workload_data.binary_status_per_device) {
+            auto binary_status = binary_status_list[j++];
+            binary_status.setMeshId(mesh_id);
+            binary_status.setStatus(convert_binary_status(status));
+        }
+    }
+}
+
+void Data::rpc_get_mesh_workload_runtime_entries(
+    rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results) {
+    std::lock_guard<std::mutex> ring_lock(runtime_entries_mutex);
+    std::lock_guard<std::mutex> trace_lock(trace_runtime_entries_mutex);
+
+    const size_t ring_count = std::min(runtime_entries_write_pos, kRuntimeEntriesCapacity);
+    const size_t ring_start = runtime_entries_write_pos - ring_count;
+
+    size_t trace_count = 0;
+    for (const auto& [_, bucket] : trace_runtime_entries) {
+        trace_count += bucket.size();
+    }
+
+    // Sentinel matches the default in rpc.capnp (UInt32 max == "not traced"). Capnp has no native null.
+    constexpr uint32_t kNoTraceId = 0xFFFFFFFFu;
+    auto all_runtime_entries = results.initRuntimeEntries(ring_count + trace_count);
+    size_t out_idx = 0;
+    auto fill = [&](const inspector::MeshWorkloadRuntimeEntry& re) {
+        auto entry = all_runtime_entries[out_idx++];
+        entry.setWorkloadId(re.workload_id);
+        entry.setRuntimeId(re.runtime_id);
+        entry.setOperationName(std::string(re.operation_name));
+        entry.setOperationParameters(stringify_tensor_specs(re.tensor_specs));
+        entry.setTraceId(re.trace_id.has_value() ? **re.trace_id : kNoTraceId);
+    };
+
+    for (size_t i = 0; i < ring_count; ++i) {
+        fill(runtime_entries[(ring_start + i) % kRuntimeEntriesCapacity]);
+    }
+    for (const auto& [_, bucket] : trace_runtime_entries) {
+        for (const auto& re : bucket) {
+            fill(re);
+        }
+    }
+}
+
+void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
+    // Get all active device ids
+    auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
+
+    // Write result
+    auto result_device_ids = results.initMetalDeviceIds(device_ids.size());
+    size_t i = 0;
+    for (const auto& device_id : device_ids) {
+        result_device_ids.set(i++, device_id);
+    }
+}
+
+void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results) {
+    std::lock_guard<std::mutex> lock(programs_mutex);
+    auto kernel_id = params.getWatcherKernelId();
+    auto program_id_it = kernel_id_to_program_id.find(kernel_id);
+    if (program_id_it == kernel_id_to_program_id.end()) {
+        throw std::runtime_error("Kernel not found");
+    }
+    auto program_id = program_id_it->second;
+    auto program_data = programs_data.find(program_id);
+    if (program_data == programs_data.end()) {
+        throw std::runtime_error("Program not found");
+    }
+    auto kernel_data_it = program_data->second.kernels.find(kernel_id);
+    if (kernel_data_it == program_data->second.kernels.end()) {
+        throw std::runtime_error("Kernel not found inside the program");
+    }
+    auto& kernel_data = kernel_data_it->second;
+    auto kernel = results.initKernel();
+    kernel.setWatcherKernelId(kernel_data.watcher_kernel_id);
+    kernel.setName(kernel_data.name);
+    kernel.setPath(kernel_data.path);
+    kernel.setSource(kernel_data.source);
+    kernel.setProgramId(program_id);
+    auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
+    for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
+        elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
+    }
+}
+
+// Get build environment information for all devices
+// This allows Inspector clients (e.g. tt-triage) to get the correct firmware path
+// for each device and build config, enabling correct firmware path resolution
+// without relying on relative paths
+// Declared here in Data to centralize Inspector RPC callback registration and
+// tie it to Inspector Data's lifetime
+void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results) {
+    // Get build environment info for all devices in this Inspector's owning MetalContext.
+    // Calls to BuildEnvManager::get_all_build_envs_info are thread-safe as it's protected by an internal mutex.
+    const auto& build_envs_info = BuildEnvManager::get_instance(context_id).get_all_build_envs_info();
+    // Populate RPC response with build environment info for all devices
+    auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
+    const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
+    const auto tensix_fw_launch_addr_value = [] {
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const auto tensix_core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        return hal.get_jit_build_config(tensix_core_type_idx, 0, 0).fw_launch_addr_value;
+    }();
+
+    size_t i = 0;
+    for (const auto& build_env : build_envs_info) {
+        auto item = result_build_envs[i++];
+        item.setMetalDeviceId(build_env.device_id);
+        // Populate RPC response with build environment info
+        auto build_info = item.initBuildInfo();
+        build_info.setBuildKey(build_env.build_key);
+        build_info.setFirmwarePath(build_env.firmware_root_path);
+        build_info.setFwCompileHash(fw_compile_hash);
+        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only).
+        // Reflects what the HAL registered at init; see MetalEnvImpl for the enable conditions.
+        build_info.setDramProgrammableCoresEnabled(
+            tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM));
+        build_info.setTensixFwLaunchAddrValue(tensix_fw_launch_addr_value);
+    }
+}
+
+// Get all dispatch core infos for all active devices
+// Do an on-demand snapshot of the command queue event info
+// Populate the results with the dispatch core info and corresponding cq_id event info
+void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
+    if (!tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Fast dispatch is not enabled, no dispatch core info to return
+        results.initCoresByCategory(0);
+        return;
+    }
+    // This returns a map of command queue id to event id for all active devices
+    auto cq_to_event_by_device =
+        tt_metal::MetalContext::instance().device_manager()->get_all_command_queue_event_infos();
+    // In a single lock, get the number of non-empty categories and initialize the results
+    std::scoped_lock locks(dispatch_core_info_mutex, dispatch_s_core_info_mutex, prefetcher_core_info_mutex);
+
+    // Get the number of non-empty categories
+    size_t non_empty_categories = 0;
+    if (!dispatch_core_info.empty()) {
+        non_empty_categories++;
+    }
+    if (!dispatch_s_core_info.empty()) {
+        non_empty_categories++;
+    }
+    if (!prefetcher_core_info.empty()) {
+        non_empty_categories++;
+    }
+
+    // Initialize the results with the number of non-empty categories
+    auto list = results.initCoresByCategory(non_empty_categories);
+
+    size_t category_index = 0;
+    // Populate the dispatch core info
+    if (!dispatch_core_info.empty()) {
+        auto category = list[category_index++];
+        Data::populate_core_entries_by_category(
+            category, rpc::CoreCategory::DISPATCH, dispatch_core_info, cq_to_event_by_device);
+    }
+    // Populate the dispatch_s core info
+    if (!dispatch_s_core_info.empty()) {
+        auto category = list[category_index++];
+        Data::populate_core_entries_by_category(
+            category, rpc::CoreCategory::DISPATCH_S, dispatch_s_core_info, cq_to_event_by_device);
+    }
+    // Populate the prefetcher core info
+    if (!prefetcher_core_info.empty()) {
+        auto category = list[category_index++];
+        Data::populate_core_entries_by_category(
+            category, rpc::CoreCategory::PREFETCH, prefetcher_core_info, cq_to_event_by_device);
+    }
+}
+
+void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results) {
+    auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+    auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
+
+    auto chips_builder = results.initChips(device_ids.size());
+    size_t chip_idx = 0;
+
+    for (ChipId device_id : device_ids) {
+        auto chip_entry = chips_builder[chip_idx++];
+        chip_entry.setChipId(static_cast<uint64_t>(device_id));
+
+        std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
+        std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
+
+        for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
+            active_eth_xy.emplace_back(logical_core.x, logical_core.y);
+        }
+
+        for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
+            idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
+        }
+
+        auto blocks = chip_entry.initBlocks();
+        auto set_coords = [](auto list_builder, const std::vector<std::pair<uint32_t, uint32_t>>& xy) {
+            auto list = list_builder(xy.size());
+            for (size_t i = 0; i < xy.size(); ++i) {
+                list[i].setX(xy[i].first);
+                list[i].setY(xy[i].second);
+            }
+        };
+        set_coords([&blocks](size_t n) { return blocks.initActiveEth(n); }, active_eth_xy);
+        set_coords([&blocks](size_t n) { return blocks.initIdleEth(n); }, idle_eth_xy);
+
+        // DRAM cores Metal manages (TRANSLATED coords), reported only when DRAM programmable cores are
+        // available. get_metal_dram_cores omits the syseng-owned NOC0 worker endpoints (CMFW DRAM
+        // telemetry), where Metal runs no DRISC firmware, so tools dump only these cores.
+        std::vector<std::pair<uint32_t, uint32_t>> dram_cores_xy;
+        if (MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+            for (const auto& dram_core :
+                 cluster.get_soc_desc(device_id).get_metal_dram_cores(CoordSystem::TRANSLATED)) {
+                dram_cores_xy.emplace_back(dram_core.x, dram_core.y);
+            }
+        }
+        set_coords([&chip_entry](size_t n) { return chip_entry.initDramCores(n); }, dram_cores_xy);
+    }
+}
+
+void Data::rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results) {
+    // Get cluster descriptor from MetalContext
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto& chip_id_to_unique_id = cluster.get_cluster_desc()->get_chip_unique_ids();
+
+    // Populate RPC response
+    auto result_mappings = results.initMappings(chip_id_to_unique_id.size());
+    size_t i = 0;
+    for (const auto& [chip_id, unique_id] : chip_id_to_unique_id) {
+        auto entry = result_mappings[i++];
+        entry.setMetalDeviceId(static_cast<uint64_t>(chip_id));
+        entry.setUniqueId(unique_id);
+    }
+}
+
+// Helper function to convert internal enum to Cap'n Proto enum
+rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
+    switch (status) {
+        case ProgramBinaryStatus::NotSent:
+            return rpc::BinaryStatus::NOT_SENT;
+        case ProgramBinaryStatus::InFlight:
+            return rpc::BinaryStatus::IN_FLIGHT;
+        case ProgramBinaryStatus::Committed:
+            return rpc::BinaryStatus::COMMITTED;
+        default:
+            return rpc::BinaryStatus::NOT_SENT;
+    }
+}
+
+// Helper function to populate the core info
+void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id) {
+    out.setMetalDeviceId(info.device_id);
+    out.setServicingMetalDeviceId(info.servicing_device_id);
+    // Convert enum to string
+    std::string worker_type_str(enchantum::to_string(info.worker_type));
+    out.setWorkType(worker_type_str);
+    out.setEventID(event_id);
+    out.setCqId(info.cq_id);
+}
+
+// Helper function to get the event id for a core
+// If not found, return std::numeric_limits<uint32_t>::max()
+uint32_t Data::get_event_id_for_core(
+    const CoreInfo& info, const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device) {
+    auto device_it = cq_to_event_by_device.find(info.device_id);
+    if (device_it != cq_to_event_by_device.end() && info.cq_id < device_it->second.size()) {
+        return device_it->second[info.cq_id];
+    }
+    return std::numeric_limits<uint32_t>::max();
+}
+
+// Helper function to populate the core entry
+void Data::populate_core_entry(
+    rpc::CoreEntry::Builder& entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id) {
+    // Populate the key
+    auto key = entry.initKey();
+    key.setChip(k.chip);
+    key.setX(k.x);
+    key.setY(k.y);
+    // Populate the info
+    auto out = entry.initInfo();
+    Data::populate_core_info(out, info, event_id);
+}
+
+// Helper function to populate the core entries by category
+void Data::populate_core_entries_by_category(
+    rpc::CoreEntriesByCategory::Builder& category_builder,
+    rpc::CoreCategory category_type,
+    const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
+    const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device) {
+    // Set the category type
+    category_builder.setCategory(category_type);
+    // Initialize the entries
+    auto entries = category_builder.initEntries(core_info.size());
+    size_t i = 0;
+    for (const auto& kv : core_info) {
+        // Get key, value from core_info
+        const tt_cxy_pair& k = kv.first;
+        const auto& info = kv.second;
+        // Get the event id for the core's command queue
+        uint32_t event_id = Data::get_event_id_for_core(info, cq_to_event_by_device);
+        // Populate the core entry with the key, info, and event id
+        auto entry = entries[i++];
+        Data::populate_core_entry(entry, k, info, event_id);
+    }
+}
+
+static std::vector<ConfigCallback>& get_config_callbacks() {
+    static std::vector<ConfigCallback> callbacks;
+    return callbacks;
+}
+
+void add_config_callback(ConfigCallback callback) { get_config_callbacks().push_back(std::move(callback)); }
+
+template <typename T>
+void add_rt_entry(std::vector<ConfigurationEntry>& entries, std::string name, const T& value) {
+    entries.push_back({std::move(name), fmt::format("{}", value), ConfigScope::RtOptions});
+}
+
+template <typename T>
+void add_rt_entry(std::vector<ConfigurationEntry>& entries, std::string name, const std::optional<T>& value) {
+    entries.push_back(
+        {std::move(name), value.has_value() ? fmt::format("{}", value.value()) : "(unset)", ConfigScope::RtOptions});
+}
+
+#define RT(x) add_rt_entry(entries, #x, rt.get_##x())
+#define RT_CUSTOM(name_str, expr) add_rt_entry(entries, name_str, expr)
+#define RT_GUARDED(x, check)                  \
+    if (check) {                              \
+        RT(x);                                \
+    } else {                                  \
+        add_rt_entry(entries, #x, "(unset)"); \
+    }
+
+void collect_environment_entries(std::vector<ConfigurationEntry>& entries) {
+    for (char** env = environ; *env != nullptr; ++env) {
+        std::string_view entry(*env);
+        auto eq = entry.find('=');
+        if (eq == std::string_view::npos) {
+            continue;
+        }
+        auto name = entry.substr(0, eq);
+        if (name.starts_with("TT_") || name.starts_with("TTNN_")) {
+            entries.push_back({std::string(name), std::string(entry.substr(eq + 1)), ConfigScope::Environment});
+        }
+    }
+}
+
+void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const tt::llrt::RunTimeOptions& rt) {
+    // clang-format off
+    // Path configuration
+    RT(root_dir);
+    // These getters TT_THROW (which logs a critical message) when unset, so guard them
+    RT_GUARDED(cache_dir, rt.is_cache_dir_specified());
+    RT(logs_dir);
+    RT_GUARDED(kernel_dir, rt.is_kernel_dir_specified());
+    RT(system_kernel_dir);
+    RT_GUARDED(core_grid_override_todeprecate, rt.is_core_grid_override_todeprecate());
+
+    // General
+    RT(build_map_enabled);
+    RT(fast_dispatch);
+    RT(num_hw_cqs);
+    RT(dram_backed_cq);
+    RT(numa_based_affinity);
+    RT_CUSTOM("target_device", static_cast<int>(rt.get_target_device()));
+    RT(simulator_enabled);
+    RT_CUSTOM("simulator_path", rt.get_simulator_path().string());
+    RT(mock_enabled);
+    RT(mock_cluster_desc_path);
+    RT(visible_devices);
+    RT(arch_name);
+
+    // Kernel execution
+    RT(kernels_nullified);
+    RT(kernels_early_return);
+    RT(skip_loading_fw);
+    RT(disable_precompiled_fw);
+    RT(force_jit_compile);
+    RT(force_context_reinit);
+    RT(log_kernels_compilation_commands);
+    RT(dump_build_commands);
+    RT(compile_hash_string);
+    RT(erisc_iram_enabled);
+
+    // Memory
+    RT(clear_l1);
+    RT(clear_dram);
+
+    // Hardware
+    RT(hw_cache_invalidation_enabled);
+    RT(relaxed_memory_ordering_disabled);
+    RT(gathering_enabled);
+    RT(enable_2_erisc_mode);
+    RT(disable_fabric_2_erisc_mode);
+    RT(disable_dma_ops);
+    RT(disable_sfploadmacro);
+    RT(disable_xip_dump);
+    RT(skip_eth_cores_with_retrain);
+    RT(use_mesh_graph_descriptor_2_0);
+    RT(custom_fabric_mesh_graph_desc_path);
+    RT(arc_debug_buffer_size);
+    RT(validate_kernel_binaries);
+    RT(record_noc_transfers);
+
+    // Timeouts
+    RT_CUSTOM("timeout_duration_for_operations", fmt::format("{}s", rt.get_timeout_duration_for_operations().count()));
+    RT(dispatch_timeout_command_to_execute);
+    RT(dispatch_progress_update_ms);
+
+    // Fabric
+    RT(enable_fabric_telemetry);
+    RT(enable_fabric_bw_telemetry);
+    RT(enable_fabric_code_profiling_rx_ch_fwd);
+    RT(enable_channel_trimming_capture);
+    RT(fabric_trimming_profile_path);
+    RT(fabric_trimming_override_path);
+    RT(enable_fabric_vc2);
+    RT(enable_fabric_mesh_pass_through);
+    RT(fabric_router_sync_timeout_ms);
+    RT(fabric_kernel_opt_level);
+    RT(reliability_mode);
+
+    // Profiler
+    RT(profiler_enabled);
+    RT(profiler_do_dispatch_cores);
+    RT(profiler_sync_enabled);
+    RT(profiler_trace_only);
+    RT(profiler_trace_tracking);
+    RT(profiler_mid_run_dump);
+    RT(profiler_cpp_post_process);
+    RT(profiler_sum);
+    RT(profiler_program_support_count);
+    RT(profiler_buffer_usage_enabled);
+    RT(profiler_noc_events_enabled);
+    RT(profiler_perf_counter_mode);
+    RT(profiler_noc_events_report_path);
+    RT(profiler_disable_dump_to_files);
+    RT(profiler_disable_push_to_tracy);
+    RT(experimental_noc_debug_dump_enabled);
+    RT(tracy_mid_run_push);
+
+    // Watcher
+    RT(watcher_enabled);
+    RT(watcher_hash);
+    RT(watcher_interval);
+    RT(watcher_dump_all);
+    RT(watcher_append);
+    RT(watcher_auto_unpause);
+    RT(watcher_noinline);
+    RT(watcher_phys_coords);
+    RT(watcher_text_start);
+    RT(watcher_skip_logging);
+    RT(watcher_noc_sanitize_linked_transaction);
+    RT(watcher_debug_delay);
+    {
+        const auto& disabled = rt.get_watcher_disabled_features();
+        std::string joined;
+        for (const auto& s : disabled) {
+            if (!joined.empty()) {
+                joined += ", ";
+            }
+            joined += s;
+        }
+        RT_CUSTOM("watcher_disabled_features", joined.empty() ? "(empty)" : joined);
+    }
+
+    // Inspector
+    RT(inspector_enabled);
+    RT(inspector_initialization_is_important);
+    RT(inspector_warn_on_write_exceptions);
+    RT(inspector_rpc_server_enabled);
+    RT(inspector_rpc_server_host);
+    RT(inspector_rpc_server_port);
+    RT(inspector_capture_tensor_specs);
+    RT(inspector_log_runtime_entries);
+    RT_CUSTOM("inspector_log_path", rt.get_inspector_log_path().string());
+    RT(serialize_inspector_on_dispatch_timeout);
+    RT(riscv_debug_info_enabled);
+    RT(jit_analytics_enabled);
+    RT(lightweight_kernel_asserts);
+    RT(llk_asserts);
+
+    // Dispatch data / testing
+    RT(dispatch_data_collection_enabled);
+    RT(test_mode_enabled);
+
+    // DispatchCoreConfig
+    {
+        static const char* dispatch_core_types[] = {"WORKER", "ETH"};
+        static const char* dispatch_core_axes[] = {"ROW", "COL"};
+        auto config = rt.get_dispatch_core_config();
+        auto type_idx = static_cast<int>(config.get_dispatch_core_type());
+        auto axis_idx = static_cast<int>(config.get_dispatch_core_axis());
+        RT_CUSTOM("dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx));
+        RT_CUSTOM("dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx));
+    }
+
+    // FabricTelemetrySettings
+    {
+        const auto& fts = rt.get_fabric_telemetry_settings();
+        RT_CUSTOM("fabric_telemetry_enabled", fts.enabled);
+        RT_CUSTOM("fabric_telemetry_chips_monitor_all", fts.chips.monitor_all);
+        RT_CUSTOM("fabric_telemetry_channels_monitor_all", fts.channels.monitor_all);
+        RT_CUSTOM("fabric_telemetry_eriscs_monitor_all", fts.eriscs.monitor_all);
+        RT_CUSTOM("fabric_telemetry_stats_mask", fts.stats_mask);
+    }
+
+    // Per-feature debug settings
+    {
+        for (int i = 0; i < tt::llrt::RunTimeDebugFeatureCount; ++i) {
+            auto feature = static_cast<tt::llrt::RunTimeDebugFeatures>(i);
+            const char* fname = tt::llrt::RunTimeDebugFeatureNames[i];
+            RT_CUSTOM(fmt::format("feature_{}_enabled", fname), rt.get_feature_enabled(feature));
+            RT_CUSTOM(fmt::format("feature_{}_file_name", fname), rt.get_feature_file_name(feature));
+            RT_CUSTOM(fmt::format("feature_{}_one_file_per_risc", fname), rt.get_feature_one_file_per_risc(feature));
+            RT_CUSTOM(fmt::format("feature_{}_prepend_device_core_risc", fname), rt.get_feature_prepend_device_core_risc(feature));
+            RT_CUSTOM(fmt::format("feature_{}_all_chips", fname), rt.get_feature_all_chips(feature));
+        }
+    }
+    // clang-format on
+}
+
+#undef RT
+#undef RT_CUSTOM
+#undef RT_GUARDED
+
+void Data::rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& results) {
+    auto& system_mesh = MetalContext::instance().get_system_mesh();
+    auto system_mesh_builder = results.initSystemMesh();
+
+    const auto& global_shape = system_mesh.shape();
+    auto global_shape_builder = system_mesh_builder.initGlobalShape(global_shape.dims());
+    for (size_t i = 0; i < global_shape.dims(); ++i) {
+        global_shape_builder.set(i, global_shape[i]);
+    }
+
+    const auto& local_shape = system_mesh.local_shape();
+    auto local_shape_builder = system_mesh_builder.initLocalShape(local_shape.dims());
+    for (size_t i = 0; i < local_shape.dims(); ++i) {
+        local_shape_builder.set(i, local_shape[i]);
+    }
+
+    const auto local_offset = MetalContext::instance().get_control_plane().get_local_mesh_offset();
+    auto local_offset_builder = system_mesh_builder.initLocalOffset(local_offset.dims());
+    for (size_t i = 0; i < local_offset.dims(); ++i) {
+        local_offset_builder.set(i, local_offset[i]);
+    }
+
+    const auto mapped = system_mesh.get_mapped_devices(std::nullopt);
+    auto mapped_builder = system_mesh_builder.initMappedDevices(mapped.fabric_node_ids.size());
+    for (size_t i = 0; i < mapped.fabric_node_ids.size(); ++i) {
+        auto entry = mapped_builder[i];
+        const auto& fabric_node_id = mapped.fabric_node_ids[i];
+        entry.setFabricMeshId(*fabric_node_id.mesh_id);
+        entry.setFabricChipId(fabric_node_id.chip_id);
+
+        const auto& device_id = mapped.device_ids[i];
+        const bool is_local = device_id.is_local();
+        entry.setIsLocal(is_local);
+        if (is_local) {
+            entry.setLocalChipId(static_cast<uint32_t>(*device_id));
+        }
+    }
+}
+
+void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results) {
+    std::vector<ConfigurationEntry> all_entries;
+
+    // 1. Environment variables
+    collect_environment_entries(all_entries);
+
+    // 2. RtOptions
+    const auto& rt = MetalContext::instance().rtoptions();
+    collect_rtoptions_entries(all_entries, rt);
+
+    // 3. External config providers (e.g. TTNN, registered at library load time)
+    for (const auto& cb : get_config_callbacks()) {
+        auto cb_entries = cb();
+        all_entries.insert(
+            all_entries.end(), std::make_move_iterator(cb_entries.begin()), std::make_move_iterator(cb_entries.end()));
+    }
+
+    // Serialize into Cap'n Proto
+    auto entries = results.initEntries(all_entries.size());
+    for (size_t i = 0; i < all_entries.size(); ++i) {
+        auto entry = entries[i];
+        entry.setName(all_entries[i].name);
+        entry.setValue(all_entries[i].value);
+
+        switch (all_entries[i].scope) {
+            case ConfigScope::Environment: entry.setScope(rpc::ConfigurationScope::ENVIRONMENT); break;
+            case ConfigScope::RtOptions: entry.setScope(rpc::ConfigurationScope::RT_OPTIONS); break;
+            case ConfigScope::TtnnConfig: entry.setScope(rpc::ConfigurationScope::TTNN_CONFIG); break;
+        }
+    }
+}
+
+}  // namespace tt::tt_metal::inspector

@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""TTML Python package.
+
+This package provides Python bindings and implementations for the TTML
+(Tenstorrent Machine Learning) library. C++ symbols from the _ttml nanobind
+extension are explicitly re-exported here and in subpackage __init__.py files.
+"""
+
+import sys
+import ttnn
+
+# Try to import _ttml from the build directory first (when using .pth file with
+# build_metal.sh --build-tt-train), then fall back to local package (standalone pip install)
+try:
+    import _ttml
+
+    # Ensure _ttml is also visible as a submodule of this package for relative imports
+    sys.modules[__name__ + "._ttml"] = _ttml
+
+except ImportError:
+    from . import _ttml
+
+# --- Top-level symbols from _ttml ---
+from ._ttml import NamedParameters
+
+# --- Python subpackages ---
+from . import autograd
+from . import lazy
+from . import init
+from . import models
+from . import modules
+
+# Lazy / deferred parameter initialization (Python-side)
+from .lazy import is_lazy_init_enabled, lazy_init, materialize_module
+
+# --- Re-export _ttml submodules that have no Python package counterpart ---
+# These are pure C++ nanobind submodules; making them attributes of ttml
+# and registering in sys.modules allows both attribute access (ttml.ops.loss.*)
+# and import statements (from ttml import ops).
+ops = _ttml.ops
+sys.modules[f"{__name__}.ops"] = ops
+
+core = _ttml.core
+sys.modules[f"{__name__}.core"] = core
+
+optimizers = _ttml.optimizers
+sys.modules[f"{__name__}.optimizers"] = optimizers
+
+from ._mesh import Mesh, open_device_mesh, close_device_mesh, maybe_mesh, mesh, sync_gradients
+
+from . import fsdp
+
+from .sharding import Sharding
+
+
+def manual_seed(seed: int) -> None:
+    """Seed all of ttml's RNGs from a single call."""
+    init.manual_seed(seed)
+    autograd.AutoContext.get_instance().set_seed(seed)

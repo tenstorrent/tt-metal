@@ -1,0 +1,58 @@
+name: "LLK e2e Tests"
+
+on:
+  schedule:
+    # Run every night at 1AM UTC
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      pytest_markers:
+        description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
+        required: false
+        default: "not perf and not quasar"
+        type: string
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+jobs:
+  llk-e2e-tests:
+    name: "LLK e2e Tests"
+    uses: ./.github/workflows/llk-e2e-impl.yaml
+    secrets: inherit
+    with:
+      pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
+      coverage: true
+
+  llk-e2e-summary:
+    name: "LLK e2e summary"
+    if: always()
+    needs:
+      - llk-e2e-tests
+    runs-on: ubuntu-slim
+    steps:
+      - name: Check e2e test results
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+
+  report-status:
+    name: "Report status"
+    runs-on: ubuntu-slim
+    if: always()
+    needs: llk-e2e-summary
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+      - name: Report status
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "LLK e2e tests"
+          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
+          status: ${{ needs.llk-e2e-summary.result }}

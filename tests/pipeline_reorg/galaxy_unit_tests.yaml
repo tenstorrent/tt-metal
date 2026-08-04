@@ -1,0 +1,133 @@
+# Galaxy unit tests matrix (WH Galaxy). See galaxy-unit-tests-impl.yaml.
+
+# Keys per entry:
+#   id: Stable slug for workflow_dispatch / tooling (optional).
+#   name: Job display name.
+#   model: Filter for workflow_dispatch / pipeline-select-galaxy (fabric, multiprocess, …).
+#   cmd: Shell command(s) to run from TT_METAL_HOME (/work).
+#   team: Required for time_budget verification.
+#   skus: SKU -> { timeout } (minutes).
+#   owner_id: Slack owner (optional).
+#   auto_triage: Passed to setup-job (default true).
+#   hang_detection_timeout: Optional float for setup-job.
+
+# Max timeouts: .github/time_budget.yaml (workflow key: unit)
+
+- id: galaxy-umd-glx
+  name: Galaxy UMD unit tests
+  model: unit
+  team: umd
+  # owner: see issue #29677
+  auto_triage: true
+  cmd: ./build/test/umd/galaxy/unit_tests_glx
+  skus:
+    wh_galaxy_perf:
+      timeout: 10
+
+- id: galaxy-umd-api
+  name: UMD API tests
+  model: unit
+  team: umd
+  auto_triage: true
+  cmd: ./build/test/umd/api/api_tests
+  skus:
+    wh_galaxy_perf:
+      timeout: 20
+
+# Unusure why fabric test commands are duplicated, but keeping from original test matrix.
+- id: galaxy-fabric-unit-suite
+  name: Galaxy Fabric tests
+  model: fabric
+  team: scaleout
+  owner_id: UJ45FEC7M # Allan Liu
+  auto_triage: true
+  cmd: |
+    mkdir -p generated/test_reports
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2*Fixture.*"
+  skus:
+    wh_galaxy:
+      timeout: 5
+
+- id: galaxy-multiprocess
+  name: Galaxy Multi-Process tests
+  model: multiprocess
+  team: scaleout
+  owner_id: U03NG0A5ND7 # Aditya Saigal
+  auto_triage: false
+  cmd: |
+    python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_dual_big_mesh_fabric_2d_sanity.yaml
+    tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" python3 tests/ttnn/distributed/test_multi_mesh.py
+    tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/multi_host_socket_tests
+    # DISABLED: TT_FATAL MeshCoordinate([3,3]) out of bounds on ranks 0+2. Tracked in issue #44339.
+    # tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Socket*"
+    tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_wh_6u_quad_2x4_acyclic.yaml
+    tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_wh_6u_quad_2x4_cyclic.yaml
+    tt-run --rank-binding 4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+  skus:
+    wh_galaxy:
+      timeout: 15
+
+- id: galaxy-distributed-ops
+  name: Galaxy distributed ops tests
+  model: distributed-ops
+  team: ttnn
+  owner_id: U044T8U8DEF # Johanna Rock
+  auto_triage: true
+  cmd: |
+    mkdir -p generated/test_reports
+    pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py
+  skus:
+    wh_galaxy:
+      timeout: 5
+
+# - id: galaxy-prefetcher-tg
+#   name: Galaxy DRAM Prefetcher unit tests
+#   model: prefetcher
+#   team: ttnn
+#   owner_id: U044T8U8DEF # Johanna Rock, Yu Gao
+#   auto_triage: true
+#   cmd: |
+#     mkdir -p generated/test_reports
+#     pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py --timeout 600
+#   skus:
+#     wh_galaxy:
+#       timeout: 25
+
+- id: galaxy-tttv2-modules
+  name: Galaxy tttv2 tests
+  model: tttv2
+  team: models
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  auto_triage: true
+  cmd: |
+    mkdir -p generated/test_reports
+    failed=0
+    HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+      pytest --durations-min=3.0 models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+      -m "not slow" \
+      --tb=short \
+      --cov=models.common.modules.rmsnorm.rmsnorm_2d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || failed=1
+    HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+      pytest --durations-min=3.0 models/common/tests/modules/mlp/test_mlp_2d.py \
+      -m "not slow" \
+      --tb=short \
+      --cov=models.common.modules.mlp.mlp_2d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || failed=1
+    HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+      pytest --durations-min=3.0 models/common/tests/test_auto_compose.py \
+      --tb=short \
+      --cov=models.common.auto_compose \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || failed=1
+    exit $failed
+  skus:
+    wh_galaxy_perf:
+      timeout: 10

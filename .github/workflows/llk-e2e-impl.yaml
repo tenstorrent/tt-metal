@@ -1,0 +1,188 @@
+name: "[internal] LLK e2e impl"
+
+on:
+  workflow_call:
+    inputs:
+      pytest-markers:
+        description: "Pytest mark expression for LLK python_tests"
+        required: false
+        type: string
+        default: "not perf and not quasar"
+      coverage:
+        description: "Enable coverage collection and merge job"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  checks: write
+  contents: read
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    needs: [build-images]
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_e2e_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "e2e"
+      - name: Build test matrix
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "ALL_SKUS_IN_TESTS" \
+            ./.github/sku_config.yaml
+
+  llk-e2e-exec:
+    needs: [load-test-matrix, build-images]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+      - name: Set CHIP_ARCH for logs and artifacts
+        shell: bash
+        env:
+          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+        run: |
+          RUN_LABEL="${RUN_ON_LABELS%% *}"
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
+            echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
+            echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
+          else
+            echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
+          fi
+      - name: Run tests
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PYTEST_MARKERS: ${{ inputs.pytest-markers }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      - name: Upload code coverage for this runner
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: ${{ inputs.coverage && matrix.test-group.coverage }}
+        with:
+          name: code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.info
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure()
+        with:
+          name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
+            ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
+
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+          include_passed: true
+          annotate_only: true
+
+  merge-coverage:
+    name: "Merge coverage (${{ matrix.chip-arch }})"
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+    needs: [llk-e2e-exec, build-images]
+    if: ${{ inputs.coverage == true }}
+    strategy:
+      matrix:
+        chip-arch: [wormhole, blackhole]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: code-coverage-${{ matrix.chip-arch }}*
+          path: ./merged_coverage_files
+      - name: Unzip artefacts, merge coverage data and generate HTML report
+        shell: bash
+        run: |
+          first=$(find ./merged_coverage_files/ -name "*.info" | head -n 1)
+          cp "$first" merged.info
+
+          for f in $(find ./merged_coverage_files/ -name "*.info"); do
+            if [ "$f" != "$first" ]; then
+              lcov -q -a merged.info -a "$f" -o ./merged.info
+            fi
+          done
+
+          lcov -q --remove ./merged.info '*tests/*' \
+            -o ./code_coverage_for_${{ matrix.chip-arch }}.info
+
+      - name: Upload merged coverage .info file
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: code_coverage_for_${{ matrix.chip-arch }}
+          path: ./code_coverage_for_${{ matrix.chip-arch }}.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: ./code_coverage_for_${{ matrix.chip-arch }}.info
+          name: coverage-report-${{ matrix.chip-arch }}
+          verbose: true

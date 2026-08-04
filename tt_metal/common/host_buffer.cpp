@@ -1,0 +1,75 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <tt_stl/span.hpp>
+#include <tt_stl/overloaded.hpp>
+
+#include "distributed/pinned_memory_cache.hpp"
+
+#include <memory>
+#include <utility>
+#include <vector>
+
+namespace tt::tt_metal {
+
+HostBuffer::HostBuffer() = default;
+
+HostBuffer::HostBuffer(const HostBuffer& other) = default;
+
+HostBuffer& HostBuffer::operator=(const HostBuffer& other) {
+    HostBuffer temp(other);
+    swap(temp);
+    return *this;
+}
+
+HostBuffer::HostBuffer(HostBuffer&& other) noexcept : HostBuffer() { swap(other); }
+
+HostBuffer& HostBuffer::operator=(HostBuffer&& other) noexcept {
+    swap(other);
+    return *this;
+}
+
+void HostBuffer::swap(HostBuffer& other) noexcept {
+    using std::swap;
+    swap(pin_, other.pin_);
+    swap(view_, other.view_);
+    swap(type_info_, other.type_info_);
+    swap(pinned_memory_, other.pinned_memory_);
+}
+
+void HostBuffer::register_pinned_memory_cache_release_callback() {
+    if (pin_ == nullptr || view_.empty()) {
+        return;
+    }
+    const void* host_address = static_cast<const void*>(view_.data());
+    pin_.add_final_release_callback(
+        [host_address]() { experimental::PinnedMemoryCache::instance().release(host_address); });
+}
+
+ttsl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
+
+ttsl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
+
+bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept {
+    auto a_view = a.view_bytes();
+    auto b_view = b.view_bytes();
+    if (a_view.size() != b_view.size()) {
+        return false;
+    }
+    for (auto i = 0; i < a_view.size(); i++) {
+        if (a_view[i] != b_view[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool operator!=(const HostBuffer& a, const HostBuffer& b) noexcept { return !(a == b); }
+
+void swap(HostBuffer& lhs, HostBuffer& rhs) noexcept { lhs.swap(rhs); }
+
+}  // namespace tt::tt_metal

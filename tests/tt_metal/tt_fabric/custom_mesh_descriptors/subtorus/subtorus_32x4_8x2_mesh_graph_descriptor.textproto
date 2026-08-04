@@ -1,0 +1,13 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# Subtorus quad-galaxy mock: 32x4 RING+RING quad torus spanning 8x2 host ranks (128 ASICs, sixteen MPI ranks).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 32, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 8, 2 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

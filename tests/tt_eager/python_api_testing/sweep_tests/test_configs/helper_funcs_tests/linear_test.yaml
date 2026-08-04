@@ -1,0 +1,22 @@
+---
+test-list:
+  linear:
+    shape:
+      start-shape:
+        - [1, 1, 32, 32]
+        - [1, 1, 1, 32]
+      end-shape:
+        - [1, 1, 2048, 2048]
+        - [1, 1, 1, 2048]
+      interval: 32
+      num-shapes: 3
+      num-samples: 2048
+      method: linear
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: helper_func_linear_sweep.csv

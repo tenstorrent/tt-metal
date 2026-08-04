@@ -1,0 +1,16 @@
+metal-wh-18.closetbox.tenstorrent.com slots=1
+metal-wh-08.closetbox.tenstorrent.com slots=1
+metal-wh-01.closetbox.tenstorrent.com slots=1
+metal-wh-02.closetbox.tenstorrent.com slots=1
+metal-wh-03.closetbox.tenstorrent.com slots=1
+metal-wh-04.closetbox.tenstorrent.com slots=1
+metal-wh-05.closetbox.tenstorrent.com slots=1
+metal-wh-06.closetbox.tenstorrent.com slots=1
+metal-wh-13.closetbox.tenstorrent.com slots=1
+metal-wh-14.closetbox.tenstorrent.com slots=1
+metal-wh-15.closetbox.tenstorrent.com slots=1
+metal-wh-16.closetbox.tenstorrent.com slots=1
+metal-wh-09.closetbox.tenstorrent.com slots=1
+metal-wh-10.closetbox.tenstorrent.com slots=1
+metal-wh-11.closetbox.tenstorrent.com slots=1
+metal-wh-12.closetbox.tenstorrent.com slots=1

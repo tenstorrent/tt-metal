@@ -1,0 +1,38 @@
+asic_to_fabric_node_mapping:
+  hostnames:
+    - hostname: 2x2_n300_cluster_desc.yaml
+      mesh:
+        - mesh: 0
+        - chips:
+            - umd_chip_id: 0
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 0
+              asic_id: 9957417446
+            - umd_chip_id: 1
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 1
+              asic_id: 10226774041
+            - umd_chip_id: 2
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 3
+              asic_id: 10226774114
+            - umd_chip_id: 3
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 2
+              asic_id: 10226782261

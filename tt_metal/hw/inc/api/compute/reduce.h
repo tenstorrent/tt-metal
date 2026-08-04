@@ -1,0 +1,265 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include "api/compute/common.h"
+#include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
+#include "tensor_shape.h"
+
+#ifdef TRISC_MATH
+#include "llk_math_reduce_api.h"
+#endif
+
+#ifdef TRISC_UNPACK
+#include "llk_unpack_AB_reduce_api.h"
+#endif
+#ifdef TRISC_PACK
+#include "llk_pack_reduce_api.h"
+#endif
+
+namespace ckernel {
+
+// clang-format off
+/**
+ * Performs the necessary hardware and software initialization for reduce operation for provided circular buffer identifiers (CB IDs). In order for reduce
+ * operation to be performed, this function call must be followed by a call to `reduce_tile` or `reduce_tile_math`.
+ * If another reduce op is needed which uses different CB IDs, then another reduce_init needs to be called as a part of that reduce operation.
+ *
+ * The `icb_scaler` circular buffer must contain the scaling factors for the reduction. The most straightforward way of filling the `icb_scaler` with the scaling
+ * factors is to populate first row of each face with the following values:
+ * - If `reduce_type = SUM`, all scaling factors should preferably be 1.
+ * - If `reduce_type = AVG`, all scaling factors should preferably be 1/N (where N is the number of elements being averaged, except if the reduction dimension is scalar,
+ * in which case the scaling factor should be 1/sqrt(N)).
+ * - If `reduce_type = MAX`, all scaling factors should preferably be 1.
+ *
+ * NOTE: For SUM and AVG operations, the value in `icb_scaler` is a scaling factor of the final sum of values across rows/columns/both, so there is no real constraint in terms
+ * of it's value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in `icb_scaler`. In any case, it is recommended to use the
+ * above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details.
+ * NOTE: For other valid ways of populating the `icb_scaler`, refer to the ISA documentation.
+ *
+ * Output tile layout (packer-zeroing contract): for all three values of `reduce_dim`, `reduce_init` programs the
+ * packer's edge masks (`_llk_pack_reduce_mask_config_<reduce_dim, …>`) so that any output datum that is not part
+ * of the reduction result is written to CB by the packer as zero. Specifically, for any tile packed into `ocb`
+ * while this reduce_init's packer state is in effect:
+ *   - `REDUCE_SCALAR`: the scalar result is at face-0 `[0, 0]`; every other datum in the tile is zero.
+ *   - `REDUCE_ROW`:    each row's reduced value is at column 0 of that row; every other datum in the tile is zero.
+ *   - `REDUCE_COL`:    each column's reduced value is at row 0 of that column; every other datum in the tile is zero.
+ * A reset to the default packer mask happens via `reduce_uninit` (or by the next non-reduce init); until then this
+ * contract holds for every pack into `ocb`.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | reduce_type               | The type of reduce op - sum, average or maximum                                         | PoolType  | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler                | CB holding scaling factors (see above)                                                  | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_init(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
+    // REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
+    // Caller must call reconfig_data_format(icb_scaler, icb) before reduce_init for this path.
+    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
+    if constexpr (swap_operands) {
+        state_configure(icb_scaler, icb, ocb, call_line);
+    } else {
+        state_configure(icb, icb_scaler, ocb, call_line);
+    }
+#else
+    state_configure(icb, icb_scaler, ocb, call_line);
+#endif
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler)));
+    PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
+}
+
+// clang-format off
+/**
+ * Resets the packer edge mask configuration to its default state by clearing any previously set masks. Needs to be called after
+ * reduce_tile if the next operation requires default packer state. In case that the next operation is reduce operation across the
+ * same dimension, this call can be omitted. If this function is not called, the packer will continue to use the edge masks set
+ * by the latest reduce_init call, which may lead to incorrect packing behavior in subsequent operations.
+ *
+ * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
+ * as a part of tt-metal#22904.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A (same as reduce_init)   | uint32_t  | 0 to 31                                        | False    |
+ */
+// clang-format on
+ALWI void reduce_uninit(std::uint32_t icb = 0) {
+#ifndef ARCH_QUASAR
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_reduce_uninit()));
+#else
+    // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
+    // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
+    // See _llk_math_reduce_init_ for more details
+    MATH((llk_math_reduce_uninit(icb)));
+#endif
+#endif
+    PACK((llk_pack_reduce_mask_clear()));
+}
+
+// clang-format off
+/**
+ * Performs a reduction operation *B = reduce(A)* using reduce_func for dimension reduction on a tile in the CB at a given index and writes the
+ * result to the DST register at index *dst_tile_index*. Reduction can be of type *Reduce::R*, *Reduce::C*, or *Reduce::RC*, identifying the
+ * dimension(s) to be reduced in size to 1. The DST register buffer must be in acquired state via *acquire_dst* call.
+ *
+ * The `icb_scaler` circular buffer must contain the scaling factors for the reduction. The most straightforward way of filling the `icb_scaler` with the scaling
+ * factors is to populate first row of each face with the following values:
+ * - If `reduce_type = SUM`, all scaling factors should preferably be 1.
+ * - If `reduce_type = AVG`, all scaling factors should preferably be 1/N (where N is the number of elements being averaged, except if the reduction dimension is scalar,
+ * in which case the scaling factor should be 1/sqrt(N)).
+ * - If `reduce_type = MAX`, all scaling factors should preferably be 1.
+ *
+ * The templates take `reduce_type` which can be `ReduceFunc::Sum`, `ReduceFunc::Avg`, or `ReduceFunc::Max` and `reduce_dim` which can be `Reduce::R`, `Reduce::C`, or
+ * `Reduce::RC`. They can also be specified by defines REDUCE_OP and REDUCE_DIM.
+ *
+ * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer state to default.
+ * NOTE: For SUM and AVG operations, the value in `icb_scaler` is a scaling factor of the final sum of values across rows/columns/both, so there is no real constraint in terms
+ * of it's value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in `icb_scaler`. In any case, it is recommended to use the
+ * above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details.
+ * NOTE: For other valid ways of populating the `icb_scaler`, refer to the ISA documentation.
+ * Return value: None
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | reduce_type               | The type of reduce op - sum, average or maximum                                         | PoolType  | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler                | CB holding scaling factors (see above)                                                  | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | itile                     | The index of the tile within the first CB                                               | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | itile_scaler              | The index of the tile within the scaling factor CB.                                     | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_tile(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler, idst)));
+    UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
+#else
+    MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));
+    UNPACK((llk_unpack_AB_reduce(icb, icb_scaler, itile, itile_scaler)));
+#endif
+}
+
+// clang-format off
+/**
+ * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing each
+ * partial result to a consecutive DST register slot. This is the uniform block entry point for the reduce op
+ * group: its body is a simple loop over `reduce_tile`, so it inherits `reduce_tile`'s semantics and requires the
+ * same initialization (`reduce_init`) to have been called first. The scaling-factor tile (`itile_scaler`) is reused
+ * for every tile in the block. The DST register buffer must be in acquired state via *acquire_dst* call.
+ *
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47478.
+ * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer
+ * state to default.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name         | Description                                                      | Type      | Valid Range                                    | Required |
+ * |------------|--------------|------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | reduce_type  | The type of reduce op - sum, average or maximum                  | PoolType  | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim   | The dimension of reduce op - row, column or both                 | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Function   | icb          | The identifier of the circular buffer (CB) containing operand A  | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler   | CB holding scaling factors (see reduce_init/reduce_tile)         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | start_itile  | The index of the first tile within the first CB                  | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | itile_scaler | The index of the tile within the scaling factor CB               | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | start_idst   | The index of the first tile in DST REG for the result            | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + ntiles <= acquired DST REG size   | True     |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_block(
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    std::uint32_t start_itile,
+    std::uint32_t itile_scaler,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        reduce_tile<reduce_type, reduce_dim>(icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Performs a math-only reduction operation on a tile in the DST register. Assumes that source tiles are already in source registers.
+ * Naive implementation of reduce_tile_math; assumes that the num_faces are laid out row-wise first. That is:
+ *
+ * num_faces = 2
+ * --------------------
+ * Face 0    | Face 1
+ * --------------------
+ *
+ * num_faces = 4
+ * --------------------
+ * Face 0    | Face 1
+ * --------------------
+ * Face 2    | Face 3
+ * --------------------
+ *
+ * For finer control in using this kernel, such as specifying different layout of faces, use the TensorShape overloaded function.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | reduce_type               | The type of reduce op - sum, average or maximum                                         | PoolType  | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ * | Function   | num_faces                 | Number of faces to reduce (optional, default 4)                                         | uint32_t  | 1 to 4                                         | False    |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
+#ifndef ARCH_QUASAR
+    ASSERT(num_faces > 0 && num_faces <= MAX_NUM_FACES);
+    const ckernel::TensorShape tensor_shape = {
+        MAX_FACE_R_DIM,
+        MAX_FACE_C_DIM,
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(1) : MAX_NUM_FACES_R_DIM,
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
+#else
+    MATH((llk_math_reduce<reduce_type, reduce_dim>(idst, tensor_shape)));
+#endif
+}
+
+// clang-format off
+/**
+ * Performs a math-only reduction operation on a tile in the DST register. Assumes that source tiles are already in source registers.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type                 | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|----------------------|------------------------------------------------|----------|
+ * | Template   | reduce_type               | The type of reduce op - sum, average or maximum                                         | PoolType             | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim            | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t             | Must be less than the acquired size of DST REG | True     |
+ * | Function   | tensor_shape              | The shape of the tensor to reduce                                                       | ckernel::TensorShape | N/A                                            | True     |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+#ifndef ARCH_QUASAR
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
+#else
+    MATH((llk_math_reduce<reduce_type, reduce_dim>(idst, tensor_shape)));
+#endif
+}
+
+}  // namespace ckernel

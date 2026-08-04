@@ -1,0 +1,172 @@
+name: "[internal] T3000 e2e tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      enabled-skus:
+        required: true
+        type: string
+      model:
+        required: false
+        type: string
+        default: "all"
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_e2e_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "e2e"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Filter test matrix by model
+        id: filter-matrix
+        if: inputs.model != 'all'
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+        run: |
+          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model)]')
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$filtered" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  t3000-e2e-tests:
+    needs: load-test-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: ${{ matrix.test-group.cmd }}
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [load-test-matrix, t3000-e2e-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ needs.load-test-matrix.outputs.matrix }}
+          run-result: ${{ needs.t3000-e2e-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

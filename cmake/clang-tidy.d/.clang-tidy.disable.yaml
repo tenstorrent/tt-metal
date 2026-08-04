@@ -1,0 +1,6 @@
+---
+# Clang-tidy doesn't seem to have a 'disable' or be happy with "turn them all off"
+# Workaround: enable one that won't be triggered.
+Checks: >
+  -*,
+  objc-missing-hash

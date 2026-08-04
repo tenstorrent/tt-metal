@@ -1,0 +1,164 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <atomic>
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "compute_kernel_config.hpp"
+#include "ttnn/device.hpp"
+
+#define DATUMS_PER_ROW (16)
+
+// This parameter is the same for all supported architectures
+// Check this invariant when adding new architectures
+#define DEST_REGISTER_FULL_SIZE (64 * 16)
+
+namespace ttnn {
+
+DeviceComputeKernelConfig init_device_compute_kernel_config(
+    tt::ARCH,
+    const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
+    const tt::tt_metal::MathFidelity default_fidelity,
+    bool default_approx_mode,
+    bool default_fp32_acc,
+    bool default_l1_acc,
+    bool default_dst_full_sync_en,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level) {
+    if (device_kernel_config.has_value()) {
+        return device_kernel_config.value();
+    }
+
+    return ComputeKernelConfig{
+        .math_fidelity = default_fidelity,
+        .math_approx_mode = default_approx_mode,
+        .fp32_dest_acc_en = default_fp32_acc,
+        .packer_l1_acc = default_l1_acc,
+        .dst_full_sync_en = default_dst_full_sync_en,
+        .throttle_level = default_throttle_level};
+}
+
+void verify_numerical_configuration(
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    tt::ARCH arch,
+    const std::optional<const DeviceComputeKernelConfig>& user_compute_kernel_config) {
+    if (arch != tt::ARCH::WORMHOLE_B0) {
+        return;
+    }
+    if (!user_compute_kernel_config.has_value()) {
+        return;
+    }
+    const auto& cfg = user_compute_kernel_config.value();
+    if (!cfg.fp32_dest_acc_en || cfg.math_fidelity != tt::tt_metal::MathFidelity::HiFi4) {
+        return;
+    }
+    // Only print warning once per process
+    // (compare-and-swap so concurrent callers do not double-log).
+    static std::atomic<bool> warning_generated{false};
+    bool expected = false;
+    if (warning_generated.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        log_warning(
+            tt::LogOp,
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
+            "bug. "
+            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
+    }
+}
+
+bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (not compute_kernel_config.has_value()) {
+        return false;
+    }
+    return compute_kernel_config.value().fp32_dest_acc_en;
+}
+
+bool get_dst_full_sync_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (not compute_kernel_config.has_value()) {
+        return false;
+    }
+    return compute_kernel_config.value().dst_full_sync_en;
+}
+
+tt::tt_metal::MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (not compute_kernel_config.has_value()) {
+        return tt::tt_metal::MathFidelity::Invalid;
+    }
+    return compute_kernel_config.value().math_fidelity;
+}
+
+ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (not compute_kernel_config.has_value()) {
+        return ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
+    }
+    return compute_kernel_config.value().throttle_level;
+}
+
+std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
+    tt::ARCH, const DeviceComputeKernelConfig& compute_kernel_config) {
+    return std::make_tuple(
+        compute_kernel_config.math_fidelity,
+        compute_kernel_config.math_approx_mode,
+        compute_kernel_config.fp32_dest_acc_en,
+        compute_kernel_config.packer_l1_acc,
+        compute_kernel_config.dst_full_sync_en);
+}
+
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
+    tt::ARCH arch, const ComputeKernelConfig& config) {
+    // Translate the universal TTNN ComputeKernelConfig (legacy scalar vocabulary) into the
+    // Metal 2.0 vocabulary. Two representation changes are worth calling out:
+    //   - double_buffer_dest is the logical inverse of the legacy dst_full_sync_en.
+    //   - the approximate/precise bool becomes a Precision enum.
+    const tt::tt_metal::Precision sfpu_precision_mode =
+        config.math_approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise;
+
+    if (arch == tt::ARCH::QUASAR) {
+        return tt::tt_metal::experimental::ComputeGen2Config{
+            .fpu_math_fidelity = config.math_fidelity,
+            .sfpu_precision_mode = sfpu_precision_mode,
+            .enable_32_bit_dest = config.fp32_dest_acc_en,
+            .double_buffer_dest = !config.dst_full_sync_en,
+            // Per-DFB unpack_modes is left default for the program factory to set.
+            // The temporary Gen2 fields (enable_2x_src_register, unpack_to_dest_en) are left default.
+        };
+    }
+    return tt::tt_metal::experimental::ComputeGen1Config{
+        .fpu_math_fidelity = config.math_fidelity,
+        .sfpu_precision_mode = sfpu_precision_mode,
+        // bfp_pack_precision_mode is left default (rarely set non-default).
+        .enable_32_bit_dest = config.fp32_dest_acc_en,
+        .double_buffer_dest = !config.dst_full_sync_en,
+        // Per-DFB unpack_modes is left default for the program factory to set.
+    };
+}
+
+uint32_t get_dest_reg_count(
+    const DeviceComputeKernelConfig& compute_kernel_config, std::optional<std::array<uint32_t, 2>> tile_shape) {
+    uint32_t tile_height;
+    uint32_t tile_width;
+    if (tile_shape.has_value()) {
+        std::array<uint32_t, 2>& shape = tile_shape.value();
+        tile_height = shape[0];
+        tile_width = shape[1];
+    } else {
+        tile_height = tt::constants::TILE_HEIGHT;
+        tile_width = tt::constants::TILE_WIDTH;
+    }
+    // Note: if DATUMS_PER_ROW will change in a future architecture, then
+    // this code will need to be updated to use an architecture specific value.
+    uint32_t available_reg_count = (DEST_REGISTER_FULL_SIZE * DATUMS_PER_ROW) / (tile_width * tile_height);
+    if (!compute_kernel_config.dst_full_sync_en) {
+        available_reg_count /= 2;
+    }
+    // Note: using bfloat16 as baseline to be conservative, even
+    // if smaller formats could have a larger register count.
+    if (compute_kernel_config.fp32_dest_acc_en) {
+        available_reg_count /= 2;
+    }
+    return available_reg_count;
+}
+
+}  // namespace ttnn

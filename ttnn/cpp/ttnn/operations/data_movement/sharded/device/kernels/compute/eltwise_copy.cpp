@@ -1,0 +1,38 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/dataflow/dataflow_buffer.h"
+
+void kernel_main() {
+    uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
+
+    DataflowBuffer dfb_in(tt::CBIndex::c_0);
+    DataflowBuffer dfb_out(tt::CBIndex::c_16);
+
+    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_tile_init(tt::CBIndex::c_0);
+    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+        // Pop tile after tile, copy to DST and pack
+        dfb_in.wait_front(1);
+
+        tile_regs_acquire();
+        copy_tile(tt::CBIndex::c_0, 0, 0);
+        tile_regs_commit();
+
+        dfb_in.pop_front(1);
+
+        dfb_out.reserve_back(1);
+
+        tile_regs_wait();
+        pack_tile(0, tt::CBIndex::c_16);
+        tile_regs_release();
+
+        dfb_out.push_back(1);
+    }
+}

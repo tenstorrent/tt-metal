@@ -1,0 +1,8 @@
+add_subdirectory(linear_regression)
+add_subdirectory(linear_regression_ddp)
+add_subdirectory(linear_regression_tp_dp)
+add_subdirectory(nano_gpt)
+add_subdirectory(sample_app)
+add_subdirectory(mnist_mlp)
+add_subdirectory(graph_capture)
+add_subdirectory(rng_simd)

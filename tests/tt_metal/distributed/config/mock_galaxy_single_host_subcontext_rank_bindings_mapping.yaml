@@ -1,0 +1,5 @@
+# Sub-context id -> rank-binding overlay (same idea as rank_to_cluster_mock_cluster_desc).
+# Paths are relative to this file unless absolute.
+subcontext_id_to_rank_bindings:
+  0: mock_galaxy_single_host_subcontext_a_rank_bindings.yaml
+  1: mock_galaxy_single_host_subcontext_b_rank_bindings.yaml

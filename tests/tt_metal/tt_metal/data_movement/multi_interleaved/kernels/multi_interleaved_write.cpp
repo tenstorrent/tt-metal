@@ -1,0 +1,64 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "tensix_types.h"
+#include "api/tensor/tensor_accessor.h"
+#include "barrier_sync.hpp"
+
+// L1 to DRAM write
+void kernel_main() {
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t l1_read_addr = get_arg_val<uint32_t>(1);
+    uint32_t page_offset = get_arg_val<uint32_t>(2);
+    // Barrier synchronization args
+    uint32_t barrier_sem_id = get_arg_val<uint32_t>(3);
+    uint32_t barrier_coord_x = get_arg_val<uint32_t>(4);
+    uint32_t barrier_coord_y = get_arg_val<uint32_t>(5);
+    uint32_t num_cores = get_arg_val<uint32_t>(6);
+    uint32_t local_barrier_addr = get_arg_val<uint32_t>(7);  // Local scratch space for polling
+
+    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(0);
+    constexpr uint32_t num_pages = get_compile_time_arg_val(1);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(3);
+    constexpr uint32_t test_id = get_compile_time_arg_val(4);
+    constexpr bool sync = get_compile_time_arg_val(5) == 1;
+    constexpr uint32_t grid_size_x = get_compile_time_arg_val(6);
+    constexpr uint32_t grid_size_y = get_compile_time_arg_val(7);
+
+    auto args = TensorAccessorArgs<8>();
+    auto s = TensorAccessor(args, dst_addr);
+
+    constexpr uint32_t transaction_size_bytes = page_size_bytes;
+    DeviceTimestampedData("Number of transactions", num_of_transactions * num_pages);
+    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
+    DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Grid Size X", grid_size_x);
+    DeviceTimestampedData("Grid Size Y", grid_size_y);
+
+    // Wait for all cores to reach this point before starting data movement
+    barrier_sync(barrier_sem_id, barrier_coord_x, barrier_coord_y, num_cores, local_barrier_addr);
+
+    {
+        DeviceZoneScopedN("RISCV1");
+        for (uint32_t i = 0; i < num_of_transactions; i++) {
+            for (uint32_t p = 0; p < num_pages; p++) {
+                if constexpr (sync) {
+                    cb_wait_front(cb_id_out0, 1);
+                }
+                uint64_t noc_addr = s.get_noc_addr(page_offset + p);
+                noc_async_write(l1_read_addr + p * page_size_bytes, noc_addr, page_size_bytes);
+                if constexpr (sync) {
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_id_out0, 1);
+                }
+            }
+        }
+        if constexpr (!sync) {
+            noc_async_write_barrier();
+        }
+    }
+}

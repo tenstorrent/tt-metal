@@ -1,0 +1,24 @@
+# Galaxy stress tests matrix (WH Galaxy perf runners). See galaxy-stress-tests-impl.yaml.
+
+# Keys per entry:
+#   id: Stable slug for workflow_dispatch / jq filtering.
+#   name: Job display name.
+#   cmd: Shell command(s) from TT_METAL_HOME (/work).
+#   team: Required for time_budget verification.
+#   skus: SKU -> { timeout } (minutes).
+#   owner_id: Slack owner (optional).
+
+# Max timeouts: .github/time_budget.yaml (workflow key: stress)
+
+- id: galaxy-fabric-stability-stress
+  name: Galaxy Fabric Stability Tests
+  team: scaleout
+  owner_id: U08FXFFH7L0 # Abhishek Agarwal
+  cmd: |
+    # 0 disables the metal per-op timeout (overrides setup-job's 5s default), which
+    # else false-fails legitimately slow subtests (size_4096 unicast ~6.2s). A real
+    # hang is bounded by the SKU job timeout below.
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_6U_galaxy.yaml
+  skus:
+    wh_galaxy_perf:
+      timeout: 100
