@@ -2,20 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import time
-import pytest
-import numpy as np
-import ttnn
 from collections import Counter
+from enum import Enum
+
+import numpy as np
+import pytest
+import torch
+import ttnn
 from loguru import logger
+
 from tests.ttnn.unit_tests.operations.test_utils import (
-    get_compute_kernel_options,
-    compute_kernel_options,
     compute_kernel_ids,
+    compute_kernel_options,
+    get_compute_kernel_options,
     get_lib_dtype,
 )
-from enum import Enum
 
 
 class TestMode(Enum):
@@ -111,6 +113,12 @@ def run_uniform(shape, rand_range, dtype, device, seed=0, compute_kernel_options
 def test_uniform(shape, rand_range, dtype, seed, device):
     torch.manual_seed(seed)
     run_uniform(shape, rand_range, dtype, device, seed=seed)
+
+
+def test_uniform_rejects_unsupported_dtype(device):
+    input_tensor = ttnn.from_torch(torch.zeros((32, 32), dtype=torch.int32), device=device, layout=ttnn.TILE_LAYOUT)
+    with pytest.raises(RuntimeError, match="Uniform: Input tensor must be Float32 or Bfloat16"):
+        ttnn.uniform(input_tensor, 0.0, 1.0)
 
 
 @pytest.mark.parametrize(

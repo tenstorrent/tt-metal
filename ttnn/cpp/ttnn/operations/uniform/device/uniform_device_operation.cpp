@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "uniform_device_operation.hpp"
+
+#include <cstdint>
+
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::uniform {
@@ -12,9 +15,6 @@ void UniformDeviceOperation::validate_inputs(
     TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Uniform: Input tensor need to be on device");
     TT_FATAL(tensor_args.input.buffer() != nullptr, "Uniform: Input tensor need to be allocated in buffers on device");
     TT_FATAL((tensor_args.input.layout() == Layout::TILE), "Uniform: Input tensor must be tilized");
-    TT_FATAL(
-        tensor_args.input.dtype() == DataType::BFLOAT16 || tensor_args.input.dtype() == DataType::FLOAT32,
-        "Uniform: Input tensor must be Float32 or Bfloat16");
     TT_FATAL(
         operation_attributes.lower_bound <= operation_attributes.upper_bound,
         "Uniform: inclusive lower bound must be <= inclusive upper bound");
@@ -43,7 +43,7 @@ ttnn::Tensor uniform(
     const Tensor& input,
     const float lower_bound,
     const float upper_bound,
-    const uint32_t seed,
+    const std::uint32_t seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::uniform::UniformDeviceOperation;
