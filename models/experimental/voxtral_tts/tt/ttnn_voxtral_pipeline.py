@@ -38,12 +38,12 @@ the teacher-forced gates in tests/tt_gates.py to judge a numerical change.
 
 PERFORMANCE, steady state on one N150, long-form cases:
 
-    Block 1 decode      ~26.6 ms/frame   ~52%
-    Block 2 flow        ~23.0 ms/frame   ~45%
+    Block 1 decode      ~25.7 ms/frame   ~51%
+    Block 2 flow        ~23.0 ms/frame   ~46%
     host embed_frame      0.2 ms/frame    0.4%
-    TOTAL               50.0-52.6 ms/frame, mean 50.9 over the 15-case fixture
+    TOTAL               49.0-52.5 ms/frame, mean 50.4 over the 15-case fixture
     prefill 0.1-1.5 s once; Block 3 codec ~9% of wall time
-    RTF 0.63-0.71 on 14 of 15 cases   (RTF = generation / audio, lower is better)
+    RTF 0.62-0.71 on 14 of 15 cases   (RTF = generation / audio, lower is better)
 
 The 15th is case 0 at RTF 1.89, and that is COLD-START, not a slow case: it pays the first codec
 bucket's kernel compiles and the first prefill shape. Every later case with the same shapes runs
@@ -55,8 +55,8 @@ WHERE THE REMAINING TIME IS. Both blocks now stream every weight matmul at the 1
 ceiling, so neither has a byte or a layout trick left; each module's docstring carries the per-line
 map. What is left is different in each:
   * Block 1 is at its floor except for w2, the last bf16 weight and the pinned trigger of the hang
-    documented below. ~21 of its 26.6 ms is pure weight streaming at the ceiling, and everything
-    that is not a matmul now totals under 6 ms.
+    documented below. ~21 of its 25.7 ms is pure weight streaming at the ceiling, and everything
+    that is not a matmul now totals under 5 ms.
   * Block 2 sits ~1.6x above its 13.4 ms weight-read floor, and that gap is DEVICE-side per-kernel
     cost -- proven by tracing, which removes host dispatch and changes nothing (6.6). Fewer ops
     does not help; bigger kernels and L1-resident operands do. Its worst single line is
