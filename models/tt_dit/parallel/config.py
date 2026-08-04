@@ -161,6 +161,19 @@ def vae_all_gather(
     return x_g
 
 
+def neighbor_pad_safe_num_links(x: ttnn.Tensor, dim: int, requested: int) -> int:
+    """Clamp ``num_links`` for ``neighbor_pad_async`` so outer_dim_size >= num_links.
+
+    The op TT_FATALs when ``product(shape[:dim]) < num_links`` (work split across links).
+    Image VAE tensors are ``[B,T,H,W,C]`` with ``B=T=1``, so H-pad (dim=2) only allows
+    ``num_links=1`` even when the CCL manager prefers multi-link.
+    """
+    outer = 1
+    for d in range(dim):
+        outer *= int(x.shape[d])
+    return max(1, min(int(requested), outer))
+
+
 def vae_neighbor_pad(
     ccl_manager,
     x: ttnn.Tensor,
@@ -172,6 +185,7 @@ def vae_neighbor_pad(
 ) -> ttnn.Tensor:
     neighbor_semaphore = ccl_manager.get_np_ping_pong_semaphore(cluster_axis)
     barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
+    n_links = neighbor_pad_safe_num_links(x, dim, ccl_manager.num_links)
 
     x_pad = ttnn.experimental.neighbor_pad_async(
         x,
@@ -182,7 +196,7 @@ def vae_neighbor_pad(
         [cluster_axis],
         [neighbor_semaphore],
         [barrier_semaphore],
-        num_links=[ccl_manager.num_links],
+        num_links=[n_links],
         topology=ttnn.Topology.Linear,
     )
 

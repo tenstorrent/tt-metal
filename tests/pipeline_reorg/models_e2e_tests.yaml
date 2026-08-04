@@ -848,6 +848,23 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
+# ── HunyuanImage-3.0 ───────────────────────────────────────────────
+- name: HunyuanImage-3.0 T2I e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
+    export HF_HUB_OFFLINE=0
+    export HY_STEPS=50
+    export HY_VERBOSE=1
+    pytest --timeout 1500 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
+  model: hunyuan-image-3.0
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+      tier: 3
+  owner_id: D0B8130N4BW # Dalar Vartanians
+  team: models
+
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020
