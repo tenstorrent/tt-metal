@@ -35,15 +35,12 @@ def _canonical_mesh_mapper(mapper_config) -> dict:
         out = {"strategy": "shard_2d", "dim": None, "dims": list(mapper_config.dims)}
     else:
         out = {"strategy": "replicate", "dim": None, "dims": None}
-    # Only add the key when set, so default-path fingerprints stay byte-identical to
-    # existing cache hashes; a (4,2)-override tensor gets a distinct key. The offset
-    # is included too: two configs with the same shape but different offsets place
-    # shards on different devices and must not alias in the cache.
+    # Omit defaults so fingerprints stay byte-identical to pre-override cache hashes.
     override = getattr(mapper_config, "mesh_shape_override", None)
     if override is not None:
         out["mesh_shape_override"] = list(override)
-    offset_override = getattr(mapper_config, "mesh_offset_override", None)
-    if offset_override is not None:
+    offset_override = getattr(mapper_config, "mesh_offset_override", (0, 0))
+    if any(offset_override):
         out["mesh_offset_override"] = list(offset_override)
     return out
 

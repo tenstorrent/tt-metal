@@ -665,7 +665,7 @@ void py_module(nb::module_& mod) {
         [](MeshMapperConfig* t,
            ttsl::SmallVector<MeshMapperConfig::Placement> placements,
            const std::optional<MeshShape>& mesh_shape_override,
-           const std::optional<MeshCoordinate>& mesh_offset_override) {
+           const MeshCoordinate& mesh_offset_override) {
             new (t) MeshMapperConfig{
                 .placements = std::move(placements),
                 .mesh_shape_override = mesh_shape_override,
@@ -673,7 +673,7 @@ void py_module(nb::module_& mod) {
         },
         nb::arg("placements"),
         nb::arg("mesh_shape_override") = nb::none(),
-        nb::arg("mesh_offset_override") = nb::none(),
+        nb::arg("mesh_offset_override") = MeshCoordinate(0, 0),
         R"doc(
            Creates a MeshMapperConfig object with the given placements and mesh shape override.
 
@@ -683,8 +683,8 @@ void py_module(nb::module_& mod) {
                Used for distributing a tensor over ND shape that doesn't match the shape of the mesh device:
                when the shape fits within a mesh device, the tensor shards are distributed within the submesh
                region. Otherwise, the tensor shards are distributed across mesh in row-major order.
-               mesh_offset_override (MeshCoordinate): If provided, anchors the submesh distribution at this
-               coordinate within the mesh device instead of the origin. Only supported when the distribution
+               mesh_offset_override (MeshCoordinate): Anchors the submesh distribution at this coordinate within
+               the mesh device instead of the origin. Defaults to (0, 0). Only supported when the distribution
                fits within the mesh device per-dimension (SUBMESH mode).
            )doc");
 
@@ -696,7 +696,7 @@ void py_module(nb::module_& mod) {
                std::optional<mmc_dim_t> row_dim,
                std::optional<mmc_dim_t> col_dim,
                const std::optional<MeshShape>& mesh_shape_override,
-               const std::optional<MeshCoordinate>& mesh_offset_override) {
+               const MeshCoordinate& mesh_offset_override) {
                 new (t) MeshMapperConfig;
                 t->placements.push_back(
                     row_dim ? MeshMapperConfig::Placement{MeshMapperConfig::Shard{*row_dim}}
@@ -710,7 +710,7 @@ void py_module(nb::module_& mod) {
             nb::arg("row_dim") = nb::none(),
             nb::arg("col_dim") = nb::none(),
             nb::arg("mesh_shape_override") = nb::none(),
-            nb::arg("mesh_offset_override") = nb::none(),
+            nb::arg("mesh_offset_override") = MeshCoordinate(0, 0),
             R"doc(
            Creates a 2D MeshMapperConfig with the given placements and mesh shape override.
 
@@ -721,8 +721,8 @@ void py_module(nb::module_& mod) {
                row_dim Optional[int]: The row dimension to shard / replicate over.
                col_dim Optional[int]: The column dimension to shard / replicate over.
                mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
-               mesh_offset_override Optional[MeshCoordinate]: If provided, anchors the submesh distribution at this
-               coordinate within the mesh device instead of the origin (SUBMESH mode only).
+               mesh_offset_override MeshCoordinate: Anchors the submesh distribution at this coordinate within the
+               mesh device instead of the origin. Defaults to (0, 0). Only supported in SUBMESH mode.
                )doc")
         .def(
             "__repr__",
@@ -745,7 +745,7 @@ void py_module(nb::module_& mod) {
             [](MeshComposerConfig* t,
                ttsl::SmallVector<int> dims,
                const std::optional<MeshShape>& mesh_shape_override,
-               const std::optional<MeshCoordinate>& mesh_offset_override) {
+               const MeshCoordinate& mesh_offset_override) {
                 new (t) MeshComposerConfig{
                     .dims = std::move(dims),
                     .mesh_shape_override = mesh_shape_override,
@@ -753,15 +753,15 @@ void py_module(nb::module_& mod) {
             },
             nb::arg("dims"),
             nb::arg("mesh_shape_override") = nb::none(),
-            nb::arg("mesh_offset_override") = nb::none(),
+            nb::arg("mesh_offset_override") = MeshCoordinate(0, 0),
             R"doc(
            Creates a MeshComposerConfig object with the given dimensions.
 
            Args:
                dims (List[int]): The dimensions to concat over.
                mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
-               mesh_offset_override Optional[MeshCoordinate]: If provided, gathers shards from this coordinate within
-               the mesh device instead of the origin (SUBMESH mode only).
+               mesh_offset_override MeshCoordinate: Gathers shards from this coordinate within the mesh device instead
+               of the origin. Defaults to (0, 0). Only supported in SUBMESH mode.
            )doc")
         .def(
             "__init__",
@@ -769,7 +769,7 @@ void py_module(nb::module_& mod) {
                mmc_dim_t row_dim,
                mmc_dim_t col_dim,
                const std::optional<MeshShape>& mesh_shape_override,
-               const std::optional<MeshCoordinate>& mesh_offset_override) {
+               const MeshCoordinate& mesh_offset_override) {
                 new (t) MeshComposerConfig;
                 t->dims.push_back(row_dim);
                 t->dims.push_back(col_dim);
@@ -779,7 +779,7 @@ void py_module(nb::module_& mod) {
             nb::arg("row_dim"),
             nb::arg("col_dim"),
             nb::arg("mesh_shape_override") = nb::none(),
-            nb::arg("mesh_offset_override") = nb::none(),
+            nb::arg("mesh_offset_override") = MeshCoordinate(0, 0),
             R"doc(
            Creates a 2D MeshComposerConfig object with the given dimensions.
 
@@ -787,8 +787,8 @@ void py_module(nb::module_& mod) {
                row_dim (int): The dimension to concat over.
                col_dim (int): The dimension to concat over.
                mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
-               mesh_offset_override Optional[MeshCoordinate]: If provided, gathers shards from this coordinate within
-               the mesh device instead of the origin (SUBMESH mode only).
+               mesh_offset_override MeshCoordinate: Gathers shards from this coordinate within the mesh device instead
+               of the origin. Defaults to (0, 0). Only supported in SUBMESH mode.
            )doc")
         .def("__repr__", [](const MeshComposerConfig& config) {
             std::ostringstream str;

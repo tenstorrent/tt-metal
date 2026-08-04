@@ -859,13 +859,13 @@ TEST_F(TensorDistribution2x4Test, NdMapperOffsetWrongDimensionality) {
 
 TEST_F(TensorDistribution2x4Test, NdMapperOffsetRejectedForRowMajor) {
     // MeshShape(1, 8) on a 2x4 device forces a row-major reshape (8 > 4 along the column dim);
-    // offset is only supported in SUBMESH mode, so this must be rejected.
+    // a non-zero offset is only supported in SUBMESH mode, so this must be rejected.
     EXPECT_ANY_THROW(create_mesh_mapper(
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}},
             .mesh_shape_override = MeshShape(1, 8),
-            .mesh_offset_override = MeshCoordinate(0, 0),
+            .mesh_offset_override = MeshCoordinate(0, 1),
         }));
 }
 

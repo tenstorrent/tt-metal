@@ -38,17 +38,14 @@
 namespace ttnn::distributed {
 namespace {
 
-// Returns a function that remaps a mesh coordinates from the mesh mapper / composer distribution shape to the device
-// shape. `global_range` must outlive the use of the returned function. When `offset` is provided, the SUBMESH mapping
-// is shifted so that distribution coordinate (0,...,0) lands at `offset` instead of the device origin.
+// Remaps distribution-shape coords onto the device. `global_range` must outlive the returned function.
+// In SUBMESH mode, adds `offset` so (0,...,0) maps to `offset`.
 auto get_remap_fn(
-    DistributionMode distribution_mode,
-    const MeshCoordinateRange* global_range,
-    const std::optional<MeshCoordinate>& offset = std::nullopt) {
+    DistributionMode distribution_mode, const MeshCoordinateRange* global_range, const MeshCoordinate& offset) {
     return [distribution_mode, offset, row_major_dst = global_range->begin()](const MeshCoordinate& src_coord) mutable {
         switch (distribution_mode) {
             case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
-            case DistributionMode::SUBMESH: return offset.has_value() ? src_coord + *offset : src_coord;
+            case DistributionMode::SUBMESH: return src_coord + offset;
         }
         TT_THROW("Unreachable");
     };
@@ -65,19 +62,18 @@ bool increment_indices(const ttsl::SmallVector<int>& limits, ttsl::SmallVector<i
     return false;
 }
 
-// Validates a `mesh_offset_override` against the distribution shape and the device shape. The offset must:
-//   - have the same dimensionality as the device shape (it is a physical coordinate in device space), and
-//   - satisfy `offset[i] <= device_shape[i] - distribution_shape[i]` for every dimension (the sub-rectangle
-//     anchored at the offset must fit entirely within the mesh device). The subtraction form avoids unsigned
-//     overflow that `offset[i] + distribution_shape[i]` could trigger for very large offsets; it is safe because
-//     SUBMESH mode (validated above) guarantees `distribution_shape[i] <= device_shape[i]` per dimension.
-// Offsets are only meaningful in SUBMESH mode; `distribution_mode` is checked to reject ROW_MAJOR + offset.
+bool is_zero_mesh_offset(const MeshCoordinate& offset) {
+    return std::all_of(offset.coords().begin(), offset.coords().end(), [](uint32_t v) { return v == 0; });
+}
+
+// Validates `mesh_offset_override`: SUBMESH-only; same dims as the device; sub-rectangle must fit.
+// A zero offset with matching dimensionality is a no-op and skips checks (including ROW_MAJOR).
 void validate_mesh_offset(
-    const std::optional<MeshCoordinate>& mesh_offset_override,
+    const MeshCoordinate& mesh_offset_override,
     DistributionMode distribution_mode,
     const MeshShape& distribution_shape,
     const MeshShape& device_shape) {
-    if (!mesh_offset_override.has_value()) {
+    if (is_zero_mesh_offset(mesh_offset_override) && mesh_offset_override.dims() == device_shape.dims()) {
         return;
     }
     TT_FATAL(
@@ -87,9 +83,9 @@ void validate_mesh_offset(
         distribution_shape,
         device_shape);
     TT_FATAL(
-        mesh_offset_override->dims() == device_shape.dims(),
+        mesh_offset_override.dims() == device_shape.dims(),
         "The offset {} must have the same dimensionality as the mesh device shape {}",
-        *mesh_offset_override,
+        mesh_offset_override,
         device_shape);
     TT_FATAL(
         distribution_shape.dims() == device_shape.dims(),
@@ -99,10 +95,10 @@ void validate_mesh_offset(
         device_shape);
     for (size_t i = 0; i < device_shape.dims(); ++i) {
         TT_FATAL(
-            (*mesh_offset_override)[i] <= device_shape[i] - distribution_shape[i],
+            mesh_offset_override[i] <= device_shape[i] - distribution_shape[i],
             "The sub-rectangle anchored at offset {} with shape {} does not fit within the mesh device shape {} "
             "(dimension {})",
-            *mesh_offset_override,
+            mesh_offset_override,
             distribution_shape,
             device_shape,
             i);
