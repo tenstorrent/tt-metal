@@ -555,8 +555,8 @@ Tensor remainder(
                 operation_input, scalar, output_mem_config, output_tensor, operation_sub_core_grids);
         }
 
-        const Tensor operation_output =
-            ttnn::unary_remainder(operation_input, scalar, output_mem_config, std::nullopt, operation_sub_core_grids);
+        const Tensor operation_output = ttnn::unary_remainder(
+            operation_input, scalar, output_tensor->memory_config(), std::nullopt, operation_sub_core_grids);
         return ttnn::typecast(
             operation_output, output_tensor->dtype(), std::nullopt, output_tensor, operation_sub_core_grids);
     }

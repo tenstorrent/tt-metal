@@ -1457,6 +1457,43 @@ def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_s
     assert_equal(expected, ttnn.to_torch(output_tensor))
 
 
+@pytest.mark.parametrize("input_is_sharded", [False, True])
+def test_binary_remainder_int32_float_scalar_optional_output_sharding(input_is_sharded, device):
+    torch_input_tensor = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_input_tensor),
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if input_is_sharded:
+        input_tensor = ttnn.to_memory_config(input_tensor, sharded_memory_config)
+    else:
+        output_tensor = ttnn.to_memory_config(output_tensor, sharded_memory_config)
+
+    scalar = 1.5
+    expected = torch.remainder(torch_input_tensor, scalar).to(torch.int32)
+    ttnn.remainder(input_tensor, scalar, output_tensor=output_tensor)
+
+    assert input_tensor.is_sharded() != output_tensor.is_sharded()
+    assert_equal(expected, ttnn.to_torch(output_tensor))
+
+
 @pytest.mark.parametrize(
     "ttnn_op",
     [
