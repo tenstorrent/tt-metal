@@ -49,6 +49,11 @@ _no_broadcast = (
     "Quasar does not support broadcast in fuser",
 )
 
+_no_unpack_to_dest = (
+    lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes,
+    "unpack_to_dest is not supported for this kernel",
+)
+
 _no_transpose_unpack_to_dest = (
     lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes
     and (
@@ -154,7 +159,7 @@ UNPACKER_MAP = {
     ),
     "UnpackerTilizeA": (
         lambda s: UnpackerTilizeA(),
-        [_no_transpose, _block_full_width],
+        [_no_transpose, _block_full_width, _no_unpack_to_dest],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
