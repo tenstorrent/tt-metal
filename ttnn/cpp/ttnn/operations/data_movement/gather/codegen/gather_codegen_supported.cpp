@@ -52,10 +52,24 @@ bool is_demoted(const Tensor& input_tensor, int8_t dim, const Tensor& input_inde
     }
 
     // Ungeneralized perf demotions (design-prompt "Perf-demoted ledger entries" block): no mechanism
-    // was identified relating these five case_ids by a general predicate, so each is an exact-match
+    // was identified relating these case_ids by a general predicate, so each is an exact-match
     // branch on the ORIGINAL (pre pre_gather_transform_tensor) shape/dim, matching the case_id's
     // "shape|dim=X&index=shape|dtype|layout" encoding. None matches the ROW_MAJOR scope:out
-    // condition, so all five stay demoted (not rejected by supported_by_codegen).
+    // condition, so this stays demoted (not rejected by supported_by_codegen).
+    //
+    // The prior five-entry list (all rank-{2,3,4} variants of dim=-1 index-halved-width and one
+    // dim=-2 index-halved-height case) was dropped: phase-7 re-measurement on the ported kernel
+    // cleared the native/generic gate those seeds were provisionally demoted ahead of (2b seeds are
+    // demoted-until-measured, per the porting guide), so they are gated (supported_by_codegen-only)
+    // cases from now on.
+    //
+    // [1,1,32,64]|dim=-2&index=[1,1,16,64] is new: unlike the dim=-1 cases above, Wt_index=2 (>=2)
+    // and Ht=1 (< max_cores) route this shape to GatherCodegenProgramFactoryTiled (the
+    // select_program_factory heuristic transcribed from the manifest's "Wt_index>=2 and
+    // Ht<max_cores" note), not Interleaved. Phase 7 measured this shape losing to the generic
+    // orchestration on device (generic/ported=0.83) despite still beating native (native/ported=
+    // 1.05); demoting routes `auto` to native rather than shipping the regressed Tiled dispatch,
+    // without touching the Tiled factory itself.
     struct DemotedCase {
         std::array<uint32_t, 4> input_shape;
         uint8_t input_rank;
@@ -63,12 +77,8 @@ bool is_demoted(const Tensor& input_tensor, int8_t dim, const Tensor& input_inde
         std::array<uint32_t, 4> index_shape;
         uint8_t index_rank;
     };
-    static constexpr std::array<DemotedCase, 5> kUngeneralizedDemotions = {{
-        {{1, 1, 32, 64}, 4, -1, {1, 1, 32, 32}, 4},
-        {{1, 1, 64, 128}, 4, -2, {1, 1, 32, 128}, 4},
-        {{1, 1, 64, 64}, 4, -1, {1, 1, 64, 32}, 4},
-        {{0, 1, 32, 64}, 3, -1, {0, 1, 32, 32}, 3},
-        {{0, 0, 32, 64}, 2, -1, {0, 0, 32, 32}, 2},
+    static constexpr std::array<DemotedCase, 1> kUngeneralizedDemotions = {{
+        {{1, 1, 32, 64}, 4, -2, {1, 1, 16, 64}, 4},
     }};
 
     auto shape_matches = [](const ttnn::Shape& shape, const std::array<uint32_t, 4>& expected, uint8_t rank) {
