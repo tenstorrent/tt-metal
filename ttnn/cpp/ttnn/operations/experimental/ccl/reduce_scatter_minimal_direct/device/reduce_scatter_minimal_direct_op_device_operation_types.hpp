@@ -19,14 +19,13 @@
 
 namespace ttnn::experimental::prim {
 
-// Direct (one-shot) reduce-scatter: latency-optimal sibling of reduce_scatter_minimal_unicast.
+// Direct (one-shot) reduce-scatter
 //
 // Instead of a store-and-forward ring (N/2 hops, each paying a full read-add-send worker round trip),
 // every device unicasts each destination's slice STRAIGHT to that destination over the fabric
 // (num_hops = ring distance, no intermediate device touches the data), bumps a per-source arrival
 // counter with the send's last packet, and once all N-1 contributions have landed reduces them together
-// with its own slice and writes the output. Fabric traffic is ~2.3x the ring's bandwidth-optimal volume
-// (a distance-h contribution crosses h links), so this is a latency play for small/medium shapes, not a
+// with its own slice and writes the output. This is a latency play for small/medium shapes, not a
 // bandwidth play. Inspired by the native all_reduce_async (mcast-then-local-reduce).
 //
 // The program-cache hash auto-reflects over these fields; all are stable/structural.

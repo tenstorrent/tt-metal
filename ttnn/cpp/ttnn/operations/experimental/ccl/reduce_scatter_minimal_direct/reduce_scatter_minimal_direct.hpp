@@ -14,17 +14,7 @@
 
 namespace ttnn::experimental {
 
-// Direct (one-shot) reduce-scatter: latency-optimal sibling of reduce_scatter_minimal_unicast.
-//
-// Every device unicasts each destination's slice straight to that destination (multi-hop fabric unicast,
-// no intermediate device touches the data), increments a per-source arrival counter with the send's last
-// packet, and once all N-1 contributions have landed reduces them with its own slice into the output. One
-// fabric traversal instead of the ring's N/2 store-and-forward steps, at ~2.3x the link traffic -- a
-// latency play for small/medium shapes, not a bandwidth play.
-//
-// Minimal-first: Ring, TILE layout, any rank >= 2 and any scatter dim (divisible by the ring size in
-// tile/page units), one worker core per link (which owns that link's forward and backward connection),
-// no mux.
+// Direct (one-shot) reduce-scatter: good for latency bound, small shapes.
 //
 // persistent_buffers, when provided, must be exactly {output, staging} as produced by
 // reduce_scatter_minimal_direct_create_persistent_buffers.
@@ -39,14 +29,7 @@ ttnn::Tensor reduce_scatter_minimal_direct(
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 // Whether this op can run a given case AT ALL -- structural constraints only (ring topology, TILE
-// layout, a scatter dim that splits into whole pages, 1D fabric). It says nothing about whether direct
-// is the FASTER choice; that policy lives at the ttnn::reduce_scatter dispatch site, which pairs this
-// with a data-volume gate.
-//
-// Mirrors the op's own validation, which stays authoritative: this predicate exists so a dispatcher can
-// ask without risking a TT_FATAL, so anything it lets through must also pass
-// ReduceScatterMinimalDirectDeviceOperation::validate_on_program_cache_miss and
-// reduce_scatter_direct_geometry. Keep the two in sync.
+// layout, a scatter dim that splits into whole pages, 1D fabric).
 bool reduce_scatter_minimal_direct_is_applicable(
     const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis = std::nullopt);
 
@@ -55,8 +38,7 @@ std::vector<ttnn::Tensor> reduce_scatter_minimal_direct_create_persistent_buffer
     const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis = std::nullopt);
 
 // Allocate ONLY the staging buffer (element [1] of the set above), for callers that own their output
-// tensor already and just want the op's staging half. The output is an ordinary tiled tensor a caller
-// can build directly (the input shape with `dim` divided by the ring size); staging is the part that
+// tensor already and just want the op's staging half. staging is the part that
 // cannot be reproduced by hand -- it is an opaque chunk-paged UINT8 tensor whose page size follows the
 // op's chunk granularity and whose placement (L1 height-sharded over the whole compute grid / L1
 // interleaved / DRAM) is chosen from the shape. Pass the result through as

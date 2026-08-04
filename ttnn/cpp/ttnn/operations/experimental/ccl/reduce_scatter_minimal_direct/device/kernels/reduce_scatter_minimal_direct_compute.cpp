@@ -16,17 +16,22 @@
 // The N blocks are folded pairwise into DST (num_devices/2 math ops per output tile). The first fold is
 // a non-accumulating add (or a copy when N is odd) so nothing depends on DST being zero at acquire.
 //
-// PER-LAUNCH STATE ON A COMPUTE KERNEL. This body runs on ALL THREE TRISCs, so a naive private counter
-// deadlocks: each TRISC would read AND increment it, they would disagree on the parity, and unpack would
-// wait on one CB half while pack pushed the other. The safe shape, used below, is that all three TRISCs
-// READ the counter at the top of kernel_main and exactly ONE (pack) writes it back at the very bottom.
-// That is race-free because program launches serialize per device -- no TRISC of the next launch can
-// start before every TRISC of this one has finished -- and pack cannot reach its increment early, since
-// its work depends on math, which depends on unpack.
-//
 // The parity picks which half of cb_reduce holds this invocation's data, and is needed only on the
 // aliased path, where cb_reduce is this core's staging shard and remote senders write into it with no
 // flow control (half_stride_tiles is 0 otherwise, making the offset vanish).
+
+namespace detail {
+
+// copy-pasted from api/dataflow/dataflow_api.h
+FORCE_INLINE
+void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_SET, false, -1);
+
+    // set semaphore value to val
+    (*sem_addr) = val;
+}
+
+}  // namespace detail
 void kernel_main() {
     constexpr uint32_t tile_granularity = get_compile_time_arg_val(0);
     constexpr uint32_t num_devices = get_compile_time_arg_val(1);
@@ -44,6 +49,7 @@ void kernel_main() {
     const uint32_t gen_addr = get_arg_val<uint32_t>(arg_idx++);  // this core's private invocation counter
 
     auto* gen_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gen_addr);
+    invalidate_l1_cache();
     const uint32_t invocation = *gen_ptr;
     // Constant tile-index offset into the parity half. The CB read pointer still walks half 0 one group
     // per chunk (the reader pushes there), so this offset alone reaches the right half -- indices stay
@@ -54,11 +60,6 @@ void kernel_main() {
     CircularBuffer cb_out(cb_out_id);
 
     compute_kernel_hw_startup(cb_reduce_id, cb_reduce_id, cb_out_id);
-    // Init hoisted OUT of the chunk loop: with an even block count every fold accumulates into DST, which
-    // tile_regs_acquire leaves zeroed, so one add_tiles_init(acc) covers the whole kernel. (The odd-N path
-    // still has to switch between copy and accumulating-add per chunk.) all_reduce_async's reduction.cpp
-    // relies on the same zero-at-acquire property; a wrong assumption here shows up immediately as a PCC
-    // failure, not as silent drift.
     if constexpr (num_devices % 2 == 0) {
         add_tiles_init(cb_reduce_id, cb_reduce_id, true);
     }
@@ -103,9 +104,7 @@ void kernel_main() {
         tiles_done += n;
     }
 
-#ifdef UCK_CHLKC_PACK
     // Exactly one TRISC advances the shared counter, and only after all of this launch's work (pack is
     // last in the unpack -> math -> pack chain). See the per-launch-state note at the top.
-    *gen_ptr = invocation + 1;
-#endif
+    PACK((*gen_ptr = invocation + 1));
 }
