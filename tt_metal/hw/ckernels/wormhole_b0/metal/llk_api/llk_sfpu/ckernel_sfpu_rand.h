@@ -36,12 +36,12 @@ inline void rand_init(std::uint32_t seed) {
 inline void make_lane_salt() {
     // Reconstruct the salt for every tile so rand_tile remains valid after
     // arbitrary SFPU operations have clobbered the mutable LREGs. LTILEID is
-    // the ISA-defined LREG15, whose lane i contains 2*i. LREG4, LREG7, and
-    // LREG14 hold 13, -17, and 5, respectively. Use SFPSHFT2's independent
+    // the ISA-defined LREG15, whose lane i contains 2*i. LREG12, LREG7, and
+    // LREG14 hold 14, -17, and 5, respectively. Use SFPSHFT2's independent
     // source and shift-count operands to avoid staging each input with
-    // SFPMOV. This is the conventional xorshift32 transformation, leaving the
-    // result in LREG3.
-    TTI_SFPSHFT2(p_sfpu::LTILEID, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    // SFPMOV. This invertible xorshift transformation leaves the result in
+    // LREG3.
+    TTI_SFPSHFT2(p_sfpu::LTILEID, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
     TTI_SFPXOR(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
     TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
     TTI_SFPXOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
@@ -106,11 +106,10 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
 
     // Keep the shift counts outside the replayed row body. SFPLOADI's SHORT
     // mode sign-extends these values to the per-lane int32 operands expected
-    // by SFPSHFT2_MOD1_SHFT_LREG. LREG4 temporarily holds 13 for lane-salt
-    // generation, then is replaced with -18 for the row mixer. LREG12-14 cost
-    // two setup instructions each, but together remove three instructions from
-    // each of the eight rows.
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_SHORT, 13);
+    // by SFPSHFT2_MOD1_SHFT_LREG. LREG12-14 cost two setup instructions each,
+    // but together remove three instructions from each of the eight rows and
+    // provide every shift count needed for lane-salt generation.
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_SHORT, (-18) & 0xFFFF);
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_SHORT, (-17) & 0xFFFF);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, 14);
     TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
@@ -120,7 +119,6 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
 
     make_lane_salt();
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_SHORT, (-18) & 0xFFFF);
     rand_prng<p_sfpu::LREG1>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
     begin_mix_uint32_fast();

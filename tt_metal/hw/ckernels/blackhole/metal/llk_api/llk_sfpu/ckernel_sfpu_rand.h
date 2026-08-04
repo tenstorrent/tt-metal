@@ -40,9 +40,9 @@ inline void make_lane_salt() {
     // mutable LREG between calls. Reconstruct a lane-specific salt from the
     // read-only lane ID at the start of each tile instead of carrying it in an
     // LREG. LTILEID is the ISA-defined LREG15, whose lane i contains 2*i; use
-    // it directly as the first shift and xor source. This is the conventional
-    // xorshift32 transformation, leaving the result in LREG3.
-    TTI_SFPSHFT(13, p_sfpu::LTILEID, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+    // it directly as the first shift and xor source. This invertible xorshift
+    // transformation leaves the result in LREG3.
+    TTI_SFPSHFT(14, p_sfpu::LTILEID, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
     TTI_SFPSHFT((-17) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG3, sfpshft_mod1_arg_imm_use_vc);
     TTI_SFPXOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
