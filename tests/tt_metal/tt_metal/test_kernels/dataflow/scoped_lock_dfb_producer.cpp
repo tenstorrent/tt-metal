@@ -25,9 +25,8 @@ void kernel_main() {
 
     dfb.reserve_back(1);
 
-    // On WH/BH scoped_lock() locks the ENTIRE ring; get_write_ptr() (==ring base on a fresh buffer, no shift:
-    // cb_addr_shift==0) is the first locked byte. target_entry_offset < ring_size lands inside the locked ring;
-    // == ring_size lands at fifo_limit, the first byte outside it.
+    // scoped_write_lock() locks the one entry at get_write_ptr(). target_entry_offset picks the write's
+    // slot: 0 = that entry, 0<offset<ring_size = another in-region (unlocked) entry, ==ring_size = past it.
     uint32_t target_addr = dfb.get_write_ptr() + target_entry_offset;
     auto do_write = [&]() {
         noc.async_write(
@@ -44,12 +43,13 @@ void kernel_main() {
         do_write();
     } else if (write_after_unlock) {
         {
-            auto lock = dfb.scoped_lock();
+            auto lock = dfb.scoped_write_lock();
         }
         do_write();  // lock released before the write -> also WRITE_TO_UNLOCKED_DFB
     } else {
-        auto lock = dfb.scoped_lock();
-        do_write();  // write while holding the whole-ring lock -> owner covers it -> no issue
+        auto lock = dfb.scoped_write_lock();
+        do_write();  // held lock covers only its entry: offset 0 -> no issue, in-region ->
+                     // WRITE_TO_UNLOCKED_DFB, past -> no issue
     }
 
     dfb.push_back(1);

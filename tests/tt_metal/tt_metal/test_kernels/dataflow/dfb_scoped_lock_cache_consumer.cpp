@@ -41,7 +41,7 @@ void kernel_main() {
     Semaphore release(sem::release);
     release.wait(1);  // wait until the publisher has seeded shared-L2=OLD / TL1=NEW
     {
-        auto lk = dfb.scoped_lock(lock_n);
+        auto lk = dfb.scoped_read_lock(lock_n);
     }  // acquire invalidates the held (shared) entries
     volatile uint32_t* my_result =
         (volatile uint32_t*)(uintptr_t)(result_addr + cidx * num_entries * sizeof(uint32_t) + MEM_L1_UNCACHED_BASE);
@@ -58,7 +58,7 @@ void kernel_main() {
         // FLUSH-on-release through a CONSUMER lock. Write inside the lock (after acquire-invalidate); a
         // CONSUMER release does NOT flush, so every slot stays cache-resident and TL1 stays OLD for all.
         {
-            auto lk = dfb.scoped_lock(lock_n);
+            auto lk = dfb.scoped_read_lock(lock_n);
             for (uint32_t s = 0; s < num_entries; ++s) {
                 cached[s * wpe] = new_val + s;
             }
@@ -78,7 +78,7 @@ void kernel_main() {
             uncached[s * wpe] = new_val + s;  // TL1 = NEW; cache still OLD (uncached write not snooped)
         }
         {
-            auto lk = dfb.scoped_lock(lock_n);
+            auto lk = dfb.scoped_read_lock(lock_n);
         }  // acquire invalidates held entries' cache lines
         for (uint32_t s = 0; s < num_entries; ++s) {
             result_uncached[s] = cached[s * wpe];  // held -> NEW (invalidated->refetch), others -> OLD (hit)
