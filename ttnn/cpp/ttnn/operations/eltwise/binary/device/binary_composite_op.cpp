@@ -30,6 +30,22 @@ namespace ttnn {
 
 using namespace operations;
 
+namespace {
+
+std::optional<CoreRangeSet> resolve_sub_device_workers(
+    const Tensor& input,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    if (!sub_device_id.has_value()) {
+        return sub_core_grids;
+    }
+
+    TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+    return input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+}
+
+}  // namespace
+
 // nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();
@@ -520,15 +536,21 @@ Tensor remainder(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     Tensor operation_input = input;
+    auto operation_sub_core_grids = sub_core_grids;
+    auto operation_sub_device_id = sub_device_id;
     if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
-        operation_input = ttnn::typecast(input, DataType::FLOAT32);
+        operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
+        operation_sub_device_id = std::nullopt;
+        operation_input =
+            ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
     }
 
     // The unary SFPU fast path does not support INT32. Float scalars promote INT32 inputs
     // above; integral scalars must route through binary_ng.
     if (operation_input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
         post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
-        return ttnn::unary_remainder(operation_input, scalar, output_mem_config, output_tensor, sub_core_grids);
+        return ttnn::unary_remainder(
+            operation_input, scalar, output_mem_config, output_tensor, operation_sub_core_grids);
     }
     return ttnn::detail::invoke_binary_ng(
         operation_input,
@@ -541,8 +563,8 @@ Tensor remainder(
         lhs_activations,
         rhs_activations,
         std::nullopt,
-        sub_core_grids,
-        sub_device_id);
+        operation_sub_core_grids,
+        operation_sub_device_id);
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -573,8 +595,7 @@ Tensor fmod(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    if ((input.dtype() == DataType::INT32 && !std::holds_alternative<float>(scalar)) ||
-        sub_device_id.has_value()) {
+    if (input.dtype() == DataType::INT32 && !std::holds_alternative<float>(scalar)) {
         return ttnn::detail::invoke_binary_ng(
             input,
             scalar,
@@ -589,9 +610,13 @@ Tensor fmod(
             sub_core_grids,
             sub_device_id);
     }
-    const Tensor operation_input = input.dtype() == DataType::INT32 ? ttnn::typecast(input, DataType::FLOAT32) : input;
+    const auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
+    const Tensor operation_input =
+        input.dtype() == DataType::INT32
+            ? ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids)
+            : input;
     float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
-    return ttnn::unary_fmod(operation_input, scalar_f, output_mem_config, std::nullopt, sub_core_grids);
+    return ttnn::unary_fmod(operation_input, scalar_f, output_mem_config, std::nullopt, operation_sub_core_grids);
 }
 
 Tensor floor_div(

@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -728,9 +728,9 @@ def test_binary_div_int32_full_range(input_shapes, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -814,9 +814,9 @@ def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, ro
     torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
     torch_input_tensor_b = torch_input_tensor_b[:num_elements].reshape(input_shapes)
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -1099,9 +1099,9 @@ def test_binary_divide_int32_full_range(input_shapes, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     golden_function = ttnn.get_golden_function(ttnn.divide)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -1407,7 +1407,8 @@ def test_binary_remainder_fmod_int32_scalar_layout_and_extreme_values(ttnn_op, l
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-def test_binary_remainder_fmod_int32_float_scalar(ttnn_op, layout, device):
+@pytest.mark.parametrize("use_sub_core_grids", [False, True])
+def test_binary_remainder_fmod_int32_float_scalar(ttnn_op, layout, use_sub_core_grids, device):
     torch_input_tensor = torch.tensor([-5, -1, 0, 1, 5], dtype=torch.int32)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -1420,7 +1421,10 @@ def test_binary_remainder_fmod_int32_float_scalar(ttnn_op, layout, device):
     scalar = 1.5
     golden_function = ttnn.get_golden_function(ttnn_op)
     expected = golden_function(torch_input_tensor, scalar, device=device)
-    actual = ttnn.to_torch(ttnn_op(input_tensor, scalar))
+    sub_core_grids = None
+    if use_sub_core_grids:
+        sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    actual = ttnn.to_torch(ttnn_op(input_tensor, scalar, sub_core_grids=sub_core_grids))
     assert_equal(expected, actual)
 
 
@@ -1474,9 +1478,9 @@ def test_binary_remainder_fmod_int32_range_1e15(input_shapes, ttnn_op, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
