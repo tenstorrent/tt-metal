@@ -210,8 +210,8 @@ class MiniMaxH3TransformerBlock(Module):
         self.ff1 = Linear(dim, inner, bias=True, activation_fn="swiglu", mesh_device=mesh_device, dtype=dtype)
         self.ff2 = Linear(inner, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
         # LayerScale, initialised to zeros in the reference and trained.
-        self.scale1 = Parameter(total_shape=[1, dim], device=mesh_device, dtype=dtype)
-        self.scale2 = Parameter(total_shape=[1, dim], device=mesh_device, dtype=dtype)
+        # No scale1/scale2 Parameters: LayerScale is folded into to_out / ff2 at load time
+        # (see _prepare_torch_state), which is exact and saves two multiplies per layer.
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for index, name in ((0, "ff1"), (2, "ff2")):
@@ -220,9 +220,24 @@ class MiniMaxH3TransformerBlock(Module):
                 key = f"{source}.{suffix}"
                 if key in state:
                     state[f"{name}.{suffix}"] = state.pop(key)
-        for name in ("scale1", "scale2"):
-            if name in state:
-                state[name] = state[name].reshape(1, -1)
+        # Fold LayerScale into the preceding projection. `to_out(x) * scale1` is
+        # `x @ (W_out * scale1) + b_out * scale1` because scale is per *output* channel, so
+        # this is exact, not an approximation. Same for scale2 into ff2. Removes two
+        # elementwise multiplies per layer -- BinaryNg is 22 calls and 13.2 % of layer device
+        # time, and these were two of them.
+        #
+        # Torch layout here is [out, in], so scale multiplies rows; the Linear's own
+        # _prepare_torch_state transposes afterwards.
+        for scale_name, target in (("scale1", "attn.to_out.0"), ("scale2", "ff2")):
+            scale = state.pop(scale_name, None)
+            if scale is None:
+                continue
+            flat = scale.reshape(-1)
+            weight_key, bias_key = f"{target}.weight", f"{target}.bias"
+            if weight_key in state:
+                state[weight_key] = state[weight_key] * flat.unsqueeze(1)
+            if bias_key in state:
+                state[bias_key] = state[bias_key] * flat
 
     def forward(
         self,
@@ -231,10 +246,8 @@ class MiniMaxH3TransformerBlock(Module):
         rope_sin: ttnn.Tensor,
         attention_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        attended = self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask)
-        x = ttnn.add(x, ttnn.mul(attended, self.scale1.data))
-        gated = self.ff2(self.ff1(self.norm2(x)))
-        return ttnn.add(x, ttnn.mul(gated, self.scale2.data))
+        x = ttnn.add(x, self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask))
+        return ttnn.add(x, self.ff2(self.ff1(self.norm2(x))))
 
 
 class MiniMaxH3ViTDecoder3d(Module):

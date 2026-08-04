@@ -1260,3 +1260,26 @@ Tilize against the 52.8 % baseline. If the round-trip is gone the flag should fl
 `until ! pgrep ...; do sleep N; done` loops, which run to the tool timeout even when the job
 finished in a minute. Bound them (`for i in $(seq 1 12); do pgrep ... || break; sleep 10;
 done`) with a cap set from the expected runtime.
+
+## Amendment 47 (2026-08-04) — LayerScale folded into the projections
+
+`scale1` / `scale2` are per-**output**-channel multipliers applied immediately after
+`to_out` and `ff2`, so `to_out(x) * scale1` is `x @ (W_out * scale1) + b_out * scale1`.
+Folded at load time in `MiniMaxH3TransformerBlock._prepare_torch_state`; the two `Parameter`s
+are gone and the block forward is now just two residual adds.
+
+Exact, not approximate: `test_vae_decoder_minimax_h3.py` 5 passed at PCC **99.9997 % /
+99.9876 %** -- the same figures as before the fold, to four decimal places.
+
+Removes two of the 22 `BinaryNg` calls per layer (13.2 % of layer device time in total).
+
+**On fp32 vs bf16 in the decoder:** the remaining fp32 is *required for reference parity*,
+not conservatism. The pinned reference computes `norm1(h.float())` and `norm_q(q.float())`
+explicitly, so the q/k RMS round trip (4 typecasts/layer, 3.2 % of device time) matches it
+exactly. The encoder was the opposite case -- fp32 throughout with no reference basis -- and
+that is already fixed (amendment 44, 2.84x).
+
+Open, as a *deliberate divergence* rather than a fix: the encoder experiment showed bf16
+norms cost 0.04 percentage points of PCC, so the decoder's fp32 q/k norms could likely go
+bf16 for the 3.2 % typecast plus cheaper LayerNorms. That trades reference parity for speed
+and should be a measured decision, not a silent one.
