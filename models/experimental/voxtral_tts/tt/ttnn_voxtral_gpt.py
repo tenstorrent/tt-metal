@@ -164,17 +164,30 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
 #     bf16 (all)                      0.99991     45.8            -             no
 #     + BFP8 on FF1, FF3              0.999884    34.7          0.86%           no
 #     + BFP8 on wqkv, wo   <- this    0.999852    31.4          0.86%           no
-#     + BFP8 on w2 (i.e. all)         0.99986     33.6            -             HANGS
+#     + BFP8 on w2 (i.e. all)         0.99977+    28.9            -             HANGS
 #
 # W2 IS THE HANG, not BFP8 in general -- a distinction that cost a long investigation and is worth
 # keeping straight, because "all-BFP8 hangs" was true but over-attributed and it froze this line of
 # work for a while. wqkv and wo were simply never tried alone; when they were, they cost 3.32
 # ms/frame with mean and p90 worst-sample unchanged, and no hang.
 #
-# BEFORE TOUCHING w2, have the repro ready: short gen + 128-bucket codec decode, then two long gens
-# that both land in the 512 bucket, the second being a pure cache HIT. That is ~90 s and it wedges
-# the card when it fires (recovery needs `tt-smi -r`). The current config clears it, and clears the
-# full 15-case set. Full diagnosis in ttnn_voxtral_pipeline.
+# W2 WAS RETRIED, AFTER wqkv AND wo TURNED OUT FINE, AND IT STILL HANGS -- so the pin is real and
+# specific to w2, not an artefact of the old all-BFP8 test. It is worth 2.5 ms/step (31.4 -> 28.9)
+# and PCC holds at 0.99977-0.99985, so the only thing stopping it is the hang.
+#
+# What the retry added: it now hangs EARLIER and HARDER than documented. The old repro died on the
+# third utterance inside Block 3; this died during the FIRST case, right after the first compute
+# op, with no pipeline output at all. So the trigger is no longer the five-condition sequence
+# below -- today's op mix (row fold, sharded norm, qkv fusion, device semantic head) reaches it
+# sooner. Do not expect the documented repro to be the minimal one any more.
+#
+# Recovery is a board reset. `tt-smi` is not on PATH here; the Wormhole build lives at
+# /home/software/syseng/wh/tt-smi and the command is `-wr 0` (this vintage has no plain `-r`).
+# open_device simply hangs until you do it.
+#
+# The old five-condition repro, kept because it is still the cheapest way to test a CHANGE that is
+# meant to fix this: short gen + 128-bucket codec decode, then two long gens that both land in the
+# 512 bucket, the second a pure cache HIT. The shipped config clears it and the full 15-case set. Full diagnosis in ttnn_voxtral_pipeline.
 #
 # Judge any change here on MEAN and P90 worst-sample, never on max: max is an order statistic and
 # moved 1.28-4.28% across configs non-monotonically (STATUS.md 6.8).

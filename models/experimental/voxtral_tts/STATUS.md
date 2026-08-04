@@ -637,6 +637,17 @@ what was outstanding at the end of the first sweep:
    listening pass, not a metric.
 6. **Concurrent requests** — STILL OPEN. Throughput, not latency.
 
+**w2 in BFP8: RETRIED AND IT STILL HANGS.** Worth doing once wqkv and wo turned out fine, because
+that made "all-BFP8 hangs" look over-attributed in general. It is not: w2 is genuinely the trigger.
+It is worth **2.5 ms/step** (31.4 → 28.9) at PCC 0.99977–0.99985, so the hang is the only obstacle.
+
+Two things the retry changed. First, it now hangs **earlier and harder**: the documented repro died
+on the third utterance inside Block 3, whereas this died during the FIRST case, right after the
+first compute op, with no pipeline output at all — today's op mix reaches the trigger sooner, so
+the five-condition sequence is no longer minimal. Second, recovery: `tt-smi` is **not on PATH** on
+this machine. The Wormhole build is at `/home/software/syseng/wh/tt-smi` and this vintage takes
+`-wr 0`, not `-r`. `open_device` hangs indefinitely until you run it.
+
 **Device tracing, re-measured after the op-count wins — still not worth it, but the reason
 changed.** The old verdict was that tracing COST time (Block 1 -0.7 ms, Block 2 -6 ms/frame). That
 penalty is gone; what is left is a gain too small to bank:
