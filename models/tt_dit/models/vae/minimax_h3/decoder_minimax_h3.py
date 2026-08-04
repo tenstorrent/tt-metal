@@ -86,20 +86,25 @@ class MiniMaxH3ViTAttention(Module):
         # Both `attention_wan.py:120` and `attention_ltx.py:158` configure theirs; this
         # follows them -- HiFi2 with fp32 accumulation off is the standard SDPA setting
         # there, and it roughly doubles matmul throughput against the HiFi4 default.
-        # Left on the ttnn defaults, against the pattern in `attention_wan.py:120` and
-        # `attention_ltx.py:158`, because measurement did not support copying them: an
-        # explicit SDPAProgramConfig at q=k=256 with HiFi2 moved the decoder wave from
-        # 0.652 s to 0.876 s. A chunk-size A/B (64/128/256/512 x HiFi2/HiFi4) was then
-        # inconclusive for a more basic reason -- the *same* configuration measured
-        # 0.34-0.99 s/wave across five runs, a 3x spread that swamps every difference
-        # between configurations.
+        # Swept at the decoder's exact SDPA shape ([1, 32, 1824, 64] bf16) with a
+        # single-op min-of-20 benchmark, which is measurable where whole-model wall clock is
+        # not: default 1.448 ms (602 TF/s) -> q=k=128 + HiFi2 0.502 ms (1737 TF/s), **2.88x**.
         #
-        # That spread is the real finding: at ~540 ops per invocation the decoder is
-        # host-dispatch bound, not compute bound, so per-op tuning is invisible until the
-        # dispatch is amortised. Trace capture is the lever here (plan section 7.1 predicted
-        # exactly this), and these knobs are worth revisiting only once it is in.
-        self.sdpa_program_config = None
-        self.sdpa_compute_kernel_config = None
+        # An earlier attempt at q=k=256 was judged a regression on whole-decoder wall clock;
+        # that reading was noise (the same code measures 0.34-0.99 s/wave). SDPA is 40 % of
+        # layer device time, so this is the largest single decoder win available.
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,  # False is more correct, matching wan/ltx
+        )
+        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
 
         # The elementwise and norm ops all default to HiFi4, which the profile shows costs
         # 21.5 % of layer device time (BinaryNg 13.2 %, LayerNorm 5.1 %, Typecast 3.2 %,

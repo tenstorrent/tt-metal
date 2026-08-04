@@ -1522,3 +1522,32 @@ much less round-trip to recover. Wall clock cannot substitute here -- the encode
 To close it: identify op 1034240 by global call count in `profile_log_device.csv`, or profile
 each down_block separately (blocks 1-5, as block 0 already is) and sum. The per-block route
 needs no new tooling and is the cheaper of the two.
+
+## Amendment 54 (2026-08-04) — SDPA swept at its real shape: 2.88x
+
+SDPA was 40 % of ViT layer device time and untouched. Swept as a **single op** at the
+decoder's exact shape (`[1, 32, 1824, 64]` bf16), min-of-20 -- measurable where whole-model
+wall clock is not, because one op has one dispatch:
+
+| config | ms | TF/s (32 dev) | speedup |
+|---|---|---|---|
+| ttnn defaults | 1.448 | 602.4 | 1.00x |
+| **q=k=128 + HiFi2** | **0.502** | **1737.0** | **2.88x** |
+
+Applied to `MiniMaxH3ViTAttention`. Gates: **5 passed**, PCC 99.9997 % / 99.9877 % --
+unchanged from the defaults, so the fidelity drop costs nothing measurable here.
+
+**This reverses an earlier judgement.** Amendment 41 recorded that an explicit SDPA config
+"moved the decoder wave from 0.652 s to 0.876 s" and concluded the defaults were better. That
+was noise -- the same code spans 0.34-0.99 s/wave -- and the conclusion was wrong. The
+correct method is the one used here and in amendment 52: measure the *op*, or measure device
+time under the profiler; never judge a per-op change by whole-model wall clock.
+
+At 40 % of layer device time, 2.88x on SDPA is worth roughly 26 % off the ViT layer.
+
+**Sweep hazard:** the sweep hung after the second configuration (`q=k=128 LoFi` or later) and
+had to be killed, then `tt-smi -glx_reset`, then a stale process holding
+`CHIP_IN_USE_0_PCIe` had to be killed by PID before the device would initialise again. Larger
+chunk sizes were never measured, so **128 is the best of {default, 128}, not a proven
+optimum** -- 192/256/384/512 remain untested. Note also that a `serve_wasm.py` process from
+another user was mistaken earlier for an unkillable leak of mine; it is not.
