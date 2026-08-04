@@ -107,6 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Width 1 fallback
     if (BLOCK_CT_DIM == 1)
     {
+        LLK_ASSERT(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "fast_tilize width-1 fallback implements L1_TO_L1 only");
         {
             ZONE_SCOPED("INIT")
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -122,20 +123,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("TILE_LOOP")
-            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-                {
-                    _llk_unpack_tilize_dispatch_(
-                        _llk_unpack_tilize_,
-                        L1_ADDRESS(buffer_A[0]),
-                        0,
-                        formats.unpack_A_src,
-                        formats.unpack_A_dst,
-                        FACE_R_DIM,
-                        4 /* num_faces */,
-                        false /* narrow_tile */);
-                }
+                _llk_unpack_tilize_dispatch_(
+                    _llk_unpack_tilize_,
+                    L1_ADDRESS(buffer_A[0]),
+                    0,
+                    formats.unpack_A_src,
+                    formats.unpack_A_dst,
+                    FACE_R_DIM,
+                    4 /* num_faces */,
+                    false /* narrow_tile */);
             }
         }
         {
@@ -243,6 +241,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Width 1 fallback
     if (BLOCK_CT_DIM == 1)
     {
+        LLK_ASSERT(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "fast_tilize width-1 fallback implements L1_TO_L1 only");
         {
             ZONE_SCOPED("INIT")
             _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -276,11 +275,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // Release one section_done per unit so pack can run all units
-            for (std::uint32_t i = 0; i < units_per_row * LOOP_FACTOR; i++)
-            {
-                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-            }
+            // Intentionally empty: MATH_PACK SEMINITs to max 2, so posting one credit per unit hangs pack
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -328,6 +323,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
     std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);
 
+    constexpr bool pack_free_runs = (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE);
+
     const std::uint32_t total_tiles = BLOCK_CT_DIM;
     const std::uint32_t tile_bytes  = GET_L1_HEADERLESS_TILE_SIZE(formats.pack_dst) << 4;
 
@@ -353,6 +350,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Width 1 fallback
     if (BLOCK_CT_DIM == 1)
     {
+        LLK_ASSERT(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "fast_tilize width-1 fallback implements L1_TO_L1 only");
         {
             ZONE_SCOPED("INIT")
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -417,12 +415,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             prev_udim = udim;
                         }
 
-                        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                        if constexpr (!pack_free_runs)
                         {
                             _llk_packer_wait_for_math_done_();
                         }
                         _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
-                        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                        if constexpr (!pack_free_runs)
                         {
                             _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                         }
@@ -434,6 +432,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("UNINIT")
+            if constexpr (pack_free_runs)
+            {
+                TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+            }
             _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, formats.pack_src);
         }
 
