@@ -1,0 +1,1075 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Galaxy 8×4 Snake-Ring All-Gather</title>
+  <style>
+    :root {
+      --bg: #07100f;
+      --panel: rgba(12, 29, 27, 0.86);
+      --panel-strong: #102724;
+      --ink: #edf8f1;
+      --muted: #9db6ad;
+      --grid: #25423c;
+      --green: #7cf7b5;
+      --cyan: #65d9ff;
+      --amber: #ffca70;
+      --red: #ff7b79;
+      --violet: #b59cff;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% -10%, rgba(101, 217, 255, 0.14), transparent 34rem),
+        radial-gradient(circle at 92% 8%, rgba(124, 247, 181, 0.11), transparent 32rem),
+        linear-gradient(180deg, #07100f 0%, #091513 56%, #07100f 100%);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      opacity: 0.16;
+      background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: linear-gradient(to bottom, black, transparent 72%);
+    }
+
+    a { color: var(--cyan); }
+    button, select { font: inherit; }
+
+    .page {
+      width: min(1240px, calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      min-height: 88vh;
+      display: grid;
+      grid-template-columns: 1.08fr 0.92fr;
+      align-items: center;
+      gap: clamp(36px, 7vw, 96px);
+      padding: 72px 0 54px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--green);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 30px;
+      height: 2px;
+      background: currentColor;
+      box-shadow: 0 0 12px currentColor;
+    }
+
+    h1, h2, h3 { line-height: 1.08; letter-spacing: -0.035em; }
+    h1 { margin: 20px 0; font-size: clamp(3rem, 7vw, 6.7rem); max-width: 10ch; }
+    h2 { margin: 0 0 16px; font-size: clamp(2rem, 4.2vw, 3.8rem); }
+    h3 { margin: 0 0 10px; font-size: 1.22rem; }
+
+    .hero p {
+      max-width: 64ch;
+      color: var(--muted);
+      font-size: clamp(1rem, 1.5vw, 1.18rem);
+    }
+
+    .hero-actions, .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-top: 28px;
+    }
+
+    .button {
+      border: 1px solid #34554d;
+      border-radius: 999px;
+      padding: 10px 16px;
+      color: var(--ink);
+      background: #122b27;
+      cursor: pointer;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+
+    .button:hover { transform: translateY(-2px); border-color: var(--green); }
+    .button.primary { color: #06130f; background: var(--green); border-color: var(--green); font-weight: 800; }
+    .button:focus-visible, select:focus-visible { outline: 3px solid rgba(101, 217, 255, 0.46); outline-offset: 2px; }
+
+    .hero-card {
+      position: relative;
+      aspect-ratio: 1 / 1.04;
+      border: 1px solid rgba(124, 247, 181, 0.24);
+      border-radius: 34px;
+      background: linear-gradient(145deg, rgba(18, 50, 44, 0.93), rgba(7, 18, 17, 0.92));
+      box-shadow: var(--shadow), inset 0 1px rgba(255, 255, 255, 0.06);
+      overflow: hidden;
+    }
+
+    .hero-card::before {
+      content: "";
+      position: absolute;
+      width: 70%;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      top: -28%;
+      right: -23%;
+      background: rgba(101, 217, 255, 0.16);
+      filter: blur(46px);
+    }
+
+    .mini-mesh {
+      position: absolute;
+      inset: 14% 12%;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: repeat(8, 1fr);
+      gap: 9px 12px;
+    }
+
+    .mini-chip {
+      position: relative;
+      border: 1px solid #477168;
+      border-radius: 8px;
+      background: #102a26;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.18), inset 0 0 18px rgba(124,247,181,.04);
+      animation: chipPulse 3.8s ease-in-out infinite;
+      animation-delay: calc(var(--i) * -90ms);
+    }
+
+    .mini-chip::after {
+      content: attr(data-rank);
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: #92b6aa;
+      font: 700 clamp(0.48rem, 1vw, 0.72rem) ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    @keyframes chipPulse {
+      0%, 84%, 100% { border-color: #477168; box-shadow: inset 0 0 18px rgba(124,247,181,.04); }
+      90% { border-color: var(--green); box-shadow: 0 0 18px rgba(124,247,181,.24); }
+    }
+
+    .hero-ring-line {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .hero-caption {
+      position: absolute;
+      left: 28px;
+      bottom: 24px;
+      right: 28px;
+      display: flex;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 0.74rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .metric {
+      padding: 15px;
+      border-left: 2px solid var(--green);
+      background: rgba(16, 39, 36, .62);
+    }
+
+    .metric b { display: block; font-size: 1.35rem; }
+    .metric span { color: var(--muted); font-size: .8rem; }
+
+    section { padding: 92px 0; }
+    .section-lead { max-width: 760px; margin-bottom: 34px; color: var(--muted); font-size: 1.05rem; }
+
+    .panel {
+      border: 1px solid rgba(104, 155, 142, 0.28);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow), inset 0 1px rgba(255,255,255,.035);
+      backdrop-filter: blur(14px);
+    }
+
+    .visualizer { overflow: hidden; }
+    .visualizer-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: center;
+      padding: 22px 24px;
+      border-bottom: 1px solid #29453f;
+    }
+
+    .visualizer-head p { margin: 5px 0 0; color: var(--muted); font-size: .9rem; }
+    .controls { margin: 0; }
+    .controls .button { padding: 8px 13px; }
+
+    .select-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: .82rem;
+    }
+
+    select {
+      color: var(--ink);
+      border: 1px solid #34554d;
+      border-radius: 999px;
+      background: #102723;
+      padding: 8px 30px 8px 12px;
+    }
+
+    .mesh-stage {
+      position: relative;
+      padding: 18px;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(124, 247, 181, .055), transparent 55%),
+        #091614;
+    }
+
+    #meshSvg { display: block; width: 100%; height: auto; min-height: 560px; }
+    .mesh-edge { fill: none; stroke: #35564e; stroke-width: 2.2; }
+    .mesh-edge.wrap { stroke: var(--amber); stroke-width: 2.7; stroke-dasharray: 8 6; }
+    .mesh-edge.failed { stroke: var(--red); opacity: .78; }
+    .mesh-edge.focus { stroke: var(--cyan); stroke-width: 5; filter: drop-shadow(0 0 7px rgba(101,217,255,.8)); }
+    .traffic-dot.fwd { fill: var(--green); filter: drop-shadow(0 0 4px var(--green)); }
+    .traffic-dot.bwd { fill: var(--cyan); filter: drop-shadow(0 0 4px var(--cyan)); }
+
+    .chip rect {
+      fill: #102b27;
+      stroke: #52766d;
+      stroke-width: 1.5;
+      transition: fill 180ms ease, stroke 180ms ease, filter 180ms ease;
+    }
+
+    .chip:hover rect, .chip.selected rect { fill: #173d36; stroke: var(--green); filter: drop-shadow(0 0 8px rgba(124,247,181,.45)); }
+    .chip { cursor: pointer; }
+    .chip .rank { fill: var(--ink); font: 800 15px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+    .chip .coord { fill: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+    .chip .tensor-rank { fill: var(--amber); font: 700 9px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+    .svg-label { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; }
+    .wrap-label { fill: var(--amber); font: 800 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .08em; }
+
+    .visualizer-foot {
+      display: grid;
+      grid-template-columns: 1fr 1.3fr;
+      gap: 0;
+      border-top: 1px solid #29453f;
+    }
+
+    .round-card, .arrival-card { padding: 22px 24px; }
+    .round-card { border-right: 1px solid #29453f; }
+    .round-line { display: flex; align-items: baseline; gap: 12px; }
+    .round-number { color: var(--green); font-size: 2.5rem; font-weight: 900; line-height: 1; }
+    .round-copy { color: var(--muted); margin: 9px 0 0; }
+    .arrival-title { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+    .arrival-title span { color: var(--muted); font-size: .8rem; }
+
+    .stripe-tape {
+      display: grid;
+      grid-template-columns: repeat(16, minmax(12px, 1fr));
+      gap: 4px;
+      margin-top: 14px;
+    }
+
+    .stripe {
+      aspect-ratio: 1;
+      display: grid;
+      place-items: center;
+      border: 1px solid #34554d;
+      border-radius: 5px;
+      color: #648078;
+      background: #0a1d1a;
+      font: 700 clamp(.46rem, .9vw, .68rem) ui-monospace, SFMono-Regular, Menlo, monospace;
+      transition: background 240ms ease, color 240ms ease, border-color 240ms ease, transform 240ms ease;
+    }
+
+    .stripe.known { color: #07130f; background: var(--green); border-color: var(--green); }
+    .stripe.new { color: #06131a; background: var(--cyan); border-color: var(--cyan); transform: translateY(-3px); }
+    .stripe.antipode { background: linear-gradient(90deg, var(--green) 50%, var(--cyan) 50%); }
+
+    .legend { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 14px; color: var(--muted); font-size: .78rem; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: currentColor; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .explain-card { padding: 26px; }
+    .explain-card p { color: var(--muted); }
+
+    .formula {
+      margin: 18px 0;
+      padding: 15px 17px;
+      border: 1px solid #32544c;
+      border-radius: 12px;
+      background: #081a17;
+      color: var(--green);
+      overflow-x: auto;
+      font: 700 .87rem/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .mapping-wrap { padding: 24px; overflow-x: auto; }
+    .mapping-grid {
+      min-width: 680px;
+      display: grid;
+      grid-template-columns: 78px repeat(4, 1fr);
+      gap: 8px;
+    }
+
+    .mapping-cell {
+      min-height: 76px;
+      display: grid;
+      place-content: center;
+      border: 1px solid #34544d;
+      border-radius: 12px;
+      color: var(--muted);
+      background: #0b1e1b;
+      text-align: center;
+      transition: transform 160ms ease, border-color 160ms ease;
+    }
+
+    .mapping-cell:hover { transform: translateY(-3px); border-color: var(--green); }
+    .mapping-cell.axis { min-height: 44px; border: none; background: transparent; color: #78948b; font-size: .75rem; }
+    .mapping-cell strong { color: var(--green); font: 800 1rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .mapping-cell small { color: var(--amber); font: 700 .68rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .mapping-cell.odd { background: linear-gradient(145deg, #132522, #0a1b18); }
+
+    .admission-layout { display: grid; grid-template-columns: .9fr 1.1fr; gap: 22px; }
+    .config-card { padding: 26px; }
+    .field { margin-top: 18px; }
+    .field label { display: block; margin-bottom: 7px; color: var(--muted); font-size: .82rem; }
+    .field select { width: 100%; border-radius: 10px; }
+
+    .status {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 22px;
+      padding: 14px;
+      border: 1px solid rgba(124,247,181,.45);
+      border-radius: 12px;
+      color: var(--green);
+      background: rgba(124,247,181,.07);
+    }
+
+    .status.fail { color: var(--red); border-color: rgba(255,123,121,.45); background: rgba(255,123,121,.07); }
+    .status-icon { font-size: 1.5rem; font-weight: 900; }
+
+    .checklist { padding: 14px 26px 24px; }
+    .check {
+      display: grid;
+      grid-template-columns: 26px 1fr;
+      gap: 10px;
+      padding: 12px 0;
+      border-bottom: 1px solid #28433d;
+    }
+    .check:last-child { border: 0; }
+    .check-mark { color: var(--green); font-weight: 900; }
+    .check.bad .check-mark { color: var(--red); }
+    .check b { display: block; }
+    .check small { color: var(--muted); }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 30px;
+      padding: 34px 28px;
+      overflow: hidden;
+    }
+
+    .pipe-stage {
+      position: relative;
+      min-height: 155px;
+      display: grid;
+      place-content: center;
+      padding: 18px;
+      border: 1px solid #35564e;
+      border-radius: 16px;
+      background: #0c211e;
+      text-align: center;
+    }
+
+    .pipe-stage:not(:last-child)::after {
+      content: "›";
+      position: absolute;
+      right: -24px;
+      top: 50%;
+      color: var(--green);
+      font-size: 2rem;
+      transform: translateY(-55%);
+    }
+
+    .pipe-icon { font: 900 1.65rem ui-monospace, monospace; color: var(--green); }
+    .pipe-stage b { margin-top: 8px; }
+    .pipe-stage small { margin-top: 4px; color: var(--muted); }
+    .pipe-pulse {
+      position: absolute;
+      top: -5px;
+      left: -5px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 12px var(--cyan);
+      animation: trace 5s linear infinite;
+      animation-delay: calc(var(--p) * -1s);
+    }
+
+    @keyframes trace {
+      0% { transform: translate(0, 0); opacity: 0; }
+      8% { opacity: 1; }
+      35% { transform: translate(calc(100% + 130px), 0); opacity: 1; }
+      43%, 100% { transform: translate(calc(100% + 130px), 0); opacity: 0; }
+    }
+
+    .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .step-card { padding: 22px; border-top: 3px solid var(--green); }
+    .step-num { color: var(--green); font: 900 2rem ui-monospace, monospace; opacity: .55; }
+    .step-card p { margin-bottom: 0; color: var(--muted); font-size: .9rem; }
+
+    pre {
+      margin: 0;
+      padding: 24px;
+      overflow-x: auto;
+      border-radius: var(--radius);
+      border: 1px solid #315049;
+      color: #d8eee3;
+      background: #06110f;
+      font: .87rem/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    code .kw { color: var(--violet); }
+    code .fn { color: var(--cyan); }
+    code .str { color: var(--amber); }
+    code .cm { color: #68867c; }
+    code .val { color: var(--green); }
+
+    .callouts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 22px; }
+    .callout { padding: 20px; }
+    .callout b { color: var(--green); }
+    .callout p { margin-bottom: 0; color: var(--muted); font-size: .88rem; }
+
+    footer { padding: 58px 0 72px; color: var(--muted); border-top: 1px solid #25423c; }
+    footer .page { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; min-height: auto; padding-top: 58px; }
+      .hero-card { max-width: 610px; width: 100%; margin: 0 auto; }
+      .visualizer-head, .visualizer-foot, .admission-layout { grid-template-columns: 1fr; }
+      .round-card { border-right: 0; border-bottom: 1px solid #29453f; }
+      .pipeline { grid-template-columns: 1fr; }
+      .pipe-stage { min-height: 110px; }
+      .pipe-stage:not(:last-child)::after { right: auto; top: auto; bottom: -31px; left: 50%; transform: translateX(-50%) rotate(90deg); }
+      .steps { grid-template-columns: 1fr 1fr; }
+      .callouts { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 620px) {
+      .page { width: min(100% - 20px, 1240px); }
+      section { padding: 66px 0; }
+      .metric-row, .two-col, .steps { grid-template-columns: 1fr; }
+      .visualizer-head { padding: 18px; }
+      .mesh-stage { padding: 5px; overflow-x: auto; }
+      #meshSvg { min-width: 700px; min-height: 520px; }
+      .visualizer-foot { min-width: 0; }
+      .stripe-tape { grid-template-columns: repeat(8, 1fr); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 1ms !important; animation-iteration-count: 1 !important; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="page hero">
+      <div>
+        <div class="eyebrow">Blackhole Galaxy · Fabric2D Torus XY</div>
+        <h1>One ring. Thirty-two chips.</h1>
+        <p>
+          The latest <strong>high_bw_all_gather</strong> mode turns Galaxy's 8×4 physical mesh into one
+          logical snake ring. Every transfer remains a direct, one-hop Fabric write, while the kernels put
+          gathered shards back into normal row-major tensor order.
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="#live-ring">Run the animation</a>
+          <a class="button" href="#implementation">See the call</a>
+        </div>
+        <div class="metric-row" aria-label="Key design facts">
+          <div class="metric"><b>8 × 4</b><span>physical mesh</span></div>
+          <div class="metric"><b>32</b><span>logical ring ranks</span></div>
+          <div class="metric"><b>16</b><span>bidirectional relay rounds</span></div>
+        </div>
+      </div>
+
+      <div class="hero-card" aria-label="Stylized 8 by 4 chip mesh">
+        <svg class="hero-ring-line" viewBox="0 0 500 520" aria-hidden="true">
+          <path d="M82 89 H418 V135 H82 V181 H418 V227 H82 V273 H418 V319 H82 V365 H418 V411 H82 Q35 250 82 89"
+                fill="none" stroke="#7cf7b5" stroke-width="2" stroke-dasharray="8 8" opacity=".46"/>
+        </svg>
+        <div class="mini-mesh" id="miniMesh"></div>
+        <div class="hero-caption"><span>logical snake</span><span>row-major output</span></div>
+      </div>
+    </header>
+
+    <section id="live-ring">
+      <div class="page">
+        <div class="eyebrow">Interactive model</div>
+        <h2>Watch the ring fill one output</h2>
+        <p class="section-lead">
+          Each chip participates in both directions at once. Pick a receiver, then play or step through the
+          schedule. The grid labels show <strong>s = snake rank</strong> and <strong>t = row-major tensor rank</strong>.
+        </p>
+
+        <div class="panel visualizer">
+          <div class="visualizer-head">
+            <div>
+              <h3>Galaxy mesh traffic</h3>
+              <p>Dots represent simultaneous adjacent-hop packets; they are illustrative, not packet-count exact.</p>
+            </div>
+            <div class="controls">
+              <button class="button primary" id="playButton" type="button">Pause</button>
+              <button class="button" id="stepButton" type="button">Step</button>
+              <button class="button" id="resetButton" type="button">Reset</button>
+              <label class="select-wrap">Speed
+                <select id="speedSelect" aria-label="Animation speed">
+                  <option value="1500">Slow</option>
+                  <option value="900" selected>Normal</option>
+                  <option value="480">Fast</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div class="mesh-stage">
+            <svg id="meshSvg" viewBox="0 0 1080 700" role="img" aria-label="Animated 8 by 4 Galaxy snake ring"></svg>
+          </div>
+
+          <div class="visualizer-foot">
+            <div class="round-card">
+              <div class="round-line">
+                <span class="round-number" id="roundNumber">0</span>
+                <strong id="roundTitle">Local placement</strong>
+              </div>
+              <p class="round-copy" id="roundCopy">Each chip writes its own shard into its persistent output.</p>
+              <div class="legend">
+                <span style="color:var(--green)"><i class="dot"></i> forward</span>
+                <span style="color:var(--cyan)"><i class="dot"></i> backward</span>
+                <span style="color:var(--amber)"><i class="dot"></i> Y wrap</span>
+              </div>
+            </div>
+            <div class="arrival-card">
+              <div class="arrival-title">
+                <strong id="receiverTitle">Output on chip (0,0)</strong>
+                <span id="completionText">1 / 32 tensor stripes present</span>
+              </div>
+              <div class="stripe-tape" id="stripeTape" aria-label="Row-major output stripe occupancy"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="mapping">
+      <div class="page">
+        <div class="eyebrow">The essential translation</div>
+        <h2>Fabric order is not tensor order</h2>
+        <p class="section-lead">
+          The snake reverses every odd physical row. Tensor sharding does not: it stays row-major. A small
+          involutive permutation lets the same function convert in either direction.
+        </p>
+
+        <div class="two-col">
+          <article class="panel explain-card">
+            <h3>Host: find neighbors in snake space</h3>
+            <p>At coordinate <code>(row, col)</code>, compute a logical ring rank. Neighbors are simply rank ±1 modulo 32.</p>
+            <div class="formula">s = row·C + (row even ? col : C−1−col)<br>forward = (s + 1) mod 32<br>backward = (s − 1) mod 32</div>
+            <p>That produces horizontal hops within a row, vertical hops at alternating row ends, and one closing Y-wrap.</p>
+          </article>
+
+          <article class="panel explain-card">
+            <h3>Kernel: address row-major output</h3>
+            <p>Relay scheduling remains in snake space, but every output address first maps the stripe to its canonical tensor rank.</p>
+            <div class="formula">tensor_rank(s) = permute_odd_lanes(s, C)<br><br>permute(permute(x)) = x</div>
+            <p>The local copy, neighbor write, and downstream relay read all use this same translated iterator.</p>
+          </article>
+        </div>
+
+        <div class="panel mapping-wrap" style="margin-top:22px">
+          <div class="mapping-grid" id="mappingGrid" aria-label="Snake rank to row-major tensor rank mapping"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="admission">
+      <div class="page">
+        <div class="eyebrow">Host-side route proof</div>
+        <h2>It runs only when every edge is truly direct</h2>
+        <p class="section-lead">
+          The op does not ask Fabric to forward around corners. Before creating a program, the host proves all 64
+          directed neighbor routes and verifies every requested link index.
+        </p>
+
+        <div class="admission-layout">
+          <div class="panel config-card">
+            <h3>Try the admission gate</h3>
+            <div class="field">
+              <label for="fabricSelect">Fabric topology</label>
+              <select id="fabricSelect">
+                <option value="torus" selected>FABRIC_2D_TORUS_XY</option>
+                <option value="plain">FABRIC_2D (no wrap)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="linksSelect">Requested links per direction</label>
+              <select id="linksSelect">
+                <option value="1">1 link</option>
+                <option value="2" selected>2 links</option>
+                <option value="3">3 links</option>
+              </select>
+            </div>
+            <div class="status" id="admissionStatus" role="status">
+              <span class="status-icon">✓</span>
+              <span><strong>Admitted.</strong> All snake edges have two direct physical links.</span>
+            </div>
+          </div>
+
+          <div class="panel checklist" id="checklist"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="dataflow">
+      <div class="page">
+        <div class="eyebrow">Store and forward</div>
+        <h2>One hop at a time, pipelined</h2>
+        <p class="section-lead">
+          A stripe terminates in the adjacent chip's persistent output. On the next iteration, that chip rereads
+          the received rows and relays them onward. No packet itself crosses multiple mesh hops.
+        </p>
+
+        <div class="panel pipeline" aria-label="Data movement pipeline">
+          <div class="pipe-stage"><i class="pipe-pulse" style="--p:0"></i><span class="pipe-icon">DRAM</span><b>Input pages</b><small>Local shard or received output</small></div>
+          <div class="pipe-stage"><i class="pipe-pulse" style="--p:1"></i><span class="pipe-icon">CB×3</span><b>Reader workers</b><small>Bank-owned slices fill L1 buffers</small></div>
+          <div class="pipe-stage"><i class="pipe-pulse" style="--p:2"></i><span class="pipe-icon">MUX</span><b>Fabric mux</b><small>Workers coalesce full packets</small></div>
+          <div class="pipe-stage"><i class="pipe-pulse" style="--p:3"></i><span class="pipe-icon">→1</span><b>Direct Fabric hop</b><small>Terminal write to one neighbor</small></div>
+          <div class="pipe-stage"><i class="pipe-pulse" style="--p:4"></i><span class="pipe-icon">OUT</span><b>Persistent output</b><small>Final destination and next relay source</small></div>
+        </div>
+
+        <div class="steps" style="margin-top:22px">
+          <article class="panel step-card"><div class="step-num">01</div><h3>Split the work</h3><p>Each link and worker owns a slice, usually aligned to destination DRAM banks for packet coalescing.</p></article>
+          <article class="panel step-card"><div class="step-num">02</div><h3>Run both ways</h3><p>Forward and backward workers execute concurrently, one port in each ring direction per device.</p></article>
+          <article class="panel step-card"><div class="step-num">03</div><h3>Signal arrivals</h3><p>A data-valid semaphore lets a downstream reader begin relaying batches before the whole stripe arrives.</p></article>
+          <article class="panel step-card"><div class="step-num">04</div><h3>Meet at the antipode</h3><p>On the even 32-chip ring, the final antipode stripe is split in half across the two directions.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="implementation">
+      <div class="page">
+        <div class="eyebrow">How to select it</div>
+        <h2><code>cluster_axis=None</code> means the whole mesh</h2>
+        <p class="section-lead">
+          Integer axes retain the existing independent row/column collectives. Explicit <code>None</code> is the
+          new contract for one all-gather across all 32 Galaxy devices.
+        </p>
+
+        <pre><code><span class="cm"># Fabric is opened as an 8×4 Galaxy mesh with Torus X and Y.</span>
+output = <span class="fn">ttnn.empty</span>(
+    gathered_shape,
+    device=mesh_device,
+    layout=input_tensor.layout,
+    dtype=input_tensor.dtype,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+)
+
+ttnn.experimental.<span class="fn">high_bw_all_gather</span>(
+    input_tensor,
+    output,
+    dim=gather_dim,
+    cluster_axis=<span class="val">None</span>,      <span class="cm"># one 32-device snake ring</span>
+    subdevice_id=subdevice_id,
+    sub_core_grid=worker_grid,
+    num_links=<span class="val">2</span>,          <span class="cm"># Galaxy-compatible uniform link count</span>
+)</code></pre>
+
+        <div class="callouts">
+          <article class="panel callout"><b>Input distribution</b><p>The gather tensor dimension must be sharded across every mesh device, with row-major mesh coordinates.</p></article>
+          <article class="panel callout"><b>Output shape</b><p>The output extent at <code>dim</code> grows by 8×4 = 32, and that placement becomes replicated.</p></article>
+          <article class="panel callout"><b>Output storage</b><p>The caller supplies a preallocated persistent interleaved-DRAM output used for both final data and relay staging.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="tradeoffs">
+      <div class="page">
+        <div class="eyebrow">What this design buys</div>
+        <h2>A simpler collective, not magical bandwidth</h2>
+        <div class="two-col">
+          <article class="panel explain-card">
+            <h3>Advantages</h3>
+            <p>One program, one synchronization sequence, direct 32-way output placement, no corner-forwarding firmware changes, and a strict host proof that rejects unsafe topologies.</p>
+          </article>
+          <article class="panel explain-card">
+            <h3>Boundaries</h3>
+            <p>A generic mesh needs at least one even dimension: the host prefers a row snake and falls back to a column snake when only the X closure is direct. Full-mesh link selection is conservative, and the idealized link-volume bound is comparable to a two-phase axis-1 then axis-0 all-gather.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="page">
+      <span>High-bandwidth all-gather · Galaxy 8×4 snake ring</span>
+      <span>Standalone document · no external assets or network required</span>
+    </div>
+  </footer>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const ROWS = 8;
+      const COLS = 4;
+      const N = ROWS * COLS;
+      const svgNS = "http://www.w3.org/2000/svg";
+      const positions = new Array(N);
+      const edgePaths = [];
+      const trafficDots = [];
+      let selectedRank = 0;
+      let round = 0;
+      let playing = true;
+      let timer = null;
+      let trafficPhase = 0;
+      let lastFrame = performance.now();
+
+      const mod = (value, base = N) => ((value % base) + base) % base;
+      const permuteOddRows = (linearIndex) => {
+        const row = Math.floor(linearIndex / COLS);
+        const offset = linearIndex % COLS;
+        return row * COLS + (row % 2 === 0 ? offset : COLS - 1 - offset);
+      };
+      const ringFromCoord = (row, col) => permuteOddRows(row * COLS + col);
+      const coordFromRing = (rank) => ({ row: Math.floor(rank / COLS), col: permuteOddRows(rank) % COLS });
+      const tensorFromRing = (rank) => permuteOddRows(rank);
+      const element = (name, attrs = {}) => {
+        const node = document.createElementNS(svgNS, name);
+        Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
+        return node;
+      };
+
+      function buildMiniMesh() {
+        const root = document.getElementById("miniMesh");
+        for (let row = 0; row < ROWS; row++) {
+          for (let col = 0; col < COLS; col++) {
+            const rank = ringFromCoord(row, col);
+            const chip = document.createElement("span");
+            chip.className = "mini-chip";
+            chip.dataset.rank = rank;
+            chip.style.setProperty("--i", rank);
+            root.appendChild(chip);
+          }
+        }
+      }
+
+      function edgePathData(a, b, isWrap) {
+        if (!isWrap) return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+        return `M ${a.x} ${a.y} C 56 ${a.y - 8}, 56 ${b.y + 8}, ${b.x} ${b.y}`;
+      }
+
+      function buildMesh() {
+        const svg = document.getElementById("meshSvg");
+        const x0 = 275;
+        const y0 = 70;
+        const xGap = 178;
+        const yGap = 78;
+
+        for (let rank = 0; rank < N; rank++) {
+          const { row, col } = coordFromRing(rank);
+          positions[rank] = { x: x0 + col * xGap, y: y0 + row * yGap, row, col };
+        }
+
+        const axisX = element("text", { x: 540, y: 34, class: "svg-label", "text-anchor": "middle" });
+        axisX.textContent = "FABRIC X / mesh columns";
+        svg.appendChild(axisX);
+        const axisY = element("text", { x: 110, y: 350, class: "svg-label", transform: "rotate(-90 110 350)", "text-anchor": "middle" });
+        axisY.textContent = "FABRIC Y / mesh rows";
+        svg.appendChild(axisY);
+
+        for (let rank = 0; rank < N; rank++) {
+          const next = mod(rank + 1);
+          const isWrap = rank === N - 1;
+          const path = element("path", {
+            d: edgePathData(positions[rank], positions[next], isWrap),
+            class: `mesh-edge${isWrap ? " wrap" : ""}`,
+            id: `edge-${rank}`,
+            "data-rank": rank
+          });
+          svg.appendChild(path);
+          edgePaths.push(path);
+        }
+
+        const wrapText = element("text", { x: 76, y: 350, class: "wrap-label", transform: "rotate(-90 76 350)", "text-anchor": "middle" });
+        wrapText.textContent = "DIRECT Y-TORUS CLOSURE · s31 ↔ s0";
+        svg.appendChild(wrapText);
+
+        edgePaths.forEach((path, rank) => {
+          ["fwd", "bwd"].forEach((direction) => {
+            const dot = element("circle", { r: direction === "fwd" ? 3.8 : 3.2, class: `traffic-dot ${direction}` });
+            dot.dataset.edge = rank;
+            dot.dataset.direction = direction;
+            svg.appendChild(dot);
+            trafficDots.push(dot);
+          });
+        });
+
+        for (let rank = 0; rank < N; rank++) {
+          const pos = positions[rank];
+          const group = element("g", { class: "chip", transform: `translate(${pos.x},${pos.y})`, tabindex: "0", role: "button", "aria-label": `Select chip row ${pos.row}, column ${pos.col}` });
+          group.dataset.rank = rank;
+          group.appendChild(element("rect", { x: -48, y: -27, width: 96, height: 54, rx: 11 }));
+          const rankText = element("text", { x: 0, y: -5, class: "rank" });
+          rankText.textContent = `s${rank}`;
+          const coordText = element("text", { x: 0, y: 10, class: "coord" });
+          coordText.textContent = `chip (${pos.row},${pos.col})`;
+          const tensorText = element("text", { x: 0, y: 22, class: "tensor-rank" });
+          tensorText.textContent = `output t${tensorFromRing(rank)}`;
+          group.append(rankText, coordText, tensorText);
+          group.addEventListener("click", () => selectReceiver(rank));
+          group.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectReceiver(rank); }
+          });
+          svg.appendChild(group);
+        }
+        selectReceiver(0);
+      }
+
+      function buildMapping() {
+        const grid = document.getElementById("mappingGrid");
+        const corner = document.createElement("div");
+        corner.className = "mapping-cell axis";
+        corner.textContent = "mesh";
+        grid.appendChild(corner);
+        for (let col = 0; col < COLS; col++) {
+          const cell = document.createElement("div");
+          cell.className = "mapping-cell axis";
+          cell.textContent = `col ${col}`;
+          grid.appendChild(cell);
+        }
+        for (let row = 0; row < ROWS; row++) {
+          const label = document.createElement("div");
+          label.className = "mapping-cell axis";
+          label.textContent = `row ${row}${row % 2 ? " ←" : " →"}`;
+          grid.appendChild(label);
+          for (let col = 0; col < COLS; col++) {
+            const ring = ringFromCoord(row, col);
+            const tensor = row * COLS + col;
+            const cell = document.createElement("div");
+            cell.className = `mapping-cell${row % 2 ? " odd" : ""}`;
+            cell.innerHTML = `<strong>snake s${ring}</strong><small>tensor t${tensor}</small>`;
+            grid.appendChild(cell);
+          }
+        }
+      }
+
+      function buildStripeTape() {
+        const tape = document.getElementById("stripeTape");
+        for (let tensorRank = 0; tensorRank < N; tensorRank++) {
+          const cell = document.createElement("span");
+          cell.className = "stripe";
+          cell.dataset.tensorRank = tensorRank;
+          cell.textContent = tensorRank;
+          cell.title = `Row-major tensor stripe ${tensorRank}`;
+          tape.appendChild(cell);
+        }
+      }
+
+      function knownSnakeRanks() {
+        const ranks = new Set([selectedRank]);
+        for (let distance = 1; distance <= Math.min(round, N / 2 - 1); distance++) {
+          ranks.add(mod(selectedRank - distance));
+          ranks.add(mod(selectedRank + distance));
+        }
+        if (round === N / 2) ranks.add(mod(selectedRank + N / 2));
+        return ranks;
+      }
+
+      function updateRound() {
+        const known = knownSnakeRanks();
+        const pos = positions[selectedRank];
+        document.getElementById("roundNumber").textContent = round;
+        document.getElementById("receiverTitle").textContent = `Output on chip (${pos.row},${pos.col}) · snake s${selectedRank}`;
+        document.getElementById("completionText").textContent = `${known.size} / ${N} tensor stripes present`;
+
+        let title = "Local placement";
+        let copy = "Each chip writes its own shard into its persistent output.";
+        const newSnake = new Set();
+        if (round > 0 && round < N / 2) {
+          const left = mod(selectedRank - round);
+          const right = mod(selectedRank + round);
+          newSnake.add(left);
+          newSnake.add(right);
+          title = `Two stripes arrive from distance ${round}`;
+          copy = `Snake s${left} and s${right} finish their last one-hop transfer into the selected receiver.`;
+        } else if (round === N / 2) {
+          const antipode = mod(selectedRank + N / 2);
+          newSnake.add(antipode);
+          title = "Antipode halves complete";
+          copy = `The two directions deliver complementary halves of snake s${antipode}; all 32 stripes are now present.`;
+        }
+        document.getElementById("roundTitle").textContent = title;
+        document.getElementById("roundCopy").textContent = copy;
+
+        document.querySelectorAll(".stripe").forEach((cell) => {
+          const tensorRank = Number(cell.dataset.tensorRank);
+          const snakeRank = permuteOddRows(tensorRank);
+          cell.classList.toggle("known", known.has(snakeRank));
+          cell.classList.toggle("new", newSnake.has(snakeRank));
+          cell.classList.toggle("antipode", round === N / 2 && newSnake.has(snakeRank));
+        });
+
+        edgePaths.forEach((path) => path.classList.remove("focus"));
+        if (round > 0) {
+          edgePaths[mod(selectedRank - 1)].classList.add("focus");
+          edgePaths[selectedRank].classList.add("focus");
+        }
+      }
+
+      function selectReceiver(rank) {
+        selectedRank = rank;
+        document.querySelectorAll(".chip").forEach((chip) => chip.classList.toggle("selected", Number(chip.dataset.rank) === rank));
+        updateRound();
+      }
+
+      function schedule() {
+        clearInterval(timer);
+        if (!playing) return;
+        const duration = Number(document.getElementById("speedSelect").value);
+        timer = setInterval(() => {
+          round = round >= N / 2 ? 0 : round + 1;
+          updateRound();
+        }, duration);
+      }
+
+      function updateTraffic(timestamp) {
+        const delta = Math.min(48, timestamp - lastFrame);
+        lastFrame = timestamp;
+        if (playing && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          const speed = 900 / Number(document.getElementById("speedSelect").value);
+          trafficPhase = (trafficPhase + delta * 0.00042 * speed) % 1;
+        }
+        trafficDots.forEach((dot, index) => {
+          const path = edgePaths[Number(dot.dataset.edge)];
+          const length = path.getTotalLength();
+          const offset = ((index % 7) * 0.115) % 1;
+          const raw = (trafficPhase + offset) % 1;
+          const progress = dot.dataset.direction === "fwd" ? raw : 1 - raw;
+          const point = path.getPointAtLength(length * progress);
+          dot.setAttribute("cx", point.x);
+          dot.setAttribute("cy", point.y);
+          dot.style.opacity = playing ? ".82" : ".28";
+        });
+        requestAnimationFrame(updateTraffic);
+      }
+
+      function updateAdmission() {
+        const topology = document.getElementById("fabricSelect").value;
+        const links = Number(document.getElementById("linksSelect").value);
+        const topologyOK = topology === "torus";
+        const linksOK = links <= 2;
+        const admitted = topologyOK && linksOK;
+        const status = document.getElementById("admissionStatus");
+        status.classList.toggle("fail", !admitted);
+        if (admitted) {
+          status.innerHTML = `<span class="status-icon">✓</span><span><strong>Admitted.</strong> All snake edges have ${links} direct physical link${links === 1 ? "" : "s"}.</span>`;
+        } else if (!topologyOK) {
+          status.innerHTML = `<span class="status-icon">×</span><span><strong>Rejected.</strong> The closing s31 → s0 edge would require multi-hop forwarding.</span>`;
+        } else {
+          status.innerHTML = `<span class="status-icon">×</span><span><strong>Rejected.</strong> Galaxy exposes only two uniform participating links here.</span>`;
+        }
+
+        const checks = [
+          [true, "Two-dimensional mesh", "Shape is exactly 8×4, with both dimensions greater than one."],
+          [true, "Even row count", "Eight rows make the last snake coordinate (7,0)."],
+          [topologyOK, "Direct closing edge", topologyOK ? "Y-torus directly connects (7,0) and (0,0)." : "Plain Fabric2D has no physical Y-wrap neighbor."],
+          [linksOK, "Requested links available", linksOK ? `${links} requested ≤ 2 uniformly available.` : `${links} requested > 2 uniformly available.`],
+          [true, "Whole gather dimension sharded", "All 32 row-major placements contribute exactly one shard."],
+        ];
+        const checklist = document.getElementById("checklist");
+        checklist.innerHTML = checks.map(([ok, name, detail]) => `
+          <div class="check${ok ? "" : " bad"}">
+            <span class="check-mark">${ok ? "✓" : "×"}</span>
+            <span><b>${name}</b><small>${detail}</small></span>
+          </div>`).join("");
+
+        const wrap = document.getElementById(`edge-${N - 1}`);
+        if (wrap) wrap.classList.toggle("failed", !topologyOK);
+      }
+
+      buildMiniMesh();
+      buildStripeTape();
+      buildMapping();
+      buildMesh();
+      updateAdmission();
+
+      document.getElementById("playButton").addEventListener("click", () => {
+        playing = !playing;
+        document.getElementById("playButton").textContent = playing ? "Pause" : "Play";
+        schedule();
+      });
+      document.getElementById("stepButton").addEventListener("click", () => {
+        playing = false;
+        document.getElementById("playButton").textContent = "Play";
+        clearInterval(timer);
+        round = round >= N / 2 ? 0 : round + 1;
+        updateRound();
+      });
+      document.getElementById("resetButton").addEventListener("click", () => {
+        round = 0;
+        updateRound();
+      });
+      document.getElementById("speedSelect").addEventListener("change", schedule);
+      document.getElementById("fabricSelect").addEventListener("change", updateAdmission);
+      document.getElementById("linksSelect").addEventListener("change", updateAdmission);
+
+      schedule();
+      requestAnimationFrame(updateTraffic);
+    })();
+  </script>
+</body>
+</html>
