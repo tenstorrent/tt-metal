@@ -42,21 +42,23 @@ rows, and the qkv fusion (0.96 ms) merged a 2048-wide matmul that was costing th
 4096-wide one into a single larger call. Judge a proposal on whether it makes kernels BIGGER, not
 on how many ops it deletes.
 
-WHERE THE TIME GOES, per frame, steady state on one N150 (~28 ms of a ~60 ms frame; Block 1's
-31.4 ms is the larger half):
+WHERE THE TIME GOES, per frame, steady state on one N150 (~24 ms of a ~52 ms frame; Block 1's
+26.6 ms is marginally the larger half):
 
-    _solve -- 7 Euler steps          ~26 ms    7 SEQUENTIAL velocity evaluations, each a 3-layer
+    _solve -- 7 Euler steps          ~22 ms    7 SEQUENTIAL velocity evaluations, each a 3-layer
                                                transformer over 3 tokens, CFG batch-2 folded to 6
                                                rows. Floor is 13.4 ms (2.6 GB at 194 GB/s), so
-                                               there is still ~2x of per-kernel cost in here, and
-                                               no known way to spend it down.
+                                               there is still ~1.6x of per-kernel cost in here.
+                                               The biggest single non-matmul line is
+                                               nlp_create_qkv_heads at ~97 us x21 -- see _block,
+                                               where its floor is measured and shown to be fixed.
     semantic_code                      1.25 ms [B,8320] masked argmax, now ON DEVICE in fp32.
                                                Was 2.74 ms of real host CPU. fp32 is mandatory --
                                                it produces an INDEX; see semantic_dev.
     host tail (FSQ quantise etc)       0.7 ms
     ------------------------------------------
-    Block 2 total                     ~28 ms   (42.5 before the row fold, sharded norm,
-                                               qkv fusion and the device semantic head)
+    Block 2 total                     ~24 ms   (42.5 before the row fold, sharded norm, qkv
+                                               fusion, device semantic head and L1 q/k/v)
 
 The structural problem is the SEQUENCE: 7 steps that each depend on the previous, so none of the
 usual batching tricks apply within a frame.
@@ -261,10 +263,37 @@ class TtVoxtralFlow:
         # q, k and v share one weight and one matmul; nlp_create_qkv_heads splits all three AND
         # builds the head layout in a single op -- given no `input_kv` it reads one fused tensor.
         qkv = ttnn.linear(h, w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
+        # THIS OP HAS A ~97 us FLOOR AND IT IS THE MOST EXPENSIVE NON-MATMUL LINE IN THE BLOCK --
+        # 2.7 ms/frame over 21 calls, more than the wqkv matmul that feeds it. The floor is fixed
+        # cost, not data movement: the same call on S=32 (10.7x the data) also measures 97 us. So
+        # there is nothing to win by feeding it less or by laying the input out differently, and
+        # both restructurings that avoid it are WORSE -- hand-rolled slice+reshape+permute is
+        # 158 us, and riding the CFG pair on the sequence dim is 259 us. The two sibling ttnn ops
+        # (create_qkv_heads, transformer.split_query_key_value_and_split_heads) reject GQA shapes.
+        #
+        # WHAT DOES WORK IS THE OUTPUT MEMORY CONFIG, and for a reason the op-level numbers hide.
+        # Isolated, an L1 output saves only ~7 us on the op itself. In the real block it is worth
+        # 2.5 ms/frame, because q/k/v then stay in L1 for the four ops that consume them:
+        #
+        #     output   transpose_k   ms/frame   codes != fp32 ref (8 draws)
+        #     DRAM     False           26.75         7/288          <- was
+        #     DRAM     True            26.72         7/288
+        #     L1       False           24.28         9/288
+        #     L1       True            24.17         9/288          <- shipped, 1.106x
+        #
+        # So L1 carries all of the speed AND all of the cost: 2 extra differing codes in 288.
+        # `transpose_k_heads=True` is free -- it emits k already transposed for the scores matmul,
+        # deleting our own transpose op -- but worth almost nothing on its own (1.001x); it is on
+        # because one fewer op is one fewer thing to read.
+        #
+        # NOT bit-exact, and the chain is: the three tensors are bit-identical either way (verified
+        # with torch.equal), but an L1-resident operand makes the downstream matmul pick a different
+        # program config, hence a different accumulation order. Velocity PCC 0.99998522 ->
+        # 0.99998164. Gated on codes and the 15-case run, not on PCC.
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.reshape(qkv, [B, 1, 3, _QKV_WIDTH]),
             num_heads=FM_N_HEADS, num_kv_heads=FM_N_KV_HEADS,
-            transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            transpose_k_heads=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         # GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the CFG fold above, and worth 1.40x
         # on this block. Mathematically the same attention: on device it gives the same velocity
         # PCC and the same 3-of-74 code diff, and in fp32 on host the two agree to 6e-07, which is
@@ -280,9 +309,10 @@ class TtVoxtralFlow:
         # repeat_interleave ops, which were materialising k/v 4x.
         #
         # NO mask and NO RoPE here -- bidirectional by design. sdpa would fuse the interior into
-        # ONE op and measures faster still (1.65x), but it costs accuracy; see STATUS.md §7.
+        # ONE op and measures faster still (1.147x), but it triples the differing codes (7/288 ->
+        # 21/288 over 8 draws); see STATUS.md 6.8.
         s = ttnn.matmul(ttnn.reshape(qh, [B, FM_N_KV_HEADS, REP * 3, FM_HEAD_DIM]),
-                        ttnn.transpose(kh, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
+                        kh, compute_kernel_config=COMPUTE_CONFIG)   # kh already transposed
         s = ttnn.multiply(s, SCALE)
         a = ttnn.softmax(s, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
         a = ttnn.matmul(a, vh, compute_kernel_config=COMPUTE_CONFIG)

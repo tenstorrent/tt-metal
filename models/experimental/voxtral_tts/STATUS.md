@@ -33,8 +33,8 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → 53.4-58.8 ms/frame (mean 55.5), RTF 0.68-0.78 on 14 of 15 cases.** Per frame:
-Block 1 ~26.6 ms, Block 2 ~28 ms, host 0.2 ms. The two are now about even.
+**Performance: 83.7 → 50.8-54.6 ms/frame (mean 52.3), RTF 0.65-0.74 on 14 of 15 cases.** Per frame:
+Block 1 ~26.6 ms, Block 2 ~24.2 ms, host 0.2 ms. The two are now about even.
 goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
 width-sharded RMSNorm in Block 2, qkv fusion) and §6.8 (BFP8 on wqkv/wo, semantic head on device) —
 and §6.7 is the one to read first: it explains why the WER headline cannot gate any of this.
@@ -851,6 +851,46 @@ that I have it, I am not going to be silent." That is the only difference across
 (298 × 3 seeds); termination is 15/15 and voice identity passes everywhere. Shipped on the judgement
 that a contraction is what a human reader does, not a defect — an explicit call, so if a future
 regression traces here, this is the trade to question first.
+
+
+### 6.10 — nlp_create_qkv_heads: the op has a floor, but its OUTPUT CONFIG was free money
+
+Chased the biggest non-matmul line in Block 2 (2.7 ms/frame, 129 us x21 — more than the wqkv matmul
+that feeds it, and 18x Block 1's decode variant at 7.0 us).
+
+**The op's cost is a FIXED ~97 us, not data movement.** The same call on S=32 — 10.7x the real data
+— also measures 97 us. So there is nothing to win by feeding it less or laying the input out
+differently, and indeed every restructuring is worse: hand-rolled slice+reshape+permute is 158 us
+against the shipped chain's 140, and riding the CFG pair on the sequence dim is 259 us. Both were
+verified bit-identical first, so those are speed results, not broken reimplementations. The sibling
+ttnn ops (`create_qkv_heads`, `transformer.split_query_key_value_and_split_heads`) reject GQA shapes.
+
+**What paid was the output memory config, and the op-level number hides why.** Isolated, an L1
+output saves ~7 us on the op. In the real block it is worth **2.5 ms/frame**, because q/k/v then
+stay in L1 for the four ops that consume them:
+
+| output | transpose_k | ms/frame | codes ≠ fp32 ref (8 draws) |
+|---|---|---|---|
+| DRAM | False ← was | 26.75 | 7/288 |
+| DRAM | True | 26.72 | 7/288 |
+| L1 | False | 24.28 | 9/288 |
+| L1 | True ← shipped | **24.17** (1.106x) | 9/288 |
+
+L1 carries all the speed AND all the cost — 2 extra differing codes in 288. `transpose_k_heads=True`
+is free (it emits k already transposed, deleting our transpose op) but worth 1.001x alone; it is on
+for tidiness. NOT bit-exact end to end: the three tensors are identical either way, but an
+L1-resident operand makes the downstream matmul choose a different program config. Velocity PCC
+0.99998522 → 0.99998164.
+
+Gated on the full run: **long-form 0 wrong words in 298**, 15/15 natural termination, voice PASS.
+For scale, the accepted BFP8-weights trade was 1.23x for one extra code in 222; the rejected sdpa
+trade was 1.147x for fourteen (7→21). This is 1.106x for two.
+
+**Generalisable lesson: for the small tensors in this block, WHERE a tensor lives matters as much as
+how big the kernel is.** Every previous win here came from making kernels bigger; this one came from
+keeping an operand in L1 across its consumers. Worth trying on other short-lived intermediates —
+though note it is not universally good: feeding a width-SHARDED activation to a matmul with a
+DRAM-interleaved weight is slower (§6.6), so interleaved-L1 is the useful middle.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of

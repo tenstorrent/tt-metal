@@ -38,12 +38,12 @@ the teacher-forced gates in tests/tt_gates.py to judge a numerical change.
 
 PERFORMANCE, steady state on one N150, long-form cases:
 
-    Block 1 decode      ~26.6 ms/frame   ~48%
-    Block 2 flow        ~28   ms/frame   ~51%
+    Block 1 decode      ~26.6 ms/frame   ~51%
+    Block 2 flow        ~24.2 ms/frame   ~46%
     host embed_frame      0.2 ms/frame    0.4%
-    TOTAL               53.4-58.8 ms/frame, mean 55.5 over the 15-case fixture
+    TOTAL               50.8-54.6 ms/frame, mean 52.3 over the 15-case fixture
     prefill 0.1-1.5 s once; Block 3 codec ~9% of wall time
-    RTF 0.68-0.78 on 14 of 15 cases   (RTF = generation / audio, lower is better)
+    RTF 0.65-0.74 on 14 of 15 cases   (RTF = generation / audio, lower is better)
 
 The 15th is case 0 at RTF 1.89, and that is COLD-START, not a slow case: it pays the first codec
 bucket's kernel compiles and the first prefill shape. Every later case with the same shapes runs
@@ -57,9 +57,10 @@ map. What is left is different in each:
   * Block 1 is at its floor except for w2, the last bf16 weight and the pinned trigger of the hang
     documented below. ~21 of its 26.6 ms is pure weight streaming at the ceiling, and everything
     that is not a matmul now totals under 6 ms.
-  * Block 2 still sits ~2x above its 13.4 ms weight-read floor, and that gap is DEVICE-side
-    per-kernel cost -- proven by tracing, which removes host dispatch and changes nothing (6.6).
-    Fewer ops does not help; only fewer, BIGGER kernels do.
+  * Block 2 sits ~1.6x above its 13.4 ms weight-read floor, and that gap is DEVICE-side per-kernel
+    cost -- proven by tracing, which removes host dispatch and changes nothing (6.6). Fewer ops
+    does not help; bigger kernels and L1-resident operands do. Its worst single line is
+    nlp_create_qkv_heads, whose ~97 us is a FIXED cost (same at 10.7x the data).
   * Block 3 is ~9% of wall and is the least explored part of the pipeline.
 
 The one structural idea left is throughput, not latency: a 3-token sequence wastes 26 of 32 tile
