@@ -2305,13 +2305,17 @@ class UnarySFPUGolden:
         ):
             return self._call_integer(operation, operand1, input_format, dimensions)
 
-        # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
-        if input_format == DataFormat.Bfp2_b:
-            operand1 = _bfp2b_to_float16b(operand1)
-        if input_format == DataFormat.Bfp4_b:
-            operand1 = _bfp4b_to_float16b(operand1)
-        if input_format.is_mx_format():
-            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
+        # Quantize input to match what hardware actually sees after unpack from L1.
+        # This used to inline a partial copy of quantize_input_to_unpack_format that
+        # handled Bfp2_b/Bfp4_b/MX but skipped Bfp8_b, so for Bfp8_b inputs the golden
+        # ran on values the hardware never saw. Smooth ops absorbed that in tolerance,
+        # but discontinuous ops (floor/ceil/trunc/frac) turn a sub-ULP quantization
+        # step across an integer into a full 1.0 error. DataCopyGolden, TypecastGolden
+        # and UntilizeGolden already use the shared helper; this brings the SFPU unary
+        # golden in line with them.
+        operand1 = quantize_input_to_unpack_format(
+            operand1, input_format, all_mx_formats=True
+        )
 
         # Special handling for Column and Row reduction which needs to process the entire tensor
         if operation in [MathOperation.ReduceColumn, MathOperation.ReduceRow]:
