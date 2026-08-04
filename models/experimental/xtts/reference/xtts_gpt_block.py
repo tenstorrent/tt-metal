@@ -130,20 +130,16 @@ def load_xtts_state_dict():
     state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
     tensors = {k: v for k, v in state_dict.items() if torch.is_tensor(v)}
 
-    # Verify only the weights the GPT model actually consumes (the 30 decoder
+    # Summarise only the weights the GPT model actually consumes (the 30 decoder
     # blocks + ln_f, the text/mel token + position embeddings, final_norm, and
-    # the two heads) — not the whole ~1.9 GB checkpoint. Print name, shape,
-    # dtype and size for each.
-    total_params, total_bytes = 0, 0
+    # the two heads) — not the whole ~1.9 GB checkpoint.
     used = {k: v for k, v in tensors.items() if _is_gpt_weight(k)}
-    print(f"[load_xtts_state_dict] {len(used)} GPT weights used (of {len(tensors)} tensors in checkpoint):")
-    for name, t in used.items():
-        n_elem = t.numel()
-        n_bytes = n_elem * t.element_size()
-        total_params += n_elem
-        total_bytes += n_bytes
-        print(f"  {name:<55} shape={tuple(t.shape)} dtype={t.dtype} " f"params={n_elem:,} size={n_bytes / 1e6:.2f} MB")
-    print(f"[load_xtts_state_dict] total GPT: {total_params:,} params, {total_bytes / 1e6:.2f} MB")
+    total_params = sum(t.numel() for t in used.values())
+    total_bytes = sum(t.numel() * t.element_size() for t in used.values())
+    print(
+        f"[load_xtts_state_dict] {len(used)} GPT weights used (of {len(tensors)} tensors in checkpoint): "
+        f"{total_params:,} params, {total_bytes / 1e6:.2f} MB"
+    )
 
     return tensors
 
