@@ -221,8 +221,8 @@ ttnn::device_operation::ProgramArtifacts build_wh_rm(const TransposeInputs& tens
         .data_format_metadata = dst_cb_data_format,
     });
     // Tilize intermediate (legacy c_24): produced and consumed within the compute kernel → self-loop.
-    // (Legacy also allocated a dead c_25 "im2" here; it is referenced by no kernel in this factory and
-    // is dropped — see METAL2_PORT_PLAN.md.)
+    // (Legacy also allocated a dead c_25 "im2" here; no kernel bound by this factory references it, so
+    // it is dropped rather than carried over.)
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = WH_TILIZE_DFB,
         .entry_size = src0_single_tile_size,

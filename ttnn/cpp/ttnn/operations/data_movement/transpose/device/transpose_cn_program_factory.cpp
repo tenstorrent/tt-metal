@@ -19,8 +19,8 @@ namespace ttnn::prim {
 
 namespace {
 
-// Spec resource names (prefixed to stay distinct under unity builds — see
-// port_patterns.md "Unity-build hygiene for anonymous-namespace symbols").
+// Spec resource names, prefixed per-factory: these live in an anonymous namespace, and the
+// transpose factories share a unity-build translation unit, so unprefixed names would collide.
 const DFBSpecName CN_SRC0_DFB{"cn_src0"};
 const TensorParamName CN_INPUT{"cn_input"};
 const TensorParamName CN_OUTPUT{"cn_output"};
