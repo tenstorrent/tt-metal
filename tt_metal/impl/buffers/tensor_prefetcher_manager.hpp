@@ -107,7 +107,19 @@ public:
     // must be within [0, kNumCqSignalSlots).
     void enqueue_cq_signal_and_wait(MeshCommandQueue& cq, const std::optional<MeshCoordinateRangeSet>& device_subset);
 
-    void stop();
+    // Retire the senders. The normal path (`force == false`) is a clean handshake: broadcast the
+    // stop sentinel and wait for every kernel to exit on it.
+    //
+    // `force` abandons the kernels instead, and exists for one situation: an error path where
+    // requests have been queued that nothing will ever consume. The clean path cannot serve that
+    // case by construction -- the sentinel goes on the *back* of the same FIFO the orphaned
+    // requests are in, so the kernel blocks on a full GCB long before it reaches the sentinel and
+    // the wait never returns. That turns any failure between queueing a request and running its
+    // matmul into a hang that buries the original error. A forced stop drops the pending queue,
+    // unblocks the host worker, and skips the kernel wait, so the caller's exception propagates.
+    // It leaves DRISC kernels running on the device: only use it when the device is about to be
+    // closed or reset.
+    void stop(bool force = false);
 
     bool is_active() const { return active_; }
 
@@ -205,6 +217,9 @@ private:
     std::condition_variable queue_cv_;
     std::deque<Request> pending_;
     std::atomic<bool> stop_requested_{false};
+    // Set by a forced stop() to break worker_loop out of its round-robin try_write spin, which
+    // has no other exit: a wedged kernel never drains its socket, so the write never lands.
+    std::atomic<bool> abort_requested_{false};
 
     // Requests captured during trace capture, keyed by the recording trace's id. Populated by
     // queue() when its command queue is mid-capture; drained back onto pending_ by

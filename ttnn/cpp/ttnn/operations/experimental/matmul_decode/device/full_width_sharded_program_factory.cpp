@@ -8,8 +8,10 @@
 #include "tt-metalium/shape.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 #include <map>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -87,7 +89,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
 
     IDevice* device = input_tensor_a.device();
     auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
-    auto inputB_core_range_set = input_tensor_b.memory_config().shard_spec().value().grid;
+    const bool use_global_cb = operation_attributes.global_cb.has_value();
+    // A prefetcher-fed weight is ND-sharded in DRAM (no legacy shard spec), so the receiver
+    // grid is the GCB's receiver set. Otherwise it is the weight's own shard grid.
+    auto inputB_core_range_set = use_global_cb ? operation_attributes.global_cb->receiver_cores()
+                                               : input_tensor_b.memory_config().shard_spec().value().grid;
     auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
     TT_FATAL(
         inputB_core_range_set == output_core_range_set,
@@ -111,23 +117,40 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         "Input tensor A must have a width that is divisible by the tile width");
     uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
-    std::array<uint32_t, 2> inputB_shard_shape = input_tensor_b.memory_config().shard_spec().value().shape;
-    TT_FATAL(
-        inputB_shard_shape[0] == (K_tiles * tt::constants::TILE_HEIGHT),
-        "Input tensor B shard shape {} [0] must be equal to K_tiles {} * tile height {}",
-        inputB_shard_shape[0],
-        K_tiles,
-        tt::constants::TILE_HEIGHT);
-    TT_FATAL(
-        inputB_shard_shape[1] % tt::constants::TILE_WIDTH == 0,
-        "Input tensor B must have a width that is divisible by the tile width");
-    uint32_t inB_N_tiles_per_core = inputB_shard_shape[1] / tt::constants::TILE_WIDTH;
+    uint32_t inB_N_tiles_per_core;
+    if (use_global_cb) {
+        const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+        const uint32_t num_gcb_receivers = inputB_core_range_set.num_cores();
+        TT_FATAL(
+            N_tiles % num_gcb_receivers == 0,
+            "full_width_sharded matmul_decode with global_cb requires N in tiles ({}) to be divisible by the GCB "
+            "receiver count ({})",
+            N_tiles,
+            num_gcb_receivers);
+        inB_N_tiles_per_core = N_tiles / num_gcb_receivers;
+    } else {
+        std::array<uint32_t, 2> inputB_shard_shape = input_tensor_b.memory_config().shard_spec().value().shape;
+        TT_FATAL(
+            inputB_shard_shape[0] == (K_tiles * tt::constants::TILE_HEIGHT),
+            "Input tensor B shard shape {} [0] must be equal to K_tiles {} * tile height {}",
+            inputB_shard_shape[0],
+            K_tiles,
+            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            inputB_shard_shape[1] % tt::constants::TILE_WIDTH == 0,
+            "Input tensor B must have a width that is divisible by the tile width");
+        inB_N_tiles_per_core = inputB_shard_shape[1] / tt::constants::TILE_WIDTH;
+    }
     ProgramDescriptor desc;
 
     constexpr uint32_t in0_cb_index = CBIndex::c_0;
     constexpr uint32_t in1_cb_index = CBIndex::c_1;
     constexpr uint32_t out_cb_index = CBIndex::c_2;
     constexpr uint32_t full_in0_cb_index = CBIndex::c_3;
+    // GCB path only: c_4 carries "compute is done reading in1" back to the reader so it can
+    // release the GCB page; c_31 is the remote (GCB) index aliased onto the local in1 CB.
+    constexpr uint32_t sync_cb_index = CBIndex::c_4;
+    constexpr uint32_t remote_cb_index = CBIndex::c_31;
     desc.cbs.push_back(CBDescriptor{
         .total_size = M_tiles * inA_K_tiles_per_core * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -140,17 +163,62 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         .buffer = input_tensor_a.buffer(),
     });
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = K_tiles * inB_N_tiles_per_core * in1_tile_size,
-        .core_ranges = all_compute_cores_with_bbox,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = in1_cb_index,
-            .data_format = in1_data_format,
-            .page_size = in1_tile_size,
-            .tile = in1_tile_desc,
-        }}},
-        .buffer = input_tensor_b.buffer(),
-    });
+    // One GCB page is a receiver's entire [K, N/num_receivers] weight slab. The local alias
+    // (in1_cb_index) is tile-paged so the compute kernel can index tiles as it does today;
+    // the remote index is slab-paged so one page-credit == one whole slab.
+    const uint32_t in1_slab_num_tiles = K_tiles * inB_N_tiles_per_core;
+    const uint32_t in1_slab_bytes = in1_slab_num_tiles * in1_tile_size;
+    if (use_global_cb) {
+        const auto& gcb = *operation_attributes.global_cb;
+        // Round the window down to a whole number of slabs; the remote CB requires its total
+        // size to be a multiple of its page size.
+        const uint32_t gcb_window_bytes = (gcb.size() / in1_slab_bytes) * in1_slab_bytes;
+        TT_FATAL(
+            gcb_window_bytes >= in1_slab_bytes,
+            "full_width_sharded matmul_decode with global_cb needs a GCB of at least one weight slab per receiver "
+            "({} B), but the GCB holds {} B",
+            in1_slab_bytes,
+            gcb.size());
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = gcb_window_bytes,
+            .core_ranges = inputB_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = in1_cb_index,
+                .data_format = in1_data_format,
+                .page_size = in1_tile_size,
+                .tile = in1_tile_desc,
+            }}},
+            .remote_format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = remote_cb_index,
+                .data_format = in1_data_format,
+                .page_size = in1_slab_bytes,
+            }}},
+            .global_circular_buffer = std::addressof(gcb),
+        });
+        // Compute -> reader release signal: one 16 B page (one credit) per invocation.
+        constexpr uint32_t sync_cb_page_bytes = 16;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = sync_cb_page_bytes,
+            .core_ranges = inputB_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = sync_cb_index,
+                .data_format = tt::DataFormat::UInt16,
+                .page_size = sync_cb_page_bytes,
+            }}},
+        });
+    } else {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in1_slab_bytes,
+            .core_ranges = all_compute_cores_with_bbox,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = in1_cb_index,
+                .data_format = in1_data_format,
+                .page_size = in1_tile_size,
+                .tile = in1_tile_desc,
+            }}},
+            .buffer = input_tensor_b.buffer(),
+        });
+    }
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = M_tiles * inB_N_tiles_per_core * out_tile_size,
@@ -221,7 +289,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         static_cast<uint32_t>(mcast_end_phys.y),
         split_H,
         in1_cb_index,
-        K_tiles * inB_N_tiles_per_core,
+        in1_slab_num_tiles,
+        remote_cb_index,
+        sync_cb_index,
     };
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
@@ -258,18 +328,33 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         reader_kernel_desc.compile_time_args = reader_compile_time_args;
         reader_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = noc,
+            // The GCB path pins every reader to NOC 0. remote_cb_pop_front acks the page with a
+            // non-posted atomic increment into the DRISC sender's L1, and that ack only comes
+            // back on NOC 0 -- on NOC 1 the following atomic barrier never drains and the core
+            // hangs after the matmul has otherwise finished. Every other GCB consumer in the
+            // repo likewise runs its remote-CB traffic on the DRAM-read NOC. This costs the
+            // two-hub gather its NOC split (both hubs mcast on NOC 0) in the GCB path only.
+            .noc = use_global_cb ? NOC::NOC_0 : noc,
         };
+        if (use_global_cb) {
+            reader_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
+        }
 
         reader_kernel_desc.runtime_args.reserve(cores.size());
         for (const auto& core : cores) {
             const auto it = sender_id_by_core.find(core);
             const bool is_sender = it != sender_id_by_core.end();
             const uint32_t sender_id = is_sender ? it->second : 0;
+            // The reader runs on the merged A-and-B bounding box, but only B cores are GCB
+            // receivers and only they have the in1 / sync CBs configured.
+            const bool is_in1_receiver = inputB_core_range_set.contains(core);
             reader_kernel_desc.runtime_args.emplace_back(
                 core,
                 KernelDescriptor::CoreRuntimeArgs{
-                    static_cast<uint32_t>(is_sender), sender_id, static_cast<uint32_t>(role_of(core))});
+                    static_cast<uint32_t>(is_sender),
+                    sender_id,
+                    static_cast<uint32_t>(role_of(core)),
+                    static_cast<uint32_t>(is_in1_receiver)});
         }
         return reader_kernel_desc;
     };
@@ -333,11 +418,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         K_tiles,
         inB_N_tiles_per_core,
         inA_K_tiles_per_core,
+        sync_cb_index,
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,
         .math_approx_mode = false,
     };
+    if (use_global_cb) {
+        compute_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
+    }
     desc.kernels.push_back(std::move(compute_kernel_desc));
 
     return desc;
