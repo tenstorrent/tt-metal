@@ -250,12 +250,23 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
 # path keeps its own copy.
 # --------------------------------------------------------------------------- #
 _FUSED_HIDDEN = 4096  # op requires H == 64 cores * 2 tiles * 32 = 4096
-_FUSED_COLS_PER_CORE = 64  # SwiGLU output columns per core (2 tiles)
+_FUSED_TILE = 32
 _FUSED_NUM_CORES = 64  # 8x8 compute grid
 _FUSED_DRAM_BANKS = 8  # Blackhole DRAM banks (round-robin shard target)
 
 
-def _interleave_gate_up(w: torch.Tensor, block: int = _FUSED_COLS_PER_CORE) -> torch.Tensor:
+def _swiglu_cols_per_core(intermediate: int) -> int:
+    """SwiGLU output columns each core owns, i.e. the I dim spread over the 64 cores.
+
+    The op splits I across *all* cores (one 32-column tile each at I == 2048) rather than
+    giving 64 columns to half of them: gate_up is the DRAM-bound phase, so every core's NoC
+    port should be fetching. Mirrors ``swiglu_tiles_per_core_for`` in the program factory.
+    """
+    i_tiles = intermediate // _FUSED_TILE
+    return _FUSED_TILE * max(1, i_tiles // _FUSED_NUM_CORES)
+
+
+def _interleave_gate_up(w: torch.Tensor, block: int) -> torch.Tensor:
     """Permute a ``[K, 2I]`` gate_up weight into per-core ``[gate_block | up_block]``
     order so each ``[K, 2*block]`` DRAM shard holds a core's gate columns followed
     by its paired up columns (what ``fused_experts`` reads in a single NoC read).
@@ -356,15 +367,16 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         cache = _as_cache(cache)
 
         # ``fused_experts`` is hard-wired to the real V4-Flash sizes: ``H == 4096``
-        # on the 64-core grid and ``I`` a multiple of the 64-column per-core slice.
+        # on the 64-core grid and ``I`` a multiple of the per-core SwiGLU column slice.
         # There is no fallback path -- this class is for that config only.
-        if self.hidden != _FUSED_HIDDEN or self.intermediate % _FUSED_COLS_PER_CORE != 0:
+        swiglu_cols = _swiglu_cols_per_core(self.intermediate)
+        if self.hidden != _FUSED_HIDDEN or self.intermediate % swiglu_cols != 0:
             raise ValueError(
                 f"DeepSeekV4PreloadedExperts requires the fused_experts layout "
-                f"(H == {_FUSED_HIDDEN}, I % {_FUSED_COLS_PER_CORE} == 0); "
+                f"(H == {_FUSED_HIDDEN}, I % {swiglu_cols} == 0); "
                 f"got H={self.hidden}, I={self.intermediate}"
             )
-        gate_up_nd = _fused_nd_dram_config(self.hidden, 2 * self.intermediate, 2 * _FUSED_COLS_PER_CORE)
+        gate_up_nd = _fused_nd_dram_config(self.hidden, 2 * self.intermediate, 2 * swiglu_cols)
         down_nd = _fused_nd_dram_config(self.intermediate, self.hidden, self.hidden // _FUSED_NUM_CORES)
 
         # Upload every expert once as the op's DRAM ND-sharded weights (gate_up
@@ -385,7 +397,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             # [H, 2I] / [I, H] (memoized so each is materialized at most once).
             gate_up_t = _memo((lambda gw=gate_up_w: gw.t().contiguous()) if gate_up_w is not None else (lambda: None))
             down_t = _memo((lambda dw=down_w: dw.t().contiguous()) if down_w is not None else (lambda: None))
-            gu_il = _materialize(lambda: _interleave_gate_up(gate_up_t()), cache.file(gu_f_name), dtype)
+            gu_il = _materialize(lambda: _interleave_gate_up(gate_up_t(), swiglu_cols), cache.file(gu_f_name), dtype)
             self._gate_up_fused.append(
                 _load_fused_weight(gu_il, device, gate_up_nd, cache_file_name=cache.file(gu_f_name), dtype=dtype)
             )
@@ -432,8 +444,17 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
 
         if t == 1:
             return self._decode_token(x_flat, routing_weights)
-        else:
-            assert False, "Prefill is computed by decode"
+
+        h = x_flat.shape[3]
+        e = routing_weights.shape[3]
+        per_token = [
+            self._decode_token(
+                ttnn.slice(x_flat, [0, 0, i, 0], [1, 1, i + 1, h]),
+                ttnn.slice(routing_weights, [0, 0, i, 0], [1, 1, i + 1, e]),
+            )
+            for i in range(t)
+        ]
+        return ttnn.concat(per_token, dim=2)
 
     def decode_static(self, x_tok: ttnn.Tensor, routing_weights: ttnn.Tensor) -> ttnn.Tensor:
         """Trace-safe single-token routed FFN. ``x_tok`` ``[1,1,1,H]`` and

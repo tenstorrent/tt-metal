@@ -198,8 +198,9 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         variant per window phase (see :meth:`DeepSeekV4Model._capture_traces`)."""
         # return ttnn.assign(hidden_streams, memory_config=hidden_streams.memory_config())
         post, comb, collapsed = self.attn_hc(hidden_streams)
+        normed = self.input_layernorm(collapsed)
         attn_out = self.self_attn.decode_static(
-            self.input_layernorm(collapsed),
+            normed,
             cos,
             sin,
             neg_sin,
@@ -217,5 +218,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         )
         hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
         post, comb, collapsed = self.ffn_hc(hidden_streams)
-        mlp_out = self.mlp.decode_static(self.post_attention_layernorm(collapsed), hash_token=hash_token)
+        collapsed = self.post_attention_layernorm(collapsed)
+        mlp_out = self.mlp.decode_static(collapsed, hash_token=hash_token)
         return self._mix(post, comb, mlp_out, hidden_streams)

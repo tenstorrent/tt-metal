@@ -51,9 +51,10 @@
 //  11: cb_rscalar   (per-active-expert routing-weight scalar tiles for the SCALAR broadcast)
 //  12: cb_acc       (running weighted-sum accumulator, ping-ponged across experts)
 //  13: cb_wtmp      (staging for one expert's weighted down output before the accumulate)
+//  14: num_producers (number of SwiGLU cores; each owns i_tiles/num_producers of the I dim)
 //
 // Runtime args:
-//   0: col_start_tile (this core's first SwiGLU output tile = compute_index * 2)
+//   0: core_index (this core's flat grid index, x*8 + y)
 void kernel_main() {
     constexpr uint32_t num_active = get_compile_time_arg_val(0);
     constexpr uint32_t k_tiles = get_compile_time_arg_val(1);
@@ -69,12 +70,16 @@ void kernel_main() {
     constexpr uint32_t cb_rscalar_id = get_compile_time_arg_val(11);
     constexpr uint32_t cb_acc_id = get_compile_time_arg_val(12);
     constexpr uint32_t cb_wtmp_id = get_compile_time_arg_val(13);
+    constexpr uint32_t num_producers = get_compile_time_arg_val(14);
 
-    const uint32_t col_start_tile = get_arg_val<uint32_t>(0);
-    const bool swiglu_core = col_start_tile < i_tiles;
+    const uint32_t core_index = get_arg_val<uint32_t>(0);
+    const bool swiglu_core = core_index < num_producers;
 
     constexpr uint32_t kOutTilesPerCore = 2;
-    constexpr uint32_t kShardTileCols = 2 * kOutTilesPerCore;  // gate 2 | up 2
+    // This core's share of the SwiGLU I dim, and the gate|up tile-column width of its gate_up
+    // shard (the first swiglu_tiles cols are gate, the next swiglu_tiles are the paired up).
+    constexpr uint32_t swiglu_tiles = i_tiles / num_producers;
+    constexpr uint32_t kShardTileCols = 2 * swiglu_tiles;
     const uint32_t slice_tiles = k_tiles * kShardTileCols;
     // down weight shard: [I, 64] == [i_tiles, 2] tiles (full K = I, this core's 2 H-cols).
     const uint32_t down_slice_tiles = i_tiles * kOutTilesPerCore;
@@ -112,76 +117,84 @@ void kernel_main() {
             matmul_init(cb_input_id, cb_weights_id);
             reconfig_data_format(cb_weights_id, cb_input_id);
             pack_reconfig_data_format(cb_mm_id);
-            mm_cb.reserve_back(2 * kOutTilesPerCore);
+            mm_cb.reserve_back(kShardTileCols);
 
-            // gate (weight tile (k, n) at k*4 + n) -> dst 0,1 -> cb_mm 0,1
+            // gate (weight tile (k, n) at k*kShardTileCols + n) -> dst n -> cb_mm n
             tile_regs_acquire();
-            for (uint32_t n = 0; n < kOutTilesPerCore; ++n) {
+            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
                 for (uint32_t k = 0; k < k_tiles; ++k) {
                     matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + n, n);
                 }
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile<true>(0, cb_mm_id, 0);
-            pack_tile<true>(1, cb_mm_id, 1);
+            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                pack_tile<true>(n, cb_mm_id, n);
+            }
             tile_regs_release();
 
-            // up (weight tile (k, n) at k*4 + 2 + n) -> dst 0,1 -> cb_mm 2,3
+            // up (weight tile (k, n) at k*kShardTileCols + swiglu_tiles + n) -> dst n
+            //    -> cb_mm swiglu_tiles + n
             tile_regs_acquire();
-            for (uint32_t n = 0; n < kOutTilesPerCore; ++n) {
+            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
                 for (uint32_t k = 0; k < k_tiles; ++k) {
-                    matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + kOutTilesPerCore + n, n);
+                    matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + swiglu_tiles + n, n);
                 }
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile<true>(0, cb_mm_id, 2);
-            pack_tile<true>(1, cb_mm_id, 3);
+            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                pack_tile<true>(n, cb_mm_id, swiglu_tiles + n);
+            }
             tile_regs_release();
 
-            mm_cb.push_back(2 * kOutTilesPerCore);
+            mm_cb.push_back(kShardTileCols);
             w_cb.pop_front(slice_tiles);
 
-            // ---- SwiGLU: cb_mm (gate 0,1 | up 2,3) -> cb_out (2 tiles). ----
-            mm_cb.wait_front(2 * kOutTilesPerCore);
+            // ---- SwiGLU: cb_mm (gate | up) -> cb_out (swiglu_tiles tiles). ----
+            mm_cb.wait_front(kShardTileCols);
             copy_tile_to_dst_init_short(cb_mm_id);
             reconfig_data_format_srca(cb_mm_id);
             pack_reconfig_data_format(cb_out_id);
-            out_cb.reserve_back(kOutTilesPerCore);
+            out_cb.reserve_back(swiglu_tiles);
 
             tile_regs_acquire();
-            copy_tile(cb_mm_id, 0, 0);  // gate 0 -> dst 0
-            copy_tile(cb_mm_id, 1, 1);  // gate 1 -> dst 1
-            copy_tile(cb_mm_id, 2, 2);  // up 0   -> dst 2
-            copy_tile(cb_mm_id, 3, 3);  // up 1   -> dst 3
+            // gate -> dst [0, swiglu_tiles), up -> dst [swiglu_tiles, 2*swiglu_tiles).
+            for (uint32_t n = 0; n < kShardTileCols; ++n) {
+                copy_tile(cb_mm_id, n, n);
+            }
 
             // gate = silu(clamp(gate, max = limit))
             clamp_tile_init();
-            clamp_tile(0, kNegInfBits, limit_bits);
-            clamp_tile(1, kNegInfBits, limit_bits);
+            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                clamp_tile(n, kNegInfBits, limit_bits);
+            }
             silu_tile_init();
-            silu_tile(0);
-            silu_tile(1);
+            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                silu_tile(n);
+            }
 
             // up = clamp(up, -limit, limit)
             clamp_tile_init();
-            clamp_tile(2, neg_limit_bits, limit_bits);
-            clamp_tile(3, neg_limit_bits, limit_bits);
+            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                clamp_tile(swiglu_tiles + n, neg_limit_bits, limit_bits);
+            }
 
             // out = gate * up
             mul_binary_tile_init();
-            mul_binary_tile(0, 2, 0);
-            mul_binary_tile(1, 3, 1);
+            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                mul_binary_tile(n, swiglu_tiles + n, n);
+            }
 
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, cb_out_id);
-            pack_tile(1, cb_out_id);
+            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                pack_tile(n, cb_out_id);
+            }
             tile_regs_release();
 
-            mm_cb.pop_front(2 * kOutTilesPerCore);
-            out_cb.push_back(kOutTilesPerCore);
+            mm_cb.pop_front(kShardTileCols);
+            out_cb.push_back(swiglu_tiles);
         }
 
         in_cb.pop_front(k_tiles);

@@ -47,7 +47,8 @@
 //   20: sem_gather
 //   21: sem_bcast
 //   22: cb_rscalar
-//   23+: TensorAccessorArgs(routing_weights), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
+//   23: down_prefetch (down slices to fetch before the gather/broadcast sync)
+//   24+: TensorAccessorArgs(routing_weights), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
 // Runtime args:
@@ -55,7 +56,7 @@
 //   1: mcast_start_x   2: mcast_start_y
 //   3: mcast_end_x     4: mcast_end_y
 //   5: num_dests       (number of receiver cores = total cores - 1)
-//   6: col_start_tile  (this core's first output tile)
+//   6: core_index      (this core's flat grid index, x*8 + y)
 void kernel_main() {
     constexpr uint32_t num_weights = get_compile_time_arg_val(0);
     constexpr uint32_t num_active = get_compile_time_arg_val(1);
@@ -80,8 +81,9 @@ void kernel_main() {
     constexpr uint32_t sem_gather_id = get_compile_time_arg_val(20);
     constexpr uint32_t sem_bcast_id = get_compile_time_arg_val(21);
     constexpr uint32_t cb_rscalar_id = get_compile_time_arg_val(22);
+    constexpr uint32_t down_prefetch = get_compile_time_arg_val(23);
 
-    constexpr auto routing_args = TensorAccessorArgs<23>();
+    constexpr auto routing_args = TensorAccessorArgs<24>();
     constexpr auto gate_up_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
@@ -95,7 +97,7 @@ void kernel_main() {
     const uint32_t mcast_end_x = get_arg_val<uint32_t>(3);
     const uint32_t mcast_end_y = get_arg_val<uint32_t>(4);
     const uint32_t num_dests = get_arg_val<uint32_t>(5);
-    const uint32_t col_start_tile = get_arg_val<uint32_t>(6);
+    const uint32_t core_index = get_arg_val<uint32_t>(6);
 
     // Pin the expert-id sender to NoC 0; the input broadcaster on {1,0} uses NoC 1.
     Noc noc(0);
@@ -158,7 +160,7 @@ void kernel_main() {
     run_reader_loop<true>(
         noc,
         num_active,
-        col_start_tile,
+        core_index,
         i_tiles,
         k_tiles,
         gate_up_tile_bytes,
@@ -182,5 +184,6 @@ void kernel_main() {
         down_args,
         kDownAddrBase,
         cb_rscalar_id,
-        num_weights);
+        num_weights,
+        down_prefetch);
 }

@@ -39,7 +39,13 @@ from models.common.utility_functions import comp_pcc, comp_allclose
 FUSED_EXPERTS_GRID = 8
 FUSED_EXPERTS_NUM_CORES = FUSED_EXPERTS_GRID * FUSED_EXPERTS_GRID
 BH_NUM_DRAM_BANKS = 8
-COLS_PER_CORE = 64  # SwiGLU output columns per core (2 tiles)
+TILE = 32
+
+
+def _swiglu_cols_per_core(intermediate: int) -> int:
+    """SwiGLU output columns per core: the I dim is spread over all 64 cores so that every
+    core fetches gate_up weights during the DRAM-bound phase 1."""
+    return TILE * max(1, (intermediate // TILE) // FUSED_EXPERTS_NUM_CORES)
 
 
 def _nd_sharded_dram_memory_config(
@@ -56,7 +62,7 @@ def _nd_sharded_dram_memory_config(
     return ttnn.MemoryConfig(ttnn.BufferType.DRAM, dram_nd_shard_spec)
 
 
-def _interleave_gate_up(w: torch.Tensor, block: int = COLS_PER_CORE) -> torch.Tensor:
+def _interleave_gate_up(w: torch.Tensor, block: int) -> torch.Tensor:
     """Permute a [K, 2I] gate_up weight into per-core [gate_block | up_block] order so each
     [K, 2*block] shard holds a core's gate columns followed by its paired up columns.
 
@@ -110,9 +116,10 @@ def test_fused_experts_gate_up(device, hidden, intermediate, num_experts, num_no
     down_weights = [
         (torch.rand((intermediate, hidden), dtype=torch.bfloat16) - 0.5).float() for _ in range(num_experts)
     ]
-    # Permute each gate_up weight into per-core [gate_64 | up_64] blocks so each [H, 128]
-    # shard holds everything a core needs for its SwiGLU output slice in one NoC read.
-    gate_up_perm = [_interleave_gate_up(w) for w in gate_up_weights]
+    # Permute each gate_up weight into per-core [gate | up] blocks so each shard holds
+    # everything a core needs for its SwiGLU output slice in one NoC read.
+    swiglu_cols = _swiglu_cols_per_core(intermediate)
+    gate_up_perm = [_interleave_gate_up(w, swiglu_cols) for w in gate_up_weights]
 
     def to_tt(t, layout, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         return ttnn.from_torch(t, dtype=dtype, device=device, layout=layout, memory_config=memory_config)
@@ -122,10 +129,8 @@ def test_fused_experts_gate_up(device, hidden, intermediate, num_experts, num_no
     ]
     dram_core_range_set = ttnn.CoreRangeSet(dram_core_ranges)
 
-    # Each gate_up shard is one core's [H, 128] (gate 64 | up 64) slice.
-    gate_up_mem_config = _nd_sharded_dram_memory_config(
-        hidden, two_intermediate, 2 * COLS_PER_CORE, dram_core_range_set
-    )
+    # Each gate_up shard is one core's [H, 2*swiglu_cols] (gate | up) slice.
+    gate_up_mem_config = _nd_sharded_dram_memory_config(hidden, two_intermediate, 2 * swiglu_cols, dram_core_range_set)
     down_mem_config = _nd_sharded_dram_memory_config(
         intermediate, hidden, hidden // FUSED_EXPERTS_NUM_CORES, dram_core_range_set
     )
