@@ -709,7 +709,31 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
    workflow you dispatched, and the run/job IDs whose logs you actually read. The **next** run
    resolves the PR number and build outcome with the `github` MCP tool — `search_pull_requests` (`query: "repo:${{ github.repository }} is:pr is:open [silencer]"`)
    then `pull_request_read` with `method: "get_check_runs"` — **not** `gh pr list` / `gh pr checks`,
-   which have no credentials here. Then **stop** — one quiet step at a time.
+   which have no credentials here. **Then report that outcome back onto the PR** with the
+   `add-comment` safe-output (`add_comment` tool) — resolving an outcome and telling nobody is
+   indistinguishable from never resolving it. That is not hypothetical: the run dispatched for
+   tenstorrent/tt-metal#52111 resolved to a real run URL, Silencer posted it nowhere, and a
+   human had to comment the link onto the PR by hand. Emit exactly one comment on the PR you
+   resolved, in the same JSON style as the `dispatch_workflow` example in *Validating changes
+   via CI*:
+   ```json
+   { "type": "add_comment", "item_number": 52111, "body": "**Test status** — dispatched `pr-gate` run <https://github.com/tenstorrent/tt-metal/actions/runs/30612345678>: `completed` / `success`.\n\nA green conclusion alone confirms nothing about this warning: that run's **own logs** must still be re-grepped for `-Wunused-but-set-variable` in the **build/compile step's** logs (categories 1–2/4 — for a runtime or log-spam fix, the **test-execution step's** logs, categories 3/5/6)." }
+   ```
+   - `item_number` is the PR number you just resolved — PRs are issues to this API, so
+     `add-comment`'s `target: "*"` reaches them.
+   - Report whatever state exists, not only a finished one: `queued` / `in_progress` /
+     `success` / `failure` / `cancelled` are all worth saying, and "still running" is a real
+     answer.
+   - Always restate **what to grep and where**, naming the step per category exactly as
+     *Validating changes via CI* does. The conclusion is never the proof; the pattern's absence
+     from that run's own logs is.
+   - If `search_pull_requests` returns no open `[silencer]` PR matching the branch you
+     recorded — already merged or closed, or the dispatch never happened — **skip silently**:
+     post nothing, fabricate no run link, and do not treat it as an error.
+   - Note in memory that this validation has been reported (*Memory* → *CI validations in
+     flight*) so the next daily run does not comment the same outcome again.
+
+   Then **stop** — one quiet step at a time.
 
 ## Validating changes via CI
 
@@ -770,7 +794,9 @@ Therefore:
   (`search_pull_requests`, then `pull_request_read` with `method: "get_check_runs"` — see *Scan
   procedure* step 7) and can then re-grep the dispatched run's own logs — the build/compile step
   for categories 1–2/4, the test-execution step for categories 3/5/6 — to confirm the pattern is
-  genuinely absent.
+  genuinely absent. It must then **post what it found back onto the PR** with the `add-comment`
+  safe-output; an outcome resolved but never reported is worth nothing (*Scan procedure* step 7
+  has the exact call).
 - In the PR's **Test Status** section, state plainly that a dispatch was **requested** for this
   branch — not that a run exists. The request is only handled after your turn, and the
   `safe_outputs` job can still reject or fail it (ref rejected by `allowed-refs`, workflow
@@ -813,7 +839,10 @@ Therefore:
     whether it went green".
     If the workflow was **not** in the `dispatch-workflow` allowlist and no dispatch could
     be requested at all, say so here instead and note that the allowlist needs the entry.
-    On later runs, update with whatever run link/state exists, keeping that same
+    This section is written once, at PR creation, and **not** edited in place afterwards:
+    the resolved run link and state arrive as an `add-comment` comment on the PR instead
+    (*Scan procedure* step 7), which leaves one timestamped record per outcome check rather
+    than quietly rewriting what the PR previously claimed. That comment keeps the same
     what-to-grep-and-where explicit.
 - Match tt-metal's existing C++/Python style. **No new
   dependencies, no broad refactors, no behavior changes** — noise removal must be
@@ -868,7 +897,9 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
     age.
 - **Backlog cursor**: which category/pattern to tackle next, so successive runs chip away at
   the noise instead of re-fighting the same top warning.
-- **CI validations in flight**: PR → build-run-ID, to check outcomes on later runs.
+- **CI validations in flight**: PR → build-run-ID, to check outcomes on later runs, plus whether
+  that outcome has already been commented back onto the PR (*Scan procedure* step 7) so a later
+  run does not re-post the same result.
 - A short **quiet-score** note per run (e.g. total distinct warning signatures, total warning
   lines) so you and maintainers can see the logs trending toward silence over time.
 
@@ -890,7 +921,9 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
   branch in the same turn you open/amend it (see *Validating changes via CI*). Never claim a fix
   is verified without a build run, and never claim a runtime/log-spam pattern (categories 3/5/6)
   is confirmed gone from a compile-only build run — the proof is its absence from the dispatched
-  run's own logs, which you cannot read until a later run.
+  run's own logs, which you cannot read until a later run. On that later run, **comment the
+  resolved outcome back onto the PR** with `add-comment` (*Scan procedure* step 7); an outcome
+  you resolve but never report is no better than one you never checked.
 - **Coordinate with `deprecations.json` / `deprecation-reaper.yml`** for deprecated-API work;
   migrate call sites, leave shim deletion to the reaper's schedule.
 - **When in doubt, do nothing / open an issue.** A wrong or noisy PR wastes maintainer
