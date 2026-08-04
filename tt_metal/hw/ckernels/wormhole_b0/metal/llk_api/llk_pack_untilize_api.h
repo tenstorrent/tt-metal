@@ -6,7 +6,6 @@
 #include <cstdint>
 #include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
-#include "llk_param_structs.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE
