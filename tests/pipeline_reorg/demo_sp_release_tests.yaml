@@ -22,6 +22,7 @@
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export HF_HOME=/mnt/MLPerf/huggingface/hub
+    # TODO(chunked-coverage): the chunked block test carries no determinism dimension; with/no_determinism reproducibility (iter5 dense+moe) is unverified on the chunked path.
     EXPECT_NUM_TESTS=1 TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache-prefill-fresh TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_ds_prefill_block_chunked -k "deepseek_v3 and mesh-8x4 and chunks5 and dense" -vvv --tb=short
     EXPECT_NUM_TESTS=1 TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache-prefill-fresh TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_ds_prefill_block_chunked -k "deepseek_v3 and mesh-8x4 and chunks5 and moe-gate_device" -vvv --tb=short
   model: deepseek_prefill
@@ -52,6 +53,7 @@
 - name: "(bh loudbox) DeepSeek Prefill modules"
   cmd: |
     # deepseek and kimi prefill on 2x4 mesh
+    # TODO(chunked-coverage): maxedge tops out at 5120 ISL; the long-ISL MLA PCC this replaced (ds 100k, kimi seq5k) has no chunked equivalent.
     EXPECT_NUM_TESTS=1 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and kimi and cpu and 2x4 and fabric2d'
     EXPECT_NUM_TESTS=1 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and ds and cpu and 2x4 and fabric2d'
     # deepseek and kimi moe blocks. NOTE: pcc-device-256 (DSv3) is pinned exact + `not pad50` so it stays
