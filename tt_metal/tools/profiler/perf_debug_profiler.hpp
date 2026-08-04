@@ -82,7 +82,12 @@ private:
     // 2 reader harts + 2 relay harts (dual relay), one 12 MiB D2HSocket FIFO per relay, adaptive per-core drain.
     static constexpr uint32_t kNRead = 2;
     static constexpr uint32_t kNRelay = 2;    // dual relay
-    static constexpr uint32_t kNSockets = 1;  // one DRISC, one D2H FIFO
+    // One DRISC. The multi-DRISC path works (measured: idle sweep halves 31.9 -> 16.2 us, words split
+    // exactly 5,501,485 each, 0 stalls) but only the PER-CORE phases halve -- transport does not, because
+    // the same total bytes are merely split across two senders. Busy sweep went 83.6 -> 58.3 us (1.43x, not
+    // the 2x predicted) and the WORST sweep was unchanged at ~95 us, which is what actually sets the knee.
+    // Raise this to 2 to re-enable; everything below is already parameterized by it.
+    static constexpr uint32_t kNSockets = 1;
     // 12 MiB / socket. RAISED from 4 MiB (1048576 words), which was sized from a "4 MiB knee" measurement
     // that later proved to be 4 MiB's OWN floor, not the hardware's. On a host-bound box 4 MiB pins the FIFO
     // at 100%: relay hostfull 415k -> reader spsc-wait 155M -> producers stall, reader copy% 0.8 (spinning),
@@ -145,15 +150,17 @@ private:
         // what makes a resident drainer possible at all -- a DRAM-only program touches none of the fast
         // dispatch worker grid or dispatch column, so it can sit there across every user workload. Going
         // through the CQ instead would deadlock the first Finish().
-        std::unique_ptr<Program> drain_program;
+        std::unique_ptr<Program> drain_program[kNSockets];
         IDevice* device = nullptr;
-        CoreCoord drisc_logical{0, 0};
-        CoreCoord drisc_virtual{0, 0};
-        uint64_t drisc_l1_noc = 0;  // NoC-addressable base of the DRISC L1 window
-        uint32_t drisc_l1_base = 0;
-        uint32_t stop_addr = 0;  // host writes 1 here to quiesce the drainer
-        uint32_t done_addr = 0;  // drainer publishes 0xD09E**** once its last page is out
-        uint32_t results_addr = 0;
+        // Per-DRISC. Each drainer owns a disjoint slice of the worker grid, its own socket and its own L1
+        // window -- nothing is shared between them on the device side.
+        CoreCoord drisc_logical[kNSockets];
+        CoreCoord drisc_virtual[kNSockets];
+        uint64_t drisc_l1_noc[kNSockets] = {};  // NoC-addressable base of each DRISC L1 window
+        uint32_t drisc_l1_base[kNSockets] = {};
+        uint32_t stop_addr[kNSockets] = {};     // host writes 1 to quiesce, 2 to release the NIU
+        uint32_t done_addr[kNSockets] = {};     // drainer publishes 0xD09E**** once its last page is out
+        uint32_t results_addr[kNSockets] = {};
         // core_index -> virtual (x,y) [what the SRC lane resolves to], and virtual -> NOC0 (x,y) [Tracy view].
         std::vector<std::pair<uint32_t, uint32_t>> core_virt;
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> virt_to_noc0;
@@ -206,9 +213,11 @@ private:
     bool boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
     // ONE read+decode pass over (ctx, sock): pages -> decode -> records -> ring. Returns true if it moved data.
     bool drain_pass(DeviceCtx& ctx, uint32_t sock_idx);
-    void writer_thread();
-    void decoder_thread();   // owns decode+publish; see decode_and_publish for why it is off the reader
-    void decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf);    // round-robins every (device, socket), publishing each read as one batch
+    void writer_thread(uint32_t sock_idx);   // one reader per socket: poll -> read -> ack -> enqueue
+    // One decoder per socket -- decode state is sequential per stream. Owns decode+publish; see
+    // decode_and_publish for why that work is off the reader thread.
+    void decoder_thread(uint32_t sock_idx);
+    void decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf);
     void consumer_thread();  // BroadcastRing reader -> PerfDebugTracyHandler (the slow sink, now off the drain)
 
     std::vector<DeviceCtx> devices_;
@@ -219,8 +228,8 @@ private:
     // Measured why this is required: with the push inline, UFLD-v2 put relay0 in HOST-WAIT for 15.85 s of a
     // 19 s run and stalled producers 826x; with the push removed entirely, stalls went to 0.
     std::unique_ptr<RecRingHolder> ring_;
-    std::thread writer_;
-    std::thread decoder_;
+    std::vector<std::thread> writers_;
+    std::vector<std::thread> decoders_;
     // One raw buffer per outstanding read, handed reader -> decoder. Bounded: at 64 KB per buffer this caps
     // at ~64 MB. On exhaustion the reader still DRAINS the FIFO into a scratch and discards, because leaving
     // the FIFO full would back-pressure the DRISC and stall the workload -- losing capture beats perturbing
@@ -241,7 +250,7 @@ private:
         uint64_t max_depth = 0;
         bool quit = false;
     };
-    DecodeQueue dq_;
+    DecodeQueue dq_[kNSockets];
     std::vector<std::thread> consumers_;
     std::atomic<uint64_t> consumed_{0};
     std::atomic<uint64_t> dropped_{0};

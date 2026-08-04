@@ -89,6 +89,11 @@ void kernel_main() {
     constexpr uint32_t kPageWords = kernel_profiler::SPSC_SPAN_PAGE_WORDS;
     constexpr uint32_t kPageBytes = kPageWords * 4u;
     constexpr uint32_t kPagesPerSlot = kSlotWords / kPageWords;  // 165
+    // Reads take the NoC the writes do not; NOC_INDEX (the kernel's configured NoC) carries egress.
+    constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
+    // Two staging generations: one fills while the other drains.
+    constexpr uint32_t kGenSlots = kNStage / 2;
+    static_assert(kGenSlots >= 1, "need at least one slot per staging generation");
 
     static_assert(kSpanBytes <= NOC_MAX_BURST_SIZE, "the fused span read must fit one NoC burst");
     static_assert(kNumRisc <= kernel_profiler::PROFILER_SPSC_MAX_RISC, "control layout too small");
@@ -98,7 +103,13 @@ void kernel_main() {
     const uint32_t cv_src = get_arg_val<uint32_t>(1);  // start of profiler_msg_t on the worker
     volatile tt_l1_ptr uint32_t* coords = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(2));
 
-    Noc noc;
+    // Reads on one NoC, writes on the other, so a batch of span reads can be IN FLIGHT while the previous
+    // batch is pushed to the host. On a single NoC the two are serialized by the barriers however the loop
+    // is arranged -- the split is what makes the overlap physically possible.
+    //
+    // Both NIUs are already live: DRISC firmware runs noc_local_state_init() for every NOC, and
+    // drisc_set_stream_mode_all() puts BOTH into stream mode.
+    Noc noc{kReadNoc};
     UnicastEndpoint src;
 
     SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
@@ -197,34 +208,29 @@ void kernel_main() {
         const uint64_t t_sweep0 = get_timestamp();
         const uint32_t frames_at_sweep_start = frames;
 
-        for (uint32_t base_c = 0; base_c < num_cores; base_c += kNStage) {
-            const uint32_t n = (num_cores - base_c) < kNStage ? (num_cores - base_c) : kNStage;
+        // ---- software pipeline: read generation G on kReadNoc while generation G^1 ships on NOC_INDEX ----
+        //
+        // Per iteration: free the generation we are about to refill (its ship was issued last iteration),
+        // issue its reads, then process the PREVIOUS batch -- whose writes now fly concurrently with those
+        // reads. Only then wait for the reads. The read barrier is the last thing, not the first, which is
+        // the whole trick: it used to sit between the read and the ship and forced them apart.
+        uint32_t gen = 0;
+        uint32_t pend_base = 0, pend_n = 0, pend_gen = 0;
+        bool have_pend = false;
+        bool gen_shipped[2] = {false, false};
 
-            // -------- BULK: one fused span read per core, all outstanding, one barrier --------
-            const uint64_t t_batch0 = get_timestamp();
-            for (uint32_t i = 0; i < n; i++) {
-                const uint32_t xy = coords[base_c + i];
-                CoreLocalMem<uint32_t> dst(kStageBase + i * kSlotBytes + kPrefix * 4u);
-                noc.async_read<NocOptions::DEFAULT, kSpanBytes>(
-                    src, dst, kSpanBytes, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src}, {});
-            }
-            noc.async_read_barrier();
-            const uint64_t t_rd = get_timestamp();
-            c_read += t_rd - t_batch0;
+        auto process_batch = [&](uint32_t base_c, uint32_t n, uint32_t g) {
+            const uint64_t t_p0 = get_timestamp();
             const uint64_t flush_at = c_reserve + c_write;
-
-            // Frame in place, then ship adjacent shippable slots together. A core with nothing breaks the
-            // run: shipping it would send 10,560 B of dead ring.
             uint32_t run_start = 0, run_len = 0;
             for (uint32_t i = 0; i < n; i++) {
                 const uint32_t c = base_c + i;
-                const uint32_t slot = kStageBase + i * kSlotBytes;
+                const uint32_t sl = g * kGenSlots + i;
+                const uint32_t slot = kStageBase + sl * kSlotBytes;
                 volatile tt_l1_ptr uint32_t* cv =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
                 uint32_t* mine = &head_mirror[c * kNumRisc];
 
-                // Seed from the worker's own heads on first sight. Tails are monotonic for the whole
-                // firmware session -- the stream may already be far along when a drainer arrives.
                 if (!seeded[c]) {
                     for (uint32_t r = 0; r < kNumRisc; r++) {
                         mine[r] = cv[kernel_profiler::SPSC_RING_HEAD_0 + r];
@@ -235,11 +241,9 @@ void kernel_main() {
                 uint32_t runs[kNumRisc];
                 uint32_t live = 0;
                 for (uint32_t r = 0; r < kNumRisc; r++) {
-                    const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
-                    uint32_t run = tail - mine[r];
+                    uint32_t run = cv[kernel_profiler::SPSC_RING_TAIL_0 + r] - mine[r];
                     if (run > kRingWords) {
-                        // A lossless producer blocks at capacity, so a wider run means a torn snapshot.
-                        overflows++;
+                        overflows++;  // torn snapshot: a lossless producer blocks at capacity
                         run = kRingWords;
                     }
                     if (run > max_occ) {
@@ -253,23 +257,13 @@ void kernel_main() {
                     run_len = 0;
                     continue;
                 }
-
-                // -------- FRAME: nothing to do --------
-                //
-                // The prefix was written once at startup and the payload is the untouched snapshot, so the
-                // DRISC writes ZERO words inside a frame. It used to patch the 5 heads to its own mirror;
-                // the host reconstructs those instead (head of this frame == tail of the previous frame for
-                // that lane, exact because the FIFO is ordered and lossless), and uses the head field that
-                // rides along in the control vector as a consistency check rather than a dependency.
                 if (run_len == 0) {
-                    run_start = i;
+                    run_start = sl;
                 }
                 run_len++;
 
-                // -------- HEAD write-back: releases the producer --------
-                //
-                // Safe here: the payload is a SNAPSHOT already resident in our staging, so those ring slots
-                // are free regardless of when the span reaches the host.
+                // Head write-back releases the producer. Safe at once: the payload is a snapshot already
+                // resident in staging, so those ring slots are free regardless of when it reaches the host.
                 for (uint32_t r = 0; r < kNumRisc; r++) {
                     mine[r] += runs[r];
                 }
@@ -289,9 +283,53 @@ void kernel_main() {
                 total_words += live;
             }
             ship_run(run_start, run_len);
-            c_proc += (get_timestamp() - t_rd) - ((c_reserve + c_write) - flush_at);
+            gen_shipped[g] = true;
+            c_proc += (get_timestamp() - t_p0) - ((c_reserve + c_write) - flush_at);
+        };
 
-            // The staging slots are about to be re-read, so every write out of them must have landed.
+        for (uint32_t base_c = 0; base_c < num_cores; base_c += kGenSlots) {
+            const uint32_t n = (num_cores - base_c) < kGenSlots ? (num_cores - base_c) : kGenSlots;
+
+            // This generation's previous ship must have landed before its slots are refilled.
+            if (gen_shipped[gen]) {
+                const uint64_t t_b0 = get_timestamp();
+                noc_async_write_barrier();
+                c_barrier += get_timestamp() - t_b0;
+                gen_shipped[gen] = false;
+            }
+
+            const uint64_t t_batch0 = get_timestamp();
+            for (uint32_t i = 0; i < n; i++) {
+                const uint32_t xy = coords[base_c + i];
+                CoreLocalMem<uint32_t> dst(kStageBase + (gen * kGenSlots + i) * kSlotBytes + kPrefix * 4u);
+                noc.async_read<NocOptions::DEFAULT, kSpanBytes>(
+                    src, dst, kSpanBytes, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src}, {});
+            }
+            const uint64_t t_issue = get_timestamp();
+
+            // The overlap: these writes go out on NOC_INDEX while the reads above fly on kReadNoc.
+            if (have_pend) {
+                process_batch(pend_base, pend_n, pend_gen);
+            }
+
+            // Issue cost, plus only the wait that REMAINS after the concurrent ship. Measuring
+            // t_batch0..barrier would swallow process_batch and double-count it against c_proc -- which it
+            // did, and the phases summed to 133%.
+            const uint64_t t_after_proc = get_timestamp();
+            noc.async_read_barrier();
+            c_read += (t_issue - t_batch0) + (get_timestamp() - t_after_proc);
+
+            pend_base = base_c;
+            pend_n = n;
+            pend_gen = gen;
+            have_pend = true;
+            gen ^= 1u;
+        }
+        if (have_pend) {
+            process_batch(pend_base, pend_n, pend_gen);
+            have_pend = false;
+        }
+        {
             const uint64_t t_b0 = get_timestamp();
             noc_async_write_barrier();
             c_barrier += get_timestamp() - t_b0;

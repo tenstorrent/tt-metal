@@ -338,8 +338,10 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         const size_t recs_per_page = (kPageSize / sizeof(uint32_t)) / 2;
         read_chunk_recs_ = cap ? static_cast<size_t>(cap) * recs_per_page : static_cast<size_t>(kHRingWords);
         ring_ = std::make_unique<RecRingHolder>(ring_capacity_recs());
-        writer_ = std::thread(&PerfDebugProfiler::writer_thread, this);
-        decoder_ = std::thread(&PerfDebugProfiler::decoder_thread, this);
+        for (uint32_t s = 0; s < kNSockets; s++) {
+            writers_.emplace_back(&PerfDebugProfiler::writer_thread, this, s);
+            decoders_.emplace_back(&PerfDebugProfiler::decoder_thread, this, s);
+        }
         consumers_.emplace_back(&PerfDebugProfiler::consumer_thread, this);
     }
     if (!devices_.empty()) {
@@ -449,149 +451,135 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         }
     }
 
-    // ---- pick the DRISC ----
     ctx.device = mesh_device->get_devices().front();
-    ctx.drisc_logical = mesh_device->impl().pick_unused_dram_logical_core(0);
-    const CoreCoord translated = soc.dram_bank_endpoint_coords.at(ctx.drisc_logical.x).at(ctx.drisc_logical.y);
-    const tt::umd::CoreCoord drisc_phys = soc.translate_coord_to(
-        tt::umd::CoreCoord(translated.x, translated.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
-    ctx.drisc_virtual = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical, CoreType::DRAM);
-    ctx.drisc_l1_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    ctx.drisc_l1_noc = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const distributed::MeshCoordinate scoord = *distributed::MeshCoordinateRange(mesh_device->shape()).begin();
 
-    // ---- DRISC L1 map ----
+    // ---- bring up each DRISC over a disjoint slice of the grid ----
     //
-    // The drainer is a conduit: it bulk-reads a core's whole 10,496 B profiler_msg_t into a staging slot
-    // and writes that slot straight to the host. There are no page buffers to assemble into -- the frame IS
-    // the slot -- so all of L1 goes to staging, and staging depth is what sets how many adjacent cores can
-    // ship in one contiguous PCIe write.
-    const uint32_t span_bytes =
-        (kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + kNRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE) *
-        sizeof(uint32_t);  // 10,496
-    // A 16-word frame prefix sits IN FRONT of each span so prefix+span are contiguous and ship as one
-    // write. 10,560 B is exactly 165 socket pages, so frames never need padding.
-    const uint32_t slot_bytes = kernel_profiler::SPSC_SPAN_PREFIX_WORDS * sizeof(uint32_t) + span_bytes;
-    const uint32_t region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    constexpr uint32_t kCfgReserve = 8 * 1024;    // D2HSocket::required_config_buffer_size() is well under this
-    constexpr uint32_t kScratchBytes = 128 * 32;  // one head-scratch slot per core; a posted write must not
-                                                  // have its scratch reused underneath it
-    constexpr uint32_t kMiscBytes = 512;          // done / stop / results (results holds the phase counters)
+    // The split is contiguous rather than interleaved: each drainer's coords list is a run of the same
+    // grid order the host uses everywhere else, so a core belongs to exactly one drainer and neither can
+    // see the other's rings. Nothing is shared on the device -- separate L1, separate socket, separate
+    // head mirrors -- so the two drain loops never interact.
+    for (uint32_t d = 0; d < kNSockets; d++) {
+        const uint32_t lo = static_cast<uint32_t>((num_cores * d) / kNSockets);
+        const uint32_t hi = static_cast<uint32_t>((num_cores * (d + 1)) / kNSockets);
+        const uint32_t my_cores = hi - lo;
+        if (my_cores == 0) {
+            continue;
+        }
+        ctx.drisc_logical[d] = mesh_device->impl().pick_unused_dram_logical_core(d);
+        const CoreCoord translated =
+            soc.dram_bank_endpoint_coords.at(ctx.drisc_logical[d].x).at(ctx.drisc_logical[d].y);
+        const tt::umd::CoreCoord drisc_phys = soc.translate_coord_to(
+            tt::umd::CoreCoord(translated.x, translated.y, CoreType::DRAM, CoordSystem::TRANSLATED),
+            CoordSystem::NOC0);
+        ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::DRAM);
+        ctx.drisc_l1_base[d] = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+        ctx.drisc_l1_noc[d] = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
-    const uint32_t fixed = kCfgReserve + kScratchBytes + kMiscBytes;
-    const uint32_t nstage = region > fixed ? (region - fixed) / slot_bytes : 0;
-    if (nstage == 0) {
-        log_warning(
-            tt::LogMetal,
-            "[perf-debug profiler] Device {}: {} B of DRISC L1 cannot hold even one {} B staging slot; "
-            "skipping DRISC capture",
-            device_id,
-            region,
-            slot_bytes);
-        disarm_producers(mesh_device, device_id);
-        return false;
-    }
+        const uint32_t span_bytes = (kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
+                                     kNRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE) *
+                                    sizeof(uint32_t);
+        const uint32_t slot_bytes = kernel_profiler::SPSC_SPAN_PREFIX_WORDS * sizeof(uint32_t) + span_bytes;
+        const uint32_t region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+        constexpr uint32_t kCfgReserve = 8 * 1024;
+        constexpr uint32_t kScratchBytes = 128 * 32;
+        constexpr uint32_t kMiscBytes = 512;
+        const uint32_t fixed = kCfgReserve + kScratchBytes + kMiscBytes;
+        const uint32_t nstage = region > fixed ? (region - fixed) / slot_bytes : 0;
+        if (nstage == 0) {
+            log_warning(tt::LogMetal, "[perf-debug profiler] Device {}: DRISC L1 too small; skipping", device_id);
+            disarm_producers(mesh_device, device_id);
+            return false;
+        }
+        const uint32_t stage_base = ctx.drisc_l1_base[d];
+        const uint32_t head_scratch = stage_base + nstage * slot_bytes;
+        ctx.done_addr[d] = head_scratch + kScratchBytes;
+        ctx.stop_addr[d] = ctx.done_addr[d] + 64;
+        ctx.results_addr[d] = ctx.stop_addr[d] + 64;
+        const uint32_t cfg_l1 = ctx.drisc_l1_base[d] + region - kCfgReserve;
+        TT_FATAL(ctx.results_addr[d] + 128 <= cfg_l1, "DRISC L1 layout overlaps the socket config");
 
-    const uint32_t stage_base = ctx.drisc_l1_base;
-    const uint32_t head_scratch = stage_base + nstage * slot_bytes;
-    ctx.done_addr = head_scratch + kScratchBytes;
-    ctx.stop_addr = ctx.done_addr + 64;
-    ctx.results_addr = ctx.stop_addr + 64;
-    const uint32_t cfg_l1 = ctx.drisc_l1_base + region - kCfgReserve;
-    TT_FATAL(ctx.results_addr + 128 <= cfg_l1, "DRISC L1 layout overlaps the socket config");
-    log_info(
-        tt::LogMetal,
-        "[perf-debug profiler] Device {}: DRISC L1 {} KB -- {} staging slots x {} B (up to {} cores per "
-        "PCIe write), conduit mode (no payload copy)",
-        device_id,
-        region / 1024,
-        nstage,
-        slot_bytes,
-        nstage);
+        // Stream mode first: the socket config is written from the host and only lands in L1 once the NIU
+        // stops forwarding inbound DRAM-range addresses to GDDR. The kernel restores it on the host's word.
+        set_drisc_niu_mode(ctx.device, ctx.drisc_logical[d], 1);
 
-    // Everything from here can throw: a JIT compile failure in the drain kernel, a socket that will not
-    // construct, a layout assertion. Any of those leaves producers armed with no consumer, which wedges the
-    // workload rather than just losing the capture -- so the catch disarms them and degrades to "no
-    // capture" instead of propagating.
-    try {
-        // Stream mode first: the socket config is written from the host, and it can only land in L1 once the
-        // NIU stops forwarding inbound DRAM-range addresses to GDDR. Restored in stop().
-        set_drisc_niu_mode(ctx.device, ctx.drisc_logical, 1);
+        try {
+            ctx.sockets[d] = std::make_unique<distributed::D2HSocket>(
+                mesh_device,
+                distributed::MeshCoreCoord{scoord, CoreCoord(drisc_phys.x, drisc_phys.y)},
+                static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
+                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
+            ctx.sockets[d]->set_page_size(kPageSize);
+            ctx.decode[d] = std::make_unique<pz::ProfzoneDecodeState>();
+            ctx.decode[d]->reset(ctx.nl);
+            for (uint32_t c = 0; c < num_cores; c++) {
+                ctx.decode[d]->core_of_xy[coords[c]] = c;  // full map: lane ids stay global across drainers
+            }
 
-        const distributed::MeshCoordinate scoord = *distributed::MeshCoordinateRange(mesh_device->shape()).begin();
-        ctx.sockets[0] = std::make_unique<distributed::D2HSocket>(
-            mesh_device,
-            distributed::MeshCoreCoord{scoord, CoreCoord(drisc_phys.x, drisc_phys.y)},
-            // The FIFO must be a whole number of pages, and a page is now a whole frame.
-        static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
-            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
-        ctx.sockets[0]->set_page_size(kPageSize);
-        ctx.decode[0] = std::make_unique<pz::ProfzoneDecodeState>();
-        ctx.decode[0]->reset(ctx.nl);
-        for (uint32_t c = 0; c < num_cores; c++) {
-            ctx.decode[0]->core_of_xy[coords[c]] = c;
+            uint32_t zero = 0;
+            cluster.write_core(
+                &zero,
+                sizeof(uint32_t),
+                tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
+                ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
+
+            ctx.drain_program[d] = std::make_unique<Program>(CreateProgram());
+            auto drain_id = CreateKernel(
+                *ctx.drain_program[d],
+                "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp",
+                ctx.drisc_logical[d],
+                DramConfig{
+                    .noc = NOC::NOC_0,
+                    .compile_args = {
+                        stage_base,
+                        nstage,
+                        head_scratch,
+                        ctx.results_addr[d],
+                        ctx.done_addr[d],
+                        ctx.stop_addr[d],
+                        ctx.sockets[d]->get_config_buffer_address(),
+                        0xFFFFFFFFu,
+                        128,
+                        drisc_gap_cycles()}});
+            std::vector<uint32_t> rt = {my_cores, static_cast<uint32_t>(prof_l1)};
+            rt.insert(rt.end(), coords.begin() + lo, coords.begin() + hi);
+            SetRuntimeArgs(*ctx.drain_program[d], drain_id, ctx.drisc_logical[d], rt);
+
+            detail::CompileProgram(ctx.device, *ctx.drain_program[d], /*force_slow_dispatch=*/true);
+            detail::WriteRuntimeArgsToDevice(ctx.device, *ctx.drain_program[d], /*force_slow_dispatch=*/true);
+            detail::LaunchProgram(
+                ctx.device, *ctx.drain_program[d], /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {}: DRISC {} failed to start ({}); continuing without capture",
+                device_id,
+                d,
+                e.what());
+            ctx.drain_program[d].reset();
+            ctx.sockets[d].reset();
+            disarm_producers(mesh_device, device_id);
+            return false;
         }
 
-        // Clear `done` before the drainer can publish it.
-        uint32_t zero = 0;
-        cluster.write_core(
-            &zero,
-            sizeof(uint32_t),
-            tt_cxy_pair(device_id, ctx.drisc_virtual),
-            ctx.drisc_l1_noc + (ctx.done_addr - ctx.drisc_l1_base));
-
-        // ---- launch the drainer, resident ----
-        //
-        // Outside the command queue on purpose (see DeviceCtx::drain_program). kQuietStop = 0 means it never
-        // stops on its own: it runs until stop() sets the stop word.
-        ctx.drain_program = std::make_unique<Program>(CreateProgram());
-        auto drain_id = CreateKernel(
-        *ctx.drain_program,
-        "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp",
-        ctx.drisc_logical,
-        DramConfig{
-            .noc = NOC::NOC_0,
-            .compile_args = {
-                stage_base,
-                nstage,
-                head_scratch,
-                ctx.results_addr,
-                ctx.done_addr,
-                ctx.stop_addr,
-                ctx.sockets[0]->get_config_buffer_address(),
-                0xFFFFFFFFu /*kMaxSweeps: run until the host says stop*/,
-                128 /*kMaxCores: power of two, indexes the head-scratch ring*/,
-                drisc_gap_cycles() /*kGapCycles: 0 = continuous*/}});
-    std::vector<uint32_t> rt = {static_cast<uint32_t>(num_cores), static_cast<uint32_t>(prof_l1)};
-    rt.insert(rt.end(), coords.begin(), coords.end());
-    SetRuntimeArgs(*ctx.drain_program, drain_id, ctx.drisc_logical, rt);
-
-        detail::CompileProgram(ctx.device, *ctx.drain_program, /*force_slow_dispatch=*/true);
-        detail::WriteRuntimeArgsToDevice(ctx.device, *ctx.drain_program, /*force_slow_dispatch=*/true);
-        detail::LaunchProgram(
-            ctx.device, *ctx.drain_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-    } catch (const std::exception& e) {
-        log_warning(
+        log_info(
             tt::LogMetal,
-            "[perf-debug profiler] Device {}: DRISC drainer failed to start ({}); continuing without capture",
+            "[perf-debug profiler] Device {}: DRISC {} resident on logical ({},{}) [noc0 ({},{})], cores "
+            "[{},{}) of {}, {} staging slots x {} B",
             device_id,
-            e.what());
-        ctx.drain_program.reset();
-        ctx.sockets[0].reset();
-        disarm_producers(mesh_device, device_id);
-        return false;
+            d,
+            ctx.drisc_logical[d].x,
+            ctx.drisc_logical[d].y,
+            drisc_phys.x,
+            drisc_phys.y,
+            lo,
+            hi,
+            num_cores,
+            nstage,
+            slot_bytes);
     }
 
-    log_info(
-        tt::LogMetal,
-        "[perf-debug profiler] Device {}: DRISC drainer resident on logical DRAM core ({},{}) "
-        "[noc0 ({},{})], {} worker cores, prof_l1=0x{:x}",
-        device_id,
-        ctx.drisc_logical.x,
-        ctx.drisc_logical.y,
-        drisc_phys.x,
-        drisc_phys.y,
-        num_cores,
-        prof_l1);
     return true;
 }
 
@@ -772,14 +760,15 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     std::vector<uint32_t> pooled;
     bool discard = false;
     {
-        std::lock_guard<std::mutex> lk(dq_.m);
-        if (!dq_.free_bufs.empty()) {
-            pooled = std::move(dq_.free_bufs.back());
-            dq_.free_bufs.pop_back();
-        } else if (dq_.allocated < kMaxPooledBufs) {
-            dq_.allocated++;
+        std::lock_guard<std::mutex> lk(dq_[sock_idx].m);
+        DecodeQueue& q = dq_[sock_idx];
+        if (!q.free_bufs.empty()) {
+            pooled = std::move(q.free_bufs.back());
+            q.free_bufs.pop_back();
+        } else if (q.allocated < kMaxPooledBufs) {
+            q.allocated++;
         } else {
-            dq_.dropped++;
+            q.dropped++;
             discard = true;
         }
     }
@@ -803,40 +792,41 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     // Hand the raw buffer to the decoder and go straight back to polling. This is the whole point: the ack
     // (issued inside sock->read above) is no longer behind 85% of host work.
     {
-        std::lock_guard<std::mutex> lk(dq_.m);
-        dq_.work.push_back(DecodeItem{&ctx, sock_idx, std::move(pooled)});
+        std::lock_guard<std::mutex> lk(dq_[sock_idx].m);
+        dq_[sock_idx].work.push_back(DecodeItem{&ctx, sock_idx, std::move(pooled)});
     }
-    dq_.cv.notify_one();
+    dq_[sock_idx].cv.notify_one();
     return true;
 }
 
 // The single writer thread: round-robin every (device, socket); each drain_pass publishes its own read as one
 // data-driven batch, then wake readers once per sweep. Idle sweeps back off. Mirrors test_x280_realprof.
-void PerfDebugProfiler::decoder_thread() {
+void PerfDebugProfiler::decoder_thread(uint32_t sock_idx) {
     tracy::SetThreadName("perf-debug-decoder");
+    DecodeQueue& q = dq_[sock_idx];
     for (;;) {
         DecodeItem item;
         {
-            std::unique_lock<std::mutex> lk(dq_.m);
-            dq_.cv.wait(lk, [this] { return !dq_.work.empty() || dq_.quit; });
-            if (dq_.work.empty()) {
-                if (dq_.quit) {
+            std::unique_lock<std::mutex> lk(q.m);
+            q.cv.wait(lk, [&q] { return !q.work.empty() || q.quit; });
+            if (q.work.empty()) {
+                if (q.quit) {
                     return;
                 }
                 continue;
             }
-            dq_.max_depth = std::max<uint64_t>(dq_.max_depth, dq_.work.size());
-            item = std::move(dq_.work.front());
-            dq_.work.pop_front();
+            q.max_depth = std::max<uint64_t>(q.max_depth, q.work.size());
+            item = std::move(q.work.front());
+            q.work.pop_front();
         }
         decode_and_publish(*item.ctx, item.sock, item.buf);
-        std::lock_guard<std::mutex> lk(dq_.m);
+        std::lock_guard<std::mutex> lk(q.m);
         item.buf.clear();
-        dq_.free_bufs.push_back(std::move(item.buf));
+        q.free_bufs.push_back(std::move(item.buf));
     }
 }
 
-void PerfDebugProfiler::writer_thread() {
+void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
     tracy::SetThreadName("x280-writer");
     // Startup accounting: the gap between this thread entering and its FIRST successful drain is the window
     // in which the D2H FIFO can fill unserviced -- which back-pressures relay -> reader -> worker rings and
@@ -862,7 +852,8 @@ void PerfDebugProfiler::writer_thread() {
         }
         bool any = false, all_done = true;
         for (auto& ctx : devices_) {
-            for (uint32_t s = 0; s < kNSockets; s++) {
+            {
+                const uint32_t s = sock_idx;  // one reader per socket -- they never touch each other's state
                 DeviceCtx::SockState& ss = ctx.sock_state[s];
                 if (ss.done) {
                     continue;
@@ -1125,106 +1116,110 @@ void PerfDebugProfiler::stop() {
     // Tell each DRISC to quiesce, then wait for it to publish `done` -- which it does only after its
     // socket barrier, so every page is already on its way to the host when we stop reading.
     for (auto& ctx : devices_) {
-        if (ctx.drain_program == nullptr) {
-            continue;
-        }
         auto& cluster = MetalContext::instance().get_cluster();
-        const tt_cxy_pair drisc(ctx.chip_id, ctx.drisc_virtual);
-        uint32_t one = 1;
-        cluster.write_core(&one, sizeof(uint32_t), drisc, ctx.drisc_l1_noc + (ctx.stop_addr - ctx.drisc_l1_base));
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        uint32_t done = 0;
-        while (std::chrono::steady_clock::now() < deadline) {
-            cluster.read_core(&done, sizeof(uint32_t), drisc, ctx.drisc_l1_noc + (ctx.done_addr - ctx.drisc_l1_base));
-            if ((done & 0xFFFF0000u) == 0xD09E0000u) {
-                break;
+        for (uint32_t d = 0; d < kNSockets; d++) {
+            if (ctx.drain_program[d] == nullptr) {
+                continue;
             }
-            // The writer thread is still draining, so the socket keeps emptying while we wait.
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        if ((done & 0xFFFF0000u) != 0xD09E0000u) {
-            log_warning(
-                tt::LogMetal, "[perf-debug profiler] Device {}: DRISC drainer did not acknowledge stop", ctx.chip_id);
-        }
-        // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
-        // bandwidth wall from a latency one; sweeps/frames/cycles can.
-        std::vector<uint32_t> res(33, 0);
-        cluster.read_core(
-            res.data(),
-            res.size() * sizeof(uint32_t),
-            drisc,
-            ctx.drisc_l1_noc + (ctx.results_addr - ctx.drisc_l1_base));
-        auto u64 = [&res](size_t i) { return (static_cast<uint64_t>(res[i + 1]) << 32) | res[i]; };
-        const uint64_t cyc = u64(0);
-        const uint64_t dw = u64(2);
-        const double kCycPerUs = 1.35e3;  // the drainer stamps with the Tensix wall clock
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] DRISC: {} sweeps ({} idle), {} frames, {} pushes, {} words, {} pages, "
-            "max occ {}/{}, overflows {}",
-            res[4],
-            res[20],
-            res[6],
-            res[9],
-            dw,
-            res[5],
-            res[7],
-            kernel_profiler::PROFILER_L1_VECTOR_SIZE,
-            res[8]);
-        // Per-phase, so a lifetime average can never again hide that empty and loaded sweeps differ by
-        // orders of magnitude. `reserve` is the host FIFO credit wait: if that dominates, the DRISC is not
-        // the bottleneck at all -- the host consumer is.
-        const uint64_t c_read = u64(10), c_proc = u64(12), c_res = u64(14), c_wr = u64(16), c_bar = u64(18);
-        const uint64_t c_idle = u64(21), c_busy = u64(23);
-        const uint64_t acct = c_read + c_proc + c_res + c_wr + c_bar;
-        auto pct = [cyc](uint64_t v) {
-            return cyc ? (100.0 * static_cast<double>(v) / static_cast<double>(cyc)) : 0.0;
-        };
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] DRISC phases of {:.1f} ms: read {:.1f}% | proc {:.1f}% | "
-            "reserve(credit-wait) {:.1f}% | write {:.1f}% | wr-barrier {:.1f}% | unaccounted {:.1f}%",
-            cyc / kCycPerUs / 1000.0,
-            pct(c_read),
-            pct(c_proc),
-            pct(c_res),
-            pct(c_wr),
-            pct(c_bar),
-            pct(cyc > acct ? cyc - acct : 0));
-        const uint32_t sweeps_busy = res[4] > res[20] ? res[4] - res[20] : 0;
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] DRISC sweeps: idle {} @ {:.1f} us | busy {} @ {:.1f} us | worst sweep "
-            "{:.1f} us | worst credit-wait {:.1f} us",
-            res[20],
-            res[20] ? (static_cast<double>(c_idle) / kCycPerUs) / res[20] : 0.0,
-            sweeps_busy,
-            sweeps_busy ? (static_cast<double>(c_busy) / kCycPerUs) / sweeps_busy : 0.0,
-            res[25] / kCycPerUs,
-            res[26] / kCycPerUs);
-        // write sub-split. Exact per busy sweep: ship_run only executes when a frame is being sent.
-        const uint64_t c_chunk = u64(27), c_push = u64(29), c_notify = u64(31);
-        const double pu = res[9] ? static_cast<double>(res[9]) : 1.0;  // pushes
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] DRISC write split over {} pushes: noc-chunk {:.2f} us/push ({:.1f} ms) | "
-            "push_pages {:.2f} us/push ({:.1f} ms) | notify {:.2f} us/push ({:.1f} ms)",
-            res[9],
-            (c_chunk / kCycPerUs) / pu,
-            c_chunk / kCycPerUs / 1000.0,
-            (c_push / kCycPerUs) / pu,
-            c_push / kCycPerUs / 1000.0,
-            (c_notify / kCycPerUs) / pu,
-            c_notify / kCycPerUs / 1000.0);
+                const tt_cxy_pair drisc(ctx.chip_id, ctx.drisc_virtual[d]);
+            uint32_t one = 1;
+            cluster.write_core(&one, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            uint32_t done = 0;
+            while (std::chrono::steady_clock::now() < deadline) {
+                cluster.read_core(&done, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
+                if ((done & 0xFFFF0000u) == 0xD09E0000u) {
+                    break;
+                }
+                // The writer thread is still draining, so the socket keeps emptying while we wait.
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if ((done & 0xFFFF0000u) != 0xD09E0000u) {
+                log_warning(
+                    tt::LogMetal, "[perf-debug profiler] Device {}: DRISC drainer did not acknowledge stop", ctx.chip_id);
+            }
+            // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
+            // bandwidth wall from a latency one; sweeps/frames/cycles can.
+            std::vector<uint32_t> res(33, 0);
+            cluster.read_core(
+                res.data(),
+                res.size() * sizeof(uint32_t),
+                drisc,
+                ctx.drisc_l1_noc[d] + (ctx.results_addr[d] - ctx.drisc_l1_base[d]));
+            auto u64 = [&res](size_t i) { return (static_cast<uint64_t>(res[i + 1]) << 32) | res[i]; };
+            const uint64_t cyc = u64(0);
+            const uint64_t dw = u64(2);
+            const double kCycPerUs = 1.35e3;  // the drainer stamps with the Tensix wall clock
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] DRISC: {} sweeps ({} idle), {} frames, {} pushes, {} words, {} pages, "
+                "max occ {}/{}, overflows {}",
+                res[4],
+                res[20],
+                res[6],
+                res[9],
+                dw,
+                res[5],
+                res[7],
+                kernel_profiler::PROFILER_L1_VECTOR_SIZE,
+                res[8]);
+            // Per-phase, so a lifetime average can never again hide that empty and loaded sweeps differ by
+            // orders of magnitude. `reserve` is the host FIFO credit wait: if that dominates, the DRISC is not
+            // the bottleneck at all -- the host consumer is.
+            const uint64_t c_read = u64(10), c_proc = u64(12), c_res = u64(14), c_wr = u64(16), c_bar = u64(18);
+            const uint64_t c_idle = u64(21), c_busy = u64(23);
+            const uint64_t acct = c_read + c_proc + c_res + c_wr + c_bar;
+            auto pct = [cyc](uint64_t v) {
+                return cyc ? (100.0 * static_cast<double>(v) / static_cast<double>(cyc)) : 0.0;
+            };
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] DRISC phases of {:.1f} ms: read {:.1f}% | proc {:.1f}% | "
+                "reserve(credit-wait) {:.1f}% | write {:.1f}% | wr-barrier {:.1f}% | unaccounted {:.1f}%",
+                cyc / kCycPerUs / 1000.0,
+                pct(c_read),
+                pct(c_proc),
+                pct(c_res),
+                pct(c_wr),
+                pct(c_bar),
+                pct(cyc > acct ? cyc - acct : 0));
+            const uint32_t sweeps_busy = res[4] > res[20] ? res[4] - res[20] : 0;
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] DRISC sweeps: idle {} @ {:.1f} us | busy {} @ {:.1f} us | worst sweep "
+                "{:.1f} us | worst credit-wait {:.1f} us",
+                res[20],
+                res[20] ? (static_cast<double>(c_idle) / kCycPerUs) / res[20] : 0.0,
+                sweeps_busy,
+                sweeps_busy ? (static_cast<double>(c_busy) / kCycPerUs) / sweeps_busy : 0.0,
+                res[25] / kCycPerUs,
+                res[26] / kCycPerUs);
+            // write sub-split. Exact per busy sweep: ship_run only executes when a frame is being sent.
+            const uint64_t c_chunk = u64(27), c_push = u64(29), c_notify = u64(31);
+            const double pu = res[9] ? static_cast<double>(res[9]) : 1.0;  // pushes
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] DRISC write split over {} pushes: noc-chunk {:.2f} us/push ({:.1f} ms) | "
+                "push_pages {:.2f} us/push ({:.1f} ms) | notify {:.2f} us/push ({:.1f} ms)",
+                res[9],
+                (c_chunk / kCycPerUs) / pu,
+                c_chunk / kCycPerUs / 1000.0,
+                (c_push / kCycPerUs) / pu,
+                c_push / kCycPerUs / 1000.0,
+                (c_notify / kCycPerUs) / pu,
+                c_notify / kCycPerUs / 1000.0);
 
-        // Release it to restore the NIU. It cannot do that until we say so: NOC2AXI forwards inbound
-        // DRAM-range addresses to GDDR, so the flip takes this L1 out of the host's view.
-        uint32_t two = 2;
-        cluster.write_core(&two, sizeof(uint32_t), drisc, ctx.drisc_l1_noc + (ctx.stop_addr - ctx.drisc_l1_base));
+            // Release it to restore the NIU. It cannot do that until we say so: NOC2AXI forwards inbound
+            // DRAM-range addresses to GDDR, so the flip takes this L1 out of the host's view.
+            uint32_t two = 2;
+            cluster.write_core(&two, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
+        }
     }
     stop_.store(true, std::memory_order_release);
-    if (writer_.joinable()) {
-        writer_.join();  // drains every socket to quiescence, then publishes its last batch
+    for (auto& w : writers_) {
+        if (w.joinable()) {
+            w.join();  // each drains its own socket to quiescence
+        }
     }
     // ---- the knee metric, read straight out of every worker's L1 ----
     //
@@ -1264,24 +1259,33 @@ void PerfDebugProfiler::stop() {
             worst);
     }
 
-    // Drain the decode queue before declaring the writer done, else the tail of the run is lost.
-    {
-        std::lock_guard<std::mutex> lk(dq_.m);
-        dq_.quit = true;
+    // Drain every decode queue before declaring the writers done, else the tail of the run is lost.
+    for (uint32_t s = 0; s < kNSockets; s++) {
+        std::lock_guard<std::mutex> lk(dq_[s].m);
+        dq_[s].quit = true;
     }
-    dq_.cv.notify_all();
-    if (decoder_.joinable()) {
-        decoder_.join();
+    for (uint32_t s = 0; s < kNSockets; s++) {
+        dq_[s].cv.notify_all();
     }
-    if (dq_.dropped != 0) {
+    for (auto& d : decoders_) {
+        if (d.joinable()) {
+            d.join();
+        }
+    }
+    uint64_t q_dropped = 0, q_depth = 0;
+    for (uint32_t s = 0; s < kNSockets; s++) {
+        q_dropped += dq_[s].dropped;
+        q_depth = std::max(q_depth, dq_[s].max_depth);
+    }
+    if (q_dropped != 0) {
         log_warning(
             tt::LogMetal,
-            "[perf-debug profiler] decoder fell behind: {} reads discarded (pool of {} exhausted); capture is "
-            "incomplete but the workload was not perturbed",
-            dq_.dropped,
+            "[perf-debug profiler] decoders fell behind: {} reads discarded (pool of {} per socket "
+            "exhausted); capture is incomplete but the workload was not perturbed",
+            q_dropped,
             kMaxPooledBufs);
     }
-    log_info(tt::LogMetal, "[perf-debug profiler] decode queue: max depth {} buffers", dq_.max_depth);
+    log_info(tt::LogMetal, "[perf-debug profiler] decode queues: max depth {} buffers", q_depth);
     writer_done_.store(true, std::memory_order_release);
     // Why the host is the wall. The egress-only benchmark moved bytes with a copy and no interpretation;
     // this thread also DECODES every marker and publishes every record, on the same thread that issues the
