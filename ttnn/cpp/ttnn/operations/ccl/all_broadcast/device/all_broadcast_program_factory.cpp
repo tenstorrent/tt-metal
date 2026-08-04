@@ -79,9 +79,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         CoreCoord(0, 0),
         std::nullopt);
 
+    // The writer moves whole input pages into the output, so the two page sizes must match.
+    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
+    const uint32_t output_page_size = output_tensors[ring_index].buffer()->aligned_page_size();
+    TT_FATAL(
+        input_page_size == output_page_size,
+        "all_broadcast requires the input and output page sizes to match, but they are {} B and {} B",
+        input_page_size,
+        output_page_size);
+
     // Info for RM tensors
     uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
-    uint32_t page_size = input_tensor.buffer()->aligned_page_size();
 
     uint32_t num_rows = std::accumulate(
         input_tensor.logical_shape().cbegin(),
@@ -97,7 +105,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const size_t packet_size_bytes =
         tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
     size_t max_packet_size = packet_size_bytes;
-    uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
+    uint32_t l1_scratch_cb_page_size_bytes = input_page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
@@ -106,7 +114,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     uint32_t cb_total_size = cb_num_pages * l1_scratch_cb_page_size_bytes;
     uint32_t cb_page_size = l1_scratch_cb_page_size_bytes;
 
-    uint32_t buffer_page_size = page_size;
+    uint32_t buffer_page_size = input_page_size;
     uint32_t num_packets_per_page =
         static_cast<uint32_t>(std::ceil(static_cast<double>(buffer_page_size) / max_packet_size));
     if (!tilized) {
@@ -134,10 +142,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        src0_cb_index,                               // cb0_id
-        num_pages_per_packet,                        // packet_size_in_pages
-        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        true,                                        // is_sender
+        src0_cb_index,         // cb0_id
+        num_pages_per_packet,  // packet_size_in_pages
+        input_page_size,       // tensor0_page_size
+        true,                  // is_sender
     };
 
     if (!tilized) {
@@ -154,12 +162,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
     // Writer kernel
     std::vector<uint32_t> writer_compile_args = {
-        src0_cb_index,                               // cb0_id
-        num_pages_per_packet,                        // packet_size_in_pages
-        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        num_targets_forward,                         // num_targets_forward_direction
-        num_targets_backward,                        // num_targets_backward_direction
-        true,                                        // is_sender
+        src0_cb_index,         // cb0_id
+        num_pages_per_packet,  // packet_size_in_pages
+        input_page_size,       // tensor0_page_size
+        num_targets_forward,   // num_targets_forward_direction
+        num_targets_backward,  // num_targets_backward_direction
+        true,                  // is_sender
     };
 
     if (!tilized) {
@@ -194,7 +202,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensors[ring_index].buffer()).append_to(writer_compile_args);
     }
 
     // Build kernel descriptors.  Push them onto desc.kernels NOW (before the
