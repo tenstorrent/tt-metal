@@ -42,6 +42,8 @@ so this module is generator-agnostic and unit-testable against any object that
 exposes it (see ``tests/`` and the standalone driver in ``doc/``).
 """
 
+import os
+import sys
 import time
 
 import torch
@@ -132,6 +134,15 @@ class SpeculativeDecoder:
         align=64,
         verify_mode="prefill",
         traced=False,
+        adaptive=False,
+        k_min=1,
+        k_max=None,
+        k_init=None,
+        guard=False,
+        guard_window=8,
+        guard_off=0.5,
+        guard_on=1.0,
+        guard_probe=16,
     ):
         self.gen = generator
         self.kv_cache = kv_cache
@@ -153,10 +164,38 @@ class SpeculativeDecoder:
         # removes host op-dispatch overhead so verify ≈ one decode step for all K+1 candidates.
         self.traced = bool(traced)
         self.proposer = NgramProposer(ngram_min_n, ngram_max_n)
-        # Populated by generate(): per-iteration accepted counts (accept-rate stats).
+        # Populated by generate(): per-iteration accepted counts + K used (accept-rate stats).
         self.last_accepts = []
+        self.last_k = []
+        # Adaptive draft length — HF assisted-generation "heuristic" schedule: grow K by +2 when the
+        # whole draft is accepted, shrink by -1 otherwise, clamped to [k_min, k_max]. Shrinking to k_min
+        # IS the guard: a low-copy turn degrades to a ~single-token verify (near-neutral) instead of the
+        # fixed-K loss. Traced verify needs ONE pre-captured trace per K in [k_min, k_max]
+        # (warm each via generator.warmup_verify_decode); verify_greedy_decode selects it by K1 = K+1.
+        self.adaptive = bool(adaptive)
+        self.k_max = int(k_max) if k_max is not None else self.draft_len
+        self.k_min = max(1, int(k_min))
+        self.k_init = int(k_init) if k_init is not None else (self.k_max if self.adaptive else self.draft_len)
+        if self.adaptive and not (self.k_min <= self.k_init <= self.k_max):
+            raise ValueError(f"need k_min<=k_init<=k_max, got {self.k_min}/{self.k_init}/{self.k_max}")
+        # Runtime spec ON/OFF guard. Adaptive-K shrinks to k_min but the k_min=1 spec floor (ngram +
+        # K1=2 verify + host accept) is still HEAVIER than a native B=1 decode step, so a low-accept
+        # stretch stays a ~0.8x LOSS. The guard makes spec always-safe: when the rolling mean accept over
+        # the last `guard_window` iters drops below `guard_off`, flip OFF and advance one token per step
+        # via a K1=1 verify (propose nothing) — structurally identical to the server's native B=1 decode
+        # (same trace family, batch 1), so cost is native, not the spec floor. While OFF, run one probe
+        # spec round every `guard_probe` steps; if that round's accept >= `guard_on`, flip back ON. This
+        # caps the worst case at ~1.0x (native) while keeping the ~2.5x when accept is high. K1=1 must be
+        # pre-warmed too (generator.warmup_verify_decode_multi with draft_len 0 in range) — else the OFF
+        # step lazily captures mid-serving and hangs.
+        self.guard = bool(guard)
+        self.guard_window = max(1, int(guard_window))
+        self.guard_off = float(guard_off)
+        self.guard_on = float(guard_on)
+        self.guard_probe = max(1, int(guard_probe))
+        self.last_spec_on = []
 
-    def _verify_window(self, history, anchor_pos, drafts):
+    def _verify_window(self, history, anchor_pos, drafts, k_target=None):
         """Target verify → the accept array g[0..K] ([len(drafts)+1, vocab]); row i is the
         target-greedy distribution for the same slot as draft d_i (row K = bonus).
 
@@ -168,7 +207,11 @@ class SpeculativeDecoder:
         anchor = int(history[-1])
         real = [int(d) for d in drafts]
         if self.verify_mode == "decode":
-            toks = [anchor] + real + ([anchor] * (self.draft_len - len(real)) if self.traced else [])
+            # traced: pad drafts up to the CURRENT K (k_target) so the batch is K1=K+1 and the matching
+            # per-K captured trace is replayed (adaptive-K selects the trace by size). Default k_target =
+            # draft_len (fixed-K behavior, unchanged).
+            kt = self.draft_len if k_target is None else int(k_target)
+            toks = [anchor] + real + ([anchor] * (kt - len(real)) if self.traced else [])
             positions = [anchor_pos + j for j in range(len(toks))]  # P-1 .. P-1+K
             return self.gen.verify_greedy_decode(
                 toks,
@@ -269,17 +312,75 @@ class SpeculativeDecoder:
         out = []
         accepts = []
         next_report = progress_every
-        K = self.draft_len
+        k_cur = float(self.k_init if self.adaptive else self.draft_len)
+        k_hist = []
+        # Per-step trace to the FULL process stream (never filtered) so the run's tail shows the model
+        # actually working — step index, drafted K, accepted m, tokens committed. Default ON; silence with
+        # TT_LAGUNA_SPEC_STEP_LOG=0. Emitted to stderr, flushed, so `tail -f` streams it live.
+        _step_log = os.environ.get("TT_LAGUNA_SPEC_STEP_LOG", "1") == "1"
+        _step = 0
+        spec_on = True  # guard state; when False we advance one native (K1=1) token per step
+        recent = []  # rolling window of accepted m for the guard decision
+        off_since = 0  # steps since we last ran a spec probe while OFF
+        spec_hist = []
         while len(out) < max_new_tokens:
-            drafts = self.proposer.propose(history, K)
+            # --- guard: decide whether THIS step runs a speculative round or a native (K1=1) step ---
+            probing = False
+            if self.guard and not spec_on:
+                if off_since >= self.guard_probe:  # periodic probe: run one spec round to re-measure accept
+                    probing, off_since = True, 0
+                else:
+                    off_since += 1
+            run_spec = (not self.guard) or spec_on or probing
+            spec_hist.append(1 if run_spec else 0)
+
+            if run_spec:
+                K = max(self.k_min, min(self.k_max, int(round(k_cur)))) if self.adaptive else self.draft_len
+                drafts = self.proposer.propose(history, K)
+            else:
+                K = 0  # native decode: propose nothing -> _verify_window builds a K1=1 single-row step
+                drafts = []
+            k_hist.append(K)
             anchor_pos = len(history) - 1  # P-1
-            verify = self._verify_window(history, anchor_pos, drafts)  # [K+1, vocab] logits OR [K+1] ids
+            verify = self._verify_window(history, anchor_pos, drafts, K)  # [K1, vocab] logits OR [K1] ids
 
             if greedy:
                 m, committed = self._accept_greedy(drafts, verify)
             else:
                 m, committed = self._accept_sampling(drafts, verify, temperature, top_p, top_k)
             accepts.append(m)
+
+            # --- guard state update: flip OFF on a low rolling window, back ON when a probe accepts ---
+            if self.guard:
+                if run_spec:
+                    recent.append(m)
+                    if len(recent) > self.guard_window:
+                        recent.pop(0)
+                if spec_on:
+                    if len(recent) >= self.guard_window and (sum(recent) / len(recent)) < self.guard_off:
+                        spec_on, recent, off_since = False, [], 0
+                elif probing and m >= self.guard_on:
+                    spec_on, recent = True, []
+                    if self.adaptive:  # resume at k_init, not the shrunken k_cur we froze while OFF
+                        k_cur = float(self.k_init)
+            self.last_spec_on = spec_hist
+
+            if _step_log:
+                _mean = sum(accepts) / max(1, len(accepts))
+                _tag = "spec" if run_spec else "NATIVE"
+                if self.guard and probing:
+                    _tag = "probe"
+                print(
+                    f"[spec-step {_step:04d}] {_tag} K={K} drafted={len(drafts)} accept={m} "
+                    f"commit={len(committed)} out={len(out) + len(committed)}/{max_new_tokens} "
+                    f"mean_accept={_mean:.2f} spec_on={int(spec_on)} last_tok={committed[-1] if committed else '-'}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            _step += 1
+            if self.adaptive and run_spec:  # HF heuristic: whole draft accepted -> +2, else -1 (shrink to k_min)
+                k_cur = min(self.k_max, k_cur + 2.0) if (len(drafts) == K and m == K) else max(self.k_min, k_cur - 1.0)
+            self.last_k = k_hist
 
             for tok in committed:
                 out.append(tok)

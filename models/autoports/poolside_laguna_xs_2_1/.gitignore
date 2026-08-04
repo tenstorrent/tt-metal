@@ -31,3 +31,7 @@ watcher.log
 # harbor/terminal-bench per-run job dirs + swebench harness run logs (bulky run outputs)
 jobs/
 logs/run_evaluation/
+
+# spec-decode / bg-run logs (run_bg.sh archives)
+doc/vllm_integration/_runs/
+*.rawout

@@ -118,8 +118,24 @@ def main():
     ap.add_argument("--osl", type=int, default=48, help="latency tokens to generate")
     ap.add_argument("--isl-acc", type=int, default=512, help="accuracy-phase prompt length")
     ap.add_argument("--osl-acc", type=int, default=48, help="accuracy-phase tokens")
-    ap.add_argument("--draft-len", type=int, default=4, help="ngram K")
+    ap.add_argument("--draft-len", type=int, default=4, help="ngram K (fixed) / k_max when --adaptive")
     ap.add_argument("--ngram-max-n", type=int, default=3)
+    ap.add_argument(
+        "--adaptive", action="store_true", help="HF adaptive draft length (grow +2 on full accept, shrink -1)"
+    )
+    ap.add_argument("--k-min", type=int, default=1, help="adaptive: min draft length (shrink floor = the guard)")
+    ap.add_argument("--k-max", type=int, default=None, help="adaptive: max draft length (default = --draft-len)")
+    ap.add_argument(
+        "--guard",
+        action="store_true",
+        help="runtime spec ON/OFF: fall back to native K1=1 decode when rolling accept is low (caps worst case at ~1.0x)",
+    )
+    ap.add_argument("--guard-window", type=int, default=8, help="guard: rolling accept window")
+    ap.add_argument("--guard-off", type=float, default=0.5, help="guard: flip OFF below this rolling mean accept")
+    ap.add_argument("--guard-on", type=float, default=1.0, help="guard: flip ON when a probe round accepts >= this")
+    ap.add_argument(
+        "--guard-probe", type=int, default=16, help="guard: run one spec probe every N native steps while OFF"
+    )
     ap.add_argument(
         "--verify-mode",
         choices=["prefill", "decode"],
@@ -209,8 +225,20 @@ def main():
         else:
             # Traced spec-verify: capture the B=K1 verify trace HERE (safe warmup window), not lazily
             # mid-serving (that hangs). K1 = draft_len+1; verify always pads to this fixed batch.
-            log(f"[phase] warmup verify-decode trace K1={args.draft_len + 1}")
-            model.warmup_verify_decode(args.draft_len, kv, nblocks)
+            # Adaptive-K needs ONE trace per K in [k_min, k_max] (verify selects by K1=K+1); fixed-K warms one.
+            # ALL K1 buffers must be allocated before ANY trace is captured (else the 2nd capture's alloc
+            # races the 1st resident trace and the replay hangs) -> warmup_verify_decode_multi stages both.
+            _kmax = args.k_max or args.draft_len
+            _krange = list(range(args.k_min, _kmax + 1)) if args.adaptive else [args.draft_len]
+            # The guard's native fallback advances via a K1=1 verify (draft_len 0) — warm it too, else the
+            # first OFF step lazily captures mid-serving and hangs.
+            if args.guard and 0 not in _krange:
+                _krange = [0] + _krange
+            log(
+                f"[phase] warmup verify-decode traces K1={[k + 1 for k in _krange]}"
+                f"{' (adaptive, staged alloc→capture)' if args.adaptive else ''}{' +native K1=1' if args.guard else ''}"
+            )
+            model.warmup_verify_decode_multi(_krange, kv, nblocks)
         ttnn.synchronize_device(mesh)
         log("[phase] warmup done")
 
@@ -225,8 +253,20 @@ def main():
             ngram_max_n=args.ngram_max_n,
             verify_mode=args.verify_mode,
             traced=args.traced,
+            adaptive=args.adaptive,
+            k_min=args.k_min,
+            k_max=args.k_max,
+            guard=args.guard,
+            guard_window=args.guard_window,
+            guard_off=args.guard_off,
+            guard_on=args.guard_on,
+            guard_probe=args.guard_probe,
         )
-        log(f"[cfg] verify_mode={args.verify_mode} traced={args.traced}")
+        log(
+            f"[cfg] verify_mode={args.verify_mode} traced={args.traced} adaptive={args.adaptive} "
+            f"k=[{args.k_min},{args.k_max or args.draft_len}] guard={args.guard}"
+            f"{f' (off<{args.guard_off} on>={args.guard_on} win={args.guard_window} probe={args.guard_probe})' if args.guard else ''}"
+        )
 
         def prefill_prompt(prompt):
             model.prefill_forward(
@@ -354,8 +394,19 @@ def main():
                     model, prompt, osl, kv_cache=kv, page_table=pt, stop_tokens=stop_ids
                 )
                 base_tps = len(base) / base_s if base_s > 0 else 0.0
+                # NOTE: this baseline reuses the K=1 VERIFY trace (batched K1-decode path), which is
+                # HEAVIER than the real B=1 traced decode the server actually runs — so base_tps is a
+                # lower bound and the ratio below OVERSTATES the true speedup. A real B=1 decode baseline
+                # isn't measurable in traced-spec mode (the decode trace is intentionally not captured, to
+                # avoid two resident CCL traces deadlocking the mesh). For the HONEST speedup, divide the
+                # spec t/s/u by the served single-user decode number from `vllm bench` (~30 t/s/u), NOT by
+                # this line. Kept only as a same-process sanity floor.
+                _prod_ref = 30.0  # served single-user decode t/s/u reference (vllm bench); adjust if remeasured
                 log(
-                    f"[RESULT-BASE {isl}/{osl}] via-verify {base_tps:.2f} tok/s/u ; spec speedup={spec_tps/max(1e-9,base_tps):.2f}x"
+                    f"[RESULT-BASE {isl}/{osl}] via-verify(K=1) {base_tps:.2f} tok/s/u = SAME-TRACE LOWER BOUND "
+                    f"(overstates speedup, ignore the {spec_tps/max(1e-9,base_tps):.2f}x). "
+                    f"HONEST spec speedup ~= {spec_tps/_prod_ref:.2f}x vs served-decode {_prod_ref:.0f} t/s/u "
+                    f"(confirm with vllm bench)."
                 )
 
         def run_decode_bench(isl, steps):

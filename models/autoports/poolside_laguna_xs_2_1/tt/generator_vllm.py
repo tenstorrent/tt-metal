@@ -824,14 +824,16 @@ class LagunaForCausalLM:
         logits = self.model.logits_to_host(shards).reshape(B, self.vocab)
         return logits
 
-    def _capture_verify_decode(self, K1, kv_cache, tokens, pos, pt_host):
-        """Capture ONE spec-decode VERIFY trace at K1=K+1 candidates (batched decode + seq KV write +
-        greedy ON-DEVICE sampler). Fully on-device — the greedy token per row is produced by the same
-        Sampling1D (top-k=1) the model's serving decode uses, so the verify matches what the hardware
-        actually greedy-decodes (NOT host fp32 argmax, which can differ on bf16 near-ties but is never
-        what's served). Persistent I/O buffers bound once; the sampler writes into the persistent `tok`
-        (the buffer the embed reads — the proven _decode_state feedback pattern); capture runs at the real
-        first-call inputs so the compile+capture KV writes are idempotent."""
+    def _alloc_verify_decode(self, K1, kv_cache, tokens, pos, pt_host):
+        """Phase 1 of verify-trace warmup: allocate ALL persistent device buffers for one K1 and warm
+        the program cache (compile), WITHOUT capturing a trace. Multi-K adaptive warmup MUST allocate
+        every K1's buffers before ANY begin_trace_capture: allocating a device buffer while a captured
+        trace is resident corrupts the trace (TTNN: 'Allocating device buffers is unsafe due to the
+        existence of an active trace') and the subsequent replay hangs the mesh. Returns a state dict
+        carrying the closured ``step`` for the later capture phase (tid filled in by _trace_verify_decode).
+
+        Fully on-device — the greedy token per row is produced by the same Sampling1D (top-k=1) the
+        model's serving decode uses, so the verify matches what the hardware actually greedy-decodes."""
         g = self.gen
         tok = g._rep(torch.zeros([1, 1, 1, K1], dtype=torch.int32), ttnn.uint32)
         cur = g._rep(torch.zeros([K1], dtype=torch.int32), ttnn.int32)
@@ -852,15 +854,31 @@ class LagunaForCausalLM:
             shards = self.model.lm_head_shards_decode(hh)
             sampler.decode_forward(shards, k=k, p=p, temp=t, seeds=seeds, tt_out_tok=tok)
 
-        step()  # compile (warm program cache)
+        step()  # compile (warm program cache) — no trace resident yet, so allocations here are safe
+        ttnn.synchronize_device(self.mesh_device)
+        return dict(tid=None, tok=tok, cur=cur, ridx=ridx, pt=pt, _step=step)
+
+    def _trace_verify_decode(self, K1, st):
+        """Phase 2 of verify-trace warmup: capture the trace using the buffers _alloc_verify_decode
+        already allocated. NO new persistent allocation happens here (step() only re-runs compiled
+        programs into existing buffers), so this is safe to call repeatedly while earlier K1 traces are
+        already resident."""
         ttnn.synchronize_device(self.mesh_device)
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        step()  # capture
+        st["_step"]()  # capture
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
-        st = dict(tid=tid, tok=tok, cur=cur, ridx=ridx, pt=pt)
+        st["tid"] = tid
+        st.pop("_step", None)
         self._verify_dec[K1] = st
         return st
+
+    def _capture_verify_decode(self, K1, kv_cache, tokens, pos, pt_host):
+        """Single-K capture (lazy fallback path): allocate then immediately capture. Safe only when no
+        other verify trace is being captured in the same window — for multi-K adaptive warmup use
+        warmup_verify_decode_multi, which allocates all buffers before capturing any trace."""
+        st = self._alloc_verify_decode(K1, kv_cache, tokens, pos, pt_host)
+        return self._trace_verify_decode(K1, st)
 
     def verify_greedy_decode(
         self, tokens, positions, page_table=None, kv_cache=None, page_tables_per_layer=None, traced=True
@@ -955,6 +973,37 @@ class LagunaForCausalLM:
         tokens = torch.zeros(K1, dtype=torch.int64)
         pt_host = ptp.repeat(K1, 1)
         self._capture_verify_decode(K1, kv_cache, tokens, pos, pt_host)
+
+    def warmup_verify_decode_multi(self, draft_lens, kv_cache, num_blocks, block_size=64):
+        """Adaptive-K verify warmup: pre-capture a verify trace for EACH draft_len in one safe window.
+
+        The naive loop `for k: warmup_verify_decode(k)` captures trace K1=2, then allocates K1=3's
+        buffers while K1=2's trace is resident — TTNN flags 'Allocating device buffers is unsafe due to
+        the existence of an active trace' and the first replay hangs the mesh. This stages ALL buffer
+        allocation (phase 1) before ANY trace capture (phase 2), so no allocation ever races a resident
+        trace."""
+        K1s = sorted({int(d) + 1 for d in draft_lens if int(d) + 1 not in self._verify_dec})
+        if kv_cache is None or not K1s:
+            return
+        base = 2 * block_size
+        dummy = torch.zeros(base, dtype=torch.int64)
+        ptp = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+        self.prefill_forward(
+            dummy.reshape(1, base),
+            page_table=ptp,
+            kv_cache=kv_cache,
+            prompt_lens=[base],
+            start_pos=[0],
+            sampling_params=None,
+        )
+        staged = {}
+        for K1 in K1s:  # phase 1: allocate + compile every K1 (no trace resident)
+            pos = torch.arange(base - 1, base - 1 + K1, dtype=torch.int32)
+            tokens = torch.zeros(K1, dtype=torch.int64)
+            pt_host = ptp.repeat(K1, 1)
+            staged[K1] = self._alloc_verify_decode(K1, kv_cache, tokens, pos, pt_host)
+        for K1 in K1s:  # phase 2: capture every trace (buffers already allocated)
+            self._trace_verify_decode(K1, staged[K1])
 
     # --------------------------------------------------------------------- #
     # Decode (traced split sampling + async split)
