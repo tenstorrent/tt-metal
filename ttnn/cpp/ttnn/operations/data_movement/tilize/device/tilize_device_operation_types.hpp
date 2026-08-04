@@ -14,8 +14,8 @@ struct TilizeParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
     bool use_multicore = false;
+    // Host L1 heuristic: default multicore path CBs fit one full tile-row (tensor width in tiles).
     bool enough_space_width = false;
-    bool enough_space_height = false;
     const bool use_low_perf = false;
     tt::tt_metal::Tile tile;
     const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;

@@ -300,7 +300,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         // Note that this implementation does not support sharding, which is enforced in validate().
         return UntilizeMultiCoreSubCoreGridsProgramFactory{};
     }
-    if (!operation_attributes.enough_space_height && !input_is_sharded && !output_is_sharded) {
+    if (!operation_attributes.enough_space_width && !input_is_sharded && !output_is_sharded) {
         // Optimized special case implementation, only supported when neither input or output is sharded
         return UntilizeMultiCoreBlockProgramFactory{};
     }
@@ -403,7 +403,6 @@ Tensor untilize(
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
     bool enough_space_width,
-    bool enough_space_height,
     uint32_t pf_type) {
     return ttnn::device_operation::launch<UntilizeDeviceOperation>(
         UntilizeOperationAttributes{
@@ -412,7 +411,6 @@ Tensor untilize(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .sub_core_grids = std::move(sub_core_grids),
             .enough_space_width = enough_space_width,
-            .enough_space_height = enough_space_height,
             .pf_type = pf_type},
         UntilizeTensorArgs{.input = input});
 }

@@ -64,7 +64,6 @@ struct UntilizeDeviceOperation {
         bool fp32_dest_acc_en,
         std::optional<CoreRangeSet> sub_core_grids,
         bool enough_space_width,
-        bool enough_space_height,
         uint32_t pf_type);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
@@ -78,7 +77,6 @@ Tensor untilize(
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
     bool enough_space_width,
-    bool enough_space_height,
     uint32_t pf_type);
 
 }  // namespace ttnn::prim

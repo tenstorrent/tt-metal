@@ -72,11 +72,9 @@ ttnn::Tensor untilize(
     uint32_t output_single_tile_size = input_single_tile_size;
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
 
+    // True when L1 can hold default-path CBs sized for one full tile-row (num_tiles_per_row tiles).
     bool enough_space_width = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
-    bool enough_space_height = operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
@@ -90,7 +88,6 @@ ttnn::Tensor untilize(
             fp32_dest_acc_en,
             sub_core_grids,
             enough_space_width,
-            enough_space_height,
             pf_type);
     };
 

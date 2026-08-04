@@ -63,11 +63,9 @@ ttnn::Tensor tilize(
     uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
-    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-1] / input_tile_height;
 
+    // True when L1 can hold default-path CBs sized for one full tile-row (num_tiles_per_row tiles).
     bool enough_space_width = ttnn::operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
-    bool enough_space_height = ttnn::operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
@@ -75,7 +73,7 @@ ttnn::Tensor tilize(
         // to the default tilize factory, whose CBs are sized to a full tile-row (ntiles_per_block) and
         // exceed L1. Reroute via interleaved DRAM so the prim selects the block factory (CBs bounded by
         // max_l1 / (in_tile + out_tile)). Uses the quasar to_memory_config (same namespace).
-        if (input_tensor.memory_config().is_sharded() && !enough_space_height) {
+        if (input_tensor.memory_config().is_sharded() && !enough_space_width) {
             const auto target_memory_config = memory_config.value_or(input_tensor.memory_config());
             auto interleaved_input = to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG);
             auto interleaved_tile = ttnn::prim::qsr::tilize(
@@ -83,8 +81,7 @@ ttnn::Tensor tilize(
                 ttnn::DRAM_MEMORY_CONFIG,
                 output_dtype,
                 use_multicore,
-                enough_space_width,
-                /*enough_space_height=*/false,
+                /*enough_space_width=*/false,
                 use_low_perf,
                 sub_core_grids);
             return to_memory_config(interleaved_tile, target_memory_config);
@@ -95,7 +92,6 @@ ttnn::Tensor tilize(
             output_dtype,
             use_multicore,
             enough_space_width,
-            enough_space_height,
             use_low_perf,
             sub_core_grids);
     };
