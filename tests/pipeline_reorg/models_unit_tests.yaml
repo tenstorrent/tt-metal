@@ -1123,7 +1123,8 @@
     run models/tt_dit/tests/models/ltx/test_vae_ltx.py           -k "4x8h0w1nl2_line and not 145f"
     run models/tt_dit/tests/models/ltx/test_audio_ltx.py         -k "4x8sp1tp0nl2_ring_is_fsdp0 and (stage_a or stage_b)"
     exit $rc
-  model: ltx-2.3-pro-t2v
+  model: ltx-2.3  # family-level: this ONE leg unit-tests the shared components used by all 4
+                  # variants (Pro/Fast x T2V/I2V); per-variant behavior is pipeline-level (e2e legs).
   model_family: LTX
   skus:
     bh_sc1:
