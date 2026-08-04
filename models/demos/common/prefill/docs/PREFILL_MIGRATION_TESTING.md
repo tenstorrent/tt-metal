@@ -379,3 +379,42 @@ the runner exits mid-prefill; too high and it blocks on chunks that never come, 
 
 Deriving every row of this table from a single place is the main thing the harness buys. It also rejects
 attempts to set any of them by hand.
+
+---
+
+## The endpoint's processes (Gate 2 only)
+
+| Process | Role |
+|---|---|
+| `migration_endpoint` | Owns the outward queues `/mig_ep<id>_{cmd,table,resp}` the runner talks to; relays commands inward and `WORKER_READY` outward. Copies no KV itself. |
+| `migration_worker` × 2 | The processes that touch DRAM: sender ("A") and loopback receiver ("B"), each with queues `/ep_<id>_{a,b}_{cmd,table,resp}`. Started by an MPI launcher — `prte` holds a pool of *slots* (one per process), `prun` requests them. |
+
+A worker reports `WORKER_READY` only once it holds the KV chunk table, the device map, and its A↔B link. The
+runner supplies the first two, then waits — it cannot distinguish a slow worker from an absent one.
+
+---
+
+## Troubleshooting: the runner times out in `wait_ready`
+
+```
+RuntimeError: MigrationLayerClient::wait_ready: timeout after 120000ms
+```
+
+Almost always: the two workers were never started, so nothing can answer. Confirm in the endpoint log
+(`/tmp/launch_mig_ep_<id>_*.log`; it holds binary bytes, so `grep` needs `-a`):
+
+```bash
+grep -a JOB_FAILED_TO_MAP $(ls -t /tmp/launch_mig_ep_1_*.log | head -1)
+```
+
+The workers are launched as one request for **two slots on the host**, and `prte` started inside a batch
+allocation takes its slot count from the allocation instead of from the `--host <node>:2` it was given. On a
+partition that advertises a whole accelerator node as one CPU (`scontrol show node <n>` → `CPUTot=1`) the
+request for two is refused. A larger allocation cannot fix this — the node has one CPU to give. Detach the
+launcher from the scheduler instead, before launching the endpoint:
+
+```bash
+# shellcheck disable=SC2046
+unset $(env | sed -n 's/^\(SLURM[^=]*\)=.*/\1/p')
+export PRTE_MCA_ras="^slurm"     # take the node pool from --host, not from the allocation
+```
