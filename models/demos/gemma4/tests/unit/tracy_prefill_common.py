@@ -81,13 +81,19 @@ def build_prefill_trace_fixtures(batch_size, prefill_len, vocab_size):
     }
 
 
-def load_prefill_trace_generator(mesh_device, model_path, fixtures):
-    """Load Gemma4Generator for a single trace bucket (inside Tracy session)."""
+def load_prefill_trace_generator(mesh_device, model_path, fixtures, *, num_layers=None):
+    """Load Gemma4Generator for a single trace bucket (inside Tracy session).
+
+    ``num_layers`` truncates the decoder stack to the first N layers (same knob
+    ``create_tt_model`` exposes). Used by the single-layer Tracy profile so the
+    ops CSV holds one decoder block instead of all 30-60.
+    """
     generator, kv_caches, _tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
         max_batch_size=fixtures["max_batch_size"],
         max_seq_len=fixtures["max_seq_len"],
+        num_layers=num_layers,
         paged_attention_config=fixtures["paged_cfg"],
     )
     model_args = generator.model_args[0]
@@ -160,21 +166,23 @@ def run_prefill_trace_tracy_session(
     vocab_size,
     *,
     emit_signposts: bool = True,
+    num_layers=None,
 ):
     """Full pplx-style Tracy session: load, capture, warm replay, signposted replay."""
     fixtures = build_prefill_trace_fixtures(batch_size, prefill_len, vocab_size)
     mesh_key = "x".join(str(d) for d in mesh_device.shape)
     logger.info(
-        "Prefill trace session: model={} mesh={} batch={} prompt_len={} kernel_len={} signposts={}",
+        "Prefill trace session: model={} mesh={} batch={} prompt_len={} kernel_len={} num_layers={} signposts={}",
         os.path.basename(model_path.rstrip("/")),
         mesh_key,
         batch_size,
         prefill_len,
         fixtures["kernel_len"],
+        num_layers or "all",
         emit_signposts,
     )
 
-    generator, kv_caches = load_prefill_trace_generator(mesh_device, model_path, fixtures)
+    generator, kv_caches = load_prefill_trace_generator(mesh_device, model_path, fixtures, num_layers=num_layers)
     run_prefill_trace_capture_and_replays(
         generator,
         kv_caches,
@@ -182,3 +190,4 @@ def run_prefill_trace_tracy_session(
         mesh_device,
         emit_signposts=emit_signposts,
     )
+    return generator, kv_caches

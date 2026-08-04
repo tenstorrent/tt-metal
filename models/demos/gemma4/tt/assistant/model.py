@@ -168,9 +168,10 @@ class Gemma4AssistantModel:
     def _raw_token_embed(self, token_tt):
         """Target token embedding of a single token id -> [1,1,1,backbone] TILE.
 
-        Uses the *scaled* embedding (``embed_tokens`` = raw table * sqrt(hidden)).
-        HF's ``embed_tokens`` is a ``Gemma4TextScaledWordEmbedding`` that applies
-        the ``sqrt(hidden)`` normalizer inside its forward, so the drafter input
+        Uses the *scaled* embedding (``embed_tokens``; device table has
+        ``sqrt(hidden)`` baked in at load). HF's ``embed_tokens`` is a
+        ``Gemma4TextScaledWordEmbedding`` that applies the ``sqrt(hidden)``
+        normalizer inside its forward, so the drafter input
         ``cat(get_input_embeddings()(token), hidden)`` carries the *scaled*
         embedding. Feeding the unscaled table (~62x too small) starves the
         ``pre_projection`` token branch and collapses drafter acceptance
