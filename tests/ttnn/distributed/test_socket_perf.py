@@ -6,8 +6,7 @@
 Bandwidth micro-benchmark for ``ttnn.MeshSocket``.
 
 Sends a tensor between two single-device submeshes of one ``MeshDevice`` and reports the achieved
-bandwidth for each of the three transfer modes (FIFO-based ``send_async``, and the direct-write
-``send_direct_async`` / ``buffered_send`` pairs).
+bandwidth for both the FIFO-based ``send_async`` and the direct-write ``send_direct_async``.
 
 Each socket connection maps a distinct sender/receiver core pair, so more connections means more
 parallel channels per chip.
@@ -27,9 +26,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 NUM_WARMUP_ITERS = 3
 NUM_MEASURED_ITERS = 100
-NUM_BUFFERED_RECV_BUFFERS = 3
-# Warmup uses one receive buffer per iteration.
-assert NUM_WARMUP_ITERS <= NUM_BUFFERED_RECV_BUFFERS
 
 BFLOAT16_BYTES = 2
 
@@ -114,10 +110,7 @@ def _run_mesh_socket_bandwidth_case(
 ) -> None:
     torch.manual_seed(0)
 
-    if transfer_mode == "buffered":
-        send_op = ttnn.experimental.buffered_send
-        recv_op = ttnn.experimental.buffered_recv
-    elif transfer_mode == "direct":
+    if transfer_mode == "direct":
         send_op = ttnn.experimental.send_direct_async
         recv_op = ttnn.experimental.recv_direct_async
     else:
@@ -131,7 +124,7 @@ def _run_mesh_socket_bandwidth_case(
     num_chips = mesh_shape[0] * mesh_shape[1]
 
     socket_connections = _build_socket_connections(mesh_shape, num_connections)
-    if transfer_mode in ("direct", "buffered"):
+    if transfer_mode == "direct":
         # Payload bypasses the FIFO, so it only has to hold the handshake page and
         # socket_page_size does not apply.
         socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 128)
@@ -154,18 +147,14 @@ def _run_mesh_socket_bandwidth_case(
     ]
 
     output_tensors = [
-        ttnn.allocate_tensor_on_device(input_tensors[i].spec, receiver_mesh_device)
-        for i in range(NUM_BUFFERED_RECV_BUFFERS)
+        ttnn.allocate_tensor_on_device(input_tensors[i].spec, receiver_mesh_device) for i in range(NUM_WARMUP_ITERS)
     ]
 
     # Warmup doubles as the correctness check and populates the program cache, which trace capture
     # below requires: building a program mid-capture would fail.
     for i in range(NUM_WARMUP_ITERS):
         send_op(input_tensors[i], send_socket)
-        if transfer_mode == "buffered":
-            recv_op(output_tensors, recv_socket)
-        else:
-            recv_op(output_tensors[i], recv_socket)
+        recv_op(output_tensors[i], recv_socket)
     for i in range(NUM_WARMUP_ITERS):
         output_data = ttnn.to_torch(output_tensors[i])
         eq, msg = comp_equal(torch_input[i], output_data)
@@ -175,10 +164,7 @@ def _run_mesh_socket_bandwidth_case(
     receiver_trace = ttnn.begin_trace_capture(receiver_mesh_device, cq_id=0)
     for _ in range(NUM_MEASURED_ITERS):
         send_op(input_tensors[0], send_socket)
-        if transfer_mode == "buffered":
-            recv_op(output_tensors, recv_socket)
-        else:
-            recv_op(output_tensors[0], recv_socket)
+        recv_op(output_tensors[0], recv_socket)
     ttnn.end_trace_capture(sender_mesh_device, sender_trace, cq_id=0)
     ttnn.end_trace_capture(receiver_mesh_device, receiver_trace, cq_id=0)
     ttnn.synchronize_device(sender_mesh_device)
@@ -255,7 +241,7 @@ fabric_router_config.max_packet_payload_size_bytes = 1088 * 8
 )
 @pytest.mark.parametrize(
     "transfer_mode",
-    ["async", "direct", "buffered"],
+    ["async", "direct"],
     ids=lambda v: f"mode_{v}",
 )
 def test_mesh_socket_bandwidth(
