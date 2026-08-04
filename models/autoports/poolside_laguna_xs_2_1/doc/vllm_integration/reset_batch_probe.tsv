@@ -1,6 +1,0 @@
-# RESET_BATCH PROBE — changed-only refresh, mns=32, conc=1 warm (vs reset_batch=True baseline ~6 t/s/u)
-# MODE	ISL	OSL	t/s/u	agg_tok/s	TTFT_s
-changed-only	4096	128	6.14	5.4	2.94
-changed-only	4096	128	6.03	6.0	0.16
-changed-only	32768	128	6.46	2.5	31.80
-changed-only	32768	128	6.47	6.4	0.31

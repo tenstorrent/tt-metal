@@ -1,4 +1,0 @@
-# Warm TTFT sweep — prefix caching ON (cache-hit = per-turn cost). ISL	TTFT_ms(warm)	t/s/u	E2EL_s
-1024	114	24.09	5.4
-16384	189	20.21	6.5
-32768	300	17.41	7.6

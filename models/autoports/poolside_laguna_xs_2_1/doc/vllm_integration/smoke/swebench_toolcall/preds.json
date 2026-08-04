@@ -1,7 +1,0 @@
-{
-  "astropy__astropy-12907": {
-    "model_name_or_path": "openai/poolside/Laguna-XS-2.1",
-    "instance_id": "astropy__astropy-12907",
-    "model_patch": ""
-  }
-}

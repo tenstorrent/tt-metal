@@ -1,3 +1,0 @@
-instances_by_exit_status:
-    LimitsExceeded:
-    - astropy__astropy-12907

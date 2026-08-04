@@ -47,3 +47,11 @@ doc/optimized_multichip_decoder/perf_before_after_layer4.json
 
 # HTML reports (published as Artifacts, not version-controlled)
 *.html
+
+# bench/eval RUN outputs (regenerable — never version-controlled). Model contract/config JSONs are kept.
+doc/vllm_integration/smoke/
+doc/vllm_integration/stage_ce/
+doc/vllm_integration/prefill_fast_validate/
+doc/vllm_integration/sweep_vllm.tsv
+doc/vllm_integration/reset_batch_probe.tsv
+doc/datatype_sweep/experts_bfp8.json
