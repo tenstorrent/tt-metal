@@ -33,9 +33,10 @@ python models/tt_dit/tests/models/minimax_h3/project_block_perf.py 5s=<csv>
 | 5 | 2026-08-04 | all-gather folded into the matmuls (AGMM), placeholder block sizes | 18.20 ms | 43.22 ms | 78.26 ms | `0928969663b` |
 | 6 | 2026-08-04 | AGMM block sizes from a measured sweep | 17.79 ms | 42.43 ms | 77.01 ms | `9587b239154` |
 | 7 | 2026-08-04 | attention gate addcmul folded into the to_out AGMM epilogue | 17.58 ms | 42.31 ms | 76.96 ms | `989f329d0c9` |
+| 8 | 2026-08-04 | ff2 + reduce-scatter + gated residual fused, blocking swept | 17.19 ms | 41.12 ms | 75.33 ms | `12d6fb043ca` |
 
-Cumulative at 5s: **26.03 -> 17.58 ms, -32.5%**; 1.30 -> 0.88 s per 50-layer step, 65.1 -> 43.9 s per video.
-At 10s: 57.65 -> 42.31 ms (-26.6%). At 15s: 98.72 -> 76.96 ms (-22.0%).
+Cumulative at 5s: **26.03 -> 17.19 ms, -34.0%**; 1.30 -> 0.86 s per 50-layer step, 65.1 -> 43.0 s per video.
+At 10s: 57.65 -> 41.12 ms (-28.7%). At 15s: 98.72 -> 75.33 ms (-23.7%).
 
 ## Notes per entry
 
@@ -78,6 +79,39 @@ Real but marginal, and honestly at the edge of what this measurement resolves: o
 predicts -0.085 ms while the block moved -0.21 / -0.12 / -0.05 ms, against run-to-run variance of
 around 0.7%. Treat entry 7 as "a small win, not a measurable one" at 15s.
 
+**8. Fused MM+RS+addcmul, with a swept blocking.** The negative result below, resolved. Same fusion,
+same three ops into one, now **-25.0% on that stage at 5s** (1.76 -> 1.33 ms) where before it was +45%.
+Nothing about the fusion changed; only the blocking did.
+
+The sweep's first axis is not the block shape but the *core grid split*. In `FusedMMRSConfig`,
+`compute_with_storage_grid_size` is the matmul grid and the reduce-scatter workers occupy the rows
+between it and the full device grid, so `num_workers_per_link = ((device.y - mm.y) * device.x) / (2 *
+links) - 1`. The matmul's cores and the collective's bandwidth are therefore in direct competition, and
+the optimum is interior:
+
+    12x7   84 mm cores, 8 RS workers/link   M=6 K=4 N=16 sb(2,2)   1.373 ms
+    12x8   96 mm cores, 5 RS workers/link   M=4 K=8 N=14 sb(2,2)   1.313 ms   <- best
+    12x9  108 mm cores, 2 RS workers/link   M=6 K=2 N=8  sb(2,2)   1.487 ms
+
+12x9 starves the reduce-scatter, 12x7 the matmul. The default's 8x7 = 56 cores at subblock 1x1 is worse
+than either end of that range, which is the whole of the earlier regression.
+
+Only M=4768 was swept; 9216 and 13632 reuse its blocking. K and N are architecture-fixed and M only
+sets how many blocks a core walks, while warmup compiles one program per combo and compile time grows
+with M -- M=9216 alone is ~75 min against ~9 min at M=4768. The reuse is validated where it matters,
+by the measured per-duration block times above, and the fused op tracks the sweep closely at 5s
+(1.33 ms measured in-model vs 1.313 swept).
+
+One bug worth recording because it produced a *silent no-op* rather than a failure. The gate that
+decides whether to fuse initially required `M_block` to divide the M tile count. 4768/32 = 149 and
+13632/32 = 426 are not divisible by 4, so **5s and 15s quietly kept the unfused path** while 10s fused,
+and the first profiled run showed a win only at 10s. The constraint was invented, not real: a partial
+trailing block along M is fine (unlike along K, where the ring delivers fixed-size chunks), as the
+sweep itself proved by measuring M=4768 at `M_block=4`. The op list is what caught it -- 5s and 15s
+still listed `ReduceScatterMinimalAsync` and `Ternary`. **After any fusion, check the profiled op list
+for the ops that were supposed to disappear**; a PCC test cannot tell you the fused path never ran, and
+here the block correctness test was passing at 99.9995% against an unfused model.
+
 ## Measured negative results
 
 Kept so nobody re-attempts these blind. A negative result with a diagnosis is worth as much as a win.
@@ -108,6 +142,15 @@ General lesson, now twice observed: **fusing an op without tuning its blocking c
 fusing it.** AGMM was +1.8% before its sweep and +2.3% after; MMRS is -3.3% before a sweep it has not
 had.
 
+> **RESOLVED by entry 8** (`12d6fb043ca`), which is where the numbers now live. The diagnosis above
+> held exactly: with a swept blocking the same fusion is -25.0% on the stage instead of +45%, and
+> nothing but `get_fused_mmrs_config`'s table changed. Two corrections to the prerequisites as written
+> above -- the entries do *not* need to be one per duration (the blocking carries across M, and
+> `mmrs_config.has_mmrs_config` registers it on demand for any M), and `default_block_size` was never
+> the missing piece. The "silently" point stands and `get_fused_mmrs_config` now warns on an unknown
+> shape, not just an unknown grid. This block is kept unedited because the reasoning is what made
+> entry 8 findable.
+
 ## Where the time goes, from the 5s profile after entry 6
 
 54 ops, 17.78 ms. Measured shares:
@@ -129,10 +172,9 @@ measured shares and should be treated as a hypothesis, not a result.
 
 ### A. Reachable from existing building blocks
 
-1. **Fused matmul + reduce-scatter + addcmul for the feed-forward.** ATTEMPTED AND REVERTED -- a 45%
-   regression on that stage. See "Measured negative results". The op exists and the arithmetic is
-   right; what is missing is a swept fused-MMRS blocking for our shapes. Still worth ~1.6 ms if that
-   is done, so it stays on the list, but it is no longer a free win.
+1. ~~**Fused matmul + reduce-scatter + addcmul for the feed-forward.**~~ DONE, entry 8, after being
+   attempted, reverted as a 45% regression, and re-landed once the blocking was swept. The ~1.6 ms
+   estimated here was close: -0.43 ms at 5s, -1.19 at 10s, -1.63 at 15s.
 2. ~~**Fold the attention gate into the `to_out` AGMM.**~~ DONE, entry 7.
 
 ### B. Dispatch -- the largest wall-clock lever, and not a device-time item
@@ -187,11 +229,17 @@ still on the table there.
 
 ### F. Small, and only worth doing while nearby
 
-10. **Reduce-scatter runs on 12 cores** against 112-120 everywhere else -- 673 us on ~10% of the
-    machine. May be inherent to the ring. Moot if item 1 lands.
+10. ~~**Reduce-scatter runs on 12 cores**~~ against 112-120 everywhere else -- 673 us on ~10% of the
+    machine. Largely moot now that item 1 has landed: the feed-forward's reduce-scatter is inside the
+    fused op, where the worker count is set by the grid split and was swept. The attention path's
+    reduce-scatter is gone via AGMM, so no standalone `ReduceScatterMinimalAsync` remains in the block.
 11. **The fused RoPE rotates 4 tiles where 3 would do.** The pass-through tile is rotated then
     discarded by `sin=0` (see `prepare_rope_tables`). A fraction of 0.27 ms -- noted for completeness,
     not worth chasing.
+12. **The block-size sweep's N range may be clipping the optimum.** The 12x7 MMRS winner sat at
+    `N_block=16`, the top of the swept range, and both AGMM winners came in at 12 and 14 -- the useful
+    values are consistently at the high end. The chosen 12x8 config is interior (`N=14`), so nothing is
+    known to be lost, but raising the sweep's ceiling would cost one run and settle it.
 
 Two measurement habits this log exists to enforce:
 
