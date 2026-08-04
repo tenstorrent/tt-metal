@@ -1364,3 +1364,84 @@ Also worth noting from the per-op listing: the op-to-op gaps are enormous and ir
 construction rather than steady-state inference -- so the 97.1 % figure is an upper bound on
 what trace recovers for a warmed pipeline. The right next measurement is a traced run, which
 gives the real number directly rather than another estimate.
+
+## Amendment 50 (2026-08-04) — trace capture attempt: blocked on `!trace_id_.has_value()`
+
+Acting on amendment 49 (97.1 % of wall time is op-to-op gap), tried to capture a mesh-sized
+wave with `utils/tracing.Tracer`. Harness kept as
+`models/tt_dit/tests/models/minimax_h3/measure_trace_minimax_h3.py`.
+
+Untraced baseline reproduces cleanly: **encoder 0.8512 / 0.8531 s per 32-unit wave** across
+two runs, consistent with the bf16 A/B's 0.857 s.
+
+Capture fails:
+
+```
+RuntimeError: TT_FATAL @ tt_metal/distributed/fd_mesh_command_queue.cpp:760:
+!trace_id_.has_value()
+```
+
+Two fixes tried, neither sufficient:
+
+1. Moved the capturing call out of the timing loop -- the loop calls
+   `ttnn.synchronize_device` after every invocation, and synchronising *during* capture is
+   illegal. Correct to fix, did not resolve it.
+2. Confirmed `trace_region_size=3e8` is passed at `open_mesh_device`.
+
+**Most likely cause, untested:** the encoder allocates inside `forward`. `causal_pad_t` calls
+`ttnn.zeros(..., device=mesh_device)` on every invocation, and `reflect_pad_hw` builds its pad
+by slice-and-concat -- both allocate during what would be the capture window, and `Tracer`'s
+own docstring warns "tensors allocated after trace capture may be overwritten". The fix is
+probably to hoist the causal zero frames into a persistent buffer allocated at construction
+(the same treatment `ccl_manager.neighbor_pad_persistent_buffer` already gives the halo),
+then retry. `Tracer(..., prep_run=False)` is worth trying as a second lever.
+
+Nothing was committed to the model for this -- the encoder is unchanged. This is a recorded
+dead end with a specific next hypothesis, not a partial implementation.
+
+## Amendment 51 (2026-08-04) — RETRACTION of amendment 49: the 97.1 % gap figure is wrong
+
+Amendment 49 quoted `tt-perf-report`'s "Running with tracing could save 47463439 us (97.1 %
+of overall time)" and concluded trace was the dominant lever. **That is wrong for warm
+inference**, and the error was mine, not the tool's: the report analyses the *entire* CSV
+("No signposts found in the file. Using the entire file for analysis"), which includes weight
+upload and construction. I repeated the headline without checking the gap distribution.
+
+Using the `OP TO OP LATENCY [ns]` column -- which amendment 49 never looked at -- on the same
+profile:
+
+| window | device | op-to-op gap | gap share |
+|---|---|---|---|
+| last 500 ops | 1115.6 ms | 9212.9 ms | 89.2 % |
+| last 400 ops | 1100.1 ms | 5171.5 ms | 82.5 % |
+| **last 300 ops** | **568.6 ms** | **110.0 ms** | **16.2 %** |
+
+**Median op-to-op gap is 0.6 us; the mean is 18425.9 us.** That distribution is the whole
+story -- a handful of 650-880 ms gaps (weight upload) drag the mean up by four orders of
+magnitude. The gap share collapses as the window excludes more construction, so in steady
+state **device time is the bottleneck, not dispatch**.
+
+Warm breakdown, gaps excluded:
+
+| op | n | device | % |
+|---|---|---|---|
+| Conv3dDeviceOperation | 48 | 265.9 ms | 23.8 % |
+| **UntilizeDeviceOperation** | 36 | 235.8 ms | **21.1 %** |
+| **GroupNormDeviceOperation** | 36 | 235.3 ms | **21.1 %** |
+| BinaryNgDeviceOperation | 18 | 121.0 ms | 10.8 % |
+| **TilizeWithValPaddingDeviceOperation** | 36 | 118.7 ms | **10.6 %** |
+| ConcatDeviceOperation | 129 | 97.5 ms | 8.7 % |
+
+**Untilize + GroupNorm + Tilize = 52.8 %**, confirming amendment 45 independently now that
+gaps are excluded. The GroupNorm layout round-trip is the target; trace is not.
+
+Consequences:
+
+* Amendment 49's ordering ("trace first, up to ~30x") is **withdrawn**. Amendment 50's trace
+  blocker is therefore not on the critical path -- worth fixing eventually, not first.
+* Amendment 41's inference that the *decoder* is host-dispatch bound rests on wall-clock
+  variance, not on gap data, and should be re-checked the same way before being acted on.
+* **Method note:** never quote `tt-perf-report`'s tracing-saving headline without first
+  checking the op-to-op gap *distribution* (median vs mean) on a warm window. Prefer
+  signposts, or slice the tail, so construction is excluded. The per-op device ranking from
+  the same report was correct throughout -- it was only the gap aggregate that misled.
