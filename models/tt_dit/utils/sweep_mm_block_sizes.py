@@ -154,6 +154,17 @@ SHAPES = [
     (4768, 5376, 5376, 12, 9, True, "qkv"),
     (4768, 7168, 1344, 12, 9, True, "plain"),
     (4768, 5376, 7168, 12, 9, True, "ff1_swiglu"),
+    # MiniMax-H3 fused MM+RS+addcmul (ff2). K = 14336 / tp = 3584 is already per-device. The core grid
+    # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
+    (4768, 3584, 5376, 12, 7, False, "mmrs"),
+    (4768, 3584, 5376, 12, 8, False, "mmrs"),
+    (4768, 3584, 5376, 12, 9, False, "mmrs"),
+    # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9) and the longer durations
+    # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
+    # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
+    # shape that has little reason to change with M. Add them back as
+    #   (9216, 3584, 5376, 12, 8, False, "mmrs"),
+    # if that assumption ever needs checking.
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
@@ -190,6 +201,14 @@ USE_CASE_CONFIGS = {
         "chunks": 3,
         "math_approx_mode": True,
         "use_matmul_split": True,
+    },
+    # Fused matmul + reduce-scatter + addcmul (RowParallelLinear.forward_fused_addcmul). The shape's
+    # core grid is the *matmul* grid; the reduce-scatter runs on the rows between it and the full
+    # device grid, so sweeping the grid means adding one SHAPES entry per candidate grid. K is already
+    # per-device here (row-parallel fractures the input), so it is not gathered.
+    "mmrs": {
+        "is_mmrs": True,
+        "use_addcmul": True,  # for the L1 estimate; the runner always passes addcmul tensors
     },
     # ff1 (proj_mlp) with fused SwiGLU — gate+up packed into N=4608 weight.
     # fp32_dest_acc_en=True (always on), N_block MUST be even (pitfall 1).
@@ -534,6 +553,70 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
             subblock_w=sb_w,
             compute_with_storage_grid_size=core_grid,
         )
+
+    if uc_cfg.get("is_mmrs", False):
+        cluster_axis = cfg["cluster_axis"]
+        cluster_size = cfg["mesh_shape"][cluster_axis]
+        full_grid = mesh_device.compute_with_storage_grid_size()
+
+        # Mirrors FusedMMRSConfig.get_params: the RS zone is whatever rows the matmul leaves free.
+        rs_zone_capacity = (full_grid.y - core_grid.y) * full_grid.x
+        num_workers_per_link = rs_zone_capacity // (2 * cfg["num_links"]) - 1
+        if num_workers_per_link < 1:
+            msg = f"matmul grid {core_grid} leaves no room for the reduce-scatter on {full_grid}"
+            raise ValueError(msg)
+
+        tt_input = ttnn.from_torch(
+            torch.randn((1, 1, M, K), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_weight = ttnn.from_torch(
+            torch.randn((K, N), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_bias = ttnn.from_torch(
+            torch.randn((1, N), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        # The addcmul operands are already at the post-scatter width.
+        addcmul_shape = (1, 1, M, N // cluster_size)
+        tt_addcmul_a = ttnn.from_torch(
+            torch.randn(addcmul_shape, dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_addcmul_b = ttnn.from_torch(
+            torch.randn(addcmul_shape, dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+
+        ccl_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+        )
+        rs_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_cores, 0) for _ in range(3)]
+        barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ccl_cores, 0)
+
+        def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+            ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                input_tensor=tt_input,
+                weight_tensor=tt_weight,
+                dim=3,
+                multi_device_global_semaphore=rs_semaphores,
+                reduce_scatter_core_grid_offset=ttnn.CoreCoord(0, core_grid.y),
+                num_links=cfg["num_links"],
+                config=_matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w),
+                num_buffers_per_channel=None,
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=num_workers_per_link,
+                bias=tt_bias,
+                memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                topology=cfg["topology"],
+                cluster_axis=cluster_axis,
+                compute_kernel_config=compute_config,
+                barrier_semaphore=barrier_semaphore,
+                fused_ternary_scalar=1.0,
+                addcmul_input_tensor1=tt_addcmul_a,
+                addcmul_input_tensor2=tt_addcmul_b,
+            )
+            if sync:
+                ttnn.synchronize_device(mesh_device)
+
+        return run_op
 
     if is_agmm:
         sp_axis = cfg["sp_axis"]

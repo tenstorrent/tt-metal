@@ -17,6 +17,7 @@ from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
 from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
+from .mmrs_config import has_mmrs_config
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
 # Mirrors `MINIMAX_H3_MODALITY_NUM` in the reference; padding rows (-1) are clamped to 0.
@@ -281,20 +282,22 @@ class MiniMaxH3TransformerBlock(Module):
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
             normed = self.ccl_manager.all_gather_persistent_buffer(normed, dim=3, mesh_axis=self.tp_mesh_axis)
-        # NOTE: ff2's reduce-scatter and this gated residual can fuse into a single
-        # minimal_matmul_strided_reduce_scatter_async via ParallelFeedForward.forward_fused_addcmul,
-        # and it is tempting because it turns three ops into one. Measured, it is a 45% REGRESSION on
-        # that stage: 1.75 ms (ff2 0.94 + reduce-scatter 0.67 + this addcmul 0.15) becomes 2.55 ms,
-        # +3.3% on the whole block at 5s.
+        # ff2's reduce-scatter and the gated residual after it fuse into a single
+        # minimal_matmul_strided_reduce_scatter_async, computing residual + ff2(...) * gate in one op.
         #
-        # The cause is blocking, not the fusion itself. The unfused path reaches
-        # get_matmul_config(..., default_block_size) and so uses our swept sizes, while the fused path
-        # goes through get_fused_mmrs_config, whose table is keyed on (M, K, N) and holds only Wan's
-        # shapes -- ours misses and takes default_fused_mmrs_config. Silently: that helper only warns
-        # when the *grid* is unknown, and the 12x10 grid is registered.
-        #
-        # So this needs a swept fused-MMRS entry per duration (M varies: 4768 / 9216 / 13632) before
-        # it is worth anything. See the perf log.
+        # Only take it for a shape with a swept blocking. The fallback config runs the matmul on 56 of
+        # the device's 120 cores at subblock 1x1, which made this fusion a 45% regression on the stage
+        # before mmrs_config existed -- and silently, since an unknown shape did not warn. See
+        # mmrs_config for the sweep and the grid/bandwidth tradeoff behind it.
+        if self.tp_factor > 1 and has_mmrs_config(normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size):
+            return self.ff.forward_fused_addcmul(
+                normed,
+                residual,
+                modulation(_GATE_MLP),
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=self.parallel_config if self.use_fused_agmm else None,
+                default_block_size=self.ff1_block_size,
+            )
         ff_out = self.ff(
             normed,
             compute_kernel_config=self.mm_compute_kernel_config,
