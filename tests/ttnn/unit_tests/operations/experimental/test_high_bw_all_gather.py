@@ -231,8 +231,19 @@ def _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype
             dim=2,
         )
         actual_outputs = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(persistent_output)]
-    for actual in actual_outputs:
-        assert torch.equal(actual, expected)
+    for rank, actual in enumerate(actual_outputs):
+        if torch.equal(actual, expected):
+            continue
+
+        mismatches = torch.nonzero(actual != expected, as_tuple=False)
+        first = tuple(mismatches[0].tolist()) if len(mismatches) else None
+        pytest.fail(
+            "high_bw_all_gather output mismatch: "
+            f"rank={rank}, mismatched_elements={len(mismatches)}, "
+            f"first_index={first}, "
+            f"actual={actual[first].item() if first is not None else None}, "
+            f"expected={expected[first].item() if first is not None else None}"
+        )
 
 
 def _assert_exact_replicated_output(host_input, persistent_output, mesh_device, dtype, layout):
@@ -256,23 +267,36 @@ def _assert_exact_replicated_output(host_input, persistent_output, mesh_device, 
 
 
 def _run_high_bw_all_gather_accuracy(
-    mesh_device, dtype, width, layout, expected_page_size, cluster_axis, rows_per_device
+    mesh_device,
+    dtype,
+    width,
+    layout,
+    expected_page_size,
+    cluster_axis,
+    rows_per_device,
+    num_links=_NUM_LINKS,
 ):
-    global_shape = (1, 1, rows_per_device * mesh_device.shape[cluster_axis], width)
+    collective_size = mesh_device.get_num_devices() if cluster_axis is None else mesh_device.shape[cluster_axis]
+    global_shape = (1, 1, rows_per_device * collective_size, width)
     torch.manual_seed(0)
     host_input = torch.rand(global_shape, dtype=torch.bfloat16)
+    mesh_mapper = (
+        ttnn.ShardTensorToMesh(mesh_device, dim=2)
+        if cluster_axis is None
+        else ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(2, None) if cluster_axis == 0 else (None, 2), mesh_shape=tuple(mesh_device.shape)
+        )
+    )
     device_input = _make_tensor(
         mesh_device,
         host_input,
         dtype,
         layout,
-        ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(2, None) if cluster_axis == 0 else (None, 2), mesh_shape=tuple(mesh_device.shape)
-        ),
+        mesh_mapper,
     )
     local_padded_shape = ttnn.get_device_tensors(device_input)[0].padded_shape
     output_shape = list(local_padded_shape)
-    output_shape[2] *= mesh_device.shape[cluster_axis]
+    output_shape[2] *= collective_size
     persistent_output = _make_tensor(
         mesh_device,
         torch.zeros(output_shape, dtype=torch.bfloat16),
@@ -287,7 +311,7 @@ def _run_high_bw_all_gather_accuracy(
         dim=2,
         output_tensor=persistent_output,
         cluster_axis=cluster_axis,
-        num_links=_NUM_LINKS,
+        num_links=num_links,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -704,7 +728,87 @@ def test_high_bw_all_gather_galaxy_ci_perf(mesh_device):
     )
 
 
-@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
+@run_for_blackhole("32-rank whole-mesh ring coverage requires Blackhole")
+@pytest.mark.skipif(
+    not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
+    reason="run on the Blackhole simulator or set TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1",
+)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_galaxy_8x4_whole_mesh_ring_accuracy(mesh_device):
+    """Gather exactly across a 32-rank snake ring while Galaxy remains an 8x4 mesh."""
+    assert tuple(mesh_device.shape) == (8, 4)
+    _run_high_bw_all_gather_accuracy(
+        mesh_device,
+        ttnn.bfloat16,
+        width=576,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=1152,
+        cluster_axis=None,
+        rows_per_device=int(os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_32_RANK_ROWS_PER_DEVICE", "4")),
+        num_links=int(os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_32_RANK_NUM_LINKS", "2")),
+    )
+
+
+@run_for_blackhole("2x2 whole-mesh ring coverage requires Blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                **_device_params(ttnn.FabricConfig.FABRIC_2D),
+                "require_exact_physical_num_devices": True,
+            },
+            id="fabric_2d",
+        ),
+        pytest.param(
+            {
+                **_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY),
+                "require_exact_physical_num_devices": True,
+            },
+            id="fabric_2d_torus_xy",
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+def test_high_bw_all_gather_quietbox_2x2_whole_mesh_ring_accuracy(mesh_device):
+    """Gather across one four-rank ring on the complete physical QuietBox."""
+    assert tuple(mesh_device.shape) == (2, 2)
+    assert mesh_device.get_num_devices() == ttnn.get_num_devices() == 4
+    _run_high_bw_all_gather_accuracy(
+        mesh_device,
+        ttnn.bfloat16,
+        width=576,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=1152,
+        cluster_axis=None,
+        rows_per_device=4,
+        num_links=2,
+    )
+
+
+@run_for_blackhole("legacy axis-ring regression requires Blackhole")
+@pytest.mark.skipif(
+    not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
+    reason="run on the Blackhole simulator or set TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1",
+)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_galaxy_8x4_axis_ring_regression(mesh_device):
+    """Retain the existing axis-ring path when the complete Galaxy is open."""
+    rank_line = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    _run_high_bw_all_gather_accuracy(
+        rank_line,
+        ttnn.bfloat16,
+        width=576,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=1152,
+        cluster_axis=0,
+        rows_per_device=4,
+        num_links=2,
+    )
+
 @pytest.mark.parametrize(
     "device_params",
     [

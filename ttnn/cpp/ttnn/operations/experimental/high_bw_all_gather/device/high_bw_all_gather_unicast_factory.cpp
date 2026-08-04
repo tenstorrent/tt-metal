@@ -4,6 +4,7 @@
 
 #include "high_bw_all_gather_unicast_factory.hpp"
 #include "high_bw_all_gather_scheduler.hpp"
+#include "kernels/snake_ring.hpp"
 
 #include <array>
 #include <cstddef>
@@ -304,23 +305,43 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         !fabric_is_2d || operation_attributes.neighbor_unicast_eligible,
         "Fabric2D high_bw_all_gather neighbor unicast requires a host-proved direct physical line/ring");
 
+    const bool linearized_mesh_ring = operation_attributes.linearized_mesh_ring;
     const uint32_t axis = operation_attributes.cluster_axis;
-    const auto topology = operation_attributes.axis_topology[axis];
+    const auto topology =
+        linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : operation_attributes.axis_topology[axis];
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
     const uint32_t num_devices = operation_attributes.num_devices;
     TT_FATAL(
         !is_ring || num_devices > 2,
-        "high_bw_all_gather ring schedule requires more than two devices on cluster_axis {}; "
-        "a size-two axis has no distinct wrap edge",
+        "high_bw_all_gather ring schedule requires more than two participating devices; got {}, "
+        "linearized_mesh_ring={}, cluster_axis={}",
+        num_devices,
+        linearized_mesh_ring,
         axis);
-    const uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-        input_tensor, sender_device_coord, std::optional<uint32_t>{operation_attributes.cluster_axis});
+    const auto mesh_shape = mesh_device->shape();
+    const auto snake_orientation = operation_attributes.snake_ring_orientation;
+    const auto snake_ring_coordinate = [&](uint32_t index) {
+        return MeshCoordinate(
+            snake_ring::coordinate_row(index, mesh_shape[0], mesh_shape[1], snake_orientation),
+            snake_ring::coordinate_col(index, mesh_shape[0], mesh_shape[1], snake_orientation));
+    };
+    const uint32_t device_idx =
+        linearized_mesh_ring
+            ? snake_ring::index_from_coordinate(
+                  sender_device_coord[0], sender_device_coord[1], mesh_shape[0], mesh_shape[1], snake_orientation)
+            : ::ttnn::ccl::get_linearized_index_from_physical_coord(
+                  input_tensor, sender_device_coord, std::optional<uint32_t>{operation_attributes.cluster_axis});
 
-    auto fwd_coord =
-        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, 1, topology, axis);
+    auto fwd_coord = linearized_mesh_ring
+                         ? std::optional<MeshCoordinate>{snake_ring_coordinate((device_idx + 1) % num_devices)}
+                         : ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                               input_tensor, sender_device_coord, 1, topology, axis);
     auto bwd_coord =
-        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, -1, topology, axis);
+        linearized_mesh_ring
+            ? std::optional<MeshCoordinate>{snake_ring_coordinate((device_idx + num_devices - 1) % num_devices)}
+            : ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                  input_tensor, sender_device_coord, -1, topology, axis);
 
     // Stripes a direction sends from a device: ring -> N/2; line fwd -> d+1, bwd -> N-d; 0 at a dead endpoint.
     // Also queried for the downstream device to choose granular vs single data_valid signalling.
@@ -354,7 +375,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
-    const uint32_t num_links = operation_attributes.axis_num_links[axis];
+    const uint32_t num_links = operation_attributes.num_links;
     const bool has_runtime_controls =
         operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value();
     const auto page_geometry = derive_page_geometry(input_tensor, output_tensor, operation_attributes);
@@ -651,6 +672,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         cb_page_size,            // cb entry size
         slice_step,              // one means contiguous slices; >1 owns one interleaved DRAM bank
         static_output_chunks_per_stripe,
+        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -665,6 +690,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         packet_size,             // packet_size
         slice_step,              // one means scatter packets; >1 enables contiguous full packets
         static_output_chunks_per_stripe,
+        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 

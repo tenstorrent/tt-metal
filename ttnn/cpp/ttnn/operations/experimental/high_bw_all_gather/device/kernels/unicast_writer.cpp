@@ -41,7 +41,13 @@ void kernel_main() {
     // See unicast_reader.cpp: the maximum per-rank output slot remains fixed for
     // runtime-controlled gathers, so its stripe width can be baked.
     constexpr uint32_t static_output_chunks_per_stripe = get_compile_time_arg_val(7);
-    constexpr auto output_tensor_args = TensorAccessorArgs<8>();
+    constexpr bool linearized_mesh_ring = get_compile_time_arg_val(8) != 0;
+    constexpr auto snake_orientation =
+        static_cast<ttnn::operations::experimental::high_bw_all_gather::snake_ring::Orientation>(
+            get_compile_time_arg_val(9));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(10);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(11);
+    constexpr auto output_tensor_args = TensorAccessorArgs<12>();
 
     // The direct-EDM/mux path and mux geometry follow the tensor-accessor arguments.
     constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offset();
@@ -164,16 +170,16 @@ void kernel_main() {
             safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);
         auto signal = [&](uint32_t chunks) { atomic_inc(downstream_data_valid_addr, chunks); };
 
-        ///////////////////////////////////////////////////
-        // MAIN
-        ///////////////////////////////////////////////////
-
         OutputStripeIterator<
             output_chunks_per_page,
             output_chunk_size,
             num_devices,
             slice_step,
-            static_output_chunks_per_stripe>
+            static_output_chunks_per_stripe,
+            linearized_mesh_ring,
+            snake_orientation,
+            mesh_rows,
+            mesh_cols>
             it;
 
         uint32_t stripe = initial_stripe;
