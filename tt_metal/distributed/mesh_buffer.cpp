@@ -400,25 +400,6 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
     return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
 
-AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address) {
-    // TODO #20966: Remove single device support and branches + dynamic_cast
-    auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
-    if (!mesh_device) {
-        if (address.has_value()) {
-            return AnyBuffer{CreateBuffer(config, *address)};
-        }
-        return AnyBuffer{CreateBuffer(config)};
-    }
-    MeshBufferConfig mesh_config = ReplicatedBufferConfig{
-        .size = config.size,
-    };
-    DeviceLocalBufferConfig local_config{
-        .page_size = config.page_size,
-        .buffer_type = config.buffer_type,
-    };
-    return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
-}
-
 Buffer* AnyBuffer::get_buffer() const { return buffer_; }
 
 bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }
