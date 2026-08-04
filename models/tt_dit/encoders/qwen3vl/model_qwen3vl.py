@@ -73,6 +73,11 @@ def _scatter_rows(base: ttnn.Tensor, values: ttnn.Tensor, runs: Sequence[tuple[i
     runs, so this is exact, and row slicing on the sequence axis is already how this module trims its
     padding. `values` rows are consumed in run order.
     """
+    # The vision tower emits `(rows, hidden)` while the sequence buffer is `(batch, seq, hidden)`;
+    # normalize so the slicing below is rank-agnostic.
+    if len(values.shape) == 2:
+        values = ttnn.reshape(values, (1, values.shape[0], values.shape[1]))
+
     total = sum(length for _, length in runs)
     if values.shape[-2] != total:
         msg = f"runs cover {total} rows but values has {values.shape[-2]}"
