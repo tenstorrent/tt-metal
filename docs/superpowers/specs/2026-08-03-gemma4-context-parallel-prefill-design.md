@@ -1,9 +1,9 @@
 # Gemma4 context-parallel prefill on Blackhole Galaxy
 
 **Date:** 2026-08-03
-**Status:** Milestones 1 and 2 implemented and passing — single decoder layer and
-the chained 60-layer body, all chunk sizes, eager and traced. See Implementation
-status.
+**Status:** Implemented and passing — the whole prefill file runs under CP with no
+skips (32 passed: single layer, the 60-layer body, and the full graph through
+lm_head; all chunk sizes, eager and traced). See Implementation status.
 **Scope:** Prefill only. Decode is disaggregated and runs outside this path.
 
 ## Implementation status
@@ -39,13 +39,22 @@ Landed on `svuckovic/gemma4-prefill`:
 
   Traced timings at 60 layers: 80.8 ms (512), 114.1 ms (1024), 158.9 ms (2048),
   273.1 ms (4096) — peak ~15k tok/s.
-- **`test_prefill_full` still skips under CP**, for a specific reason: it selects
-  one absolute position's logits with a mesh-wide scalar index
-  (`get_last_token=tile_start`, or `process_logits_after_prefill_trace`), which
-  under CP indexes into each rank's *local* shard and picks the wrong tokens.
-  Gathering logits instead is not viable (4096 x 262144 is ~4.3 GB, which is why
-  the head is fed a 32-row slice). The fix is a CP gather of the hidden states
-  before lm_head (~44 MB) so the existing slice stays valid.
+- **The full graph through lm_head works** (`test_prefill_full`, 8/8). It selects
+  one absolute position's logits, and both paths pick it with a mesh-wide scalar
+  index (`get_last_token=tile_start` eagerly, `process_logits_after_prefill_trace`
+  after a trace) — which under CP addressed a different span on every rank. The
+  sequence is now gathered before either slice: ~44 MB at 4k x 5376 bf16, and the
+  head still only sees 32 rows. Gathering the *logits* instead would be ~4.3 GB at
+  a 262k vocab, which is why the head is fed a slice at all. The gather sits only
+  on the `get_last_token != -1` branch, since a caller wanting every row may keep
+  logits CP-sharded; traced runs always pass -1, so it never lands in a capture.
+
+  Eager and traced agree exactly on the top-5 next tokens at every chunk size, and
+  the predictions move sensibly with context (512 tokens gives
+  `As/Since/Because/While`; 1k-4k converge on a confident single token). Note this
+  test is a smoke test, not a PCC test — there is no host-side 60-layer reference
+  that fits in RAM, so the numerical evidence for CP comes from the single-layer
+  PCC against HuggingFace.
 - **CP branch guarded against the 32768 SDPA cliff.** It uses the non-chunked op,
   and under CP the relevant length is K (`cp * local`), so a check on the local Q
   length under-reports by `cp`. Concretely, chunk 32768 with CP=4 gives local Q
