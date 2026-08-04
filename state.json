@@ -1,24 +1,25 @@
 {
-  "last_run": "2026-08-04T12:59:50Z",
-  "run_id": "30911307121",
-  "tasks_run": ["task5_maintain_prs_check", "task6_stale_prs", "task8_monthly_summary"],
+  "last_run": "2026-08-04T18:53:08Z",
+  "run_id": "30940350696",
+  "tasks_run": ["task2_comment", "task3_fix_issues", "task5_maintain_prs_check", "task8_monthly_summary"],
   "monthly_activity_issue": {
     "number": 51865,
     "month": "2026-08",
-    "status": "updated",
-    "note": "August tracker; July tracker #50956 closed as superseded on a prior run"
+    "status": "updated"
   },
   "issues_labeled": [],
-  "issues_commented": [],
+  "issues_commented": [
+    {"number": 51660, "timestamp": "2026-08-04T18:53:08Z", "note": "linked new fix PR for erfinv small-arg collapse"}
+  ],
   "welcomed_contributors": [],
   "stale_pr_actions": {
     "51024": {"action": "codeowners_ping", "timestamp": "2026-07-28T06:46:32Z", "note": "merged same day, no longer tracked"},
-    "50525": {"action": "codeowners_ping", "timestamp": "2026-08-04T12:59:50Z", "note": "re-pinged, still pending metalium-developers-infra approval; CI green, Copilot review recommended merge"}
+    "50525": {"action": "codeowners_ping", "timestamp": "2026-08-04T12:59:50Z", "note": "re-pinged 2026-08-04; checked again this run, CI still green (5/5 passed), still reviewer-blocked, <3 days since last ping so no re-ping needed yet"}
   },
   "backlog_cursor": {
     "issues": 51420,
     "last_processed_date": "2026-08-03",
-    "note": "reviewed fresh issues from ~51294 through ~51439; many are internal team epics/CI-auto-triage clusters out of scope. Also spot-checked oldest-first issue list (2023-2024 vintage) on 2026-08-04 - all already labeled/long-standing tracking issues, no fresh triage candidates found there. Next run should continue scanning forward past #51439 for fresh issues, and separately continue oldest-first legacy sweep if time allows."
+    "note": "reviewed fresh issues from ~51294 through ~51439; many are internal team epics/CI-auto-triage clusters out of scope. Spot-checked oldest-first issue list (2023-2024 vintage) on 2026-08-04 - all already labeled/long-standing tracking issues, no fresh triage candidates found there. Next run should continue scanning forward past #51439 for fresh issues, and separately continue oldest-first legacy sweep if time allows."
   },
   "open_prs": [
     {
@@ -27,14 +28,23 @@
       "issue": 51420,
       "title": "fix(ttnn): use non-legacy rsqrt in fused_rms_minimal compute kernel",
       "created": "2026-08-03",
-      "ci_status": "pr-gate.yaml run 30844343235 stuck at action_required (0 jobs run) as of 2026-08-04 - needs maintainer approval to run, not a build failure. Already flagged via PR comment on 2026-08-04 run before this one; skipped duplicate comment this run since no new info."
+      "ci_status": "pr-gate.yaml run 30844343235 still stuck at action_required (0 jobs run) as of 2026-08-04 18:53 UTC - needs maintainer approval to run, not a build failure. Already flagged via PR comment; no new info this run, skipped duplicate comment."
+    },
+    {
+      "branch": "repo-assist/fix-issue-51660-erfinv-small-arg",
+      "pr_number": null,
+      "issue": 51660,
+      "title": "fix(ttnn): add small-argument Maclaurin branch for erfinv to fix collapse-to-zero",
+      "created": "2026-08-04",
+      "note": "PR just opened this run via create_pull_request tool - actual PR number not yet known to this run, check next run. Added Maclaurin series branch (threshold |x|<0.1) alongside existing Winitzki approximation in ckernel_sfpu_erfinv.h for both wormhole_b0 and blackhole. Verified series accuracy independently via Newton's method (math.erf-based, scipy unavailable in sandbox) - rel error <1.4e-5 up to |x|=0.5. CI build queued via pr-gate; check outcome next run.",
+      "ci_status": "queued as of 2026-08-04 18:53 UTC, check on next run"
     }
   ],
   "closed_or_merged_prs": [
     {"pr_number": 51663, "merged_at": "2026-08-03T00:02:44Z", "note": "fmod/remainder repair-loop direction fix, merged by blozano-tt"},
-    {"pr_number": 51809, "merged_at": null, "note": "closed unmerged - superseded by human PR #51686 which more thoroughly fixed the same moe_routing_remap issue (#51757/#51860); correct outcome, no further action"},
+    {"pr_number": 51809, "merged_at": null, "note": "closed unmerged - superseded by human PR #51686 which more thoroughly fixed the same moe_routing_remap issue"},
     {"pr_number": 51111, "merged_at": "2026-07-28T19:35:44Z", "note": "repeat_program_factory_last_dim precedence fix"}
   ],
-  "next_tasks": ["task1_triage", "task2_comment", "task3_fix_issues", "task4_improvements", "task7_welcome"],
-  "notes": "2026-08-04: Task5 - checked PR #51999 CI: still action_required/awaiting maintainer approval, no new info vs. yesterday's comment, skipped duplicate. Task6 - re-pinged /codeowners on PR #50525 (3+ days since last ping on 2026-07-30, still reviewer-blocked pending metalium-developers-infra team approval; CI fully green, Copilot review recommended merge). Noted human PR #51421 (gengelageTT, fused_rms_minimal stats-buffer fix) references our #51420/#51999 as a complementary follow-up - no action needed on our end. Spot-checked oldest-first issue backlog (2023-2024 era issues) for fresh triage candidates - all already well-labeled/long-standing tracking issues (do-not-close tags etc), nothing actionable found in this quick pass. Did not get to Task1/2/3/4/7 this run - next run should prioritize those, particularly continuing the fresh-issue scan past #51439 (Task 1/2) and revisiting the three unfixed bug candidates noted in Suggested Actions (#51660 erfinv, #51845 sin/cos Cody-Waite, #51861 hypot range) for Task 3 fix attempts."
+  "next_tasks": ["task1_triage", "task2_comment", "task4_improvements", "task6_stale_prs", "task7_welcome"],
+  "notes": "2026-08-04 (second run, 18:53 UTC): Task3 - implemented and opened PR for #51660 (erfinv small-argument fix), commented on the issue linking it. Task5 - re-checked #51999 (still action_required, no change) and #50525 (CI still green, still reviewer-blocked, no re-ping needed yet since <3 days since last ping). Investigated #51845 (sin/cos Cody-Waite range limit) and #51861 (hypot overflow) as candidates but deferred: #51845's fix requires extending multi-stage Cody-Waite reduction (nontrivial, needs careful validation of new stage constants); #51861's own report says implementation placement (composite scaling vs dedicated SFPU path) needs a maintainer's call before a PR should be attempted. Both remain good next-run or maintainer-input candidates - noted in Suggested Actions. Did not get to Task1 (label triage), Task4 (small improvements), Task6 (stale PR sweep beyond the one #50525 check), or Task7 (welcome) this run - next run should prioritize those, and confirm PR number + CI status for the new erfinv PR once available."
 }
