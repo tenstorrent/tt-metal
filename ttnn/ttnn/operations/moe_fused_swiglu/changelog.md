@@ -1,3 +1,69 @@
+# Cross-M-block activation prefetch
+
+For every non-final M block, the reader now reserves the next resident-x slot and starts its local
+activation-row DRAM read while the current block is in reduce/phase 2. The existing depth-2
+`cb_x_tiles` storage is sufficient, so this adds no L1. bf16 row-major input lands in the existing
+one-row `cb_x_in` staging slot and is published after its read completes; bfp8 tiled input lands
+directly in the next resident-x slot.
+
+The overlap requires scoped read barriers. Current-block W_down and phase-2 local reads use
+transaction id 14, while next-block x uses id 15. This lets phase 2 wait for exactly its own reads
+without draining the prefetch. Transaction id 0 cannot be used with the scoped barrier on this
+architecture: the first prototype did that and hung deterministically in the initial W_down wait.
+Tagging phase 2 before its first W_down issue fixed it.
+
+Blackhole p150, emb 7168 / N 2048 / bf16 RM / bfp4 ND-sharded / 11x8, medians:
+
+| count | prior progressive-M (us) | + next-x prefetch (us) | change |
+|---:|---:|---:|---:|
+| 128 | 84.16 | 84.87 | +0.8 % (noise; one M block, prefetch inactive) |
+| 256 | 118.25 | 119.11 | +0.7 % (noise; one M block, prefetch inactive) |
+| 512 | 204.71 | 199.42 | -2.6 % |
+| 1024 | 380.43 | 356.68 | -6.2 % |
+| 5120 | 1757.32 | 1612.46 | -8.2 % |
+
+The 1024-to-5120 marginal slope fell from 336.2 to 306.6 ns/token (-8.8 %). Equivalently, each
+additional 256-token block fell from 86.06 to 78.49 us, a 7.57 us saving. One bf16 activation
+block is 256 x 7168 x 2 bytes, or 7.17 us at 512 GB/s, so the measured saving is the expected size
+of an activation read becoming hidden rather than a mysterious compute change.
+
+The easy matmul parameter sweep was negative and is not retained. `OUT_SUBBLOCK_H_GU=2` regressed
+the five counts by +0.9 / +5.2 / +6.3 / +5.9 / +6.5 %. Height 4 was flat at 512/1024 and +0.9 %
+at 5120 (its isolated -1.7 % at 256 was not repeatable enough to matter). Height 1 remains.
+
+Validation: prefetch-on matched prefetch-off SHA-256 output digests on all 18 bitwise-gate shapes;
+all 35 real-M/M-tiles tests passed with watcher and LLK assertions, including the 20-block M=5120
+wrap and both activation formats; 500 pseudo-randomly interleaved dispatches over 24 shapes stayed
+bitwise stable.
+
+# Progressive M-row handoff
+
+The reader now publishes each completed x M row immediately for full-size `M_BLOCK=8` slots, and
+the compute kernel starts W_up on cumulative row prefixes while the remaining row multicasts run.
+W_gate retains its existing reader schedule and consumes the same resident x second. Smaller slots
+keep the old one-push, gate-first schedule because making count 128 progressive measured about
++3 us. The selection uses runtime `m_eff`; the device-resident expert count is not specialized.
+
+The shared matmul helper gained `WaitAndRetainPerMSubblock`, plus a runtime shape bit that selects
+progressive or bulk waiting without duplicating the template instantiation. The duplicated version
+did not fit the kernel config buffer (71,568 > 70,656 B). Both modes retain x and leave its one
+whole-slot pop to the caller.
+
+The caller fronts the complete slot immediately before that pop. This is load-bearing for a ragged
+full-size slot such as M=224: arithmetic consumes seven rows, but the CB reservation and pop cover
+eight, so relying on the intervening reduce/down work to outlast publication of the padding row
+would be a timing-dependent race.
+
+Final Blackhole p150 medians at emb 7168 / N 2048 / bf16 RM / bfp4 ND-sharded / 11x8 were 84.38,
+117.49, 206.30, 378.80 and 1755.93 us for counts 128, 256, 512, 1024 and 5120. Against the prior
+84.25, 120.05, 212.38, 396.92 and 1845.66 us, the gain grows from noise at 128 to 4.9 % at 5120.
+A temporary timestamp marker confirmed first-row math finished before x multicast ended on 71/88
+cores (median lead 5,546 cycles / 4.108 us); no measurement marker remains in the source.
+
+Validation: exact cross-revision SHA-256 match on all 18 bitwise-gate shapes; all 16 real-M shapes
+passed twice, including ragged tails and the 20-block count-5120 wrap; count 512 also passed with
+watcher and LLK assertions enabled.
+
 # Rewrite — generality and readability
 
 The op was fast, correct and unreadable: 41 environment knobs (10 selecting paths whose

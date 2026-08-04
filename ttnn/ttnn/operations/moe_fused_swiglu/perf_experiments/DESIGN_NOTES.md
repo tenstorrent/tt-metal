@@ -429,12 +429,56 @@ The review is the strongest argument in this document for reading the geometry o
 grid: three of the five defects are invisible at 11x8 / N 2048 / bfp4 and were found by asking
 what the code produces elsewhere.
 
-## 9. Still open
+## 9. Cross-block x prefetch: scope the phase-2 read barriers
 
-**Count 512.** After the round-17 wins there is no knob-turn left at 512 (`WD_SPLIT` 4 -> 200.05,
-6 -> 199.07, `WD_AHEAD` 2 -> 200.33, `GU_CHUNKS` 2 -> 207.03, against a 199.54 base).
+After the round-17 wins there was no useful knob-turn left at count 512 (`WD_SPLIT` 4 -> 200.05,
+6 -> 199.07, `WD_AHEAD` 2 -> 200.33, `GU_CHUNKS` 2 -> 207.03, against a 199.54 base). The structural
+blocker was that phase 2's blanket `noc_async_read_barrier()` calls drain reads on every transaction
+id, so a cross-block x prefetch paid its full DRAM latency inside phase 2.
 
-The recorded structural blocker: phase 2's blanket `noc_async_read_barrier()` calls drain
-trid-tagged reads too, so any cross-block `x` prefetch pays full DRAM latency inside phase 2.
-**Scoping the barriers** (`noc_async_read_barrier_with_trid` on a W_down-only trid) is the
-prerequisite, before the prefetch.
+The reader now tags current-block W_down and phase-2 local reads with transaction id 14, tags the
+next block's local activation-row read with id 15, and uses scoped barriers for the former. The
+existing depth-2 resident-x CB provides the destination; no L1 was added. bf16 input uses the
+existing one-row pre-tilize slot, while bfp8 input reads directly into the next resident slot.
+
+Do not use transaction id 0 with `noc_async_read_barrier_with_trid` here. Id 0 is the legacy
+untagged stream on this architecture; the first prototype hung at the initial W_down wait. Phase 2
+must be assigned its nonzero id before the first W_down request is issued.
+
+At count 128/256 there is only one M block and this path is inactive. At 512/1024/5120 it changed
+204.71/380.43/1757.32 us to 199.42/356.68/1612.46 us (-2.6/-6.2/-8.2 %). The marginal slope from
+1024 to 5120 fell 336.2 -> 306.6 ns/token. The saving is 7.57 us per additional 256-token block;
+the block's bf16 input is 3.67 MB, or 7.17 us at 512 GB/s, so the result is consistent with hiding
+essentially the exposed activation DRAM read.
+
+The adjacent gate/up subblock-height sweep supplied no second winner: height 2 was 5-7 % worse at
+large M, while height 4 was flat at 512/1024 and 0.9 % worse at 5120. Height 1 remains.
+
+## 10. Start gate/up before the x multicast finishes
+
+For a full-size `M_BLOCK=8` slot, the reader reserves the whole resident `cb_x_tiles` region but
+publishes one `KR_PAD`-tile M row after each completed multicast round. Compute runs W_up first,
+because the independent writer already streams W_up on NoC1 while the reader is still in the x
+chain, and uses cumulative waits of 1, 2, ... M rows. W_gate keeps its tuned reader schedule and
+runs second against the same resident x. A full-slot wait immediately before the explicit
+whole-slot pop covers ragged slots whose arithmetic deliberately omits the final padding rows.
+
+Smaller power-of-two slots keep the old single push and gate-first order. Their multicast is too
+short to repay the extra CB bookkeeping: applying the progressive schedule at count 128 regressed
+the median from about 84.3 to 87.3 us. Keeping the choice runtime avoids specializing on the
+device-resident expert count. The helper has one matmul template instantiation and a runtime shape
+bit; duplicating the instantiation exceeded the compute kernel config budget (71,568 > 70,656 B).
+
+Blackhole p150, 11x8, emb 7168, N 2048, bf16 RM input, bfp4 ND-sharded weights:
+
+| count | before (us) | progressive M (us) | change |
+|---:|---:|---:|---:|
+| 128 | 84.25 | 84.38 | within run-to-run noise |
+| 256 | 120.05 | 117.49 | -2.1 % |
+| 512 | 212.38 | 206.30 | -2.9 % |
+| 1024 | 396.92 | 378.80 | -4.6 % |
+| 5120 | 1845.66 | 1755.93 | -4.9 % |
+
+A temporary TRISC marker after the first W_up M row proved this is real overlap, not merely an
+earlier blocking wait: 71/88 cores completed that row before the reader's x-multicast zone ended,
+with a median lead of 5,546 cycles (4.108 us). The marker is not present in the shipped source.

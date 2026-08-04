@@ -130,6 +130,13 @@ constexpr uint32_t CT_HMCAST = CT_XMCAST + 5;
 constexpr uint32_t TILE_H = 32;
 constexpr uint32_t BF16_TILE_ROW_BYTES = TILE_H * 2;  // one 32-element tile slice of a bf16 stick
 
+// Cross-block x prefetch uses the two highest read transaction IDs. Phase-2 reads must be tagged
+// separately because a blanket read barrier drains EVERY id and would turn the prefetch back into
+// a serial read. The IDs are local to this data-movement RISC-V.
+constexpr bool kPrefetchNextX = true;
+constexpr uint32_t P2_READ_TRID = 14;
+constexpr uint32_t NEXT_X_TRID = 15;
+
 // Runtime-arg layout. The scalar block, then the whole COLUMN in virtual coordinates as KGROUPS
 // (vx, vy) pairs in ROW order: the invite fan-out and the up-gather destinations. Row `r` is at
 // index `r` on every core in the column, which is what makes "worker r owns tiles
@@ -316,6 +323,34 @@ void kernel_main() {
     constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;  // one child's landing slot
     constexpr uint32_t X_ROW_BYTES = KR_PAD * BFP8_TILE;
 
+    // One activation-row issue body for both the ordinary prologue and the cross-block prefetch.
+    // On the bf16 path `dst` is one cb_x_in stick-row slot; on the tiled path it is the resident
+    // cb_x_tiles row. Completion and CB publication stay with the caller.
+    auto issue_x_row = [&](uint32_t row, uint32_t dst) {
+#ifndef ABLATE_NO_XSTAGE_XFER
+        if constexpr (INPUT_FORMAT == 0) {
+            for (uint32_t i = 0; i < TILE_H; ++i) {
+                const uint32_t s = (i + my_col + my_row) % TILE_H;
+                noc_async_read(
+                    x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
+                    dst + s * X_SLICE,
+                    kr * BF16_TILE_ROW_BYTES);
+            }
+        } else {
+            for (uint32_t i = 0; i < kr; ++i) {
+                noc_async_read(x_acc.get_noc_addr(row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
+            }
+        }
+#else
+        (void)row;
+        (void)dst;
+#endif
+    };
+
+    // True means the next cb_x_tiles slot was reserved during the previous block and this core's
+    // injector row, if any, has already landed (bf16 sticks in cb_x_in; bfp8 tiles in the slot).
+    bool x_prefetched = false;
+
     // `count == 0` -> m_blocks == 0 on every core: no CB traffic, no collective round, no
     // semaphore. Uniform across the grid, so it cannot hang.
     for (uint32_t b = 0; b < m_blocks; ++b) {
@@ -355,7 +390,11 @@ void kernel_main() {
         // all-or-nothing and drained the whole weight block before a single stick was tilized.
         // Chunk 0 here; chunks 1..N-1 after that barrier. See DESIGN_NOTES.md §4.
 
-        cb_reserve_back(cb_x_tiles, x_slot_tiles);
+        const bool staged_early = x_prefetched;
+        x_prefetched = false;
+        if (!staged_early) {
+            cb_reserve_back(cb_x_tiles, x_slot_tiles);
+        }
         const uint32_t x_base = get_write_ptr(cb_x_tiles);
 
         // ---- x staging PROLOGUE: land every tile-row THIS core injects, before the chain ----
@@ -377,21 +416,12 @@ void kernel_main() {
                 if constexpr (INPUT_FORMAT == 0) {
                     // bf16 ROW_MAJOR: read this row-group's emb slice of 32 sticks; compute tilizes
                     // them to bfp8 in cb_x_stage; copy the tile-row into the resident slot.
-                    cb_reserve_back(cb_x_in, TILE_H);
-                    const uint32_t wp = get_write_ptr(cb_x_in);
-#ifndef ABLATE_NO_XSTAGE_XFER  // /perf-measure: drop the ACTIVATION DRAM stream, keep the tilize
-                    for (uint32_t i = 0; i < TILE_H; ++i) {
-                        const uint32_t s = (i + my_col + my_row) % TILE_H;
-                        noc_async_read(
-                            x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
-                            wp + s * X_SLICE,
-                            kr * BF16_TILE_ROW_BYTES);
+                    if (!staged_early) {
+                        cb_reserve_back(cb_x_in, TILE_H);
+                        issue_x_row(row, get_write_ptr(cb_x_in));
+                        noc_async_read_barrier();
+                        cb_push_back(cb_x_in, TILE_H);
                     }
-#else
-                    (void)wp;
-#endif
-                    noc_async_read_barrier();
-                    cb_push_back(cb_x_in, TILE_H);
 
                     cb_wait_front(cb_x_stage, KR_PAD);
                     noc_async_read(get_noc_addr(get_read_ptr(cb_x_stage)), dst, X_ROW_BYTES);
@@ -399,12 +429,10 @@ void kernel_main() {
                     cb_pop_front(cb_x_stage, KR_PAD);
                 } else {
                     // bfp8_b TILE: the tiles land straight in the resident slot, no tilize.
-#ifndef ABLATE_NO_XSTAGE_XFER
-                    for (uint32_t i = 0; i < kr; ++i) {
-                        noc_async_read(x_acc.get_noc_addr(row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
+                    if (!staged_early) {
+                        issue_x_row(row, dst);
+                        noc_async_read_barrier();
                     }
-#endif
-                    noc_async_read_barrier();
                 }
             }
         }
@@ -474,6 +502,13 @@ void kernel_main() {
         // Phase 1b' — W_down for ALL WD_AHEAD phase-2 K-blocks, ISSUED as one batch, so the
         // reads land under the reduce rendezvous instead of in front of the round that needs them.
         constexpr uint32_t WD_BLOCK_TILES = HN_PAD * EC_MAX;
+        constexpr bool CAN_PREFETCH_X = HGROUPS >= M_BLOCK;
+        const bool prefetch_next_x = kPrefetchNextX && CAN_PREFETCH_X && (b + 1 < m_blocks);
+        if (prefetch_next_x) {
+            // Transaction id zero is the legacy/untagged stream and cannot be waited through the
+            // scoped barrier on this architecture. Tag phase 2 before its first W_down issue.
+            noc_async_read_set_trid(P2_READ_TRID);
+        }
         auto issue_wd_batch = [&]() {
             cb_reserve_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
             MaybeDeviceZoneScope("reader_wd_issue");
@@ -501,6 +536,32 @@ void kernel_main() {
             }
         };
         issue_wd_batch();
+
+        // Start block b+1's activation read before block b's reduce + phase 2. At the supported
+        // grids HGROUPS >= M_BLOCK, so each core injects at most one row and the existing one-row
+        // cb_x_in is sufficient. Smaller grids retain the ordinary next-block prologue.
+        bool prefetch_has_local_row = false;
+        if (prefetch_next_x) {
+            const uint32_t next_m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b + 1, M_BLOCK, M_EFF_MIN);
+            cb_reserve_back(cb_x_tiles, next_m_eff * KR_PAD);
+            const uint32_t next_x_base = get_write_ptr(cb_x_tiles);
+            const uint32_t t = moe_fused_swiglu::inject_first(my_col);
+            if (t < next_m_eff) {
+                prefetch_has_local_row = true;
+                uint32_t row = (b + 1) * M_BLOCK + t;
+                if (row >= M_T_MAX) {
+                    row = M_T_MAX - 1;
+                }
+                noc_async_read_set_trid(NEXT_X_TRID);
+                if constexpr (INPUT_FORMAT == 0) {
+                    cb_reserve_back(cb_x_in, TILE_H);
+                    issue_x_row(row, get_write_ptr(cb_x_in));
+                } else {
+                    issue_x_row(row, next_x_base + t * X_ROW_BYTES);
+                }
+                noc_async_read_set_trid(P2_READ_TRID);
+            }
+        }
 
         // ---- Phase 1c: the cross-column reduce, RECEIVER side ----
         // SEM_GO is the invite — the flow control that stops a contributor overwriting a landing
@@ -558,7 +619,11 @@ void kernel_main() {
         // the round boundary. See DESIGN_NOTES.md §4.
         {
             MaybeDeviceZoneScope("reader_wd_wait");
-            noc_async_read_barrier();
+            if (prefetch_next_x) {
+                noc_async_read_barrier_with_trid(P2_READ_TRID);
+            } else {
+                noc_async_read_barrier();
+            }
             if constexpr (WD_SPLIT) {
                 // ...and NOC_1's half of the SAME blocks (see wd_split_gate).
                 wd_split_gate(wd_done, WD_AHEAD);
@@ -572,6 +637,18 @@ void kernel_main() {
         if (is_root) {
             h_arrivals += sl_w;
         }
+        if (prefetch_next_x) {
+            // Every read issued from here to the end of phase 2 is either a W_down head or the
+            // sender's local h copy. Scoped barriers may drain these without touching NEXT_X_TRID.
+            noc_async_read_set_trid(P2_READ_TRID);
+        }
+        auto phase2_read_barrier = [&]() {
+            if (prefetch_next_x) {
+                noc_async_read_barrier_with_trid(P2_READ_TRID);
+            } else {
+                noc_async_read_barrier();
+            }
+        };
         {
             MaybeDeviceZoneScope("reader_phase2");
             bool wd_pending = false;
@@ -641,7 +718,7 @@ void kernel_main() {
                 if (i_send) {
                     // The SENDER must drain before it broadcasts (its self-copy has to have landed), so
                     // it also publishes the pending W_down block here. One core per round pays this.
-                    noc_async_read_barrier();  // the self-copy AND the previous round's W_down block
+                    phase2_read_barrier();  // the self-copy AND the previous round's W_down block
                     if (wd_pending) {
                         if constexpr (WD_SPLIT) {
                             wd_split_gate(wd_done, 1);
@@ -687,7 +764,7 @@ void kernel_main() {
                         // WD_AHEAD=1 prologue block (1 of 11) and I misread it as "down never waits
                         // for its weights"; this is every other round, on the non-sending cores.
                         MaybeDeviceZoneScope("p2_wdbar");
-                        noc_async_read_barrier();
+                        phase2_read_barrier();
                         if constexpr (WD_SPLIT) {
                             wd_split_gate(wd_done, 1);
                         }
@@ -724,12 +801,22 @@ void kernel_main() {
             // HGROUPS-WD_AHEAD <= HGROUPS-1, so nothing is ever left pending here. Kept as an
             // ASSERT-free safety drain for a future WD_AHEAD that changes that arithmetic.
             if (wd_pending) {
-                noc_async_read_barrier();
+                phase2_read_barrier();
                 if constexpr (WD_SPLIT) {
                     wd_split_gate(wd_done, 1);
                 }
                 cb_push_back(cb_w_down, WD_BLOCK_TILES);
             }
+        }
+        if (prefetch_next_x) {
+            noc_async_read_set_trid(0);
+            noc_async_read_barrier_with_trid(NEXT_X_TRID);
+            if constexpr (INPUT_FORMAT == 0) {
+                if (prefetch_has_local_row) {
+                    cb_push_back(cb_x_in, TILE_H);
+                }
+            }
+            x_prefetched = true;
         }
     }
 }
