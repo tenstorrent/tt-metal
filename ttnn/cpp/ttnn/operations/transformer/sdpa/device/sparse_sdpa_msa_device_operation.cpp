@@ -276,7 +276,7 @@ SparseSDPAMsaOperation::DispatchArgs SparseSDPAMsaOperation::compute_dispatch_ar
     };
 }
 
-void SparseSDPAMsaOperation::override_runtime_arguments(
+void SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const SparseSDPAMsaParams& attrs,
     const SparseSDPAMsaInputs& t,

@@ -32,6 +32,15 @@ struct SparseSDPAMsaOperation {
             const tensor_args_t& t,
             tensor_return_value_t& output,
             const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+
+        // Cache-hit re-apply of all per-dispatch state (buffer addresses, per-core K/V offsets, group strides,
+        // causal chunk_start), since the hash excludes interleaved K/V T and cache_batch_idx. See the .cpp.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& t,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<SparseSDPAMsaProgramFactory>;
@@ -68,15 +77,6 @@ struct SparseSDPAMsaOperation {
         const operation_attributes_t& attrs,
         const tensor_args_t& t,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
-
-    // Cache-hit re-apply of all per-dispatch state (buffer addresses, per-core K/V offsets, group strides,
-    // causal chunk_start), since the hash excludes interleaved K/V T and cache_batch_idx. See the .cpp.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& attrs,
-        const tensor_args_t& t,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 Tensor sparse_sdpa_msa(
