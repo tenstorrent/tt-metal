@@ -26,21 +26,16 @@ from models.tt_dit.utils.ltx import (
     print_ltx_timing_table,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params, ring_params, ring_params_8k
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
-# Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
-# s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
-# l1_small_size: native ttnn.conv1d (the depthwise audio taps) runs an UntilizeWithHalo gather
-# whose sharding/config tensors allocate from the dedicated L1_SMALL pool; it defaults to 0, which
-# OOMs the vocoder. 32 KB matches the audio component tests.
-ring_trace_params = {**ring_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+# Traced ring config (LTX_TRACED=1): 8k fabric payload (strided AGMM is tuned for it); l1_small_size
+# feeds the audio vocoder's conv scratch pool.
+ring_trace_params = {**ring_params_8k, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 
-# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
-# (no checkpoint present). Runs the same prompt as the girl audio fixture (DEFAULT_LTX_PROMPT — the
-# "young woman with a guitar sings Doo-be-doo" clip the audio tests use), so e2e and audio stay aligned.
+# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
 @pytest.mark.skipif(
     not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
