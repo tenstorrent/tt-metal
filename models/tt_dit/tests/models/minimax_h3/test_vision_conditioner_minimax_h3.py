@@ -5,21 +5,31 @@
 # =============================================================================
 # MiniMax-H3 conditioner with an image, on the RELEASED weights: the fl2va path.
 #
-# WIP: test_fused_conditioner_real_weights FAILS at PCC 98.4764% against the
+# WIP: test_fused_conditioner_real_weights FAILS at PCC 98.6224% against the
 # 0.99 threshold, and the cause is NOT established. The two vision-tower cases
 # pass. Do not read a green run of this file as fl2va being verified end to end.
 #
 # What is known about the failure:
-#   - 98.4764% / RMSE 18.7% is bit-reproducible: measured four times, in-suite
-#     and in isolation (-k fused), before and after a device reboot. It is not
-#     flaky, not cross-test interference, and not hardware.
-#   - A standalone script feeding the SAME decoder the reference's own vision
+#   - reproducible: 98.4764% measured four times before the vision attention got
+#     its HiFi4 + fp32-accumulate SDPA config, and 98.6224% after. In-suite and
+#     in isolation (-k fused), before and after a device reboot. Not flaky, not
+#     cross-test interference, not hardware.
+#   - the gap is mostly NOT the vision tower. Giving the tower fp32 accumulation
+#     roughly halved its hidden-state error (block 26: 99.6893% -> 99.8272% on a
+#     784-patch image) and moved this number by only 0.146 points. If inherited
+#     tower error dominated, that change should have moved it far more, so the
+#     bulk of the ~1.4% shortfall lives downstream -- in the decoder with vision
+#     injected.
+#   - the next precision lever is layers/linear.py, documented as "HiFi2 +
+#     packer_l1_acc + bf16 acc". Every qkv, proj and MLP matmul still accumulates
+#     in bf16 and those carry most of the FLOPs. Changing it affects every tt_dit
+#     model, so it has not been touched here.
+#   - a standalone script feeding the SAME decoder the reference's own vision
 #     output scored 99.8789%, and our tower's 99.8006% -- which would say the
-#     injection is correct and the tower contributes ~0.08 points. But that
-#     script disagrees with this test by 1.3 points on what should be identical
-#     work, and it had two defects of its own, so it is the less trustworthy of
-#     the two and its numbers are recorded here only as a lead.
-#   - The reduced-geometry equivalent in
+#     injection is correct. But that script disagrees with this test by 1.3
+#     points on nominally identical work and had two defects of its own, so it is
+#     recorded as a lead, not a finding.
+#   - the reduced-geometry equivalent in
 #     tests/encoders/qwen3vl/test_qwen3vl_fused_conditioner.py passes at
 #     99.9917%, so whatever this is needs the real depth, width or tap index to
 #     show up -- 64 layers and a tap at 50, versus 4 layers and a tap at 3.
@@ -30,8 +40,13 @@
 #
 #   - the vision tower at its real geometry (depth 27, hidden 1152, head_dim 72
 #     padded to 96, deepstack [8, 16, 24], a 48x48 position table) on the
-#     released 595M-parameter weights -- PASSES at 99.5580% (tokens) and
-#     99.9010 / 99.8785 / 99.6816 (deepstack), on both real canvases;
+#     released 595M-parameter weights -- PASSES, but short of the four nines the
+#     rest of this port reaches:
+#         448x448    tokens 99.6532%   deepstack 99.9341 / 99.9046 / 99.7551
+#         1344x768   tokens 99.5953%   deepstack 99.8910 / 99.8719 / 99.6651
+#     Every block scores ~99.999% in isolation, so this is bf16 accumulation over
+#     27 of them rather than a bad op -- see the linear.py note above for the
+#     remaining lever;
 #   - the fused conditioner, with MiniMax-H3's exact presentation built by the
 #     real tokenizer and the real image processor, tapped at hidden_states[50]
 #     -- currently FAILING, see above.
@@ -195,7 +210,7 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
 )
 def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links):
-    """WIP -- FAILING at PCC 98.4764% against the 0.99 threshold, cause not established.
+    """WIP -- FAILING at PCC 98.6224% against the 0.99 threshold, cause not established.
 
     Left failing rather than relaxed or skipped: the number is bit-reproducible across four runs and
     the reduced-geometry equivalent passes at 99.9917%, so there is something real here that only the
