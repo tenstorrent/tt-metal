@@ -3,8 +3,10 @@ from typing import Callable, Optional
 import ttnn
 
 from .common import DeepSeekV4Module, _HIFI4, width_sharded_l1_config
-from .weight_cache import _load_weight, _materialize
+from .weight_cache import _CachePath, _load_weight, _materialize
 import torch
+
+from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
 
 
 def get_width_shard_num_cores(width: int, device, num_cores: Optional[int] = None) -> int:
@@ -39,6 +41,185 @@ def to_ttnn_device(
     cache_file_name: Optional[str] = None,
 ) -> ttnn.Tensor:
     return _load_weight(tensor, device, cache_file_name=cache_file_name, layout=layout)
+
+
+def _receiver_ring_cols(num_cores: int, device, preferred_width: Optional[int] = None) -> int:
+    """Width of a ``num_cores`` rectangle of receiver cores anchored at (0, 0).
+
+    ``matmul_decode`` walks the GCB's receiver cores row-major and treats position ``p`` as
+    weight slab ``p``, so the receivers must form a full rectangle: only then does a core's
+    row-major index equal ``row * width + col``, which is what ``_bank_receivers_strided``
+    assumes when it places ring position ``p`` at ``(p % width, p // width)``. A ragged set
+    (what ``num_cores_to_corerangeset`` yields for a non-multiple of the grid width) would
+    shift the mapping and silently pair receivers with the wrong slab.
+
+    ``preferred_width`` is used when it yields a rectangle that fits, so the partial mode can
+    keep its natural ``n_blocks``-wide by ``k_blocks``-tall arrangement; otherwise the widest
+    divisor that fits the device grid is used.
+    """
+    grid = device.compute_with_storage_grid_size()
+
+    def fits(w):
+        return w is not None and 0 < w <= grid.x and num_cores % w == 0 and num_cores // w <= grid.y
+
+    width = preferred_width if fits(preferred_width) else next((w for w in range(grid.x, 0, -1) if fits(w)), None)
+    if width is None:
+        raise ValueError(f"cannot form a rectangle of {num_cores} cores within a {grid.x}x{grid.y} device grid")
+    return width
+
+
+def _bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int):
+    """Receivers fed by DRAM bank ``bank_idx``, matching ROUND_ROBIN_1D shard placement.
+
+    Under ROUND_ROBIN_1D, weight shard ``s`` lands on bank ``s % num_dram_banks``. Giving bank
+    ``b`` the ring positions ``b, b + num_dram_banks, ...`` therefore makes shard index equal
+    ring position, so no permutation of the weight is needed.
+    """
+    cores = []
+    for s in range(recv_per_bank):
+        ring_pos = bank_idx + s * num_dram_banks
+        coord = ttnn.CoreCoord(ring_pos % ring_cols, ring_pos // ring_cols)
+        cores.append(ttnn.CoreRange(coord, coord))
+    return ttnn.CoreRangeSet(cores)
+
+
+def decode_weight_layout(
+    K: int, N: int, partial_width_sharded: bool = False, k_blocks: Optional[int] = None, n_blocks: Optional[int] = None
+):
+    """``(num_b_cores, slab_shape, preferred_width)`` for a :class:`LinearDecode` weight.
+
+    The single source of truth for how a weight is cut across B cores, shared by the layer
+    and by :func:`make_shared_decode_gcb` so a shared GCB cannot be sized against a layout
+    that differs from the one the layer actually builds.
+    """
+    if partial_width_sharded:
+        if k_blocks is None or n_blocks is None:
+            raise ValueError("partial_width_sharded=True requires k_blocks and n_blocks")
+        return k_blocks * n_blocks, (K // k_blocks, N // n_blocks), n_blocks
+    num_b_cores = N // 64 if n_blocks is None else n_blocks
+    return num_b_cores, (K, N // num_b_cores), None
+
+
+def _slab_bytes(dtype: ttnn.DataType, slab_shape) -> int:
+    """Byte size of one receiver's weight slab, in whole 32x32 tiles."""
+    height, width = slab_shape
+    if height % ttnn.TILE_SIZE or width % ttnn.TILE_SIZE:
+        raise ValueError(f"weight slab {list(slab_shape)} must be tile-aligned")
+    tiles = (height // ttnn.TILE_SIZE) * (width // ttnn.TILE_SIZE)
+    return tiles * ttnn.Tile([ttnn.TILE_SIZE, ttnn.TILE_SIZE]).get_tile_size(dtype)
+
+
+def _receiver_cores_in_order(core_range_set: ttnn.CoreRangeSet):
+    """The GCB's receiver cores in the order ``matmul_decode`` assigns weight slabs.
+
+    Mirrors ``corerange_to_cores(..., row_wise=true)``: each ``CoreRange`` in stored order,
+    expanded row-wise. Deliberately read back from the ``CoreRangeSet`` rather than
+    recomputed from the ring geometry, so the layer's notion of "slab p goes to core p"
+    is the device's, whether the GCB was built here or handed in.
+    """
+    cores = []
+    for core_range in core_range_set.ranges():
+        for y in range(core_range.start.y, core_range.end.y + 1):
+            for x in range(core_range.start.x, core_range.end.x + 1):
+                cores.append(ttnn.CoreCoord(x, y))
+    return cores
+
+
+def make_shared_decode_gcb(device, specs, dtype: ttnn.DataType, num_slabs: int = 1):
+    """One GCB that several :class:`LinearDecode` weights can be prefetched through.
+
+    ``specs`` is a list of ``decode_weight_layout`` keyword dicts (``K``, ``N``,
+    ``partial_width_sharded``, ``k_blocks``, ``n_blocks``) **in the order the matmuls will
+    consume them**. Two things must match across them, and both are checked here because
+    getting either wrong hangs the device rather than raising.
+
+    Same number of B cores, since a GCB's receiver set is fixed at construction.
+
+    Same slab size, which is the harder constraint. A GCB page is one slab, so weights of
+    different sizes would change the ring's page size from one transfer to the next. Both
+    ends do re-derive the page geometry per transfer and are written to credit any skipped
+    ring tail to the other side over NOC -- the DRISC sender via
+    ``resize_remote_sender_cb_interface`` per request, the receiver via the
+    ``setup_remote_cb_interfaces`` that BRISC firmware runs at every program launch -- but
+    measured against this path that does not hold: three weights of 128 KB, 256 KB and
+    256 KB through one GCB hang, while the same three at a uniform size pass, as does a
+    single weight repeatedly wrapping a two-slab ring. The failing case is the one that
+    leaves the read pointer mid-ring and then has to realign it up to a larger page. Until
+    that is understood, group weights by slab size and give each group its own GCB.
+
+    What is *not* checked anywhere is order. One GCB is one FIFO, so requests must be queued
+    in the same order the matmuls consume them; a consumer that runs out of turn pops a
+    page belonging to another weight, which is wrong results rather than an error. Keep
+    ``specs``, the queueing order, and the forward order in agreement.
+    """
+    if not specs:
+        raise ValueError("make_shared_decode_gcb needs at least one weight spec")
+    layouts = [decode_weight_layout(**spec) for spec in specs]
+    core_counts = {num_cores for num_cores, _, _ in layouts}
+    if len(core_counts) != 1:
+        raise ValueError(
+            f"weights sharing a GCB must use the same number of B cores, but the specs want {sorted(core_counts)}"
+        )
+    num_b_cores = core_counts.pop()
+    slab_sizes = {_slab_bytes(dtype, slab_shape) for _, slab_shape, _ in layouts}
+    if len(slab_sizes) != 1:
+        raise ValueError(
+            f"weights sharing a GCB must have the same slab size, but the specs give {sorted(slab_sizes)} B; "
+            "a GCB whose page size changes between transfers hangs, so group these by size and build one GCB "
+            "per group"
+        )
+    # The per-spec preferred widths can disagree, so fall back to the common rectangle rather
+    # than letting whichever weight is built first pick the receiver set for the others.
+    ring_cols = _receiver_ring_cols(num_b_cores, device, preferred_width=None)
+    bank_to_receivers = _bank_to_receivers(num_b_cores, device, ring_cols)
+    size = num_slabs * slab_sizes.pop()
+    return ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, size)
+
+
+def _dram_banks_for(num_b_cores: int, device) -> int:
+    """The DRAM bank count, having checked the weight's slabs spread evenly over it."""
+    num_dram_banks = device.dram_grid_size().x
+    if num_b_cores % num_dram_banks != 0:
+        raise ValueError(
+            f"the prefetcher needs the {num_b_cores} weight slabs to divide evenly across {num_dram_banks} DRAM banks"
+        )
+    return num_dram_banks
+
+
+def _bank_to_receivers(num_b_cores: int, device, ring_cols: int):
+    """``(dram_bank, receivers)`` pairs placing slab ``p`` on the ``p``-th receiver."""
+    num_dram_banks = _dram_banks_for(num_b_cores, device)
+    recv_per_bank = num_b_cores // num_dram_banks
+    return [
+        (bank, _bank_receivers_strided(bank, recv_per_bank, num_dram_banks, ring_cols))
+        for bank in range(num_dram_banks)
+    ]
+
+
+def _coalesced_core_range_set(cores) -> ttnn.CoreRangeSet:
+    """A ``CoreRangeSet`` over ``cores`` in the same coalesced form the device builds.
+
+    ``CoreRangeSet`` equality compares the range decomposition, not the member cores, so a
+    set built as one ``CoreRange`` per core is *not* equal to the same cores expressed as a
+    rectangle -- and ``matmul_decode`` asserts the output grid equals the GCB's (coalesced)
+    receiver grid. Merging one core at a time reproduces that decomposition.
+    """
+    core_range_set = ttnn.CoreRangeSet([])
+    for core in cores:
+        core_range_set = core_range_set.merge(ttnn.CoreRangeSet({ttnn.CoreRange(core, core)}))
+    return core_range_set
+
+
+def _prefetch_cache_file(cache_file_name: Optional[str]) -> Optional[str]:
+    """A distinct cache path for the prefetcher weight layout.
+
+    The DRAM ND-sharded weight is a different tensor from the DRAM-interleaved one the
+    L1-copy path caches (and in partial mode a different element order too, since the
+    prefetcher layout is not K-block-folded), so the two must not share a cache file.
+    """
+    if cache_file_name is None:
+        return None
+    return _CachePath(f"{cache_file_name}_prefetch", getattr(cache_file_name, "require_cache", False))
 
 
 class Linear(DeepSeekV4Module):
@@ -84,6 +265,26 @@ class LinearDecode(DeepSeekV4Module):
       ``(K_blocks x N_blocks)`` grid of ``[Kc, Nc]`` blocks maps across
       ``K_blocks * N_blocks`` cores (``Kc = K/K_blocks``, ``Nc = N/N_blocks``), and the
       K-partials are reduced across cores. Requires ``k_blocks`` and ``n_blocks``.
+
+    ``use_prefetcher=True`` switches how the weight reaches the compute cores. Instead of
+    holding it DRAM-interleaved and copying it into L1 width-sharded form before every call,
+    it is stored DRAM ND-sharded -- one contiguous slab per B core -- and the DRISC tensor
+    prefetcher pushes each slab into the matmul's in1 circular buffer through a
+    GlobalCircularBuffer, off the command queue. The slab shape is the same per-core weight
+    block as the L1 path (``[K, N/cores]`` or ``[Kc, Nc]``), except that the partial layout is
+    *not* K-block-folded: the DRAM ND shard already enumerates the ``(K_blocks x N_blocks)``
+    grid row-major, which is the receiver order the op consumes slabs in.
+
+    ``fetch_weights`` keeps its meaning across both paths -- stage this layer's weights ahead
+    of the call that needs them -- but here it queues the prefetch request rather than
+    copying into L1, so the transfer overlaps whatever the workers are still doing. Calling
+    it is optional; ``forward`` queues the request itself if nobody did.
+
+    The caller owns the prefetcher session: wrap the forward passes in
+    ``ttnn.experimental.start_tensor_prefetcher`` / ``stop_tensor_prefetcher`` (plus a
+    ``wait_for_cq_on_tensor_prefetcher``), since one session should span a whole model step
+    rather than a single layer. ``ttnn.experimental.is_tensor_prefetcher_supported(device)``
+    reports whether the device has the programmable DRAM cores this needs.
     """
 
     def __init__(
@@ -99,12 +300,18 @@ class LinearDecode(DeepSeekV4Module):
         num_inputA_cores: int = 32,
         k_blocks: Optional[int] = None,
         n_blocks: Optional[int] = None,
+        use_prefetcher: bool = False,
+        num_prefetch_slabs: int = 2,
+        global_cb=None,
     ):
         self.partial_width_sharded = partial_width_sharded
         self.num_inputA_cores = num_inputA_cores
         self.dtype = dtype
         self.device = device
         self.l1_weights = None
+        self.use_prefetcher = use_prefetcher
+        self.global_cb = None
+        self.prefetch_queued = False
 
         assert K != -1 and N != -1, "K and N must be set"
         self.K = K
@@ -113,18 +320,22 @@ class LinearDecode(DeepSeekV4Module):
             self.n_blocks = n_blocks
             self.k_blocks = k_blocks
 
-        if partial_width_sharded:
-            if k_blocks is None or n_blocks is None:
-                raise ValueError("partial_width_sharded=True requires k_blocks and n_blocks")
-            kc, nc = self.K // k_blocks, self.N // n_blocks
-            num_inputB_cores = k_blocks * n_blocks
-            shard_shape = (kc, nc)
-        else:
-            if n_blocks is None:
-                num_inputB_cores = self.N // 64
-            else:
-                num_inputB_cores = n_blocks
-            shard_shape = (self.K, self.N // num_inputB_cores)
+        num_inputB_cores, shard_shape, preferred_width = decode_weight_layout(
+            K, N, partial_width_sharded, k_blocks, n_blocks
+        )
+
+        if use_prefetcher:
+            self._init_prefetched_weight(
+                weight,
+                cache_file_name,
+                dtype,
+                num_inputB_cores,
+                shard_shape,
+                preferred_width=preferred_width,
+                num_slabs=num_prefetch_slabs,
+                shared_cb=global_cb,
+            )
+            return
 
         b_core_range_set = ttnn.num_cores_to_corerangeset(
             num_inputB_cores, self.device.compute_with_storage_grid_size(), row_wise=True
@@ -158,6 +369,7 @@ class LinearDecode(DeepSeekV4Module):
         if partial_width_sharded:
             # Fold the K-blocks into the width so a width-sharded [Kc, Nc] block lands on
             # core c = kb * n_blocks + nb (row-major), matching the op's expected geometry.
+            kc = shard_shape[0]
             w = w.reshape(k_blocks, kc, self.N).permute(1, 0, 2).reshape(kc, self.N * k_blocks)
         self.weight = ttnn.as_tensor(
             w,
@@ -168,7 +380,142 @@ class LinearDecode(DeepSeekV4Module):
             cache_file_name=cache_file_name,
         )
 
+    def _init_prefetched_weight(
+        self,
+        weight,
+        cache_file_name,
+        dtype,
+        num_inputB_cores,
+        slab_shape,
+        preferred_width,
+        num_slabs,
+        shared_cb=None,
+    ):
+        """Store the weight DRAM ND-sharded and point the layer at the GCB it prefetches through.
+
+        Slab ``p`` of the weight must reach the B core whose row-major index in the receiver
+        rectangle is ``p``. That holds here because the weight is distributed ROUND_ROBIN_1D
+        (slab ``p`` -> DRAM bank ``p % banks``) and the receivers are laid out with the matching
+        stride, so slab index, ring position and receiver row-major index all coincide. Nothing
+        on the device checks this pairing -- a mismatch is wrong results, not an error.
+
+        ``shared_cb`` adopts a GCB built by :func:`make_shared_decode_gcb` instead of building a
+        private one, which is how several projections avoid each paying for their own buffer.
+        That builder laid its receivers out with the same bank stride used here, so slab ``p``
+        still lands on receiver ``p`` and only the weight's DRAM side is set up in this case.
+        """
+        num_dram_banks = _dram_banks_for(num_inputB_cores, self.device)
+        if shared_cb is not None:
+            receivers = shared_cb.receiver_cores()
+            if receivers.num_cores() != num_inputB_cores:
+                raise ValueError(
+                    f"this weight needs {num_inputB_cores} B cores but the shared GCB has "
+                    f"{receivers.num_cores()} receivers"
+                )
+            # A whole number of this weight's slabs, not merely enough for one: a leftover
+            # partial slab is what leaves the ring pointer mid-page and forces the realign
+            # that hangs (see make_shared_decode_gcb).
+            slab_bytes = _slab_bytes(dtype, slab_shape)
+            if shared_cb.size() < slab_bytes or shared_cb.size() % slab_bytes != 0:
+                raise ValueError(
+                    f"the shared GCB holds {shared_cb.size()} B per receiver, which is not a whole number of "
+                    f"this weight's {slab_bytes} B slabs -- it was almost certainly sized for a differently "
+                    f"shaped weight"
+                )
+
+        dram_memory_config = ttnn.MemoryConfig(
+            ttnn.BufferType.DRAM,
+            ttnn.NdShardSpec(
+                ttnn.Shape(list(slab_shape)),
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}),
+                ttnn.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
+        )
+
+        cache_file_name = _prefetch_cache_file(cache_file_name)
+        w = _materialize(weight, cache_file_name, dtype)
+        if w is not None:
+            # torch nn.Linear stores [out=N, in=K]; the op wants [K, N]. Unlike the L1 partial
+            # path there is no K-block fold -- the ND shard supplies that enumeration.
+            w = w.t().contiguous().reshape(1, 1, self.K, self.N)
+        self.weight = ttnn.as_tensor(
+            w,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=dram_memory_config,
+            cache_file_name=cache_file_name,
+        )
+        if shared_cb is not None:
+            self.global_cb = shared_cb
+        else:
+            ring_cols = _receiver_ring_cols(num_inputB_cores, self.device, preferred_width)
+            self.global_cb = make_matmul_decode_gcb(
+                self.device,
+                self.weight,
+                _bank_to_receivers(num_inputB_cores, self.device, ring_cols),
+                slab_shape=slab_shape,
+                num_slabs=num_slabs,
+            )
+        # The op requires the output to live on the receiver cores (full mode asserts the two
+        # grids are equal; partial mode reduces onto the first n_blocks of them in row-major
+        # order), so keep them to build the output config from. Read back from the GCB so this
+        # is the device's own slab-to-core order rather than a second guess at it.
+        self.receiver_cores = _receiver_cores_in_order(self.global_cb.receiver_cores())
+
+    def _prefetch_output_memory_config(self, m_padded: int) -> ttnn.MemoryConfig:
+        """Width-sharded L1 output over the GCB's receiver cores.
+
+        ``compute_output_specs`` derives exactly this for a rank-2 activation, but takes an
+        earlier branch for a rank-4 one and falls back to DRAM-interleaved -- which the
+        callers here (a sharded RMSNorm, another decode matmul) reject. Building it
+        explicitly keeps both ranks on the same sharded layout.
+
+        Full mode leaves the results spread over every receiver; partial mode reduces the
+        K-partials onto the first ``n_blocks`` receivers in row-major order, so only those
+        carry output.
+        """
+        if self.partial_width_sharded:
+            num_output_cores = self.n_blocks
+            grid = _coalesced_core_range_set(self.receiver_cores[:num_output_cores])
+        else:
+            num_output_cores = len(self.receiver_cores)
+            # Taken from the GCB rather than rebuilt, so the equality the full width-sharded
+            # factory asserts between the B grid and the output grid cannot fail on a
+            # decomposition mismatch.
+            grid = self.global_cb.receiver_cores()
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, [m_padded, self.N // num_output_cores], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    def _queue_prefetch(self):
+        """Ask the DRISC senders to push this weight's slabs into the GCB.
+
+        Split out from the matmul so a caller can hoist it: the transfer then runs on the
+        DRAM-core path, off the command queue, while earlier ops still occupy the workers.
+        ``block_count`` is 1 in every mode -- a receiver's whole slab is one GCB page,
+        because the compute kernel indexes in1 tiles by absolute position within it.
+
+        ``capture_into_trace`` is what makes this work under traced decode. A request is a
+        host-side write to the DRISC senders, not a command-queue op, so a trace would not
+        record it: capture would push weights that the captured (non-executing) matmuls never
+        drain, and every replay would then wait on credits nobody posts. With the flag set, a
+        request issued while the current queue is mid-capture is recorded against that trace
+        and re-sent on each ``execute_trace`` instead. Outside capture it is sent immediately
+        as before, so this is unconditional.
+        """
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            self.device, [(self.weight, 1)], global_cb=self.global_cb, capture_into_trace=True
+        )
+        self.prefetch_queued = True
+
     def fetch_weights(self):
+        if self.use_prefetcher:
+            self._queue_prefetch()
+            return
         self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         # self.weight.deallocate()
 
@@ -186,6 +533,34 @@ class LinearDecode(DeepSeekV4Module):
         return a_memory_config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self.use_prefetcher:
+            if not x.is_sharded():
+                x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
+            # Exactly one queued request per matmul: the matmul waits for one page per
+            # receiver, so a missing request hangs it and a doubled one desynchronises the
+            # GCB pointers. ``fetch_weights`` may already have issued this call's request.
+            if not self.prefetch_queued:
+                self._queue_prefetch()
+            self.prefetch_queued = False
+            m_padded = ((x.shape[-2] + 31) // 32) * 32
+            try:
+                return ttnn.experimental.matmul_decode(
+                    x,
+                    self.weight,
+                    partial_width_sharded=self.partial_width_sharded,
+                    global_cb=self.global_cb,
+                    output_mem_config=self._prefetch_output_memory_config(m_padded),
+                )
+            except Exception:
+                # The request is already with the DRISC senders, and matmul_decode does most
+                # of its validation while building the program -- so a rejected call leaves
+                # slabs queued that nothing will ever drain. A clean stop cannot retire that:
+                # its sentinel queues behind the orphaned request, so the kernel blocks on a
+                # full GCB and never reaches it. Force-stopping abandons the kernels, which
+                # keeps the failure an exception instead of a hang; stop is a no-op if no
+                # prefetcher is running, so the caller's own stop still behaves.
+                ttnn.experimental.stop_tensor_prefetcher(self.device, force=True)
+                raise
         if self.l1_weights is None or not self.l1_weights.is_allocated():
             self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         m = x.shape[-2]
