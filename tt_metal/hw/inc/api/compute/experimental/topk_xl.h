@@ -174,7 +174,8 @@ ALWI void topk_xl_copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_L
  * | True     |
  */
 template <uint32_t K>
-ALWI void topk_xl_copy_tile(uint32_t in_cb_id, uint32_t dst_start_tile_index, uint32_t in_tile_index_base, uint32_t num_elements) {
+ALWI void topk_xl_copy_tile(
+    uint32_t in_cb_id, uint32_t dst_start_tile_index, uint32_t in_tile_index_base, uint32_t num_elements) {
     constexpr uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
     if constexpr (K <= elements_per_tile) {
         UNPACK((llk_unpack_topk_xl_copy_one_tile_unpack(in_cb_id, in_tile_index_base, num_elements)));
