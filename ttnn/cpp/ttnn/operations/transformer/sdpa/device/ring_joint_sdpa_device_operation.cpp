@@ -497,8 +497,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "Chunked GPT-OSS halo {} exceeds the per-device Q slab {}",
             halo_tokens,
             N_local_q);
-    } else {
-        TT_FATAL(B == 1, "Non-sliding RingJointSDPA supports batch size 1, got B={}", B);
     }
 
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");

@@ -893,6 +893,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
+    // The store-and-forward chains are scheduled per head, not per (batch, head).
+    // Until their batch-aware scheduling is restored, multi-batch requests read K/V
+    // independently on each core. This preserves the established B>1 functional path.
+    const bool build_kv_chains = enable_kv_chains && B == 1;
 
     const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
@@ -1968,7 +1972,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     };
 
     // Build head chains for MHA and separate-V shared-K. GQA uses KV-head-grouped chains instead.
-    if (use_head_chain) {
+    if (use_head_chain && build_kv_chains) {
         for (uint32_t head_id = 0; head_id < static_cast<uint32_t>(head_segments.size()); ++head_id) {
             const auto& segs = head_segments[head_id];
             if (segs.size() < 2) {
@@ -1986,7 +1990,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Check query-head chain multicast eligibility and configure mcast for eligible chains.
     uint32_t mcast_chains = 0;
-    if (use_head_chain) {
+    if (use_head_chain && build_kv_chains) {
         struct McastCandidate {
             std::vector<uint32_t> core_indices;
             uint32_t ref_q_chunks;
@@ -2175,7 +2179,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     bool gqa_mcast_enabled = false;
     std::string gqa_mcast_fallback_reason;
     std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
-    if (gqa_grouped_kv && enable_kv_chains) {
+    if (gqa_grouped_kv && build_kv_chains) {
         std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
 
         for (uint32_t ci = 0; ci < num_cores; ++ci) {
@@ -2261,7 +2265,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Build the shared-K chain for separate-V/latent cases.
     // K is shared across all heads, so all active cores form one chain.
     // Sorted by physical position for a stable unicast ordering (overwritten by mcast pass if eligible).
-    if (k_uses_batch_chain && enable_kv_chains) {
+    if (k_uses_batch_chain && build_kv_chains) {
         std::vector<uint32_t> core_indices;
         for (uint32_t i = 0; i < num_cores; ++i) {
             if (core_work[i].global_q_count == 0) {
