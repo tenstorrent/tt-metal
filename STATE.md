@@ -1046,3 +1046,51 @@ So SDPA is left on the ttnn defaults with that reasoning recorded in the code, a
 capture is the next decoder work**. No per-op decoder tuning -- SDPA config, bfp8 weights,
 matmul program configs -- can be evaluated until dispatch is amortised, because the
 measurement floor is wider than the effects being measured.
+
+## Amendment 42 (2026-08-04) — per-op profile of one ViT layer: 36 % is data movement
+
+Whole-decoder wall clock could not attribute anything (amendment 41: same code, 0.34-0.99 s
+per wave). The device profiler sidesteps host jitter entirely -- it reports per-op *device*
+time. Via tt-buddy's tracy workflow:
+
+```
+python -m tracy -p -r -m pytest models/tt_dit/tests/models/minimax_h3/profile_vit_layer_minimax_h3.py
+```
+
+(`websockets` had to be installed into the venv first; `python -m pip` is absent, use
+`uv pip install --python python_env/bin/python`.)
+
+One layer plus `proj_in`/`proj_out`, second iteration (the first populates the program
+cache), **15.527 ms of device time over 63 ops**:
+
+| op | n | total us | mean us | % | fidelity |
+|---|---|---|---|---|---|
+| SDPAOperation | 2 | 4277.8 | 2138.9 | **27.6 %** | HiFi2 |
+| **ReshapeViewDeviceOperation** | 5 | 3998.9 | **799.8** | **25.8 %** | -- |
+| MinimalMatmulDeviceOperation | 10 | 3029.0 | 302.9 | 19.5 % | HiFi2 |
+| **TransposeDeviceOperation** | 5 | 1569.8 | **314.0** | **10.1 %** | -- |
+| BinaryNgDeviceOperation | 22 | 1315.1 | 59.8 | 8.5 % | HiFi4 |
+| LayerNormDeviceOperation | 7 | 567.8 | 81.1 | 3.7 % | HiFi4 |
+| TypecastDeviceOperation | 4 | 424.7 | 106.2 | 2.7 % | HiFi4 |
+| UnaryDeviceOperation | 4 | 172.2 | 43.1 | 1.1 % | -- |
+
+**Reshape + Transpose are 35.9 % of device time -- more than the matmuls (19.5 %), and a
+reshape averaging 800 us is pure data movement that should be nearly free.**
+
+The source is `MiniMaxH3ViTAttention.forward`, which builds heads by hand:
+
+```python
+query, key, value = (ttnn.reshape(part, (b, s, heads, hd)) for part in ttnn.chunk(qkv, 3, dim=-1))
+query, key, value = (ttnn.permute(t, (0, 2, 1, 3)) for t in (query, key, value))
+...
+attended = ttnn.reshape(ttnn.permute(attended, (0, 2, 1, 3)), (b, s, heads * hd))
+```
+
+That is 4 reshapes and 4 transposes per layer. **Both wan and ltx use the fused op instead**
+-- `ttnn.experimental.nlp_create_qkv_heads` (`attention_wan.py:401`, `attention_ltx.py:463`)
+-- which does chunk + reshape + head-permute in one, with `nlp_concat_heads` for the return
+trip. This is the answer to "is the ViT as fast as it gets": no, and the gap is not the SDPA
+config that was tried first, it is the hand-rolled head plumbing around it.
+
+Next: replace with `nlp_create_qkv_heads` / `nlp_concat_heads`, re-profile, then revisit the
+HiFi4 elementwise ops (BinaryNg at 8.5 % is running HiFi4 where HiFi2 would do).
