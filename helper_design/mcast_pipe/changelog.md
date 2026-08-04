@@ -6,6 +6,55 @@ feedback round lands.
 
 ---
 
+## Round 17 — non-owning receiver-coordinate view (2026-08-04)
+
+- **Trigger:** SegFormer width-sharded Conv profiling isolated substantial receiver overhead in
+  `McastArgs::receiver()`: the rotating `SPAN=18` path first materialized a 36-word local coordinate
+  array and then `ReceiverPipe` copied all 36 words into a second owned array.
+- **API (API-006):** `ReceiverPipe` now retains a non-owning pointer to its sender-coordinate pairs.
+  The pointed storage must outlive the pipe. `McastArgs::receiver()` satisfies that contract by
+  pointing directly at the kernel's stable RT-argument block; the raw-construction test keeps its
+  local array alive for every pipe use. The durable contract and validation evidence are recorded in
+  `api_feedback.md`.
+- **Version:** remains `MCAST_PIPE_API_VERSION 9`. Existing array arguments decay to the accepted
+  pointer and require no call-site rewrite; this is an internal representation and lifetime-contract
+  change.
+- **Correctness:** the complete `--dev` helper suite passed 73/73, including rotating spans 2/4/8 and
+  the by-hand `ReceiverPipe` construction. The exact SegFormer 576-channel width-sharded nightly node
+  passed at PCC 0.9998909 against 0.985.
+- **Performance:** three independent real-time-profiler runs measured 38,362.905, 38,377.304, and
+  38,414.444 ns. Their median, 38,377.304 ns, is +0.958% versus the immediate pre-migration parent
+  (38,013.031 ns), below the 1% investigation threshold and improved from the migrated 38,682.593 ns
+  (+1.761%).
+
+---
+
+## Round 16 — caller-managed source-L1 lifetime (2026-08-04)
+
+- **Trigger:** real-time profiling of the SDXL VAE Conv migration attributed most of its regression
+  to the remote-only `async_writes_flushed()` performed after every weight and bias multicast. Review
+  confirmed that this wait protects payload-source reuse; linked data→signal ordering does not itself
+  require the sender to wait after every issue.
+- **API (API-005):** added the method-template policy
+  `send<SourceL1Guard::CallerManaged>(src_l1, dst_l1, size)`. The existing `send(...)` spelling remains
+  source-compatible and defaults to `SourceL1Guard::Guard`, preserving the guarantee that `src_l1` is
+  reusable on return. Caller-managed sends require the source to remain unchanged until a later NoC
+  completion point. The durable contract and validation evidence are recorded in `api_feedback.md`.
+- **Safety:** caller-managed mode skips only the remote-only SENT source-lifetime fence. A real sender
+  loopback still waits for ACKed completion, rotating Flag mode still flushes before resetting its
+  signal-source cell, and Counter mode still drains multicast atomic acknowledgements.
+- **Version:** remains `MCAST_PIPE_API_VERSION 9`. The addition is opt-in and does not stale or rewrite
+  any existing caller; the rollout version remains the compatibility key for mandatory migrations.
+- **Conv adoption:** the height-sharded weights sender uses caller-managed sends for its weight and
+  bias sources. Fully buffered sources need no completion wait; streaming weights flush immediately
+  before the next block overwrites the source slot. The full helper send path is `FORCE_INLINE`.
+- **Coverage/performance:** added a remote Flag test that reuses one immutable source across four
+  caller-managed sends; the complete `--dev` helper suite passed 73/73. The exact SDXL VAE correctness
+  node passed at PCC 0.9999325, and its 20-record real-time median improved from 28,719.126 ns to
+  28,161.499 ns (+0.736% versus the reverse pre-migration baseline).
+
+---
+
 ## Round 15 — width-sharded Conv activation migration (2026-08-03)
 
 - **Trigger:** the earlier v9 port's 25 numerical failures predated the Round-13 ACKed completion
