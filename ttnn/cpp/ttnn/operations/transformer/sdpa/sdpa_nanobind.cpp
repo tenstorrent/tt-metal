@@ -52,7 +52,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_balanced,
     bool is_cross,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<uint32_t> sliding_window_size) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -83,7 +85,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        attention_sink,
+        sliding_window_size);
     return outputs;
 }
 
@@ -107,7 +111,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     bool use_column_major_ccl,
     bool is_balanced,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    std::optional<uint32_t> kv_cache_num_layers,
+    std::optional<uint32_t> kv_cache_layer_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::transformer::ring_mla(
@@ -130,7 +138,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        slot_id,
+        kv_actual_isl_tensor,
+        kv_cache_num_layers,
+        kv_cache_layer_idx);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -245,8 +257,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<uint32_t> block_size,
-    std::optional<uint32_t> num_kv_heads) {
+    std::optional<PagedCacheGeometryOverride> paged_cache_geometry) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -258,8 +269,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             memory_config,
             program_config,
             compute_kernel_config,
-            block_size,
-            num_kv_heads);
+            paged_cache_geometry);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -276,13 +286,17 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         memory_config,
         program_config,
         compute_kernel_config,
-        block_size,
-        num_kv_heads);
+        paged_cache_geometry);
 }
 
 }  // namespace
 
 void bind_sdpa(nb::module_& mod) {
+    nb::enum_<ttnn::transformer::SparseKVFormat>(mod, "SparseKVFormat")
+        .value("BF16", ttnn::transformer::SparseKVFormat::BF16)
+        .value("FP8_E4M3", ttnn::transformer::SparseKVFormat::FP8_E4M3)
+        .value("SCALED_FP8", ttnn::transformer::SparseKVFormat::SCALED_FP8);
+
     const auto* const doc =
         R"doc(
         Causal scaled dot product attention. This API mimics the PyTorch API of the same name.
@@ -340,17 +354,21 @@ void bind_sdpa(nb::module_& mod) {
 
         Args:
             q (ttnn.Tensor):       [1, H, S, K_DIM] bf16 or fp8_e4m3 (H a multiple of 32)
-            kv (ttnn.Tensor):      [1, 1, T, K_DIM] bf16 or fp8_e4m3 (fp8 halves the K-gather bytes; tilized to bfp8_b in-op).
-                                   When cache_batch_idx is set, [B, 1, T, K_DIM] and may be ND-sharded across DRAM banks.
+            kv (ttnn.Tensor):      [1, 1, T, K_DIM] bf16/raw fp8, or one packed scaled-FP8 row per token;
+                                   interpretation is selected only by `kv_format`, never inferred from width.
+                                   The packed DSA row is [512 FP8 | 4 FP32 scales | 64 BF16 RoPE] = 656 bytes.
+                                   When cache_batch_idx is set, B may exceed 1 and kv may be ND-sharded.
             indices (ttnn.Tensor): [1, 1, S, TOPK] uint32
             v_dim (int):           width of V (leading v_dim cols of the K_DIM-wide cache); the output width.
 
         Keyword args:
+            kv_format (SparseKVFormat): explicit physical/logical format of `kv`.
             scale (float, optional): defaults to K_DIM**-0.5.
             k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
             cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
-                It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+                It is a dynamic runtime arg, so changing the slot does not recompile. Changing T also reuses the
+                program for a plain interleaved cache, but recompiles for sharded or block-cyclic caches.
             block_cyclic_sp_axis (int, optional): when set (with block_cyclic_chunk_local), `indices` are NATURAL
                 token positions and kv is stored block-cyclic across an SP-sharded cache; the kernel remaps each
                 index natural->physical page on the fly (no host reorder needed). This is the MESH axis the cache
@@ -359,7 +377,6 @@ void bind_sdpa(nb::module_& mod) {
             block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
                 Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
-
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -369,6 +386,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("indices").noconvert(),
         nb::arg("v_dim"),
         nb::kw_only(),
+        nb::arg("kv_format"),
         nb::arg("scale") = nb::none(),
         nb::arg("k_chunk_size") = 128,
         nb::arg("compute_kernel_config") = nb::none(),
@@ -472,13 +490,11 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            block_size (int, optional): Part of PagedCacheGeometryOverride (with
-                `num_kv_heads`). Geometry override for an HMA-shared paged cache. When the
-                K/V cache was allocated for a different layer's view, pass this call's view
-                block_size (tokens/block); Q drives head_dim and the per-block element count must
-                be invariant. Defaults to the cache's declared block_size.
-            num_kv_heads (int, optional): Companion to `block_size` in PagedCacheGeometryOverride;
-                this call's view num_kv_heads. Defaults to the cache's declared num_kv_heads.
+            paged_cache_geometry (PagedCacheGeometryOverride, optional): Geometry override for
+                an HMA-shared paged cache. When the K/V cache was allocated for a different
+                layer's view, pass this call's view with both `block_size` and `num_kv_heads`
+                set; Q drives head_dim and the per-block element count must be invariant.
+                Defaults to the cache's declared shape.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -500,8 +516,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("block_size").noconvert() = nb::none(),
-        nb::arg("num_kv_heads").noconvert() = nb::none());
+        nb::arg("paged_cache_geometry").noconvert() = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
@@ -600,6 +615,15 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            attention_sink (ttnn.Tensor, optional): Per-query-head attention sink with logical shape
+                [1 x nqh x 1 x 1], sharded across the tensor-parallel head axis and replicated across
+                the sequence-parallel ring. The ring-attention sink path requires BF16, streaming
+                compute, causal separate-K/V attention, and supports both full-causal and
+                sliding-window attention. Defaults to None.
+            sliding_window_size (int, optional): Causal attention window in tokens. The ring reader and
+                compute kernels prune K chunks outside the window. Ring attention currently supports the
+                GPT-OSS specialization: a 128-token window, local 8Q:1K:1V heads with D64, BF16 Q,
+                BFP8_B K/V, SP4 production or SP8 test topology, and chunked prefill without joint tokens.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -650,7 +674,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("is_cross").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
@@ -715,7 +741,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("slot_id").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
+        nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

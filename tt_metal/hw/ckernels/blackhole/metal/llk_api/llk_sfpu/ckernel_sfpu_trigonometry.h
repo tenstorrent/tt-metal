@@ -208,7 +208,8 @@ inline void calculate_sine() {
 
         // Compute j = round(v / PI).
         // First, j = v * (1 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest.
-        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat j =
+            __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // At this point, the mantissa bits of j contain the integer.
         // Store for later; the LSB determines the sign of the result.
@@ -284,11 +285,11 @@ inline void calculate_cosine() {
 
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
         // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
-        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // sfpi::vFloat rounding_bias;
         // rounding_bias = sfpi::sFloat16b(0x1.8p23f);
-        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
+        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         j = j + ROUNDING_BIAS;
 
@@ -299,7 +300,7 @@ inline void calculate_cosine() {
         j = j + NEG_ROUNDING_BIAS;
 
         sfpi::vFloat two = sfpi::sFloat16b(2.0f);
-        j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one.get(), SFPMAD_MOD1_OFFSET_NONE);
+        j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.

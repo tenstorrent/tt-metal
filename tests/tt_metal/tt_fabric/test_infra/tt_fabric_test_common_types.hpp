@@ -86,7 +86,7 @@ struct ParsedSenderConfig {
 // Resolved structures (after resolution) - use FabricNodeId
 struct DestinationConfig {
     std::optional<FabricNodeId> device;
-    std::optional<CoreCoord> core;
+    std::optional<tt::tt_metal::CoreCoord> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
@@ -116,7 +116,7 @@ struct TrafficPatternConfig {
 
 struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
-    std::optional<CoreCoord> core;
+    std::optional<tt::tt_metal::CoreCoord> core;
     std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<TrafficPatternConfig> patterns;
     uint32_t link_id = 0;          // Link ID for multi-link tests

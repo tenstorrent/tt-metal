@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -60,6 +61,13 @@ constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
 // bf8_b path's L1). The CT-arg index is passed either way; the CB just isn't
 // created (and never touched by the kernels) when x is already TILE.
 constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
+// Optional per-expert projection biases (gpt-oss, FUSE_BIAS). Each holds this
+// core's N-column slice of the (1, N) bias, read once by the reader and added
+// by the compute kernel (gate/up before the activation, down after the down
+// matmul). Allocated only when op.fuse_bias.
+constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
+constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
+constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -95,29 +103,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // silu and multiply).
     constexpr uint32_t kMaxGridX = 11;
     constexpr uint32_t MAX_GRID_Y = 8;
-    // Short-sequence regime: for small allocated M the 2D layout is stall-bound
-    // (FPU idle), dominated by the gate/up weight DRAM read and by per_core_M.
-    // Both shrink with the grid (pure host config): more N-columns parallelise
-    // the read, and maximising GRID_Y drives per_core_M down to 1-2 for the cost
-    // of a cheap weight multicast. So: GRID_X tuned below, GRID_Y =
-    // min(8, M_tiles_full), single chunk; GRID_Y == 1 drops the multicast.
+    // Full 2D grid, always. The short-sequence special case was removed: real
+    // dispatch buffers are always in the long-sequence range, and the runtime
+    // kernel picker (adaptive_chunk.hpp) already shrinks per_core_M for small
+    // token counts, so no host-side small-M grid tuning is needed.
     //
-    // Branches purely on ALLOCATED M (x.padded_shape); the runtime token count
-    // still bounds the chunk loop device-side. Production keeps M_tiles_full
-    // large, so it stays on the unchanged 2D path.
-    constexpr uint32_t kShortSeqMaxMTiles = 32;  // <= 1024 tokens
+    // chunk_M_tiles here is the CB-sized MAXIMUM chunk (op.chunk_M_tiles, default
+    // 64 => per_core_M_max 8). All three kernels pick the ACTUAL chunk_M /
+    // per_core_M / num_chunks at runtime from the device token count, never
+    // exceeding this max; the CBs below are sized to the max so a smaller pick
+    // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = kMaxGridX;
     uint32_t GRID_Y = MAX_GRID_Y;
     uint32_t chunk_M_tiles = op.chunk_M_tiles;
     uint32_t in0_block_w_gu = 16;
-    const bool short_seq = M_tiles_full <= kShortSeqMaxMTiles;
-    if (short_seq) {
-        // Maximise rows to minimise per_core_M (1 for M <= 8, 2 for M <= 16, ...).
-        GRID_Y = std::min(MAX_GRID_Y, M_tiles_full);
-        GRID_Y = std::max<uint32_t>(GRID_Y, 1);
-        const uint32_t per_core_M_short = (M_tiles_full + GRID_Y - 1) / GRID_Y;
-        chunk_M_tiles = per_core_M_short * GRID_Y;  // single chunk (>= M_tiles_full)
-    }
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
         grid_size.x >= kMaxGridX && grid_size.y >= MAX_GRID_Y,
@@ -126,97 +125,41 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         MAX_GRID_Y,
         grid_size.x,
         grid_size.y);
-    // per_core_M upper bound (requested). `chunk_M_tiles` here is either
-    // op.chunk_M_tiles (general 2D path) or the short_seq single-chunk value;
-    // the adaptive L1-budget guard below may shrink per_core_M / in0_block_w_gu
-    // (and hence chunk_M_tiles) to fit the device's per-core L1.
+    // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
+    // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
+    // fit the device's per-core L1 on large models.
     const uint32_t per_core_M_max = chunk_M_tiles / GRID_Y;
     TT_FATAL(
         per_core_M_max * GRID_Y == chunk_M_tiles && per_core_M_max >= 1,
         "chunk_M_tiles ({}) must be a positive multiple of GRID_Y ({})",
         chunk_M_tiles,
         GRID_Y);
-    // Effective per_core_M. The general path may reduce it below per_core_M_max
-    // to fit L1 (short_seq keeps its picker's value). Also read by the short_seq
-    // GRID_X search below (est_l1_bytes).
+    // Effective (CB-sized) per_core_M. The L1 guard below may reduce it to fit L1.
     uint32_t per_core_M = per_core_M_max;
-    // M_tiles_full is NOT required to divide chunk_M_tiles. The kernel runs
-    // ceil(M_tiles_full / chunk_M_tiles) chunks; the reader zero-fills L1
+    // M_tiles_full is NOT required to divide chunk_M_tiles. The kernels run
+    // ceil(count_tiles / chunk_M_tiles_runtime) chunks; the reader zero-fills L1
     // rows past min(count_tiles, M_tiles_full) in the last chunk; the writer
     // skips OOB writes for output rows >= M_tiles_full. Avoids the host-side
     // pad/slice round-trip in the composite for non-aligned M.
 
-    // Per-core L1 footprint estimator, mirroring the CreateCircularBuffer sizes
-    // below. Bounds the short-seq GRID_X search to the known-good 2D footprint
-    // so we never risk an L1 OOM.
-    const uint32_t x_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype()));
-    // Matmul input CB (cb_in0_x). On the row-major path the compute kernel
-    // tilizes bf16 x into it and packs bf8_b — keeping x bf8 through the matmul
-    // (as the TILE path does) instead of bf16, which halves this CB and frees L1
-    // for a larger per_core_M. cb_x_rm stays bf16 (the mcast/tilize source).
-    const uint32_t in0_x_ts = op.x_is_row_major ? tt::tile_size(tt::DataFormat::Bfp8_b) : x_ts;
-    const uint32_t w_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_proj.dtype()));
-    const uint32_t p_ts = tt::tile_size(tt::DataFormat::Float16_b);
-    const uint32_t im_ts = tt::tile_size(tt::DataFormat::Bfp8_b);
-    const uint32_t out_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype()));
-    auto est_l1_bytes = [&](uint32_t gx, uint32_t pcM, uint32_t ibw_gu) -> uint64_t {
-        const uint32_t pcN_gu = (N_gate_tiles_full + gx - 1) / gx;
-        const uint32_t pcN_d = (N_down_tiles_full + gx - 1) / gx;
-        const uint32_t ibw_d = pcN_gu;
-        uint64_t b = 0;
-        b += (op.x_is_row_major ? 1ull : 2ull) * pcM * ibw_gu * in0_x_ts;  // CB_IN0_X (single-buf on RM)
-        if (op.x_is_row_major) {
-            b += 2ull * pcM * ibw_gu * p_ts;  // CB_X_RM bf16 staging (row-major only)
-        }
-        b += 2ull * ibw_gu * pcN_gu * w_ts;  // CB_IN1_GATE
-        b += 2ull * ibw_gu * pcN_gu * w_ts;  // CB_IN1_UP
-        b += 2ull * ibw_d * pcN_d * w_ts;    // CB_IN1_DOWN
-        b += 1ull * pcM * pcN_gu * im_ts;    // CB_GATE_INT
-        b += 1ull * pcM * pcN_gu * im_ts;    // CB_ACTIVATED
-        b += 1ull * pcM * pcN_gu * p_ts;     // CB_PARTIALS_GU
-        b += 1ull * pcM * pcN_gu * p_ts;     // CB_PARTIALS_UP
-        b += 1ull * pcM * pcN_d * p_ts;      // CB_PARTIALS_D
-        b += 2ull * 8 * out_ts;              // CB_OUT (subblock <= 8 tiles, staged x2)
-        b += 2ull * pcM * ibw_d * im_ts;     // CB_IN0_DOWN_FULL
-        b += 8192;                           // counts + idx scratch
-        return b;
-    };
+    // Bias tile size (FUSE_BIAS): all three bias CBs share the gate-bias dtype
+    // (enforced in validation). Zero when unused so the L1 footprint estimate
+    // (cb_footprint_bytes below) is unchanged on the bias-free path.
+    const uint32_t bias_ts =
+        op.fuse_bias ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_bias->dtype())) : 0;
 
-    if (short_seq) {
-        // Reference footprint: the largest 2D config (GRID_X=11, per_core_M=8,
-        // in0_block_w_gu=16) is known to fit, so any smaller config fits too.
-        constexpr uint32_t kMax2dPerCoreM = 8;
-        const uint64_t budget = est_l1_bytes(kMaxGridX, kMax2dPerCoreM, 16);
-        // gate/up K-block widths to try (descending = fewest handshakes),
-        // restricted to divisors of K_gate_tiles.
-        const uint32_t ibw_candidates[] = {56, 32, 28, 16, 8, 4, 2, 1};
-        uint32_t best_gx = kMaxGridX;
-        uint32_t best_ibw = 16;
-        bool found = false;
-        // Candidate GRID_X: more N-columns parallelise the dominant weight read,
-        // so prefer gx=8, then 11, then 4. Restricted to values whose
-        // per_core_N_gu has a large (<=8) output-subblock divisor — gx 5/6/7
-        // give per_core_N_gu with only divisor 1, forcing 1-wide pack subblocks
-        // that erase the saving.
-        const uint32_t gx_candidates[] = {8, kMaxGridX, 4};
-        for (uint32_t gx : gx_candidates) {
-            if (found) {
-                break;
-            }
-            for (uint32_t ibw : ibw_candidates) {
-                if (ibw > K_gate_tiles || (K_gate_tiles % ibw) != 0) {
-                    continue;
-                }
-                if (est_l1_bytes(gx, per_core_M, ibw) <= budget) {
-                    best_gx = gx;
-                    best_ibw = ibw;
-                    found = true;
-                    break;  // largest fitting ibw for this gx
-                }
-            }
-        }
-        GRID_X = best_gx;
-        in0_block_w_gu = best_ibw;
+    // in0_block_w_gu (the gate/up K-loop block width) must divide K_gate_tiles.
+    // The short_seq picker above already restricts itself to divisors, but the
+    // general 2D path leaves the default 16 unchanged — valid only when emb is a
+    // multiple of 512 (=> K_gate_tiles a multiple of 16). Models with a different
+    // emb (e.g. GPT-OSS 120B: emb 2880 => K_gate_tiles 90) need the default
+    // snapped down to the largest divisor of K_gate_tiles that does not exceed
+    // it. No-op for short_seq and for every shipped 512-multiple emb; the L1
+    // guard below may narrow it further. Previously divisor-snapping only ran as
+    // a side effect of the L1-overflow guard, so non-512 emb slipped through on
+    // the TILE x layout — whose smaller footprint fits at 16 and skips the guard.
+    while (in0_block_w_gu > 1 && (K_gate_tiles % in0_block_w_gu) != 0) {
+        --in0_block_w_gu;
     }
 
     const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
@@ -308,9 +251,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     //      weight re-reads, the dominant DRAM cost;
     //   2. then the largest in0_block_w_gu (divisor of K_gate_tiles) that fits —
     //      wider gate/up K-blocks pipeline DRAM I/O better.
-    // Runs after the short_seq GRID_X/in0_block_w_gu picker, so it also caps
-    // short_seq configs at the real L1 ceiling. This mirrors the CB allocations
-    // in the "circular buffers" section below; keep the two in sync.
+    // The resulting per_core_M is the CB-sized MAX; the runtime picker never
+    // exceeds it. This mirrors the CB allocations in the "circular buffers"
+    // section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
         total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
@@ -328,6 +271,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;                  // cb_mm_partials_d
         total += static_cast<uint64_t>(d_out_subblock_h * d_out_subblock_w * 2) * out_tile_size;  // cb_out
         total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;               // cb_in0_down_full
+        // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
+        // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
+        total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
         return total;
     };
 
@@ -346,12 +292,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint64_t l1_budget = static_cast<uint64_t>(l1_device->l1_size_per_core()) - l1_reserved - L1_SCRATCH_MARGIN;
 
     // If the requested config — (per_core_M_max, in0_block_w_gu) from
-    // op.chunk_M_tiles and either the short_seq picker or the default 16 —
-    // overflows the real L1 budget, shrink to fit: reduce per_core_M first (the
-    // kernel just runs more chunks; keeping per_core_M large minimises full
-    // weight re-reads, the dominant DRAM cost), then narrow in0_block_w_gu to
-    // the largest divisor of K_gate_tiles that fits. No-op when the requested
-    // config already fits (all DSV3 / M2.7 dims and every short_seq config).
+    // op.chunk_M_tiles and the default in0_block_w_gu=16 — overflows the real L1
+    // budget, shrink to fit: reduce per_core_M first (fewer weight re-reads, the
+    // dominant DRAM cost), then narrow in0_block_w_gu to the largest divisor of
+    // K_gate_tiles that fits. No-op when the requested config already fits (all
+    // DSV3 / M2.7 dims).
     if (cb_footprint_bytes(per_core_M, in0_block_w_gu) > l1_budget) {
         // Candidate gate/up K-block widths: divisors of K_gate_tiles no wider
         // than the requested in0_block_w_gu, largest first.
@@ -394,16 +339,23 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         chunk_M_tiles = per_core_M * GRID_Y;
     }
 
-    // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); holds
-    // for every value the guard above picks and for the default 16 on all
-    // shipped models (emb a multiple of 512 => K_gate_tiles a multiple of 16).
+    // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
+    // divisor-snap after the short_seq picker and the L1 guard above both
+    // preserve this, so this is a defensive invariant check.
     TT_FATAL(
         K_gate_tiles % in0_block_w_gu == 0,
         "K_gate_tiles ({}) must be divisible by in0_block_w_gu ({})",
         K_gate_tiles,
         in0_block_w_gu);
 
-    const uint32_t num_chunks = (M_tiles_full + chunk_M_tiles - 1) / chunk_M_tiles;
+    // num_chunks is the compile-time UPPER BOUND on the runtime chunk count used
+    // only to clamp the kernels' loop defensively. The runtime picker may choose
+    // a chunk as small as min(16, chunk_M_tiles) (per_core_M 2), so the worst
+    // case is ceil(M_tiles_full / that min). Matches adaptive_chunk.hpp's
+    // kMinChunkMTiles = 16.
+    constexpr uint32_t kMinChunkMTiles = 16;
+    const uint32_t min_chunk = (chunk_M_tiles < kMinChunkMTiles) ? chunk_M_tiles : kMinChunkMTiles;
+    const uint32_t num_chunks = (M_tiles_full + min_chunk - 1) / min_chunk;
 
     // Phase-level numbers.
     const uint32_t gu_in0_num_subblocks = per_core_M / gu_out_subblock_h;
@@ -638,6 +590,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             .set_page_size(CB_START_SCRATCH_READER, start_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_reader_cb_cfg);
 
+    // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
+    // (read once, reused across all chunks). gate/up: per_core_N_gu tiles; down:
+    // per_core_N_d tiles. Bias broadcast across rows in the compute kernel.
+    const bool fuse_bias = op.fuse_bias;
+    if (fuse_bias) {
+        // Validation enforces gate/up/down biases share one dtype, so all three CBs
+        // (and the compute kernel's single unpack reconfig for gate/up) use it safely.
+        const tt::DataFormat bias_df = tt::tt_metal::datatype_to_dataformat_converter(t.gate_bias->dtype());
+        const uint32_t bias_tile_size = tt::tile_size(bias_df);
+        make_cb(CB_GATE_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);
+        make_cb(CB_UP_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);
+        make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/per_core_N_d, bias_tile_size);
+    }
+
     // -------------------------- kernel build ------------------------------
     // Reader compile-time args. Order must exactly match the layout the reader
     // kernel reads via get_compile_time_arg_val(idx) and the TensorAccessor
@@ -703,12 +669,26 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // (unread when read_x_at_offset is 0), keeping the CT-arg layout stable.
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
 
+    // FUSE_BIAS: after the `start` accessor, append the 3 bias CB ids then the 3
+    // bias tensor accessors (gate, up, down). The reader reads them at the
+    // offset after start_args.next_compile_time_args_offset(). Only present when
+    // fuse_bias — a distinct program (FUSE_BIAS define is in the cache key).
+    std::map<std::string, std::string> reader_defines{};
+    if (fuse_bias) {
+        reader_ct_args.push_back(CB_GATE_BIAS);
+        reader_ct_args.push_back(CB_UP_BIAS);
+        reader_ct_args.push_back(CB_DOWN_BIAS);
+        tt::tt_metal::TensorAccessorArgs(t.gate_bias->buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.up_bias->buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.down_bias->buffer()).append_to(reader_ct_args);
+        reader_defines["FUSE_BIAS"] = "1";
+    }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
         "unified_routed_expert_ffn_reader.cpp",
         core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args, reader_defines));
 
     // Writer compile-time args (must match writer's get_compile_time_arg_val order).
     std::vector<uint32_t> writer_ct_args = {
@@ -749,6 +729,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu,                       // 21
         K_gate_tiles,                         // 22
         static_cast<uint32_t>(up_mode == 2),  // 23 writer_split_up
+        // down_k_tail_skip: when the compute tail-skips the last down block's
+        // K padding, the down matmul never reduces the N-OOB hidden columns, so
+        // the writer's `up` read can skip zero-filling them. Must match the
+        // reader's identically-derived constexpr.
+        static_cast<uint32_t>((K_down_tiles_padded - K_down_tiles) < in0_block_w_d),  // 24 down_k_tail_skip
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start (direct-write), then up (UP_SPLIT).
@@ -810,6 +795,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // x_is_row_major — 1 => compute tilizes CB_X_RM -> CB_IN0_X before the
         // gate/up matmul. 0 => x already TILE in CB_IN0_X (no tilize).
         static_cast<uint32_t>(op.x_is_row_major),
+        // Real (unpadded) down-K tile count. Lets the compute skip the down
+        // matmul over the last K-block's tail padding tiles (zero-activated)
+        // instead of computing dead MACs.
+        K_down_tiles,
     };
     std::unordered_map<std::string, uint32_t> compute_named_args = {
         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
@@ -831,6 +820,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         {"cb_counts_scratch", CB_COUNTS_SCRATCH},
         {"cb_idx_scratch", CB_IDX_SCRATCH},
     };
+    if (fuse_bias) {
+        compute_named_args["cb_gate_bias"] = CB_GATE_BIAS;
+        compute_named_args["cb_up_bias"] = CB_UP_BIAS;
+        compute_named_args["cb_down_bias"] = CB_DOWN_BIAS;
+    }
 
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     std::map<std::string, std::string> compute_defines{};
@@ -844,6 +838,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
         // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
         compute_defines["SWIGLU_OAI"] = "1";
+    }
+    if (fuse_bias) {
+        // FUSE_BIAS: add gate/up bias (broadcast across rows) before the
+        // SwiGLU-OAI activation and down bias after the down matmul (gpt-oss).
+        compute_defines["FUSE_BIAS"] = "1";
     }
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -976,9 +975,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
-        // start_addr — last reader arg (see layout comment). Same buffer the
-        // writer gets; read by the reader only when read_x_at_offset.
+        // start_addr — reader arg at M_ROW_NOC_RT_OFFSET + 2*GRID_X (see layout
+        // comment). Same buffer the writer gets; read by the reader only when
+        // read_x_at_offset.
         reader_args.push_back(start_buffer->address());
+        // FUSE_BIAS: 3 bias addrs immediately after start_addr (read by the
+        // reader at start_offset + 1..3). Kept last so override can update them.
+        if (fuse_bias) {
+            reader_args.push_back(t.gate_bias->buffer()->address());
+            reader_args.push_back(t.up_bias->buffer()->address());
+            reader_args.push_back(t.down_bias->buffer()->address());
+        }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
         // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
@@ -1029,6 +1036,9 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const uint32_t out_addr = tensor_return_value.buffer()->address();
     const uint32_t start_addr =
         t.expert_region_offsets.has_value() ? t.expert_region_offsets->buffer()->address() : out_addr;
+    // FUSE_BIAS appends 3 bias addrs after start_addr, so start is no longer the
+    // last reader arg. Recover its index from the presence of the bias tensors.
+    const bool has_bias = t.gate_bias.has_value();
 
     for (const auto& core : cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_id, core);
@@ -1038,8 +1048,14 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[3] = down_addr;
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
-        // start_addr is the last reader arg (after the M-row NoC table).
-        reader_args[reader_args.size() - 1] = start_addr;
+        // start_addr sits before the (optional) 3 trailing bias addrs.
+        const size_t start_idx = reader_args.size() - 1 - (has_bias ? 3 : 0);
+        reader_args[start_idx] = start_addr;
+        if (has_bias) {
+            reader_args[reader_args.size() - 3] = t.gate_bias->buffer()->address();
+            reader_args[reader_args.size() - 2] = t.up_bias->buffer()->address();
+            reader_args[reader_args.size() - 1] = t.down_bias->buffer()->address();
+        }
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;

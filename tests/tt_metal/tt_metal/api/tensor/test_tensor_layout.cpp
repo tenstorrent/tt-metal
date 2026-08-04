@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -51,8 +52,8 @@ TEST_P(TensorLayoutComputeTests, TensorLayout_Generic) {
     TensorLayout layout(params.inputs.data_type, PageConfig(params.inputs.layout), DefaultMemoryConfig);
 
     EXPECT_EQ(layout.get_alignment(), params.expected.alignment);
-    EXPECT_EQ(layout.compute_physical_shape(params.inputs.shape), params.expected.physical_size);
-    EXPECT_EQ(layout.compute_strides(params.inputs.shape), params.expected.strides);
+    EXPECT_EQ(layout.impl().compute_physical_shape(params.inputs.shape), params.expected.physical_size);
+    EXPECT_EQ(layout.impl().compute_strides(params.inputs.shape), params.expected.strides);
 
     if (params.expected.tensor_creation_works) {
         ::test_utils::test_tensor_on_device(params.inputs.shape, layout);
@@ -282,8 +283,8 @@ TEST_P(TensorLayoutRowMajorPaddedShapeAlignmentTests, FromPaddedShape_ComputesFu
         DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), DefaultMemoryConfig, params.shape, params.padded_shape);
 
     EXPECT_EQ(layout.get_alignment(), params.expected_alignment);
-    EXPECT_EQ(layout.compute_physical_shape(params.shape), params.expected_physical_shape);
-    EXPECT_EQ(layout.compute_strides(params.shape), params.expected_strides);
+    EXPECT_EQ(layout.impl().compute_physical_shape(params.shape), params.expected_physical_shape);
+    EXPECT_EQ(layout.impl().compute_strides(params.shape), params.expected_strides);
     EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
 }
 
@@ -341,7 +342,7 @@ TEST_P(TensorLayoutTilePaddedAlignmentTests, Tensor_TilePaddedAlignmentRegressio
     // dimension cumulative alignment correctly carrying the original padded
     // dims, not the substituted tile dims. A too-small physical shape is the
     // direct signature of the bug.
-    EXPECT_EQ(layout.compute_physical_shape(params.shape), params.expected_physical_shape);
+    EXPECT_EQ(layout.impl().compute_physical_shape(params.shape), params.expected_physical_shape);
 
     // The physical volume must cover the legacy padded volume,
     // otherwise a host buffer packed for the legacy padded shape would not
@@ -493,7 +494,7 @@ TEST_P(ConsumedMemoryBytesPerBankTests, TestConsumedMemoryBytesPerBank) {
     }
 
     EXPECT_EQ(
-        params.tensor_layout.compute_consumed_memory_bytes_per_bank(params.shape, page_alignment, num_banks),
+        params.tensor_layout.impl().compute_consumed_memory_bytes_per_bank(params.shape, page_alignment, num_banks),
         params.expected_consumed_memory_bytes_per_bank);
 }
 

@@ -290,8 +290,8 @@ def test_no_short_zones(tmp_path):
     with_sources = sum(1 for r in snapshot if r["runtime_id"] != 0 and r["kernel_sources"])
     assert with_sources == valid, (
         f"{with_sources}/{valid} valid records resolved kernel_sources. Trace-replayed records resolve "
-        f"sources only if their runtime_id is tied to program_id during trace capture; ensure TieRuntimeIdToProgramId "
-        f"and RecordKernelSourceMap are called in create_trace_node (dispatch.cpp)."
+        f"sources only if their runtime_id is tied to program metadata during trace capture; ensure RecordProgramMetadata "
+        f"is called in create_trace_node (dispatch.cpp)."
     )
 
 

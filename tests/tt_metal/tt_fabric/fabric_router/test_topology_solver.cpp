@@ -3306,8 +3306,72 @@ TEST_F(TopologySolverTest, MappingConstraintsManyToMany) {
     EXPECT_TRUE(constraints.is_valid_mapping(2, 10));
     EXPECT_TRUE(constraints.is_valid_mapping(3, 12));
     EXPECT_FALSE(constraints.is_valid_mapping(1, 20));  // Not in global_nodes set
-    EXPECT_FALSE(
-        constraints.is_valid_mapping(4, 10));  // Not in target_nodes set (but constraint still applies if queried)
+    // Targets outside the group are not restricted by this constraint
+    EXPECT_TRUE(constraints.is_valid_mapping(4, 10));
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsManyToMany_PinningGroupSemantics) {
+    // Pinning-group semantics:
+    //  - {1,2,3,4} -> {a,b,c,d,e}: group members land on distinct globals from the set; leftovers stay free
+    //  - {1,2,3,4,5} -> {a,b,c,d}: rejected at add time (too many targets)
+    //  - {1} -> {a,b,c,d,e}: 1:many; other targets may still use any global (subject to injectivity)
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    for (TestTargetNode t = 1; t <= 6; ++t) {
+        target_adj[t] = {};
+    }
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    for (TestGlobalNode g = 10; g <= 15; ++g) {
+        global_adj[g] = {};
+    }
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    const std::set<TestGlobalNode> abcde = {10, 11, 12, 13, 14};
+    const std::set<TestGlobalNode> abcd = {10, 11, 12, 13};
+
+    // Case 1: four targets, five globals — succeeds; node 6 may use the leftover global
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        ASSERT_TRUE(constraints.add_required_constraint(std::set<TestTargetNode>{1, 2, 3, 4}, abcde));
+        auto result =
+            solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+        ASSERT_TRUE(result.success) << result.error_message;
+        for (TestTargetNode t = 1; t <= 4; ++t) {
+            TestGlobalNode g = result.target_to_global.at(t);
+            EXPECT_TRUE(abcde.count(g) == 1) << "group member " << t << " must land in the pool";
+        }
+        std::set<TestGlobalNode> used_by_group;
+        for (TestTargetNode t = 1; t <= 4; ++t) {
+            used_by_group.insert(result.target_to_global.at(t));
+        }
+        EXPECT_EQ(used_by_group.size(), 4u);
+        // Node 6 is outside the group and maps to some global (including any leftover from abcde)
+        EXPECT_TRUE(result.target_to_global.count(6) == 1);
+    }
+
+    // Case 2: five targets, four globals — rejected immediately
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        EXPECT_FALSE(constraints.add_required_constraint(std::set<TestTargetNode>{1, 2, 3, 4, 5}, abcd));
+    }
+
+    // Case 3: single target, five globals — 1:many; node 2 may share the pool
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        ASSERT_TRUE(constraints.add_required_constraint(std::set<TestTargetNode>{1}, abcde));
+        EXPECT_TRUE(constraints.is_valid_mapping(2, 10));
+        EXPECT_TRUE(constraints.is_valid_mapping(2, 14));
+        AdjacencyGraph<TestTargetNode>::AdjacencyMap two_target_adj{{1, {}}, {2, {}}};
+        AdjacencyGraph<TestTargetNode> two_target_graph(two_target_adj);
+        AdjacencyGraph<TestGlobalNode>::AdjacencyMap two_global_adj{{10, {}}, {11, {}}};
+        AdjacencyGraph<TestGlobalNode> two_global_graph(two_global_adj);
+        auto result =
+            solve_topology_mapping(two_target_graph, two_global_graph, constraints, ConnectionValidationMode::RELAXED);
+        ASSERT_TRUE(result.success) << result.error_message;
+        EXPECT_TRUE(abcde.count(result.target_to_global.at(1)) == 1);
+    }
 }
 
 // Same-group constraint: target groups map within global group boundaries (no splitting).

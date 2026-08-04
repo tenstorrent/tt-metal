@@ -6,6 +6,6 @@
 
 namespace ttnn {
 
-std::string to_string(const tt::tt_metal::Tensor& tensor);
+std::string to_string(const Tensor& tensor);
 
 }  // namespace ttnn

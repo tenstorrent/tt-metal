@@ -567,20 +567,22 @@ def mesh_device(request, silicon_arch_name, device_params):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
-        # This is a workaround to support skipping tests where configuring mesh devices whose size does not match the physical
-        # number of devices causes the runtime to crash. Theoretically the runtime should support mesh devices smaller than the
-        # number of physical devices, but that hasn't been the case when testing. TODO remove when such behavior is more widely supported.
+        available_num_devices = (
+            ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+            if ttnn.using_distributed_env()
+            else ttnn.get_num_devices()
+        )
         if (
             device_params.get("require_exact_physical_num_devices", False)
-            and num_devices_requested != ttnn.get_num_devices()
+            and num_devices_requested != available_num_devices
         ):
             pytest.skip(
-                f"Test requires exact match of requested num devices ({num_devices_requested}) to available physical num devices ({ttnn.get_num_devices()})."
+                f"Test requires exact match of requested num devices ({num_devices_requested}) to available physical num devices ({available_num_devices})."
             )
 
-        if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
+        if num_devices_requested > available_num_devices:
             pytest.skip(
-                f"Requested more devices ({num_devices_requested}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+                f"Requested more devices ({num_devices_requested}) than available ({available_num_devices}). Test not applicable for machine"
             )
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
@@ -749,7 +751,15 @@ def bh_2d_mesh_device_context(device_params):
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-    if ttnn.get_num_devices() == 8:
+
+    # TODO #50463: Revisit MGD path handling
+    if os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+        mesh_shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=mesh_shape,
+            **updated_device_params,
+        )
+    elif ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(4, 2),
             **updated_device_params,

@@ -32,7 +32,7 @@ namespace ttnn::experimental::prim {
 struct MinimalMatmulStridedReduceScatterAsync {
     using operation_attributes_t = MinimalMatmulStridedReduceScatterAsyncParams;
     using tensor_args_t = MinimalMatmulStridedReduceScatterAsyncInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<MinimalMatmulStridedReduceScatterAsyncProgramFactory>;

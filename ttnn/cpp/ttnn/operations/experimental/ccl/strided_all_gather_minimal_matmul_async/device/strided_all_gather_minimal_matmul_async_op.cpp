@@ -25,14 +25,14 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
 StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalMatmulAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather shape
-    ttnn::TensorSpec strided_all_gather_output_shape = StridedAllGatherAsync::compute_output_specs(
+    tt::tt_metal::TensorSpec strided_all_gather_output_shape = StridedAllGatherAsync::compute_output_specs(
         attributes.strided_all_gather_async_struct, StridedAllGatherAsyncInputs{tensor_args.input_tensor});
 
     // Matmul shape - now returns a vector, extract the single output (chunks=1 by default)
     auto minimal_matmul_output_specs_vec = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
     TT_FATAL(minimal_matmul_output_specs_vec.size() == 1, "Expected single matmul output spec");
-    ttnn::TensorSpec minimal_matmul_output_specs = minimal_matmul_output_specs_vec[0];
+    tt::tt_metal::TensorSpec minimal_matmul_output_specs = minimal_matmul_output_specs_vec[0];
 
     return {strided_all_gather_output_shape, minimal_matmul_output_specs};
 }

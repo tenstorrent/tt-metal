@@ -70,7 +70,7 @@ ttnn::Tensor pad_time_tile(const ttnn::Tensor& x, uint32_t BH, uint32_t D, uint3
 ttnn::Tensor make_const_cc(const std::vector<float>& data, uint32_t C, MeshDevice* dev) {
     ttnn::Shape shape({1, 1, C, C});
     TensorLayout layout(DataType::FLOAT32, PageConfig(Layout::TILE), ttnn::DRAM_MEMORY_CONFIG);
-    TensorSpec spec(shape, layout);
+    tt::tt_metal::TensorSpec spec(shape, layout);
     return ttnn::Tensor::from_vector(data, spec, dev);
 }
 
@@ -93,7 +93,7 @@ ttnn::Tensor make_quadrant_masks(MeshDevice* dev) {
     }
     ttnn::Shape shape({1, 1, 32, 96});
     TensorLayout layout(DataType::FLOAT32, PageConfig(Layout::TILE), ttnn::DRAM_MEMORY_CONFIG);
-    return ttnn::Tensor::from_vector(m, TensorSpec(shape, layout), dev);
+    return ttnn::Tensor::from_vector(m, tt::tt_metal::TensorSpec(shape, layout), dev);
 }
 
 // eye/tril/ones depend only on the chunk size, and the zero initial-state only on shape — none

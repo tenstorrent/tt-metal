@@ -348,6 +348,7 @@ void Hal::initialize_wh(
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Wormhole dispatch feature {}", static_cast<int>(feature));
         }
     };

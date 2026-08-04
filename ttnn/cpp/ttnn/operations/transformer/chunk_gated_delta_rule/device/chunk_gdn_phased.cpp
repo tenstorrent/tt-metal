@@ -63,7 +63,8 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
 ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t&) {
     const auto f32 = [&](const ttnn::Shape& s) {
-        return TensorSpec(s, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
+        return tt::tt_metal::TensorSpec(
+            s, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
     };
     const uint32_t BH = attrs.BH, NC = attrs.num_chunks, C = attrs.chunk_size, K = attrs.key_dim, V = attrs.val_dim;
     return {
@@ -179,7 +180,7 @@ ChunkGdnScanOperation::spec_return_value_t ChunkGdnScanOperation::compute_output
     const auto s_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     ttnn::Shape o_shape({attrs.BH, attrs.num_chunks, attrs.chunk_size, attrs.val_dim});
     ttnn::Shape s_shape({attrs.BH, attrs.key_dim, attrs.val_dim});
-    return {TensorSpec(o_shape, o_layout), TensorSpec(s_shape, s_layout)};
+    return {tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
 }
 
 ChunkGdnScanOperation::tensor_return_value_t ChunkGdnScanOperation::create_output_tensors(
