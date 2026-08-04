@@ -495,17 +495,20 @@ inline __attribute__((always_inline)) void sem_rendezvous(bool is_action_thread,
 // Which entry rendezvous a run type uses. Measured per run type, not chosen a priori: the two barriers
 // differ in medium — llk_profiler::sync_point polls an L1 barrier array and invalidates dcache, while
 // sem_rendezvous polls a hardware semaphore through pc_buf — so they release the threads with different
-// stagger, and the measured window inherits that phase. Over 3 tests / 580 variant-pairs, reproduced
-// twice cycle-for-cycle, variant-pairs breaching 1% per run type were:
-//   L1_CONGESTION 177 -> 78,  UNPACK_ISOLATE 100 -> 6,  MATH_ISOLATE 3 -> 0   (sync_point wins)
-//   PACK_ISOLATE   51 -> 89,  L1_TO_L1         0 -> 18                        (semaphore wins)
+// stagger, and the measured window inherits that phase. Measured on perf_unpack_tilize over all 772
+// variants, counting variants past 50 cycles:
+//   UNPACK_ISOLATE  49 -> 0    worst -2563 -> -14, mean -106 -> +4              (semaphore wins)
+//   L1_CONGESTION   sync_point kept: moving it to the semaphore keeps the worst magnitude and only flips
+//                   its sign (-1277 -> +1277) while the pack row goes 17 -> 23 variants and +349 ->
+//                   +1270. That row is a bistable L1 arbiter orbit, so changing the barrier re-phases
+//                   which variants latch the slow orbit instead of removing it.
 // Choosing per run type is legitimate because PERF_RUN_TYPE is compile-time: each run type is its own
 // ELF, so this selects the measured-best barrier for each rather than trading one row against another.
 // sync_point is also what the no-counter build itself calls (counters.h NC stub), so where it is chosen
 // the two builds reach ZONE_START through the identical barrier.
 constexpr bool entry_via_sync_point(PerfRunType rt)
 {
-    return rt == PerfRunType::L1_CONGESTION || rt == PerfRunType::UNPACK_ISOLATE || rt == PerfRunType::MATH_ISOLATE;
+    return rt == PerfRunType::L1_CONGESTION || rt == PerfRunType::MATH_ISOLATE;
 }
 
 // TRISC0 — the thread the no-counter path elects as its rendezvous actor (its MEASURE_PERF_COUNTERS
