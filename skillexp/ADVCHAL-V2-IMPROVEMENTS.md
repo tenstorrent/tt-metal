@@ -156,6 +156,19 @@ observation (differential).
 
 ## B. The stage — search
 
+### B0. Do not trust the advised grid at all — treat it as one sample ⭐
+
+Measured over the three cells where both are defined: a fixed heuristic *"pick the legal grid closest to 16
+cores"*, which never consults the advisor, captures **99.4 %** of the achievable win, while **the advisor's own
+recommended grid captures 82 %**. It wins the grid choice in 1 of 3 cells, by 0.19 pp. And the advisor's
+measured advice overall is a **49 % coin flip** (118 rows), with "use more cores" at 11 %.
+
+**Change.** State plainly in `SKILL.md` that the advised core count carries **no throughput information** —
+`LayoutScore` has no latency term and for norms the core-count term does not even depend on the candidate — so
+it is a *detection* signal, not a *selection* one. Then B1.
+
+→ [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md) §2–3.
+
 ### B1. Emit the legal grid ladder, and sweep both sides of the advice ⭐
 
 **Measured value: two of the three cells with a low-core reduction shipped the wrong rung** — north-mini
@@ -394,6 +407,27 @@ not explain the selection.** Either the recorded per-evaluation score is not wha
 applies an unrecorded criterion. Add the comparison actually used to the trace.
 
 - **Evidence:** [`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §5.
+
+## E0. Test the two starved classes the advisor declines to widen ⭐ largest untested hypothesis
+
+`rms_norm` is the only starved class the advisor wants widened, and widening it paid **6–13 %/layer every time
+it was measured**. Two more classes sit on ≤2 cores with comparable share, and the advisor says leave them:
+
+| op | sum µs | cells | max share of window | advisor advises | screened in v2? |
+|---|---|---|---|---|---|
+| `nlp_create_qkv_heads_decode` | 283 | 5 | **9.27 %** | **1 core** | **no** — recorded as agreement |
+| `concatenate_heads` | 154 | 1 | **7.79 %** | **DRAM** | **no** — recorded as DRAM-advice |
+
+Neither reaches the ranked worklist, because the reconciliation treats "advisor agrees" and "advisor says DRAM"
+as nothing to screen. v1's analysis independently flagged 1-core `concatenate_heads` as its single largest miss,
+and it is still unmeasured.
+
+**Action.** Add a knob for each and screen it exactly like the norm ladder: enumerate the legal grids, sweep
+both sides, absolute oracle at the model's own bar. Expected effort is one knob per model; expected payoff, if
+the class behaves like `rms_norm`, is the same order — several hundred µs/model per affected cell.
+
+**Note the ordering dependency:** this is only reachable if C1b (screen the cliff first) and C5 (`agreed_on`)
+land — otherwise these rows stay invisible for the same reason they were invisible in v2.
 
 ## E. Coverage (tt-mlir / tt-metal) — the biggest prize
 

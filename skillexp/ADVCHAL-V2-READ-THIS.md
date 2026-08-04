@@ -37,6 +37,7 @@ that shipped scores **0.98347** — the *incumbent* is the one that fails the mo
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
 | [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |
 | [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **10 stage settings changed one at a time** — what each would have found, with a scoreboard |
+| [`ADVCHAL-V2-ADVISOR-VALUE.md`](ADVCHAL-V2-ADVISOR-VALUE.md) | **was the advisor necessary?** — detection, grid choice, hit rate, and what 7.4 h bought |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -97,7 +98,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The thirteen findings that matter
+## 3. The fifteen findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -356,6 +357,52 @@ introducing an error that matters. *(Measured eagerly; the traced two-layer case
 has.)*
 
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E18
+
+### 3.14 Zooming out: for this win class, the advisor was not necessary
+
+Three independent tests of whether the advisor was needed for the wins it got credit for.
+
+**Detection.** A rule using only the shipped profile — *op on ≤2 cores, ≥2 % of the layer* — flags 7 cells and
+catches **all 4** win cells. Adding "and the advisor wants more cores" narrows it to 5 with the same recall. So
+the advisor buys *precision*, not recall.
+
+**Grid choice**, scored on the ladders I measured:
+
+| selector | summed layer improvement over 3 cells | share of achievable |
+|---|---|---|
+| best legal grid (hindsight) | −32.61 pp | 100 % |
+| **a fixed "closest to 16 cores" heuristic, no advisor** | **−32.42 pp** | **99.4 %** |
+| the advisor's own recommended grid | −26.64 pp | **82 %** |
+
+**Hit rate**, over all 118 per-op rows the corpus actually measured: **49 % — a coin flip.** By direction:
+fewer cores 51 %, to DRAM 56 %, **more cores 11 % (1 won, 8 lost)**.
+
+**And the reason that last number looks so bad is an accounting defect.** All 37 low-core `rms_norm` rows the
+advisor wanted widened are recorded as `below_threshold` (30), `not_measurable` (5) or `rejected` (2) —
+**`kept`: 0** — *including in the two cells that shipped exactly that change for −12.98 % and −10.23 %*. So the
+one direction the advisor gets reliably right (4 of 4 cells) is unrepresentable in its own accounting, and the
+hit rate is computed only over the boundary candidates where it is chance.
+
+**What it did contribute:** precision in detection, the *direction* on starved reductions (4/4, even when its
+number was second-best), and early naming of the legality walls. It is a **defect detector with a broken cost
+model** — which is what an objective with no latency term should be.
+
+→ [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md)
+
+### 3.15 Two more starved op classes, both of which the advisor says to leave alone
+
+`rms_norm` is the **only** starved class the advisor wants widened. The two next-largest:
+
+| op on ≤2 cores | sum µs | cells | max share of window | advisor says |
+|---|---|---|---|---|
+| `rms_norm` | 1,030 | 6 | 9.48 % | widen to 8/11/22/88 ✅ |
+| `nlp_create_qkv_heads_decode` | 283 | 5 | **9.27 %** | **keep it on 1 core** ❌ |
+| `concatenate_heads` | 154 | 1 | **7.79 %** | **move to DRAM** ❌ |
+
+Neither was screened in v2 — both are recorded as agreement or DRAM-advice, so neither reaches the worklist.
+Given that the starved-reduction class paid 6–13 %/layer *every time it was measured*, **these are the
+corpus's largest untested hypothesis.** v1's analysis independently flagged 1-core `concatenate_heads` as its
+single largest miss.
 
 ---
 
