@@ -742,29 +742,42 @@ not a rewritten or guessed variant:
   branch (the configured `max: 1`). Never dispatch a workflow you did not scan, and never
   dispatch against a branch you did not create this turn.
 
-**What this proves, and what it does not.** The dispatched run confirms **compilation/build
-success** for gate-type workflows (`pr-gate`, `merge-gate`, and anything else pulling in
-`build-artifact.yaml`) — which is exactly the evidence categories 1–2 and 4 (host compile, JIT /
-device-kernel, `-Wdeprecated-declarations`) need. It does **not** confirm that a runtime warning
-or log-spam pattern (categories 3/5/6) is actually gone: that requires reading the dispatched
-run's own logs for the pattern's absence, and **you cannot do that in this turn.** Exactly as
-with the PR itself — gh-aw performs the dispatch in the `safe_outputs` job *after* your agent
-turn ends — the run does not exist yet, so you have **no run ID, no outcome, and no logs** to
-cite. Do not claim or imply a fix is verified.
+**What this proves, and what it does not.** A dispatched run's **pass/fail conclusion alone is
+never sufficient proof — for any category.** A green run says the workflow succeeded; it says
+nothing about *your specific warning*. The proof is always the same act: once the run completes,
+**re-grep that run's own logs for the specific pattern** and confirm it is absent. What differs
+by category is only **where in that run's logs the evidence lives**:
+
+- **Categories 1–2 and 4** (host compile, JIT / device-kernel, `-Wdeprecated-declarations`) — in
+  the **build/compile step's** logs of whichever workflow you dispatched. Gate-type or not is
+  irrelevant: what matters is that the dispatched workflow exercises the compile path, which the
+  tracked workflows always do (they pull in `build-artifact.yaml` — see *Scan procedure* step 1).
+  So dispatching the **workflow whose logs sourced the fix** and then reading that run's own
+  compile logs is the **complete, direct** proof — a non-gate target like `t3000-demo-tests`,
+  which recompiles the very kernels that emitted the warning, is not weaker evidence than a gate.
+- **Categories 3, 5 and 6** (runtime warnings, log spam, over-verbose messages) — in the
+  **test-execution step's** logs of that same run.
+
+Either way, **you cannot do that grep in this turn.** Exactly as with the PR itself — gh-aw
+performs the dispatch in the `safe_outputs` job *after* your agent turn ends — the run does not
+exist yet, so you have **no run ID, no outcome, and no logs** to cite. Do not claim or imply a
+fix is verified.
 
 Therefore:
 
 - Record in memory what you know now: the branch name, the `workflow_name` you dispatched, and
   the run/job IDs whose logs motivated the fix. The **next** scheduled run resolves the outcome
   (`search_pull_requests`, then `pull_request_read` with `method: "get_check_runs"` — see *Scan
-  procedure* step 7) and can then re-grep the dispatched run's logs to confirm a category 3/5/6
-  pattern is genuinely absent.
+  procedure* step 7) and can then re-grep the dispatched run's own logs — the build/compile step
+  for categories 1–2/4, the test-execution step for categories 3/5/6 — to confirm the pattern is
+  genuinely absent.
 - In the PR's **Test Status** section, state plainly that a dispatch was **requested** for this
   branch — not that a run exists. The request is only handled after your turn, and the
   `safe_outputs` job can still reject or fail it (ref rejected by `allowed-refs`, workflow
   missing from the compile-time `workflows` allowlist, `max` exceeded) while leaving the PR in
   place, so say that too and ask the maintainer to verify a run actually exists on the branch
-  before relying on it — keeping the compile-vs-runtime distinction explicit.
+  before relying on it — and say explicitly that the run's **own logs** must then be checked for
+  this exact pattern, naming which step's logs to look in.
 - A dispatched run is **not** a substitute for maintainer review, and it does not make the PR
   ready for review. It stays a draft.
 
@@ -790,14 +803,18 @@ Therefore:
     cite. Say too that the request may have been **rejected or failed** by that job — the
     ref refused by `allowed-refs`, the workflow missing from the compile-time allowlist,
     `max` exceeded — leaving this PR with no run behind it, so a maintainer must verify a
-    run actually exists on the branch before relying on it. Keep the compile-vs-runtime
-    distinction explicit — a green run confirms **compilation** only, not that a
-    runtime/log-spam pattern (categories 3/5/6) is gone, which needs that run's own logs
-    re-grepped for the pattern's absence. Ask the maintainer to check that run's outcome.
+    run actually exists on the branch before relying on it. Then be explicit about what
+    makes it proof: **a green conclusion on its own confirms nothing about this warning —
+    that run's own logs must be re-grepped for the exact pattern once it completes.** Quote
+    the pattern to grep for and name **where** it lives in that run: the **build/compile
+    step's** logs for a compile / JIT / deprecated-declaration fix (categories 1–2/4), the
+    **test-execution step's** logs for a runtime or log-spam fix (categories 3/5/6). A
+    maintainer should come away knowing exactly what to look for and where, not just "check
+    whether it went green".
     If the workflow was **not** in the `dispatch-workflow` allowlist and no dispatch could
     be requested at all, say so here instead and note that the allowlist needs the entry.
     On later runs, update with whatever run link/state exists, keeping that same
-    distinction explicit.
+    what-to-grep-and-where explicit.
 - Match tt-metal's existing C++/Python style. **No new
   dependencies, no broad refactors, no behavior changes** — noise removal must be
   behavior-preserving (a demoted log still logs at lower severity; a removed unused variable
