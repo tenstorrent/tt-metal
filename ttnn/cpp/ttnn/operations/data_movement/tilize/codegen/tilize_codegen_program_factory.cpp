@@ -307,16 +307,32 @@ bool uses_block_path(
     return (split.cores_w * split.cores_h) > total_ht;
 }
 
-// ops/tilize/spec.py _choose_tilize_2d_ncol.
-// ncol need NOT divide Wt: a non-divisor split widens the first Wt % ncol blocks by one tile,
-// which costs one extra reader/compute kernel variant (build_2d_column groups cores by width, as
-// the block path already does for its cliff columns) and buys the column split for prime and
-// awkward Wt that would otherwise fall to the row path.
+// ops/tilize/spec.py _choose_tilize_2d_ncol, restricted to divisors of Wt.
+//
+// The reference widened this to any ncol <= min(valid_cores / total_Ht, Wt), accepting a width
+// cliff (the first Wt % ncol blocks one tile wider) to buy the column split for prime and awkward
+// Wt. build_2d_column below implements that cliff faithfully, but the width is a compile-time arg
+// to both the reader and the compute kernel, so a cliff doubles the program's kernel count from
+// three to six over the same ~60 cores. That trade is a device-time win and a wall-time loss: the
+// two non-divisor configurations measured on wormhole_b0 (Wt=7 split five ways, Wt=5 split three
+// ways) came in at device parity with the generic reference and ~2.1x / ~1.5x better than native
+// on device, while wall-clock regressed to 0.68 / 0.64 of native — the extra kernel group's
+// host-side program cost outweighs the device saving at these sizes. Every column configuration
+// that measured at or above parity in wall-clock has a uniform width (ncol | Wt, one kernel
+// group), so the port keeps the divisor restriction and lets a non-divisor Wt fall to the row
+// path, which is where it sat before the reference widened the choice.
 uint32_t choose_tilize_2d_ncol(uint32_t total_ht, uint32_t wt, uint32_t valid_cores) {
     if (total_ht >= valid_cores || wt < 2) {
         return 1;
     }
-    return std::max<uint32_t>(1, std::min(valid_cores / total_ht, wt));
+    const uint32_t max_ncol = std::min(valid_cores / total_ht, wt);
+    uint32_t best = 1;
+    for (uint32_t d = 2; d <= max_ncol; ++d) {
+        if (wt % d == 0) {
+            best = d;
+        }
+    }
+    return best;
 }
 
 // ops/tilize/spec.py uses_2d_column_path

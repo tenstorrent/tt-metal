@@ -90,25 +90,38 @@ bool supported_by_codegen(const TilizeCodegenParams& operation_attributes, const
 
 bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    // Both predicates below are conditions on WHICH builder create_descriptor selects and on the
+    // The general arms below are conditions on WHICH builder create_descriptor selects and on the
     // work that builder hands each core, so they key on the shared dispatch query rather than on
-    // shapes. Every demoted ledger entry satisfies one of them; every ledger entry left on codegen
-    // (measured faster) satisfies neither.
+    // shapes. Where measurement found no such condition, the ledger entry is an enumerated exact
+    // match, flagged UNGENERALIZED at its branch.
     const uint32_t total_ht = operation_attributes.NC * operation_attributes.Ht;
     // Same grid query the factory's path dispatch uses (64 cores on wormhole_b0).
     const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
     const uint32_t grid_cores = grid.x * grid.y;
     const auto dispatch = tilize_codegen_dispatch(input_tensor.device(), operation_attributes, input_tensor);
 
-    // One tile per core on the 2D column path. The column split is taken as wide as the grid
-    // allows (ncol == Wt here), so build_2d_column's `minimal_work` clamp fires: CB depth 1 and
-    // write_batch 1. That leaves the same serialized read -> tilize_block -> write native runs,
-    // minus native's own multi-tile block, so the only remaining difference is codegen's larger
-    // per-core setup (block-reader CT dispatch, TensorAccessor construction, one kernel group per
-    // column width) against a single tile of work. Columns two tiles wide and up keep a batched
-    // writer and stay on codegen.
+    // UNGENERALIZED. One-tile-per-core column splits were demoted wholesale by an earlier round on
+    // the theory that build_2d_column's `minimal_work` clamp (CB depth 1, write_batch 1) leaves
+    // nothing to overlap against codegen's heavier per-core setup. Measurement on the ported kernel
+    // refuted that as a general condition: thirteen one-tile-per-core column configurations cleared
+    // parity (native/ported 1.02-2.18 with generic/ported ~1.00), so the arm is gone. These three
+    // stayed below it, with no mechanism separating them from the thirteen that did not, so they are
+    // enumerated exact matches rather than a predicate. All three are Column-path,
+    // max_tiles_per_column_block == 1; the buffer_type term is load-bearing on the third, whose
+    // DRAM twin measured above parity.
     if (dispatch.path == TilizeCodegenPath::Column && dispatch.max_tiles_per_column_block == 1) {
-        return true;
+        const bool is_l1 = operation_attributes.input_mem_config.buffer_type() == BufferType::L1;
+        const uint32_t nc = operation_attributes.NC;
+        const uint32_t ht = operation_attributes.Ht;
+        const uint32_t wt = operation_attributes.Wt;
+        // [1, 32, 64] and [32, 64], uint16, DRAM — a single tile-row split two ways.
+        if (operation_attributes.input_dtype == DataType::UINT16 && !is_l1 && nc == 1 && ht == 1 && wt == 2) {
+            return true;
+        }
+        // [12, 32, 160], bfloat16, L1 — twelve tile-rows split five ways.
+        if (operation_attributes.input_dtype == DataType::BFLOAT16 && is_l1 && nc == 12 && ht == 1 && wt == 5) {
+            return true;
+        }
     }
 
     // A caller-forced single-core route (use_multicore=false / use_low_perf) has no parallelism for
@@ -125,12 +138,25 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     // core on every core to pay off: with total_Ht > grid_cores a core owns several tile-rows,
     // which forces write_batch back to 1 (writer_tilize_interleaved's batched branch mis-orders
     // rows), and with total_Ht < grid_cores the split leaves cores idle that the column split was
-    // unable to recruit (ncol == 1 means grid_cores / total_Ht < 2).
+    // unable to recruit (no divisor of Wt fits grid_cores / total_Ht).
     //
-    // Lower confidence than the column arm: only one measured row-path configuration
-    // (total_Ht == grid_cores) is above parity, so the exact position of this boundary rests on
-    // that single point rather than on a swept range.
+    // This is the only remaining general arm, and it carries the bulk of the demoted ledger
+    // (~65 entries). Its boundary position rests on a single measured row-path configuration above
+    // parity (total_Ht == grid_cores) rather than on a swept range, plus the two reversals below.
     if (dispatch.path == TilizeCodegenPath::Row && total_ht != grid_cores) {
+        // UNGENERALIZED reversals. Two row-path configurations measured above parity on the ported
+        // kernel (native/ported 1.09 and 1.04, generic/ported ~1.00) and are no longer demoted.
+        // Both sit within ~9% of parity and both have an L1 twin that measured below it, so the
+        // separating term is the input buffer type and nothing more general is claimed here.
+        const bool is_dram = operation_attributes.input_mem_config.buffer_type() == BufferType::DRAM;
+        const uint32_t nc = operation_attributes.NC;
+        const uint32_t ht = operation_attributes.Ht;
+        const uint32_t wt = operation_attributes.Wt;
+        if (operation_attributes.input_dtype == DataType::BFLOAT16 && is_dram && wt == 2 &&
+            // [5, 8, 64, 64] (total_Ht 80) and [6, 4, 96, 64] (total_Ht 72).
+            ((nc == 40 && ht == 2) || (nc == 24 && ht == 3))) {
+            return false;
+        }
         return true;
     }
 
