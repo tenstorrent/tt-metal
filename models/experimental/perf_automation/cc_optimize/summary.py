@@ -630,9 +630,12 @@ def _fidelity_breakdown(profile):
             f = str(o.get("fidelity") or "hifi4").lower()
             fl, ms = agg.get(f, (0, 0.0))
             agg[f] = (fl + int(o["flops"]), ms + float(o["compute_ms"]))
+        # ALWAYS all four modes, present or not. A mode with no ops still states its peak, so the
+        # reader sees the whole ladder the model could be sitting on rather than only where it
+        # happens to sit today -- and a zero row is the visible answer to "what would HiFi4 cost".
         order = ["lofi", "hifi2", "hifi3", "hifi4"]
-        keys = [f for f in order if f in agg] + [f for f in agg if f not in order]
-        rows = [(f, agg[f][0], (peaks.get(f) or 0.0) * cores, agg[f][1]) for f in keys]
+        keys = order + [f for f in agg if f not in order]
+        rows = [(f, agg.get(f, (0, 0.0))[0], (peaks.get(f) or 0.0) * cores, agg.get(f, (0, 0.0))[1]) for f in keys]
         return rows, sum(r[3] for r in rows)
     except Exception:  # noqa: BLE001
         return None, None
