@@ -16,10 +16,13 @@ import hashlib
 import os
 import re
 from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import torch
+import torchvision.transforms.functional as TF
 from diffusers.schedulers import UniPCMultistepScheduler
 from loguru import logger
 from PIL import Image
@@ -27,11 +30,12 @@ from safetensors.torch import load_file
 
 import ttnn
 from models.tt_dit.experimental.utils.lightx2v_loader import wan_lightx2v_to_diffusers_key
+from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 from models.tt_dit.solvers import UniPCSolver, UniPCVariant
 from models.tt_dit.utils import cache
-from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width
+from models.tt_dit.utils.conv3d import aligned_channels, conv_pad_height, conv_pad_in_channels, conv_pad_width
 from models.tt_dit.utils.tensor import bf16_tensor_2dshard, fast_device_to_host
 
 
@@ -302,6 +306,96 @@ _ENCODER_T_CHUNK_BY_MESH = {
     (4, 32): None,
 }
 
+# Truncated VAE encode: encode only the first 33 pixel frames (-> 9 latent frames) and
+# replicate the last latent to fill the remaining slots. Every frame past the conditioned
+# one is zero and the encoder is causal in T, so the dropped latents repeat the last
+# computed one.
+_I2V_ENCODE_FRAMES = 33
+
+# Selects prepare_latents_ (truncated encode, device-side channel pad, swept blockings)
+# over prepare_latents. Off until the truncation is validated against the full encode.
+_TRUNCATED_ENCODE_ENV = "WAN22_I2V_TRUNCATED_ENCODE"
+
+# Breaks the prepare_latents sections down per phase. Diagnostic only: it syncs at every
+# phase boundary, which serializes host work that normally overlaps device work, so the
+# reported total runs higher than an uninstrumented run.
+_ENCODE_TIMERS_ENV = "WAN22_I2V_ENCODE_TIMERS"
+
+# Frame count each conv3d sees, per mesh, used only to pick blockings at construction.
+# 4x8 runs chunked at 16 so every conv3d call sees 16 frames; 4x32 runs the 33 frames in one
+# full-T pass. Both hit the "720p image encoder" entries in conv3d._BLOCKINGS; a mesh absent
+# here gets the fallback table. Only valid while _I2V_ENCODE_FRAMES truncation is on.
+_ENCODER_BUILD_T_BY_MESH = {
+    (4, 8): 16,
+    (4, 32): _I2V_ENCODE_FRAMES,
+}
+
+
+def _truncated_encode_frames(max_cond_pos: int, num_frames: int) -> int:
+    """Pixel frames to encode: the truncation point, extended to cover the last conditioned frame.
+
+    Rounded up to the next 4n+1 that temporal downsampling expects, so the latent count is
+    exact and the encoder keeps seeing the shapes its blockings were picked for.
+    """
+    frames = max(_I2V_ENCODE_FRAMES, max_cond_pos + 1)
+    frames = ((frames - 2) // 4 + 1) * 4 + 1
+    return min(frames, num_frames)
+
+
+def _load_pil_image(src) -> Image.Image:
+    """Load a conditioning image from a PIL image, a local path, or an http(s) URL.
+
+    Always converted to RGB: the encode path assumes 3 channels, and a greyscale or
+    RGBA input would otherwise reach the channel pad with the wrong count.
+    """
+    if src is None:
+        raise ValueError("No image provided")
+    if isinstance(src, Image.Image):
+        return src.convert("RGB")
+    if not isinstance(src, (str, Path)):
+        raise TypeError(f"Unsupported image input {type(src).__name__}; expected PIL.Image, str, or Path")
+    src = str(src)
+    try:
+        if urlparse(src).scheme in ("http", "https"):
+            import io
+
+            import requests
+
+            resp = requests.get(src, timeout=30)
+            resp.raise_for_status()
+            return Image.open(io.BytesIO(resp.content)).convert("RGB")
+        return Image.open(src).convert("RGB")
+    except Exception as e:
+        raise ValueError(f"Failed to load image from {src!r}: {e}") from e
+
+
+def _parse_image_prompts(image_prompt, num_frames: int) -> list[ImagePrompt]:
+    """Resolve conditioning inputs to loaded RGB images at non-negative frame positions.
+
+    Negative positions index from the end, so -1 is the last frame. Both prepare_latents
+    variants test ``i in cond_by_pos`` while walking forward from frame 0, so an
+    unresolved negative position would silently drop the conditioning frame instead of
+    failing, and would also skew the truncated encode's frame count.
+    """
+    if isinstance(image_prompt, ImagePrompt):
+        image_prompt = [image_prompt]
+    elif isinstance(image_prompt, (Image.Image, str, Path)):
+        image_prompt = [ImagePrompt(image=image_prompt, frame_pos=0)]
+    if not image_prompt:
+        raise ValueError("I2V requires at least one conditioning image")
+
+    resolved: list[ImagePrompt] = []
+    seen: set[int] = set()
+    for image, frame_pos in image_prompt:
+        pos = frame_pos if frame_pos >= 0 else num_frames + frame_pos
+        if not 0 <= pos < num_frames:
+            raise ValueError(f"frame_pos {frame_pos} resolves to {pos}, outside [0, {num_frames})")
+        if pos in seen:
+            raise ValueError(f"Duplicate frame_pos {pos}")
+        seen.add(pos)
+        resolved.append(ImagePrompt(image=_load_pil_image(image), frame_pos=pos))
+    return resolved
+
 
 def _resolve_checkpoint(repo_id: str) -> str:
     """Prefer a local checkpoint directory over a hub repo id.
@@ -335,6 +429,49 @@ class WanPipelineI2VLora(WanPipelineI2V):
 
     BASE_DIFFUSERS_REPO = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
 
+    # Routes prepare_latents to prepare_latents_ (truncated encode, device-side channel pad,
+    # resolution-aware blockings). The encoder's blockings key off the same flag so the two
+    # stay consistent. Subclasses and tests can set the attribute directly.
+    USE_TRUNCATED_ENCODE: bool = os.environ.get(_TRUNCATED_ENCODE_ENV, "0").lower() in ("1", "true")
+
+    # Emits the per-phase prepare_latents sections. See _ENCODE_TIMERS_ENV for the caveat.
+    ENCODE_TIMERS: bool = os.environ.get(_ENCODE_TIMERS_ENV, "0").lower() in ("1", "true")
+
+    # Set for the duration of __call__ so prepare_latents can report its VAE encode.
+    _on_event: PipelineEventCallback = null_callback
+
+    # Phases reported under prepare_latents when ENCODE_TIMERS is on, in execution order.
+    # The test's summary table reads these names; vae_encode is always emitted.
+    ENCODE_PHASES = (
+        "pl_noise",
+        "pl_preprocess",
+        "pl_upload",
+        "pl_assemble",
+        "vae_encode",
+        "pl_readback",
+        "pl_post",
+    )
+
+    @contextmanager
+    def _encode_phase(self, name: str):
+        """Time one prepare_latents phase into the pipeline's profiler.
+
+        Device work is enqueued asynchronously, so without a sync a phase boundary marks
+        where the host stopped issuing, not where the device finished, and the encode
+        would absorb the upload and assembly time. Syncing makes the split honest at the
+        cost of the overlap it otherwise hides, so this stays behind ENCODE_TIMERS and
+        the default path emits no extra sections and adds no syncs.
+        """
+        if not self.ENCODE_TIMERS:
+            yield
+            return
+        self._on_event(SectionStart(name))
+        try:
+            yield
+        finally:
+            ttnn.synchronize_device(self.mesh_device)
+            self._on_event(SectionEnd(name))
+
     def __init__(
         self,
         *,
@@ -343,6 +480,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
         lora_high: LoRAArg = None,
         lora_low: LoRAArg = None,
         flow_shift: float | None = None,
+        run_warmup: bool = True,
     ) -> None:
         high_specs = _normalize_lora_arg(lora_high)
         low_specs = _normalize_lora_arg(lora_low)
@@ -363,7 +501,9 @@ class WanPipelineI2VLora(WanPipelineI2V):
         # Cleared after TT cache handoff (see _prepare_transformer) to free CPU memory.
         self._fused_state_dicts: dict[int, dict[str, torch.Tensor] | None] = {0: None, 1: None}
 
-        super().__init__(device=device, config=config)
+        # Warmup deferred: it runs a real __call__, and should see the schedule set below
+        # rather than the base one it would otherwise compile against.
+        super().__init__(device=device, config=config, run_warmup=False)
 
         # Distilled few-step LoRAs need a different flow shift than the base schedule,
         # which WanPipelineConfig pins at 12.0. Rebuilt here instead of plumbing it through
@@ -379,6 +519,39 @@ class WanPipelineI2VLora(WanPipelineI2V):
                 variant=UniPCVariant(self._scheduler.config.solver_type),
             )
             logger.info(f"WanPipelineI2VLora: scheduler flow_shift overridden to {flow_shift}")
+
+        if run_warmup:
+            self._warmup()
+
+    def _preprocess_frame(self, image: Image.Image, height: int, width: int, device) -> torch.Tensor:
+        """Conditioning image to a (B,C,H,W) float32 tensor, nominally in [-1,1]."""
+        img = TF.to_tensor(image).sub_(0.5).div_(0.5)
+        img = torch.nn.functional.interpolate(img[None], size=(height, width), mode="bicubic", antialias=True)
+        return img.to(device) if device is not None else img
+
+    def _vae_encoder_build_dims(self) -> tuple[int, int, int | None]:
+        chunk = _ENCODER_BUILD_T_BY_MESH.get(tuple(self.mesh_device.shape)) if self.USE_TRUNCATED_ENCODE else None
+        if chunk is None:
+            logger.info(
+                f"Image encoder: fallback conv3d blockings "
+                f"(truncated encode {'on' if self.USE_TRUNCATED_ENCODE else f'off, set {_TRUNCATED_ENCODE_ENV}=1'})"
+            )
+            return super()._vae_encoder_build_dims()
+        logger.info(
+            f"Image encoder: truncated encode on, blockings for "
+            f"{self._width}x{self._height} T={chunk} ({_I2V_ENCODE_FRAMES}-frame encode)"
+        )
+        return self._height, self._width, chunk
+
+    def __call__(self, *args, on_event: PipelineEventCallback | None = None, **kwargs):
+        # The base __call__ times prepare_latents as a whole but does not forward the
+        # callback into it, so stash it here to let prepare_latents break out its
+        # VAE encode. Same pattern WanPipelineSVI uses for its per-clip state.
+        self._on_event = on_event if on_event is not None else null_callback
+        try:
+            return super().__call__(*args, on_event=on_event, **kwargs)
+        finally:
+            self._on_event = null_callback
 
     def prepare_latents(
         self,
@@ -398,12 +571,21 @@ class WanPipelineI2VLora(WanPipelineI2V):
         conditioned one is zero. Here the real frames are padded and uploaded individually
         and the zero runs are built on device, then encoded in one pass.
         """
+        if self.USE_TRUNCATED_ENCODE:
+            return self.prepare_latents_(
+                batch_size=batch_size,
+                image_prompt=image_prompt,
+                num_channels_latents=num_channels_latents,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                dtype=dtype,
+                device=device,
+            )
+
         assert batch_size == 1, "Only batch size 1 is currently supported for I2V"
 
-        if isinstance(image_prompt, ImagePrompt):
-            image_prompt = [image_prompt]
-        elif isinstance(image_prompt, Image.Image):
-            image_prompt = [ImagePrompt(image=image_prompt, frame_pos=0)]
+        image_prompt = _parse_image_prompts(image_prompt, num_frames)
 
         # Skip WanPipelineI2V.prepare_latents (the path being replaced) and take the
         # plain noise-latent allocation from the grandparent.
@@ -423,11 +605,8 @@ class WanPipelineI2VLora(WanPipelineI2V):
         # ---- host: preprocess + pad ONLY the conditioned frames --------------
         cond_by_pos: dict[int, ttnn.Tensor] = {}
         logical_h = None
-        seen: set[int] = set()
         for image, frame_pos in image_prompt:
-            assert frame_pos not in seen, f"Frame position {frame_pos} already processed."
-            seen.add(frame_pos)
-            img = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
+            img = self._preprocess_frame(image, height, width, device)
             # (B,C,H,W) -> (B,T=1,H,W,C)
             frame_BTHWC = img.unsqueeze(2).permute(0, 2, 3, 4, 1)
             frame_BTHWC = conv_pad_in_channels(frame_BTHWC)
@@ -479,9 +658,14 @@ class WanPipelineI2VLora(WanPipelineI2V):
 
         chunk = _ENCODER_T_CHUNK_BY_MESH.get(tuple(self.mesh_device.shape))
 
+        self._on_event(SectionStart("vae_encode"))
         encoded_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
             tt_video_BTHWC, logical_h, logical_w=logical_w, encoder_t_chunk_size=chunk
         )
+        # The encoder call only enqueues work; sync so the section covers the actual
+        # device time rather than leaking it into the readback below.
+        ttnn.synchronize_device(self.mesh_device)
+        self._on_event(SectionEnd("vae_encode"))
 
         # tt_video_BTHWC may alias a conditioned frame or the zero tensor when there is
         # only one segment, so guard against a double free.
@@ -491,7 +675,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
         for tt in owned:
             ttnn.deallocate(tt)
 
-        # ---- host: replicate + normalize + mask ------------------------------
+        # ---- host: replicate + mask ------------------------------------------
         concat_dims = [None, None]
         concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
         concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
@@ -505,16 +689,6 @@ class WanPipelineI2VLora(WanPipelineI2V):
         if encoded.shape[2] != f_lat_full:
             encoded = encoded[:, :, :f_lat_full, :, :]
 
-        latents_mean = (
-            torch.tensor(self._vae.config.latents_mean)
-            .view(1, self._vae.config.z_dim, 1, 1, 1)
-            .to(encoded.device, encoded.dtype)
-        )
-        latents_std = 1.0 / torch.tensor(self._vae.config.latents_std).view(1, self._vae.config.z_dim, 1, 1, 1).to(
-            encoded.device, encoded.dtype
-        )
-        encoded = (encoded - latents_mean) * latents_std
-
         msk = torch.zeros(batch_size, num_frames, h_lat, w_lat)
         for pos in cond_by_pos:
             msk[:, pos, :, :] = 1
@@ -523,6 +697,198 @@ class WanPipelineI2VLora(WanPipelineI2V):
         msk = msk.transpose(1, 2)
 
         y = torch.cat([msk, encoded], dim=1)
+        return latents, y
+
+    def prepare_latents_(
+        self,
+        batch_size: int,
+        image_prompt,
+        num_channels_latents: int = 16,
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = 81,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
+    ):
+        """prepare_latents with the three Prodia encode optimizations.
+
+        On top of the upload-only-conditioned-frames scheme of ``prepare_latents``:
+        the encode is truncated to ``_I2V_ENCODE_FRAMES`` and the tail latents are
+        replicated on the host; channel padding moves to the device so each frame crosses
+        PCIe with 3 channels instead of 32; and the encoder was built with real dims
+        (see ``_vae_encoder_build_dims``) so its conv3d blockings come from the swept table.
+        """
+        assert batch_size == 1, "Only batch size 1 is currently supported for I2V"
+
+        image_prompt = _parse_image_prompts(image_prompt, num_frames)
+
+        with self._encode_phase("pl_noise"):
+            # Skip WanPipelineI2V.prepare_latents (the path being replaced) and take the
+            # plain noise-latent allocation from the grandparent.
+            latents, _ = WanPipeline.prepare_latents(
+                self,
+                batch_size=batch_size,
+                num_channels_latents=num_channels_latents,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                dtype=dtype,
+                device=device,
+            )
+        latent_shape = latents.shape
+        h_lat, w_lat = latent_shape[-2], latent_shape[-1]
+
+        in_channels = 3
+        padded_channels = aligned_channels(in_channels)
+
+        # ---- host: preprocess + pad ONLY the conditioned frames --------------
+        # Channels stay at 3 through the transfer and are padded on device below.
+        # Preprocess and upload are separate passes so each phase is entered once:
+        # BenchmarkProfiler keys on name alone, so a phase re-entered per frame would
+        # report only the last one.
+        host_frames: list[tuple[int, torch.Tensor]] = []
+        logical_h = None
+        logical_w = None
+        with self._encode_phase("pl_preprocess"):
+            for image, frame_pos in image_prompt:
+                img = self._preprocess_frame(image, height, width, device)
+                # (B,C,H,W) -> (B,T=1,H,W,C)
+                frame_BTHWC = img.unsqueeze(2).permute(0, 2, 3, 4, 1)
+                frame_BTHWC, logical_h = conv_pad_height(
+                    frame_BTHWC, self.vae_parallel_config.height_parallel.factor * self.vae_scale_factor_spatial
+                )
+                frame_BTHWC, logical_w = conv_pad_width(
+                    frame_BTHWC, self.vae_parallel_config.width_parallel.factor * self.vae_scale_factor_spatial
+                )
+                host_frames.append((frame_pos, frame_BTHWC))
+
+        cond_by_pos: dict[int, ttnn.Tensor] = {}
+        with self._encode_phase("pl_upload"):
+            for frame_pos, frame_BTHWC in host_frames:
+                tt_frame = bf16_tensor_2dshard(
+                    frame_BTHWC,
+                    self.mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    shard_mapping={
+                        self.vae_parallel_config.height_parallel.mesh_axis: 2,
+                        self.vae_parallel_config.width_parallel.mesh_axis: 3,
+                    },
+                )
+                if padded_channels != in_channels:
+                    tt_padded = ttnn.pad(
+                        tt_frame,
+                        [(0, 0), (0, 0), (0, 0), (0, 0), (0, padded_channels - in_channels)],
+                        value=0.0,
+                    )
+                    ttnn.deallocate(tt_frame)
+                    tt_frame = tt_padded
+                cond_by_pos[frame_pos] = tt_frame
+
+        encode_frames = _truncated_encode_frames(max(cond_by_pos), num_frames)
+
+        if self.ENCODE_TIMERS:
+            # bf16 on the wire, whatever the host dtype.
+            xfer_mb = sum(t.numel() * 2 for _, t in host_frames) / 1e6
+            logger.info(
+                f"[encode] {len(host_frames)} frame(s) uploaded, {xfer_mb:.1f}MB at "
+                f"{in_channels}ch (padded to {padded_channels} on device), "
+                f"encode_frames={encode_frames}/{num_frames}"
+            )
+        host_frames.clear()
+
+        tt_zero_1 = None
+
+        def _zero_run(n: int) -> ttnn.Tensor:
+            nonlocal tt_zero_1
+            if tt_zero_1 is None:
+                tt_zero_1 = ttnn.zeros_like(next(iter(cond_by_pos.values())))
+            z, built = tt_zero_1, 1
+            while built * 2 <= n:
+                z = ttnn.concat([z, z], dim=1)
+                built *= 2
+            if built < n:
+                z = ttnn.concat([z, z[:, : n - built, :, :, :]], dim=1)
+            return z
+
+        with self._encode_phase("pl_assemble"):
+            segments: list[ttnn.Tensor] = []
+            zero_start = None
+            for i in range(encode_frames):
+                if i in cond_by_pos:
+                    if zero_start is not None:
+                        segments.append(_zero_run(i - zero_start))
+                        zero_start = None
+                    segments.append(cond_by_pos[i])
+                elif zero_start is None:
+                    zero_start = i
+            if zero_start is not None:
+                segments.append(_zero_run(encode_frames - zero_start))
+
+            tt_video_BTHWC = segments[0] if len(segments) == 1 else ttnn.concat(segments, dim=1)
+
+        chunk = _ENCODER_T_CHUNK_BY_MESH.get(tuple(self.mesh_device.shape))
+
+        pc_before = self.mesh_device.num_program_cache_entries()
+        self._on_event(SectionStart("vae_encode"))
+        encoded_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
+            tt_video_BTHWC, logical_h, logical_w=logical_w, encoder_t_chunk_size=chunk
+        )
+        # The encoder call only enqueues work; sync so the section covers the actual
+        # device time rather than leaking it into the readback below.
+        ttnn.synchronize_device(self.mesh_device)
+        self._on_event(SectionEnd("vae_encode"))
+        pc_after = self.mesh_device.num_program_cache_entries()
+        if pc_after != pc_before:
+            # Steady state is zero: a non-zero delta after warmup means the encode shape
+            # changed (e.g. a late frame_pos moved encode_frames) and programs recompiled.
+            logger.info(
+                f"VAE encode compiled {pc_after - pc_before} new program(s) "
+                f"(encode_frames={encode_frames}, forward chunk={chunk})"
+            )
+
+        # tt_video_BTHWC may alias a conditioned frame or the zero tensor when there is
+        # only one segment, so guard against a double free.
+        owned = list(cond_by_pos.values()) + ([tt_zero_1] if tt_zero_1 is not None else [])
+        if all(tt_video_BTHWC is not t for t in owned):
+            ttnn.deallocate(tt_video_BTHWC)
+        for tt in owned:
+            ttnn.deallocate(tt)
+
+        # ---- device -> host --------------------------------------------------
+        with self._encode_phase("pl_readback"):
+            concat_dims = [None, None]
+            concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+            concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+            encoded = fast_device_to_host(
+                encoded_BCTHW, self.mesh_device, concat_dims, ccl_manager=self.vae_ccl_manager
+            )
+            ttnn.deallocate(encoded_BCTHW)
+            ttnn.synchronize_device(self.mesh_device)
+
+        # ---- host: replicate + mask ------------------------------------------
+        with self._encode_phase("pl_post"):
+            # Same crop convention as WanPipelineI2V.prepare_latents.
+            encoded = encoded[:, :, :, :new_logical_h, :new_logical_w].to(dtype=dtype)
+
+            # The truncated encode returns fewer latent frames than the transformer expects;
+            # the dropped ones encode all-zero pixels, so they repeat the last computed latent.
+            f_lat_full = latent_shape[2]
+            n_lat = encoded.shape[2]
+            if n_lat < f_lat_full:
+                encoded = torch.cat(
+                    [encoded, encoded[:, :, -1:, :, :].expand(-1, -1, f_lat_full - n_lat, -1, -1)], dim=2
+                )
+            elif n_lat > f_lat_full:
+                encoded = encoded[:, :, :f_lat_full, :, :]
+
+            msk = torch.zeros(batch_size, num_frames, h_lat, w_lat)
+            for pos in cond_by_pos:
+                msk[:, pos, :, :] = 1
+            msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
+            msk = msk.view(1, msk.shape[1] // 4, 4, h_lat, w_lat)
+            msk = msk.transpose(1, 2)
+
+            y = torch.cat([msk, encoded], dim=1)
         return latents, y
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
@@ -602,9 +968,15 @@ class WanPipelineI2VLora(WanPipelineI2V):
         is_fsdp: bool | None = None,
         boundary_ratio: float | None = 0.875,
         flow_shift: float | None = None,
+        cfg_enabled: bool = True,
         lora_high: LoRAArg = None,
         lora_low: LoRAArg = None,
     ) -> WanPipelineI2VLora:
+        """cfg_enabled=False halves denoising cost by dropping the unconditional pass.
+
+        Only correct for adapters distilled to be guidance-free; with it off the caller
+        must keep both guidance scales at 1.0, which __call__ enforces.
+        """
         config = WanPipelineConfig.default(
             mesh_shape=mesh_device.shape,
             checkpoint_name=_resolve_checkpoint(cls.BASE_DIFFUSERS_REPO),
@@ -616,6 +988,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
             dynamic_load=dynamic_load,
             is_fsdp=is_fsdp,
             boundary_ratio=boundary_ratio,
+            cfg_enabled=cfg_enabled,
             model_type="i2v",
         )
         return cls(

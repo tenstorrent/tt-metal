@@ -652,6 +652,9 @@ class WanPipeline(PipelineAPIMixin):
                         else:
                             ttnn.copy(cond_latents_tt, self.condition_buffer)
 
+                        # reset the cond_latents so we don't duplicate compute
+                        cond_latents = None
+
                     rope_cos_1HND, rope_sin_1HND, trans_mat = ts.model.get_rope_features(latents)
                     rope_args = {
                         "rope_cos_1HND": rope_cos_1HND,

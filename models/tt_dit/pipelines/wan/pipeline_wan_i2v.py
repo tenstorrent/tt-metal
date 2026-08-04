@@ -16,7 +16,7 @@ import ttnn
 
 from ...models.vae.vae_wan2_1 import WanEncoder
 from ...utils import cache
-from ...utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width
+from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels, conv_pad_width
 from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, unflatten
 from .pipeline_wan import WanPipeline, WanPipelineConfig
 
@@ -29,10 +29,11 @@ class ImagePrompt(NamedTuple):
 
 
 class WanPipelineI2V(WanPipeline):
-    def __init__(self, *, device: ttnn.MeshDevice, config: WanPipelineConfig) -> None:
+    def __init__(self, *, device: ttnn.MeshDevice, config: WanPipelineConfig, run_warmup: bool = True) -> None:
         # initialize without warmup; we warm up below with a sample image_prompt.
         super().__init__(device=device, config=config, run_warmup=False)
 
+        enc_height, enc_width, enc_t_chunk = self._vae_encoder_build_dims()
         self.tt_vae_encoder = WanEncoder(
             base_dim=self._vae.config.base_dim,
             in_channels=self._vae.config.in_channels,
@@ -45,26 +46,60 @@ class WanPipelineI2V(WanPipeline):
             mesh_device=self.mesh_device,
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
+            height=enc_height,
+            width=enc_width,
+            encoder_t_chunk_size=enc_t_chunk,
+            latents_mean=self._vae.config.latents_mean,
+            latents_std=self._vae.config.latents_std,
         )
+
+        # C_in_block decides how prepare_conv3d_weights reshapes the stored weights, so a
+        # cache written for one blocking is unusable by another. The _lnorm suffix marks
+        # weights with the latent normalization folded into quant_conv, which are likewise
+        # unusable by a build that normalizes on the host.
+        subfolder = "vae_encoder_lnorm"
+        if enc_t_chunk is not None:
+            blocking_hash = conv3d_blocking_hash(self.tt_vae_encoder)
+            if blocking_hash:
+                subfolder = f"vae_encoder_{blocking_hash}_lnorm"
 
         cache.load_model(
             self.tt_vae_encoder,
             model_name=os.path.basename(self.checkpoint_name),
-            subfolder="vae_encoder",
+            subfolder=subfolder,
             parallel_config=self.vae_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._vae.torch_state_dict(),
         )
 
-        # warmup buffers with a sample image_prompt sized to the target resolution.
+        if run_warmup:
+            self._warmup()
+
+    def _warmup(self) -> None:
+        """Allocate buffers with a sample image_prompt sized to the target resolution.
+
+        Runs a real ``__call__``, so it reaches ``prepare_latents``. A subclass whose
+        ``prepare_latents`` needs state set in its own ``__init__`` must therefore pass
+        ``run_warmup=False`` and call this once that state exists.
+        """
         self(
             prompts=["warmup"],
             image_prompt=Image.new("RGB", (self._width, self._height)),
             num_inference_steps=2,
-            guidance_scale=2 if config.cfg_enabled else 1,
-            guidance_scale_2=2 if config.cfg_enabled else 1,
+            guidance_scale=2 if self._cfg_enabled else 1,
+            guidance_scale_2=2 if self._cfg_enabled else 1,
         )
+
+    def _vae_encoder_build_dims(self) -> tuple[int, int, int | None]:
+        """Dims that select the image encoder's conv3d blockings, applied at construction.
+
+        The chunk size here is the frame count each conv3d call will actually see, which is
+        independent of the ``encoder_t_chunk_size`` passed to ``WanEncoder.forward``: a
+        full-T forward pass over 33 frames sees 33, a forward pass chunked at 16 sees 16.
+        ``None`` yields zero stage dims, i.e. the fallback blocking table.
+        """
+        return 0, 0, None
 
     @classmethod
     def create_pipeline(
@@ -189,19 +224,9 @@ class WanPipelineI2V(WanPipeline):
             concat_dims,
             ccl_manager=self.vae_ccl_manager,
         )
+        # Already normalized by latents_mean/std: the encoder's quant_conv absorbed them.
         encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :new_logical_w]
         encoded_video_torch = encoded_video_torch.to(dtype=dtype)
-
-        latents_mean = (
-            torch.tensor(self._vae.config.latents_mean)
-            .view(1, self._vae.config.z_dim, 1, 1, 1)
-            .to(encoded_video_torch.device, encoded_video_torch.dtype)
-        )
-        latents_std = 1.0 / torch.tensor(self._vae.config.latents_std).view(1, self._vae.config.z_dim, 1, 1, 1).to(
-            encoded_video_torch.device, encoded_video_torch.dtype
-        )
-
-        encoded_video_torch = (encoded_video_torch - latents_mean) * latents_std
 
         # Finalize mask setup into the latent space
         msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
