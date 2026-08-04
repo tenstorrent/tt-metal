@@ -1,0 +1,2760 @@
+[
+ {
+  "label": "gemma-4-12B exp11",
+  "kind": "full_attention",
+  "window": 1316.991,
+  "floor": 3.381,
+  "feas": "measurable",
+  "ceiling": 25.39,
+  "chain_us": 355.515,
+  "chain_ops": 15,
+  "dram_us": 42.268,
+  "dram_ops": 3,
+  "agree_ops": 4,
+  "untraced_us": 27.763,
+  "untraced_ops": 3,
+  "n_v": {
+   "kept": 8,
+   "below_threshold": 6
+  },
+  "us_v": {
+   "kept": 305.0,
+   "below_threshold": 50.5
+  },
+  "kept_us": 305.0,
+  "n_chains": 14,
+  "pair_name": 19,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "full_attention:b6",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b7",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b22",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:1",
+    "v": "kept",
+    "us": 13.0,
+    "ops": [
+     "nlp_create_qkv_heads_decode"
+    ]
+   },
+   {
+    "id": "full_attention:5",
+    "v": "kept",
+    "us": 49.3,
+    "ops": [
+     "rotary_embedding",
+     "rotary_embedding"
+    ]
+   },
+   {
+    "id": "full_attention:9",
+    "v": "kept",
+    "us": 10.8,
+    "ops": [
+     "multiply"
+    ]
+   },
+   {
+    "id": "full_attention:7",
+    "v": "kept",
+    "us": 129.4,
+    "ops": [
+     "linear"
+    ]
+   },
+   {
+    "id": "full_attention:6",
+    "v": "kept",
+    "us": 102.6,
+    "ops": [
+     "concatenate_heads"
+    ]
+   },
+   {
+    "id": "full_attention:2",
+    "v": "below_threshold",
+    "us": 9.8,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:3",
+    "v": "below_threshold",
+    "us": 8.9,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:4",
+    "v": "below_threshold",
+    "us": 6.9,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:8",
+    "v": "below_threshold",
+    "us": 12.5,
+    "ops": [
+     "rms_norm",
+     "add",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:10",
+    "v": "below_threshold",
+    "us": 6.5,
+    "ops": [
+     "rms_norm",
+     "add"
+    ]
+   },
+   {
+    "id": "full_attention:0",
+    "v": "below_threshold",
+    "us": 5.9,
+    "ops": [
+     "rms_norm"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "gemma-4-12B exp11",
+  "kind": "sliding_attention",
+  "window": 1199.604,
+  "floor": 0.712,
+  "feas": "measurable",
+  "ceiling": 15.782,
+  "chain_us": 230.683,
+  "chain_ops": 15,
+  "dram_us": 102.836,
+  "dram_ops": 3,
+  "agree_ops": 4,
+  "untraced_us": 57.621,
+  "untraced_ops": 3,
+  "n_v": {
+   "kept": 6,
+   "rejected": 2,
+   "below_threshold": 6
+  },
+  "us_v": {
+   "kept": 50.4,
+   "rejected": 137.3,
+   "below_threshold": 43.0
+  },
+  "kept_us": 50.4,
+  "n_chains": 14,
+  "pair_name": 19,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "sliding_attention:b7",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention:b6",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention:b22",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention:9",
+    "v": "kept",
+    "us": 10.8,
+    "ops": [
+     "multiply"
+    ]
+   },
+   {
+    "id": "sliding_attention:1",
+    "v": "kept",
+    "us": 15.3,
+    "ops": [
+     "nlp_create_qkv_heads_decode"
+    ]
+   },
+   {
+    "id": "sliding_attention:5",
+    "v": "kept",
+    "us": 24.3,
+    "ops": [
+     "rotary_embedding",
+     "rotary_embedding"
+    ]
+   },
+   {
+    "id": "sliding_attention:7",
+    "v": "rejected",
+    "us": 86.1,
+    "ops": [
+     "linear"
+    ]
+   },
+   {
+    "id": "sliding_attention:6",
+    "v": "rejected",
+    "us": 51.1,
+    "ops": [
+     "concatenate_heads"
+    ]
+   },
+   {
+    "id": "sliding_attention:2",
+    "v": "below_threshold",
+    "us": 6.5,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:8",
+    "v": "below_threshold",
+    "us": 12.5,
+    "ops": [
+     "rms_norm",
+     "add",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:3",
+    "v": "below_threshold",
+    "us": 6.1,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:4",
+    "v": "below_threshold",
+    "us": 5.4,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:10",
+    "v": "below_threshold",
+    "us": 6.6,
+    "ops": [
+     "rms_norm",
+     "add"
+    ]
+   },
+   {
+    "id": "sliding_attention:0",
+    "v": "below_threshold",
+    "us": 5.9,
+    "ops": [
+     "rms_norm"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "llama-3.1-8B exp17",
+  "kind": "dense",
+  "window": 648.353,
+  "floor": 0.697,
+  "feas": "measurable",
+  "ceiling": 4.394,
+  "chain_us": 50.833,
+  "chain_ops": 8,
+  "dram_us": 67.743,
+  "dram_ops": 2,
+  "agree_ops": 5,
+  "untraced_us": 29.021,
+  "untraced_ops": 2,
+  "n_v": {
+   "hard_error": 1,
+   "rejected": 2,
+   "below_threshold": 2
+  },
+  "us_v": {
+   "hard_error": 0.0,
+   "rejected": 20.8,
+   "below_threshold": 30.0
+  },
+  "kept_us": 0.0,
+  "n_chains": 5,
+  "pair_name": 12,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "dense:b9",
+    "v": "hard_error",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:2",
+    "v": "rejected",
+    "us": 19.4,
+    "ops": [
+     "add",
+     "rms_norm",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:3",
+    "v": "rejected",
+    "us": 1.5,
+    "ops": [
+     "add"
+    ]
+   },
+   {
+    "id": "dense:1",
+    "v": "below_threshold",
+    "us": 23.7,
+    "ops": [
+     "nlp_create_qkv_heads_decode",
+     "rotary_embedding_llama",
+     "rotary_embedding_llama"
+    ]
+   },
+   {
+    "id": "dense:0",
+    "v": "below_threshold",
+    "us": 6.3,
+    "ops": [
+     "rms_norm"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "llama-3.2-1B exp17",
+  "kind": "dense",
+  "window": 354.536,
+  "floor": 0.146,
+  "feas": "measurable",
+  "ceiling": 2.822,
+  "chain_us": 40.42,
+  "chain_ops": 7,
+  "dram_us": 25.497,
+  "dram_ops": 3,
+  "agree_ops": 5,
+  "untraced_us": 26.217,
+  "untraced_ops": 2,
+  "n_v": {
+   "rejected": 2,
+   "below_threshold": 2
+  },
+  "us_v": {
+   "rejected": 17.8,
+   "below_threshold": 22.7
+  },
+  "kept_us": 0.0,
+  "n_chains": 4,
+  "pair_name": 12,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "dense:b9",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:2",
+    "v": "rejected",
+    "us": 17.8,
+    "ops": [
+     "add",
+     "rms_norm",
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:1",
+    "v": "below_threshold",
+    "us": 17.4,
+    "ops": [
+     "nlp_create_qkv_heads_decode",
+     "rotary_embedding_llama"
+    ]
+   },
+   {
+    "id": "dense:0",
+    "v": "below_threshold",
+    "us": 5.2,
+    "ops": [
+     "rms_norm"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "phi-3.5 exp17",
+  "kind": "dense",
+  "window": 1016.115,
+  "floor": 1.092,
+  "feas": "measurable",
+  "ceiling": 83.551,
+  "chain_us": 499.884,
+  "chain_ops": 26,
+  "dram_us": 190.291,
+  "dram_ops": 2,
+  "agree_ops": 2,
+  "untraced_us": 92.566,
+  "untraced_ops": 10,
+  "n_v": {
+   "rejected": 20,
+   "below_threshold": 4
+  },
+  "us_v": {
+   "rejected": 111.6,
+   "below_threshold": 388.3
+  },
+  "kept_us": 0.0,
+  "n_chains": 24,
+  "pair_name": 19,
+  "pair_pos": 11,
+  "chains": [
+   {
+    "id": "dense:b19",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b34",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:6",
+    "v": "rejected",
+    "us": 2.2,
+    "ops": [
+     "neg"
+    ]
+   },
+   {
+    "id": "dense:11",
+    "v": "rejected",
+    "us": 1.5,
+    "ops": [
+     "neg"
+    ]
+   },
+   {
+    "id": "dense:5",
+    "v": "rejected",
+    "us": 7.0,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:2",
+    "v": "rejected",
+    "us": 2.5,
+    "ops": [
+     "embedding"
+    ]
+   },
+   {
+    "id": "dense:10",
+    "v": "rejected",
+    "us": 6.6,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:1",
+    "v": "rejected",
+    "us": 31.8,
+    "ops": [
+     "nlp_create_qkv_heads_decode"
+    ]
+   },
+   {
+    "id": "dense:4",
+    "v": "rejected",
+    "us": 1.6,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:3",
+    "v": "rejected",
+    "us": 2.5,
+    "ops": [
+     "embedding"
+    ]
+   },
+   {
+    "id": "dense:12",
+    "v": "rejected",
+    "us": 20.1,
+    "ops": [
+     "concat",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:13",
+    "v": "rejected",
+    "us": 6.1,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:7",
+    "v": "rejected",
+    "us": 22.4,
+    "ops": [
+     "concat",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:8",
+    "v": "rejected",
+    "us": 6.1,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:9",
+    "v": "rejected",
+    "us": 1.3,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:b43",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b11",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b49",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b51",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b44",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b45",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:14",
+    "v": "below_threshold",
+    "us": 196.2,
+    "ops": [
+     "add",
+     "rms_norm",
+     "linear",
+     "slice_static",
+     "slice_static",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:15",
+    "v": "below_threshold",
+    "us": 185.4,
+    "ops": [
+     "linear",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:0",
+    "v": "below_threshold",
+    "us": 6.6,
+    "ops": [
+     "rms_norm"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "north-mini FN",
+  "kind": "dense_full_attention",
+  "window": 153.39,
+  "floor": 0.849,
+  "feas": "measurable",
+  "ceiling": 3.476,
+  "chain_us": 12.331,
+  "chain_ops": 4,
+  "dram_us": 3.68,
+  "dram_ops": 2,
+  "agree_ops": 4,
+  "untraced_us": 59.591,
+  "untraced_ops": 8,
+  "n_v": {
+   "not_measurable": 1,
+   "below_threshold": 7
+  },
+  "us_v": {
+   "not_measurable": 0.0,
+   "below_threshold": 12.3
+  },
+  "kept_us": 0.0,
+  "n_chains": 8,
+  "pair_name": 9,
+  "pair_pos": 1,
+  "chains": [
+   {
+    "id": "dense_full_attention:b13",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_attention:b4",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_attention:b5",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_attention:b11",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_attention:b8",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_attention:0",
+    "v": "below_threshold",
+    "us": 5.8,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "dense_full_attention:2",
+    "v": "below_threshold",
+    "us": 4.5,
+    "ops": [
+     "slice_static",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense_full_attention:1",
+    "v": "below_threshold",
+    "us": 2.0,
+    "ops": [
+     "slice_static"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "north-mini FN",
+  "kind": "full_attention_moe",
+  "window": 497.373,
+  "floor": 1.206,
+  "feas": "not_measurable",
+  "ceiling": 0,
+  "chain_us": 70.016,
+  "chain_ops": 2,
+  "dram_us": 0,
+  "dram_ops": 0,
+  "agree_ops": 1,
+  "untraced_us": 337.721,
+  "untraced_ops": 29,
+  "n_v": {
+   "not_measurable": 1
+  },
+  "us_v": {
+   "not_measurable": 70.0
+  },
+  "kept_us": 0.0,
+  "n_chains": 1,
+  "pair_name": 3,
+  "pair_pos": 0,
+  "chains": [
+   {
+    "id": "full_attention_moe:0",
+    "v": "not_measurable",
+    "us": 70.0,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "north-mini FN",
+  "kind": "sliding_attention_moe",
+  "window": 522.982,
+  "floor": 1.638,
+  "feas": "not_measurable",
+  "ceiling": 1.148,
+  "chain_us": 70.109,
+  "chain_ops": 2,
+  "dram_us": 3.716,
+  "dram_ops": 2,
+  "agree_ops": 1,
+  "untraced_us": 360.667,
+  "untraced_ops": 29,
+  "n_v": {
+   "not_measurable": 3
+  },
+  "us_v": {
+   "not_measurable": 70.1
+  },
+  "kept_us": 0.0,
+  "n_chains": 3,
+  "pair_name": 5,
+  "pair_pos": 0,
+  "chains": [
+   {
+    "id": "sliding_attention_moe:b3",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention_moe:b4",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention_moe:0",
+    "v": "not_measurable",
+    "us": 70.1,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "gemma-4-26B FN",
+  "kind": "full_attention",
+  "window": 1458.663,
+  "floor": 2.157,
+  "feas": "measurable",
+  "ceiling": 8.448,
+  "chain_us": 275.985,
+  "chain_ops": 12,
+  "dram_us": 19.69,
+  "dram_ops": 2,
+  "agree_ops": 6,
+  "untraced_us": 750.086,
+  "untraced_ops": 38,
+  "n_v": {
+   "kept": 1,
+   "below_threshold": 10
+  },
+  "us_v": {
+   "kept": 0.0,
+   "below_threshold": 276.0
+  },
+  "kept_us": 0.0,
+  "n_chains": 11,
+  "pair_name": 17,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "full_attention:b23",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b21",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b16",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b18",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b17",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:5",
+    "v": "below_threshold",
+    "us": 7.8,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:3",
+    "v": "below_threshold",
+    "us": 17.1,
+    "ops": [
+     "rms_norm",
+     "add",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:0",
+    "v": "below_threshold",
+    "us": 187.9,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   },
+   {
+    "id": "full_attention:2",
+    "v": "below_threshold",
+    "us": 31.2,
+    "ops": [
+     "rotary_embedding"
+    ]
+   },
+   {
+    "id": "full_attention:1",
+    "v": "below_threshold",
+    "us": 27.1,
+    "ops": [
+     "rms_norm",
+     "rms_norm",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:4",
+    "v": "below_threshold",
+    "us": 5.0,
+    "ops": [
+     "gelu",
+     "multiply"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "gemma-4-26B FN",
+  "kind": "sliding_attention",
+  "window": 1263.77,
+  "floor": 2.804,
+  "feas": "aggregate_only",
+  "ceiling": 4.789,
+  "chain_us": 204.549,
+  "chain_ops": 11,
+  "dram_us": 15.979,
+  "dram_ops": 4,
+  "agree_ops": 5,
+  "untraced_us": 741.602,
+  "untraced_ops": 34,
+  "n_v": {
+   "kept": 1,
+   "below_threshold": 6
+  },
+  "us_v": {
+   "kept": 0.0,
+   "below_threshold": 204.5
+  },
+  "kept_us": 0.0,
+  "n_chains": 7,
+  "pair_name": 17,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "sliding_attention:b21",
+    "v": "kept",
+    "us": 0.0,
+    "ops": [
+     "nlp_concat_heads_decode",
+     "linear"
+    ]
+   },
+   {
+    "id": "sliding_attention:b19",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention:4",
+    "v": "below_threshold",
+    "us": 7.8,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:2",
+    "v": "below_threshold",
+    "us": 17.2,
+    "ops": [
+     "rms_norm",
+     "add",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:0",
+    "v": "below_threshold",
+    "us": 156.9,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   },
+   {
+    "id": "sliding_attention:1",
+    "v": "below_threshold",
+    "us": 17.6,
+    "ops": [
+     "rms_norm",
+     "rms_norm",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:3",
+    "v": "below_threshold",
+    "us": 5.1,
+    "ops": [
+     "gelu",
+     "multiply"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "phi-3.5 FN",
+  "kind": "dense",
+  "window": 725.175,
+  "floor": 1.064,
+  "feas": "measurable",
+  "ceiling": 71.637,
+  "chain_us": 450.615,
+  "chain_ops": 27,
+  "dram_us": 55.137,
+  "dram_ops": 2,
+  "agree_ops": 2,
+  "untraced_us": 96.957,
+  "untraced_ops": 8,
+  "n_v": {
+   "kept": 12,
+   "rejected": 3,
+   "below_threshold": 3
+  },
+  "us_v": {
+   "kept": 73.7,
+   "rejected": 374.5,
+   "below_threshold": 2.5
+  },
+  "kept_us": 73.7,
+  "n_chains": 18,
+  "pair_name": 20,
+  "pair_pos": 11,
+  "chains": [
+   {
+    "id": "dense:b14",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b29",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:3",
+    "v": "kept",
+    "us": 2.1,
+    "ops": [
+     "neg"
+    ]
+   },
+   {
+    "id": "dense:8",
+    "v": "kept",
+    "us": 1.5,
+    "ops": [
+     "neg"
+    ]
+   },
+   {
+    "id": "dense:2",
+    "v": "kept",
+    "us": 6.8,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:7",
+    "v": "kept",
+    "us": 6.6,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:1",
+    "v": "kept",
+    "us": 1.6,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:6",
+    "v": "kept",
+    "us": 1.3,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:4",
+    "v": "kept",
+    "us": 20.1,
+    "ops": [
+     "concat",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:5",
+    "v": "kept",
+    "us": 6.8,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:9",
+    "v": "kept",
+    "us": 19.8,
+    "ops": [
+     "concat",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:10",
+    "v": "kept",
+    "us": 7.0,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:b43",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b38",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b39",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:12",
+    "v": "below_threshold",
+    "us": 2.5,
+    "ops": [
+     "add"
+    ]
+   },
+   {
+    "id": "dense:0",
+    "v": "rejected",
+    "us": 178.4,
+    "ops": [
+     "rms_norm",
+     "linear",
+     "nlp_create_qkv_heads_decode",
+     "embedding",
+     "embedding"
+    ]
+   },
+   {
+    "id": "dense:11",
+    "v": "rejected",
+    "us": 196.1,
+    "ops": [
+     "linear",
+     "add",
+     "rms_norm",
+     "linear",
+     "slice_static",
+     "slice_static",
+     "multiply"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "qwen3-27B FN",
+  "kind": "full_attention",
+  "window": 1008.176,
+  "floor": 1.609,
+  "feas": "measurable",
+  "ceiling": 34.282,
+  "chain_us": 124.143,
+  "chain_ops": 32,
+  "dram_us": 54.69,
+  "dram_ops": 12,
+  "agree_ops": 5,
+  "untraced_us": 45.297,
+  "untraced_ops": 9,
+  "n_v": {
+   "rejected": 4,
+   "not_measurable": 4,
+   "below_threshold": 14,
+   "kept": 1
+  },
+  "us_v": {
+   "rejected": 6.4,
+   "not_measurable": 3.5,
+   "below_threshold": 106.4,
+   "kept": 7.8
+  },
+  "kept_us": 7.8,
+  "n_chains": 23,
+  "pair_name": 38,
+  "pair_pos": 11,
+  "chains": [
+   {
+    "id": "full_attention:6",
+    "v": "rejected",
+    "us": 2.6,
+    "ops": [
+     "repeat"
+    ]
+   },
+   {
+    "id": "full_attention:12",
+    "v": "rejected",
+    "us": 1.1,
+    "ops": [
+     "repeat"
+    ]
+   },
+   {
+    "id": "full_attention:13",
+    "v": "rejected",
+    "us": 1.1,
+    "ops": [
+     "repeat"
+    ]
+   },
+   {
+    "id": "full_attention:b16",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:7",
+    "v": "rejected",
+    "us": 1.7,
+    "ops": [
+     "repeat"
+    ]
+   },
+   {
+    "id": "full_attention:b65",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b61",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:14",
+    "v": "not_measurable",
+    "us": 3.5,
+    "ops": [
+     "multiply",
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:8",
+    "v": "below_threshold",
+    "us": 3.5,
+    "ops": [
+     "multiply",
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:2",
+    "v": "below_threshold",
+    "us": 16.2,
+    "ops": [
+     "nlp_create_qkv_heads_decode"
+    ]
+   },
+   {
+    "id": "full_attention:11",
+    "v": "below_threshold",
+    "us": 5.1,
+    "ops": [
+     "slice_static",
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:17",
+    "v": "below_threshold",
+    "us": 7.1,
+    "ops": [
+     "sigmoid",
+     "multiply"
+    ]
+   },
+   {
+    "id": "full_attention:18",
+    "v": "below_threshold",
+    "us": 34.3,
+    "ops": [
+     "add",
+     "rms_norm",
+     "multiply"
+    ]
+   },
+   {
+    "id": "full_attention:3",
+    "v": "below_threshold",
+    "us": 7.3,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:4",
+    "v": "below_threshold",
+    "us": 6.5,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:1",
+    "v": "kept",
+    "us": 7.8,
+    "ops": [
+     "slice_static",
+     "slice_static",
+     "slice_static",
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:0",
+    "v": "below_threshold",
+    "us": 8.6,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:5",
+    "v": "below_threshold",
+    "us": 5.2,
+    "ops": [
+     "slice_static",
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:10",
+    "v": "below_threshold",
+    "us": 4.2,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "full_attention:16",
+    "v": "below_threshold",
+    "us": 4.2,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "full_attention:19",
+    "v": "below_threshold",
+    "us": 1.9,
+    "ops": [
+     "add"
+    ]
+   },
+   {
+    "id": "full_attention:9",
+    "v": "below_threshold",
+    "us": 1.2,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:15",
+    "v": "below_threshold",
+    "us": 1.1,
+    "ops": [
+     "slice_static"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "north-mini onA",
+  "kind": "dense_full_attention",
+  "window": 274.481,
+  "floor": 1.841,
+  "feas": "not_measurable",
+  "ceiling": 1.709,
+  "chain_us": 220.56,
+  "chain_ops": 12,
+  "dram_us": 14.459,
+  "dram_ops": 4,
+  "agree_ops": 1,
+  "untraced_us": 12.301,
+  "untraced_ops": 3,
+  "n_v": {
+   "not_measurable": 6
+  },
+  "us_v": {
+   "not_measurable": 220.6
+  },
+  "kept_us": 0.0,
+  "n_chains": 6,
+  "pair_name": 13,
+  "pair_pos": 4,
+  "chains": [
+   {
+    "id": "dense_full_attention:b10",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_attention:b3",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_attention:b4",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_attention:2",
+    "v": "not_measurable",
+    "us": 118.6,
+    "ops": [
+     "linear",
+     "slice_static",
+     "slice_static",
+     "silu",
+     "multiply",
+     "linear",
+     "add",
+     "add"
+    ]
+   },
+   {
+    "id": "dense_full_attention:0",
+    "v": "not_measurable",
+    "us": 69.8,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   },
+   {
+    "id": "dense_full_attention:1",
+    "v": "not_measurable",
+    "us": 32.2,
+    "ops": [
+     "linear",
+     "slice_static"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "north-mini onA",
+  "kind": "full_attention_sparse_moe",
+  "window": 822.608,
+  "floor": 0.847,
+  "feas": "not_measurable",
+  "ceiling": 0.562,
+  "chain_us": 102.1,
+  "chain_ops": 4,
+  "dram_us": 10.358,
+  "dram_ops": 2,
+  "agree_ops": 1,
+  "untraced_us": 634.671,
+  "untraced_ops": 32,
+  "n_v": {
+   "not_measurable": 3
+  },
+  "us_v": {
+   "not_measurable": 102.1
+  },
+  "kept_us": 0.0,
+  "n_chains": 3,
+  "pair_name": 7,
+  "pair_pos": 0,
+  "chains": [
+   {
+    "id": "full_attention_sparse_moe:b6",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention_sparse_moe:0",
+    "v": "not_measurable",
+    "us": 69.9,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   },
+   {
+    "id": "full_attention_sparse_moe:1",
+    "v": "not_measurable",
+    "us": 32.2,
+    "ops": [
+     "linear",
+     "slice_static"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "north-mini onA",
+  "kind": "sliding_attention_sparse_moe",
+  "window": 827.64,
+  "floor": 14.526,
+  "feas": "not_measurable",
+  "ceiling": 1.706,
+  "chain_us": 102.092,
+  "chain_ops": 4,
+  "dram_us": 14.673,
+  "dram_ops": 4,
+  "agree_ops": 1,
+  "untraced_us": 634.177,
+  "untraced_ops": 32,
+  "n_v": {
+   "not_measurable": 5
+  },
+  "us_v": {
+   "not_measurable": 102.1
+  },
+  "kept_us": 0.0,
+  "n_chains": 5,
+  "pair_name": 9,
+  "pair_pos": 0,
+  "chains": [
+   {
+    "id": "sliding_attention_sparse_moe:b3",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention_sparse_moe:b4",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention_sparse_moe:b10",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention_sparse_moe:0",
+    "v": "not_measurable",
+    "us": 69.8,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   },
+   {
+    "id": "sliding_attention_sparse_moe:1",
+    "v": "not_measurable",
+    "us": 32.2,
+    "ops": [
+     "linear",
+     "slice_static"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "gemma-4-26B onA",
+  "kind": "full_attention",
+  "window": 1981.055,
+  "floor": 3.543,
+  "feas": "not_measurable",
+  "ceiling": 0,
+  "chain_us": 405.441,
+  "chain_ops": 14,
+  "dram_us": 52.898,
+  "dram_ops": 2,
+  "agree_ops": 5,
+  "untraced_us": 1159.191,
+  "untraced_ops": 40,
+  "n_v": {
+   "below_threshold": 4
+  },
+  "us_v": {
+   "below_threshold": 405.4
+  },
+  "kept_us": 0.0,
+  "n_chains": 4,
+  "pair_name": 18,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "full_attention:0",
+    "v": "below_threshold",
+    "us": 202.9,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   },
+   {
+    "id": "full_attention:3",
+    "v": "below_threshold",
+    "us": 142.8,
+    "ops": [
+     "rms_norm",
+     "add",
+     "rms_norm",
+     "slice_static",
+     "slice_static",
+     "gelu",
+     "multiply",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:2",
+    "v": "below_threshold",
+    "us": 32.7,
+    "ops": [
+     "rotary_embedding"
+    ]
+   },
+   {
+    "id": "full_attention:1",
+    "v": "below_threshold",
+    "us": 27.1,
+    "ops": [
+     "rms_norm",
+     "rms_norm",
+     "rms_norm"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "gemma-4-26B onA",
+  "kind": "sliding_attention",
+  "window": 1789.133,
+  "floor": 0.587,
+  "feas": "not_measurable",
+  "ceiling": 0,
+  "chain_us": 326.983,
+  "chain_ops": 13,
+  "dram_us": 51.145,
+  "dram_ops": 4,
+  "agree_ops": 4,
+  "untraced_us": 1157.582,
+  "untraced_ops": 36,
+  "n_v": {
+   "below_threshold": 3
+  },
+  "us_v": {
+   "below_threshold": 327.0
+  },
+  "kept_us": 0.0,
+  "n_chains": 3,
+  "pair_name": 18,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "sliding_attention:0",
+    "v": "below_threshold",
+    "us": 165.8,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   },
+   {
+    "id": "sliding_attention:2",
+    "v": "below_threshold",
+    "us": 143.5,
+    "ops": [
+     "rms_norm",
+     "add",
+     "rms_norm",
+     "slice_static",
+     "slice_static",
+     "gelu",
+     "multiply",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:1",
+    "v": "below_threshold",
+    "us": 17.7,
+    "ops": [
+     "rms_norm",
+     "rms_norm",
+     "rms_norm"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "phi-3.5 onA",
+  "kind": "dense",
+  "window": 569.09,
+  "floor": 0.43,
+  "feas": "measurable",
+  "ceiling": 70.381,
+  "chain_us": 122.729,
+  "chain_ops": 22,
+  "dram_us": 65.043,
+  "dram_ops": 3,
+  "agree_ops": 5,
+  "untraced_us": 84.024,
+  "untraced_ops": 8,
+  "n_v": {
+   "kept": 15,
+   "rejected": 1,
+   "below_threshold": 2
+  },
+  "us_v": {
+   "kept": 78.6,
+   "rejected": 0.0,
+   "below_threshold": 44.1
+  },
+  "kept_us": 78.6,
+  "n_chains": 18,
+  "pair_name": 19,
+  "pair_pos": 11,
+  "chains": [
+   {
+    "id": "dense:b30",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b15",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:4",
+    "v": "kept",
+    "us": 2.1,
+    "ops": [
+     "neg"
+    ]
+   },
+   {
+    "id": "dense:9",
+    "v": "kept",
+    "us": 1.5,
+    "ops": [
+     "neg"
+    ]
+   },
+   {
+    "id": "dense:3",
+    "v": "kept",
+    "us": 6.9,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:8",
+    "v": "kept",
+    "us": 6.7,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:2",
+    "v": "kept",
+    "us": 1.6,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:10",
+    "v": "kept",
+    "us": 20.2,
+    "ops": [
+     "concat",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:11",
+    "v": "kept",
+    "us": 6.6,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:7",
+    "v": "kept",
+    "us": 1.2,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:5",
+    "v": "kept",
+    "us": 19.9,
+    "ops": [
+     "concat",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:6",
+    "v": "kept",
+    "us": 7.0,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:b44",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b39",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b40",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:1",
+    "v": "kept",
+    "us": 4.8,
+    "ops": [
+     "embedding",
+     "embedding"
+    ]
+   },
+   {
+    "id": "dense:0",
+    "v": "below_threshold",
+    "us": 22.6,
+    "ops": [
+     "rms_norm",
+     "nlp_create_qkv_heads_decode"
+    ]
+   },
+   {
+    "id": "dense:12",
+    "v": "below_threshold",
+    "us": 21.6,
+    "ops": [
+     "add",
+     "rms_norm",
+     "multiply",
+     "add"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "north-mini B",
+  "kind": "dense_full_forced_rope",
+  "window": 179.282,
+  "floor": 0.168,
+  "feas": "measurable",
+  "ceiling": 5.929,
+  "chain_us": 71.19,
+  "chain_ops": 9,
+  "dram_us": 13.865,
+  "dram_ops": 4,
+  "agree_ops": 3,
+  "untraced_us": 12.01,
+  "untraced_ops": 3,
+  "n_v": {
+   "rejected": 5,
+   "below_threshold": 2
+  },
+  "us_v": {
+   "rejected": 64.0,
+   "below_threshold": 7.2
+  },
+  "kept_us": 0.0,
+  "n_chains": 7,
+  "pair_name": 12,
+  "pair_pos": 4,
+  "chains": [
+   {
+    "id": "dense_full_forced_rope:2",
+    "v": "rejected",
+    "us": 61.2,
+    "ops": [
+     "linear",
+     "linear",
+     "silu",
+     "multiply",
+     "linear"
+    ]
+   },
+   {
+    "id": "dense_full_forced_rope:3",
+    "v": "rejected",
+    "us": 2.8,
+    "ops": [
+     "add",
+     "add"
+    ]
+   },
+   {
+    "id": "dense_full_forced_rope:b5",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_forced_rope:b12",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_forced_rope:b6",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense_full_forced_rope:0",
+    "v": "below_threshold",
+    "us": 5.9,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "dense_full_forced_rope:1",
+    "v": "below_threshold",
+    "us": 1.3,
+    "ops": [
+     "slice_static"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "north-mini B",
+  "kind": "full_no_rope_moe",
+  "window": 581.483,
+  "floor": 1.263,
+  "feas": "not_measurable",
+  "ceiling": 0.563,
+  "chain_us": 9.146,
+  "chain_ops": 3,
+  "dram_us": 10.264,
+  "dram_ops": 2,
+  "agree_ops": 3,
+  "untraced_us": 444.25,
+  "untraced_ops": 37,
+  "n_v": {
+   "not_measurable": 1,
+   "below_threshold": 2
+  },
+  "us_v": {
+   "not_measurable": 0.0,
+   "below_threshold": 9.1
+  },
+  "kept_us": 0.0,
+  "n_chains": 3,
+  "pair_name": 7,
+  "pair_pos": 1,
+  "chains": [
+   {
+    "id": "full_no_rope_moe:b8",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_no_rope_moe:0",
+    "v": "below_threshold",
+    "us": 5.9,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_no_rope_moe:1",
+    "v": "below_threshold",
+    "us": 3.2,
+    "ops": [
+     "slice_static",
+     "add"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "north-mini B",
+  "kind": "sliding_rope_moe",
+  "window": 584.728,
+  "floor": 0.936,
+  "feas": "aggregate_only",
+  "ceiling": 1.688,
+  "chain_us": 9.172,
+  "chain_ops": 3,
+  "dram_us": 14.139,
+  "dram_ops": 4,
+  "agree_ops": 3,
+  "untraced_us": 442.421,
+  "untraced_ops": 37,
+  "n_v": {
+   "rejected": 3,
+   "below_threshold": 2
+  },
+  "us_v": {
+   "rejected": 0.0,
+   "below_threshold": 9.2
+  },
+  "kept_us": 0.0,
+  "n_chains": 5,
+  "pair_name": 9,
+  "pair_pos": 1,
+  "chains": [
+   {
+    "id": "sliding_rope_moe:b5",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": [
+     "IR-resolved boundary aggregate"
+    ]
+   },
+   {
+    "id": "sliding_rope_moe:b12",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": [
+     "IR-resolved boundary aggregate"
+    ]
+   },
+   {
+    "id": "sliding_rope_moe:b6",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": [
+     "IR-resolved boundary aggregate"
+    ]
+   },
+   {
+    "id": "sliding_rope_moe:0",
+    "v": "below_threshold",
+    "us": 6.0,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_rope_moe:1",
+    "v": "below_threshold",
+    "us": 3.2,
+    "ops": [
+     "slice_static",
+     "add"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "gemma-4-26B B",
+  "kind": "full_attention",
+  "window": 1211.136,
+  "floor": 0.852,
+  "feas": "measurable",
+  "ceiling": 6.373,
+  "chain_us": 332.126,
+  "chain_ops": 14,
+  "dram_us": 56.702,
+  "dram_ops": 2,
+  "agree_ops": 5,
+  "untraced_us": 630.756,
+  "untraced_ops": 41,
+  "n_v": {
+   "rejected": 5,
+   "below_threshold": 6
+  },
+  "us_v": {
+   "rejected": 0.0,
+   "below_threshold": 332.1
+  },
+  "kept_us": 0.0,
+  "n_chains": 11,
+  "pair_name": 18,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "full_attention:b26",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b21",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b15",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b17",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b16",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:5",
+    "v": "below_threshold",
+    "us": 44.3,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:0",
+    "v": "below_threshold",
+    "us": 133.6,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   },
+   {
+    "id": "full_attention:3",
+    "v": "below_threshold",
+    "us": 90.1,
+    "ops": [
+     "rms_norm",
+     "add",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:2",
+    "v": "below_threshold",
+    "us": 30.8,
+    "ops": [
+     "rotary_embedding"
+    ]
+   },
+   {
+    "id": "full_attention:1",
+    "v": "below_threshold",
+    "us": 26.9,
+    "ops": [
+     "rms_norm",
+     "rms_norm",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:4",
+    "v": "below_threshold",
+    "us": 6.6,
+    "ops": [
+     "slice_static",
+     "slice_static",
+     "gelu",
+     "multiply"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "gemma-4-26B B",
+  "kind": "sliding_attention",
+  "window": 1206.737,
+  "floor": 1.291,
+  "feas": "measurable",
+  "ceiling": 3.832,
+  "chain_us": 325.915,
+  "chain_ops": 13,
+  "dram_us": 51.336,
+  "dram_ops": 4,
+  "agree_ops": 4,
+  "untraced_us": 632.304,
+  "untraced_ops": 37,
+  "n_v": {
+   "kept": 2,
+   "below_threshold": 5
+  },
+  "us_v": {
+   "kept": 0.0,
+   "below_threshold": 325.9
+  },
+  "kept_us": 0.0,
+  "n_chains": 7,
+  "pair_name": 18,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "sliding_attention:b21",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention:4",
+    "v": "below_threshold",
+    "us": 44.0,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:b19",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "sliding_attention:0",
+    "v": "below_threshold",
+    "us": 167.8,
+    "ops": [
+     "rms_norm",
+     "linear"
+    ]
+   },
+   {
+    "id": "sliding_attention:2",
+    "v": "below_threshold",
+    "us": 90.1,
+    "ops": [
+     "rms_norm",
+     "add",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:1",
+    "v": "below_threshold",
+    "us": 17.3,
+    "ops": [
+     "rms_norm",
+     "rms_norm",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "sliding_attention:3",
+    "v": "below_threshold",
+    "us": 6.7,
+    "ops": [
+     "slice_static",
+     "slice_static",
+     "gelu",
+     "multiply"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "phi-3.5 B",
+  "kind": "dense",
+  "window": 699.768,
+  "floor": 0.713,
+  "feas": "measurable",
+  "ceiling": 70.732,
+  "chain_us": 134.762,
+  "chain_ops": 25,
+  "dram_us": 197.856,
+  "dram_ops": 3,
+  "agree_ops": 4,
+  "untraced_us": 75.152,
+  "untraced_ops": 9,
+  "n_v": {
+   "kept": 12,
+   "below_threshold": 8
+  },
+  "us_v": {
+   "kept": 73.8,
+   "below_threshold": 61.0
+  },
+  "kept_us": 73.8,
+  "n_chains": 20,
+  "pair_name": 20,
+  "pair_pos": 12,
+  "chains": [
+   {
+    "id": "dense:b16",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b32",
+    "v": "kept",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:4",
+    "v": "kept",
+    "us": 2.0,
+    "ops": [
+     "neg"
+    ]
+   },
+   {
+    "id": "dense:9",
+    "v": "kept",
+    "us": 1.5,
+    "ops": [
+     "neg"
+    ]
+   },
+   {
+    "id": "dense:3",
+    "v": "kept",
+    "us": 7.1,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:8",
+    "v": "kept",
+    "us": 6.6,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:2",
+    "v": "kept",
+    "us": 1.6,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:7",
+    "v": "kept",
+    "us": 1.3,
+    "ops": [
+     "slice_static"
+    ]
+   },
+   {
+    "id": "dense:5",
+    "v": "kept",
+    "us": 19.8,
+    "ops": [
+     "concat",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:6",
+    "v": "kept",
+    "us": 8.0,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:10",
+    "v": "kept",
+    "us": 19.8,
+    "ops": [
+     "concat",
+     "multiply"
+    ]
+   },
+   {
+    "id": "dense:11",
+    "v": "kept",
+    "us": 6.2,
+    "ops": [
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:b46",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b42",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b41",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:b43",
+    "v": "below_threshold",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "dense:0",
+    "v": "below_threshold",
+    "us": 27.5,
+    "ops": [
+     "rms_norm",
+     "nlp_create_qkv_heads_decode"
+    ]
+   },
+   {
+    "id": "dense:13",
+    "v": "below_threshold",
+    "us": 19.8,
+    "ops": [
+     "slice_static",
+     "slice_static",
+     "silu",
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "dense:12",
+    "v": "below_threshold",
+    "us": 8.7,
+    "ops": [
+     "add",
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "dense:1",
+    "v": "below_threshold",
+    "us": 4.9,
+    "ops": [
+     "embedding",
+     "embedding"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "qwen3-27B B",
+  "kind": "full_attention",
+  "window": 1267.432,
+  "floor": 0.749,
+  "feas": "measurable",
+  "ceiling": 33.698,
+  "chain_us": 570.902,
+  "chain_ops": 32,
+  "dram_us": 47.498,
+  "dram_ops": 11,
+  "agree_ops": 3,
+  "untraced_us": 31.976,
+  "untraced_ops": 8,
+  "n_v": {
+   "rejected": 8,
+   "not_measurable": 2,
+   "below_threshold": 10
+  },
+  "us_v": {
+   "rejected": 331.4,
+   "not_measurable": 0.0,
+   "below_threshold": 239.5
+  },
+  "kept_us": 0.0,
+  "n_chains": 20,
+  "pair_name": 35,
+  "pair_pos": 11,
+  "chains": [
+   {
+    "id": "full_attention:12",
+    "v": "rejected",
+    "us": 1.1,
+    "ops": [
+     "repeat"
+    ]
+   },
+   {
+    "id": "full_attention:11",
+    "v": "rejected",
+    "us": 1.1,
+    "ops": [
+     "repeat"
+    ]
+   },
+   {
+    "id": "full_attention:b12",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:6",
+    "v": "rejected",
+    "us": 1.7,
+    "ops": [
+     "repeat"
+    ]
+   },
+   {
+    "id": "full_attention:7",
+    "v": "rejected",
+    "us": 1.7,
+    "ops": [
+     "repeat"
+    ]
+   },
+   {
+    "id": "full_attention:2",
+    "v": "rejected",
+    "us": 16.1,
+    "ops": [
+     "nlp_create_qkv_heads_decode"
+    ]
+   },
+   {
+    "id": "full_attention:b61",
+    "v": "not_measurable",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:b57",
+    "v": "rejected",
+    "us": 0.0,
+    "ops": []
+   },
+   {
+    "id": "full_attention:1",
+    "v": "rejected",
+    "us": 304.8,
+    "ops": [
+     "linear",
+     "slice_static",
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:10",
+    "v": "rejected",
+    "us": 4.8,
+    "ops": [
+     "slice_static",
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:16",
+    "v": "below_threshold",
+    "us": 183.2,
+    "ops": [
+     "linear",
+     "add",
+     "rms_norm",
+     "multiply",
+     "add"
+    ]
+   },
+   {
+    "id": "full_attention:3",
+    "v": "below_threshold",
+    "us": 7.2,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:15",
+    "v": "below_threshold",
+    "us": 12.9,
+    "ops": [
+     "sigmoid",
+     "multiply"
+    ]
+   },
+   {
+    "id": "full_attention:4",
+    "v": "below_threshold",
+    "us": 6.0,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:0",
+    "v": "below_threshold",
+    "us": 9.7,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "full_attention:5",
+    "v": "below_threshold",
+    "us": 4.8,
+    "ops": [
+     "slice_static",
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:9",
+    "v": "below_threshold",
+    "us": 4.3,
+    "ops": [
+     "multiply",
+     "multiply"
+    ]
+   },
+   {
+    "id": "full_attention:14",
+    "v": "below_threshold",
+    "us": 4.3,
+    "ops": [
+     "multiply",
+     "multiply"
+    ]
+   },
+   {
+    "id": "full_attention:13",
+    "v": "below_threshold",
+    "us": 3.5,
+    "ops": [
+     "slice_static",
+     "neg",
+     "slice_static"
+    ]
+   },
+   {
+    "id": "full_attention:8",
+    "v": "below_threshold",
+    "us": 3.5,
+    "ops": [
+     "slice_static",
+     "neg",
+     "slice_static"
+    ]
+   }
+  ]
+ },
+ {
+  "label": "qwen3-27B B",
+  "kind": "linear_attention",
+  "window": 15833.007,
+  "floor": 5.795,
+  "feas": "not_measurable",
+  "ceiling": 0,
+  "chain_us": 429.247,
+  "chain_ops": 5,
+  "dram_us": 0,
+  "dram_ops": 0,
+  "agree_ops": 3,
+  "untraced_us": 10053.796,
+  "untraced_ops": 56,
+  "n_v": {
+   "below_threshold": 4
+  },
+  "us_v": {
+   "below_threshold": 429.2
+  },
+  "kept_us": 0.0,
+  "n_chains": 4,
+  "pair_name": 5,
+  "pair_pos": 3,
+  "chains": [
+   {
+    "id": "linear_attention:1",
+    "v": "below_threshold",
+    "us": 79.4,
+    "ops": [
+     "rms_norm"
+    ]
+   },
+   {
+    "id": "linear_attention:2",
+    "v": "below_threshold",
+    "us": 182.0,
+    "ops": [
+     "multiply"
+    ]
+   },
+   {
+    "id": "linear_attention:0",
+    "v": "below_threshold",
+    "us": 165.9,
+    "ops": [
+     "rms_norm",
+     "add"
+    ]
+   },
+   {
+    "id": "linear_attention:3",
+    "v": "below_threshold",
+    "us": 1.9,
+    "ops": [
+     "add"
+    ]
+   }
+  ]
+ }
+]

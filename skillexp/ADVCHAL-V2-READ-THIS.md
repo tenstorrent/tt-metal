@@ -45,6 +45,7 @@ that shipped scores **0.98347** — the *incumbent* is the one that fails the mo
 | [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **10 stage settings changed one at a time** — what each would have found, with a scoreboard |
 | [`ADVCHAL-V2-ADVISOR-VALUE.md`](ADVCHAL-V2-ADVISOR-VALUE.md) | **was the advisor necessary?** — detection, grid choice, hit rate, and what 7.4 h bought |
 | [`ADVCHAL-V2-PERF-REPORT-AUDIT.md`](ADVCHAL-V2-PERF-REPORT-AUDIT.md) | **the perf report the stage runs and throws away** — compute-vs-movement scorecard per cell |
+| [`ADVCHAL-V2-ADVICE-FOLLOWED.md`](ADVCHAL-V2-ADVICE-FOLLOWED.md) | **how much of the advice was followed, all 15 cells** — per chain verdict, and buffer type vs geometry |
 | [`ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md) | **one shipped win, op by op** — original / advised / shipped, with shapes and the stage's own labels |
 | [`ADVCHAL-V2-PHI-OP-BY-OP.md`](ADVCHAL-V2-PHI-OP-BY-OP.md) | the same win as a before/after delta, plus the sharding view |
 | `phi_TERMINAL_BEFORE.txt`, `phi_TERMINAL_AFTER.txt` | real `tt-perf-report` terminal output, both sides |
@@ -109,7 +110,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The twenty-four findings that matter
+## 3. The twenty-five findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -723,6 +724,50 @@ candidate on its own.
 
 ---
 
+### 3.25 Corpus-wide: the advisor's L1 call was followed widely, its grid once in fourteen cells
+
+§3.24 answered this for one cell. Across all 15, at chain level:
+
+| chain verdict | chains | µs | share | meaning |
+|---|---|---|---|---|
+| `below_threshold` | 108 | 3325.9 | **60.0 %** | **dismissed without a measurement** |
+| `rejected` | 55 | 1063.8 | 19.2 % | implemented, measured, lost or vetoed |
+| `kept` | 58 | 589.3 | **10.6 %** | the advice shipped |
+| `not_measurable` | 26 | 568.4 | 10.2 % | the cell's ceiling was under its noise floor |
+| `hard_error` | 1 | 0.0 | — | implementing it hit a `TT_FATAL` |
+
+**58 of 248 chains kept, 589 of 5547 µs = 10.6 %** — 8.8 % if you include the 86 `dram_resident` ops that get
+no chain at all. **17 of 26 (cell, layer-kind) pairs kept zero.** And that is an *upper bound*: `kept` means
+the chain shipped, not that the advised geometry was implemented.
+
+**Buffer type vs geometry, over the 9 cells that changed anything:**
+
+| what shipped | cells |
+|---|---|
+| the advised geometry, **verbatim** | **1** — gemma-4-26B onA (`1x88`, 88 cores) → **−12.98 %**, the corpus's largest win |
+| a **self-chosen** grid on the advisor-identified op | **3** — north-mini FN (32 vs advised 22), phi onA (32 vs 22), phi B (`[8,1]` vs 11/22) |
+| buffer type / boundary only, **no grid** | **5** — gemma-4-12B, gemma-4-26B FN, gemma-4-26B B, phi FN, qwen FN |
+
+**Where a cell measured the advisor's grid head-to-head against its own, the advisor's lost.** north-mini FN
+screened the advised 22 as `advisor_moe_norm_22` and recorded it *"slower than the 32-core winner for both MoE
+kinds"*; phi B's artefacts say *"advisor core counts 11/22 alone (not recommendations)"*. So the ranking that
+gets used is `isL1` (level 1 of `LayoutScore`); the one that does not is `coreCount` (level 6 of 7) — §3.3.
+
+**Two of the three biggest wins came from cells whose own arithmetic said not to bother.** gemma-4-26B onA and
+north-mini FN both shipped a widened RMSNorm; both had layer kinds with `ceiling_us = 0`, verdict
+`not_measurable`, every chain `below_threshold`, and **0 kept chains recorded**. They screened anyway and
+booked −12.98 % and −9.26 % per layer. The ceiling prices boundary conversions only, so an in-chain re-grid —
+exactly what a 1→88-core norm is — is worth `0.000 µs` to it. This is §3.13/D0 confirmed at corpus scale.
+
+**And 70 of the 134 dismissed chains are ≥ 5× their own cell's noise floor**, up to 282×, including chains at
+19.3 %, 14.5 % and 13.9 % of their profiled window. *(Caveat: a chain's µs is its ops' incumbent cost, not the
+claimed saving — 57× the floor means a **1.7 % saving on those ops would already be measurable**, not that a
+57× win exists.)*
+
+→ [`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md) for the per-cell tables and the full dismissed-chain list.
+
+---
+
 ## 4. What makes a model advisor-compatible
 
 Ranked by how much it actually decided outcomes.
@@ -867,4 +912,6 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 | Implicit: that the wins generalise across batch | They do **not** — phi is batch-32-pinned by construction (E17), and nothing records it |
 | Row 46/54 `linear` "follows the advice" | **Downgraded to *family only*.** Both were already L1 width-sharded before the change, and the advised grid differs (88c vs 32c, 88c vs 12c). I had credited the advisor with the incumbent's own choice |
 | Seven rows read as "does not follow the advice" / "op removed" | **Downgraded to *undecidable*.** All seven are `pair_confidence: position` — the tool's own documented guess. I had been reading positional pairings as findings (§3.24) |
+| Implicit: that "improved" means the advice was followed | **It does not.** Two of the three largest wins were booked by cells that recorded **0 kept chains** and whose feasibility said `not_measurable` (§3.25) |
+| `advchal-v2-data.json` covers the corpus | **It has 14 rows, not 15** — gemma-4-26B FN is missing. Counts taken from that file alone are one cell short ([`ADVICE-FOLLOWED`](ADVCHAL-V2-ADVICE-FOLLOWED.md)) |
 | Implicit: that DS-matmul advice never wins | One *did* (gemma-4-12B `linear` 12→55c, kept), and 65 % of matmul cost was never screenable anyway (§3.12) |
