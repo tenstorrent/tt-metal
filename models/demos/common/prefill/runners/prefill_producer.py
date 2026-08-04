@@ -982,8 +982,6 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     return slot_traces, slot_lengths, pools_by_trace
 
 
-
-
 # Multi-rank coordination (device-less; GO/DONE over MPI collectives, not sync files)
 #
 # Only the barriers are MPI — the merged KV table and the device map are still delivered as files the
