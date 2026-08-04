@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/circular_buffer_constants.h>
@@ -104,20 +105,20 @@ struct CbDepths {
 // common/codegen_common/factory/cb_policy.py scale_cb_depths_to_l1: when the requested plan
 // overruns the usable budget both depths shrink by the same floored factor, then any rounding
 // excess left by the min-1 clamp is taken off whichever CB still has a page to give.
-CbDepths scale_cb_depths_to_l1(
+std::optional<CbDepths> scale_cb_depths_to_l1(
     uint32_t in_depth, uint32_t out_depth, uint32_t in_page, uint32_t out_page, uint32_t l1) {
-    TT_FATAL(l1 > kL1Reserve, "tilize codegen: L1 size {} does not exceed the {}-byte reserve", l1, kL1Reserve);
+    if (l1 <= kL1Reserve) {
+        return std::nullopt;
+    }
     const uint32_t available = l1 - kL1Reserve;
     const uint64_t minimum_bytes = static_cast<uint64_t>(in_page) + out_page;
-    TT_FATAL(
-        available >= minimum_bytes,
-        "tilize codegen: a one-page input/output CB plan needs {} L1 bytes, exceeding the available {}",
-        minimum_bytes,
-        available);
+    if (available < minimum_bytes) {
+        return std::nullopt;
+    }
 
     uint64_t total = static_cast<uint64_t>(in_depth) * in_page + static_cast<uint64_t>(out_depth) * out_page;
     if (total <= available) {
-        return {in_depth, out_depth};
+        return CbDepths{in_depth, out_depth};
     }
     in_depth = std::max<uint32_t>(1, static_cast<uint32_t>(static_cast<uint64_t>(in_depth) * available / total));
     out_depth = std::max<uint32_t>(1, static_cast<uint32_t>(static_cast<uint64_t>(out_depth) * available / total));
@@ -130,7 +131,9 @@ CbDepths scale_cb_depths_to_l1(
         // (bytes, which) pairs keeps the first maximum).
         const bool pick_in = in_depth > 1 && (out_depth <= 1 || in_bytes >= out_bytes);
         const bool pick_out = !pick_in && out_depth > 1;
-        TT_FATAL(pick_in || pick_out, "tilize codegen: scaled CB plan cannot fit the available {} L1 bytes", available);
+        if (!pick_in && !pick_out) {
+            return std::nullopt;
+        }
         const uint32_t depth = pick_in ? in_depth : out_depth;
         const uint32_t page = pick_in ? in_page : out_page;
         const uint64_t excess = scaled - available;
@@ -142,13 +145,38 @@ CbDepths scale_cb_depths_to_l1(
         }
         scaled = static_cast<uint64_t>(in_depth) * in_page + static_cast<uint64_t>(out_depth) * out_page;
     }
-    return {in_depth, out_depth};
+    return CbDepths{in_depth, out_depth};
 }
 
 // ops/tilize/spec.py _select_tilize_cb_depths + _validate_tilize_pipeline: fit the plan to L1,
-// then prove the surviving contract cannot wedge the device. A depth below the compute chunk or
+// then check the surviving contract cannot wedge the device. A depth below the compute chunk or
 // below the batched writer's residency leaves the packer blocked on a reservation the writer can
-// only release by consuming pages the packer has not produced — fail on the host instead.
+// only release by consuming pages the packer has not produced.
+//
+// Returns nullopt instead of raising (the reference's ValueError) so the routing gate can answer
+// the same question the factory does and fall back to native, rather than the factory aborting a
+// call `auto` already accepted.
+std::optional<CbDepths> try_select_cb_depths(
+    uint32_t in_depth,
+    uint32_t out_depth,
+    uint32_t compute_chunk,
+    uint32_t write_batch,
+    uint32_t in_page,
+    uint32_t out_page,
+    uint32_t l1) {
+    if (compute_chunk == 0) {
+        return std::nullopt;
+    }
+    const std::optional<CbDepths> depths = scale_cb_depths_to_l1(in_depth, out_depth, in_page, out_page, l1);
+    if (!depths.has_value()) {
+        return std::nullopt;
+    }
+    if (depths->in_depth < compute_chunk || depths->out_depth < required_cb_out(write_batch, compute_chunk)) {
+        return std::nullopt;
+    }
+    return depths;
+}
+
 CbDepths select_cb_depths(
     uint32_t in_depth,
     uint32_t out_depth,
@@ -157,22 +185,18 @@ CbDepths select_cb_depths(
     uint32_t in_page,
     uint32_t out_page,
     uint32_t l1) {
-    TT_FATAL(compute_chunk > 0, "tilize codegen: compute chunk must be positive");
-    const CbDepths depths = scale_cb_depths_to_l1(in_depth, out_depth, in_page, out_page, l1);
+    const std::optional<CbDepths> depths =
+        try_select_cb_depths(in_depth, out_depth, compute_chunk, write_batch, in_page, out_page, l1);
     TT_FATAL(
-        depths.in_depth >= compute_chunk,
-        "tilize codegen: CB_IN depth {} is smaller than compute chunk {}",
-        depths.in_depth,
-        compute_chunk);
-    const uint32_t required_out = required_cb_out(write_batch, compute_chunk);
-    TT_FATAL(
-        depths.out_depth >= required_out,
-        "tilize codegen: CB_OUT depth {} is smaller than the {} pages required for write_batch {} and compute chunk {}",
-        depths.out_depth,
-        required_out,
+        depths.has_value(),
+        "tilize codegen: no CB plan fits per-core L1 ({} B) for compute chunk {} and write batch {} at input page {} / "
+        "output page {} B",
+        l1,
+        compute_chunk,
         write_batch,
-        compute_chunk);
-    return depths;
+        in_page,
+        out_page);
+    return *depths;
 }
 
 // UnpackToDestMode vector forcing a FLOAT32 input CB to unpack straight into DEST (avoids the
@@ -283,19 +307,16 @@ bool uses_block_path(
     return (split.cores_w * split.cores_h) > total_ht;
 }
 
-// ops/tilize/spec.py _choose_tilize_2d_ncol
+// ops/tilize/spec.py _choose_tilize_2d_ncol.
+// ncol need NOT divide Wt: a non-divisor split widens the first Wt % ncol blocks by one tile,
+// which costs one extra reader/compute kernel variant (build_2d_column groups cores by width, as
+// the block path already does for its cliff columns) and buys the column split for prime and
+// awkward Wt that would otherwise fall to the row path.
 uint32_t choose_tilize_2d_ncol(uint32_t total_ht, uint32_t wt, uint32_t valid_cores) {
     if (total_ht >= valid_cores || wt < 2) {
         return 1;
     }
-    const uint32_t max_ncol = std::min(valid_cores / total_ht, wt);
-    uint32_t best = 1;
-    for (uint32_t d = 2; d <= max_ncol; ++d) {
-        if (wt % d == 0) {
-            best = d;
-        }
-    }
-    return best;
+    return std::max<uint32_t>(1, std::min(valid_cores / total_ht, wt));
 }
 
 // ops/tilize/spec.py uses_2d_column_path
@@ -304,15 +325,95 @@ uint32_t uses_2d_column_path(
     if (uses_block_path(total_ht, wt, num_avail_cores, cb_block_limit, ts_in, l1)) {
         return 1;
     }
-    if (wt <= 2) {
-        return 1;
-    }
     return choose_tilize_2d_ncol(total_ht, wt, num_avail_cores);
+}
+
+// ops/tilize/spec.py _tilize_compute_chunk: the exact tile count one compute invocation consumes.
+uint32_t tilize_compute_chunk(uint32_t width, uint32_t cb_block_limit) {
+    return (width <= cb_block_limit) ? width : largest_divisor_le(width, cb_block_limit);
+}
+
+// Per-column-block widths for a (possibly non-divisor) ncol split of Wt: the first Wt % ncol
+// blocks carry one extra tile.
+std::vector<uint32_t> column_block_widths(uint32_t wt, uint32_t ncol) {
+    const uint32_t base = wt / ncol;
+    const uint32_t rem = wt % ncol;
+    std::vector<uint32_t> widths(ncol, base);
+    for (uint32_t b = 0; b < rem; ++b) {
+        widths[b] += 1;
+    }
+    return widths;
 }
 
 // ---------------------------------------------------------------------------
 // build_tilize_row (ops/tilize/spec.py build_tilize_row)
 // ---------------------------------------------------------------------------
+
+// Everything the row path decides before its CB depths: column chunking, the batched-writer
+// contract, and the requested depths. Split out of build_row so the routing gate can ask whether
+// the resulting plan fits L1 without building a program.
+struct RowShape {
+    uint32_t cb_depth = 0;
+    uint32_t chunk_wt = 0;
+    uint32_t num_col_chunks = 0;
+    uint32_t write_batch = 0;
+    bool minimal_work = false;
+    uint32_t requested_in_depth = 0;
+    uint32_t requested_out_depth = 0;
+};
+
+RowShape compute_row_shape(uint32_t l1, uint32_t num_cores, const Geometry& g, const TilizeCodegenParams& attrs) {
+    RowShape s;
+    if (attrs.use_low_perf) {
+        // ttnn's low-performance route: single-core, one-tile block, minimal CB footprint.
+        s.cb_depth = 1;
+        s.chunk_wt = 1;
+        s.num_col_chunks = g.wt;
+    } else if (2 * 2 * g.wt * g.ts_in <= l1) {
+        s.cb_depth = 2;
+        s.chunk_wt = g.wt;
+        s.num_col_chunks = 1;
+    } else if (2 * g.wt * g.ts_in <= l1) {
+        s.cb_depth = 1;
+        s.chunk_wt = g.wt;
+        s.num_col_chunks = 1;
+    } else {
+        const uint32_t max_chunk = l1 / (2 * g.ts_in);
+        s.chunk_wt = largest_divisor_le(g.wt, max_chunk);
+        s.cb_depth = (2 * 2 * s.chunk_wt * g.ts_in <= l1) ? 2 : 1;
+        s.num_col_chunks = g.wt / s.chunk_wt;
+    }
+
+    // MEMORY: writer_tilize_interleaved.cpp's batched branch walks CB pages linearly from the
+    // read pointer, which only matches the output tile ids when a core owns ONE tile-row; with
+    // several rows per core it interleaves them wrong. Force the single-write branch there.
+    // A one-tile-per-core assignment has nothing to overlap either, so batch priming and
+    // double-buffering would be pure per-core setup cost — spec.py's `minimal_work` clamp.
+    s.minimal_work = (s.num_col_chunks == 1 && s.chunk_wt == 1 && g.total_ht <= num_cores);
+    if (s.minimal_work) {
+        s.cb_depth = 1;
+    }
+    const bool force_single_write = attrs.use_low_perf || (g.total_ht > num_cores) || s.minimal_work;
+    s.write_batch = force_single_write ? 1 : kDefaultWriteBatch;
+    // Compute only ever adds pages in whole chunk_wt-sized tilize_block groups, so a batched
+    // writer that needs a non-multiple-of-chunk_wt capacity (required_cb_out rounds up to
+    // align_up(2*write_batch, chunk_wt)) is reserving more than any single compute group can
+    // supply: the packer blocks on the partial group while the writer blocks on the pages only
+    // that group produces, degenerating the pipeline to lockstep instead of overlapping. Clamping
+    // to chunk_wt keeps the required capacity at exactly 2*chunk_wt, reachable one compute group
+    // at a time.
+    if (!force_single_write && align_up(2 * s.write_batch, s.chunk_wt) > 2 * s.chunk_wt) {
+        s.write_batch = s.chunk_wt;
+    }
+
+    s.requested_in_depth = s.cb_depth * s.chunk_wt;
+    s.requested_out_depth = std::max(s.cb_depth * s.chunk_wt, required_cb_out(s.write_batch, s.chunk_wt));
+    if (s.minimal_work) {
+        s.requested_out_depth = 1;
+    }
+    return s;
+}
+
 ProgramDescriptor build_row(
     IDevice* device,
     const TilizeCodegenParams& attrs,
@@ -324,27 +425,6 @@ ProgramDescriptor build_row(
     const uint32_t l1 = device->l1_size_per_core();
     const uint32_t stick_size_bytes = g.w * g.elem_size;
     const uint32_t aligned_ps = align_up(stick_size_bytes, dram_alignment);
-
-    uint32_t cb_depth, chunk_wt, num_col_chunks;
-    if (attrs.use_low_perf) {
-        // ttnn's low-performance route: single-core, one-tile block, minimal CB footprint.
-        cb_depth = 1;
-        chunk_wt = 1;
-        num_col_chunks = g.wt;
-    } else if (2 * 2 * g.wt * g.ts_in <= l1) {
-        cb_depth = 2;
-        chunk_wt = g.wt;
-        num_col_chunks = 1;
-    } else if (2 * g.wt * g.ts_in <= l1) {
-        cb_depth = 1;
-        chunk_wt = g.wt;
-        num_col_chunks = 1;
-    } else {
-        const uint32_t max_chunk = l1 / (2 * g.ts_in);
-        chunk_wt = largest_divisor_le(g.wt, max_chunk);
-        cb_depth = (2 * 2 * chunk_wt * g.ts_in <= l1) ? 2 : 1;
-        num_col_chunks = g.wt / chunk_wt;
-    }
 
     CoreRangeSet all_cores;
     uint32_t num_cores;
@@ -377,35 +457,12 @@ ProgramDescriptor build_row(
         cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/false);
     }
 
-    // MEMORY: writer_tilize_interleaved.cpp's batched branch walks CB pages linearly from the
-    // read pointer, which only matches the output tile ids when a core owns ONE tile-row; with
-    // several rows per core it interleaves them wrong. Force the single-write branch there.
-    // A one-tile-per-core assignment has nothing to overlap either, so batch priming and
-    // double-buffering would be pure per-core setup cost — spec.py's `minimal_work` clamp.
-    const bool minimal_work = (num_col_chunks == 1 && chunk_wt == 1 && g.total_ht <= num_cores);
-    if (minimal_work) {
-        cb_depth = 1;
-    }
-    const bool force_single_write = attrs.use_low_perf || (g.total_ht > num_cores) || minimal_work;
-    uint32_t write_batch = force_single_write ? 1 : kDefaultWriteBatch;
-    // Compute only ever adds pages in whole chunk_wt-sized tilize_block groups, so a batched
-    // writer that needs a non-multiple-of-chunk_wt capacity (required_cb_out rounds up to
-    // align_up(2*write_batch, chunk_wt)) is reserving more than any single compute group can
-    // supply: the packer blocks on the partial group while the writer blocks on the pages only
-    // that group produces, degenerating the pipeline to lockstep instead of overlapping. Clamping
-    // to chunk_wt keeps the required capacity at exactly 2*chunk_wt, reachable one compute group
-    // at a time.
-    if (!force_single_write && align_up(2 * write_batch, chunk_wt) > 2 * chunk_wt) {
-        write_batch = chunk_wt;
-    }
-
-    const uint32_t requested_in_depth = cb_depth * chunk_wt;
-    uint32_t requested_out_depth = std::max(cb_depth * chunk_wt, required_cb_out(write_batch, chunk_wt));
-    if (minimal_work) {
-        requested_out_depth = 1;
-    }
-    const CbDepths cb =
-        select_cb_depths(requested_in_depth, requested_out_depth, chunk_wt, write_batch, g.ts_in, g.ts_out, l1);
+    const RowShape shape = compute_row_shape(l1, num_cores, g, attrs);
+    const uint32_t chunk_wt = shape.chunk_wt;
+    const uint32_t num_col_chunks = shape.num_col_chunks;
+    const uint32_t write_batch = shape.write_batch;
+    const CbDepths cb = select_cb_depths(
+        shape.requested_in_depth, shape.requested_out_depth, chunk_wt, write_batch, g.ts_in, g.ts_out, l1);
     const uint32_t cb_in_depth = cb.in_depth;
     const uint32_t cb_out_depth = cb.out_depth;
 
@@ -511,6 +568,57 @@ ProgramDescriptor build_row(
 // ---------------------------------------------------------------------------
 // build_tilize_2d_column (ops/tilize/spec.py build_tilize_2d_column)
 // ---------------------------------------------------------------------------
+
+// Column-block widths and the CB contract they imply. One CB size spans every width group (the
+// block path does the same), so sizing follows the widest block and a narrower group leaves part
+// of its reservation unused.
+struct ColumnShape {
+    std::vector<uint32_t> block_wts;
+    std::vector<uint32_t> block_starts;
+    uint32_t max_tpc = 0;
+    uint32_t max_sub_wt = 0;
+    uint32_t cb_depth = 0;
+    uint32_t write_batch = 0;
+    bool minimal_work = false;
+    uint32_t requested_in_depth = 0;
+    uint32_t requested_out_depth = 0;
+};
+
+ColumnShape compute_column_shape(uint32_t l1, const Geometry& g, uint32_t ncol) {
+    ColumnShape s;
+    s.block_wts = column_block_widths(g.wt, ncol);
+    s.block_starts.reserve(ncol);
+    uint32_t acc = 0;
+    for (const uint32_t w : s.block_wts) {
+        s.block_starts.push_back(acc);
+        acc += w;
+    }
+    s.max_tpc = *std::max_element(s.block_wts.begin(), s.block_wts.end());
+
+    s.cb_depth = (2 * 2 * s.max_tpc * g.ts_in <= l1) ? 2 : 1;
+    // As in the row backend, a one-tile-per-core assignment has nothing to overlap: avoid
+    // batch-4 writer priming and double-buffering in this launch-bound case.
+    s.minimal_work = (s.max_tpc == 1);
+    if (s.minimal_work) {
+        s.cb_depth = 1;
+    }
+    s.write_batch = s.minimal_work ? 1 : kDefaultWriteBatch;
+
+    // sub_wt is the packer's reservation granularity, so it has to be known before the output depth.
+    const uint32_t cb_block_limit = compute_cb_block_limit(g.ts_in, l1);
+    s.max_sub_wt = 0;
+    for (const uint32_t w : s.block_wts) {
+        s.max_sub_wt = std::max(s.max_sub_wt, tilize_compute_chunk(w, cb_block_limit));
+    }
+
+    s.requested_in_depth = s.cb_depth * s.max_tpc;
+    s.requested_out_depth = std::max(s.cb_depth * s.max_tpc, required_cb_out(s.write_batch, s.max_sub_wt));
+    if (s.minimal_work) {
+        s.requested_out_depth = 1;
+    }
+    return s;
+}
+
 ProgramDescriptor build_2d_column(
     IDevice* device,
     const TilizeCodegenParams& attrs,
@@ -518,12 +626,10 @@ ProgramDescriptor build_2d_column(
     Tensor& output_tensor,
     const Geometry& g,
     uint32_t ncol) {
-    TT_FATAL(
-        ncol >= 2 && g.wt % ncol == 0, "tilize codegen 2D ncol={} must be a divisor of Wt={} and >= 2", ncol, g.wt);
+    TT_FATAL(ncol >= 2 && ncol <= g.wt, "tilize codegen 2D ncol={} must satisfy 2 <= ncol <= Wt={}", ncol, g.wt);
 
     const uint32_t dram_alignment = hal::get_dram_alignment();
     const uint32_t l1 = device->l1_size_per_core();
-    const uint32_t tpc = g.wt / ncol;
     const uint32_t num_cores = g.total_ht * ncol;
 
     const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -536,26 +642,12 @@ ProgramDescriptor build_2d_column(
 
     const uint32_t stick_size_bytes = g.w * g.elem_size;
     const uint32_t aligned_ps = align_up(stick_size_bytes, dram_alignment);
-
-    uint32_t cb_depth = (2 * 2 * tpc * g.ts_in <= l1) ? 2 : 1;
-    const bool minimal_work = (tpc == 1);
-    if (minimal_work) {
-        cb_depth = 1;
-    }
-    const uint32_t write_batch = minimal_work ? 1 : kDefaultWriteBatch;
-
-    // sub_wt is the packer's reservation granularity, so it has to be known before the output depth.
     const uint32_t cb_block_limit = compute_cb_block_limit(g.ts_in, l1);
-    const uint32_t sub_wt = (tpc <= cb_block_limit) ? tpc : largest_divisor_le(tpc, cb_block_limit);
-    const uint32_t n_sub = (sub_wt == tpc) ? 1 : (tpc / sub_wt);
 
-    const uint32_t requested_in_depth = cb_depth * tpc;
-    uint32_t requested_out_depth = std::max(cb_depth * tpc, required_cb_out(write_batch, sub_wt));
-    if (minimal_work) {
-        requested_out_depth = 1;
-    }
-    const CbDepths cb =
-        select_cb_depths(requested_in_depth, requested_out_depth, sub_wt, write_batch, g.ts_in, g.ts_out, l1);
+    const ColumnShape shape = compute_column_shape(l1, g, ncol);
+    const uint32_t write_batch = shape.write_batch;
+    const CbDepths cb = select_cb_depths(
+        shape.requested_in_depth, shape.requested_out_depth, shape.max_sub_wt, write_batch, g.ts_in, g.ts_out, l1);
     const uint32_t cb_in_depth = cb.in_depth;
     const uint32_t cb_out_depth = cb.out_depth;
 
@@ -590,54 +682,74 @@ ProgramDescriptor build_2d_column(
         }}},
     });
 
-    KernelDescriptor::CompileTimeArgs reader_ct{n_sub, constants::TILE_HEIGHT, sub_wt, elem_w_bytes, aligned_ps};
-    TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kReaderTilizeBlock;
-    reader_desc.core_ranges = core_grid;
-    reader_desc.compile_time_args = std::move(reader_ct);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor::CompileTimeArgs writer_ct{kCbOutId, out_page};
-    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
-    writer_ct.push_back(write_batch);
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kWriterTilizeBlock;
-    writer_desc.core_ranges = core_grid;
-    writer_desc.compile_time_args = std::move(writer_ct);
-    writer_desc.config = WriterConfigDescriptor{};
-
     const bool fp32 = (attrs.input_dtype == DataType::FLOAT32 || attrs.output_dtype == DataType::FLOAT32);
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = kComputeTilize;
-    compute_desc.core_ranges = core_grid;
-    compute_desc.compile_time_args = {kCbInId, kCbOutId, n_sub, sub_wt};
-    ComputeConfigDescriptor compute_cfg;
-    compute_cfg.fp32_dest_acc_en = fp32;
-    // The unpack-to-DEST override keys off the INPUT dtype alone: it exists to stop an RM fp32
-    // input from unpacking through SRCA as Float16_b, which an fp32 output cannot cause.
-    if (attrs.input_dtype == DataType::FLOAT32) {
-        compute_cfg.unpack_to_dest_mode = unpack_to_dest_fp32_modes(kCbInId);
-    }
-    compute_desc.config = compute_cfg;
 
+    // The block width is a compile-time arg to the reader and the compute kernel, so each distinct
+    // width (at most two: base and base+1 when ncol does not divide Wt) needs its own instance.
+    std::map<uint32_t, std::vector<uint32_t>> groups;  // block width -> core indices
     for (uint32_t i = 0; i < num_cores; ++i) {
-        const auto& core = cores[i];
-        const uint32_t tile_row = i / ncol;
-        const uint32_t col_block = i % ncol;
-        const uint32_t start_stick = tile_row * constants::TILE_HEIGHT;
-        const uint32_t start_tc = col_block * tpc;
-        const uint32_t col_byte_offset = start_tc * constants::TILE_WIDTH * g.elem_size;
-
-        reader_desc.emplace_runtime_args(core, {input_tensor.buffer(), 1u, start_stick, col_byte_offset});
-        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{1});
-        const uint32_t start_tile = tile_row * g.wt + start_tc;
-        writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), tpc, start_tile, tpc, g.wt});
+        groups[shape.block_wts[i % ncol]].push_back(i);
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    for (const auto& [grp_wt, indices] : groups) {
+        std::vector<CoreRange> grp_ranges;
+        grp_ranges.reserve(indices.size());
+        for (const uint32_t i : indices) {
+            grp_ranges.emplace_back(cores[i], cores[i]);
+        }
+        const CoreRangeSet grp_grid(grp_ranges);
+
+        const uint32_t sub_wt = tilize_compute_chunk(grp_wt, cb_block_limit);
+        const uint32_t n_sub = grp_wt / sub_wt;
+
+        KernelDescriptor::CompileTimeArgs reader_ct{n_sub, constants::TILE_HEIGHT, sub_wt, elem_w_bytes, aligned_ps};
+        TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
+        KernelDescriptor reader_desc;
+        reader_desc.kernel_source = kReaderTilizeBlock;
+        reader_desc.core_ranges = grp_grid;
+        reader_desc.compile_time_args = std::move(reader_ct);
+        reader_desc.config = ReaderConfigDescriptor{};
+
+        KernelDescriptor::CompileTimeArgs writer_ct{kCbOutId, out_page};
+        TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+        writer_ct.push_back(write_batch);
+        KernelDescriptor writer_desc;
+        writer_desc.kernel_source = kWriterTilizeBlock;
+        writer_desc.core_ranges = grp_grid;
+        writer_desc.compile_time_args = std::move(writer_ct);
+        writer_desc.config = WriterConfigDescriptor{};
+
+        KernelDescriptor compute_desc;
+        compute_desc.kernel_source = kComputeTilize;
+        compute_desc.core_ranges = grp_grid;
+        compute_desc.compile_time_args = {kCbInId, kCbOutId, n_sub, sub_wt};
+        ComputeConfigDescriptor compute_cfg;
+        compute_cfg.fp32_dest_acc_en = fp32;
+        // The unpack-to-DEST override keys off the INPUT dtype alone: it exists to stop an RM fp32
+        // input from unpacking through SRCA as Float16_b, which an fp32 output cannot cause.
+        if (attrs.input_dtype == DataType::FLOAT32) {
+            compute_cfg.unpack_to_dest_mode = unpack_to_dest_fp32_modes(kCbInId);
+        }
+        compute_desc.config = compute_cfg;
+
+        for (const uint32_t i : indices) {
+            const auto& core = cores[i];
+            const uint32_t tile_row = i / ncol;
+            const uint32_t col_block = i % ncol;
+            const uint32_t start_stick = tile_row * constants::TILE_HEIGHT;
+            const uint32_t start_tc = shape.block_starts[col_block];
+            const uint32_t col_byte_offset = start_tc * constants::TILE_WIDTH * g.elem_size;
+
+            reader_desc.emplace_runtime_args(core, {input_tensor.buffer(), 1u, start_stick, col_byte_offset});
+            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{1});
+            const uint32_t start_tile = tile_row * g.wt + start_tc;
+            writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), grp_wt, start_tile, grp_wt, g.wt});
+        }
+
+        desc.kernels.push_back(std::move(reader_desc));
+        desc.kernels.push_back(std::move(writer_desc));
+        desc.kernels.push_back(std::move(compute_desc));
+    }
     return desc;
 }
 
@@ -652,6 +764,58 @@ struct BlockAssignment {
     uint32_t start_tc = 0;
 };
 
+// The 2D block split after the wide-short adjustment, plus the CB contract it implies.
+struct BlockShape {
+    Split2D split;
+    uint32_t write_batch = 0;
+    uint32_t max_bw = 0;
+    uint32_t max_compute_chunk = 0;
+    uint32_t cb_depth = 0;
+    uint32_t requested_in_depth = 0;
+    uint32_t requested_out_depth = 0;
+};
+
+BlockShape compute_block_shape(uint32_t l1, uint32_t num_avail_cores, const Geometry& g) {
+    const uint32_t cb_block_limit = compute_cb_block_limit(g.ts_in, l1);
+    BlockShape s;
+    s.split = compute_2d_split(g.total_ht, g.wt, num_avail_cores, cb_block_limit);
+
+    // Keep one tile-row per core in the wide-short regime instead of the generic splitter's
+    // tall-block + width-cliff combination (known-wrong ordering — see uses_block_path).
+    if (std::max(s.split.block_ht, s.split.cliff_ht) > 1 && g.total_ht < num_avail_cores) {
+        const uint32_t forced_cols = std::min(num_avail_cores / g.total_ht, g.wt);
+        if (forced_cols >= 2) {
+            const uint32_t block_wt = (g.wt + forced_cols - 1) / forced_cols;
+            // Rounding the block width up can leave trailing columns with nothing to own
+            // (block_wt * (forced_cols - 1) >= Wt). Recover the column count from the width so the
+            // blocks exactly tile [0, Wt) and the cliff width stays inside (0, block_wt].
+            s.split.cores_w = (g.wt + block_wt - 1) / block_wt;
+            s.split.block_wt = block_wt;
+            s.split.cliff_wt = g.wt - block_wt * (s.split.cores_w - 1);
+            s.split.cores_h = g.total_ht;
+            s.split.block_ht = 1;
+            s.split.cliff_ht = 0;
+        }
+    }
+
+    // MEMORY: the batched writer_tilize_block.cpp is correct only for ONE tile-row per core.
+    const bool multirow_core = std::max(s.split.block_ht, s.split.cliff_ht) > 1;
+    s.write_batch = multirow_core ? 1 : kDefaultWriteBatch;
+
+    // A single CB size spans every width group, so it follows the widest block.
+    for (const uint32_t w : {s.split.block_wt, s.split.cliff_wt}) {
+        if (w == 0) {
+            continue;
+        }
+        s.max_bw = std::max(s.max_bw, w);
+        s.max_compute_chunk = std::max(s.max_compute_chunk, tilize_compute_chunk(w, cb_block_limit));
+    }
+    s.cb_depth = (2 * 2 * s.max_bw * g.ts_in <= l1) ? 2 : 1;
+    s.requested_in_depth = s.cb_depth * s.max_bw;
+    s.requested_out_depth = std::max(s.cb_depth * s.max_bw, required_cb_out(s.write_batch, s.max_compute_chunk));
+    return s;
+}
+
 ProgramDescriptor build_block(
     IDevice* device,
     const TilizeCodegenParams& attrs,
@@ -664,30 +828,14 @@ ProgramDescriptor build_block(
     const uint32_t num_avail_cores = grid.x * grid.y;
     const uint32_t cb_block_limit = compute_cb_block_limit(g.ts_in, l1);
 
-    Split2D split = compute_2d_split(g.total_ht, g.wt, num_avail_cores, cb_block_limit);
-    uint32_t block_wt = split.block_wt, block_ht = split.block_ht;
-    uint32_t cores_w = split.cores_w, cores_h = split.cores_h;
-    uint32_t cliff_wt = split.cliff_wt, cliff_ht = split.cliff_ht;
-
-    // Keep one tile-row per core in the wide-short regime instead of the generic splitter's
-    // tall-block + width-cliff combination (known-wrong ordering — see uses_block_path).
-    if (std::max(block_ht, cliff_ht) > 1 && g.total_ht < num_avail_cores) {
-        const uint32_t forced_cols = std::min(num_avail_cores / g.total_ht, g.wt);
-        if (forced_cols >= 2) {
-            cores_h = g.total_ht;
-            block_ht = 1;
-            cliff_ht = 0;
-            cores_w = forced_cols;
-            block_wt = (g.wt + cores_w - 1) / cores_w;
-            cliff_wt = g.wt - block_wt * (cores_w - 1);
-        }
-    }
+    const BlockShape shape = compute_block_shape(l1, num_avail_cores, g);
+    const uint32_t block_wt = shape.split.block_wt, block_ht = shape.split.block_ht;
+    const uint32_t cores_w = shape.split.cores_w, cores_h = shape.split.cores_h;
+    const uint32_t cliff_wt = shape.split.cliff_wt, cliff_ht = shape.split.cliff_ht;
+    const uint32_t write_batch = shape.write_batch;
 
     const bool has_cliff_w = cliff_wt > 0;
     const bool has_cliff_h = cliff_ht > 0;
-    // MEMORY: the batched writer_tilize_block.cpp is correct only for ONE tile-row per core.
-    const bool multirow_core = std::max(block_ht, cliff_ht) > 1;
-    const uint32_t write_batch = multirow_core ? 1 : kDefaultWriteBatch;
 
     const uint32_t total_cores = cores_w * cores_h;
     const std::vector<CoreCoord> valid_cores = grid_to_cores(total_cores, grid.x, grid.y, /*row_wise=*/true);
@@ -707,18 +855,10 @@ ProgramDescriptor build_block(
         }
     }
 
-    uint32_t max_bw = 0;
-    uint32_t max_compute_chunk = 0;
-    for (const auto& [w, _] : groups) {
-        max_bw = std::max(max_bw, w);
-        max_compute_chunk =
-            std::max(max_compute_chunk, (w <= cb_block_limit) ? w : largest_divisor_le(w, cb_block_limit));
-    }
-    const uint32_t cb_depth = (2 * 2 * max_bw * g.ts_in <= l1) ? 2 : 1;
     const CbDepths cb = select_cb_depths(
-        cb_depth * max_bw,
-        std::max(cb_depth * max_bw, required_cb_out(write_batch, max_compute_chunk)),
-        max_compute_chunk,
+        shape.requested_in_depth,
+        shape.requested_out_depth,
+        shape.max_compute_chunk,
         write_batch,
         g.ts_in,
         g.ts_out,
@@ -768,8 +908,8 @@ ProgramDescriptor build_block(
         }
         const CoreRangeSet grp_grid(grp_ranges);
 
-        const uint32_t sub_wt = (grp_wt <= cb_block_limit) ? grp_wt : largest_divisor_le(grp_wt, cb_block_limit);
-        const uint32_t n_sub = (sub_wt == grp_wt) ? 1 : (grp_wt / sub_wt);
+        const uint32_t sub_wt = tilize_compute_chunk(grp_wt, cb_block_limit);
+        const uint32_t n_sub = grp_wt / sub_wt;
 
         KernelDescriptor::CompileTimeArgs reader_ct{n_sub, constants::TILE_HEIGHT, sub_wt, elem_w_bytes, aligned_ps};
         TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
@@ -820,6 +960,74 @@ ProgramDescriptor build_block(
 
 }  // namespace
 
+TilizeCodegenDispatch tilize_codegen_dispatch(
+    IDevice* device, const TilizeCodegenParams& attrs, const Tensor& input_tensor) {
+    // ops/tilize/tilize.py: route_single = (not use_multicore) or use_low_perf — both force the
+    // single-core row path regardless of Wt/Ht, ahead of the block/2D-column dispatch decision.
+    if (!attrs.use_multicore || attrs.use_low_perf) {
+        return {TilizeCodegenPath::RowSingleCore, 1, 0};
+    }
+
+    const Geometry g = compute_geometry(attrs, input_tensor);
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const uint32_t num_avail_cores = grid.x * grid.y;
+    const uint32_t l1 = device->l1_size_per_core();
+    const uint32_t cb_block_limit = compute_cb_block_limit(g.ts_in, l1);
+
+    if (uses_block_path(g.total_ht, g.wt, num_avail_cores, cb_block_limit, g.ts_in, l1)) {
+        return {TilizeCodegenPath::Block, 1, 0};
+    }
+    const uint32_t ncol = uses_2d_column_path(g.total_ht, g.wt, num_avail_cores, cb_block_limit, g.ts_in, l1);
+    if (ncol >= 2) {
+        const std::vector<uint32_t> widths = column_block_widths(g.wt, ncol);
+        return {TilizeCodegenPath::Column, ncol, *std::max_element(widths.begin(), widths.end())};
+    }
+    return {TilizeCodegenPath::Row, 1, 0};
+}
+
+bool tilize_codegen_cb_plan_fits(IDevice* device, const TilizeCodegenParams& attrs, const Tensor& input_tensor) {
+    const Geometry g = compute_geometry(attrs, input_tensor);
+    const uint32_t l1 = device->l1_size_per_core();
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const uint32_t num_avail_cores = grid.x * grid.y;
+    const TilizeCodegenDispatch dispatch = tilize_codegen_dispatch(device, attrs, input_tensor);
+
+    uint32_t requested_in = 0, requested_out = 0, compute_chunk = 0, write_batch = 0;
+    switch (dispatch.path) {
+        case TilizeCodegenPath::RowSingleCore:
+        case TilizeCodegenPath::Row: {
+            // split_work_to_cores hands out one core per unit of work up to the grid size, so the
+            // row path's core count is known without building the split.
+            const uint32_t num_cores =
+                dispatch.path == TilizeCodegenPath::RowSingleCore ? 1u : std::min(g.total_ht, num_avail_cores);
+            const RowShape shape = compute_row_shape(l1, num_cores, g, attrs);
+            requested_in = shape.requested_in_depth;
+            requested_out = shape.requested_out_depth;
+            compute_chunk = shape.chunk_wt;
+            write_batch = shape.write_batch;
+            break;
+        }
+        case TilizeCodegenPath::Column: {
+            const ColumnShape shape = compute_column_shape(l1, g, dispatch.ncol);
+            requested_in = shape.requested_in_depth;
+            requested_out = shape.requested_out_depth;
+            compute_chunk = shape.max_sub_wt;
+            write_batch = shape.write_batch;
+            break;
+        }
+        case TilizeCodegenPath::Block: {
+            const BlockShape shape = compute_block_shape(l1, num_avail_cores, g);
+            requested_in = shape.requested_in_depth;
+            requested_out = shape.requested_out_depth;
+            compute_chunk = shape.max_compute_chunk;
+            write_batch = shape.write_batch;
+            break;
+        }
+    }
+    return try_select_cb_depths(requested_in, requested_out, compute_chunk, write_batch, g.ts_in, g.ts_out, l1)
+        .has_value();
+}
+
 ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     const TilizeCodegenParams& operation_attributes,
     const TilizeCodegenInputs& tensor_args,
@@ -829,27 +1037,17 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     Tensor& output_tensor = tensor_return_value;
 
     const Geometry g = compute_geometry(operation_attributes, input_tensor);
+    const TilizeCodegenDispatch dispatch = tilize_codegen_dispatch(device, operation_attributes, input_tensor);
 
-    // ops/tilize/tilize.py: route_single = (not use_multicore) or use_low_perf — both force the
-    // single-core row path regardless of Wt/Ht, ahead of the block/2D-column dispatch decision.
-    const bool route_single = !operation_attributes.use_multicore || operation_attributes.use_low_perf;
-    if (route_single) {
-        return build_row(device, operation_attributes, input_tensor, output_tensor, g, /*single_core=*/true);
+    switch (dispatch.path) {
+        case TilizeCodegenPath::RowSingleCore:
+            return build_row(device, operation_attributes, input_tensor, output_tensor, g, /*single_core=*/true);
+        case TilizeCodegenPath::Block: return build_block(device, operation_attributes, input_tensor, output_tensor, g);
+        case TilizeCodegenPath::Column:
+            return build_2d_column(device, operation_attributes, input_tensor, output_tensor, g, dispatch.ncol);
+        case TilizeCodegenPath::Row:
+        default: return build_row(device, operation_attributes, input_tensor, output_tensor, g, /*single_core=*/false);
     }
-
-    const CoreCoord grid = device->compute_with_storage_grid_size();
-    const uint32_t num_avail_cores = grid.x * grid.y;
-    const uint32_t l1 = device->l1_size_per_core();
-    const uint32_t cb_block_limit = compute_cb_block_limit(g.ts_in, l1);
-
-    if (uses_block_path(g.total_ht, g.wt, num_avail_cores, cb_block_limit, g.ts_in, l1)) {
-        return build_block(device, operation_attributes, input_tensor, output_tensor, g);
-    }
-    const uint32_t ncol = uses_2d_column_path(g.total_ht, g.wt, num_avail_cores, cb_block_limit, g.ts_in, l1);
-    if (ncol >= 2) {
-        return build_2d_column(device, operation_attributes, input_tensor, output_tensor, g, ncol);
-    }
-    return build_row(device, operation_attributes, input_tensor, output_tensor, g, /*single_core=*/false);
 }
 
 }  // namespace ttnn::prim

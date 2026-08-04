@@ -257,3 +257,65 @@ def test_tilize_codegen_rejects_an_unknown_implementation(device, expect_error, 
     # otherwise answer without dispatching, so an unknown value never passes silently.
     with expect_error(RuntimeError, "unknown implementation selector"):
         ttnn.tilize(xt, **kwargs, implementation=selector)
+
+
+# --------------------------------------------------------------------------------------
+# Hand-added: execution controls. The generated block above varies only shape/dtype/
+# memory_config, so it never touches the three parameters that control WHERE work lands:
+# use_multicore, use_low_perf and sub_core_grids. None of them is honoured by any codegen
+# builder (every one places work over the full compute_with_storage_grid_size and
+# TilizeCodegenParams carries no core set), so accepting such a call on codegen would land
+# work on cores the caller reserved.
+# --------------------------------------------------------------------------------------
+
+# 8 tile-rows x 32 tile-columns. The column split takes ncol = grid_cores // 8 column
+# blocks, which is below Wt == 32 for any real grid, so every block is at least two tiles
+# wide and the case is not perf-demoted on either a full or a harvested grid. The
+# unconstrained call therefore genuinely reaches codegen, making the fallbacks asserted
+# below attributable to the control rather than to the shape.
+_EXEC_CONTROL_SHAPE = [256, 1024]
+_EXEC_CONTROL_KWARGS = {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)}
+_EXEC_CONTROL_DTYPE = ttnn.bfloat16
+
+
+def _exec_control_input(device):
+    x = _make_input(_EXEC_CONTROL_SHAPE, _EXEC_CONTROL_DTYPE)
+    return ttnn.from_torch(x, dtype=_EXEC_CONTROL_DTYPE, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
+def test_tilize_codegen_auto_reaches_codegen_without_execution_controls(device):
+    """Positive control for the two fallback assertions below."""
+    xt = _exec_control_input(device)
+    # Warms the native program for these exact arguments, so a later cache growth can only
+    # come from a second, distinct (codegen) program.
+    golden = ttnn.to_torch(ttnn.tilize(xt, **_EXEC_CONTROL_KWARGS, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **_EXEC_CONTROL_KWARGS, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = "auto did not route the unconstrained execution-control baseline to codegen"
+    assert device.num_program_cache_entries() > entries_before, msg
+
+
+@pytest.mark.parametrize(
+    "control",
+    [{"use_multicore": False}, {"use_low_perf": True}, {"sub_core_grids": True}],
+    ids=["use_multicore=False", "use_low_perf=True", "sub_core_grids"],
+)
+def test_tilize_codegen_auto_falls_back_on_execution_controls(device, control):
+    if "sub_core_grids" in control:
+        control = {"sub_core_grids": ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])}
+    xt = _exec_control_input(device)
+    golden = ttnn.to_torch(ttnn.tilize(xt, **_EXEC_CONTROL_KWARGS, **control, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **_EXEC_CONTROL_KWARGS, **control, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = f"auto routed a call carrying {list(control)[0]} to codegen, which cannot honour it"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
+def test_tilize_codegen_rejects_sub_core_grids(device, expect_error):
+    xt = _exec_control_input(device)
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
+    # Forced codegen must name the control rather than silently widening the placement.
+    with expect_error(RuntimeError, "sub_core_grids"):
+        ttnn.tilize(xt, **_EXEC_CONTROL_KWARGS, sub_core_grids=sub_core_grids, implementation=_CODEGEN)

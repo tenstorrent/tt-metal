@@ -20,6 +20,19 @@ TilizeCodegenDeviceOperation::program_factory_t TilizeCodegenDeviceOperation::se
 
 void TilizeCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    // The native op's structural preconditions (TilizeDeviceOperation::validate_on_program_cache_miss)
+    // come first: supported_by_codegen() answers over layout/dtype/memory config, all of which answer
+    // for a host or deallocated tensor too, so without these the first thing to notice would be a
+    // null device/buffer dereference in the factory.
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+    // Native's stick-size invariant: the reader moves whole TILE_W-wide element groups, which is
+    // only byte-addressable for an even element size.
+    TT_FATAL(
+        (input_tensor.padded_shape()[-1] * input_tensor.element_size()) % 2 == 0, "Stick size must be divisible by 2");
+
     TT_FATAL(
         supported_by_codegen(operation_attributes, tensor_args),
         "tilize: inputs not supported by the codegen implementation");
