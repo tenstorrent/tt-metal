@@ -1261,7 +1261,7 @@ protected:
 
     void prepend_paged_boundary_crossing(std::vector<HostMemDeviceCommand>& commands, uint32_t base_addr) override {
         const bool is_dram = get_is_dram();
-        const auto& mem_map = MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
         const uint32_t dispatch_cb_pages = mem_map.dispatch_buffer_pages();
         constexpr uint32_t dispatch_cb_page_size = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         const uint32_t dispatch_cb_size = dispatch_cb_pages * dispatch_cb_page_size;
@@ -1314,7 +1314,7 @@ protected:
         uint32_t max_payload_per_cmd_bytes,
         Common::DeviceData& device_data) override {
         const bool is_mcast = get_is_mcast();
-        const auto& mem_map = MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
         const uint32_t dispatch_cb_pages = mem_map.dispatch_buffer_pages();
         constexpr uint32_t dispatch_cb_page_size = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         const uint32_t dispatch_cb_size = dispatch_cb_pages * dispatch_cb_page_size;

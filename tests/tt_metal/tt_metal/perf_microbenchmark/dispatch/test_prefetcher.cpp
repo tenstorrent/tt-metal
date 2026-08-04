@@ -3074,39 +3074,33 @@ class PrefetcherLinearPackedReadQuasarSimulatorTestFixture
     : public Common::QuasarSimulatorVariant<PrefetcherLinearPackedReadTestFixture> {};
 class PrefetcherHostQuasarSimulatorTestFixture : public Common::QuasarSimulatorVariant<PrefetcherHostTestFixture> {
 public:
-    // On the Quasar simulator the completion queue is DRAM-backed by default (no host hugepages). Validate
-    // against a host-side staging buffer that refresh_completion_data() fills from DRAM before validate().
-    // An explicit TT_METAL_DRAM_BACKED_CQ=0 opts out of DRAM-backed CQs; in that case defer to the base
-    // (hugepage-backed) completion-buffer behavior so the test matches the runtime CQ configuration.
+    // Validation always runs against a host-side staging buffer that refresh_completion_data() normalizes from
+    // the live completion region, so a write pointer that wraps the ring still reads back as one contiguous
+    // span. The region itself is DRAM on the Quasar simulator by default, or the mapped host channel under an
+    // explicit TT_METAL_DRAM_BACKED_CQ=0; both are staged the same way.
     void* get_completion_queue_buffer() override {
-        if (!mgr_->is_dram_backed()) {
-            return PrefetcherHostTestFixture::get_completion_queue_buffer();
-        }
         quasar_completion_buf_.resize(this->get_completion_queue_buffer_size());
         return quasar_completion_buf_.data();
     }
 
-    // On WH/BH the dirty pattern is written into the PCIe-mapped completion buffer, i.e. the real completion memory the
-    // dispatcher writes into. On the Quasar simulator that memory is DRAM, so dirty there too.
+    // Two regions need the dirty pattern: the staging buffer, so padding past the dispatcher-written span
+    // survives validation, and the completion region the dispatcher actually writes into.
     void dirty_host_completion_buffer(void* completion_queue_buffer, uint32_t size_bytes) override {
         PrefetcherHostTestFixture::dirty_host_completion_buffer(completion_queue_buffer, size_bytes);
-        if (!mgr_->is_dram_backed()) {
-            return;
+        if (mgr_->is_dram_backed()) {
+            std::vector<uint32_t> dirty(size_bytes / sizeof(uint32_t), HOST_DATA_DIRTY_PATTERN);
+            tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
+                dirty.data(), size_bytes, this->device_->id(), completion_dram_channel(), completion_dram_addr());
+        } else {
+            PrefetcherHostTestFixture::dirty_host_completion_buffer(completion_region_host_ptr(), size_bytes);
         }
-        std::vector<uint32_t> dirty(size_bytes / sizeof(uint32_t), HOST_DATA_DIRTY_PATTERN);
-        tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-            dirty.data(), size_bytes, this->device_->id(), completion_dram_channel(), completion_dram_addr());
     }
 
-    // Read the dispatcher-written prefix of the DRAM completion queue into the staging buffer so
+    // Copy the dispatcher-written span of the completion region into the staging buffer so
     // device_data.validate() sees real data. When the device write pointer wraps, normalize the
-    // tail + head ring segments into one contiguous staging span. Skipped when DRAM-backed CQs
-    // are explicitly disabled (TT_METAL_DRAM_BACKED_CQ=0); the base (hugepage-backed) completion
-    // buffer is directly readable, so no DRAM readback is needed.
+    // tail + head ring segments into one contiguous staging span. Padding past the written span keeps
+    // its dirty fill.
     void refresh_completion_data() override {
-        if (!mgr_->is_dram_backed()) {
-            return;
-        }
         const uint8_t cq_id = fdcq_->id();
         std::atomic<bool> exit_condition{false};
         const auto [write_ptr_16B, write_toggle] =
@@ -3129,27 +3123,37 @@ public:
         }
         TT_FATAL(
             bytes_written <= quasar_completion_buf_.size(),
-            "Quasar completion readback {} B exceeds staging buffer {} B",
+            "Completion readback {} B exceeds staging buffer {} B",
             bytes_written,
             quasar_completion_buf_.size());
 
         const uint32_t read_offset = read_ptr_bytes - completion_base;
         const uint32_t tail_bytes = std::min(bytes_written, completion_limit - read_ptr_bytes);
-        tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-            this->device_,
-            completion_dram_channel(),
-            completion_dram_addr() + read_offset,
-            std::span<uint8_t>(quasar_completion_buf_.data(), tail_bytes));
+        read_completion_region(read_offset, std::span<uint8_t>(quasar_completion_buf_.data(), tail_bytes));
         if (tail_bytes < bytes_written) {
-            tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-                this->device_,
-                completion_dram_channel(),
-                completion_dram_addr(),
-                std::span<uint8_t>(quasar_completion_buf_.data() + tail_bytes, bytes_written - tail_bytes));
+            read_completion_region(
+                0, std::span<uint8_t>(quasar_completion_buf_.data() + tail_bytes, bytes_written - tail_bytes));
         }
     }
 
 private:
+    // Copy dst.size() bytes out of the completion region, starting region_offset bytes past its base.
+    void read_completion_region(uint32_t region_offset, std::span<uint8_t> dst) {
+        if (mgr_->is_dram_backed()) {
+            tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
+                this->device_, completion_dram_channel(), completion_dram_addr() + region_offset, dst);
+            return;
+        }
+        std::memcpy(dst.data(), completion_region_host_ptr() + region_offset, dst.size());
+    }
+
+    // Host address of the completion region base. Only call this when the CQ is host-backed: the
+    // DRAM-backed form of get_completion_queue_ptr mirrors the whole region through DRAM on every call,
+    // which this fixture avoids by reading back only the written span.
+    uint8_t* completion_region_host_ptr() const {
+        return static_cast<uint8_t*>(mgr_->get_completion_queue_ptr(fdcq_->id()));
+    }
+
     // DRAM address of the completion region base, matching SystemMemoryManager::get_completion_queue_ptr.
     uint32_t completion_dram_addr() const {
         const uint8_t cq_id = fdcq_->id();
@@ -3176,7 +3180,7 @@ protected:
         const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const uint32_t dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
-        const uint32_t scratch_half = MetalContext::instance().dispatch_mem_map(CoreType::WORKER).scratch_db_size() / 2;
+        const uint32_t scratch_half = MetalContext::instance().dispatch_mem_map().scratch_db_size() / 2;
         const uint32_t scratch_half_dram_aligned = tt::align(scratch_half, dram_alignment);
         const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
         const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
@@ -3224,7 +3228,7 @@ protected:
             bytes_per_pass += cmd.size_bytes();
         }
 
-        const uint32_t cmddat_q_size = MetalContext::instance().dispatch_mem_map(CoreType::WORKER).cmddat_q_size();
+        const uint32_t cmddat_q_size = MetalContext::instance().dispatch_mem_map().cmddat_q_size();
 
         // num_iterations is the target number of cmddat_q wraps. Each command header is fetched into the
         // prefetcher's cmddat_q ring, so streaming more than N * cmddat_q_size command bytes forces the
@@ -3308,7 +3312,7 @@ protected:
             device_, worker_range, l1_base, dram_base_, nullptr, false, /*dram_data_size_words=*/0, cfg_);
         const uint32_t source_addr = device_data.get_result_data_addr(first_worker, 0);
 
-        const auto& mem_map = MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
         const uint32_t dispatch_cb_pages = mem_map.dispatch_buffer_pages();
         constexpr uint32_t dispatch_cb_page_size = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         const uint32_t dispatch_cb_size = dispatch_cb_pages * dispatch_cb_page_size;
@@ -3408,8 +3412,7 @@ protected:
         // has wrapped to the base and the host producer is at the limit. The extra command makes the host
         // producer reset to the base before reserving the next entry.
         // The reserve/write loop in execute_generated_commands blocks for PrefetchQ space as needed.
-        const uint32_t prefetch_q_entries =
-            MetalContext::instance().dispatch_mem_map(CoreType::WORKER).prefetch_q_entries();
+        const uint32_t prefetch_q_entries = MetalContext::instance().dispatch_mem_map().prefetch_q_entries();
         const uint32_t num_traversals = get_num_iterations();
         execute_generated_commands(
             commands, device_data, worker_range.size(), (num_traversals * prefetch_q_entries) + 1);
