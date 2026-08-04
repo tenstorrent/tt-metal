@@ -91,7 +91,9 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
 }
 
 MassagedConcat build_untilize_rm_retilize_concat(
-    const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape) {
+    const MemoryConfig& output_memory_config,
+    ttnn::Shape& logical_output_shape,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
             // untilize_rm_retilize if the concat dim is padded for tilized tensors
@@ -131,15 +133,19 @@ MassagedConcat build_untilize_rm_retilize_concat(
             concat_db_print(true, "[DEBUG] already tilized");
             return output;
         },
-        .operation = [&output_memory_config](
+        .operation = [&output_memory_config, sub_core_grids](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
-            auto res = concat_impl(itensors, dim, groups, output_memory_config, std::nullopt);
+            auto res = concat_impl(itensors, dim, groups, output_memory_config, sub_core_grids);
             return res;
         }});
 }
 
-MassagedConcat build_prepost_transpose_concat(const MemoryConfig& output_memory_config, int dim1, int dim2) {
+MassagedConcat build_prepost_transpose_concat(
+    const MemoryConfig& output_memory_config,
+    int dim1,
+    int dim2,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [dim1, dim2](
                          const std::vector<ttnn::Tensor>& /*tensors*/, int /*dim*/, unsigned int /*groups*/) -> bool {
@@ -175,16 +181,18 @@ MassagedConcat build_prepost_transpose_concat(const MemoryConfig& output_memory_
         .post_transform = [dim1, dim2, &output_memory_config](const ttnn::Tensor& output) -> ttnn::Tensor {
             return ttnn::transpose(output, dim1, dim2, output_memory_config);
         },
-        .operation = [output_memory_config](
+        .operation = [output_memory_config, sub_core_grids](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
             return ttnn::operations::data_movement::concat_impl(
-                itensors, dim, groups, output_memory_config, std::nullopt);
+                itensors, dim, groups, output_memory_config, sub_core_grids);
         }});
 }
 
 MassagedConcat build_non_aligned_last_dim_concat(
-    const std::vector<ttnn::Tensor>& /*tensors*/, const MemoryConfig& output_memory_config) {
+    const std::vector<ttnn::Tensor>& /*tensors*/,
+    const MemoryConfig& output_memory_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     // this is a special case of pre-post transpose concat where we're
     // concatting on the last dim and the last dims of the input tensors are
     // not all aligned
@@ -211,12 +219,13 @@ MassagedConcat build_non_aligned_last_dim_concat(
         return false;
     };
 
-    auto transpose_concat = build_prepost_transpose_concat(output_memory_config, -2, -1);
+    auto transpose_concat = build_prepost_transpose_concat(output_memory_config, -2, -1, sub_core_grids);
     transpose_concat.set_predicate(predicate);
     return transpose_concat;
 }
 
-MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(const MemoryConfig& output_memory_config) {
+MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(
+    const MemoryConfig& output_memory_config, const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
             if (dim != 0) {
@@ -248,11 +257,11 @@ MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(const MemoryConfig
             TT_FATAL(shape.rank() == 2 && shape[0] == 1, "Expected 2D tensor with first dim=1, got shape {}", shape);
             return ttnn::squeeze(output, 0);
         },
-        .operation = [output_memory_config](
+        .operation = [output_memory_config, sub_core_grids](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
             return ttnn::operations::data_movement::concat_impl(
-                itensors, dim, groups, output_memory_config, std::nullopt);
+                itensors, dim, groups, output_memory_config, sub_core_grids);
         }});
 }
 
@@ -329,13 +338,6 @@ ttnn::Tensor concat(
     };
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
-
-    // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
-    // which don't currently support sub_core_grids
-    if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
-        (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
-        return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
-    }
 
     // Issue #43371: When concat is on the last dim and the last dim is not buffer-aligned,
     // the fallback path transposes dims -2/-1 so that the (small) last dim moves to dim[-2]
@@ -433,12 +435,14 @@ ttnn::Tensor concat(
         }
     }
 
-    auto untilize_rm_retilize_concat =
-        ttnn::operations::data_movement::build_untilize_rm_retilize_concat(mem_config, logical_output_shape);
+    // sub_core_grids is a placement hint: the massaged paths hand it to the concat they end in, and
+    // the intermediate transposes/untilizes simply don't use it.
+    auto untilize_rm_retilize_concat = ttnn::operations::data_movement::build_untilize_rm_retilize_concat(
+        mem_config, logical_output_shape, sub_core_grids);
     auto non_aligned_last_dim_concat =
-        ttnn::operations::data_movement::build_non_aligned_last_dim_concat(input_tensors, mem_config);
+        ttnn::operations::data_movement::build_non_aligned_last_dim_concat(input_tensors, mem_config, sub_core_grids);
     auto unsqueeze_squeeze_1D_concat =
-        ttnn::operations::data_movement::build_unsqueeze_squeeze_1D_rm_unaligned_concat(mem_config);
+        ttnn::operations::data_movement::build_unsqueeze_squeeze_1D_rm_unaligned_concat(mem_config, sub_core_grids);
     auto massaged_concat =
         untilize_rm_retilize_concat.sequence(unsqueeze_squeeze_1D_concat.sequence(non_aligned_last_dim_concat));
 

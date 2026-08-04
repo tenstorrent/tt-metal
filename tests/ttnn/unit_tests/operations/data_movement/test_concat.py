@@ -437,6 +437,7 @@ def test_concat_many_inputs(device, num_inputs):
         (((1, 1, 256, 512), (1, 1, 256, 256)), 3),
         (((1, 1, 32, 1024), (1, 1, 32, 1024)), 0),
         (((1, 1, 32, 64), (1, 1, 32, 64)), 0),
+        (((1, 1, 32, 40), (1, 1, 32, 40)), 3),  # RM rows of 80 B: not DRAM-aligned
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
