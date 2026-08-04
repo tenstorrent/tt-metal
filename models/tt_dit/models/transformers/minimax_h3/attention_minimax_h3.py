@@ -16,6 +16,7 @@ from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
+from .agmm_config import agmm_block_size
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -162,6 +163,10 @@ class MiniMaxH3Attention(Module):
         self.norm_q = DistributedRMSNorm(**qk_norm_kwargs)
         self.norm_k = DistributedRMSNorm(**qk_norm_kwargs)
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+        # all_gather_minimal_matmul_async folds the TP all-gather into the matmul. Ring only: on a
+        # line topology WanAttention measured the unfused path faster, so match that condition.
+        self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and tp_factor > 1
 
         # Ring SDPA reuses the joint-attention entry point with empty joint inputs, as WanAttention does.
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, head_dim)), device=mesh_device)
@@ -312,15 +317,22 @@ class MiniMaxH3Attention(Module):
         use_ring = self.is_sequence_parallel and sp_factor > 1
         assert not (use_ring and N is None), "ring attention needs the logical sequence length N"
 
-        # NOTE: bringup takes the unfused path -- an explicit all-gather feeding a plain
-        # column-parallel matmul. Folding these into `all_gather_minimal_matmul_async` (as
-        # WanAttention does on ring topologies) is the performance follow-up.
-        if tp_factor > 1:
+        # Passing parallel_config puts ColParallelLinear on all_gather_minimal_matmul_async: the TP
+        # all-gather of the K-fractured input folds into the matmul that consumes it, instead of
+        # running as a separate op. Only on ring topologies -- on a line the unfused path is faster,
+        # which is the same condition WanAttention uses.
+        matmul_parallel_config = self.parallel_config if self.use_fused_agmm else None
+        if not self.use_fused_agmm and tp_factor > 1:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis
             )
 
-        q_1BNF, k_1BNF, v_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+        q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+            spatial_1BND,
+            compute_kernel_config=self.mm_compute_kernel_config,
+            parallel_config=matmul_parallel_config,
+            default_block_size=agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor),
+        )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -388,10 +400,16 @@ class MiniMaxH3Attention(Module):
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
         # Each device holds canonical heads [d * n_local, (d+1) * n_local), so gathering on TP
-        # rebuilds the full inner_dim in canonical order for to_out.
-        if tp_factor > 1:
+        # rebuilds the full inner_dim in canonical order for to_out -- fused into the matmul when
+        # use_fused_agmm.
+        if not self.use_fused_agmm and tp_factor > 1:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis
             )
 
-        return self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+        return self.to_out(
+            spatial_1BND,
+            compute_kernel_config=self.mm_compute_kernel_config,
+            parallel_config=matmul_parallel_config,
+            default_block_size=agmm_block_size(self.inner_dim, self.hidden_size // tp_factor),
+        )

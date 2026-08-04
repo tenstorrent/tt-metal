@@ -14,6 +14,7 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
+from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
 
 
@@ -98,6 +99,9 @@ class MiniMaxH3TokenRefinerBlock(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
+        # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
+        self.ff1_block_size = agmm_block_size(hidden_size, 2 * ffn_dim // self.tp_factor)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ff.net.0.proj", "ff.ff1")
@@ -108,10 +112,17 @@ class MiniMaxH3TokenRefinerBlock(Module):
         prompt_1BLP = ttnn.add(prompt_1BLP, self.attn(self.norm1(prompt_1BLP)))
 
         normed = self.norm2(prompt_1BLP)
-        # ParallelFeedForward expects a replicated input and reduce-scatters back to TP-fractured.
-        if self.tp_factor > 1:
+        # ff1 folds the TP all-gather into its matmul when parallel_config is passed; ff2 is
+        # row-parallel and reduce-scatters back to TP-fractured.
+        if not self.use_fused_agmm and self.tp_factor > 1:
             normed = self.ccl_manager.all_gather_persistent_buffer(normed, dim=3, mesh_axis=self.tp_mesh_axis)
-        return ttnn.add(prompt_1BLP, self.ff(normed, compute_kernel_config=self.mm_compute_kernel_config))
+        ff_out = self.ff(
+            normed,
+            compute_kernel_config=self.mm_compute_kernel_config,
+            parallel_config=self.parallel_config if self.use_fused_agmm else None,
+            default_block_size=self.ff1_block_size,
+        )
+        return ttnn.add(prompt_1BLP, ff_out)
 
 
 class MiniMaxH3TokenRefiner(Module):

@@ -15,6 +15,7 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
+from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
@@ -138,6 +139,9 @@ class MiniMaxH3TransformerBlock(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
+        # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
+        self.ff1_block_size = agmm_block_size(hidden_size, 2 * ffn_dim // self.tp_factor)
 
     # ------------------------------------------------------------------ weights
 
@@ -265,10 +269,14 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_weight=modulation(_SCALE_MLP),
             dynamic_bias=modulation(_SHIFT_MLP),
         )
-        # ParallelFeedForward expects a replicated input; its RowParallelLinear reduce-scatters the
-        # result back to TP-fractured. As in the attention module, bringup takes the unfused
-        # all-gather path and folding it into the matmul is the performance follow-up.
-        if self.tp_factor > 1:
+        # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
+        # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
+        if not self.use_fused_agmm and self.tp_factor > 1:
             normed = self.ccl_manager.all_gather_persistent_buffer(normed, dim=3, mesh_axis=self.tp_mesh_axis)
-        ff_out = self.ff(normed, compute_kernel_config=self.mm_compute_kernel_config)
+        ff_out = self.ff(
+            normed,
+            compute_kernel_config=self.mm_compute_kernel_config,
+            parallel_config=self.parallel_config if self.use_fused_agmm else None,
+            default_block_size=self.ff1_block_size,
+        )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
