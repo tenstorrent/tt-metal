@@ -15,8 +15,8 @@ target is zero, and capacity is a HARD WALL with a safety margin. Printing "achi
 them invited reading 26% dispatch as a grade rather than as a quarter of every token being wasted,
 and 35% capacity as underperformance rather than spare room.
 
-Hence three blocks, and utilization bars grouped by DIRECTION so a reader is not asked to infer that
-two of the five want to be small.
+Hence three blocks, and a DIRECTION marked on each utilization bar so a reader is not asked to infer
+that two of them want to be small.
 
 Everything here renders from dicts. No device, no profiler, no ledger writes -- the optimize loop is
 usually holding the board when a report is drawn, and a report generator that needs hardware is a
@@ -84,13 +84,28 @@ def test_the_band_percentage_is_derived_not_hardcoded():
     assert "37-50%" in moe, moe[:400]  # 64.0/170.7 = 37.49%, rendered %.0f
 
 
-def test_utilization_is_grouped_by_direction():
-    """26% dispatch is bad and 69% bandwidth is good; ungrouped bars invite the opposite reading."""
-    t = _render()
-    u = t[t.index("Utilization") :]
-    assert "higher is better" in u and "lower is better" in u
-    assert u.index("higher is better") < u.index("lower is better")
-    assert u.index("DRAM bandwidth") < u.index("lower is better") < u.index("Dispatch overhead")
+def test_each_row_states_its_own_direction():
+    """26% dispatch is bad and 69% bandwidth is good; an unmarked bar invites the opposite reading.
+
+    Marked per ROW rather than under a group heading: the heading sat furthest from the bars it
+    described, and grouping forced an ordering on rows that otherwise read roofline-then-overhead."""
+    u = _render()[_render().index("Utilization") :]
+    assert "↑ better" in u and "↓ better" in u
+    for name, arrow in (("DRAM bandwidth", "↑"), ("Dispatch overhead", "↓"), ("DRAM capacity", "↓")):
+        row = next(l for l in u.splitlines() if name in l)
+        assert row.rstrip().endswith("%s better" % arrow), row
+
+
+def test_an_unmeasured_row_claims_no_direction():
+    """TTFT is never measured, so there is no number for 'higher' or 'lower' to be about."""
+    row = next(l for l in _render().splitlines() if "Compute (prefill)" in l)
+    assert "better" not in row, row
+
+
+def test_the_direction_column_lines_up():
+    u = _render()[_render().index("Utilization") :]
+    rows = [l for l in u.splitlines() if "better" in l and l.startswith("  ")]
+    assert len({l.index("better") for l in rows}) == 1, rows
 
 
 # ---------------------------------------------------------------- alignment
@@ -204,3 +219,51 @@ def test_no_device_is_touched():
     body = src[i : src.index("\ndef ", i + 1)]
     for forbidden in ("tt-smi", "ttnn", "subprocess", "open_device", "MeshDevice"):
         assert forbidden not in body, forbidden
+
+
+def test_no_row_carries_trailing_whitespace():
+    """RUN_REPORT.md is committed; the repo's pre-commit hook strips trailing whitespace, so a
+    generator that emits it makes the file dirty the moment it is written."""
+    for line in _render().splitlines():
+        assert line == line.rstrip(), repr(line)
+
+
+# ---------------------------------------------------------------- the overhead rows judge honestly
+
+
+def test_a_healthy_row_carries_no_verdict():
+    """ "ok" read as a verdict against the TARGET beside it while being judged on a hidden 10%
+    tolerance -- so a row printed target ~0 ms, measured 2.46 ms, and called itself ok. On a
+    threshold row, passing is the silent case."""
+    over = _render()[_render().index("Overheads") : _render().index("Utilization")]
+    assert " ok" not in over, over
+
+
+def test_a_breach_is_marked():
+    """The exception is the entire signal, so it must be impossible to miss."""
+    out = _render(profile=_prof(host=200.0))
+    over = out[out.index("Overheads") : out.index("Utilization")]
+    assert "✗ OVER" in over, over
+
+
+def test_the_flag_threshold_is_printed_not_hidden():
+    """A verdict the reader cannot check against a stated number is not a verdict."""
+    assert "flag >%d%%" % S._DISPATCH_FLAG_PCT in _render()
+
+
+def _cap_row(**kw):
+    """The capacity row alone -- the default profile's dispatch is 16% and already breaching, so a
+    whole-render assertion would pass on the wrong row."""
+    return next(l for l in _render(**kw).splitlines() if "DRAM capacity" in l and "│" in l)
+
+
+def test_capacity_breaches_at_the_safety_margin():
+    assert "✗ OVER" in _cap_row(active_bytes=int(BH_DRAM * 0.95))
+    assert "✗ OVER" not in _cap_row(active_bytes=int(BH_DRAM * 0.5))
+
+
+def test_the_share_names_the_declared_unit():
+    """The MEASURED column says ms/token; calling the same thing a 'step' one column over is two
+    names for one unit, side by side."""
+    over = _render()[_render().index("Overheads") : _render().index("Utilization")]
+    assert "of token" in over and "of step" not in over, over

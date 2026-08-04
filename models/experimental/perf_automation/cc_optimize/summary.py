@@ -589,6 +589,12 @@ def _floor_anchor(current_ms, depth, model: str = "", task: str = ""):
 
 _BAR_W = 20
 
+# Dispatch has no achievable band -- its target is zero, since a fully traced model replays from
+# device-resident queues and the op gaps vanish. This is the share of a step above which the residual
+# is worth a round of the ladder rather than being noise. Named and printed, because a verdict the
+# reader cannot check against the stated target is not a verdict.
+_DISPATCH_FLAG_PCT = 10
+
 
 def _split(width):
     """Divider aligned to the column format: first break at 46, second at 69."""
@@ -762,32 +768,44 @@ def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, activ
         out.append(rule)
         out.append("%-26s %-18s \u2502 %-21s \u2502" % ("", "TARGET", "MEASURED"))
         out.append(_split(W))
+        # No "ok" marker on a healthy row. It read as a verdict against the TARGET beside it, but was
+        # judged on a DIFFERENT, invisible rule -- a hardcoded 10% tolerance -- so a row could print
+        # a target of ~0 ms, measure 2.46 ms, and call itself ok. The tolerance is now stated in the
+        # TARGET column, and only the breach is marked: on a threshold row, passing is the silent
+        # case and the exception is the whole signal. `\u2717` matches the roofline block's out-of-band
+        # glyph, so the report has one vocabulary rather than two.
+        _step = unit.split("/")[0].replace("tok", "token") if "/" in unit else "step"
         if disp is not None and per_unit_ms:
             _share = 100.0 * disp / float(per_unit_ms)
             _ops = _ops_per_unit(profile)
             out.append(
-                " %-25s %-18s \u2502 %-21s \u2502 %.0f%% of step   %s"
-                % (
-                    "Dispatch",
-                    "~0 ms (traced)",
-                    "%.2f ms/%s" % (disp, unit.split("/")[0].replace("tok", "token")),
-                    _share,
-                    "\u2193 OVER" if _share > 10 else "\u2193 ok",
-                )
+                (
+                    " %-25s %-18s \u2502 %-21s \u2502 %.0f%% of %-9s %s"
+                    % (
+                        "Dispatch",
+                        "~0 ms, flag >%d%%" % _DISPATCH_FLAG_PCT,
+                        "%.2f ms/%s" % (disp, _step),
+                        _share,
+                        _step,
+                        "\u2717 OVER" if _share > _DISPATCH_FLAG_PCT else "",
+                    )
+                ).rstrip()
             )
             if _ops:
                 out.append(" %-25s %-18s \u2502 %-21s \u2502" % ("", "%d ops" % _ops, ""))
         if cap and active_bytes:
             _used = 100.0 * active_bytes / cap
             out.append(
-                " %-25s %-18s \u2502 %-21s \u2502 %.0f%% used      %s"
-                % (
-                    "DRAM capacity",
-                    "< %.1f GiB (90%%)" % (cap * 0.9 / 1024**3),
-                    "%.2f GiB" % (active_bytes / 1024**3),
-                    _used,
-                    "\u2193 ok" if _used < 90 else "\u2193 OVER",
-                )
+                (
+                    " %-25s %-18s \u2502 %-21s \u2502 %.0f%% used%s"
+                    % (
+                        "DRAM capacity",
+                        "< %.1f GiB (90%%)" % (cap * 0.9 / 1024**3),
+                        "%.2f GiB" % (active_bytes / 1024**3),
+                        _used,
+                        "      \u2717 OVER" if _used >= 90 else "",
+                    )
+                ).rstrip()
             )
             out.append(rule)
             out.append("  %.1f GiB unused \u2014 headroom for a larger batch" % ((cap - active_bytes) / 1024**3))
@@ -795,33 +813,36 @@ def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, activ
             out.append(rule)
         out.append("")
 
+    # One list, direction marked on the ROW it qualifies. Two direction-headed groups put the label
+    # furthest from the bars it describes, and forced an ordering on rows that otherwise read
+    # roofline-then-overhead top to bottom. A row with nothing measured gets no arrow -- there is no
+    # direction to want when there is no number.
     out.append("Utilization")
     out.append(rule)
-    out.append("  higher is better")
     _u1 = (measured / theo) if (measured and theo) else None
-    out.append(
-        "  %-19s %s  %4s   %s"
-        % (
+    _rows = [
+        (
             "DRAM bandwidth",
-            _bar(_u1),
-            ("%.0f%%" % (_u1 * 100)) if _u1 else "\u2014",
+            _u1,
             ("%.0f / %.0f GB/s" % (bw_gbps, peak_bw_gbps)) if (bw_gbps and peak_bw_gbps) else "no data",
-        )
-    )
-    out.append("  %-19s %s  %4s   %s" % ("Compute (prefill)", _bar(None), "\u2014", "TTFT never measured"))
-    out.append("")
-    out.append("  lower is better")
+            "\u2191 better" if _u1 else "",
+        ),
+        ("Compute (prefill)", None, "TTFT never measured", ""),
+    ]
     if disp is not None and per_unit_ms:
         _d = disp / float(per_unit_ms)
-        out.append(
-            "  %-19s %s  %4s   %.2f / %.2f ms"
-            % ("Dispatch overhead", _bar(_d), "%.0f%%" % (_d * 100), disp, per_unit_ms)
-        )
+        _rows.append(("Dispatch overhead", _d, "%.2f / %.2f ms" % (disp, per_unit_ms), "\u2193 better"))
     if cap and active_bytes:
         _c = active_bytes / cap
+        _rows.append(
+            ("DRAM capacity", _c, "%.2f / %.0f GiB" % (active_bytes / 1024**3, cap / 1024**3), "\u2193 better")
+        )
+    for _name, _frac, _detail, _dir in _rows:
         out.append(
-            "  %-19s %s  %4s   %.2f / %.0f GiB"
-            % ("DRAM capacity", _bar(_c), "%.0f%%" % (_c * 100), active_bytes / 1024**3, cap / 1024**3)
+            (
+                "  %-19s %s  %4s   %-21s %s"
+                % (_name, _bar(_frac), ("%.0f%%" % (_frac * 100)) if _frac else "\u2014", _detail, _dir)
+            ).rstrip()
         )
     out.append(rule)
     return out
