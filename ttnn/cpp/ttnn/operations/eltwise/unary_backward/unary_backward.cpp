@@ -663,12 +663,12 @@ std::vector<Tensor> atan_bw(
 
 std::vector<Tensor> rad2deg_bw(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
-    using namespace ttnn::operations::unary;
+    namespace unary = ttnn::operations::unary;
     constexpr float RAD_TO_DEG = 57.29577951308232f;
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = operations::unary::detail::unary_impl(
         grad,
-        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, RAD_TO_DEG)},
+        {unary::EltwiseUnaryWithParam(unary::UnaryOpType::MUL_UNARY_SFPU, RAD_TO_DEG)},
         output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
@@ -1550,12 +1550,12 @@ std::vector<Tensor> erf_bw(
 
 std::vector<Tensor> deg2rad_bw(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
-    using namespace ttnn::operations::unary;
+    namespace unary = ttnn::operations::unary;
     constexpr float DEG_TO_RAD = 0.017453292519943295f;
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = operations::unary::detail::unary_impl(
         grad,
-        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, DEG_TO_RAD)},
+        {unary::EltwiseUnaryWithParam(unary::UnaryOpType::MUL_UNARY_SFPU, DEG_TO_RAD)},
         output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
