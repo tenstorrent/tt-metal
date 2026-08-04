@@ -62,13 +62,6 @@ public:
         const bool&>
     attribute_values() const;
 
-    static MemoryConfig create_with_prepopulated_shard_specs(
-        TensorMemoryLayout memory_layout,
-        BufferType buffer_type,
-        std::optional<ShardSpec> shard_spec,
-        std::optional<NdShardSpec> nd_shard_spec,
-        bool created_with_nd_shard_spec);
-
     friend std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
     // pre-condition: the MemoryConfig must not be in a moved-from state.
@@ -76,6 +69,13 @@ public:
     const MemoryConfigImpl& impl() const;
 
 private:
+    friend MemoryConfig create_memory_config_with_prepopulated_shard_specs(
+        TensorMemoryLayout memory_layout,
+        BufferType buffer_type,
+        std::optional<ShardSpec> shard_spec,
+        std::optional<NdShardSpec> nd_shard_spec,
+        bool created_with_nd_shard_spec);
+
     MemoryConfig(
         TensorMemoryLayout memory_layout,
         BufferType buffer_type,

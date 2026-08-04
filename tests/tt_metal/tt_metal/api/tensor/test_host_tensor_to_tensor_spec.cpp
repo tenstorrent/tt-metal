@@ -20,12 +20,12 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tile.hpp>
 
 namespace tt::tt_metal {
@@ -40,6 +40,19 @@ std::vector<T> make_ramp(size_t count) {
         data[i] = static_cast<T>(static_cast<float>(i % 251));
     }
     return data;
+}
+
+template <typename T>
+std::vector<T> untilize_nfaces(const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data) {
+    return convert_layout(
+        data,
+        shape,
+        TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        tile.get_tile_shape(),
+        tile.get_face_shape(),
+        tile.get_transpose_within_face(),
+        tile.get_transpose_of_faces());
 }
 
 std::vector<float> make_bfp_data(const Shape& shape, const Tile& tile) {
@@ -369,8 +382,8 @@ TEST(HostTensorToTensorSpec, Bfp8TileToFloat32RowMajorValueCheck) {
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
 
     // unpacked_golden is tile-major; convert to RM logical for comparison.
-    auto rm_golden =
-        tensor_impl::to_row_major_layout(src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
+    auto rm_golden = CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(
+        src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
     EXPECT_THAT(result.to_vector<float>(), Pointwise(Eq(), rm_golden));
 }
 
@@ -393,8 +406,8 @@ TEST(HostTensorToTensorSpec, Bfp4TileToFloat32RowMajorValueCheck) {
     EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
 
-    auto rm_golden =
-        tensor_impl::to_row_major_layout(src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
+    auto rm_golden = CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(
+        src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
     EXPECT_THAT(result.to_vector<float>(), Pointwise(Eq(), rm_golden));
 }
 
@@ -423,7 +436,7 @@ TEST(HostTensorToTensorSpec, RowMajorToBfp8ChangesLayoutAndPreservesTile) {
     auto unpacked_data =
         unpack_bfp8_tiles_into_float_vec(result_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto rm_data =
-        tensor_impl::to_row_major_layout(dest_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_data));
+        CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(dest_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_data));
 
     ASSERT_EQ(rm_data.size(), data.size());
     for (size_t i = 0; i < data.size(); ++i) {
