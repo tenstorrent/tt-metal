@@ -137,32 +137,21 @@ def upload_csv_sftp(
         return
 
     log.info("Uploading %d CSV file(s) to %s@%s ...", len(csv_files), sftp_user, sftp_host)
-    client = paramiko.SSHClient()
-    # Verify the server against known_hosts and refuse unknown/mismatched keys.
-    # A bare paramiko.Transport performs no host-key check, so a DNS/network
-    # compromise could redirect the key auth + CSV health data to an
-    # impersonating host. Fail closed instead.
-    client.load_system_host_keys()
-    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    transport = None
     try:
-        client.connect(
-            hostname=sftp_host,
-            port=22,
-            username=sftp_user,
-            pkey=pkey,
-            look_for_keys=False,
-            allow_agent=False,
-            timeout=30,
-        )
-        with client.open_sftp() as sftp:
-            for csv_file in csv_files:
-                remote_path = csv_file.name
-                log.info("Uploading %s", csv_file.name)
-                sftp.put(str(csv_file), remote_path)
+        transport = paramiko.Transport((sftp_host, 22))
+        transport.connect(username=sftp_user, pkey=pkey)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+
+        for csv_file in csv_files:
+            remote_path = csv_file.name
+            log.info("Uploading %s", csv_file.name)
+            sftp.put(str(csv_file), remote_path)
+
+        sftp.close()
         log.info("SFTP upload complete")
     except Exception as exc:
-        # Best-effort telemetry upload: a rejected host key, auth failure, or
-        # transfer error must warn but never abort the health-check run.
         log.warning("SFTP upload failed: %s", exc)
     finally:
-        client.close()
+        if transport:
+            transport.close()
