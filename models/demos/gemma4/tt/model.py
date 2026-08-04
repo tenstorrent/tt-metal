@@ -1116,8 +1116,9 @@ class Gemma4Model:
         # >= 4k OOMs DRAM on smaller WH SKUs (lm_head logits = seq_len * vocab
         # * 2B; at seq=4096 that's 2 GiB, doesn't fit in DRAM with weights).
         if get_last_token != -1:
-            # Tile-align here so callers may pass the true last-token index
-            # (bounded fill length) without undershooting the lm_head slice.
+            # get_last_token is an absolute position, so gather the CP-sharded
+            # sequence before selecting the globally addressed last-token tile.
+            hidden_states = self._cp_gather_prefill_sequence(hidden_states)
             tile_start = (int(get_last_token) // 32) * 32
             hidden_states = ttnn.slice(
                 hidden_states,
@@ -1139,6 +1140,33 @@ class Gemma4Model:
         """Commit stashed bounded ring K/V after lm_head (or batched-hidden return)."""
         if getattr(self, "bounded_sliding_kv_cache", False):
             flush_deferred_bounded_fills(self.layers)
+
+    def _cp_gather_prefill_sequence(self, hidden_states):
+        """Gather a CP-sharded prefill sequence back to full length.
+
+        Required before any slice by ABSOLUTE position. Those indices are mesh-wide
+        scalars, but under context parallelism each rank holds a different span of
+        the sequence, so the same scalar would select different (wrong) tokens on
+        every rank — the position wanted actually lives on exactly one of them.
+
+        Cheap in the place it is used: ~44 MB at 4k x 5376 bf16, and the lm_head
+        that follows only ever sees the 32-row slice. Gathering the *logits*
+        instead would be ~4.3 GB at a 262k vocab, which is why the head is fed a
+        slice in the first place.
+
+        Deliberately does not deallocate its input: one call site hands us a trace
+        output the caller still owns.
+        """
+        from models.demos.gemma4.tt.ccl import cp_degree
+
+        if cp_degree(self.mesh_config) <= 1:
+            return hidden_states
+        return ttnn.all_gather(
+            hidden_states,
+            dim=2,
+            cluster_axis=self.mesh_config.sp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _apply_lm_head(self, hidden_states, is_decode=False, keep_sharded_for_sampling=False, deallocate_input=True):
         """Project post-norm hidden states to vocab logits, softcap, all-gather.
@@ -1841,7 +1869,12 @@ class Gemma4Model:
 
         If the last dim is already vocab-sized (legacy / batched path that ran
         lm_head inside the trace), only slice and return.
+
+        Under CP the trace returns a sequence-sharded tensor, so it is gathered
+        first: ``last_token_idx`` is absolute and a mesh-wide scalar cannot address
+        a per-rank span.
         """
+        hidden_states = self._cp_gather_prefill_sequence(hidden_states)
         get_last_token = (last_token_idx // 32) * 32
         sliced = ttnn.slice(
             hidden_states,
