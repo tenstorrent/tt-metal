@@ -1094,3 +1094,39 @@ config that was tried first, it is the hand-rolled head plumbing around it.
 
 Next: replace with `nlp_create_qkv_heads` / `nlp_concat_heads`, re-profile, then revisit the
 HiFi4 elementwise ops (BinaryNg at 8.5 % is running HiFi4 where HiFi2 would do).
+
+## Amendment 43 (2026-08-04) — fused head ops: 1.45x on ViT layer device time
+
+Acting on amendment 42: replaced the hand-rolled head plumbing in
+`MiniMaxH3ViTAttention.forward` with `ttnn.experimental.nlp_create_qkv_heads` /
+`nlp_concat_heads`, the ops wan (`attention_wan.py:401`) and ltx (`attention_ltx.py:463`)
+already use.
+
+One layer, second iteration, device time: **15.527 ms -> 10.707 ms (1.45x)**, 63 -> 54 ops.
+
+| op | before us | after us |
+|---|---|---|
+| ReshapeViewDeviceOperation | 3998.9 | **0** |
+| TransposeDeviceOperation | 1569.8 | **0** |
+| SliceDeviceOperation | 128.8 | **0** |
+| NlpCreateHeadsDeviceOperation | 0 | 113.9 |
+| NLPConcatHeadsDeviceOperation | 0 | 623.2 |
+
+**5697 us of data movement became 737 us -- 7.7x on that portion**, and it is now gone as a
+category. `transpose_k_heads=False` is required (SDPA wants K as `[B,H,S,D]`), and the
+layout the op expects -- `[Q all heads | K all heads | V all heads]` -- is exactly what
+`_prepare_torch_state`'s `cat([q, k, v], dim=0)` already produced, so the RoPE lane permute
+baked into the q/k weights carries over untouched.
+
+Correctness: `test_vae_decoder_minimax_h3.py` 5 passed, PCC 99.9997 % / 99.9876 %.
+
+End-to-end, 32-unit waves: decoder **0.866 s -> 0.538 s**. 768P/5s **21.4 s -> 19.4 s**
+(encode 15.7, decode 3.8). Note the end-to-end decoder gain (1.61x) exceeds the device-time
+gain (1.45x) because removing 9 ops per layer also removes 324 dispatches per invocation --
+this helps the host-bound regime of amendment 41 as well as the device.
+
+**The decoder is no longer the problem: encode 15.7 s against decode 3.8 s.** Remaining
+decoder headroom, in order: SDPA is now 40 % of layer device time (4282 us, unchanged by
+this work), NLPConcatHeads is oddly 5.5x NlpCreateHeads, and BinaryNg/LayerNorm/Typecast
+still run HiFi4. But the encoder is 80 % of wall time and has never been profiled per-op --
+that is where the 3 s target is won.

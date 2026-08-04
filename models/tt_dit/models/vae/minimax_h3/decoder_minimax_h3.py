@@ -149,10 +149,19 @@ class MiniMaxH3ViTAttention(Module):
         batch, seq_len, _ = x.shape
         qkv = self.to_qkv(x)
 
-        query, key, value = (
-            ttnn.reshape(part, (batch, seq_len, self.num_heads, self.head_dim)) for part in ttnn.chunk(qkv, 3, dim=-1)
+        # One fused op rather than chunk + 3 reshapes + 3 permutes. Profiling one layer put
+        # ReshapeView at 25.8 % of device time (800 us mean) and Transpose at 10.1 % -- 36 %
+        # on data movement, more than every matmul combined -- and this hand-rolled head
+        # plumbing was all of it. wan (attention_wan.py:401) and ltx (attention_ltx.py:463)
+        # both use this op. transpose_k_heads=False because SDPA wants K as [B,H,S,D], and
+        # the layout it expects, [Q all heads | K all heads | V all heads], is exactly what
+        # _prepare_torch_state's cat([q, k, v], dim=0) already produces.
+        query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, (batch, 1, seq_len, qkv.shape[-1])),
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_heads,
+            transpose_k_heads=False,
         )
-        query, key, value = (ttnn.permute(t, (0, 2, 1, 3)) for t in (query, key, value))
 
         query = self._rms(query)
         key = self._rms(key)
@@ -170,7 +179,9 @@ class MiniMaxH3ViTAttention(Module):
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
-        attended = ttnn.reshape(ttnn.permute(attended, (0, 2, 1, 3)), (batch, seq_len, self.num_heads * self.head_dim))
+        attended = ttnn.reshape(
+            ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, self.num_heads * self.head_dim)
+        )
         return self.to_out(attended)
 
 
