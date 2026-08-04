@@ -51,16 +51,18 @@ inline void llk_unpack_AB_reduce_block_max_row_init(const ckernel::TensorShape& 
  * @param operandA          SrcA operand (block of tiles) circular buffer identifier.
  * @param operandB          SrcB scaler operand circular buffer identifier.
  * @param row_start_index   Tile offset of the block's first SrcA tile within operandA's CB.
+ * @param tensor_shape      Operand tile shape -- the SAME shape the math thread uses.
  */
 template <std::uint32_t block_ct_dim, bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t row_start_index) {
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t row_start_index,
+    const ckernel::TensorShape& tensor_shape) {
     static_assert(!respect_trigger, "respect_trigger (MOP-split handshake) not supported on Quasar");
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
-    // Program the SrcA MOP now that the operand (hence buffer descriptor) is known.
     _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
         block_ct_dim, operandA_id, operandB_id, tensor_shape, respect_trigger);
 

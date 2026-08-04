@@ -119,7 +119,14 @@ ALWI void reduce_block_max_row(
     std::uint32_t icb_scaler,
     std::uint32_t row_start_index,
     std::uint32_t idst) {
+#ifdef ARCH_QUASAR
+    // Quasar programs the unpack MOP at execute -- pass the caller tensor_shape so unpack and math share
+    // one source of truth for the tile geometry (WH/BH build the unpack MOP from this shape at init).
+    UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(
+        icb, icb_scaler, row_start_index, tensor_shape)));
+#else
     UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(icb, icb_scaler, row_start_index)));
+#endif
     MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst, tensor_shape)));
 }
 
@@ -339,8 +346,14 @@ ALWI void reduce_block_max_row_runtime(
     std::uint32_t idst,
     bool respect_trigger = false,
     bool overlap_first_half = false) {
+#ifdef ARCH_QUASAR
+    // Pass the caller tensor_shape so unpack and math share one source of truth for the tile geometry.
+    UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(
+        icb, icb_scaler, row_start_index, tensor_shape, respect_trigger, overlap_first_half)));
+#else
     UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(
         icb, icb_scaler, row_start_index, respect_trigger, overlap_first_half)));
+#endif
     MATH((llk_math_reduce_block_max_row_runtime<DST_ACCUM_MODE>(idst, tensor_shape)));
 }
 
