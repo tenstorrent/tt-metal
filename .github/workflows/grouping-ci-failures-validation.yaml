@@ -1,26 +1,18 @@
-name: (triage) Grouping CI Failures
+# TEMPORARY VALIDATION WORKFLOW - DELETE BEFORE MERGE
+#
+# A copy of grouping-ci-failures.yaml that runs on push to the validation
+# branch, because the real workflow is disabled_manually and enabling it would
+# re-arm the hourly schedule on main.
+
+name: (triage) Grouping CI Failures VALIDATION
 
 on:
-  schedule:
-    # Run every hour at minute 0
-    - cron: '0 * * * *'
-  workflow_dispatch:
-    inputs:
-      start_date:
-        description: 'Start date for fetching Slack messages (format: January 1, 2026). Defaults to 3 days ago if empty.'
-        required: false
-        type: string
-      end_date:
-        description: "End date (cutoff) for fetching Slack messages (format: 'January 31, 2026'). Messages after this date are ignored. Leave empty for no cutoff."
-        required: false
-        default: ""
+  push:
+    branches:
+      - ebanerjee/json-state-ci-failure-grouping
 
-# The grouping state is a single chain of artifacts per branch, each run building
-# on its predecessor. Two runs at once would both build on the same predecessor
-# and one of them would lose its work, so runs queue instead of overlapping.
-# Cancelling would be worse than waiting: a half-finished run publishes nothing.
 concurrency:
-  group: grouping-ci-failures-${{ github.ref }}
+  group: grouping-ci-failures-validation-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -75,7 +67,7 @@ jobs:
             const runs = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'grouping-ci-failures.yaml',
+              workflow_id: 'grouping-ci-failures-validation.yaml',
               branch,
               status: 'success',
               exclude_pull_requests: true,
@@ -142,7 +134,7 @@ jobs:
           start_date: ${{ inputs.start_date || steps['calc-date'].outputs.start_date }}
           end_date: ${{ inputs.end_date || '' }}
           state_path: ${{ github.workspace }}/grouping-state
-          workflow_file: '.github/workflows/grouping-ci-failures.yaml'
+          workflow_file: '.github/workflows/grouping-ci-failures-validation.yaml'
 
       - name: Upload grouping state
         if: ${{ success() }}
