@@ -18,7 +18,6 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_arg(args::stride_w);
     constexpr uint32_t input_width = get_arg(args::input_width);
     constexpr uint32_t work_per_core = get_arg(args::work_per_core);
-    constexpr bool is_l1_aligned = get_arg(args::is_l1_aligned);
 
     constexpr uint32_t patch_size = stride_h * stride_w;
     const auto s_out = TensorAccessor(tensor::dst);
@@ -27,13 +26,20 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer cb_in0(dfb::in0);
 
+    // The src1 scratch DFB is bound (and used) only when the stick is not L1-aligned.
+    // Its binding, and every reference to it, is #ifdef-gated on the same condition the host
+    // uses to bind it (FOLD_RM_NOT_L1_ALIGNED). In the aligned build the DFB is neither bound
+    // nor touched (matching the host, which does not allocate it).
+#ifdef FOLD_RM_NOT_L1_ALIGNED
     DataflowBuffer cb_in1(dfb::in1);
+    uint32_t intermed_l1_scratch = cb_in1.get_write_ptr();
+    // Datatypes will be multiple of 2 bytes only so it is safe to use uint16_t pointer
+    volatile tt_l1_ptr uint16_t* patch_data = (volatile uint16_t*)intermed_l1_scratch;
+#endif
     for (uint32_t input_idx = 0; input_idx < work_per_core; input_idx++) {
         cb_in0.wait_front(1);
-        if constexpr (!is_l1_aligned) {
-            uint32_t intermed_l1_scratch = cb_in1.get_write_ptr();
-            // Datatypes will be multiple of 2 bytes only so it is safe to use uint16_t pointer.
-            volatile tt_l1_ptr uint16_t* patch_data = (volatile uint16_t*)intermed_l1_scratch;
+#ifdef FOLD_RM_NOT_L1_ALIGNED
+        {
             uint32_t idx = 0;
             uint32_t l1_addr = cb_in0.get_read_ptr();
             for (uint32_t i = 0; i < patch_size; i++) {
@@ -49,10 +55,13 @@ void kernel_main() {
                 stick_nbytes * patch_size,
                 {},
                 {.page_id = dst_index});
-        } else {
+        }
+#else
+        {
             // If L1 aligned, write directly from the circular buffer.
             noc.async_write(cb_in0, s_out, stick_nbytes * patch_size, {}, {.page_id = dst_index});
         }
+#endif
         noc.async_write_barrier();
         cb_in0.pop_front(1);
         dst_index++;
