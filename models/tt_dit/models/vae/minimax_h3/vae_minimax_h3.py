@@ -36,9 +36,11 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -94,10 +96,22 @@ class MiniMaxH3VaeConfig:
         return cls(**{k: v for k, v in cfg.items() if not k.startswith("_")})
 
 
-# How many mesh-sized waves of decoded tiles to hold on the host before stitching. Keeps
-# every wave full while bounding peak host memory: a decoded tile is 22 MB, so this caps
-# the in-flight set at a few GB regardless of video length or resolution.
-_DECODE_WAVES_IN_FLIGHT = 4
+# How many mesh-sized waves' worth of *chunks* to decode before stitching and releasing them.
+#
+# **1, measured.** A decoded tile is 22 MB of fp32 pixels and a group's tiles are all held on host
+# until the group is stitched. At 4 (a 5-chunk group, 140 tiles, ~3.1 GB) the readback degraded from
+# 89 ms for the first wave to 215-277 ms for later ones -- host allocator pressure, not transfer:
+#
+#   5 chunks/group   readback per wave [92 223 277 218 223 274 215]  median 223 ms
+#   1 chunk/group    readback per wave [88  89 148 101  89  99  86]  median  89 ms
+#
+# 89 ms is the true cost of the transfer, confirmed by an isolated measurement of the same volume.
+# Device time is identical either way -- the wave count is set by the total unit count and every wave
+# pads to the mesh size regardless -- so the smaller group is free. Stage: 4.3 -> 3.8 s.
+#
+# Note the arithmetic below floors rather than ceils: `ceil(1 * 32 / 28) = 2` could never express one
+# chunk per group, which is the setting that keeps the held pile to a single chunk.
+_DECODE_WAVES_IN_FLIGHT = 1
 
 
 def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tuple[list[int], list[int], list[int]]:
@@ -187,6 +201,7 @@ class MiniMaxH3Vae(Module):
         tile_size: int = DEFAULT_TILE_SIZE,
         tile_overlap: int = DEFAULT_TILE_OVERLAP,
         use_tiling: bool = True,
+        weight_loader=None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -195,10 +210,78 @@ class MiniMaxH3Vae(Module):
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
         self.use_tiling = use_tiling
+        # Hook for a caller that wants weights loaded through `utils.cache` rather than straight off
+        # the host state dict. Called as `weight_loader(module, subfolder, state)` once per distinct
+        # (T, H, W) sub-model, since each one holds its own shape-specialised conv3d weight layout.
+        # Defaults to a plain strict load, which is what every existing test does.
+        self._weight_loader = weight_loader
         self._encoders: dict[tuple[int, int, int, int], MiniMaxH3Encoder3d] = {}
         self._encoder_state: dict[str, torch.Tensor] | None = None
         self._decoders: dict[tuple[int, int, int], object] = {}
         self._decoder_state: dict[str, torch.Tensor] | None = None
+        # Per-decode breakdown, reset at the top of `decode`. Always collected: it is a handful of
+        # `perf_counter` calls against a multi-second stage, and without it "VAE decode: 6.0 s" is a
+        # number with nowhere to go.
+        self._profile = self._empty_profile()
+        self.last_decode_profile: dict[str, float] = {}
+
+    @staticmethod
+    def _empty_profile() -> dict[str, float]:
+        return {
+            "host_prep": 0.0,
+            "upload": 0.0,
+            "device": 0.0,
+            "readback": 0.0,
+            "readback_mb": 0.0,
+            "unpatchify": 0.0,
+            "tiling": 0.0,
+            "stitch": 0.0,
+            "waves": 0,
+            "units": 0,
+            # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
+            # comparing a mean against someone else's min-of-N is how a 2x phantom appears.
+            "readback_each": [],
+            "device_each": [],
+        }
+
+    def _report_profile(self, total: float) -> None:
+        """Log where a decode's wall time went, and stash it on `last_decode_profile`."""
+        p = dict(self._profile)
+        accounted = sum(p[k] for k in ("host_prep", "upload", "device", "readback", "unpatchify", "tiling", "stitch"))
+        each = p.get("readback_each") or []
+        if each:
+            logger.info(
+                f"    readback per wave: min {min(each) * 1000:.0f} / median "
+                f"{sorted(each)[len(each) // 2] * 1000:.0f} / max {max(each) * 1000:.0f} ms  "
+                f"[{' '.join(f'{v * 1000:.0f}' for v in each)}]  on {p.get('shape')} {p.get('dtype')}"
+            )
+        each_d = p.get("device_each") or []
+        if each_d:
+            logger.info(
+                f"    device   per wave: min {min(each_d) * 1000:.0f} / median "
+                f"{sorted(each_d)[len(each_d) // 2] * 1000:.0f} / max {max(each_d) * 1000:.0f} ms  "
+                f"[{' '.join(f'{v * 1000:.0f}' for v in each_d)}]"
+            )
+        p["residual"] = max(0.0, total - accounted)
+        p["total"] = total
+        self.last_decode_profile = p
+        waves, units = int(p["waves"]), int(p["units"])
+        logger.info(
+            f"VAE decode profile: {total:.2f} s over {waves} waves / {units} units "
+            f"({self.mesh_device.get_num_devices()} devices, "
+            f"{units / waves if waves else 0:.1f} units/wave)"
+        )
+        for name in ("device", "readback", "stitch", "unpatchify", "tiling", "upload", "host_prep", "residual"):
+            share = 100 * p[name] / total if total else 0.0
+            per_wave = f"  {p[name] / waves * 1000:6.0f} ms/wave" if waves and name in ("device", "readback") else ""
+            logger.info(f"    {name:<12} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
+        logger.info(f"    readback volume {p['readback_mb'] / 1000:.2f} GB")
+
+    def _load_submodel(self, module, subfolder: str, state: dict[str, torch.Tensor]) -> None:
+        if self._weight_loader is not None:
+            self._weight_loader(module, subfolder, state)
+        else:
+            module.load_torch_state_dict(state)
 
     def forward(self, *args, **kwargs):
         """Unused: ``Module`` declares ``forward`` abstract, but this class has two entry points."""
@@ -248,7 +331,9 @@ class MiniMaxH3Vae(Module):
                 mesh_device=self.mesh_device,
                 dtype=self.dtype,
             )
-            encoder.load_torch_state_dict(dict(self._encoder_state))
+            self._load_submodel(
+                encoder, f"vae_encoder_t{num_frames}_h{height}_w{width}_taps{temporal_taps}", dict(self._encoder_state)
+            )
             self._encoders[key] = encoder
         return self._encoders[key]
 
@@ -431,7 +516,7 @@ class MiniMaxH3Vae(Module):
                 eps=self.config.decoder_norm_eps,
                 mesh_device=self.mesh_device,
             )
-            decoder.load_torch_state_dict(dict(self._decoder_state))
+            self._load_submodel(decoder, f"vae_decoder_t{num_frames}_h{height}_w{width}", dict(self._decoder_state))
             self._decoders[key] = decoder
         return self._decoders[key]
 
@@ -457,34 +542,99 @@ class MiniMaxH3Vae(Module):
         decoder = self._decoder_for(num_frames, height, width)
         wave_size = self.mesh_device.get_num_devices()
 
+        profile = self._profile
+        # Synchronizing after each forward is what makes `device` and `readback` separable in the
+        # profile -- and it also serializes them, defeating the pipelining below. So it is opt-in:
+        # set MINIMAX_H3_VAE_PROFILE=1 to attribute time, leave it unset to go fast.
+        attribute = os.environ.get("MINIMAX_H3_VAE_PROFILE", "0") == "1"
+
+        def read_wave(decoded, count: int) -> list[torch.Tensor]:
+            mark = time.perf_counter()
+            # `ConcatMeshToTensor`, deliberately, **not** `fast_device_to_host`.
+            #
+            # `fast_device_to_host(concat_dims=[0, 0])` looks like the right call -- it is what
+            # `vae_ltx.py` and `vae_wan2_1.py` use, and it measured 39 % faster -- but it is a misuse
+            # of that API and returns garbage here. `concat_dims` names, per mesh axis, the tensor
+            # dimension to concatenate along, and it is meant for a tensor fractured on *different*
+            # dims per axis (LTX shards H on one axis and W on the other). This tensor is fractured
+            # 32 ways along dim 0 by `ShardTensorToMesh(dim=0)`, so passing dim 0 for both axes is not
+            # a valid spec: measured, it returns `[24..31, 0, 0, ... 0]` where the correct order is
+            # `[0..31]` -- one mesh row of real data and the rest left unwritten.
+            #
+            # It was *faster* precisely because it was not moving the data. Nothing in the per-shard
+            # numerics suite catches this (every shard is individually correct, and the roundtrip
+            # tests run on a 1x1 mesh where the spec is trivially right); the e2e CLIP
+            # prompt-alignment gate did, dropping 37.37 -> 19.58.
+            out = ttnn.to_torch(decoded, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            elapsed = time.perf_counter() - mark
+            profile["readback"] += elapsed
+            profile["readback_each"].append(elapsed)
+            profile["shape"] = tuple(decoded.shape)
+            profile["dtype"] = str(decoded.dtype)
+            profile["readback_mb"] += out.numel() * out.element_size() / 1e6
+
+            mark = time.perf_counter()
+            # `.float()` per tile rather than once over the whole batch: the batch is 32 x 22 MB and
+            # upcasting it whole allocated a 5 GB fp32 intermediate to then slice 32 ways. The blend
+            # still runs in fp32, so this is numerically identical -- the device output is bf16 either
+            # way, and upcasting earlier adds no information.
+            tiles = [
+                unpatchify(
+                    out[index : index + 1].float(),
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                    out_channels=self.config.out_channels,
+                    patch_size=self.config.spatial_compression_ratio,
+                    patch_size_t=self.config.temporal_compression_ratio,
+                )
+                for index in range(count)
+            ]
+            profile["unpatchify"] += time.perf_counter() - mark
+            return tiles
+
         results: list[torch.Tensor] = []
+        pending: tuple | None = None  # (decoded_device_tensor, count) for the wave in flight
         for start in range(0, len(units), wave_size):
+            mark = time.perf_counter()
             wave = [
                 unit.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1)
                 for unit in units[start : start + wave_size]
             ]
             count = len(wave)
             padded = wave + [wave[-1]] * (wave_size - count)
+            batch = torch.cat(padded, dim=0)
+            profile["host_prep"] += time.perf_counter() - mark
+
+            mark = time.perf_counter()
             tokens = ttnn.from_torch(
-                torch.cat(padded, dim=0),
+                batch,
                 dtype=ttnn.bfloat16,
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
-            out = ttnn.to_torch(decoder(tokens), mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-            for index in range(count):
-                results.append(
-                    unpatchify(
-                        out[index : index + 1],
-                        num_frames=num_frames,
-                        height=height,
-                        width=width,
-                        out_channels=self.config.out_channels,
-                        patch_size=self.config.spatial_compression_ratio,
-                        patch_size_t=self.config.temporal_compression_ratio,
-                    )
-                )
+            profile["upload"] += time.perf_counter() - mark
+
+            mark = time.perf_counter()
+            decoded = decoder(tokens)
+            if attribute:
+                ttnn.synchronize_device(self.mesh_device)
+            elapsed = time.perf_counter() - mark
+            profile["device"] += elapsed
+            profile["device_each"].append(elapsed)
+
+            # Read the *previous* wave only after this one is enqueued, so its ~281 ms of transfer
+            # overlaps this wave's ~178 ms of compute instead of following it. Two waves' device
+            # output are live at once, which is one extra tile per device.
+            if pending is not None:
+                results.extend(read_wave(*pending))
+            pending = (decoded, count)
+            profile["waves"] += 1
+            profile["units"] += count
+
+        if pending is not None:
+            results.extend(read_wave(*pending))
         return results
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
@@ -496,8 +646,23 @@ class MiniMaxH3Vae(Module):
         if not self.use_tiling:
             return self._run_decoder(z_BCTHW)
 
+        mark = time.perf_counter()
         units = self._latent_tiles(z_BCTHW)
-        return self._stitch_decoded(self._run_decoder_units(units), z_BCTHW.shape[-2], z_BCTHW.shape[-1])
+        self._profile["tiling"] += time.perf_counter() - mark
+        decoded = self._run_decoder_units(units)
+        mark = time.perf_counter()
+        out = self._stitch_decoded(decoded, z_BCTHW.shape[-2], z_BCTHW.shape[-1])
+        self._profile["stitch"] += time.perf_counter() - mark
+        return out
+
+    def decode_tile_grid(self, latent_height: int, latent_width: int):
+        """Public alias for :meth:`_decode_tile_grid`, for callers that need the seam positions.
+
+        Exists because re-deriving this with `split_tiles(...)` and hardcoded constants is easy to get
+        wrong: at 1344x768 the real overlap of 64 gives a 4x7 grid, and an assumed 32 gives 4x6 with
+        boundary columns that are not boundaries. Ask the object that owns the geometry.
+        """
+        return self._decode_tile_grid(latent_height, latent_width)
 
     def _decode_tile_grid(self, latent_height: int, latent_width: int):
         """Tiles are laid out in *pixel* space, then mapped back onto the latent grid."""
@@ -534,6 +699,8 @@ class MiniMaxH3Vae(Module):
         the reference ``_decode``; the trailing repeated latent frames produce pixel frames
         that were never asked for and are cut at the end.
         """
+        self._profile = self._empty_profile()
+        decode_started = time.perf_counter()
         config = self.config
         chunk_size = config.tokens_chunk_size
         temporal_ratio = config.temporal_compression_ratio
@@ -560,17 +727,28 @@ class MiniMaxH3Vae(Module):
             # before stitching any of them would hold 6.8 GB (and ~29 GB at 1440P/10s).
             # Group chunks into a few waves' worth, stitch, release. Groups are whole chunks
             # so a group never straddles a stitch boundary.
-            chunks_per_group = max(1, -(-_DECODE_WAVES_IN_FLIGHT * wave_size // tiles_per_chunk))
+            # Floor, not ceil, and tunable: a group's decoded tiles are all held on host until the
+            # group is stitched, and the readback slows down as that pile grows -- measured 92 ms for
+            # the first wave against 215-277 ms for later ones when a group is 5 chunks (140 tiles,
+            # ~3.1 GB of fp32 pixels). Ceil could never express "one chunk per group", which is the
+            # setting that keeps the pile at one chunk's worth.
+            waves_in_flight = int(os.environ.get("MINIMAX_H3_DECODE_WAVES_IN_FLIGHT", _DECODE_WAVES_IN_FLIGHT))
+            chunks_per_group = max(1, waves_in_flight * wave_size // tiles_per_chunk)
             clips = []
             for group_start in range(0, num_chunks, chunks_per_group):
                 group = chunk_latents[group_start : group_start + chunks_per_group]
-                flat = self._run_decoder_units([unit for latents in group for unit in self._latent_tiles(latents)])
+                mark = time.perf_counter()
+                group_units = [unit for latents in group for unit in self._latent_tiles(latents)]
+                self._profile["tiling"] += time.perf_counter() - mark
+                flat = self._run_decoder_units(group_units)
+                mark = time.perf_counter()
                 clips.extend(
                     self._stitch_decoded(
                         flat[i * tiles_per_chunk : (i + 1) * tiles_per_chunk], latent_height, latent_width
                     )
                     for i in range(len(group))
                 )
+                self._profile["stitch"] += time.perf_counter() - mark
         else:
             clips = self._run_decoder_units(chunk_latents) if chunk_latents else []
 
@@ -598,6 +776,7 @@ class MiniMaxH3Vae(Module):
                 for k in range(pad_tokens)
             )
             result = result[:, :, :-pad_frames]
+        self._report_profile(time.perf_counter() - decode_started)
         return result
 
     def normalize_latents(self, latents: torch.Tensor) -> torch.Tensor:

@@ -25,6 +25,10 @@ from ....pipelines.minimax_h3 import packing as p
 # (label, latent_height, latent_width, num_frames, keyframe_anchors)
 BRINGUP = ("bringup", 544 // 16, 960 // 16, 124, ("first", "last"))
 CANONICAL = ("canonical", 768 // 16, 1344 // 16, 192, ("first",))
+# The t2va working point every T2VA gate runs at: 1344x768, 124 frames, no keyframes.
+# Distinct from the two above in the way that matters here -- an empty `keyframe_anchors`
+# takes the no-condition-rows path, which is the one the t2va pipeline actually uses.
+T2VA = ("t2va_768p_5s", 768 // 16, 1344 // 16, 124, ())
 
 # sequence_length, latent frames, audio latents, sha256[:16] of position_ids and token_tags
 GOLDEN = {
@@ -260,6 +264,81 @@ def test_unpack_audio_tokens_is_channel_major():
     # Channel-major: the first block of rows is the left channel in full.
     assert torch.equal(unpacked[0], rows[:num_audio_latents].transpose(0, 1))
     assert torch.equal(unpacked[1], rows[num_audio_latents:].transpose(0, 1))
+
+
+ROPE_FREQ_DIM = 16
+ROPE_THETA = 10000.0
+
+
+@pytest.mark.parametrize("case", [BRINGUP, CANONICAL, T2VA], ids=lambda c: c[0])
+def test_rope_tables_match_reference(case):
+    """Bit-exact cross-check of the rotary tables against the reference rope module.
+
+    The tables *are* the audio/video alignment -- a drifted angle desynchronizes the two
+    modalities without failing any shape or finiteness check -- so this is `torch.equal`, not
+    PCC. Exactness is reachable because `build_rope_tables` mirrors the reference op for op and
+    in its order; if a refactor makes it merely close, that is the regression, not the bar.
+    """
+    rope_module = pytest.importorskip(
+        "diffusers.models.transformers.transformer_minimax_h3",
+        reason="requires the minimax-h3 diffusers branch",
+    )
+    _, latent_height, latent_width, num_frames, anchors = case
+    layout = _layout(latent_height, latent_width, num_frames, anchors)
+
+    reference = rope_module.MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
+    with torch.no_grad():
+        want_cos, want_sin = reference(layout.position_ids)
+    got_cos, got_sin = p.build_rope_tables(layout.position_ids, rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
+
+    assert torch.equal(got_cos, want_cos), "rope cos is not bit-exact against the reference"
+    assert torch.equal(got_sin, want_sin), "rope sin is not bit-exact against the reference"
+
+
+@pytest.mark.parametrize("case", [BRINGUP, CANONICAL, T2VA], ids=lambda c: c[0])
+def test_rope_tables_shape_and_dtype(case):
+    """The width is `2 * 3 * rope_freq_dim`, which is *partial* rotary against head_dim 128.
+
+    Stands in for the reference check when the diffusers branch is absent, and pins the one
+    number the fused RoPE op relayouts against: 96 of each head's 128 channels rotate and the
+    remaining 32 pass through.
+    """
+    _, latent_height, latent_width, num_frames, anchors = case
+    layout = _layout(latent_height, latent_width, num_frames, anchors)
+    cos, sin = p.build_rope_tables(layout.position_ids, rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
+
+    assert cos.shape == sin.shape == (layout.sequence_length, 2 * 3 * ROPE_FREQ_DIM)
+    assert cos.shape[-1] == 96 < 128, "rotary width must stay narrower than head_dim"
+    # fp32, not the fp64 the position grid is carried in: the reference casts before computing,
+    # and casting after would move the last ulp of every angle.
+    assert cos.dtype == sin.dtype == torch.float32
+    assert torch.isfinite(cos).all() and torch.isfinite(sin).all()
+    # A row's three axis blocks are concatenated then duplicated, so the two halves are equal.
+    half = cos.shape[-1] // 2
+    assert torch.equal(cos[:, :half], cos[:, half:])
+    assert torch.equal(sin[:, :half], sin[:, half:])
+
+
+def test_rope_tables_distinguish_the_three_axes():
+    """A t2va layout must not collapse to 1-D rope.
+
+    Video rows carry a real `(t, h, w)` grid, so the three per-axis frequency blocks of a video
+    row must differ from each other. If they did not, the spatial rotary would be doing nothing
+    and the failure would look like weak spatial coherence rather than a bug.
+    """
+    _, latent_height, latent_width, num_frames, anchors = T2VA
+    layout = _layout(latent_height, latent_width, num_frames, anchors)
+    cos, _ = p.build_rope_tables(layout.position_ids, rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
+
+    # A video row well inside the clip: not frame 0, not the first column of its frame.
+    row = int(layout.video_indices[-1])
+    t_block, h_block, w_block = (
+        cos[row, :ROPE_FREQ_DIM],
+        cos[row, ROPE_FREQ_DIM : 2 * ROPE_FREQ_DIM],
+        cos[row, 2 * ROPE_FREQ_DIM : 3 * ROPE_FREQ_DIM],
+    )
+    assert not torch.equal(t_block, h_block)
+    assert not torch.equal(h_block, w_block)
 
 
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])

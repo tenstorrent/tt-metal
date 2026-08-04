@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""MiniMax-H3's Qwen3-VL text conditioner: config, truncated depth, and weight loading.
+
+H3 conditions on ``hidden_states[50]`` of a 64-layer Qwen3-VL, which is the *raw* output of
+decoder layer 49 -- not the post-norm final state. So only 50 layers are built and the tap is
+taken with ``activation_layers``, which returns hidden states without the final norm. Truncating
+the stack to 50 layers and reading its normalized output instead would be a different tensor;
+the diffusers reference raises rather than allow that, and
+``test_text_encoder_minimax_h3.py::test_tap_is_not_the_post_norm_state`` pins the distinction
+here (they differ by O(10^4), not by rounding).
+
+T2VA is text-only, so none of the vision tower (``model.visual.*``, 27 blocks) is built or read,
+and mRoPE degenerates: all three position axes carry the same ``arange``, which makes the
+checkpoint's ``mrope_interleaved: true`` indistinguishable from the chunked section split
+``create_rope_tensors`` implements. That is measured, not assumed --
+``test_mrope_is_permutation_invariant_for_text_only``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+
+import torch
+from loguru import logger
+from safetensors import safe_open
+
+from ...parallel.manager import CCLManager
+from .model_qwen3vl import Qwen3VlTextEncoder
+
+# H3 reads `hidden_states[50]`; `hidden_states[0]` is the embedding output, so index 50 is the
+# output of decoder layer 49 and a 50-layer stack tapped at its last layer is exactly that.
+MINIMAX_H3_TEXT_ENCODER_LAYER = 50
+
+_CHECKPOINT_PREFIX = "model.language_model."
+
+
+def minimax_h3_text_config(weights_dir: str | os.PathLike) -> dict:
+    """Read `text_encoder/config.json`'s `text_config` as plain JSON.
+
+    Deliberately not `AutoConfig.from_pretrained`: that resolves `model_type: qwen3_vl`, which
+    ties this to a transformers version that knows the architecture, when all that is needed are
+    a dozen integers. The released values are hidden 5120, intermediate 25600, 64 heads, 8 KV
+    heads, head_dim 128, rms_eps 1e-6, rope_theta 5e6, mrope_section [24, 20, 20].
+    """
+    config = json.loads((Path(weights_dir) / "config.json").read_text())["text_config"]
+    num_layers = config["num_hidden_layers"]
+    if num_layers <= MINIMAX_H3_TEXT_ENCODER_LAYER:
+        raise ValueError(
+            f"MiniMax-H3 conditions on hidden_states[{MINIMAX_H3_TEXT_ENCODER_LAYER}], which needs more "
+            f"than {MINIMAX_H3_TEXT_ENCODER_LAYER} decoder layers, but this checkpoint has {num_layers}"
+        )
+    return config
+
+
+def load_minimax_h3_text_state_dict(weights_dir: str | os.PathLike, *, num_layers: int) -> dict[str, torch.Tensor]:
+    """The `model.language_model.*` sub-tree, layers `[0, num_layers)`, prefix stripped.
+
+    Reads only the shards that hold wanted tensors, so the vision tower and `lm_head` are never
+    materialized -- with 50 of 64 layers that is ~50 GB of the checkpoint's 63 GB. `norm.weight`
+    *is* kept even though the tap bypasses the final norm: the module owns that parameter and the
+    load is strict, so dropping it would fail as a missing key rather than save anything
+    meaningful (one 5120-element vector).
+    """
+    directory = Path(weights_dir)
+    index_path = directory / "model.safetensors.index.json"
+    if not index_path.is_file():
+        raise FileNotFoundError(f"no model.safetensors.index.json under {directory}")
+    weight_map = json.loads(index_path.read_text())["weight_map"]
+
+    layer_re = re.compile(rf"^{re.escape(_CHECKPOINT_PREFIX)}layers\.(\d+)\.")
+    wanted: dict[str, str] = {}
+    for key, shard in weight_map.items():
+        if not key.startswith(_CHECKPOINT_PREFIX):
+            continue  # model.visual.* and lm_head.weight
+        match = layer_re.match(key)
+        if match is not None and int(match.group(1)) >= num_layers:
+            continue  # layers 50..63 are never evaluated
+        wanted[key] = shard
+
+    by_shard: dict[str, list[str]] = {}
+    for key, shard in wanted.items():
+        by_shard.setdefault(shard, []).append(key)
+
+    state: dict[str, torch.Tensor] = {}
+    for shard, keys in sorted(by_shard.items()):
+        with safe_open(str(directory / shard), framework="pt", device="cpu") as handle:
+            for key in keys:
+                state[key[len(_CHECKPOINT_PREFIX) :]] = handle.get_tensor(key)
+    logger.info(
+        f"MiniMax-H3 text encoder: {len(state)} tensors from {len(by_shard)} of "
+        f"{len(set(weight_map.values()))} shards, {sum(t.numel() for t in state.values()) * 2 / 1e9:.1f} GB bf16"
+    )
+    return state
+
+
+def build_minimax_h3_text_encoder(
+    weights_dir: str | os.PathLike,
+    *,
+    mesh_device,
+    parallel_config,
+    ccl_manager: CCLManager,
+    is_fsdp: bool = True,
+    num_layers: int = MINIMAX_H3_TEXT_ENCODER_LAYER,
+    load_weights: bool = True,
+) -> tuple[Qwen3VlTextEncoder, dict]:
+    """Build the conditioner at truncated depth, tapped at its last layer, and load its weights.
+
+    `is_fsdp` defaults on: the encoder runs once per prompt, outside the denoise loop, so the
+    per-layer weight gather costs nothing that matters, while sharding over the non-TP axis takes
+    the resident weights from ~12.5 GB/device at TP=4 to ~1.6 GB/device across a 4x8 mesh. It
+    self-disables when the non-TP axis is size 1.
+
+    Returns `(encoder, text_config)`; the config carries `head_dim`, `rope_theta` and
+    `mrope_section`, which the caller needs to build the rope tables at the matching width.
+    """
+    config = minimax_h3_text_config(weights_dir)
+    rope_scaling = config.get("rope_scaling") or {}
+
+    encoder = Qwen3VlTextEncoder(
+        vocab_size=config["vocab_size"],
+        hidden_size=config["hidden_size"],
+        intermediate_size=config["intermediate_size"],
+        hidden_act=config.get("hidden_act", "silu"),
+        num_hidden_layers=num_layers,
+        num_attention_heads=config["num_attention_heads"],
+        num_key_value_heads=config["num_key_value_heads"],
+        rms_norm_eps=config["rms_norm_eps"],
+        # transformers >= 4.57 keeps rope_theta at the top of text_config; older layouts put it
+        # inside rope_scaling. Accept both, as the Ideogram-4 pipeline does.
+        rope_theta=rope_scaling.get("rope_theta", config["rope_theta"]),
+        mrope_section=rope_scaling["mrope_section"],
+        # Not hidden_size // num_attention_heads for this checkpoint: 5120 / 64 = 80, but the
+        # real head_dim is 128 and q_proj is [8192, 5120].
+        head_dim=config["head_dim"],
+        # The raw output of the last built layer, i.e. hidden_states[50], with no final norm.
+        activation_layers=(num_layers - 1,),
+        device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+        is_fsdp=is_fsdp,
+    )
+
+    if load_weights:
+        state = load_minimax_h3_text_state_dict(weights_dir, num_layers=num_layers)
+        # Strict: an unconsumed or missing key here is a real mapping bug, and this is the only
+        # place it is cheap to catch.
+        encoder.load_torch_state_dict(state)
+        del state
+
+    return encoder, config
