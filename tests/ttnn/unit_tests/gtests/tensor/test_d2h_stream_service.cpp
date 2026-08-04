@@ -519,7 +519,7 @@ void run_layer_ack_service_case(
     // Record: [1,1,1,n] uint32 replicated DRAM. Content is irrelevant to the ack count
     // (LayerAckService reads then discards it), so build once and resend each iteration.
     const uint32_t n = metadata_size_bytes / sizeof(uint32_t);
-    const auto record_spec = TensorSpec(
+    const auto record_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, n}),
         TensorLayout(
             DataType::UINT32,
