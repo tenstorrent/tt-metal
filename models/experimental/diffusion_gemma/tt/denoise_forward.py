@@ -1081,7 +1081,7 @@ def read_prompt_kv_cache_by_layer(
             f"tt_kv_cache has {len(tt_model.tt_kv_cache)} layers but model has {len(tt_model.layers)} layers"
         )
     # Only forward the kwarg when borrowing is actually requested: ``read_fn`` is a documented
-    # injection point and existing test doubles / demo/replay_hf_tt.py monkeypatches accept only
+    # injection point and existing test doubles / tests/replay_hf_tt.py monkeypatches accept only
     # (kv_cache, *, prompt_len, seq_len_start).
     extra = {"borrow_full_span": True} if borrow_full_span else {}
     if layer_idx is not None:

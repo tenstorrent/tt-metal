@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
-from models.experimental.diffusion_gemma.demo.replay_hf_tt import (
+from models.experimental.diffusion_gemma.tests.replay_hf_tt import (
     _make_replay_noise,
     _stage_gate_active_step_indices,
     _tensor_sha256,
