@@ -179,10 +179,26 @@ execute_step_write_initial_run_json
 
 ## Step 2b: Hide Existing Implementation (blind regeneration)
 
-EXECUTE the following. When `HIDE_EXISTING_KERNEL=true` it git-removes and commits the target op's existing files (metal wrapper + tt-llk lib impl) on the worktree branch, so the analyzer and writer regenerate blind — following their normal git-read policy they find no prior implementation on the branch. No-op when the flag is unset:
+EXECUTE the following — it acts only when `HIDE_EXISTING_KERNEL=true`, and is a no-op otherwise:
 
 ```bash
 execute_step_hide_existing_kernel
+```
+
+If it prints a `WARNING:` block, quote it verbatim in your final report and via `execute_step_message`.
+
+## Step 2c: Remove Existing Tests (test regeneration)
+
+EXECUTE the following — it acts only when `REMOVE_TESTS=true`, and is a no-op otherwise:
+
+```bash
+execute_step_remove_existing_tests
+```
+
+If it removed a dedicated file, continue to Step 3. If it instead printed `SHARED_TEST_FILES` (the op has no dedicated file and lives in a shared unified test), open each listed file and delete **only** this op's slice — its `OpConfig(MathOperation.{op}, …)` / op-list entry and its `prepare_{KERNEL_NAME}_inputs` (or family) branch in the `.py`; its `#include "llk_sfpu/ckernel_sfpu_{KERNEL_NAME}.h"` and its `SfpuType::{op}` / `BinaryOp::{OP}` dispatcher branch in the `.cpp`/header — leaving every other op untouched (`{op}`/`{OP}` are this op's registered enum names). If the list is empty, locate the shared test yourself by grepping the op's registration. Then commit the excision:
+
+```bash
+execute_step_commit_test_excision
 ```
 
 ---
@@ -375,6 +391,11 @@ Agent tool:
     playbook: treat the existing test as the immutable source of truth — never
     author, extend, register, or modify any test, golden, or input-prep; only run
     the existing test and debug the kernel.
+
+    If REMOVE_TESTS=true (read it from state), author the op's test fresh from the
+    analysis spec then run and debug — this overrides LOCK_TESTS. Step 2c already
+    removed the op's dedicated test files; replace any registrations left in a
+    shared unified SFPU test.
 ```
 
 - WAIT for the Tester finish and return `PASS`, `STUCK`, or `ENV_ERROR`.

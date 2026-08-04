@@ -28,7 +28,8 @@ TARGET_ARCH="$($ST --log-dir "$LOG_DIR" get TARGET_ARCH)"
 KERNEL_PATH="$($ST --log-dir "$LOG_DIR" get GENERATED_KERNEL)"   # the failed kernel
 SKIP_WRITER="$($ST --log-dir "$LOG_DIR" get SKIP_WRITER)"
 LOCK_TESTS="$($ST --log-dir "$LOG_DIR" get LOCK_TESTS)"
-for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH KERNEL_PATH SKIP_WRITER LOCK_TESTS; do echo "$v=${!v:-<empty>}"; done
+REMOVE_TESTS="$($ST --log-dir "$LOG_DIR" get REMOVE_TESTS)"
+for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH KERNEL_PATH SKIP_WRITER LOCK_TESTS REMOVE_TESTS; do echo "$v=${!v:-<empty>}"; done
 ```
 
 Run all file I/O from `$WORKTREE_DIR/tt_metal/tt-llk`. Throughout, `{KERNEL_NAME}` denotes the resolved value. Derived paths:
@@ -112,7 +113,7 @@ Pick the **one primary** category — the one whose fix cascades the most downst
 | **HARNESS_INCOMPATIBILITY** | Every variant times out / all-zeros with near-identical signatures; the sibling smoke passes; the test source calls foreign-arch `_llk_*` / sync / `wait_*` symbols or reaches them via a `*_compat*` shim | The kernel plan was likely fine — the test source was never converted to target-native. Direct the tester to author a native test source before further kernel edits. Do NOT rewrite §6b |
 | **UNDIAGNOSABLE** | No coherent pattern — different signatures, different categories | Escalate. Do not refine on noise |
 
-When `LOCK_TESTS=true` (from Inputs), the test is locked — do not recommend authoring or editing any test, golden, or input-prep; treat `HARNESS_INCOMPATIBILITY` as terminal and `ESCALATE`.
+When `LOCK_TESTS=true` and `REMOVE_TESTS` is unset (from Inputs), the test is locked — do not recommend authoring or editing any test, golden, or input-prep; treat `HARNESS_INCOMPATIBILITY` as terminal and `ESCALATE`. When `REMOVE_TESTS=true`, the test is being authored fresh — recommend test-authoring fixes normally.
 
 If you cannot confidently pick ONE category after reading the logs twice, classify `UNDIAGNOSABLE` and escalate.
 

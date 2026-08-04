@@ -206,7 +206,7 @@ execute_step_setup_run() {
     local S="$_ORCH_SCRIPTS" wt
     wt="$(_wt)"
 
-    local START_TIME KERNEL_NAME TARGET_ARCH WORKTREE_BRANCH SFPI_MODE LOCK_TESTS HIDE_EXISTING_KERNEL LOG_DIR_BASE
+    local START_TIME KERNEL_NAME TARGET_ARCH WORKTREE_BRANCH SFPI_MODE LOCK_TESTS REMOVE_TESTS HIDE_EXISTING_KERNEL LOG_DIR_BASE
     local RUN_ID LOG_DIR GIT_COMMIT CODEGEN_VERSION PROMPT BATCH_ID MODEL RUN_TYPE
     START_TIME="$(python "$S/state.py" --worktree-dir "$wt" get START_TIME)"; START_TIME="${START_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
     KERNEL_NAME="$(python "$S/state.py" --worktree-dir "$wt" get KERNEL_NAME)"
@@ -214,6 +214,7 @@ execute_step_setup_run() {
     WORKTREE_BRANCH="$(python "$S/state.py" --worktree-dir "$wt" get WORKTREE_BRANCH)"
     SFPI_MODE="$(python "$S/state.py" --worktree-dir "$wt" get SFPI_MODE)"
     LOCK_TESTS="$(python "$S/state.py" --worktree-dir "$wt" get LOCK_TESTS)"; LOCK_TESTS="${LOCK_TESTS:-false}"
+    REMOVE_TESTS="$(python "$S/state.py" --worktree-dir "$wt" get REMOVE_TESTS)"; REMOVE_TESTS="${REMOVE_TESTS:-false}"
     HIDE_EXISTING_KERNEL="$(python "$S/state.py" --worktree-dir "$wt" get HIDE_EXISTING_KERNEL)"; HIDE_EXISTING_KERNEL="${HIDE_EXISTING_KERNEL:-false}"
     LOG_DIR_BASE="$(python "$S/state.py" --worktree-dir "$wt" get LOG_DIR_BASE)"
     # Reuse begin_setup's identity if the router threaded it into worktree state;
@@ -245,6 +246,7 @@ execute_step_setup_run() {
     ss WORKTREE_BRANCH "$WORKTREE_BRANCH"
     ss SFPI_MODE       "$SFPI_MODE" --json
     ss LOCK_TESTS     "$LOCK_TESTS" --json
+    ss REMOVE_TESTS   "$REMOVE_TESTS" --json
     ss HIDE_EXISTING_KERNEL "$HIDE_EXISTING_KERNEL" --json
     ss RUN_ID          "$RUN_ID"
     ss START_TIME      "$START_TIME"
@@ -315,6 +317,19 @@ execute_step_set_kernel_identity() {
 # implementation (`git show HEAD:<path>` returns nothing). No-op unless the flag
 # is set. base_commit (GIT_COMMIT, captured at setup BEFORE this) is unchanged,
 # so the final generated.patch is still computed against origin/main.
+#
+# Hiding spans all three layers an op can occupy — the metal LLK-API dest, the
+# tt-llk lib implementation wherever it lives under the arch tree (sfpu/,
+# experimental/, or any future subfolder), and the compute-level API entry
+# point. Every candidate is a git pathspec expanded through `git ls-files`, so
+# globs match and untracked/absent paths drop out silently. Keying only on
+# GENERATED_KERNEL is what previously let an op implemented under
+# common/inc/experimental/ survive a "blind" run untouched.
+#
+# GENERATED_KERNEL is the only hidden path that comes back: the writer generates
+# it fresh, exactly as it does when nothing was hidden. Every other hidden path —
+# the tt-llk lib implementation and the compute-level API entry point — stays
+# hidden for the whole run and gets no new version written.
 # Run AFTER execute_step_set_kernel_identity and BEFORE the analyzer.
 # ===========================================================================
 execute_step_hide_existing_kernel() {
@@ -322,20 +337,73 @@ execute_step_hide_existing_kernel() {
     local hide; hide="$(sg HIDE_EXISTING_KERNEL 2>/dev/null || echo false)"
     if [ "$hide" != "true" ]; then echo "hide_existing_kernel: not requested — skipping"; return 0; fi
     local wt kn kt gen; wt="$(_wt)"; kn="$(sg KERNEL_NAME)"; kt="$(sg KERNEL_TYPE)"; gen="$(sg GENERATED_KERNEL)"
-    local -a files=(); [ -n "$gen" ] && files+=("$gen")
+    local -a patterns=(); [ -n "$gen" ] && patterns+=("$gen")
     if [ "$kt" = "sfpu" ]; then
-        files+=("tt_metal/tt-llk/tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_${kn}.h")
+        # Anywhere under the arch's tt-llk tree — common/inc/sfpu/, common/inc/experimental/,
+        # and any future subfolder. Anchored on ckernel_sfpu_${kn}.h so it can never match the
+        # shared *_init.h / *_macros.h files.
+        patterns+=("tt_metal/tt-llk/tt_llk_quasar/**/ckernel_sfpu_${kn}.h")
         # Per-op metal LLK-API entry point (llk_math_eltwise_{unary,binary,ternary}_sfpu_{op}.h) —
         # arity isn't tracked in state, so glob it; anchored on ${kn} so it can't match the
         # shared *_init.h / *_macros.h files.
-        files+=("tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/llk_math_eltwise_*_sfpu_${kn}.h")
+        patterns+=("tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/llk_math_eltwise_*_sfpu_${kn}.h")
     fi
-    local removed=0 f
-    for f in "${files[@]}"; do
-        if git -C "$wt" ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
-            git -C "$wt" rm -q -f -- "$f" && { removed=$((removed + 1)); echo "  hid: $f"; }
-        fi
+    # Compute-level API entry point (eltwise_unary/${kn}.h, eltwise_binary/${kn}.h, …). Arity
+    # isn't tracked in state, so glob the category folder; the basename is exact, so an op
+    # folded into a shared header (activations.h, comp.h) yields no match and nothing is hidden.
+    patterns+=("tt_metal/hw/inc/api/compute/*/${kn}.h")
+    # Drive removals off `git ls-files` so glob pathspecs expand; a file removed by an earlier
+    # pattern leaves the index and cannot be matched twice.
+    local removed=0 pat f; local -a hidden=()
+    for pat in "${patterns[@]}"; do
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            git -C "$wt" rm -q -f -- "$f" && {
+                removed=$((removed + 1)); echo "  hid: $f"
+                # GENERATED_KERNEL is regenerated by the writer, so it IS this run's output and
+                # must stay in generated.patch. Record only the paths that stay hidden.
+                [ "$f" = "$gen" ] || hidden+=("$f")
+            }
+        done < <(git -C "$wt" ls-files -- "$pat")
     done
+    # Step 8 turns these into exclude pathspecs so generated.patch carries no deletion of a
+    # file this run deliberately ignored. Space-separated: every path is repo-relative and
+    # space-free.
+    ss HIDDEN_FILES "${hidden[*]}"
+    # Guard: a test source left on the branch that #includes a header we just hid makes the
+    # run's compile fail in a way no agent can repair — worst under LOCK_TESTS, where the
+    # tester may not touch tests. Scan the run's own compile scope (tt-llk tests) and
+    # discount the files execute_step_remove_existing_tests is about to delete in Step 2c.
+    # Warn and proceed: hiding stays in effect so the run is genuinely blind, but the cause
+    # is named here instead of surfacing later as an unexplained compile error.
+    local -a includers=()
+    if [ "${#hidden[@]}" -gt 0 ]; then
+        local rt arch_ doomed="" b inc
+        rt="$(sg REMOVE_TESTS 2>/dev/null || echo false)"; arch_="$(sg TARGET_ARCH)"
+        [ "$rt" = "true" ] && doomed="$(git -C "$wt" ls-files -- \
+            "tt_metal/tt-llk/tests/python_tests/${arch_}/test_*${kn}*_${arch_}.py" \
+            "tt_metal/tt-llk/tests/sources/${arch_}/*${kn}*_test.cpp" 2>/dev/null)"
+        for f in "${hidden[@]}"; do
+            # Match the include as written — last two path components on an #include line.
+            # A bare basename is far too loose: "fill.h" substring-matches
+            # ckernel_sfpu_fill.h, and "ckernel_sfpu_fill.h" alone also matches the BH/WH
+            # helper's `sfpu/` include, which is not the quasar path we hid.
+            b="$(printf '%s\n' "$f" | awk -F/ '{print $(NF-1)"/"$NF}')"
+            while IFS= read -r inc; do
+                [ -n "$inc" ] || continue
+                case "$doomed" in *"$inc"*) continue ;; esac
+                includers+=("$inc includes $b")
+            done < <(git -C "$wt" grep -l -E -e "^[[:space:]]*#[[:space:]]*include.*${b}" \
+                        -- 'tt_metal/tt-llk/tests' 2>/dev/null)
+        done
+    fi
+    if [ "${#includers[@]}" -gt 0 ]; then
+        echo "  WARNING: a hidden header is still included by a test source on the branch."
+        echo "           This run's compile WILL fail and no agent can fix it:"
+        printf '             %s\n' "${includers[@]}"
+        echo "           ACTION: stop the listed file(s) including the hidden header, or clear"
+        echo "           HIDE_EXISTING_KERNEL. REMOVE_TESTS only deletes the op's dedicated tests."
+    fi
     if [ "$removed" -gt 0 ]; then
         git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
             commit -q -m "codegen: hide existing ${kn} implementation for blind regeneration" || true
@@ -343,6 +411,86 @@ execute_step_hide_existing_kernel() {
     else
         echo "hide_existing_kernel: no tracked ${kn} files to hide"
     fi
+}
+
+# ===========================================================================
+# Step 1c — remove the op's existing tests so the tester authors them fresh. When
+# REMOVE_TESTS=true, git-remove AND commit the op's arch-specific dedicated test
+# files (Python test + C++ source) on the worktree branch. An op with no dedicated
+# file lives in a shared unified SFPU test: a whole-file rm would destroy every
+# other op's cases, so instead locate the shared files that register the op, record
+# them in SHARED_TEST_FILES, and print them — the orchestrator excises only this op's
+# slice (Step 2c) and commits it via execute_step_commit_test_excision. No-op unless
+# the flag is set. base_commit (GIT_COMMIT, captured at setup BEFORE this) is
+# unchanged, so the final generated.patch still diffs against origin/main.
+# Run AFTER execute_step_set_kernel_identity and BEFORE the analyzer.
+# ===========================================================================
+execute_step_remove_existing_tests() {
+    local _L; _L="$(_LOG)"
+    local remove; remove="$(sg REMOVE_TESTS 2>/dev/null || echo false)"
+    if [ "$remove" != "true" ]; then echo "remove_existing_tests: not requested — skipping"; return 0; fi
+    local wt kn arch; wt="$(_wt)"; kn="$(sg KERNEL_NAME)"; arch="$(sg TARGET_ARCH)"
+    ss SHARED_TEST_FILES ""
+    # Dedicated files are arch-specific and op-anchored; patterns tolerate a prefix
+    # (e.g. test_sfpu_where_quasar.py) but never match a shared unified test. Keep the
+    # wildcards quoted so git expands them as repo-root-relative pathspecs — the shell's
+    # cwd is already inside tt_metal/tt-llk, so shell globbing would double the prefix
+    # and match nothing. git ls-files returns only tracked matches.
+    local -a patterns=(
+        "tt_metal/tt-llk/tests/python_tests/${arch}/test_*${kn}*_${arch}.py"
+        "tt_metal/tt-llk/tests/sources/${arch}/*${kn}*_test.cpp"
+    )
+    local removed=0 pat f
+    for pat in "${patterns[@]}"; do
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            git -C "$wt" rm -q -f -- "$f" && { removed=$((removed + 1)); echo "  removed: $f"; }
+        done < <(git -C "$wt" ls-files -- "$pat")
+    done
+    if [ "$removed" -gt 0 ]; then
+        git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
+            commit -q -m "codegen: remove existing ${kn} tests for regeneration" || true
+        echo "remove_existing_tests: removed ${removed} dedicated file(s), committed on worktree branch"
+        return 0
+    fi
+    # No dedicated file — the op registers into a shared unified test. Locate the shared
+    # .py / dispatcher header / .cpp that carry the op (a registration token next to the
+    # op name, case-insensitive) so the orchestrator excises only this op's slice.
+    local -a shared=()
+    while IFS= read -r f; do [ -n "$f" ] && shared+=("$f"); done < <(
+        git -C "$wt" grep -il -E "(MathOperation|OpConfig|SfpuType|BinaryOp|prepare_|ckernel_sfpu_)[A-Za-z0-9_.:]*${kn}" \
+            -- "tt_metal/tt-llk/tests/python_tests/${arch}" \
+               "tt_metal/tt-llk/tests/sources/${arch}" \
+               "tt_metal/tt-llk/tests/helpers/include/sfpu_operations_${arch}.h" 2>/dev/null
+    )
+    ss SHARED_TEST_FILES "${shared[*]}"
+    if [ "${#shared[@]}" -gt 0 ]; then
+        echo "remove_existing_tests: no dedicated ${kn} test files — op lives in a shared test."
+        echo "  SHARED_TEST_FILES — orchestrator excises only the ${kn} slice, then runs execute_step_commit_test_excision:"
+        printf '    %s\n' "${shared[@]}"
+    else
+        echo "remove_existing_tests: no dedicated ${kn} test files and no shared registration located — orchestrator must find and excise the op's slice"
+    fi
+}
+
+# ===========================================================================
+# Step 1c (shared path) — commit the orchestrator's excision of the op's slice
+# from the shared unified test. Stage the files recorded in SHARED_TEST_FILES and
+# commit them on the worktree branch. No-op when nothing was recorded or staged.
+# Run AFTER the orchestrator edits the shared files and BEFORE the analyzer.
+# ===========================================================================
+execute_step_commit_test_excision() {
+    local _L; _L="$(_LOG)"
+    local wt kn files; wt="$(_wt)"; kn="$(sg KERNEL_NAME)"; files="$(sg SHARED_TEST_FILES)"
+    [ -n "$files" ] || { echo "commit_test_excision: no shared files recorded — nothing to commit"; return 0; }
+    git -C "$wt" add -- $files
+    if git -C "$wt" diff --cached --quiet; then
+        echo "commit_test_excision: no staged changes — nothing to commit"
+        return 0
+    fi
+    git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
+        commit -q -m "codegen: remove existing ${kn} cases from shared test for regeneration" || true
+    echo "commit_test_excision: committed ${kn} excision on worktree branch"
 }
 
 # ===========================================================================
@@ -920,6 +1068,14 @@ execute_step_write_generated_patch() {
     # HIDE_EXISTING_KERNEL deletion commit. Falls back to HEAD if unknown.
     base="$(sg GIT_COMMIT)"; { [ -n "$base" ] && [ "$base" != "unknown" ]; } || base="HEAD"
     local PATHSPEC="tt_llk_${ta} tests codegen/artifacts :(top)tt_metal/hw/ckernels/quasar/metal/llk_api :(top)tt_metal/hw/inc/api"
+    # Files hidden for blind regeneration and never rewritten (HIDE_EXISTING_KERNEL) are not
+    # this run's output — they were removed on the branch so the pipeline could not read them.
+    # Exclude them, so the patch carries no deletion and applies onto origin/main without
+    # removing the prior implementation. HIDDEN_FILES holds repo-root-relative paths, hence
+    # :(top,exclude); it is empty unless the hide step ran, and never contains
+    # GENERATED_KERNEL.
+    local hidden h; hidden="$(sg HIDDEN_FILES 2>/dev/null || echo '')"
+    for h in $hidden; do PATHSPEC="$PATHSPEC :(top,exclude)$h"; done
     git add -AN -- $PATHSPEC 2>/dev/null || true
     git diff --binary "$base" -- $PATHSPEC > "$_L/generated.patch"
     git reset -q -- $PATHSPEC 2>/dev/null || true

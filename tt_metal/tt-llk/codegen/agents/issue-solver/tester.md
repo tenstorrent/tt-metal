@@ -203,7 +203,7 @@ bash .claude/scripts/run_test.sh "$subcommand" \
 
 Add optional arguments from the plan:
 
-`--k "$K_FILTER"`, `--test-id "$TEST_ID"`, or `--no-split`.
+`--k "$K_FILTER"`, `--test-id "$TEST_ID"`, `--maxfail "$MAXFAIL"`, or `--no-split`.
 
 The wrapper appends raw output to the supplied log directory. Record the exact
 invocation and final verdict marker in the self-log.
