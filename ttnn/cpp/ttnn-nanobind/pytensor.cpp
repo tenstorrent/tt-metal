@@ -61,6 +61,7 @@
 
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -211,7 +212,7 @@ RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& bu
     // Buffer is float tiles; TensorSpec must match so to_vector only untilizes / strips padding.
     TensorSpec decode_spec(
         tensor_spec.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tensor_layout_from_padded_shape(
             DataType::FLOAT32,
             tensor_spec.page_config(),
             MemoryConfig{},
