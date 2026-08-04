@@ -17,8 +17,6 @@ constexpr uint32_t handshake_page_size = get_compile_time_arg_val(1);
 // direct_dest_info layout (must match send_direct_async/device/kernels/sender_direct_writer.cpp).
 constexpr uint32_t DEST_VALID_OFFSET = 0;
 constexpr uint32_t DEST_OUTPUT_ADDR_OFFSET = 4;
-constexpr uint32_t DEST_PAGE_SIZE_OFFSET = 8;
-constexpr uint32_t DEST_NUM_PAGES_OFFSET = 12;
 
 FORCE_INLINE void fabric_inline_write_upstream(
     const SocketReceiverInterface& receiver_socket,
@@ -40,8 +38,6 @@ void kernel_main() {
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_page_size = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -63,9 +59,8 @@ void kernel_main() {
     fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
 
     //////////////////////////////////////////////////
-    // STEP 2: write the destination tensor info back into the sender's handshake buffer.
-    // Write the data fields first, then the valid flag last so the sender never observes a
-    // partially-written struct.
+    // STEP 2: write the output address into the sender's handshake buffer, then the valid flag, so
+    // the sender never observes a partially-written struct.
     //////////////////////////////////////////////////
     uint32_t upstream_noc_x = receiver_socket.d2d.upstream_noc_x;
     uint32_t upstream_noc_y = receiver_socket.d2d.upstream_noc_y;
@@ -76,18 +71,6 @@ void kernel_main() {
         socket_packet_header_addr,
         get_noc_addr(upstream_noc_x, upstream_noc_y, sender_handshake_addr + DEST_OUTPUT_ADDR_OFFSET),
         output_base_addr);
-    fabric_inline_write_upstream(
-        receiver_socket,
-        fabric_connection,
-        socket_packet_header_addr,
-        get_noc_addr(upstream_noc_x, upstream_noc_y, sender_handshake_addr + DEST_PAGE_SIZE_OFFSET),
-        output_page_size);
-    fabric_inline_write_upstream(
-        receiver_socket,
-        fabric_connection,
-        socket_packet_header_addr,
-        get_noc_addr(upstream_noc_x, upstream_noc_y, sender_handshake_addr + DEST_NUM_PAGES_OFFSET),
-        num_pages);
     fabric_inline_write_upstream(
         receiver_socket,
         fabric_connection,

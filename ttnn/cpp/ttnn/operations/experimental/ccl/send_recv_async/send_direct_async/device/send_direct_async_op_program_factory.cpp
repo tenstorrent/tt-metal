@@ -51,30 +51,40 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.device();
 
     tt::tt_metal::Program program{};
+    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
+    const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
 
     std::vector<CoreCoord> sender_core_coords;
-    std::vector<CoreCoord> receiver_core_coords;
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
+
+    for (const auto& connection : socket_connection_config) {
+        if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
+            sender_core_coords.push_back(connection.sender_core.core_coord);
+            sender_fabric_node_ids.push_back(
+                input_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord));
+            receiver_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
+                tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord));
+        }
+    }
     uint32_t num_cores = sender_core_coords.size();
+    TT_FATAL(
+        num_cores > 0,
+        "send_direct_async found no socket connections whose sender core is on device {}",
+        target_device->id());
 
     // cores must not exceed available fabric links
-    if (num_cores > 0) {
-        const auto& receiver_fabric_node_id = receiver_fabric_node_ids[0];
-        const auto& sender_fabric_node_id = sender_fabric_node_ids[0];
+    {
         auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_ids[0], sender_fabric_node_ids[0]);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
             num_cores <= num_available_links,
             "Cannot create {} receiver-sender pairs with only {} available fabric links between devices. "
-            "Reduce the number of cores per device. "
-            "Available links: {}, Requested pairs: {}",
+            "Reduce the number of cores per device.",
             num_cores,
-            num_available_links,
-            num_available_links,
-            num_cores);
+            num_available_links);
     }
 
     auto max_alignment = std::max(
@@ -95,18 +105,10 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
     auto fabric_max_payload_size = tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
 
-    // Bank-contiguous packing optimization: for an interleaved tensor, pages whose indices differ by
-    // num_banks live in the same bank at consecutive slots and are therefore contiguous in memory.
-    // When more than one page fits in a fabric packet we gather num_pages_per_packet such pages with
-    // a single noc_async_read and forward them in a single fabric packet.
-    //
-    // The reader processes a whole super-block of (num_banks * num_pages_per_packet) pages per CB
-    // entry: it issues one read per bank (each gathering num_pages_per_packet bank-contiguous pages)
-    // so the reads overlap across banks before a single barrier, preserving DRAM read parallelism.
-    // The writer then drains the entry as num_banks combined fabric packets.
-    //
-    // Restricted to DRAM so the super-block CB stays small (num_banks is the DRAM bank count, ~12);
-    // L1-interleaved buffers would have one bank per core and an impractically large CB.
+    // Bank-contiguous packing: in an interleaved tensor, pages whose indices differ by num_banks sit
+    // in the same bank at consecutive slots, so they are contiguous in memory and can be gathered by
+    // one read and forwarded in one fabric packet. Restricted to DRAM so the super-block CB stays
+    // small (~12 banks); L1-interleaved has one bank per core and would need an impractical CB.
     const bool is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t enable_bank_packing = (is_interleaved && is_dram && num_pages_per_packet > 1 && num_banks > 1) ? 1u : 0u;
 
@@ -118,13 +120,11 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
         partial_packet_size = input_page_size % fabric_max_payload_size;
     }
 
-    // Handshake page carries the sender buffer address (advertise) and the completion token. Size it
-    // to comfortably hold the dest-info struct and keep it independent of the data page size.
-    uint32_t handshake_page_size = tt::align(static_cast<uint32_t>(64), max_alignment);
+    uint32_t handshake_page_size = ttnn::send_recv_utils::handshake_page_size(max_alignment);
 
     uint32_t cb_num_pages = 2;
-    // For bank packing, each CB entry holds a full super-block: num_banks regions of
-    // num_pages_per_packet pages each (laid out at input_page_size stride, contiguous per bank).
+    // Under bank packing each CB entry holds one super-block: num_banks regions of
+    // num_pages_per_packet pages, at input_page_size stride and contiguous within a bank.
     uint32_t cb_page_size = enable_bank_packing
                                 ? static_cast<uint32_t>(num_banks * num_pages_per_packet * input_page_size)
                                 : fabric_max_payload_size;
@@ -157,8 +157,8 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
 
     CreateCircularBuffer(program, sender_core_range_set, cb_packet_header_config);
 
-    // Handshake CB: page 0 is the dest-info landing zone (receiver writes back here), page 1 stages
-    // the advertise payload that is pushed to the receiver over the socket.
+    // Page 0 is the dest-info landing zone the receiver writes back into, page 1 stages the
+    // advertise payload pushed to the receiver over the socket.
     auto handshake_cb_index = tt::CBIndex::c_2;
     uint32_t handshake_cb_num_pages = 2;
     tt::tt_metal::CircularBufferConfig cb_handshake_config =
@@ -183,8 +183,6 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
     };
     reader_compile_args.insert(reader_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
-    // Dedicated reader: streams input pages into the data CB, gathering bank-contiguous pages into a
-    // single CB entry when bank packing is enabled so the writer can drain each entry as one packet.
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/device/kernels/"

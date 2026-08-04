@@ -49,17 +49,12 @@ void kernel_main() {
     uint32_t page_start_offset = get_arg_val<uint32_t>(rt_args_idx++);  // page start offset for this core
     [[maybe_unused]] uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets (fallback)
     [[maybe_unused]] uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder (fallback)
-    // Base address of the persistent L1_SMALL handshake buffer: page 0 is the dest-info landing
-    // zone (the receiver writes the OutputTensorInfo struct here), page 1 stages the advertise
-    // payload.
     uint32_t handshake_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    // Two fabric headers stored in fabric_packet_header_cb:
-    //  - data_packet_header: issues direct writes to the receiver (output tensor + handshake advertise)
-    //  - socket_packet_header: used by socket APIs for control flow
+    // Separate headers so the data path and the socket control path do not clobber each other.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
@@ -75,18 +70,16 @@ void kernel_main() {
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
     fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
 
-    // Handshake buffer pages: page 0 is the dest-info landing zone, page 1 stages the advertise
-    // payload. Both live in the persistent L1_SMALL buffer addressed by handshake_base_addr.
-
-    // The receiver signals validity by writing the OutputTensorInfo struct, whose first field
-    // (num_tensors) becomes non-zero once the struct lands. Clear it before advertising so we never
-    // observe a stale completion.
-    auto* dest_info_ptr = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
+    // Ring state lives in the persistent L1_SMALL buffer at handshake_base_addr, so it survives
+    // across runs. A non-zero num_tensors means the receiver already advertised the ring and the
+    // handshake can be skipped; the host zeroes this buffer when it builds the program.
+    volatile tt_l1_ptr OutputTensorInfo* dest_info =
+        reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
 
     //////////////////////////////////////////////////
     // STEP 1: advertise the handshake-buffer address over the socket
     //////////////////////////////////////////////////
-    if (dest_info_ptr->num_tensors == 0) {
+    if (dest_info->num_tensors == 0) {
         socket_reserve_pages(sender_socket, 1);
         uint64_t advertise_dst_addr = get_noc_addr(
             downstream_enc.d2d.downstream_noc_x,
@@ -99,29 +92,20 @@ void kernel_main() {
         fabric_connection.send_payload_flush_blocking_from_address(
             (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 
-        // fabric_write_page(
-        //     fabric_connection, data_packet_header_addr, advertise_stage_addr, advertise_dst_addr,
-        //     handshake_page_size);
         socket_push_pages(sender_socket, 1);
         fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
 
         //////////////////////////////////////////////////
-        // STEP 2: wait for the receiver to write back the destination tensor info, including the ring of
-        // receive-buffer base addresses.
-        //
-        // The data path uses the advertised receive-buffer ring and waits for a free slot before
-        // streaming into the selected buffer.
+        // STEP 2: wait for the receiver to write back the ring of receive-buffer base addresses
         //////////////////////////////////////////////////
         do {
             invalidate_l1_cache();
-        } while (dest_info_ptr->num_tensors == 0);
+        } while (dest_info->num_tensors == 0);
         update_socket_config(sender_socket);
     }
 
-    // Work from the advertised ring state in the landing zone. The indices are monotonic counters;
-    // modulo is used only to select the output buffer address.
-    volatile OutputTensorInfo* dest_info = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
-
+    // Block while the ring is full. The indices are monotonic counters, so the modulo below is what
+    // maps them onto a buffer.
     do {
         invalidate_l1_cache();
     } while ((dest_info->write_index[0] - dest_info->read_index[0]) >= dest_info->num_tensors);
@@ -138,12 +122,7 @@ void kernel_main() {
     // STEP 3: stream pages directly into the selected receiver output tensor
     //////////////////////////////////////////////////
     if constexpr (enable_bank_packing) {
-        // Interleaved bank-contiguous packing (see send_direct_async/sender_direct_writer.cpp).
-        // The reader produced one CB entry per super-block of (num_banks * num_pages_per_packet)
-        // pages, with bank b's packet at a fixed region [b * bank_region_bytes]. We drain each entry
-        // as up to num_banks combined fabric packets, each covering bank-contiguous pages
-        // {p, p + num_banks, ..., p + (count - 1) * num_banks}. Iteration mirrors the reader exactly
-        // so the CB FIFO stays in sync; no per-iteration modulus is needed.
+        // Bank-contiguous packing, see send_direct_async/kernels/sender_direct_writer.cpp.
         constexpr uint32_t super_block_pages = num_banks * num_pages_per_packet;
         constexpr uint32_t bank_region_bytes = num_pages_per_packet * output_page_size;
         const uint32_t end_page = page_start_offset + num_pages;
@@ -221,7 +200,7 @@ void kernel_main() {
     }
 
     //////////////////////////////////////////////////
-    // STEP 4: push a single completion page onto the socket
+    // STEP 4: tell the receiver a buffer is filled by bumping its copy of write_index
     //////////////////////////////////////////////////
     uint32_t write_l1_addr = dest_info->receiver_config_l1_addr + offsetof(OutputTensorInfo, write_index);
     uint64_t write_noc_addr =

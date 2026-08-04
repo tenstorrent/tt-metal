@@ -15,12 +15,11 @@ void bind_buffered_send(nb::module_& mod) {
     ttnn::bind_function<"buffered_send", "ttnn.experimental.">(
         mod,
         R"doc(
-        Performs a buffered send of multi-device :attr:`input_tensor` to a :attr:`mesh_socket`.
+        Sends :attr:`input_tensor` over :attr:`mesh_socket`, paired with buffered_recv.
 
-        Behaves the same as send_direct_async: the sender writes each page straight into the
-        receiver's output tensor instead of the socket FIFO. The socket is used only to advertise
-        the sender handshake-buffer address (over which the receiver writes back its output tensor
-        address) and to signal completion with a single page.
+        Like send_direct_async, pages are written straight into the receiver's memory rather than
+        through the socket FIFO; the destination is whichever of buffered_recv's output tensors is
+        free, so the sender blocks while the ring is full.
 
         Args:
             input_tensor (ttnn.Tensor): device tensor.
