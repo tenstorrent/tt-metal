@@ -30,7 +30,7 @@ which are a pessimistic proxy and cost a lot of time once (STATUS.md trap #12):
     Block 2 velocity PCC 0.99998522, semantic codes EXACT, 71/74 frame codes exact on synthetic h
     Block 3          real speech PCC 0.999984, worst sample 1.16% of peak
 
-END TO END, the number to quote is **long-form WER 0.00% over 298 words**, plus 15/15 natural
+END TO END, the number to quote is **long-form WER: 1 wrong word in 298**, plus 15/15 natural
 [END_AUDIO] and the voice-identity check. NOT the 340-word natural-text headline: that bucket
 includes 42 words of 3-to-6-word clips where one Whisper disagreement is worth 17-50%, and the
 SAME CODE at seeds 0/1/2 spans 0.88-2.06% on it. See STATUS.md 6.7 before quoting any WER, and use
@@ -38,12 +38,12 @@ the teacher-forced gates in tests/tt_gates.py to judge a numerical change.
 
 PERFORMANCE, steady state on one N150, long-form cases:
 
-    Block 1 decode      ~31.4 ms/frame   ~52%
-    Block 2 flow        ~28   ms/frame   ~47%
-    host embed_frame      0.2 ms/frame    0.3%
-    TOTAL               58.3-62.5 ms/frame, mean 59.9 over the 15-case fixture
+    Block 1 decode      ~26.6 ms/frame   ~48%
+    Block 2 flow        ~28   ms/frame   ~51%
+    host embed_frame      0.2 ms/frame    0.4%
+    TOTAL               53.4-58.8 ms/frame, mean 55.5 over the 15-case fixture
     prefill 0.1-1.5 s once; Block 3 codec ~9% of wall time
-    RTF 0.74-0.82 on 14 of 15 cases   (RTF = generation / audio, lower is better)
+    RTF 0.68-0.78 on 14 of 15 cases   (RTF = generation / audio, lower is better)
 
 The 15th is case 0 at RTF 1.89, and that is COLD-START, not a slow case: it pays the first codec
 bucket's kernel compiles and the first prefill shape. Every later case with the same shapes runs
@@ -55,7 +55,8 @@ WHERE THE REMAINING TIME IS. Both blocks now stream every weight matmul at the 1
 ceiling, so neither has a byte or a layout trick left; each module's docstring carries the per-line
 map. What is left is different in each:
   * Block 1 is at its floor except for w2, the last bf16 weight and the pinned trigger of the hang
-    documented below. ~20 of its 31 ms is pure weight streaming at the ceiling.
+    documented below. ~21 of its 26.6 ms is pure weight streaming at the ceiling, and everything
+    that is not a matmul now totals under 6 ms.
   * Block 2 still sits ~2x above its 13.4 ms weight-read floor, and that gap is DEVICE-side
     per-kernel cost -- proven by tracing, which removes host dispatch and changes nothing (6.6).
     Fewer ops does not help; only fewer, BIGGER kernels do.

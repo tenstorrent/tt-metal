@@ -13,7 +13,7 @@ with `tt_transformers` on the same metric for comparison:
                              ours            ours all-BFP8   tt_transformers
     prefill, last position     0.999883        0.999881        0.999564
     decode step                0.99985+        0.99986         0.981
-    decode ms/step             31.4            33.6            48
+    decode ms/step             26.6            33.6            48
 
 There is deliberately no end-to-end WER row: the same code at three seeds spans 0.88-2.06% on that
 metric, so it cannot separate two builds. The gate is long-form WER (0.00% over 298 words) plus the
@@ -42,7 +42,7 @@ bf16 is w2, which is the pinned hang trigger (see WEIGHT_DTYPE). So this line is
 WHERE THE TIME GOES, per decode frame, steady state on one N150 (measure with
 the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
 
-    six linears, weight streaming     ~20.3 ms   AT THE CEILING -- 194 GB/s, and a plain
+    six linears, weight streaming     ~20.7 ms   AT THE CEILING -- 194 GB/s, and a plain
                                                  interleaved matmul cannot do better here.
                                                  Tuned matmul program configs are SLOWER
                                                  (169 vs 193 GB/s on wq). Only fewer BYTES help.
@@ -51,10 +51,12 @@ the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
                                                  it (which KEEPS fp32 acc) is 1.46x on the
                                                  norm+linear pair and still doubles the worst
                                                  sample, 1.06% -> 1.95%. See _norm.
-    everything else                    ~5.3 ms   qkv heads, rope, cache write, sdpa_decode,
-                                                 reshapes, residual adds
+    sdpa_decode                         1.8 ms   68 us/layer at pos~200; grows with cache length
+    everything else                    ~2.9 ms   qkv heads, rope, 2x cache write, reshapes,
+                                                 residual adds -- all of it under 4% now, which
+                                                 is the decode-native layout's payoff
     ------------------------------------------
-    Block 1 total                      31.4 ms   (Block 2 is now ~28, so Block 1 is still
+    Block 1 total                      26.6 ms   (Block 2 is now ~28, so Block 1 is still
                                                  the larger half -- see ttnn_voxtral_flow)
 
 So the only remaining lever on Block 1 is WEIGHT BYTES, and that is capped by the hang: BFP8 on
@@ -136,6 +138,34 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 DTYPE = ttnn.bfloat16
+
+# RMSNORM, WIDTH-SHARDED, for the DECODE shape. The interleaved op costs 115 us on a [1,1,3072] row
+# -- latency, not arithmetic: one core reduces the whole row with a DRAM round trip either side.
+# Sharded it is 44 us including BOTH memory_config moves, i.e. ~4.9 ms/frame over 52 calls.
+#
+# fp32 accumulation is UNCHANGED, so this is NOT the rejected "drop the compute config" trade.
+#
+# THE CORE COUNT BARELY MATTERS and the reason is worth knowing: 2/4/8 cores measure 42.4/40.5/44.1
+# us, flat, because the norm COMPUTE is ~16 us at any of them and the two to_memory_config calls are
+# the other ~28. The reshard is the tax, not the reduction. 8 is used because it is marginally the
+# fastest end to end (26.54 vs 27.50 ms/step at 2 cores).
+#
+# Feeding the sharded result straight to the next matmul, to dodge the second reshard, is SLOWER
+# (8.94 vs 5.32 ms per 26 norm+linear pairs): a DRAM-interleaved weight makes the matmul gather the
+# shards itself. Measured, closed.
+#
+# THIS WAS REVERTED ONCE AND THE REVERT WAS WRONG. It was measured while wqkv and wo were still
+# bf16, where it read mean worst-sample 0.86% -> 0.92%. On the current weights it reads 0.86% ->
+# 0.84% mean and 1.10% -> 1.06% p90, i.e. no cost, reproduced twice. The lesson is that a precision
+# change here is not separable from the others -- re-measure against the CURRENT config, never
+# against a recorded number.
+_NORM_GRID_X = 8
+_NORM_SHARD = ttnn.create_sharded_memory_config(
+    shape=(1, 1, TILE, DIM), core_grid=ttnn.CoreGrid(y=1, x=_NORM_GRID_X),
+    strategy=ttnn.ShardStrategy.WIDTH)
+_NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(_NORM_GRID_X, 1), subblock_w=4, block_h=1,
+    block_w=DIM // _NORM_GRID_X // TILE, inplace=False)
 
 # Decode runs in ttnn's DECODE-NATIVE head layout, [1, batch, heads, head_dim], and these are the
 # memory configs those ops demand. At batch 1 the layout lines everything up for free:
@@ -343,6 +373,15 @@ class TtVoxtralGPT:
         return ttnn.rms_norm(x, weight=gamma, epsilon=NORM_EPS,
                              compute_kernel_config=COMPUTE_CONFIG)
 
+    def _norm_dec(self, x, gamma):
+        """The same RMSNorm at the DECODE shape, width-sharded -- see _NORM_SHARD. Decode only,
+        because the program config pins the row count and prefill's S varies per prompt (prefill is
+        ~3% of wall time, so it keeps the interleaved op)."""
+        h = ttnn.rms_norm(ttnn.to_memory_config(x, _NORM_SHARD), weight=gamma, epsilon=NORM_EPS,
+                          compute_kernel_config=COMPUTE_CONFIG, program_config=_NORM_PRG,
+                          memory_config=_NORM_SHARD)
+        return ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
+
 
     # ----------------------------------------------------------------------------
     # PREFILL PATH -- whole prompt at once, fills the KV cache
@@ -416,7 +455,6 @@ class TtVoxtralGPT:
 
     # ----------------------------------------------------------------------------
     # DECODE PATH -- one frame at a time; THIS is the hot loop
-    # Two interiors: _layer_step_native (default, ttnn decode-native ops) and _layer_step (hand-rolled reference).
     # ----------------------------------------------------------------------------
     def _layer_step(self, x, w, cos, sin, cache, pos_t):
         """One decode position. x [1,1,3072] -> same, against `cache` written up to `pos_t`.
@@ -425,7 +463,8 @@ class TtVoxtralGPT:
         see _QKV_SHARD for why that makes the whole interior glue-free. `pos_t` is a DEVICE tensor
         because paged_update_cache and sdpa_decode both take the position that way.
         """
-        qkv = ttnn.linear(self._norm(x, w["an"]), w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
+        qkv = ttnn.linear(self._norm_dec(x, w["an"]), w["wqkv"],
+                          compute_kernel_config=COMPUTE_CONFIG)
         qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(
             qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
@@ -440,7 +479,7 @@ class TtVoxtralGPT:
             compute_kernel_config=COMPUTE_CONFIG)
         a = ttnn.reshape(ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG), [1, 1, Q_WIDTH])
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
-        return self._mlp(x, self._norm(x, w["fn"]), w)
+        return self._mlp(x, self._norm_dec(x, w["fn"]), w)
 
     @torch.no_grad()
     def prefill(self, embeds, apply_final_norm=True, last_only=False):
@@ -511,8 +550,7 @@ class TtVoxtralGPT:
         x = up(embed.reshape(1, 1, DIM))
         for i, w in enumerate(self.layers):
             x = self._layer_step(x, w, cos, sin, self.caches[i], pos_t)
-        x = ttnn.rms_norm(x, weight=self.norm, epsilon=NORM_EPS,
-                          compute_kernel_config=COMPUTE_CONFIG)
+        x = self._norm_dec(x, self.norm)
         self.pos = pos + 1
         return ttnn.to_torch(x).float().reshape(1, 1, DIM)
 
