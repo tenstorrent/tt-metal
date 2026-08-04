@@ -8,7 +8,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_routing_tables.cpp
     fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
-    fabric_router/test_skip_ring_topology.cpp
+    fabric_router/test_express_ring_topology.cpp
     fabric_router/test_physical_grouping_descriptor.cpp
     fabric_router/test_topology_mapper.cpp
     fabric_router/test_topology_mapper_utils.cpp
