@@ -54,11 +54,12 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     // Compute initial remainder
     sfpi::vInt r = a - qb;
 
-    // Shift before conversion so the valid magnitude 2**31 is representable as
-    // a positive sign-magnitude integer. Dropping the low bit can change the
-    // approximate correction by at most one, which the final adjustment handles.
-    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r) >> 1, sfpi::RoundMode::Nearest);
-    r_f = sfpi::addexp(r_f, 1);
+    // Compute correction for approximation error: correction = |r| / b.
+    // abs(INT_MIN) remains INT_MIN, whose sign-magnitude conversion produces
+    // -0.0 instead of the valid magnitude 2**31.
+    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    v_if(r_f < 0.0f) { r_f = TWO_POW_31; }
+    v_endif;
     sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(r_f * inv_b_f, sfpi::RoundMode::Nearest);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
