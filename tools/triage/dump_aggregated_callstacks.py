@@ -5,10 +5,9 @@
 
 """
 Usage:
-    dump_aggregated_callstacks [--all-cores] [--device-visualization]
+    dump_aggregated_callstacks [--device-visualization]
 
 Options:
-    --all-cores                      Show all cores, including those with Go Message = DONE and RISCs not enabled by the running program. By default, both are filtered out.
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
 
 Description:
@@ -21,7 +20,8 @@ Description:
       - Locations or device visualizations (if --device-visualization)
     This significantly reduces the number of rows vs raw dump_callstacks.
 
-    Only RISCs stopped inside their kernel are shown.
+    Only RISCs stopped inside their kernel are shown. Cores with Go Message = DONE and RISCs not
+    enabled by the running program are always filtered out, use dump_callstacks to see every core.
 
     By default, the locations are trimmed to 10 entries. Use -v or -vv to show all locations.
 
@@ -182,7 +182,6 @@ class AggregationBucket:
 def _collect_aggregated(
     callstack_provider: CallstackProvider,
     run_checks,
-    show_all_cores: bool,
     visualize_devices: bool,
     verbose: bool,
     context: Context,
@@ -193,8 +192,8 @@ def _collect_aggregated(
         try:
             if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
                 return None
-            # Filter DONE / not-enabled-by-design cores, like dump_callstacks.py does
-            if not show_all_cores and callstack_provider.dispatcher_data.is_idle_in_default_view(location, risc_name):
+            # Filter DONE / not-enabled-by-design cores
+            if callstack_provider.dispatcher_data.is_idle_in_default_view(location, risc_name):
                 return None
 
             return callstack_provider.get_cached_callstacks(location, risc_name)
@@ -257,7 +256,6 @@ def _collect_aggregated(
 
 def run(args, context: Context):
     """Main entry point for the script."""
-    show_all_cores: bool = args["--all-cores"]
     visualize_devices: bool = args["--device-visualization"]
     verbose: bool = args["-v"] >= 1
 
@@ -267,7 +265,6 @@ def run(args, context: Context):
     return _collect_aggregated(
         callstack_provider=callstack_provider,
         run_checks=run_checks,
-        show_all_cores=show_all_cores,
         visualize_devices=visualize_devices,
         verbose=verbose,
         context=context,
