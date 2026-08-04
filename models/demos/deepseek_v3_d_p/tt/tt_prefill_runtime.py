@@ -667,12 +667,23 @@ class TtPrefillRuntime:
         return [block]
 
     def kv_cache_pcc_check(
-        self, kv_caches: MlaKvCaches, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
+        self,
+        kv_caches: MlaKvCaches,
+        *,
+        slot_id: int,
+        n_chunks: int,
+        trace_dir=None,
+        first_layer_idx: int = 0,
+        real_len=None,
+        pt_path_override=None,
     ) -> float:
         """Optional bring-up hook (not part of the core runtime contract; never called in production
         serving). PCC the populated engine-owned primary KV cache (`.kvpe`) for `slot_id` against the
         golden trace; returns the min per-layer PCC and asserts on failure (unless
-        PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module."""
+        PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module.
+        `real_len` caps the compared extent to the real (non-pad) tokens — a partial last chunk makes
+        n_chunks * chunk_size overshoot the prompt; `pt_path_override` selects a per-slot .pt golden
+        (both are used by the migration validators in prefill/runners/validation.py)."""
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(
@@ -682,6 +693,8 @@ class TtPrefillRuntime:
             n_chunks=n_chunks,
             trace_dir=trace_dir,
             first_layer_idx=first_layer_idx,
+            real_len=real_len,
+            pt_path_override=pt_path_override,
         )
 
     def set_layer_completion_sink(self, sink) -> None:
