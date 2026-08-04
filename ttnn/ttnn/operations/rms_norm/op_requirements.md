@@ -137,7 +137,7 @@ weights are untouched. Two findings:
 
 ---
 
-### [ ] Refinement 1b — wide-`W` reduce precision under `fp32_dest_acc_en=False`
+### [x] Refinement 1b — wide-`W` reduce precision under `fp32_dest_acc_en=False`
 
 **Goal**: close the 10 `severity=precision` cells Refinement 1 left failing — every
 `fp32_dest_acc_en=False` loose case with `W ≥ 5120`
@@ -175,6 +175,34 @@ class of gap as deviation **D3**, so step one is widening the wrapper in
   `tests/ttnn/unit_tests/operations/rms_norm/probes/` holds the chunk-count / `REDUCE_BULK` /
   fidelity sweeps that established the nulls — re-run them to prove the lever moves what
   those could not.
+
+**Outcome** (`[x]` full): all 10 cells closed — golden **1670 / 1670** (Refinement 1:
+1660 / 1670), `supported_fail = 0`, `xpass_drift = 0`, zero hangs, no regression. No
+SUPPORTED change (none was needed). `ReduceAlgorithm::AccumulateViaAdd` landed exactly as
+named: `accumulate_reduce_block<>` / `accumulate_reduce<>` now forward reduce()'s
+`ReduceFp32Mode` **and** `ReduceAlgorithm` slots (this also retires deviation **D3**) and
+route the last block through `Accumulate::at_last` so the datapath's within-tile finalize
+runs once; the op selects it from a new crossover knob `REDUCE_ACC_VIA_ADD_MIN_WT = 4`
+(descriptor **D7**). Measured rel RMS on the target cells fell from **0.042–0.127 to
+0.0089–0.0109** (vs the `rms ≤ 0.04` gate), PCC 0.99988+. Three findings:
+* **A latent library bug the lever exposed, now fixed.** `fold_partial_last` (the masked
+  partial fold, `reduce_helpers_compute.inl`) never reconfigured **SrcB** to the mask CB —
+  everything around it leaves SrcB pointing at the input CB, and `llk_unpack_AB_init` only
+  *asserts* formats, it does not set them. Latent for any caller whose input format differs
+  from its scaler/mask format; here it broke `float32` + non-aligned `W` + `Wt ≥ 4`
+  (`unp_B_src_format mismatch` under `--dev`, PCC 0.9990 in production). Two acceptance
+  cells caught it, which is why the pad-poison re-run the verifier notes demanded mattered.
+* **Both partial-`W` mechanisms stay live and covered.** The threshold means the pad-poison
+  shapes span `Wt = 2, 3` (partial-SCALER pair) and `Wt = 5, 7` (0/1 MASK tile); both are
+  clean, median got/true ratio within 0.7 % of 1.0.
+* **The 2.87–2.94× that Refinement 4 item (a) predicts does NOT translate to this op.**
+  Measured whole-op A/B at the `_perf_case` config (bf16 / HiFi2 / `fp32_dest_acc_en=False`,
+  one fresh-cache profiled run per variant): `(1,1,32,7168)` 44690 → 42253 ns (**1.06×**),
+  `(1,1,224,3072)` 23758 → 22544 ns (1.05×), `(1,1,32,1024)` 11132 → 10881 ns (1.02×),
+  `(1,1,8192,5120)` 754579 → 752410 ns (1.00×). A small uniform win, no shape slower.
+  The gap is the finding: rms_norm is **dataflow-bound** at these widths, so shaving reduce
+  MATH cycles moves the total a few percent — Refinement 4 should score item (a) as already
+  landed and spend its budget on the byte-count / occupancy levers instead.
 
 ---
 

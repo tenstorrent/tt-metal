@@ -69,6 +69,8 @@ void kernel_main() {
     constexpr uint32_t INV_W_BITS = get_compile_time_arg_val(7);
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(8);
     constexpr uint32_t REDUCE_BULK = get_compile_time_arg_val(9);
+    constexpr uint32_t REDUCE_ACC_VIA_ADD = get_compile_time_arg_val(10);
+    constexpr uint32_t SCALER_TILES = get_compile_time_arg_val(11);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
 
@@ -85,10 +87,41 @@ void kernel_main() {
     // ---- policy / shape knobs --------------------------------------------
     constexpr auto REDUCE_POLICY =
         (REDUCE_BULK != 0) ? ckl::ReduceInputPolicy::BulkWaitBulkPop : ckl::ReduceInputPolicy::WaitAndPopPerTile;
-    // Non-tile-aligned W: the reader emitted [full scaler, partial scaler];
-    // route the partial one to the last width tile so pad lanes contribute 0.
+
+    // Reduce datapath, chosen host-side from WT_CHUNK (the reduce-dim tiles per
+    // reduce() call) -- see REDUCE_ACC_VIA_ADD_MIN_WT in the descriptor.
+    //
+    //   AccumulateViaAdd sums the width tiles ELEMENTWISE into DST with pairwise
+    //   add_tiles and finishes the within-tile 32-column sum on the SFPU (fp32
+    //   LREGs).  ReduceTile (the FPU matmul-with-ones) instead accumulates all
+    //   WT_CHUNK*32 all-positive addends of sum(x^2) into a single DEST word --
+    //   which at fp32_dest_acc_en=False is 16-bit, and is exactly the wide-W
+    //   error Refinement 1 diagnosed.  AccumulateViaAdd cuts the DEST-resident
+    //   accumulation depth by 32x (WT_CHUNK/2 pairwise adds instead of
+    //   WT_CHUNK*32 serial ones) and is also the faster path once the reduce dim
+    //   spans >= 4 tiles (examples/reduce_block/report_reduced_sweep.md).
+    constexpr bool ACC_VIA_ADD = (REDUCE_ACC_VIA_ADD != 0);
+    constexpr auto REDUCE_ALGO = ACC_VIA_ADD ? ckl::ReduceAlgorithm::AccumulateViaAdd : ckl::ReduceAlgorithm::Auto;
+    // AccumulateViaAdd's cross-chunk Accumulate indexes a resident block, so it
+    // is BulkWaitBulkPop-only (reduce_helpers_compute.inl static_assert). The
+    // descriptor already couples the two knobs; assert it so a future flip of
+    // REDUCE_BULK fails here instead of deep inside the library.
+    static_assert(
+        !ACC_VIA_ADD || REDUCE_BULK != 0,
+        "rms_norm: ReduceAlgorithm::AccumulateViaAdd + Accumulate requires BulkWaitBulkPop (REDUCE_BULK == 1)");
+
+    // Non-tile-aligned W: the two datapaths take DIFFERENT partial mechanisms.
+    //   ReduceTile       : reader emitted [full scaler, partial scaler]; route the
+    //                      partial one to the last width tile (pad lanes * 0).
+    //   AccumulateViaAdd : reader emitted a single 0/1 MASK tile at index 0; the
+    //                      last width tile folds in through a masked accumulating
+    //                      broadcast-mul, PARTIAL_W valid lanes.
+    // Both zero the pad lanes by multiplying them with an exact 0, so the reader's
+    // pad-lane invariant (no inf/NaN in padding) is what it always was.
     constexpr auto PARTIAL_SCALER =
-        (PARTIAL_W != 0) ? ckl::ReducePartialScaler::last_tile_at(1) : ckl::ReducePartialScaler::none();
+        (PARTIAL_W == 0) ? ckl::ReducePartialScaler::none()
+                         : (ACC_VIA_ADD ? ckl::ReducePartialScaler::partial_mask(PARTIAL_W, /*mask_idx=*/0)
+                                        : ckl::ReducePartialScaler::last_tile_at(1));
     // RESIDENT holds x across both passes -> pass A must not pop it.
     constexpr auto PASS_A_POP = X_RESIDENT ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd;
     constexpr uint32_t NORM_OUT = HAS_G ? cb_normalized : cb_output_tiles;
@@ -118,7 +151,10 @@ void kernel_main() {
                 cb_x_squared,
                 cb_scaler,
                 cb_row_stat,
-                REDUCE_POLICY>(ckl::ReduceInputBlockShape::of(rows, WT_CHUNK), c, NUM_W_CHUNKS, PARTIAL_SCALER);
+                REDUCE_POLICY,
+                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast,
+                REDUCE_ALGO>(ckl::ReduceInputBlockShape::of(rows, WT_CHUNK), c, NUM_W_CHUNKS, PARTIAL_SCALER);
         }
 
         // ================= finalize: 1/rms = rsqrt(sum/W + eps) ============
@@ -174,7 +210,9 @@ void kernel_main() {
         cb_pop_front(cb_row_stat, rows);
     }
 
-    cb_pop_front(cb_scaler, (PARTIAL_W != 0) ? 2 : 1);
+    // SCALER_TILES is the descriptor's single source of truth for how many tiles
+    // the reader pushed into cb_scaler (datapath- and PARTIAL_W-dependent).
+    cb_pop_front(cb_scaler, SCALER_TILES);
     if constexpr (HAS_G && X_RESIDENT) {
         cb_pop_front(cb_gamma_tiles, WT_CHUNK);
     }

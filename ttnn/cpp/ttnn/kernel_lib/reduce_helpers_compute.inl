@@ -314,13 +314,22 @@ ALWI void reduce_accumulate_via_add(
     // cross-call-accumulate, and streaming paths so the partial fold lives in one place. `last_idx` is the
     // input-CB index of that tile (absolute into the resident block, or front-relative 0 for streaming).
     // Referenced from a runtime `if (has_partial)` in every instantiation, so it is never truly unused.
+    //
+    // The mask arrives as operand B, but everything around this fold configures SrcB for the INPUT CB (the
+    // per-call reconfig above sets both add operands to it, and every add_tiles_init(input, input) leaves it
+    // there). llk_unpack_AB_init does NOT reconfigure formats — it only asserts they already match — so SrcB
+    // must be pointed at the mask CB here and restored after, or a caller whose input format differs from its
+    // scaler/mask format silently unpacks the mask as the input's format (an LLK_ASSERT under --dev, wrong
+    // values in production). Same shape as the FoldViaAdd accumulator-add reconfig below.
     [[maybe_unused]] auto fold_partial_last = [&](uint32_t last_idx) {
+        reconfig_data_format_srcb(input_dfb_id, scaler_dfb_id);
         MATH((llk_math_eltwise_binary_init<ckernel::EltwiseBinaryType::ELWMUL, MASK_BCAST, MATH_FIDELITY>(
             input_dfb_id, scaler_dfb_id, 1)));
         UNPACK((llk_unpack_AB_init<MASK_BCAST>(input_dfb_id, scaler_dfb_id)));
         UNPACK((llk_unpack_AB<MASK_BCAST>(input_dfb_id, scaler_dfb_id, last_idx, mask_idx)));
         MATH((llk_math_eltwise_binary<ckernel::EltwiseBinaryType::ELWMUL, MASK_BCAST, DST_ACCUM_MODE, MATH_FIDELITY>(
             0, false)));
+        reconfig_data_format_srcb(scaler_dfb_id, input_dfb_id);
     };
 
     for (uint32_t o = 0; o < n_out; ++o) {

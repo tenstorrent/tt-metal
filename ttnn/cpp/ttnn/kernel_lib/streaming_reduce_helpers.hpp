@@ -33,12 +33,28 @@ namespace compute_kernel_lib {
 // =============================================================================
 //
 // Performs ONE iteration of an accumulating reduce. The helper:
-//   - always uses Accumulate::at(cb_acc, b) — index-aware reload
+//   - uses Accumulate::at(cb_acc, b) — index-aware reload — on every block, and
+//     Accumulate::at_last(cb_acc, b) on the last one (the `last` flag is what
+//     tells the AccumulateViaAdd datapath to run its within-tile finalize
+//     exactly once; the ReduceTile datapath ignores it, which finalizes every
+//     block, so the routing is identical there)
 //   - if b == num_blocks - 1: forwards `partial` and `post_op_final` to reduce<>
 //   - otherwise: forwards ReducePartialScaler::none() and NoOp{}
 //
 // Use this when you need to interleave per-block work (e.g. per-block sub/mul
 // before the reduce). Use `accumulate_reduce` if you don't.
+//
+// `fp32_mode` and `algorithm` are pass-throughs to reduce<>'s slots of the same
+// name, so a streaming caller can pick the datapath (e.g.
+// ReduceAlgorithm::AccumulateViaAdd for a wide float SUM, which is both more
+// accurate and faster than the FPU matmul reduce once the reduce dim spans
+// several tiles) without dropping down to reduce<> and re-deriving the
+// per-block Accumulate / partial / post-op routing. NOTE: AccumulateViaAdd's
+// cross-call accumulate requires in_policy == BulkWaitBulkPop, and it takes its
+// partial-reduce mechanism from a 0/1 MASK tile
+// (ReducePartialScaler::partial_mask + dataflow_kernel_lib::prepare_reduce_mask)
+// rather than the partial SCALER tile pair ReduceTile uses — see reduce()'s
+// static_asserts and the ReduceAlgorithm docs.
 //
 // Caller owns:
 //   - sizing cb_acc to (block_shape.rows * block_shape.batches) pages
@@ -52,6 +68,8 @@ template <
     uint32_t cb_acc,
     ReduceInputPolicy in_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
+    ReduceAlgorithm algorithm = ReduceAlgorithm::Auto,
     typename PostOp = NoOp>
 ALWI void accumulate_reduce_block(
     ReduceInputBlockShape block_shape,
@@ -76,6 +94,9 @@ ALWI void accumulate_reduce_block(
 // post_reduce_op hook (in DST after final accumulation, before pack). For
 // multi-instruction finalizers (e.g. rsqrt-with-eps), pass NoOp{} here and use
 // `transform_in_place` on cb_acc afterwards.
+//
+// `fp32_mode` / `algorithm` are pass-throughs to reduce<>; see
+// accumulate_reduce_block above for the AccumulateViaAdd caveats.
 template <
     PoolType pool,
     ReduceDim rdim,
@@ -84,6 +105,8 @@ template <
     uint32_t cb_acc,
     ReduceInputPolicy in_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
+    ReduceAlgorithm algorithm = ReduceAlgorithm::Auto,
     typename PostOp = NoOp>
 ALWI void accumulate_reduce(
     ReduceInputBlockShape block_shape,

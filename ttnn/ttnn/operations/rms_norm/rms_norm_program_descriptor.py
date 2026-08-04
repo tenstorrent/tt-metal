@@ -20,6 +20,10 @@ Knob map (all tunable parameters, none inlined):
     CB_ROW_STAT_DEPTH       ring depth of cb_row_stat, in units of BLOCK_ROWS.
                             NOT a perf knob -- >= 2 is a CORRECTNESS floor for
                             the partial final row-block (see D6)
+    REDUCE_ACC_VIA_ADD_MIN_WT
+                            smallest WT_CHUNK at which the reduce runs on
+                            ReduceAlgorithm::AccumulateViaAdd instead of
+                            ReduceTile (see D7)
 
   derived buffer depths
     CB_X_DEPTH / CB_OUT_DEPTH   the depth the regime search settled on; forced
@@ -31,6 +35,10 @@ Knob map (all tunable parameters, none inlined):
     _cb_block_mult()        which CBs scale with BLOCK_ROWS * WT_CHUNK, and at what
                             depth -- never re-spelled inline
     scaler_pages            page count of cb_scaler (2 when PARTIAL_W, else 1)
+    reduce_acc_via_add      the chosen reduce datapath (D7); also decides what the
+                            reader fills cb_scaler with
+    scaler_tiles            tiles the reader actually pushes into cb_scaler and the
+                            compute pops (<= scaler_pages)
 
   derived block factors
     BLOCK_ROWS   tile-rows per compute block = min(per-core assignment,
@@ -55,10 +63,13 @@ the scheme, topology, work split and helper mapping are unchanged):
       admissible divisor), so the knob is not collapsed.
   D2  The STREAM chunk-size solve counts the ROW_MAJOR staging CBs at
       WT_CHUNK tiles (what is actually allocated), not at Wt.
-  D3  accumulate_reduce_block() does not expose reduce()'s ReduceFp32Mode
-      template slot (streaming_reduce_helpers.hpp:47-61), so the reduce runs at
-      the default Fast mode.  fp32 DEST accumulation still comes from
-      fp32_dest_acc_en=True.
+  D3  RESOLVED by Refinement 1b.  accumulate_reduce_block() used not to expose
+      reduce()'s ReduceFp32Mode / ReduceAlgorithm template slots; both are now
+      forwarded (streaming_reduce_helpers.hpp), which is what made D7 possible.
+      The op still passes ReduceFp32Mode::Fast: Accurate only routes *Float32*
+      SUM through the SFPU, and the wide-W precision cell this op cares about is
+      bfloat16 -- D7 is the lever that reaches it.  fp32 DEST accumulation still
+      comes from fp32_dest_acc_en=True.
   D4  The regime predicate SEARCHES the depth knob rather than fixing it: it
       walks CB_DEPTH_CANDIDATES coarsest-first and takes RESIDENT at the first
       depth whose whole-row working set fits, dropping to STREAM only when no
@@ -144,6 +155,59 @@ the scheme, topology, work split and helper mapping are unchanged):
       [rows, 2*rows) which is within the ring since 2*rows <= 2*BLOCK_ROWS.
       Both L1 solves count this depth through CB_ROW_STAT_DEPTH -- one source of
       truth, so raising it cannot drift from the budget.
+  D7  The reduce runs on ReduceAlgorithm::AccumulateViaAdd once
+      WT_CHUNK >= REDUCE_ACC_VIA_ADD_MIN_WT, and on the default ReduceTile below
+      that.  Refinement 1b's precision lever; also a measured perf win.
+
+      WHY.  ReduceTile is the FPU matmul-with-ones: each input tile's 32-column
+      row sum lands in ONE DEST word, so a row of Wt tiles drives WT_CHUNK*32
+      all-positive addends through a single accumulator -- 16-bit at
+      fp32_dest_acc_en=False.  That is precisely the wide-W error Refinement 1
+      diagnosed (reduce output +12.4 % at W=11008, bit-invariant across chunk
+      count / REDUCE_BULK / math_fidelity, so unreachable by any chunking knob).
+      AccumulateViaAdd instead sums the width tiles ELEMENTWISE into DST with
+      pairwise add_tiles and finishes the within-tile 32-column sum on the SFPU
+      (fp32 LREGs, one rounding at the store).  DEST-resident accumulation depth
+      drops from WT_CHUNK*32 serial adds to WT_CHUNK/2 pairwise ones -- and the
+      cross-chunk carry still goes through the fp32 cb_row_stat, so the depth is
+      bounded by WT_CHUNK rather than by Wt.
+
+      COUPLED, not a one-word swap.  AccumulateViaAdd + cross-chunk Accumulate is
+      BulkWaitBulkPop-only (so it is gated on REDUCE_BULK == 1), and its
+      non-tile-aligned mechanism is a 0/1 MASK tile
+      (dataflow_kernel_lib::prepare_reduce_mask + ReducePartialScaler::
+      partial_mask) instead of ReduceTile's [full, partial] SCALER pair -- hence
+      `scaler_tiles`, which the reader fills to and the compute pops.  Both
+      mechanisms zero the pad lanes by an exact multiply-by-0, so the reader's
+      pad-lane invariant is unchanged.
+
+      THRESHOLD, not unconditional: AccumulateViaAdd is a LOSS at 1-2 reduce-dim
+      tiles (0.67x / 0.94x) and a win from 4 up (1.40x .. 5.35x at 32) --
+      examples/reduce_block/report_reduced_sweep.md, dim=row.  Narrow rows also
+      have no precision problem to fix (Wt=1 is 32 addends).  So the knob is a
+      crossover, and BOTH datapaths stay live and covered: the pad-poison shapes
+      alone span Wt = 2, 3 (ReduceTile) and 5, 7 (AccumulateViaAdd).
+
+      MEASURED on the WHOLE OP (blackhole p150b, 110-core grid, ~1.35 GHz,
+      bf16 + TILE gamma + HiFi2 + fp32_dest_acc_en=False -- the `_perf_case`
+      config; one fresh-cache profiled run per variant, A/B by flipping this
+      knob between 4 and 10**9;
+      test_rms_norm_perf.py::test_rms_norm_perf_reduce_datapath):
+
+        shape                  Wt    ReduceTile   AccViaAdd   speedup
+        (1,1,32,7168)         224      44690 ns    42253 ns    1.06x
+        (1,1,224,3072)         96      23758 ns    22544 ns    1.05x
+        (1,1,32,1024)          32      11132 ns    10881 ns    1.02x
+        (1,1,8192,5120)       160     754579 ns   752410 ns    1.00x
+
+      So the datapath is a small, uniform win here -- NOT the 2.87-5.35x the
+      isolated reduce bake-off shows, and that gap is the finding: rms_norm is
+      dataflow-bound at these widths (x is read twice in STREAM, and pass B plus
+      the writer move the same bytes again), so shaving reduce MATH cycles moves
+      the total by only a few percent.  A perf phase that budgets against the
+      reduce-block micro-benchmark will over-predict; the levers with headroom
+      are the byte-count / occupancy ones (Lamp L1 / L5), not this one.
+      Precision, not speed, is why the knob ships.
 """
 
 from __future__ import annotations
@@ -187,6 +251,17 @@ GRID_W = 1
 # reduce() input policy knob: 1 = BulkWaitBulkPop (bulk wait/indexed/bulk pop),
 # 0 = WaitAndPopPerTile.  Bulk is the coarse default (op_design.md section 1.4).
 REDUCE_BULK = 1
+
+# Reduce-datapath crossover knob (D7): the smallest WT_CHUNK (reduce-dim tiles
+# per reduce() call) at which ReduceAlgorithm::AccumulateViaAdd is preferred over
+# the default ReduceTile.  4 is the MEASURED crossover for REDUCE_ROW on this
+# helper (ttnn/ttnn/operations/examples/reduce_block/report_reduced_sweep.md:
+# R=1 0.67x, R=2 0.94x, R=4 1.40x, R=8 2.21x, R=16 3.54x, R=32 5.35x), and it is
+# also where the precision motive starts: AccumulateViaAdd's DEST-resident
+# accumulation depth is WT_CHUNK/2 pairwise adds instead of ReduceTile's
+# WT_CHUNK*32 serial ones.  Raise it to 10**9 to pin the op back to ReduceTile
+# everywhere; lower it to 1 to force AccumulateViaAdd everywhere.
+REDUCE_ACC_VIA_ADD_MIN_WT = 4
 
 # Ring depth of cb_row_stat, in units of BLOCK_ROWS.  MUST be >= 2 -- this is a
 # correctness constant, not a perf knob.  See D6.
@@ -432,6 +507,18 @@ def create_program_descriptor(
     # kernels from the NUM_W_CHUNKS CT arg -- one source of truth, so it is
     # deliberately NOT passed as a second flag.
 
+    # ---- reduce datapath (D7) ---------------------------------------------
+    # WT_CHUNK is the reduce-dim tile count of ONE reduce() call, so it -- not Wt
+    # -- is what the crossover is measured against.  AccumulateViaAdd's cross-chunk
+    # Accumulate indexes a resident block, hence BulkWaitBulkPop only: the two
+    # knobs are coupled here (one place), and the compute kernel static_asserts it.
+    reduce_acc_via_add = REDUCE_BULK == 1 and wt_chunk >= REDUCE_ACC_VIA_ADD_MIN_WT
+    # Tiles the reader actually pushes into cb_scaler, and the compute pops.
+    # AccumulateViaAdd takes ONE: the 0/1 mask (partial W) or an unused 1.0 scaler.
+    # ReduceTile takes the [full, partial] pair when W is not tile-aligned.
+    scaler_tiles = 1 if reduce_acc_via_add else scaler_pages
+    assert scaler_tiles <= scaler_pages, "rms_norm: cb_scaler is sized below the tiles the reader pushes"
+
     # ---- per-core assignment: (row_start, row_count) prefix sum -----------
     cores_g1 = _cores_in(core_group_1)
     cores_g2 = _cores_in(core_group_2)
@@ -482,12 +569,13 @@ def create_program_descriptor(
         gamma_elem_bytes,  # 9  gamma element bytes
         R_rm,  # 10 total ROW_MAJOR sticks (0 for TILE)
         W,  # 11 logical width (elements)
+        1 if reduce_acc_via_add else 0,  # 12 REDUCE_ACC_VIA_ADD (picks mask vs scaler pair)
     ]
     # The kernel reads its accessor args at TensorAccessorArgs<N>() -- N must equal
     # the scalar CT-arg count above.  Assert it here so adding a scalar arg fails
     # in Python instead of mis-parsing on device.
     n_reader_scalars = len(reader_ct_args)
-    assert n_reader_scalars == 12, "rms_norm_reader.cpp expects TensorAccessorArgs<12>()"
+    assert n_reader_scalars == 13, "rms_norm_reader.cpp expects TensorAccessorArgs<13>()"
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -521,6 +609,8 @@ def create_program_descriptor(
         _f32_bits(1.0 / float(W)),  # 7  INV_W (raw fp32 bits) -- R1/R4: logical W
         _f32_bits(epsilon),  # 8  EPS (raw fp32 bits)
         REDUCE_BULK,  # 9  reduce input policy knob
+        1 if reduce_acc_via_add else 0,  # 10 REDUCE_ACC_VIA_ADD (reduce datapath, D7)
+        scaler_tiles,  # 11 tiles the reader pushed into cb_scaler
     ]
 
     reader_rt = ttnn.RuntimeArgs()

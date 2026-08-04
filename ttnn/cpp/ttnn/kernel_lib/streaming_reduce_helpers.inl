@@ -20,6 +20,8 @@ template <
     uint32_t cb_acc,
     ReduceInputPolicy in_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
+    ReduceFp32Mode fp32_mode,
+    ReduceAlgorithm algorithm,
     typename PostOp>
 ALWI void accumulate_reduce_block(
     ReduceInputBlockShape block_shape,
@@ -29,14 +31,16 @@ ALWI void accumulate_reduce_block(
     PostOp post_op_final) {
     const bool is_last = (b + 1 == num_blocks);
     if (is_last) {
-        reduce<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode>(
+        // at_last: AccumulateViaAdd runs its within-tile finalize (sfpu_reduce +
+        // post_reduce_op) only on the flagged block; ReduceTile ignores the flag.
+        reduce<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode, fp32_mode, algorithm>(
             block_shape,
             ReduceInputMemoryLayout::contiguous(),
-            Accumulate::at(cb_acc, b),
+            Accumulate::at_last(cb_acc, b),
             post_op_final,
             partial);
     } else {
-        reduce<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode>(
+        reduce<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode, fp32_mode, algorithm>(
             block_shape,
             ReduceInputMemoryLayout::contiguous(),
             Accumulate::at(cb_acc, b),
@@ -53,6 +57,8 @@ template <
     uint32_t cb_acc,
     ReduceInputPolicy in_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
+    ReduceFp32Mode fp32_mode,
+    ReduceAlgorithm algorithm,
     typename PostOp>
 ALWI void accumulate_reduce(
     ReduceInputBlockShape block_shape,
@@ -60,7 +66,7 @@ ALWI void accumulate_reduce(
     ReducePartialScaler partial,
     PostOp post_op_final) {
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        accumulate_reduce_block<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode>(
+        accumulate_reduce_block<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode, fp32_mode, algorithm>(
             block_shape, b, num_blocks, partial, post_op_final);
     }
 }

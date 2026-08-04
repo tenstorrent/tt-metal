@@ -120,3 +120,73 @@
   that was predicted to fail). Both share one `_measure()` body so a further axis cannot fork
   the metrics, and `_skip_unsupported()` mirrors `EXCLUSIONS` + `feature_spec.INVALID` so the
   file never asserts on a cell the op may refuse. Unit suite: **269 passed, 30 skipped**.
+
+## Refinement 1b — wide-`W` reduce precision under `fp32_dest_acc_en=False`
+
+- **Date**: 2026-08-04
+- **What was done** (`[x]` full): swapped the reduce datapath to
+  `ReduceAlgorithm::AccumulateViaAdd` above a measured crossover, which is the exact lever
+  Refinement 1 named. Small, shared-path diff — no new kernel, no second program-descriptor
+  branch, no forked compute phase.
+  - **Reused**: the same `ckl::accumulate_reduce_block` call in the same pass-A loop, the same
+    `cb_x_squared → cb_row_stat` accumulator, the same `transform_in_place` finalize and pass
+    B, the same `cb_scaler` slot, the same reader boot block. The whole change is two
+    forwarded template args, one `constexpr` datapath selector, one reader `if constexpr`,
+    and one host-derived tile count.
+  - **Added — helper wrapper (retires deviation D3)**: `accumulate_reduce_block<>` and
+    `accumulate_reduce<>` in `streaming_reduce_helpers.hpp/.inl` now forward reduce()'s
+    `ReduceFp32Mode` *and* `ReduceAlgorithm` slots (the gap the refinement predicted), and
+    route the last block through `Accumulate::at_last` instead of `at` so AccumulateViaAdd's
+    within-tile finalize runs exactly once. Byte-identical for ReduceTile, which ignores the
+    `last` flag — `toy_variance`, the only other caller, passes template args only up to
+    `cb_acc`, so it is unaffected (it is separately, pre-existingly broken against the current
+    `eltwise_convenience` API — verified identical before/after this change).
+  - **Added — descriptor D7 + the crossover knob**: `REDUCE_ACC_VIA_ADD_MIN_WT = 4` selects
+    AccumulateViaAdd once `WT_CHUNK >= 4`, ReduceTile below. Not unconditional, because the
+    datapath is a *loss* at 1–2 reduce-dim tiles (0.67× / 0.94×) and narrow rows have no
+    precision problem to fix. One source of truth: `reduce_acc_via_add` and `scaler_tiles`
+    derive from it and feed the CB sizing, both kernels' CT args and the compute's final pop.
+    The knob is also coupled to `REDUCE_BULK == 1` in one place (AccumulateViaAdd + cross-chunk
+    Accumulate is `BulkWaitBulkPop`-only), with a compute-side `static_assert` as the backstop.
+  - **Added — the coupled partial-`W` swap**: AccumulateViaAdd takes a 0/1 **mask** tile
+    (`prepare_reduce_mask` + `ReducePartialScaler::partial_mask`) where ReduceTile takes the
+    `[full, partial]` **scaler** pair. Both zero the pad lanes with an exact multiply-by-0, so
+    the reader's one-time pad-lane zeroing invariant is unchanged.
+  - **WHY it works where chunking could not**: ReduceTile's FPU matmul-with-ones drives
+    `WT_CHUNK*32` all-positive addends through ONE DEST word (16-bit at
+    `fp32_dest_acc_en=False`) — Refinement 1's bit-invariant +12.4 % error. AccumulateViaAdd
+    sums the width tiles *elementwise* with pairwise `add_tiles` and finishes the 32-column sum
+    on the SFPU in fp32 LREGs, cutting DEST-resident accumulation depth from `WT_CHUNK*32`
+    serial adds to `WT_CHUNK/2` pairwise ones, with the cross-chunk carry still through the
+    fp32 `cb_row_stat`.
+- **Accuracy achieved**: on the 7 target shapes × 2 gamma layouts at the `_perf_case` config
+  (bfloat16 / TILE / HiFi2 / `fp32_dest_acc_en=False`), rel RMS fell from **0.042–0.127 to
+  0.0089–0.0109** (gate `rms <= 0.04`), PCC **0.99988–1.0000** (gate 0.995). Narrow-`W`
+  control unchanged at rel RMS 0.0065. Pad-poison: rel RMS 0.0056–0.0094, median got/true
+  ratio within 0.7 % of 1.0 on both partial mechanisms. Prior baselines held (unit suite green).
+- **Golden test progress**: **1670 / 1670** live cells passing (Refinement 1: 1660 / 1670),
+  5256 xfail_expected, 33902 invalid_skipped, `xpass_drift = 0`, zero hangs, **no regression**
+  on any previously-passing cell. All 10 `severity=precision` failures closed. Unit suite:
+  **298 passed, 30 skipped** (also green under `--dev` with LLK asserts on).
+- **Issues encountered**: **a latent kernel-library bug the lever exposed.**
+  `fold_partial_last` in `reduce_helpers_compute.inl` never reconfigured **SrcB** to the mask
+  CB — the code around it leaves SrcB pointing at the *input* CB, and `llk_unpack_AB_init` only
+  asserts formats rather than setting them. Latent for any caller whose input format differs
+  from its scaler/mask format; it surfaced here as 2 regressed acceptance cells (`float32` +
+  non-aligned `W` + `Wt >= 4`), diagnosed exactly by the `--dev` LLK assert
+  (`unp_B_src_format mismatch`, actual Float32 vs expected Float16_b) rather than guessed, and
+  fixed by bracketing the fold with `reconfig_data_format_srcb` — the same shape as the
+  adjacent FoldViaAdd reconfig. The `reduce_block` example's 19 tests (which cover both
+  `fold_partial_last` paths) stay green.
+  Second finding, recorded for the perf phases: **Refinement 4's item (a) 2.87–2.94× does not
+  translate to this op.** Measured whole-op A/B by flipping the knob: `(1,1,32,7168)` 1.06×,
+  `(1,1,224,3072)` 1.05×, `(1,1,32,1024)` 1.02×, `(1,1,8192,5120)` 1.00× — a small uniform
+  win, no shape slower. rms_norm is dataflow-bound at these widths, so reduce-MATH cycles are
+  not the bottleneck; the numbers are in descriptor D7 so a later phase does not re-budget
+  against the micro-benchmark.
+- **Tests added**: `test_rms_norm_wide_w_precision.py` (25 cases, new — the 7 wide shapes ×
+  2 gamma layouts at the perf-case config, a narrow-`W` control, and 8 pad-poison shapes
+  spanning both partial mechanisms with a got/true ratio assertion, since a padding leak on a
+  wide row is a near-uniform scale error PCC is largely blind to).
+  `test_rms_norm_perf.py` extended in place with `test_rms_norm_perf_reduce_datapath`
+  (4 shapes at the `_perf_case` config) so the D7 A/B is re-measurable.

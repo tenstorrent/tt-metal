@@ -120,9 +120,12 @@ SUPPORTED = {
 #
 # float32 activations without fp32 DEST accumulation would silently downcast
 # the sum-of-squares to bf16 — refused natively rather than answered wrongly
-# (references/precision_convention.md).  Kept explicit even though
-# SUPPORTED["fp32_dest_acc_en"] is currently [True]: it documents the cell that
-# stays refused when bfloat16 + fp32_dest_acc_en=False is later unlocked.
+# (references/precision_convention.md).  Now load-bearing rather than
+# documentary: Refinement 1 put False in SUPPORTED["fp32_dest_acc_en"], so this
+# is the one cell of that axis the op still refuses.  It stays refused even after
+# Refinement 1b cut the wide-W accumulation error (descriptor D7): the objection
+# is that a float32 CALLER asked for fp32 and would get a 16-bit accumulator, not
+# that the error is large.
 
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},

@@ -16,9 +16,10 @@
 //
 // Helper-usage notes
 // ------------------
-// * scaler CB          -> dataflow_kernel_lib::prepare_[partial_]reduce_scalers,
-//                         pool-type-aware overloads (PoolType::SUM,
-//                         ReduceDim::REDUCE_ROW).
+// * scaler CB          -> dataflow_kernel_lib::prepare_[partial_]reduce_scalers
+//                         (ReduceTile datapath) or prepare_reduce_mask
+//                         (AccumulateViaAdd datapath), pool-type-aware
+//                         overloads (PoolType::SUM, ReduceDim::REDUCE_ROW).
 // * ROW_MAJOR staging  -> dataflow_kernel_lib::read_sticks_for_tilize at TILE
 //                         granularity, which is exactly the contract of
 //                         compute_kernel_lib::tilize<WT_CHUNK>(rows).
@@ -67,7 +68,8 @@ void kernel_main() {
     constexpr uint32_t GAMMA_ELEM_BYTES = get_compile_time_arg_val(9);
     constexpr uint32_t R_RM = get_compile_time_arg_val(10);
     constexpr uint32_t W_ELEMS = get_compile_time_arg_val(11);
-    constexpr auto x_args = TensorAccessorArgs<12>();
+    constexpr uint32_t REDUCE_ACC_VIA_ADD = get_compile_time_arg_val(12);
+    constexpr auto x_args = TensorAccessorArgs<13>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr bool RM = (IS_TILE == 0);
@@ -92,9 +94,27 @@ void kernel_main() {
 
     const auto x_acc = TensorAccessor(x_args, x_addr);
 
-    // ---- boot: the reduce scaler (value exactly 1.0; 1/W is applied in fp32
-    // by the compute finalize, never folded into a bf16 scaler -- R4) -------
-    if constexpr (PARTIAL_W != 0) {
+    // ---- boot: what cb_scaler carries, per reduce datapath ----------------
+    // Value is exactly 1.0 everywhere; 1/W is applied in fp32 by the compute
+    // finalize, never folded into a bf16 scaler (R4).
+    //
+    //   ReduceTile       aligned : [full scaler]                   -> 1 tile
+    //                    partial : [full scaler, partial scaler]   -> 2 tiles
+    //   AccumulateViaAdd aligned : [scaler] (unused by the datapath, but keeps
+    //                              the boot SrcB format real)      -> 1 tile
+    //                    partial : [0/1 mask]                      -> 1 tile
+    // The tile COUNT is the descriptor's SCALER_TILES, which the compute kernel
+    // pops -- this branch must agree with it (asserted host-side).
+    if constexpr (REDUCE_ACC_VIA_ADD != 0) {
+        if constexpr (PARTIAL_W != 0) {
+            // 0/1 mask in the row-0 broadcast layout AccumulateViaAdd's masked
+            // accumulating broadcast-mul consumes for the last width tile.
+            dataflow_kernel_lib::prepare_reduce_mask<cb_scaler, ckernel::ReduceDim::REDUCE_ROW>(PARTIAL_W);
+        } else {
+            dataflow_kernel_lib::
+                prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
+        }
+    } else if constexpr (PARTIAL_W != 0) {
         dataflow_kernel_lib::prepare_partial_reduce_scalers<
             cb_scaler,
             ckernel::PoolType::SUM,
