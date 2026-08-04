@@ -17,7 +17,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
-#include "skip_ring_topology.hpp"
+#include "express_ring_topology.hpp"
 
 namespace tt::tt_fabric {
 
@@ -47,19 +47,19 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
             devices_in_mesh.resize(intra_mesh_connectivity.size());
         }
     }
-    // Recover the skip-link ring decomposition per mesh; null where a mesh declares none, which
+    // Recover the express-link ring decomposition per mesh; null where a mesh declares none, which
     // leaves that mesh on the base dimension-order policy.
-    this->skip_rings_.resize(intra_mesh_connectivity.size());
+    this->express_rings_.resize(intra_mesh_connectivity.size());
     this->x_rings_.resize(intra_mesh_connectivity.size());
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
-        auto rings = derive_skip_ring_topology(mesh_graph, MeshId{mesh_id_val});
+        auto rings = derive_express_ring_topology(mesh_graph, MeshId{mesh_id_val});
         if (!rings.has_value()) {
-            continue;  // no skip links: the mesh keeps the base policy and needs no ring state
+            continue;  // no express links: the mesh keeps the base policy and needs no ring state
         }
-        this->skip_rings_[mesh_id_val] = std::make_unique<SkipRingTopology>(std::move(*rings));
+        this->express_rings_[mesh_id_val] = std::make_unique<ExpressRingTopology>(std::move(*rings));
         auto x_rings = derive_ordinary_ring_topology(mesh_graph, MeshId{mesh_id_val}, 1);
         if (x_rings.has_value()) {
-            this->x_rings_[mesh_id_val] = std::make_unique<SkipRingTopology>(std::move(*x_rings));
+            this->x_rings_[mesh_id_val] = std::make_unique<ExpressRingTopology>(std::move(*x_rings));
         }
     }
 
@@ -72,11 +72,11 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
 
 RoutingTableGenerator::~RoutingTableGenerator() = default;
 
-const SkipRingTopology* RoutingTableGenerator::get_skip_rings(MeshId mesh_id) const {
-    return *mesh_id < this->skip_rings_.size() ? this->skip_rings_[*mesh_id].get() : nullptr;
+const ExpressRingTopology* RoutingTableGenerator::get_express_rings(MeshId mesh_id) const {
+    return *mesh_id < this->express_rings_.size() ? this->express_rings_[*mesh_id].get() : nullptr;
 }
 
-const SkipRingTopology* RoutingTableGenerator::get_x_rings(MeshId mesh_id) const {
+const ExpressRingTopology* RoutingTableGenerator::get_x_rings(MeshId mesh_id) const {
     return *mesh_id < this->x_rings_.size() ? this->x_rings_[*mesh_id].get() : nullptr;
 }
 
@@ -138,11 +138,11 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                     // Move North or South
                     MeshCoordinate target_coord_on_column(dst_mesh_coord[0], src_mesh_coord[1]);
                     auto target_chip_id = mesh_graph.coordinate_to_chip(mesh_id, target_coord_on_column);
-                    // A skip-link mesh takes its next hop from the ring decomposition, which carries
+                    // A express-link mesh takes its next hop from the ring decomposition, which carries
                     // the leaf, orientation and cross-ring policy; every other mesh uses the base
-                    // dimension-order policy unchanged. This is the only place skip links alter routing.
+                    // dimension-order policy unchanged. This is the only place express links alter routing.
                     RoutingDirection direction = RoutingDirection::NONE;
-                    if (const auto* rings = this->skip_rings_[mesh_id_val].get(); rings != nullptr) {
+                    if (const auto* rings = this->express_rings_[mesh_id_val].get(); rings != nullptr) {
                         const int next_row = rings->next_row(
                             static_cast<int>(src_mesh_coord[0]), static_cast<int>(dst_mesh_coord[0]));
                         const auto next_chip = mesh_graph.coordinate_to_chip(
@@ -171,13 +171,13 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                 }
             }
         }
-        this->validate_skip_ring_routes(mesh_id_val, intra_mesh_connectivity);
+        this->validate_express_ring_routes(mesh_id_val, intra_mesh_connectivity);
     }
 }
 
-void RoutingTableGenerator::validate_skip_ring_routes(
+void RoutingTableGenerator::validate_express_ring_routes(
     std::uint32_t mesh_id_val, const IntraMeshConnectivity& intra_mesh_connectivity) {
-    const auto* rings = this->skip_rings_[mesh_id_val].get();
+    const auto* rings = this->express_rings_[mesh_id_val].get();
     if (rings == nullptr) {
         return;
     }
@@ -250,13 +250,13 @@ void RoutingTableGenerator::validate_skip_ring_routes(
                 } else {
                     TT_FATAL(
                         !in_x_phase,
-                        "Mesh M{} route {}->{} returns to the skip axis after leaving it",
+                        "Mesh M{} route {}->{} returns to the express axis after leaving it",
                         mesh_id_val,
                         src,
                         dst);
                     TT_FATAL(
                         !axis_landed,
-                        "Mesh M{} route {}->{} continues on the skip axis after a terminal landing",
+                        "Mesh M{} route {}->{} continues on the express axis after a terminal landing",
                         mesh_id_val,
                         src,
                         dst);
