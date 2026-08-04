@@ -550,8 +550,15 @@ Tensor remainder(
     if (operation_input.dtype() != DataType::INT32 && !output_dtype.has_value() &&
         !operation_sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&
         rhs_activations.empty()) {
-        return ttnn::unary_remainder(
-            operation_input, scalar, output_mem_config, output_tensor, operation_sub_core_grids);
+        if (!output_tensor.has_value() || output_tensor->dtype() == operation_input.dtype()) {
+            return ttnn::unary_remainder(
+                operation_input, scalar, output_mem_config, output_tensor, operation_sub_core_grids);
+        }
+
+        const Tensor operation_output =
+            ttnn::unary_remainder(operation_input, scalar, output_mem_config, std::nullopt, operation_sub_core_grids);
+        return ttnn::typecast(
+            operation_output, output_tensor->dtype(), std::nullopt, output_tensor, operation_sub_core_grids);
     }
     return ttnn::detail::invoke_binary_ng(
         operation_input,

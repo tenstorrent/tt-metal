@@ -580,7 +580,7 @@ def test_binary_mul_int32_edge_cases(device):
         # scalar bcast
         pytest.param([(1, 1, 1), (8, 16, 32)], id="broadcast_lhs_1"),
         pytest.param([(8, 16, 32), (1, 1, 1)], id="broadcast_rhs_1"),
-        # no subtile bcast
+        # no sub-tile bcast
         pytest.param([(1, 16, 32), (8, 16, 32)], id="broadcast_lhs_2"),
         pytest.param([(8, 16, 32), (1, 16, 32)], id="broadcast_rhs_2"),
         # row bcast
@@ -728,9 +728,9 @@ def test_binary_div_int32_full_range(input_shapes, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -814,9 +814,9 @@ def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, ro
     torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
     torch_input_tensor_b = torch_input_tensor_b[:num_elements].reshape(input_shapes)
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -1099,9 +1099,9 @@ def test_binary_divide_int32_full_range(input_shapes, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     golden_function = ttnn.get_golden_function(ttnn.divide)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -1428,6 +1428,35 @@ def test_binary_remainder_fmod_int32_float_scalar(ttnn_op, layout, use_sub_core_
     assert_equal(expected, actual)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("use_sub_core_grids", [False, True])
+def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_sub_core_grids, device):
+    torch_input_tensor = torch.tensor([-5, -4, -1, 0, 1, 4, 5], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_input_tensor),
+        dtype=ttnn.int32,
+        device=device,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    scalar = 1.5
+    expected = torch.remainder(torch_input_tensor, scalar).to(torch.int32)
+    sub_core_grids = None
+    if use_sub_core_grids:
+        sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    ttnn.remainder(input_tensor, scalar, output_tensor=output_tensor, sub_core_grids=sub_core_grids)
+
+    assert_equal(expected, ttnn.to_torch(output_tensor))
+
+
 @pytest.mark.parametrize(
     "ttnn_op",
     [
@@ -1478,9 +1507,9 @@ def test_binary_remainder_fmod_int32_range_1e15(input_shapes, ttnn_op, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
