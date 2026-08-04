@@ -165,18 +165,25 @@ def get_pcc_threshold(request, default=0.99):
 # Mesh / device helpers
 # --------------------------------------------------------------------------- #
 def _resolve_mesh_shape(max_tp=4):
-    return {"P150": (1, 1), "P150x4": (1, 4)}.get(
-        os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), max_tp))
-    )
+    """``MESH_DEVICE`` -> mesh shape, from the canonical ``model_config.MESH_SHAPES`` table
+    (P150/P150x4 on Blackhole, N150/N300/T3K on Wormhole; T3K is (1,8) = TP=8). Anything unlisted
+    falls back to (1, min(num_devices, max_tp)). Imported lazily to keep this module's load light
+    (see the module docstring)."""
+    from models.demos.blackhole.qwen36.tt.model_config import MESH_SHAPES
+
+    return MESH_SHAPES.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), max_tp)))
 
 
 def parametrize_mesh_tp(max_tp=4):
     """Parametrize a TP test over the env-selected mesh shape + FABRIC_1D.
 
     Mirrors the idiom the qwen TP tests used inline: ``MESH_DEVICE=P150`` -> (1,1),
-    ``P150x4`` -> (1,4); otherwise (1, min(num_devices, max_tp)). The mesh shape
-    gets an explicit ``RxC`` id so node names (and ``pcc_thresholds.json`` mesh
-    keys) are readable.
+    ``P150x4`` -> (1,4), ``T3K`` -> (1,8); otherwise (1, min(num_devices, max_tp)).
+    The mesh shape gets an explicit ``RxC`` id so node names (and
+    ``pcc_thresholds.json`` mesh keys) are readable.
+
+    ``max_tp`` only bounds the fallback, so it does not cap a mesh named explicitly
+    via ``MESH_DEVICE`` — ``T3K`` still resolves to (1,8) at the default max_tp=4.
     """
     shape = _resolve_mesh_shape(max_tp)
     # Local import to keep this test helper's module load light (see module docstring).

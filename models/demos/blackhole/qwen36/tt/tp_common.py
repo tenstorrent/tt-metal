@@ -33,8 +33,107 @@ def prefill_grid_default():
     return (8, 10) if is_blackhole() else (8, 8)
 
 
+def _ag_matmul_grid(tt_ccl, grid, cluster_axis):
+    """(grid, num_links, workers_per_link) for the fused all-gather+matmul prefill ops.
+
+    The gather is bandwidth-bound, so it uses every ethernet link the mesh has: 2 on P150x4, 1 on
+    T3K (``get_num_links``). The op requires ``grid.x == num_links * workers_per_link``, and the
+    default 7-wide grid is prime (forcing 1 link), so the width is pinned to 8 — giving 2 links x 4
+    workers on P150x4 and 1 link x 8 workers on T3K.
+
+    Height is capped at ``device_grid.y - 1``, NOT device_grid.y: the op hardcodes its in0 mux cores
+    to row ``full_grid_size.y - 1`` of the FULL device grid (see in0_mux_logical in
+    all_gather_minimal_matmul_async_program_factory.cpp), so a matmul grid that reaches the last row
+    puts a matmul worker and a mux on the same core — which fails as "Illegal NOC usage: data
+    movement kernels on logical core 7-7 cannot use the same NOC". On a BH P150 (10 rows) the cap is
+    9, exactly the tuned height, so this reserves the mux row on Wormhole (-> 7) for free."""
+    num_links = tt_ccl.get_num_links(cluster_axis)
+    dev = tt_ccl.mesh_device.compute_with_storage_grid_size()
+    grid = (min(8, dev.x), min(grid[1], dev.y - 1))
+    return grid, num_links, grid[0] // num_links
+
+
+def _ag_matmul_k_block(k_local):
+    """K_block_size for the fused all-gather+matmul: the largest block <= 8 that evenly divides the
+    per-device K tiles. Ring topology has no tail-block support, so an indivisible K_block_size is a
+    hard TT_FATAL, and the TP degree decides divisibility: dim 5120 is 160 K tiles, which is 40 per
+    device at TP=4 (8 divides it, so P150x4 keeps its tuned 8) but only 20 at TP=8, where 8 does not
+    divide and this picks 5."""
+    return _find_largest_divisor(k_local // TILE_SIZE, max_div=8)
+
+
+#: Largest share of a core's unreserved L1 an L1-resident prefill matmul OUTPUT may take before we
+#: fall back to DRAM. EMPIRICAL, not derived: a 2D prefill matmul's circular buffers alone run
+#: ~1.33 MB of the 1.43 MB budget for these shapes, so only a small shard can join them, and
+#: modelling the CB layout exactly proved unreliable in both directions. 1/6 admits the BH P150
+#: configuration the outL1 win was swept on (186 KB/core) and rejects the T3K one that clashes
+#: (353 KB/core). Re-measure before widening.
+PREFILL_OUT_L1_MAX_FRAC = 1 / 6
+
+#: Measured static-CB footprint of the prefill SDPA at q/k chunk 128 with head_dim 256 on an (8,8)
+#: grid. It fits a Blackhole core's 1536 KB L1 with ~39 KB to spare but overruns Wormhole's 1464 KB
+#: ("circular buffers ... grow to 1533120 B which is beyond max L1 size of 1499136 B"), so the chunk
+#: has to halve there. See sdpa_prefill_chunk.
+_SDPA_PREFILL_CB_BYTES_AT_128 = 1533120
+
+
+def sdpa_prefill_chunk(seq_len):
+    """q/k chunk size for the prefill SDPA, capped by what this core's L1 can hold.
+
+    128 for seq>=2048 (64 below) is the Blackhole-tuned choice — 256 wins in isolation but its CBs
+    clash in the full model. Wormhole has 72 KB less L1 per core (1464 vs 1536 KB), which is exactly
+    enough to turn the 128 config's 1497 KB of CBs from a fit into an overflow, so drop to 64 there.
+    Chunk 64 is already the validated config for shorter sequences, so this reuses a known-good path
+    rather than inventing one."""
+    padded = max(TILE_SIZE, _roundup(seq_len, TILE_SIZE))
+    want = 128 if seq_len >= 2048 else 64
+    if want == 128 and ttnn.get_max_worker_l1_unreserved_size() < _SDPA_PREFILL_CB_BYTES_AT_128:
+        want = 64
+    return min(want, padded)
+
+
+def prefill_out_l1_fits(mesh_device, m, n, elem_bytes=2):
+    """Is an L1-interleaved [m,n] matmul output small enough per core to sit beside that matmul's CBs?
+
+    Decides an optimization, not correctness — the caller falls back to a DRAM output. It matters
+    because the shard scales with 1/num_cores: the MLP prefill down-proj output is ~20 MB, which is
+    186 KB/core over a BH P150's ~110 cores but 353 KB/core over a T3K's 64, and at that size it
+    collides with the matmul's circular buffers. See PREFILL_OUT_L1_MAX_FRAC."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    # Round each dim up to a tile: the allocation is tile-padded, and for the down-proj that padding
+    # is the difference between a predicted fit and the observed clash.
+    padded = _roundup(m, TILE_SIZE) * _roundup(n, TILE_SIZE) * elem_bytes
+    shard_bytes = math.ceil(padded / (grid.x * grid.y))
+    return shard_bytes <= PREFILL_OUT_L1_MAX_FRAC * ttnn.get_max_worker_l1_unreserved_size()
+
+
 def _roundup(a, b):
     return b * math.ceil(a / b)
+
+
+#: Bytes per element per ttnn dtype. ttnn.DataType exposes only name/value — no itemsize.
+_DTYPE_BYTES = {ttnn.float32: 4, ttnn.bfloat16: 2, ttnn.bfloat4_b: 1, ttnn.bfloat8_b: 1}
+
+
+def _rs_worker_cores(mm_out_bytes, num_links, ring_size, topology):
+    """Cores the fused reduce-scatter will claim, mirroring the op's own sizing.
+
+    reduce_scatter_minimal_async picks workers_per_direction from a data-size heuristic and then
+    needs num_links * 2 * (1 mux + workers) cores (reduce_scatter_core_count_per_link), laid out
+    row-major from reduce_scatter_core_grid_offset. We reproduce the thresholds here (from
+    reduce_scatter_program_utils.cpp::reduce_scatter_default_workers) because the op sizes itself
+    against the WHOLE device's core count but places from our offset — so the caller has to reserve
+    rows for the real number, not a guess. Getting it wrong low walks off the grid ("No core
+    coordinate found at location: (0, 8, TENSIX, LOGICAL)"); getting it wrong high needlessly
+    starves the matmul of rows."""
+    moved = mm_out_bytes * (ring_size - 1) / ring_size / num_links / (2 if topology == ttnn.Topology.Ring else 1)
+    if moved <= 4 * 1024:  # single packet: one worker, and the op then drops the mux
+        return num_links * 2
+    if topology == ttnn.Topology.Ring:
+        workers = 8 if moved > 50 * 1024 * 1024 else (2 if moved < 1024 * 1024 else 4)
+    else:
+        workers = 8 if moved > 4_000_000 else (2 if moved < 500_000 else 4)
+    return num_links * 2 * (1 + workers)
 
 
 def _find_largest_divisor(n, max_div=8):
@@ -162,6 +261,30 @@ def create_activation_shard_config(k):
     )
 
 
+def _prefill_in0_block_w(per_core_M, per_core_N, k_tiles):
+    """Largest in0_block_w (<=4, dividing k_tiles) whose circular buffers fit this core's L1.
+
+    A 2D matmul's CBs are roughly double-buffered in0 (per_core_M x in0_block_w) + double-buffered
+    in1 (in0_block_w x per_core_N) + the output block (per_core_M x per_core_N) plus its fp32
+    accumulate — so only the in0/in1 terms are tunable once the grid fixes per_core_M/N.
+
+    This matters on Wormhole: its worker grid is 8 rows to a BH P150's 10, which raises per_core_M
+    (e.g. 9 vs 8 tiles at seq 2304), and its L1 is 72 KB smaller (1464 vs 1536 KB). Together those
+    turn the MLP down-proj's ~1497 KB of CBs from a fit into "circular buffers ... grow to 1533120 B
+    which is beyond max L1 size of 1499136 B". Halving in0_block_w there costs some FPU efficiency
+    but keeps the op legal. The estimate is deliberately ~3% conservative against the measured
+    footprint, and a BH P150 still selects 4 for these shapes, so its tuned configs are unchanged."""
+    budget = ttnn.get_max_worker_l1_unreserved_size()
+    fixed = 3 * per_core_M * per_core_N  # output block + its fp32 accumulate
+    for w in (4, 2, 1):
+        if k_tiles % w:
+            continue
+        cb_tiles = fixed + 2 * per_core_M * w + 2 * w * per_core_N
+        if cb_tiles * 2048 <= budget:
+            return w
+    return 1
+
+
 # 2D prefill matmul config
 def _get_out_subblock_w(per_core_n, out_subblock_h):
     for w in range(min(per_core_n, 4 // out_subblock_h), 0, -1):
@@ -190,6 +313,8 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
 
     k_tiles = math.ceil(k / TILE_SIZE)
     in0_block_w = min(4, max(1, k_tiles // grid_size[0]))
+    # Shrink in0_block_w if the resulting CBs would not fit this core's L1 (Wormhole; see helper).
+    in0_block_w = min(in0_block_w, _prefill_in0_block_w(per_core_M, per_core_N, k_tiles))
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -264,14 +389,11 @@ def all_gather_matmul_prefill(
     (default DRAM; L1 keeps it resident for downstream slices)."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
-    # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
-    # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
-    num_links = 2
-    grid = (8, grid[1])
-    workers = grid[0] // num_links
+    # AG-bound: parallelize the gather over every link, on a grid that fits this device (see helper).
+    grid, num_links, workers = _ag_matmul_grid(tt_ccl, grid, cluster_axis)
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=4,
-        K_block_size=8,
+        K_block_size=_ag_matmul_k_block(K_local),
         N_block_size=8,
         subblock_h=1,
         subblock_w=4,
@@ -310,12 +432,10 @@ def all_gather_swiglu_prefill(
     x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
-    num_links = 2
-    grid = (8, grid[1])
-    workers = grid[0] // num_links
+    grid, num_links, workers = _ag_matmul_grid(tt_ccl, grid, cluster_axis)
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=8,
-        K_block_size=8,
+        K_block_size=_ag_matmul_k_block(K_local),
         N_block_size=16,
         subblock_h=1,
         subblock_w=4,
@@ -430,20 +550,36 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
     return cache[key]
 
 
-def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
+def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=None, rs_offset=None):
     """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
     2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
-    GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
-    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
+    GDN-out with its large RS). x: K-sharded [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd]
+    (cloned; shared buffer survives)."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
     x4 = ttnn.reshape(x, (1, 1, M, K_local))
-    # RS-bound: 2 ethernet links parallelize the fp32 cross-device reduce (P150x4 max; traced_8k win).
-    # grid (8,8) leaves rows 8-9 for the 2 RS worker rows.
-    num_links = 2
+    # RS-bound: parallelize the fp32 cross-device reduce over every ethernet link (2 on P150x4,
+    # 1 on T3K). The RS workers sit in rows stacked directly beneath the matmul, so the matmul gets
+    # (device height - reserved rows) rows.
+    #
+    # How many rows to reserve is NOT num_links — it is however many cores the RS actually claims,
+    # spread over the grid width (see _rs_worker_cores). Reserving too few walks off the grid; too
+    # many starves the matmul of rows, which inflates its per-core fp32 output block. This lands on
+    # the validated 2 rows for a BH P150 (2 links x 10 cores = 20, over an 11-wide grid) and 2 rows
+    # for a T3K at the 2k/4k prefill chunks (1 link x 10 cores, over 8-wide), widening to 3 only if
+    # a chunk large enough to trip the op's 50 MB/link threshold is used.
+    num_links = tt_ccl.get_num_links()
+    dev = tt_ccl.mesh_device.compute_with_storage_grid_size()
+    mm_out_bytes = _roundup(M, TILE_SIZE) * _roundup(N, TILE_SIZE) * _DTYPE_BYTES.get(dtype, 4)
+    rs_cores = _rs_worker_cores(mm_out_bytes, num_links, nd, topology)
+    rs_rows = math.ceil(rs_cores / dev.x)
+    if grid is None:
+        grid = (min(8, dev.x), dev.y - rs_rows)
+    if rs_offset is None:
+        rs_offset = (0, grid[1])
     per_core_N = max(1, math.ceil(N / TILE_SIZE / grid[0]))
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -552,9 +688,23 @@ def shard_small(torch_tensor, mesh, cache_path, dim=-1, dtype=ttnn.bfloat16):
 
 
 def replicate_kv_weight(weight, n_kv_heads, tp, head_dim):
-    """Replicate KV weight so each device gets >=1 head. No-op when tp <= n_kv_heads."""
+    """Replicate a KV projection weight so every device owns one WHOLE head. No-op when tp <= n_kv_heads.
+
+    weight: [n_kv_heads*head_dim, in] -> [tp*head_dim, in], where device d gets head
+    (d*n_kv_heads)//tp. That mapping agrees with HF's GQA grouping (q head h belongs to kv head
+    h//(n_heads/n_kv_heads)) as long as q heads shard contiguously, which prepare_attn_qkv* does:
+    e.g. n_heads=24, n_kv_heads=4, tp=8 -> device d holds q heads [3d,3d+3) and kv head d//2, and
+    q heads 0-5 do map to kv head 0, 6-11 to kv head 1, and so on.
+
+    Devices sharing a kv head recompute identical K/V into their own local cache; the caches are
+    per-device and never gathered, so the duplication costs cache memory, not correctness."""
     if tp <= n_kv_heads:
         return weight
+    assert weight.shape[0] == n_kv_heads * head_dim, (
+        f"KV weight rows {weight.shape[0]} != n_kv_heads*head_dim = {n_kv_heads}*{head_dim}; "
+        "replicate_kv_weight assumes an unfused [n_kv_heads*head_dim, in] projection"
+    )
+    assert tp % n_kv_heads == 0, f"TP={tp} must be a multiple of n_kv_heads={n_kv_heads} for even KV replication"
     chunks = weight.reshape(n_kv_heads, head_dim, -1)
     parts = []
     for d in range(tp):

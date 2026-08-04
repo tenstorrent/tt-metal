@@ -1,14 +1,16 @@
-# Qwen3.5 / Qwen3.6 on Blackhole
+# Qwen3.5 / Qwen3.6 on Blackhole and Wormhole
 
-This directory implements Tenstorrent Blackhole inference for the hybrid
+This directory implements Tenstorrent inference for the hybrid
 **Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6 family. Despite the
-`qwen3_5_9b` directory name, the same code path serves three checkpoints:
+`blackhole/` path (kept for now to avoid churn — the code is arch-aware, not
+Blackhole-only), the same code path serves these checkpoints:
 
 | Model            | `HF_MODEL`             | Mesh / `MESH_DEVICE` | Parallelism            |
 | ---------------- | ---------------------- | -------------------- | ---------------------- |
 | Qwen3.5-9B       | `Qwen/Qwen3.5-9B`      | single P150 — `P150` | single device          |
 | Qwen3.5-27B      | `Qwen/Qwen3.5-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
 | Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
+| Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | T3K — `T3K`          | 8-way tensor parallel  |
 
 - The **9B** runs on a **single Blackhole P150** device. It uses the validated
   single-device forward path (no collectives).
@@ -16,6 +18,38 @@ This directory implements Tenstorrent Blackhole inference for the hybrid
   (a `(1, 4)` Blackhole mesh) using **4-way tensor parallelism (TP)**. The TP
   path needs `FABRIC_1D` for the cross-device collectives (all-reduce /
   reduce-scatter) and a trace region for the captured chunk-outer prefill trace.
+- The **27B** also runs on a **T3K** (a `(1, 8)` Wormhole mesh, 8 n300 chips) at
+  **TP=8**. Nothing selects this but the mesh width; the same `FABRIC_1D` +
+  trace-region requirements apply. Two things differ from Blackhole and are
+  handled automatically:
+  - **KV replication.** Qwen3.6-27B has only 4 KV heads but T3K has 8 devices,
+    so each device replicates a whole KV head rather than owning a fraction of
+    one (`tp_common.replicate_kv_weight`; device *d* takes KV head
+    `d*n_kv_heads//TP`, which matches HF's GQA grouping). It costs 2x KV-cache
+    memory versus a perfect shard, which the halved per-device weight footprint
+    more than pays for.
+  - **A smaller worker grid** (8x8 = 64 cores, vs ~11x10 on a P150) and **one
+    ethernet link instead of two**. The fused-CCL grids, link counts, matmul
+    `K_block_size`, and the L1-vs-DRAM choice for prefill matmul outputs are all
+    derived from the device rather than hardcoded — see `tt/tp_common.py`.
+  - **A tighter L1 budget.** Wormhole has 1464 KB of L1 per core to Blackhole's
+    1536 KB, and spreads every L1-interleaved tensor over 64 cores instead of
+    ~110 — so a per-core share is ~1.7x larger. Two prefill placements are
+    therefore chosen from the device rather than fixed: a matmul's `in0_block_w`
+    shrinks when its circular buffers would not fit, and the ~20 MB `[S, dim]`
+    out-projection outputs (MLP down-proj, attention `wo`) fall back to DRAM
+    instead of staying L1-resident. Blackhole keeps its measured choices.
+  - **A replicated-activation vision tower.** The vision tower's `dim` is 1152 =
+    36 tiles, which 8 devices cannot split into whole tiles (4.5 each; it is 9 at
+    TP=4). Since the block I/O contract restores its fracture with a
+    `reduce_scatter` along `dim=3`, and a tile cannot be split, the tower instead
+    keeps **activations replicated** at full `dim` on T3K and all-reduces the
+    row-parallel out-projections (`tt/vision/vision_ccl.py`) rather than
+    reduce-scattering them. Weights stay sharded, so no TP compute is given up —
+    the tower is not run redundantly. The PatchMerger still fractures its
+    **output** for the LLM, which is safe because that splits `out_hidden_size`
+    (5120 -> 20 tiles/device), not `dim`. Selected automatically by
+    `vision_replicated_acts`; `P150x4` is unaffected.
 
 Everything model-specific (hybrid layer dispatch, DeltaNet head/conv dims,
 partial rotary factor, vocab, layer count) is read from the parsed HF config, so
@@ -57,9 +91,18 @@ export HF_MODEL=Qwen/Qwen3.5-27B
 export MESH_DEVICE=P150x4
 ```
 
+**27B on a T3K (8 Wormhole n300 chips, TP=8):**
+
+```bash
+export HF_MODEL=Qwen/Qwen3.6-27B
+export MESH_DEVICE=T3K
+```
+
 `HF_MODEL` is the single source of truth for the checkpoint — it may be a Hugging
 Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
-`MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`).
+`MESH_DEVICE` selects the mesh shape — `P150` → `(1,1)`, `P150x4` → `(1,4)`,
+`T3K` → `(1,8)`; see `MESH_SHAPES` in `tt/model_config.py`, which is the single
+table the tests and both demos read.
 
 Optional flags:
 

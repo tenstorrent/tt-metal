@@ -324,8 +324,13 @@ class Qwen36MLP:
                 hidden.shape[-2], hidden.shape[-1], w.w2.shape[-1], max_cols=getattr(args, "decode_grid_w", 8)
             )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
-        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
-        mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
+        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial). Only when the
+        # shard actually fits beside the matmul's CBs: the output is ~20 MB, which is 186 KB/core over
+        # a BH P150's ~110 cores but 320 KB/core over a T3K's 64, and there it clashes with the CBs.
+        _l1_w2_out = x.shape[-2] <= ttnn.TILE_SIZE or (
+            _prefill_tuned and tpc.prefill_out_l1_fits(self.device, hidden.shape[-2], w.w2.shape[-1])
+        )
+        mc_w2_out = ttnn.L1_MEMORY_CONFIG if _l1_w2_out else mc
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 

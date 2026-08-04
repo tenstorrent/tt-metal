@@ -25,6 +25,16 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         return str(cache_dir / n) if cache_dir is not None else None
 
     tw = {}
+    # GQA KV replication (TP > n_kv_heads, e.g. TP=8 on T3K with 4 KV heads): expand k/v from
+    # [n_kv_heads*head_dim, in] to [TP*head_dim, in] so every device owns ONE WHOLE KV head instead
+    # of a fraction of one. Devices sharing a KV head recompute identical K/V into their own local
+    # cache (caches are per-device and never gathered), so this is correct, not just convenient.
+    # No-op when TP <= n_kv_heads, so the validated P150x4 (TP=4) layout is byte-for-byte unchanged.
+    # Device d lands on KV head (d*n_kv_heads)//TP, which matches HF's q-head grouping (q head h ->
+    # kv head h//(n_heads/n_kv_heads)) because q heads shard contiguously n_local_heads at a time.
+    k_proj = tpc.replicate_kv_weight(state_dict["k_proj.weight"], args.n_kv_heads, args.num_devices, args.head_dim)
+    v_proj = tpc.replicate_kv_weight(state_dict["v_proj.weight"], args.n_kv_heads, args.num_devices, args.head_dim)
+
     # Column-parallel q/k/v: fused [q+gate|k|v] per device, or separate DRAM-sharded weights.
     # Distinct cache names — as_tensor reload ignores requested memcfg.
     fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
@@ -34,8 +44,8 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         if qg_deint:
             fused = tpc.prepare_attn_qkv_deint(
                 state_dict["q_proj.weight"],
-                state_dict["k_proj.weight"],
-                state_dict["v_proj.weight"],
+                k_proj,
+                v_proj,
                 args.n_local_heads,
                 args.head_dim,
                 args.n_local_kv_heads * args.head_dim,
@@ -44,8 +54,8 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         else:
             fused = tpc.prepare_attn_qkv(
                 state_dict["q_proj.weight"],
-                state_dict["k_proj.weight"],
-                state_dict["v_proj.weight"],
+                k_proj,
+                v_proj,
                 args.n_local_heads * args.head_dim * 2,
                 args.n_local_kv_heads * args.head_dim,
                 args.num_devices,
@@ -77,7 +87,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dtype=ttnn.bfloat8_b,
         )
         tw["wk"] = tpc.shard_w(
-            state_dict["k_proj.weight"],
+            k_proj,
             mesh,
             dim=-1,
             memory_config=k_mc,
@@ -85,7 +95,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dtype=ttnn.bfloat8_b,
         )
         tw["wv"] = tpc.shard_w(
-            state_dict["v_proj.weight"],
+            v_proj,
             mesh,
             dim=-1,
             memory_config=v_mc,
@@ -226,12 +236,17 @@ class TPAttention:
                     weight.shape[-1],
                     max_cols=getattr(self.args, "decode_grid_w", 8),
                 )
+                # L1 output only when its per-core shard leaves room for this matmul's own CBs. The
+                # [S,dim] output is 214 KB/core over a BH P150's ~110 cores but 369 KB over a T3K's
+                # 64, where it clashes ("circular buffers ... clash with L1 buffers"). Same guard as
+                # the MLP down-proj, which has the identical shape.
+                _l1_out = tpc.prefill_out_l1_fits(self.mesh, x.shape[-2], weight.shape[-1])
                 return ttnn.linear(
                     x,
                     weight,
                     compute_kernel_config=self.compute_cfg,
                     program_config=pc,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=ttnn.L1_MEMORY_CONFIG if _l1_out else ttnn.DRAM_MEMORY_CONFIG,
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
@@ -428,13 +443,14 @@ class TPAttention:
                 ttnn.fill_cache(self.v_caches[h], ttnn.slice(v, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
 
         q8, k8, v8 = q, k, v
-        padded = max(32, ((S + 31) // 32) * 32)
-        # SDPA flash chunk: 128 for S>=2048, 64 below. (256 wins in ISOLATION at S=3072/4096
-        # -- test_sdpa_prefill_opt -- but in the full model its larger CBs clash with the resident
-        # attn-input L1 buffer during a single-pass prefill of S>2048 (prefill_tp/generate_tp;
-        # program.cpp "circular buffers ... clash with L1 buffers"). Production serving chunks
-        # prefill at <=2048, so this path never sees S>2048 and 256 has no reachable win.)
-        ch = min(128 if S >= 2048 else 64, padded)
+        # SDPA flash chunk: 128 for S>=2048, 64 below, and 64 regardless on a device whose L1 cannot
+        # hold the 128 config's CBs (Wormhole — see tpc.sdpa_prefill_chunk). (256 wins in ISOLATION
+        # at S=3072/4096 -- test_sdpa_prefill_opt -- but in the full model its larger CBs clash with
+        # the resident attn-input L1 buffer during a single-pass prefill of S>2048
+        # (prefill_tp/generate_tp; program.cpp "circular buffers ... clash with L1 buffers").
+        # Production serving chunks prefill at <=2048, so this path never sees S>2048 and 256 has no
+        # reachable win.)
+        ch = tpc.sdpa_prefill_chunk(S)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=ch, k_chunk_size=ch
         )

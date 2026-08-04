@@ -411,6 +411,10 @@ def test_attention_tp_qknorm_offset(mesh_device):
     class _Args:
         n_local_heads = NH // nd
         n_local_kv_heads = max(1, NKV // nd)
+        # n_kv_heads/num_devices drive the loader's KV-replication step; NKV == nd here, so it is a
+        # no-op and this test still exercises only the q_norm/k_norm +1 offset.
+        n_kv_heads = NKV
+        num_devices = nd
         head_dim = HD
         rope_head_dim = 64
         max_batch_size = 1

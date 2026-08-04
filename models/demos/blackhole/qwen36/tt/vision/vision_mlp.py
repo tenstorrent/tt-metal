@@ -25,6 +25,8 @@ from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 
+from .vision_ccl import all_reduce_replicated
+
 
 class MLP(LightweightModule):
     def __init__(
@@ -105,16 +107,20 @@ class MLP(LightweightModule):
             cache_file_name=cache_name("linear_fc2_w_row"),
         )
 
-        # The MLP output is fractured along dim=3 (post reduce_scatter), so
-        # the bias is sharded along the same axis.
+        # The bias must match how the output is distributed: sharded along dim=3 when the output is
+        # fractured by the reduce_scatter, replicated when the out-projection all-reduces to a
+        # full-width tensor instead (args.vision_replicated_acts — see vision_ccl).
+        self.replicated_acts = getattr(args, "vision_replicated_acts", False)
         self.linear_fc2_bias = ttnn.as_tensor(
             torch_bias("linear_fc2"),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+            if self.replicated_acts
+            else ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("linear_fc2_b_frac"),
+            cache_file_name=cache_name("linear_fc2_b_repl" if self.replicated_acts else "linear_fc2_b_frac"),
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
@@ -152,20 +158,23 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        # On T3K/QB2 `tt_all_reduce(dim=3)` is implemented as a
-        # reduce_scatter, so the result is fractured along dim=3 -- exactly
-        # the block I/O contract that the LLM uses.
-        w2_frac = tt_all_reduce(
-            w2_partial,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=self.ccl_cluster_axis,
-            dim=3,
-            sharded=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.args.ccl_dtype,
-            topology=self.args.ccl_topology(),
-        )
+        # On T3K/QB2 `tt_all_reduce(dim=3)` is implemented as a reduce_scatter, so the result is
+        # fractured along dim=3 -- exactly the block I/O contract that the LLM uses. When dim cannot
+        # be split into whole tiles per device, all-reduce to a replicated full-width tensor instead.
+        if self.replicated_acts:
+            w2_frac = all_reduce_replicated(w2_partial, self.tt_ccl, self.args.ccl_topology())
+        else:
+            w2_frac = tt_all_reduce(
+                w2_partial,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=self.ccl_cluster_axis,
+                dim=3,
+                sharded=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=self.args.ccl_dtype,
+                topology=self.args.ccl_topology(),
+            )
         if w2_frac is not w2_partial:
             ttnn.deallocate(w2_partial)
 

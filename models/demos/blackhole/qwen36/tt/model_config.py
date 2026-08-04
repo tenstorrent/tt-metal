@@ -15,6 +15,17 @@ from models.tt_transformers.tt.model_config import ModelArgs
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
 GDN_CONV1D_L1_SMALL_SIZE = 24576
 
+# MESH_DEVICE -> mesh shape. Blackhole: P150 (1,1) single-device 9B, P150x4 (1,4) TP=4 27B.
+# Wormhole: N150 (1,1), N300 (1,2), T3K (1,8) TP=8 27B. The mesh width IS the TP degree, and
+# num_devices>1 alone selects the TP code path (see _init_tp_config).
+MESH_SHAPES = {
+    "P150": (1, 1),
+    "P150x4": (1, 4),
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "T3K": (1, 8),
+}
+
 
 class Qwen36ModelArgs(ModelArgs):
     """Qwen3.5-9B ModelArgs for Blackhole P150."""
