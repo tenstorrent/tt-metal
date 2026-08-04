@@ -4,7 +4,7 @@
 
 #include "gather_codegen_device_operation.hpp"
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "gather_codegen_supported.hpp"
 #include "ttnn/device_operation.hpp"
