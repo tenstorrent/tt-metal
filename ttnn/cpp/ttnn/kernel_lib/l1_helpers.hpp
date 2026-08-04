@@ -80,6 +80,10 @@ FORCE_INLINE void prepare_zero_tile() {
  *                    (e.g. a bfloat16 bit pattern in bits [15:0]).
  *                    For val_size < 4 the value is replicated into a uint32_t
  *                    for the bulk writes.
+ *
+ * @note For val_size == 4 the head/tail element stores compile out entirely.
+ *       Both start_addr and (start_addr + n_bytes) must be 4-byte-aligned;
+ *       an unaligned range silently under-fills the head/tail bytes.
  */
 template <uint32_t val_size>
 FORCE_INLINE void fill_l1_range(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
