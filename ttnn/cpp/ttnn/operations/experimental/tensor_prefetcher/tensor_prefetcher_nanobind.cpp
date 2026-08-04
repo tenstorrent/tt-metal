@@ -85,10 +85,13 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
-                cq_id (Optional[int]): command queue that may be recording a trace. When that
-                    CQ is mid trace-capture, the request is captured into the trace instead of
-                    being sent immediately, and is re-sent on every execute_trace of that trace.
-                    Defaults to the current/default command queue.
+                capture_into_trace (bool): whether this request may be captured into a trace.
+                    When True and the current command queue is mid trace-capture, the request
+                    is captured into the trace instead of being sent immediately, and is
+                    re-sent on every execute_trace of that trace. Defaults to False: the
+                    request is always sent immediately and is never captured, whatever any
+                    command queue is doing. Which queue counts as current follows the usual
+                    ttnn convention — pass cq_id=n, or wrap the call in ttnn.command_queue(n).
 
             Returns:
                 None
@@ -99,7 +102,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("global_cb"),
         nb::kw_only(),
         nb::arg("device_subset") = std::nullopt,
-        nb::arg("cq_id") = std::nullopt);
+        nb::arg("capture_into_trace") = false);
 
     ttnn::bind_function<"wait_for_cq_on_tensor_prefetcher", "ttnn.experimental.">(
         mod,
@@ -115,7 +118,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to fence.
-                cq_id (int): the command queue to fence against.
+                cq_id (Optional[int]): the command queue to fence against. Defaults to the
+                    calling thread's current queue (also what ttnn.command_queue(n) sets).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh to
                     fence. Defaults to the full mesh.
 
@@ -124,7 +128,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         )doc",
         &wait_for_cq_on_tensor_prefetcher,
         nb::arg("mesh_device"),
-        nb::arg("cq_id") = 0,
+        nb::arg("cq_id") = std::nullopt,
         nb::kw_only(),
         nb::arg("device_subset") = std::nullopt);
 
