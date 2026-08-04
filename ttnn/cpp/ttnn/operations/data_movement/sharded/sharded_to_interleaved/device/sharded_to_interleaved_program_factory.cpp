@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -102,8 +104,6 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
         num_units_height = static_cast<uint32_t>(input.logical_volume() / input.logical_shape()[-1]);
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
-        num_units_per_shard_width_last =
-            output_unit_size - (round_up(num_units_per_row, output_unit_size) - num_units_per_row);
     }
 
     // re-calculate end_core in the case shard grid is larger than used grid
@@ -209,9 +209,9 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
 
     for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
         const auto& core = cores[core_idx];
-        uint32_t shard_height = num_units_per_shard_height;
-        uint32_t shard_width = input.layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
         if (input.layout() == Layout::TILE) {
+            uint32_t shard_height = num_units_per_shard_height;
+            uint32_t shard_width = num_units_per_shard_width;
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
                 if (core.x == end_core.x && core.y == end_core.y) {
                     shard_height = num_units_per_shard_height_last;
@@ -256,31 +256,25 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
                 curr_idx_h += num_units_per_row * num_units_per_shard_height;
             }
         } else {
+            uint32_t shard_height = num_units_per_shard_height;
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
                 if (core.x == end_core.x && core.y == end_core.y) {
                     shard_height = num_units_per_shard_height_last;
                 }
-            } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
-                if (core.x == end_core.x && core.y == end_core.y) {
-                    shard_width = num_units_per_shard_width_last;
-                }
             } else if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
                 if (rm_orientation) {
-                    if (core.x == end_core.x) {
-                        shard_width = num_units_per_shard_width_last;
-                    }
                     if (core.y == end_core.y) {
                         shard_height = num_units_per_shard_height_last;
                     }
                 } else {
-                    if (core.y == end_core.y) {
-                        shard_width = num_units_per_shard_width_last;
-                    }
                     if (core.x == end_core.x) {
                         shard_height = num_units_per_shard_height_last;
                     }
                 }
             }
+            // A shard can be wider than the logical row (e.g. pool pads channels up to a tile).
+            const uint32_t shard_width = std::min(output_unit_size, num_units_per_row - curr_idx_w);
+
             uint32_t l1_alignment = hal::get_l1_alignment();
             uint32_t padded_shard_width = tt::align(output_unit_size, dst_buffer->alignment());
             if (is_blackhole or is_l1_aligned) {

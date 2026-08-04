@@ -102,10 +102,16 @@ tt::tt_metal::TensorSpec ShardedToInterleavedDeviceOperation::compute_output_spe
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    // Propagate the input's padded_shape so the destination DRAM tensor has matching stick stride.
-    // Without this, when the source shard width exceeds the destination's logical width, the writer
-    // kernel writes more bytes per stick than the destination tensor's stick page can hold, causing
-    // inter-stick byte overlap and data corruption.
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        return tt::tt_metal::TensorSpec(
+            input_tensor.logical_shape(),
+            tt::tt_metal::TensorLayout(
+                args.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+    }
+
+    // TODO: the tiled path still leaks the input's padding: the writer's destination row stride comes
+    // from input.padded_shape(), so the output has to match it or tile ids land on the wrong rows. Fix
+    // mirrors the row-major clamp: stride from the output's tiles-per-row, clamp each core's width.
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
