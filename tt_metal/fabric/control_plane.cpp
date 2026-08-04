@@ -1606,97 +1606,77 @@ bool ControlPlane::express_routing_enabled(MeshId mesh_id) const {
     return this->routing_table_generator_->get_skip_rings(mesh_id) != nullptr;
 }
 
-// Whether the E/W dimension closes into a ring, which is what makes the ordinary X family protected.
-// Only an ordinary end edge counts, for the same reason as the skip axis: a chord could also join the
-// first and last column.
-bool ControlPlane::x_axis_closes(MeshId mesh_id) const {
-    const auto& mesh_graph = this->get_mesh_graph();
-    const int cols = static_cast<int>(mesh_graph.get_mesh_shape(mesh_id)[1]);
-    if (cols <= 2) {
-        return false;
-    }
-    const auto& conn = mesh_graph.get_intra_mesh_connectivity()[*mesh_id];
-    const auto first = mesh_graph.coordinate_to_chip(mesh_id, MeshCoordinate(0, 0));
-    const auto last = mesh_graph.coordinate_to_chip(mesh_id, MeshCoordinate(0, static_cast<std::uint32_t>(cols - 1)));
-    const auto it = conn[first].find(last);
-    return it != conn[first].end() && it->second.port_direction != RoutingDirection::Z;
+// The ring covering `direction` from `local`: the skip decomposition for an axis hop, the ordinary X
+// ring for E/W. Null when that dimension carries no ring.
+const SkipRingTopology* ControlPlane::ring_for_direction(MeshId mesh_id, RoutingDirection direction) const {
+    const bool orthogonal = direction == RoutingDirection::E || direction == RoutingDirection::W;
+    return orthogonal ? this->routing_table_generator_->get_x_rings(mesh_id)
+                      : this->routing_table_generator_->get_skip_rings(mesh_id);
 }
 
-// Row of a node along the skip axis, and the row of the neighbor reached by `direction`.
-// Returns nullopt when that direction has no intra-mesh neighbor.
-std::optional<int> ControlPlane::skip_axis_row_of_neighbor(FabricNodeId local, RoutingDirection direction) const {
-    const auto* rings = this->routing_table_generator_->get_skip_rings(local.mesh_id);
+// Coordinate of `node` along the ring's axis, and of the neighbor reached by `direction`.
+std::optional<int> ControlPlane::ring_coord_of_neighbor(
+    const SkipRingTopology& rings, FabricNodeId local, RoutingDirection direction) const {
     const auto neighbors = this->get_intra_chip_neighbors(local, direction);
-    if (rings == nullptr || neighbors.empty()) {
+    if (neighbors.empty()) {
         return std::nullopt;
     }
-    const auto& mesh_graph = this->get_mesh_graph();
-    return static_cast<int>(mesh_graph.chip_to_coordinate(local.mesh_id, neighbors[0])[rings->axis_dim]);
+    return static_cast<int>(this->get_mesh_graph().chip_to_coordinate(local.mesh_id, neighbors[0])[rings.axis_dim]);
 }
 
 bool ControlPlane::has_protected_ring(FabricNodeId fabric_node_id, RoutingDimension dimension) const {
-    const auto* rings = this->routing_table_generator_->get_skip_rings(fabric_node_id.mesh_id);
-    if (dimension == RoutingDimension::X) {
-        // The ordinary X ring is protected at every row when the X axis closes; there are no chords
-        // on it, so no node is excluded.
-        return this->x_axis_closes(fabric_node_id.mesh_id);
-    }
+    const auto* rings = dimension == RoutingDimension::X
+                            ? this->routing_table_generator_->get_x_rings(fabric_node_id.mesh_id)
+                            : this->routing_table_generator_->get_skip_rings(fabric_node_id.mesh_id);
     if (rings == nullptr) {
         return false;
     }
-    const auto& mesh_graph = this->get_mesh_graph();
-    const int row =
-        static_cast<int>(mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id)[rings->axis_dim]);
-    return !rings->is_leaf(row);
+    const int coord = static_cast<int>(
+        this->get_mesh_graph().chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id)[rings->axis_dim]);
+    return !rings->is_leaf(coord);
 }
 
 bool ControlPlane::is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const {
-    if (egress == RoutingDirection::E || egress == RoutingDirection::W) {
-        return this->x_axis_closes(local.mesh_id);
-    }
-    const auto* rings = this->routing_table_generator_->get_skip_rings(local.mesh_id);
+    const auto* rings = this->ring_for_direction(local.mesh_id, egress);
     if (rings == nullptr) {
         return false;
     }
-    const auto& mesh_graph = this->get_mesh_graph();
-    const int row = static_cast<int>(mesh_graph.chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);
-    const auto peer_row = this->skip_axis_row_of_neighbor(local, egress);
-    if (!peer_row.has_value() || rings->is_leaf(row) || rings->is_leaf(*peer_row)) {
+    const int coord =
+        static_cast<int>(this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);
+    const auto peer = this->ring_coord_of_neighbor(*rings, local, egress);
+    if (!peer.has_value() || rings->is_leaf(coord) || rings->is_leaf(*peer)) {
         return false;
     }
-    if (rings->domain_of[row] != rings->domain_of[*peer_row]) {
+    if (rings->domain_of[coord] != rings->domain_of[*peer]) {
         return false;  // a crossover joins two rings; it belongs to neither
     }
-    return rings->ring_distance(rings->domain_of[row], row, *peer_row) == 1;
+    return rings->ring_distance(rings->domain_of[coord], coord, *peer) == 1;
 }
 
 bool ControlPlane::are_same_directed_ring_edges(
     FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const {
-    const auto* rings = this->routing_table_generator_->get_skip_rings(local.mesh_id);
-    if (rings == nullptr || !this->is_protected_ring_edge(local, ingress) ||
-        !this->is_protected_ring_edge(local, egress)) {
+    const auto* rings = this->ring_for_direction(local.mesh_id, ingress);
+    // Both hops must ride the same ring, so a turn between the two axes is never the same view.
+    if (rings == nullptr || rings != this->ring_for_direction(local.mesh_id, egress) ||
+        !this->is_protected_ring_edge(local, ingress) || !this->is_protected_ring_edge(local, egress)) {
         return false;
     }
-    if (ingress == RoutingDirection::E || ingress == RoutingDirection::W) {
-        // On the chordless X ring, arriving and leaving on opposite sides is the same orientation.
-        return (ingress == RoutingDirection::W && egress == RoutingDirection::E) ||
-               (ingress == RoutingDirection::E && egress == RoutingDirection::W);
-    }
-    const auto& mesh_graph = this->get_mesh_graph();
-    const int row = static_cast<int>(mesh_graph.chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);
-    const auto from_row = this->skip_axis_row_of_neighbor(local, ingress);
-    const auto to_row = this->skip_axis_row_of_neighbor(local, egress);
-    if (!from_row.has_value() || !to_row.has_value()) {
+    const int coord =
+        static_cast<int>(this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);
+    const auto from = this->ring_coord_of_neighbor(*rings, local, ingress);
+    const auto to = this->ring_coord_of_neighbor(*rings, local, egress);
+    if (!from.has_value() || !to.has_value()) {
         return false;
     }
-    const int domain = rings->domain_of[row];
+    const int domain = rings->domain_of[coord];
     const int n = static_cast<int>(rings->forward_cycle[domain].size());
     const auto forward_step = [&](int a, int b) {
         return (rings->pos_in_domain[b] - rings->pos_in_domain[a] + n) % n == 1;
     };
-    // U->V and V->W must advance the same way around the cycle.
-    return (forward_step(*from_row, row) && forward_step(row, *to_row)) ||
-           (forward_step(row, *from_row) && forward_step(*to_row, row));
+    // Arriving from the ingress neighbor and leaving toward the egress one must step the same way
+    // around the cycle: both forward, or both reverse.
+    return (forward_step(*from, coord) && forward_step(coord, *to)) ||
+           (forward_step(coord, *from) && forward_step(*to, coord));
 }
 
 bool ControlPlane::continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const {
@@ -1704,9 +1684,9 @@ bool ControlPlane::continuation_allowed(FabricNodeId local, RoutingDirection ing
     if (rings == nullptr || !this->is_protected_ring_edge(local, egress)) {
         return true;  // nothing protected is being acquired, so nothing to gate
     }
-    const auto& mesh_graph = this->get_mesh_graph();
-    const int row = static_cast<int>(mesh_graph.chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);
-    const auto from_row = this->skip_axis_row_of_neighbor(local, ingress);
+    const int row =
+        static_cast<int>(this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);
+    const auto from_row = this->ring_coord_of_neighbor(*rings, local, ingress);
     if (!from_row.has_value() || rings->is_leaf(row) || rings->is_leaf(*from_row)) {
         return true;  // worker injection, or arrival over a leaf-run or anchor edge
     }
