@@ -95,11 +95,9 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         so the returned KvCaches holds just the one GptOssKVCache at index 0. The engine owns it and
         passes it into every runtime call.
 
-        NOTE: index 0 is a ``GptOssKVCache`` dataclass (holding the k + v tensors), not a single raw
-        tensor as the DeepSeek MLA KVPE cache is. The standalone/PCC path treats kv_caches[0] opaquely
-        and works. The migration path (build_kv_chunk_table) assumes a single primary tensor and is NOT
-        wired for GPT-OSS yet (TODO: split into KvCaches([k, v]) + a GQA table builder if migration is
-        needed)."""
+        Index 0 is a ``GptOssKVCache`` (``.k`` / ``.v`` tensors). Migration uses the multi-config
+        table in ``tt/runners/kv_chunk_table.py`` (config 0..N-1 = k heads, N..2N-1 = v heads).
+        """
         from models.demos.gpt_oss_d_p.tt.attention import allocate_kv_cache
 
         return GptOssKvCaches(
