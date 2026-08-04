@@ -466,6 +466,7 @@ _MATERIAL_GAP_FRAC = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FRAC", "0.03"))
 _MATERIAL_GAP_FLOOR = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FLOOR", "0.05"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
 _STRUCTURAL_RUNGS = {"structural", "gather", "fusion", "fuse", "sparse", "cache", "kv-cache"}
+_LADDER_ORDER = ["grid", "fidelity", "dtype", "shard", "structural", "tt-lang", "cpp"]
 
 _KNOB_ORDER = {
     "memory": ("grid", "dtype", "shard", "fidelity"),
@@ -3718,6 +3719,29 @@ def _fullpipe_ms_now():
 
 
 @mcp.tool()
+def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tuple[int, int]:
+    """(attempts already made, how many are permitted) for this (op, rung).
+
+    Mirrors the policy _op_ladder_status already applies when handing rungs out, so the two cannot
+    drift: knob rungs get _MAX_KNOB_RETRIES, deep rungs get one, and a knob is capped to one once the
+    op has gone deep (perf_mcp.py:1338 -- a second knob search is not worth it after a structural or
+    kernel rung exists). Failed measurements do not count against the allowance; nothing was learned.
+    """
+    rung = _normalise_rung(kernel_kind)
+    matches = [a for a in attempts if _op_match(op_signature, a)]
+    tries = sum(1 for a in matches if _normalise_rung(a.get("kernel_kind")) == rung and not a.get("measurement_failed"))
+    kinds = {(a.get("kernel_kind") or "").lower() for a in matches}
+    went_deeper = bool(kinds & (_STRUCTURAL_RUNGS | {"tt-lang", "cpp", "tp-fracture"}))
+    if rung in _KNOB_RUNG_NAMES:
+        allowed = 1 if went_deeper else _MAX_KNOB_RETRIES
+    else:
+        allowed = 1
+    return tries, allowed
+
+
+_KNOB_RUNG_NAMES = {"grid", "dtype", "fidelity", "shard"}
+
+
 def record_kernel_attempt(
     op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = "", stages_json: str = ""
 ) -> dict:
@@ -3796,6 +3820,48 @@ def record_kernel_attempt(
                 "reused -- one replay, one attempt."
             ),
         }
+    # ENFORCED, not advised: a rung that has already had its attempts does not get another one.
+    #
+    # termination_check hands the agent a next_target, but that is ADVICE and the agent is an LLM
+    # that routinely works something else -- matmul was excluded twice by seeding and measured anyway
+    # in runs 25 and 26; NLPConcatHeads/shard was measured a fourth time with three attempts already
+    # on file. Across gemma-3-12b-it's history that is 30 repeats in 146 attempts (21%), and earlier
+    # 62 in 162 (38%): MatmulDeviceOperation 128x15360x3840/grid three times, 32x15360x3840/shard
+    # three times, BinaryNg/grid three times.
+    #
+    # Refusing HERE is what makes it stick. This is the one choke point every attempt passes through,
+    # and a refused attempt cannot enter history, cannot clear an op, and cannot be banked as a win --
+    # so re-doing a closed rung stops being merely discouraged and becomes unrecordable. The refusal
+    # names the op's remaining rungs so the agent is redirected rather than just blocked.
+    #
+    # Permanence across runs comes free: _load_attempts_all reads archive UNION live, so a rung tried
+    # in a previous optimize of this model is still closed in the next one.
+    if os.environ.get("PERF_MCP_ALLOW_RETRIED_RUNG") != "1":
+        _all = [a for a in _load_attempts_all() if not a.get("measurement_failed")]
+        _tries, _allowed = _rung_allowance(op_signature, kernel_kind, _all)
+        if _tries >= _allowed:
+            _done_kinds = sorted(
+                {
+                    _normalise_rung(a.get("kernel_kind"))
+                    for a in _all
+                    if _op_match(op_signature, a) and a.get("kernel_kind")
+                }
+            )
+            _left = [r for r in _LADDER_ORDER if r not in _done_kinds]
+            return {
+                "recorded": False,
+                "refused": (
+                    "rung %r on %r is CLOSED: %d of %d permitted attempt(s) already recorded"
+                    % (_normalise_rung(kernel_kind), op_signature, _tries, _allowed)
+                ),
+                "already_tried": _done_kinds,
+                "rungs_still_open": _left,
+                "next": (
+                    "work a rung in rungs_still_open, or a different op from termination_check's "
+                    "blocking list. Re-measuring a closed rung cannot be recorded, so it cannot "
+                    "clear the op or bank a win."
+                ),
+            }
     rec = {
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,
