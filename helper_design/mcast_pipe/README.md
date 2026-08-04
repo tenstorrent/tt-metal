@@ -23,37 +23,38 @@ The completed migrations have correctness and JIT-path evidence, but the API
 and migration review is not finished. Newly recorded feedback is intentionally
 outside the old rollout report and is the active work queue.
 
-## Next important work
+## Choosing the next work
 
-1. Resolve the open API feedback before beginning another broad migration pass.
-   API-001 and API-002 may change the CT/RT wire; API-003 changes signal-only
-   handshake semantics. Settling those first avoids immediately revisiting new
-   ports.
-2. Implement API-004's offset-grid `Mcast1D`. Use matmul-2D in1 as the first
-   production migration test and apply MIG-003's semaphore ownership and opaque
-   CT/RT block insertion in the same atomic change.
-3. Address the remaining migration-specific cleanup: MIG-001's Conv CT/RT
-   offset chaining and MIG-002's sort row-start handshake.
-4. Fix PERF-002 using its measured root cause: the per-send completion fence is
-   the dominant SDXL VAE cost, followed by the send hot path not remaining fully
-   inline. PERF-003's SegFormer width-sharded regression still needs equivalent
-   ablation. PERF-001 found no regression for the rectangular SDXL GroupNorm
-   model shape, but still needs deliberate wrapped-group coverage.
+At the start of a new session, review every **Open** item in both feedback logs,
+inspect the current code and tests, and choose the next coherent unit based on
+dependency, risk, and validation cost. The document order and item numbers are
+identifiers, not a priority list. Implemented API entries are retained as
+contract context, not pending work.
 
-No priority below this list should be inferred from the order of historical
-documents or ledger rows.
+Known coupling constrains what can be made atomic without prescribing which
+unit must be selected first:
+
+| Candidate work | Coupling to account for |
+| --- | --- |
+| API-001 | Changes the wire offsets exercised by MIG-001 and MIG-003. |
+| API-002 | May share a self-describing metadata word with API-001, but role enforcement can be designed independently of RT compaction. |
+| API-003 + MIG-002 | Signal-only handshake semantics unblock absorption of sort's row-start readiness gate. |
+| API-004 + MIG-003 | Offset-grid `Mcast1D` uses matmul-2D as its first production test; semaphore ownership and opaque argument insertion should be handled in the same binding change. |
+| MIG-004 | Independent GroupNorm wrapped-shape performance validation. |
+
+An agent should select and state its proposed unit after checking these
+relationships; it should not mechanically follow this table from top to
+bottom.
 
 ## Active review queue
 
 - [`api_feedback.md`](api_feedback.md) — open helper-contract decisions
-  (API-001 through API-004).
+  plus implemented contracts that future migrations must preserve.
 - [`migration_feedback.md`](migration_feedback.md) — concrete robustness issues
-  in existing ports (MIG-001 through MIG-003).
-- [`perf_feedback.md`](perf_feedback.md) — measured performance comparisons and
-  open follow-ups (PERF-001 through PERF-003).
+  and migration-specific validation gaps.
 
-These three files are intake logs. When an item is resolved, update its status
-there and record an implemented API change in `changelog.md`.
+These two files are the active review queue. When an item is resolved, update
+its status there and record an implemented API change in `changelog.md`.
 
 ## Authoritative workflow state
 

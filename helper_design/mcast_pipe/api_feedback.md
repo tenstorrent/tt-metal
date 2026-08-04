@@ -1,10 +1,10 @@
 # `mcast_pipe` API feedback
 
-This is the intake log for review feedback on the current `mcast_pipe` API.
-Record concerns here before they become accepted design changes. Once an item is
-resolved, preserve the outcome here and document any resulting API revision in
-`changelog.md`; use `api_feasibility.md` when the resolution depends on census or
-production-kernel evidence.
+This is the review log for the current `mcast_pipe` API. Record concerns here
+before they become accepted design changes, and retain implemented decisions
+when their contracts are important to future migrations. Document resulting
+API revisions in `changelog.md`; use `api_feasibility.md` when a resolution
+depends on census or production-kernel evidence.
 
 Record issues in individual ports, including brittle CT/RT offset handling, in
 `migration_feedback.md`.
@@ -46,10 +46,10 @@ determines the next runtime-argument offset. Requiring the kernel call site to
 repeat it creates two sources of truth that can disagree.
 
 The value must be compile-time information because it determines
-`ReceiverPipe`'s type and coordinate storage, but it does not need to be a
-template argument supplied by the caller. `get_compile_time_arg_val()` is
-constexpr and the decoder already uses values read from the CT block as
-non-type template arguments.
+`ReceiverPipe`'s type and its `receive(round)` bounds check, but it does not
+need to be a template argument supplied by the caller.
+`get_compile_time_arg_val()` is constexpr and the decoder already uses values
+read from the CT block as non-type template arguments.
 
 ### Candidate wire change
 
@@ -309,3 +309,87 @@ potentially enlarged `all_cores` used to accommodate extra in0-sharded cores.
   sequentially run both transpose orientations and the mapped matmul inventory.
 - If caller-facing semantics change, bump `MCAST_PIPE_API_VERSION` and record
   the result in `changelog.md`.
+
+## API-005 — Make payload source-L1 lifetime explicit per send
+
+- **Date:** 2026-08-04
+- **Status:** Implemented
+- **Surface:** `dataflow_kernel_lib::SenderPipe::send()`
+- **Trigger:** the SDXL VAE Conv migration regressed by 2.730%, prompting review
+  of why `send()` calls `async_writes_flushed()`.
+
+The flush is not required to order multicast data before its linked ready
+signal. It is a source-lifetime guard: it makes `src_l1` safe to overwrite or
+reuse when `send()` returns. Some kernels keep the source immutable through a
+later barrier or kernel completion, so forcing SENT completion after every send
+unnecessarily serializes their hot path.
+
+The accepted API is an opt-in method-template policy:
+
+```cpp
+pipe.send(src_l1, dst_l1, size);  // guarded; source is reusable on return
+pipe.send<SourceL1Guard::CallerManaged>(src_l1, dst_l1, size);
+```
+
+For `CallerManaged`, the caller must keep the payload source unchanged until a
+later NoC completion point. The policy cannot be inferred from the addresses:
+it depends on the caller's CB/storage lifetime. It skips only the remote-only
+SENT fence and does not weaken real-loopback destination completion,
+rotating-Flag signal-source lifetime, or Counter atomic acknowledgement
+requirements.
+
+`MCAST_PIPE_API_VERSION` remains 9 because existing callers retain their exact
+spelling and guarded semantics; only an explicitly opted-in call changes its
+contract.
+
+### Implementation and validation
+
+The height-sharded Conv sender opts into caller-managed lifetime for weights
+and bias. Bias is immutable. Fully buffered weight sources are not reused, and
+the streaming configuration flushes once at the actual CB overwrite boundary.
+The complete send hot path is `FORCE_INLINE`.
+
+With three warmups and 20 real-time-profiler records, the SDXL VAE median
+improved from 28,719.126 ns to 28,161.499 ns, within +0.736% of the 27,955.899
+ns reverse pre-migration baseline. The exact nightly correctness node passed at
+PCC 0.9999325 against 0.985, and the complete helper suite passed 73/73 under
+`--dev`, including loopback and rotating cases.
+
+## API-006 — Let `ReceiverPipe` borrow stable sender coordinates
+
+- **Date:** 2026-08-04
+- **Status:** Implemented
+- **Surface:** `dataflow_kernel_lib::McastArgs::receiver()` and `ReceiverPipe`
+- **Trigger:** the SegFormer width-sharded Conv migration regressed by 1.761%; a
+  rotating `SPAN=18` receiver copied the same 36 RT coordinate words twice
+  during pipe construction.
+
+`McastArgs::receiver()` now constructs `ReceiverPipe` with a non-owning pointer
+directly into its RT coordinate block. `ReceiverPipe` retains that view instead
+of owning another fixed-size array.
+
+This requires an explicit lifetime contract: the coordinate storage must
+outlive the pipe. `McastArgs` satisfies it because `get_arg_addr()` addresses
+the kernel's RT block in L1, which remains allocated and unchanged throughout
+the kernel invocation. A direct `ReceiverPipe` caller must keep its own array
+alive through every pipe use. The helper tests' by-hand receiver does so by
+declaring the array in `kernel_main()` before constructing and using the pipe.
+
+The change does not remove `NUM_SENDERS` from the pipe type: it still provides
+the compile-time bound for `receive(round)` and remains tied to API-001's span
+discussion. It only removes redundant coordinate storage and copies.
+
+`MCAST_PIPE_API_VERSION` remains 9 because existing array arguments decay to
+the accepted pointer and require no call-site rewrite. The ownership/lifetime
+semantics changed and are documented on the constructor.
+
+### Implementation and validation
+
+The complete helper suite passed 73/73 under `--dev`, including rotating spans
+and direct construction. The exact 576-channel SegFormer width-sharded nightly
+node passed at PCC 0.9998909 against 0.985.
+
+Three independent real-time-profiler medians were 38,362.905, 38,377.304, and
+38,414.444 ns. Their median, 38,377.304 ns, is +0.958% versus the immediate
+pre-migration parent at 38,013.031 ns and improves on the migrated 38,682.593
+ns result (+1.761%).

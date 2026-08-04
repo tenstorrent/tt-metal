@@ -3,7 +3,8 @@
 This is the review log for issues found in individual `mcast_pipe` migrations.
 It is separate from `api_feedback.md`: API feedback concerns the helper contract,
 while this file records places where a migration did not use that contract
-robustly or left avoidable coupling to an argument layout.
+robustly, left avoidable coupling to an argument layout, or still needs
+migration-specific performance validation.
 
 ## Status values
 
@@ -195,3 +196,48 @@ must not restate the current helper RT width.
   as the same atomic unit and may repeat the pattern.
 - Rebuild host code, run one compile-focused 1D parametrization first, then run
   the mapped matmul inventory sequentially.
+
+## MIG-004 — Validate GroupNorm's fixed three-rectangle sender path
+
+- **Date:** 2026-08-04
+- **Status:** Open — rectangular SDXL coverage passed; wrapped shapes remain
+- **Host file:**
+  `ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp`
+- **Sender kernels:** `reader_mcast_sender_unary_sharded_gn_v2.cpp` and
+  `welford_reader_mcast_sender_unary_sharded_gn_v2.cpp`
+
+Before migration, the sender always constructed and sent the middle rectangle,
+but sent first/last edge rectangles only when those groups existed. The host
+helper now always emits three `Mcast2D` blocks. A missing edge becomes a
+sender-only singleton, so its `send()` is behaviorally a no-op but still incurs
+pipe construction and a degenerate call/branch path on every reduction value.
+
+The common rectangular case therefore changed from one send call to three,
+with two degenerate calls. A one-edge case changed from two to three. A case
+with both edges still performs three real sends and may benefit from pipe
+construction moving out of the hot loop.
+
+### Existing evidence
+
+On Blackhole p100a at AICLK 800, with three warmups and 20 real-time-profiler
+records per case, baseline `4a1d6a97ca9` and migrated `28356d43846` measured:
+
+| SDXL `(1, 1920, 32, 32)` case | Baseline median (ns) | Migrated median (ns) | Delta |
+| --- | ---: | ---: | ---: |
+| Legacy | 48,593.704 | 48,714.444 | +0.248% |
+| Welford | 261,695.556 | 260,426.667 | -0.485% |
+
+These 8x8 block-sharded cases use rectangular column groups and execute two
+degenerate edge sends. No material regression was observed for that shape.
+
+### Remaining validation
+
+- Identify supported shapes that create one edge rectangle and both edge
+  rectangles; confirm the shape class from host-generated geometry rather than
+  assuming it from tensor dimensions.
+- Compare legacy and Welford kernels against the pre-migration parent with the
+  same device, clock, build, inputs, and real-time-profiler protocol.
+- Preserve separate results for zero-, one-, and two-edge shape classes; do not
+  average them together.
+- If a regression appears, measure construction, degenerate calls, and real
+  sends separately before changing the helper or wire format.
