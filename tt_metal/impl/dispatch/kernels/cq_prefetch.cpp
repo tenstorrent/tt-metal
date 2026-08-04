@@ -25,6 +25,17 @@
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 #include "api/debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
+#endif
+
+// prefetch.cpp defines FABRIC_RELAY exactly when !is_hd(), so this catches an _h/_d build for Quasar.
+// For now, Quasar FD assumes prefetcher and dispatcher share a Tensix (local
+// semaphore credits, iDMA-drain barriers), but this might change with product requirements.
+// If we do need support for remote chips, remove this and add support for local copies using iDMA
+#if defined(ARCH_QUASAR) && defined(FABRIC_RELAY)
+#error "Quasar FD supports the _hd prefetcher only; the split _h/_d variants are not supported yet."
+#endif
 
 #include <array>
 #include <cstdint>
@@ -286,26 +297,73 @@ bool process_cmd(
     PrefetchExecBufState& exec_buf_state);
 
 #ifdef ARCH_QUASAR
-// Same-core copy: L1->L1 memcpy through the L1 uncached alias, used when prefetcher and dispatcher are on
-// the same core.
-FORCE_INLINE void local_copy_bytes(uintptr_t dst_addr, uintptr_t src_addr, uint32_t num_bytes, uint32_t dst_end) {
-    ASSERT((src_addr & 0x3u) == 0);
-    ASSERT((dst_addr & 0x3u) == 0);
+// Temporary instrumentation for iDMA microbenchmarks
+FORCE_INLINE uint32_t rdcycle() {
+    uint32_t c;
+    asm volatile("rdcycle %0" : "=r"(c));
+    return c;
+}
+
+// Init iDMA on Quasar for local L1 to L1 copy from prefetcher to dispatcher
+// Sets up multi-channel iDMA, cmdbuf_0 and trid = 0 is the default
+// All local_copy_bytes_issue() share cmdbuf_0/trid 0, so a single local_copy_bytes_wait() drains
+// everything. Do not issue local copies on another trid/cmdbuf without a matching wait.
+FORCE_INLINE void init_iDMA() {
+    // Setup iDMA
+    overlay::reset_cmdbuf_0();
+    overlay::idma_setup_as_copy_cmdbuf_0(false);
+    overlay::setup_ongoing_cmdbuf_0(
+        /*src_addr_inc_en=*/false,
+        /*dest_addr_inc_en=*/false,
+        /*trid_inc_en=*/false,
+        /*req_vc_inc_en=*/true,
+        /*resp_vc_inc_en=*/false);
+    overlay::setup_wrapping_vcs_cmdbuf_0(
+        /*wr=*/true,
+        /*req_start_vc=*/overlay::CMDBUF_WR_REQ_VC,
+        /*req_end_vc=*/overlay::CMDBUF_WR_REQ_VC + 7);
+    overlay::setup_trids_cmdbuf_0(overlay::CMDBUF_DEF_TRID);
+}
+
+// Same core local L1 to L1 iDMA copies. iDMA bypasses DM caches, so callers must use
+// uncached TL1 access or flush/invalidate cache and call local_copy_bytes_wait() before reusing
+// src or releasing dst.
+FORCE_INLINE void local_copy_bytes_issue(uintptr_t dst_addr, uintptr_t src_addr, uint32_t num_bytes, uint32_t dst_end) {
     ASSERT(dst_addr + num_bytes <= dst_end);
-    volatile uint32_t tt_l1_ptr* dst_ptr = uncached_l1_ptr<uint32_t>(dst_addr);
-    volatile uint32_t tt_l1_ptr* src_ptr = uncached_l1_ptr<uint32_t>(src_addr);
-    const uint32_t words = num_bytes >> 2;
-    for (uint32_t i = 0; i < words; ++i) {
-        dst_ptr[i] = src_ptr[i];
-    }
-    const uint32_t tail_bytes = num_bytes & 0x3u;
-    if (tail_bytes != 0) {
-        volatile uint8_t tt_l1_ptr* dst_tail = uncached_l1_ptr<uint8_t>(dst_addr + (words << 2));
-        volatile uint8_t tt_l1_ptr* src_tail = uncached_l1_ptr<uint8_t>(src_addr + (words << 2));
-        for (uint32_t i = 0; i < tail_bytes; ++i) {
-            dst_tail[i] = src_tail[i];
+    uint32_t issue_start = rdcycle();
+    constexpr uint32_t kChunkThreshold = 2560;  // Empirical sim threshold; recheck on silicon.
+    constexpr uint32_t num_dma_banks = 8;
+    if (num_bytes <= kChunkThreshold) {
+        overlay::set_src_cmdbuf_0(src_addr);
+        overlay::set_dest_cmdbuf_0(dst_addr);
+        overlay::set_len_cmdbuf_0(num_bytes);
+        overlay::issue_cmdbuf_0();
+    } else {
+        const uint32_t base_chunk = num_bytes / num_dma_banks;
+        const uint32_t remainder = num_bytes % num_dma_banks;  // TODO replace with bitmask
+        uint32_t offset = 0;
+        for (uint32_t i = 0; i < num_dma_banks; i++) {
+            const uint32_t this_chunk = base_chunk + (i < remainder ? 1 : 0);
+            overlay::set_src_cmdbuf_0(src_addr + offset);
+            overlay::set_dest_cmdbuf_0(dst_addr + offset);
+            overlay::set_len_cmdbuf_0(this_chunk);
+            overlay::issue_cmdbuf_0();
+            offset += this_chunk;
         }
     }
+    uint32_t issue_time = rdcycle() - issue_start;
+    DEVICE_PRINT("local_copy_bytes_issue num_bytes: {} issue_time: {} \n", num_bytes, issue_time);
+}
+
+// Blocks until every iDMA transfer issued on the selected trid has completed
+FORCE_INLINE void local_copy_bytes_wait(uint32_t trid = overlay::CMDBUF_DEF_TRID) {
+    uint32_t wait_start = rdcycle();
+    uint32_t spin_iters = 0;
+    while (!overlay::idma_acked_cmdbuf_0(trid)) {
+        spin_iters++;
+    }
+    uint32_t wait_time = rdcycle() - wait_start;
+    DEVICE_PRINT("local_copy_bytes_wait spin_iters: {} wait_time: {} \n", spin_iters, wait_time);
 }
 #endif
 
@@ -325,7 +383,7 @@ FORCE_INLINE void write_downstream(
                 get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
                 remaining);
 #elif defined(ARCH_QUASAR)
-            local_copy_bytes(local_downstream_data_ptr, data_ptr, remaining, downstream_end);
+            local_copy_bytes_issue(local_downstream_data_ptr, data_ptr, remaining, downstream_end);
 #else
             cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
                 static_cast<uint32_t>(data_ptr),
@@ -344,7 +402,7 @@ FORCE_INLINE void write_downstream(
         get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
         length);
 #elif defined(ARCH_QUASAR)
-    local_copy_bytes(local_downstream_data_ptr, data_ptr, length, downstream_end);
+    local_copy_bytes_issue(local_downstream_data_ptr, data_ptr, length, downstream_end);
 #else
     cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
         static_cast<uint32_t>(data_ptr),
@@ -841,7 +899,12 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
         RelayInlineState::downstream_noc_encoding);
 
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
+#if defined(ARCH_QUASAR)
+    // Barrier for the write_downstream() call(s) above: on Quasar those are issue-only iDMA transfers
+    local_copy_bytes_wait();
+#else
     noc_async_writes_flushed();
+#endif
     RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
     return cmd->relay_inline.stride;
 }
@@ -865,7 +928,7 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
 #if defined(ARCH_QUASAR)
-        local_copy_bytes(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
+        local_copy_bytes_issue(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
 #else
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
@@ -875,7 +938,7 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
         data_ptr = cmddat_q_base;
     }
 #if defined(ARCH_QUASAR)
-    local_copy_bytes(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
+    local_copy_bytes_issue(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
 #else
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
 #endif
@@ -910,7 +973,7 @@ static uint32_t write_pages_to_dispatcher(
 #if defined(FABRIC_RELAY)
         noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
 #elif defined(ARCH_QUASAR)
-        local_copy_bytes(downstream_data_ptr, scratch_write_addr, last_chunk_size, downstream_cb_end);
+        local_copy_bytes_issue(downstream_data_ptr, scratch_write_addr, last_chunk_size, downstream_cb_end);
 #else
         cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, last_chunk_size);
 #endif
@@ -925,7 +988,7 @@ static uint32_t write_pages_to_dispatcher(
 #if defined(FABRIC_RELAY)
     noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
 #elif defined(ARCH_QUASAR)
-    local_copy_bytes(downstream_data_ptr, scratch_write_addr, amt_to_write, downstream_cb_end);
+    local_copy_bytes_issue(downstream_data_ptr, scratch_write_addr, amt_to_write, downstream_cb_end);
 #else
     cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, amt_to_write);
 #endif
@@ -933,6 +996,39 @@ static uint32_t write_pages_to_dispatcher(
 
     return npages;
 }
+
+#if defined(ARCH_QUASAR)
+// Quasar iDMA writes are issue-only; this helper waits before releasing dispatcher pages
+template <bool final_has_preacquired_page = false>
+static void write_pages_to_dispatcher_and_release_quasar(
+    uint32_t& downstream_data_ptr, uint32_t scratch_write_addr, uint32_t amt_to_write) {
+    constexpr uint32_t first_chunk_threshold = 64 * 1024;
+    constexpr uint32_t first_chunk_size = 32 * 1024;
+
+    // Give the dispatcher an early 32KB chunk, then keep the remaining transfer large
+    if (amt_to_write >= first_chunk_threshold) {
+        uint32_t npages =
+            write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, first_chunk_size);
+        scratch_write_addr += first_chunk_size;
+        amt_to_write -= first_chunk_size;
+
+        local_copy_bytes_wait();
+        DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
+    }
+
+    if constexpr (final_has_preacquired_page) {
+        uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+        downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
+        local_copy_bytes_wait();
+        // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written.
+        DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+    } else {
+        uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+        local_copy_bytes_wait();
+        DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
+    }
+}
+#endif
 
 // This isn't the right way to handle large pages, but expedient for now
 // In the future, break them down into smaller pages...
@@ -977,7 +1073,9 @@ uint32_t process_relay_paged_cmd_large(
     while (read_length != 0) {
         // This ensures that writes from prior iteration are done
         // TODO(pgk); we can do better on WH w/ tagging
+#if !defined(ARCH_QUASAR)
         noc_async_writes_flushed();
+#endif
 
         db_toggle ^= 1;
         scratch_read_addr = scratch_db_top[db_toggle];
@@ -1016,9 +1114,12 @@ uint32_t process_relay_paged_cmd_large(
         }
 
         write_length -= amt_to_write;
+#if defined(ARCH_QUASAR)
+        write_pages_to_dispatcher_and_release_quasar(downstream_data_ptr, scratch_write_addr, amt_to_write);
+#else
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
         DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
-
+#endif
         // TODO(pgk); we can do better on WH w/ tagging
         noc_async_read_barrier();
     }
@@ -1027,11 +1128,14 @@ uint32_t process_relay_paged_cmd_large(
     if (write_length > 0) {
         scratch_write_addr = scratch_db_top[db_toggle];
         uint32_t amt_to_write = write_length;
+#if defined(ARCH_QUASAR)
+        write_pages_to_dispatcher_and_release_quasar<true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+#else
         uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-
         downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
         // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
         DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+#endif
     } else {
         downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
         DispatchRelayInlineState::cb_writer.release_pages(1, downstream_data_ptr);
@@ -1062,7 +1166,10 @@ uint32_t process_relay_paged_cmd_large(
 template <bool is_dram>
 uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_ptr, uint32_t page_id) {
     // This ensures that a previous cmd using the scratch buf has finished
+    // Quasar helper waits for iDMA before releasing dispatcher pages.
+#if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
+#endif
 
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
     uint32_t base_addr = cmd->relay_paged.base_addr;
@@ -1110,7 +1217,9 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
         while (read_length != 0) {
             // This ensures that writes from prior iteration are done
             // TODO(pgk); we can do better on WH w/ tagging
+#if !defined(ARCH_QUASAR)
             noc_async_writes_flushed();
+#endif
 
             db_toggle ^= 1;
             scratch_read_addr = scratch_db_top[db_toggle];
@@ -1129,9 +1238,13 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
             }
 
             // Third step - write from DB
+#if defined(ARCH_QUASAR)
+            write_pages_to_dispatcher_and_release_quasar(downstream_data_ptr, scratch_write_addr, amt_to_write);
+#else
             uint32_t npages =
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
             DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
+#endif
 
             read_length -= amt_read;
 
@@ -1146,13 +1259,14 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     ASSERT(length_adjust < page_size);
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_read - length_adjust;
+#if defined(ARCH_QUASAR)
+    write_pages_to_dispatcher_and_release_quasar<true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+#else
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
-
+#endif
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
@@ -1160,7 +1274,10 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
 // embedded relay_paged cmds
 void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cache) {
     // This ensures that a previous cmd using the scratch buf has finished
+    // Quasar helper waits for iDMA before releasing dispatcher pages.
+#if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
+#endif
 
     // First step - read multiple sub_cmds worth into DB0
     CQPrefetchRelayPagedPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayPagedPackedSubCmd tt_l1_ptr*)(l1_cache);
@@ -1209,7 +1326,10 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cac
     while (total_length != 0) {
         // This ensures that writes from prior iteration are done
         // TODO(pgk); we can do better on WH w/ tagging
+        // Quasar helper waits for iDMA before releasing dispatcher pages.
+#if !defined(ARCH_QUASAR)
         noc_async_writes_flushed();
+#endif
 
         db_toggle ^= 1;
         scratch_read_addr = scratch_db_top[db_toggle];
@@ -1250,9 +1370,12 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cac
         }
 
         // Third step - write from DB
+#if defined(ARCH_QUASAR)
+        write_pages_to_dispatcher_and_release_quasar(downstream_data_ptr, scratch_write_addr, amt_to_write);
+#else
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
         DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
-
+#endif
         total_length -= amt_read;
 
         // TODO(pgk); we can do better on WH w/ tagging
@@ -1262,12 +1385,14 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cac
     // Third step - write from DB
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_read;
+#if defined(ARCH_QUASAR)
+    write_pages_to_dispatcher_and_release_quasar<true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+#else
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+#endif
 }
 
 template <bool cmddat_wrap_enable>
@@ -1341,7 +1466,10 @@ void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t d
 
 uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_ptr) {
     // This ensures that a previous cmd using the scratch buf has finished
+    // Quasar helper waits for iDMA before releasing dispatcher pages.
+#if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
+#endif
 
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmdLarge>(cmd_ptr);
     uint32_t noc_xy_addr = cmd->relay_linear.noc_xy_addr;
@@ -1374,8 +1502,10 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
         uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
         wlength -= read_length;
         while (read_length != 0) {
+            // Quasar helper waits for iDMA before releasing dispatcher pages.
+#if !defined(ARCH_QUASAR)
             noc_async_writes_flushed();
-
+#endif
             db_toggle ^= 1;
             scratch_read_addr = scratch_db_top[db_toggle];
             scratch_write_addr = scratch_db_top[db_toggle ^ 1];
@@ -1388,10 +1518,13 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
 
             noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle ^ 1]);
 
+#if defined(ARCH_QUASAR)
+            write_pages_to_dispatcher_and_release_quasar(downstream_data_ptr, scratch_write_addr, amt_to_write);
+#else
             uint32_t npages =
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-
             DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
+#endif
 
             read_length -= amt_to_read;
         }
@@ -1401,12 +1534,14 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
 
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
+#if defined(ARCH_QUASAR)
+    write_pages_to_dispatcher_and_release_quasar<true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+#else
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+#endif
     noc_async_read_set_trid(0U);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -1578,7 +1713,13 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
         cmd_ptr += remaining_stride;
 
         // fetch more
+        // on Quasar: Barrier for the write_downstream() call just above: paged_read_into_cmddat_q() below refills the
+        // same cmddat_q region that call just read from
+#if defined(ARCH_QUASAR)
+        local_copy_bytes_wait();
+#else
         noc_async_writes_flushed(RelayInlineState::downstream_noc_index);
+#endif
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
         data_ptr = cmd_ptr;
         remaining = exec_buf_state.length;
@@ -1591,7 +1732,11 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
         RelayInlineState::downstream_cb_end_addr,
         RelayInlineState::downstream_noc_encoding);
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
+#if defined(ARCH_QUASAR)
+    local_copy_bytes_wait();
+#else
     noc_async_writes_flushed(RelayInlineState::downstream_noc_index);
+#endif
     RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
 
     return stride;
@@ -1623,7 +1768,7 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
 #elif defined(ARCH_QUASAR)
-        local_copy_bytes(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
+        local_copy_bytes_issue(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
 #else
         cq_noc_async_write_with_state_any_len<true, true>(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
@@ -1635,7 +1780,11 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
         cmd_ptr += remaining_stride;
 
         // fetch more
+#if defined(ARCH_QUASAR)
+        local_copy_bytes_wait();
+#else
         noc_async_writes_flushed();
+#endif
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
         data_ptr = cmd_ptr;
         remaining = exec_buf_state.length;
@@ -1645,7 +1794,8 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 #if defined(FABRIC_RELAY)
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
 #elif defined(ARCH_QUASAR)
-    local_copy_bytes(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
+    // No wait here, matching the BH/WH no-flush contract above
+    local_copy_bytes_issue(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
 #else
     cq_noc_async_write_with_state_any_len<true, true>(
         static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
@@ -1754,7 +1904,11 @@ uint32_t process_exec_buf_cmd(
 
 uint32_t process_paged_to_ringbuffer_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_ptr) {
     // This ensures that a previous cmd using the ringbuffer have completed.
+    // No iDMA wait is needed here: process_relay_ringbuffer_sub_cmds() waits for each local copy before releasing
+    // its dispatcher pages, so no prior transfer can still be reading the ring buffer when it is refilled below.
+#if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
+#endif
 
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
     uint32_t start_page = cmd->paged_to_ringbuffer.start_page;
@@ -1826,18 +1980,24 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
         uint32_t start = ringbuffer_start + sub_cmd->start;
         uint32_t length = sub_cmd->length;
 
+#if defined(ARCH_QUASAR)
+        write_pages_to_dispatcher_and_release_quasar(downstream_data_ptr, start, length);
+#else
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, start, length);
-
         DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
+#endif
         sub_cmd++;
     }
     uint32_t start = ringbuffer_start + sub_cmd->start;
     uint32_t length = sub_cmd->length;
+#if defined(ARCH_QUASAR)
+    write_pages_to_dispatcher_and_release_quasar<true>(downstream_data_ptr, start, length);
+#else
     uint32_t npages = write_pages_to_dispatcher<1, false>(downstream_data_ptr, start, length);
-
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+#endif
 }
 
 template <bool cmddat_wrap_enable>
@@ -1892,7 +2052,10 @@ static uint32_t process_exec_buf_relay_ringbuffer_cmd(
 
 void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_length, uint32_t* l1_cache) {
     // This ensures that a previous cmd using the scratch buf has finished
+    // Quasar helper waits for iDMA before releasing dispatcher pages.
+#if !defined(ARCH_QUASAR)
     noc_async_writes_flushed();
+#endif
 
     // First step - read multiple sub_cmds worth into DB0
     CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr*)(l1_cache);
@@ -1941,7 +2104,9 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
     while (total_length != 0) {
         // This ensures that writes from prior iteration are done
         // TODO(pgk); we can do better on WH w/ tagging
+#if !defined(ARCH_QUASAR)
         noc_async_writes_flushed();
+#endif
 
         scratch_read_addr = scratch_read_start_addr;
         uint32_t scratch_write_addr = scratch_write_start_addr;
@@ -1953,8 +2118,12 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
         fill_scratch_db();
 
         // Third step - write from DB
+#if defined(ARCH_QUASAR)
+        write_pages_to_dispatcher_and_release_quasar(downstream_data_ptr, scratch_write_addr, amt_to_write);
+#else
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
         DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
+#endif
 
         total_length -= amt_read;
 
@@ -1964,12 +2133,14 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
 
     // Third step - write from DB
     uint32_t amt_to_write = amt_read;
+#if defined(ARCH_QUASAR)
+    write_pages_to_dispatcher_and_release_quasar<true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
+#else
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
-
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+#endif
 }
 
 template <bool cmddat_wrap_enable>
@@ -2478,6 +2649,7 @@ static uintptr_t process_relay_inline_all(uintptr_t data_ptr, uintptr_t fence, b
 CBReaderWithManualRelease<my_upstream_cb_sem_id, cmddat_q_log_page_size, cmddat_q_base, cmddat_q_end> h_cmddat_q_reader;
 
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
+// Quasar only builds the fused _hd path today; this _d-only path does not need an iDMA drain.
 inline void relay_raw_data_to_downstream(uintptr_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
     // In initial return, we return the header bytes as well
     uint32_t initial_data_to_return = sizeof(CQPrefetchHToPrefetchDHeader);
@@ -2743,6 +2915,9 @@ void kernel_main_hd() {
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0);
+#else
+    // Setup iDMA
+    init_iDMA();
 #endif
 
     while (!done) {
