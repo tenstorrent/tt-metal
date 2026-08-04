@@ -11,6 +11,7 @@ portion (head_dim=64).
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 
 def compute_rope_freqs(head_dim: int, max_seq_len: int, theta: float = 10_000_000.0):
@@ -230,7 +231,7 @@ class Qwen36RoPESetup:
         structurally cannot represent, so it uses the per-request table staged by
         build_request_rope(). It is unreachable for text-only inference.
         """
-        if self._req_cos is None:
+        if self._req_cos is None and not is_blackhole():
             from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
 
             tbl_cos, tbl_sin = _rope_dev_tables(self.device, self.head_dim, start + length, self.theta)
