@@ -24,6 +24,15 @@
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+// reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
+// input CB wait. Quasar has no such handshake, so it stays disabled there and the normal CB
+// synchronization is kept (see can_reduce_trigger below).
+#ifdef ARCH_QUASAR
+constexpr bool reduce_trigger_supported = false;
+#else
+constexpr bool reduce_trigger_supported = true;
+#endif
+
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
@@ -1999,8 +2008,8 @@ void sdpa_standard_v2(
         // reduce_trigger enables early reduce start via semaphore signaling from packer to unpacker.
         // The unpack MOP is split in half (block_ct_dim / 2), so active_Sk must be even,
         // and we need >1 subblock so the semaphore fires before the reduce's second half.
-        constexpr bool can_reduce_trigger =
-            (Sk_chunk_t % qkt_subblock_w == 0) && (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
+        constexpr bool can_reduce_trigger = reduce_trigger_supported && (Sk_chunk_t % qkt_subblock_w == 0) &&
+                                            (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
 
         // Pre-compute subblock width: compile-time for full chunks, hoisted for padded last chunk.
         constexpr std::uint32_t full_sbw = qkt_subblock_w;
@@ -2010,7 +2019,8 @@ void sdpa_standard_v2(
 
         // With largest_factor_le, padded chunks also have evenly-dividing subblocks,
         // so reduce_trigger can be enabled when the same constraints hold for last_chunk_Sk.
-        constexpr bool can_reduce_trigger_padded = (padded_k_tiles_inner > 0) && (last_chunk_Sk % padded_sbw == 0) &&
+        constexpr bool can_reduce_trigger_padded = reduce_trigger_supported && (padded_k_tiles_inner > 0) &&
+                                                   (last_chunk_Sk % padded_sbw == 0) &&
                                                    (last_chunk_Sk / padded_sbw > 1) && (last_chunk_Sk % 2 == 0);
 
         // Optional zigzag Q-chunk remap plus per-Q K-chunk bounds. Causal uses the
@@ -2353,8 +2363,8 @@ void sdpa_ring_v2(
 
     // reduce_trigger enables early reduce start via semaphore signaling from packer to unpacker.
     // All conditions are compile-time except the active_Sk == Sk_chunk_t guard (padded chunks).
-    constexpr bool can_reduce_trigger =
-        (Sk_chunk_t % qkt_subblock_w == 0) && (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
+    constexpr bool can_reduce_trigger = reduce_trigger_supported && (Sk_chunk_t % qkt_subblock_w == 0) &&
+                                        (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
 
     // Subblock width for the non-padded (common) case — compile-time constant.
     constexpr std::uint32_t full_sbw = qkt_subblock_w;
