@@ -113,6 +113,37 @@ def open_device(device_id=0):
 # long gen, 512-bucket decode -- the last is a pure cache HIT and hangs. tt_transformers never saw
 # it because it uses the same mixed precision we now do.
 #
+# ROOT-CAUSED 2026-08-04 with TT_METAL_WATCHER=10, which turns the hang into a clean abort with a
+# device-side dump instead of a wedged card. Investigating this no longer costs a board reset.
+#
+#   EXACT OP     ttnn_voxtral_codec.py:589 -- the codec's OUTPUT projection,
+#                _conv1d(x, "out", 1024, 240, kernel=7, stride=1, "reflect")  at L=4102
+#   EXACT KERNEL ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/
+#                halo_gather.cpp   (stuck on both BRISC and NCRISC)
+#   EXACT FAULT  NCRISC on noc1 attempts a unicast write of 13,897,728 bytes from local
+#                L1[0x15f0000] to virtual core 18-52 [addr=0x008ae800] -- a core that does not
+#                exist. 13,897,728 = 3393 x 4096, and 4096 B is exactly one input row (1024 fp32
+#                channels), so it is trying to push 3393 rows in ONE NOC transaction to nowhere.
+#
+# IT IS NOT A DEADLOCK. It is an out-of-range NOC write with an implausible size, i.e. a corrupted
+# descriptor -- which is why memory looked flat and why no amount of program-cache or leak hunting
+# found it.
+#
+# THE TRIGGER IS THE SECOND EXECUTION OF THAT EXACT SHAPE, a pure program-cache hit. Case 2 runs
+# L=4102 and completes; case 3's byte-identical call faults. That is precisely the "pure cache HIT"
+# in the minimal repro below, now with a named kernel.
+#
+# WHY BLOCK 1's w2 IS INVOLVED AT ALL: it is not a Block 1 bug. w2's dtype is simply the biggest
+# lever we have on DRAM allocation ADDRESSES -- BFP8 frees ~690 MB across 26 layers, shifting every
+# later allocation including the codec's conv buffers. So this is a latent address-dependent bug in
+# ttnn's conv halo path that w2 happens to expose. Anything else that moves allocations by enough
+# would do the same, which is why the five conditions below looked so arbitrary.
+#
+# UNTESTED IDEAS for dodging it, if upstream is slow: we already pad manually and pass padding=0, so
+# a conv_config that avoids the halo path may exist; or the output projection could be expressed
+# without conv1d at all, since a k=7 stride-1 conv over a pre-padded tensor is a sliding-window
+# matmul. Worth ~2.5 ms/frame (w2 in BFP8) if either works.
+#
 # Measured and ELIMINATED, so none of these get retried: memory (flat, 8 GB free at the hang);
 # program-cache COUNT (576 entries over 4 buckets completes, while we died at 310-341 and
 # tt_transformers lived at 329); Block 3 length/content; a Block 1 leak (1400 steps clean); and

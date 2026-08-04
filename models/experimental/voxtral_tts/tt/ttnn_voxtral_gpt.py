@@ -264,8 +264,14 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
 # /home/software/syseng/wh/tt-smi and the command is `-wr 0` (this vintage has no plain `-r`).
 # open_device simply hangs until you do it.
 #
-# The old five-condition repro, kept because it is still the cheapest way to test a CHANGE that is
-# meant to fix this: short gen + 128-bucket codec decode, then two long gens that both land in the
+# ROOT-CAUSED, AND IT IS NOT A BLOCK 1 BUG -- full dump in ttnn_voxtral_pipeline. It is an
+# out-of-range NOC write inside ttnn's conv `halo_gather` kernel, on the SECOND execution of the
+# CODEC's output-projection conv (a program-cache hit). w2's dtype only matters because it shifts
+# DRAM allocation addresses by ~690 MB across 26 layers. So w2 in BFP8 -- worth 2.5 ms/frame -- is
+# blocked on a ttnn conv bug, not on anything about this weight. Run with TT_METAL_WATCHER=10 and
+# the hang becomes a clean abort with the kernel named, instead of a wedged card.
+#
+# The old five-condition repro, still the cheapest way to test a CHANGE meant to fix this: short gen + 128-bucket codec decode, then two long gens that both land in the
 # 512 bucket, the second a pure cache HIT. The shipped config clears it and the full 15-case set. Full diagnosis in ttnn_voxtral_pipeline.
 #
 # Judge any change here on MEAN and P90 worst-sample, never on max: max is an order statistic and

@@ -1008,6 +1008,47 @@ wall**, and no sharding of a 3.9 GB working set changes that.
 Every hand-tuned config tried in this port has lost, and in each case the plain one was already at
 the ceiling (see also the 169-vs-193 GB/s program-config result in ttnn_voxtral_gpt).
 
+
+### 6.12 — the w2 hang, root-caused
+
+Found with `TT_METAL_WATCHER=10`, which converts the hang into a clean abort plus a device-side dump.
+**Investigating this no longer costs a board reset**, which is what made it tractable at all.
+
+| | |
+|---|---|
+| **exact op** | `ttnn_voxtral_codec.py:589` — the codec's OUTPUT projection, `_conv1d(x, "out", 1024, 240, kernel=7, stride=1, "reflect")` at L=4102 |
+| **exact kernel** | `ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp`, stuck on both BRISC and NCRISC |
+| **exact fault** | NCRISC on noc1 attempts a **unicast write of 13,897,728 bytes** from local `L1[0x15f0000]` to virtual core **18-52** `[addr=0x008ae800]` — a core that does not exist |
+| **trigger** | the SECOND execution of that exact shape, i.e. a pure program-cache hit |
+
+`13,897,728 = 3393 × 4096`, and 4096 B is exactly one input row (1024 fp32 channels). So it is trying
+to push **3393 rows in a single NOC transaction, to nowhere.**
+
+**It is not a deadlock** — it is a corrupted descriptor producing an out-of-range write. That is why
+memory looked flat with 8 GB free, and why program-cache counting and leak hunting never found it.
+
+**The trigger is the cache hit, confirmed by the conv trace.** Case 2 runs `out` at L=4102 and
+completes; case 3's byte-identical call faults. That is exactly the "pure cache HIT" of the old
+five-condition repro, now with a kernel name attached.
+
+**And it is not a Block 1 bug.** w2's dtype matters only because it is the biggest lever we have on
+DRAM allocation ADDRESSES — BFP8 frees ~690 MB across 26 layers, shifting every later allocation
+including the codec's conv buffers. This is a latent address-dependent bug in ttnn's conv halo path
+that w2 happens to expose; anything moving allocations by enough would do the same. That explains
+why the five conditions looked so arbitrary: they are just a recipe for reaching a bad address
+twice.
+
+**Two of my own earlier claims were wrong and are corrected here.** §6.x said the hang "now fires
+earlier and harder — during the FIRST case, with no pipeline output at all". It does not: Python's
+stdout is block-buffered and the abort discards it, so the absence of output meant nothing. It hangs
+in the THIRD utterance's codec decode, exactly where the original diagnosis put it. A single-case
+run completes cleanly, consistent with needing ≥2 buckets.
+
+**Worth 2.5 ms/frame** if it can be dodged or fixed. Untested ideas: we already pad manually and
+pass `padding=0`, so a `conv_config` avoiding the halo path may exist; or the output projection could
+skip `conv1d` entirely, since a k=7 stride-1 conv over a pre-padded tensor is a sliding-window
+matmul. Otherwise this is an upstream report, and it now has everything needed to file one.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
