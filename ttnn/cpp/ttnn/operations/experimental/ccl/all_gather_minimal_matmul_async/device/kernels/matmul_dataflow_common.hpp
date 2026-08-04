@@ -769,16 +769,13 @@ FORCE_INLINE void write_tile_to_chunk(
  *
  * Note: Unlike write_block_sync, this function takes a tuple of accessors, rather than a single accessor.
  */
-template <
-    uint32_t M_block_tiles,
-    uint32_t N_block_tiles,
-    uint32_t N_chunks,
-    uint32_t N_tiles_per_chunk,
-    typename... Accessors>
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t N_chunks, typename... Accessors>
 void write_block_sync_split(
     Noc noc,
     const std::tuple<Accessors...>& accessors,
     const TensorShape2D& chunk_shape,
+    const uint32_t (&chunk_tile_widths)[N_chunks],
+    const uint32_t (&chunk_tile_offsets)[N_chunks + 1],
     uint32_t read_ptr,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
@@ -788,11 +785,14 @@ void write_block_sync_split(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
-    const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
-    const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
+    // Scan the prefix-sum table for the chunk holding d1_start (widths may differ; N_chunks is 2-8).
+    uint32_t chunk_idx_start = 0;
+    while (chunk_idx_start + 1 < N_chunks && d1_start >= chunk_tile_offsets[chunk_idx_start + 1]) {
+        chunk_idx_start++;
+    }
+    const uint32_t tile_idx_in_chunk_start = d1_start - chunk_tile_offsets[chunk_idx_start];
 
     for (uint32_t i = d0_start; i < d0_end; i++) {
-        // Assumes that all chunks have same number of tiles on the M-axis
         if (i >= chunk_shape.logical_d0) {
             break;
         }
@@ -802,7 +802,7 @@ void write_block_sync_split(
 
         for (uint32_t j = d1_start; j < d1_end; j++, tile_idx_in_chunk++) {
             // If we've reached the end of the current chunk, move to the next one
-            if (tile_idx_in_chunk >= chunk_shape.logical_d1) {
+            if (chunk_idx < N_chunks && tile_idx_in_chunk >= chunk_tile_widths[chunk_idx]) {
                 tile_idx_in_chunk = 0;
                 chunk_idx++;  // Move to next chunk; if chunk is past last one then next branch will skip padding
             }
@@ -813,7 +813,8 @@ void write_block_sync_split(
                 continue;
             }
 
-            uint32_t tile_id_in_chunk = i * chunk_shape.logical_d1 + tile_idx_in_chunk;
+            // Row stride is this chunk's own width (a shared width would scatter later chunks).
+            uint32_t tile_id_in_chunk = i * chunk_tile_widths[chunk_idx] + tile_idx_in_chunk;
 
             // Compile-time dispatch preserving concrete types
             write_tile_to_chunk(
@@ -836,24 +837,25 @@ void write_block_sync_split(
  * Variadic write method for split operation with N output tensors.
  * Takes the tuple directly, preserving concrete TensorAccessor<DSpec> types for noc.async_write.
  */
-template <
-    uint32_t M_block_tiles,
-    uint32_t N_block_tiles,
-    uint32_t N_chunks,
-    uint32_t N_tiles_per_chunk,
-    typename... Accessors>
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t N_chunks, typename... Accessors>
 void write_block_sync_granular_split(
     Noc noc,
     const std::tuple<Accessors...>& accessors,
     const TensorShape2D& chunk_shape,
+    const uint32_t (&chunk_tile_widths)[N_chunks],
+    const uint32_t (&chunk_tile_offsets)[N_chunks + 1],
     CircularBuffer cb_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
-    const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
-    const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
+    // Scan the prefix-sum table for the chunk containing d1_start (widths may differ per chunk).
+    uint32_t chunk_idx_start = 0;
+    while (chunk_idx_start + 1 < N_chunks && d1_start >= chunk_tile_offsets[chunk_idx_start + 1]) {
+        chunk_idx_start++;
+    }
+    const uint32_t tile_idx_in_chunk_start = d1_start - chunk_tile_offsets[chunk_idx_start];
 
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
         cb_out.wait_front(N_block_tiles);
@@ -866,7 +868,7 @@ void write_block_sync_granular_split(
 
             for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++, tile_idx_in_chunk++) {
                 // If we've reached the end of the current chunk, move to the next one
-                if (tile_idx_in_chunk >= chunk_shape.logical_d1) {
+                if (chunk_idx < N_chunks && tile_idx_in_chunk >= chunk_tile_widths[chunk_idx]) {
                     tile_idx_in_chunk = 0;
                     chunk_idx++;  // Move to next chunk; if chunk is past last one then next branch will skip padding
                 }
@@ -875,7 +877,7 @@ void write_block_sync_granular_split(
                     break;
                 }
 
-                uint32_t tile_id = m_tile * chunk_shape.logical_d1 + tile_idx_in_chunk;
+                uint32_t tile_id = m_tile * chunk_tile_widths[chunk_idx] + tile_idx_in_chunk;
                 // Compile-time dispatch preserving concrete types
                 write_tile_to_chunk(
                     noc,
