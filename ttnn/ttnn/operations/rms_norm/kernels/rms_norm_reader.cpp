@@ -27,9 +27,16 @@
 //   dataflow tilize helper covers neither whole-tile interleaved reads nor the
 //   gamma slot (op_design.md section 6.1).
 //
+// Refinement 2b -- the BAND scheme (ROW_MAJOR shard cutting the WIDTH axis).
+// Such a shard's page is a row SEGMENT, so no accessor read can reach a row.
+// Instead each core stages the band it already holds out of its OWN L1, and
+// joins the unchanged cross-core combine: sum(x^2) over a row is the sum over the
+// bands however the bands are cut, so a band need not align to a tile column.
+// See _plan_band in rms_norm_program_descriptor.py.
+//
 // One raw-API addition beyond the design's table: a ONE-TIME zero of the whole
 // cb_input_sticks ring at boot, via noc.async_write_zeros (the device zero
-// API), gated on PARTIAL_W != 0.  Reason (R3): the L1 pad lanes of a staged
+// API), gated on STAGE_ZERO.  Reason (R3): the L1 pad lanes of a staged
 // ROW_MAJOR row are never written by a stick read, so whatever L1 garbage was
 // there survives into the reduce.  The partial scaler multiplies pad lanes by
 // zero, and inf*0 / nan*0 = NaN would poison the whole row.  Zeroing the ring
@@ -66,7 +73,11 @@ void kernel_main() {
     constexpr uint32_t GAMMA_IS_RM = get_compile_time_arg_val(7);
     constexpr uint32_t ELEM_BYTES = get_compile_time_arg_val(8);
     constexpr uint32_t GAMMA_ELEM_BYTES = get_compile_time_arg_val(9);
-    constexpr uint32_t R_RM = get_compile_time_arg_val(10);
+    // Total ROW_MAJOR sticks in the tensor.  The per-core stick range now comes in
+    // as a runtime extent (stick_base / stick_count), which is what the BAND scheme
+    // needs (its rows do not start on a tile boundary); R_RM is kept as the
+    // whole-tensor figure the CT-arg contract documents.
+    [[maybe_unused]] constexpr uint32_t R_RM = get_compile_time_arg_val(10);
     constexpr uint32_t W_ELEMS = get_compile_time_arg_val(11);
     constexpr uint32_t REDUCE_ACC_VIA_ADD = get_compile_time_arg_val(12);
     // Refinement 2: NATIVE_IN == 1 means cb_input_tiles is BACKED ON THE INPUT
@@ -75,11 +86,28 @@ void kernel_main() {
     // PUBLISHES the pages once so cb_wait_front can see them.
     constexpr uint32_t NATIVE_IN = get_compile_time_arg_val(13);
     constexpr uint32_t IN_SHARD_PAGES = get_compile_time_arg_val(14);
-    constexpr auto x_args = TensorAccessorArgs<15>();
+    // Refinement 2b: BAND == 1 means this core stages x out of its OWN ROW_MAJOR
+    // shard -- an RM shard that cuts the WIDTH axis, whose page is a row SEGMENT,
+    // so the accessor cannot reach a row.  The core's shard IS its band (every
+    // stick it owns x `shard_w` elements) at x_addr + local_stick * SHARD_ROW_BYTES,
+    // and the cross-core combine sums the group's per-row partials elementwise, so
+    // the band need not start or end on a tile column.
+    constexpr uint32_t BAND = get_compile_time_arg_val(15);
+    constexpr uint32_t SHARD_ROW_BYTES = get_compile_time_arg_val(16);
+    // Whether the RM staging ring must be zeroed at boot (some staged stick is
+    // narrower than the ring's padded row).  On the whole-row schemes this is
+    // PARTIAL_W != 0; on the BAND scheme it is a band that does not fill its tile
+    // columns, and there it REPLACES the reduce mask entirely.
+    constexpr uint32_t STAGE_ZERO = get_compile_time_arg_val(17);
+    constexpr auto x_args = TensorAccessorArgs<18>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr bool NATIVE_X = (NATIVE_IN != 0);
+    constexpr bool BAND_X = (BAND != 0);
     constexpr bool RM = (IS_TILE == 0);
+    static_assert(!BAND_X || IS_TILE == 0, "rms_norm: the BAND scheme is ROW_MAJOR-only");
+    static_assert(
+        !BAND_X || PARTIAL_W == 0, "rms_norm: the BAND scheme masks pad lanes by zero-staging, not by scaler");
     constexpr bool HAS_G = (HAS_GAMMA != 0);
     constexpr bool G_RM = (GAMMA_IS_RM != 0);
     // X_RESIDENT == GAMMA_RESIDENT == (NUM_W_CHUNKS == 1): one source of truth.
@@ -102,6 +130,14 @@ void kernel_main() {
     // (0, WT_CHUNK); under a width split it is the core's shard column range.
     const uint32_t w_start = get_arg_val<uint32_t>(4);
     const uint32_t w_real = get_arg_val<uint32_t>(5);  // REAL width tiles (<= WT_CHUNK)
+    // The ROW_MAJOR view of the SAME slice: sticks and width ELEMENTS.  On the
+    // tile-axis schemes these are derived host-side from (row_start, w_start) so
+    // the two views cannot drift (_work_tile_axis); on the BAND scheme they are
+    // the primary extents and are not tile-aligned on either axis.
+    const uint32_t stick_base = get_arg_val<uint32_t>(6);    // first stick this core owns
+    const uint32_t stick_count = get_arg_val<uint32_t>(7);   // sticks owned
+    const uint32_t w_off_elems = get_arg_val<uint32_t>(8);   // first width element owned
+    const uint32_t w_real_elems = get_arg_val<uint32_t>(9);  // REAL width elements owned
 
     // An INACTIVE core: it joined the program only so the width combine's stat
     // multicast lands in a cb_row_final this program owns (a width shard grid need
@@ -145,7 +181,7 @@ void kernel_main() {
     }
 
     // ---- boot: establish the pad-lane invariant on the RM staging ring ----
-    if constexpr (RM && PARTIAL_W != 0) {
+    if constexpr (RM && STAGE_ZERO != 0) {
         Noc noc;
         DataflowBuffer stage_dfb(cb_input_sticks);
         noc.async_write_zeros(stage_dfb, stage_dfb.get_total_size_bytes());
@@ -165,6 +201,14 @@ void kernel_main() {
                 // gamma is a single stick; row 0 of the staged tile-row is the
                 // only row BroadcastDim::Row reads.
                 constexpr uint32_t G_TILE_COL_BYTES = TILE_DIM * GAMMA_ELEM_BYTES;
+                // TILE-COLUMN aligned by construction -- which is load-bearing, not
+                // incidental: a DRAM read whose source offset is not 64-byte aligned
+                // is silently truncated down to the alignment (measured: bands 1..3
+                // of an 8-element shard all received gamma[0..8)).  That is exactly
+                // why the BAND scheme stages into the GLOBAL tile frame (see
+                // band_delta_bytes) rather than at the band's own byte offset: it
+                // keeps every gamma fetch on a tile column, for x's dtype AND
+                // gamma's, whatever the shard granule is.
                 const uint32_t off = first_wt * G_TILE_COL_BYTES;
                 const uint32_t total = W_ELEMS * GAMMA_ELEM_BYTES;
                 const uint32_t remaining = (off < total) ? (total - off) : 0;
@@ -240,18 +284,68 @@ void kernel_main() {
     // a single knob-derived unit that divides every CB ring by construction,
     // and >= 4 tiles per barrier whenever the block allows it.
     const uint32_t x_tile_bytes = get_tile_size(cb_input_tiles);
-    auto stage_x_chunk = [&](uint32_t first_tile_row, uint32_t rows, uint32_t c) {
+
+    // ---- BAND staging: this core's own resident RM shard -> the tilize ring --
+    // The band is `band_bytes` of every stick it owns, at x_addr + local_stick *
+    // SHARD_ROW_BYTES; the ring wants it at the padded tile-column stride.  When
+    // the band fills its tile columns exactly AND the shard stride matches, a
+    // whole tile-row moves in ONE transaction; otherwise it is one per stick --
+    // the same granularity the accessor path uses, but out of local L1 rather
+    // than DRAM.  Trailing lanes keep the boot zero, so they add exactly 0 to
+    // sum(x^2) and no reduce mask is needed (STAGE_ZERO / PARTIAL_W == 0).
+    const uint32_t band_bytes = w_real_elems * ELEM_BYTES;
+    // The band is staged in the tensor's GLOBAL TILE FRAME: its first element sits
+    // at lane (w_off_elems % 32) of the staged stick, so staged tile column j IS
+    // global width tile (w_off_elems / 32 + j).  Two things fall out of that, and
+    // both are why the frame is not the band's own byte offset:
+    //   * gamma (RM or TILE) is fetched at a tile-column offset, which is a multiple
+    //     of 64 bytes for every dtype -- an unaligned DRAM read is silently
+    //     truncated to the alignment, so an offset of "the band's first element"
+    //     would hand three cores in four the WRONG weights;
+    //   * the leading lanes [0, delta) and the trailing ones are the boot zeros, so
+    //     they contribute exactly 0 to sum(x^2) -- no reduce mask, either side.
+    // The shard granule keeps both the L1 source and the shifted destination
+    // 16-byte aligned (w_off_elems is a multiple of L1_align/elem_size).
+    const uint32_t band_delta_bytes = (w_off_elems % TILE_DIM) * ELEM_BYTES;
+    const bool band_contiguous =
+        (band_delta_bytes == 0) && (band_bytes == CHUNK_ROW_BYTES) && (SHARD_ROW_BYTES == CHUNK_ROW_BYTES);
+    auto stage_band = [&](uint32_t stick_start, uint32_t sticks) {
+        for (uint32_t s = 0; s < sticks; s += TILE_DIM) {
+            const uint32_t n = ((sticks - s) < TILE_DIM) ? (sticks - s) : TILE_DIM;
+            cb_reserve_back(cb_input_sticks, WT_CHUNK);
+            const uint32_t dst = get_write_ptr(cb_input_sticks) + band_delta_bytes;
+            const uint32_t src = x_addr + (stick_start + s - stick_base) * SHARD_ROW_BYTES;
+            if (band_bytes != 0) {
+                if (band_contiguous) {
+                    noc_async_read(get_noc_addr(src), dst, n * CHUNK_ROW_BYTES);
+                } else {
+                    for (uint32_t i = 0; i < n; ++i) {
+                        noc_async_read(get_noc_addr(src + i * SHARD_ROW_BYTES), dst + i * CHUNK_ROW_BYTES, band_bytes);
+                    }
+                }
+                noc_async_read_barrier();
+            }
+            cb_push_back(cb_input_sticks, WT_CHUNK);
+        }
+    };
+
+    auto stage_x_chunk = [&](uint32_t r0, uint32_t rows, uint32_t c) {
+        const uint32_t first_tile_row = row_start + r0;
         if constexpr (NATIVE_X) {
             return;  // already resident and published above -- no NoC read for x
         } else if constexpr (RM) {
-            const uint32_t stick_start = first_tile_row * TILE_DIM;
+            const uint32_t stick_start = stick_base + r0 * TILE_DIM;
             uint32_t sticks = rows * TILE_DIM;
-            if (stick_start + sticks > R_RM) {
-                sticks = R_RM - stick_start;  // short final tile-row
+            if (r0 * TILE_DIM + sticks > stick_count) {
+                sticks = stick_count - r0 * TILE_DIM;  // short final tile-row
             }
-            const uint32_t row_bytes = (c + 1 == NUM_W_CHUNKS) ? LAST_CHUNK_ROW_BYTES : CHUNK_ROW_BYTES;
-            dataflow_kernel_lib::read_sticks_for_tilize<cb_input_sticks>(
-                x_acc, sticks, row_bytes, stick_start, /*byte_offset_within_page=*/c * CHUNK_ROW_BYTES);
+            if constexpr (BAND_X) {
+                stage_band(stick_start, sticks);
+            } else {
+                const uint32_t row_bytes = (c + 1 == NUM_W_CHUNKS) ? LAST_CHUNK_ROW_BYTES : CHUNK_ROW_BYTES;
+                dataflow_kernel_lib::read_sticks_for_tilize<cb_input_sticks>(
+                    x_acc, sticks, row_bytes, stick_start, /*byte_offset_within_page=*/c * CHUNK_ROW_BYTES);
+            }
         } else {
             for (uint32_t r = 0; r < rows; ++r) {
                 // + w_start: this core's width slice under a cross-core width split
@@ -275,11 +369,10 @@ void kernel_main() {
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t r0 = blk * BLOCK_ROWS;
         const uint32_t rows = (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
-        const uint32_t first_tile_row = row_start + r0;
 
         for (uint32_t pass = 0; pass < NUM_PASSES; ++pass) {
             for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
-                stage_x_chunk(first_tile_row, rows, c);
+                stage_x_chunk(r0, rows, c);
                 // STREAM: gamma is chunked and re-read for every pass-B chunk.
                 if constexpr (!X_RESIDENT) {
                     if (pass == 1) {

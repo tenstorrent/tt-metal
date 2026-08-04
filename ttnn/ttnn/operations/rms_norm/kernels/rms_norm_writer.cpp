@@ -11,6 +11,9 @@
 //   * NATIVE_OUT      : nothing to move at all — compute packed straight into
 //                       the output shard's own L1 through a zero-copy CB; the
 //                       writer only takes the completion barrier.
+//   * BAND (Ref. 2b)  : cb_output_sticks -> this core's own resident ROW_MAJOR
+//                       shard, one band (w_real_elems elements) per stick, at the
+//                       shard's own L1 stride.  Local L1, no DRAM traffic.
 //
 // The ROW_MAJOR path uses dataflow_kernel_lib::write_sticks_after_untilize,
 // which is exactly the consumer contract of
@@ -38,6 +41,12 @@
 //                   cb_row_final (loopback multicast: src != dst, so the root
 //                   gets its own copy too).
 //      non-root     ReceiverPipe::receive() into cb_row_final.
+//   4  every core   drain THIS block's output (write_block) before starting the
+//                   next round.  Not cosmetic: compute cannot finish block blk+1's
+//                   pass A until it has drained block blk's pass B, so a writer
+//                   that ran the whole combine first and the whole write-back
+//                   second deadlocks the moment num_blocks exceeds the output CB's
+//                   depth.
 //
 // It lives in the WRITER, not the reader, for two reasons: NoC1 is idle through
 // pass A (so the combine handshake overlaps the reader's NoC0 x/gamma traffic),
@@ -81,20 +90,33 @@ void kernel_main() {
     constexpr uint32_t NUM_W_CHUNKS = get_compile_time_arg_val(3);
     constexpr uint32_t BLOCK_ROWS = get_compile_time_arg_val(4);
     constexpr uint32_t ELEM_BYTES = get_compile_time_arg_val(5);
-    constexpr uint32_t R_RM = get_compile_time_arg_val(6);
+    [[maybe_unused]] constexpr uint32_t R_RM = get_compile_time_arg_val(6);
     constexpr uint32_t W_ELEMS = get_compile_time_arg_val(7);
     constexpr uint32_t NATIVE_OUT = get_compile_time_arg_val(8);
     constexpr uint32_t COMBINE = get_compile_time_arg_val(9);
     constexpr uint32_t GATHER_SEM_ID = get_compile_time_arg_val(10);
     constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(11);
     constexpr uint32_t OUT_SHARD_PAGES = get_compile_time_arg_val(12);
-    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/13, /*RT=*/6>();
+    // Refinement 2b: BAND == 1 means the output goes back stick-by-stick into this
+    // core's own band -- straight into the resident output shard when
+    // OUT_SHARD_ROW_BYTES != 0, otherwise through the accessor at the band's byte
+    // offset (legal only for a stick-paged output: interleaved / height-sharded).
+    constexpr uint32_t BAND = get_compile_time_arg_val(13);
+    constexpr uint32_t OUT_SHARD_ROW_BYTES = get_compile_time_arg_val(14);
+    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/15, /*RT=*/10>();
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
     constexpr bool RM = (IS_TILE == 0);
     constexpr bool NATIVE = (NATIVE_OUT != 0);
     constexpr bool CROSS_CORE = (COMBINE != 0);
-    static_assert(!CROSS_CORE || !RM, "rms_norm: the cross-core width combine is TILE-only");
+    constexpr bool BAND_OUT = (BAND != 0);
+    constexpr bool BAND_OUT_LOCAL = (OUT_SHARD_ROW_BYTES != 0);
+    static_assert(!BAND_OUT || IS_TILE == 0, "rms_norm: the BAND scheme is ROW_MAJOR-only");
+    // The cross-core width combine used to be TILE-only: an RM shard that cuts the
+    // width axis had no expressible per-core width slice.  The BAND scheme gives it
+    // one (see the reader), and the combine itself is unchanged -- it sums per-row
+    // partials elementwise and never cares where a band starts.
+    static_assert(!CROSS_CORE || !RM || BAND_OUT, "rms_norm: an RM width combine needs the BAND scheme");
     static_assert(!CROSS_CORE || NUM_W_CHUNKS == 1, "rms_norm: a width-split core takes its slice in one chunk");
     constexpr uint32_t CHUNK_ROW_BYTES = WT_CHUNK * TILE_DIM * ELEM_BYTES;
     constexpr uint32_t LAST_CHUNK_ROW_BYTES = W_ELEMS * ELEM_BYTES - (NUM_W_CHUNKS - 1) * CHUNK_ROW_BYTES;
@@ -106,6 +128,11 @@ void kernel_main() {
     const uint32_t w_start = get_arg_val<uint32_t>(3);    // first width tile this core owns
     const uint32_t is_root = get_arg_val<uint32_t>(4);    // group root (multicast sender)
     const uint32_t my_slot = get_arg_val<uint32_t>(5);    // index within the width group
+    // The ROW_MAJOR view of the same slice (mirrors the reader's args 6..9).
+    const uint32_t stick_base = get_arg_val<uint32_t>(6);
+    const uint32_t stick_count = get_arg_val<uint32_t>(7);
+    const uint32_t w_off_elems = get_arg_val<uint32_t>(8);
+    const uint32_t w_real_elems = get_arg_val<uint32_t>(9);
 
     // An INACTIVE core (see the reader): it exists only so the stat multicast
     // lands in a cb_row_final this program owns.  No shard, no work.
@@ -117,6 +144,93 @@ void kernel_main() {
     const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
 
     const uint32_t num_blocks = (num_rows + BLOCK_ROWS - 1) / BLOCK_ROWS;
+
+    // ---- BAND write-back: the reader's stage_band, mirrored ------------------
+    // Same transaction granularity as the read half (one per tile-row when the band
+    // fills its tile columns and the shard stride matches, one per stick
+    // otherwise), so neither NoC half is the batched one.
+    const uint32_t band_bytes = w_real_elems * ELEM_BYTES;
+    const uint32_t band_off_bytes = w_off_elems * ELEM_BYTES;
+    // The band sits at lane (w_off_elems % 32) of each untilized stick -- the
+    // reader's GLOBAL TILE FRAME, mirrored.
+    const uint32_t band_delta_bytes = (w_off_elems % TILE_DIM) * ELEM_BYTES;
+    const bool band_contiguous = BAND_OUT_LOCAL && (band_delta_bytes == 0) && (band_bytes == CHUNK_ROW_BYTES) &&
+                                 (OUT_SHARD_ROW_BYTES == CHUNK_ROW_BYTES);
+    auto write_band = [&](uint32_t stick_start, uint32_t sticks) {
+        for (uint32_t s = 0; s < sticks; s += TILE_DIM) {
+            const uint32_t n = ((sticks - s) < TILE_DIM) ? (sticks - s) : TILE_DIM;
+            cb_wait_front(cb_output_sticks, WT_CHUNK);
+            const uint32_t src = get_read_ptr(cb_output_sticks) + band_delta_bytes;
+            if (band_bytes != 0) {
+                if (band_contiguous) {
+                    const uint32_t dst = out_addr + (stick_start + s - stick_base) * OUT_SHARD_ROW_BYTES;
+                    noc_async_write(src, get_noc_addr(dst), n * CHUNK_ROW_BYTES);
+                } else {
+                    for (uint32_t i = 0; i < n; ++i) {
+                        const uint64_t dst =
+                            BAND_OUT_LOCAL
+                                ? get_noc_addr(out_addr + (stick_start + s + i - stick_base) * OUT_SHARD_ROW_BYTES)
+                                : out_acc.get_noc_addr(stick_start + s + i, band_off_bytes);
+                        noc_async_write(src + i * CHUNK_ROW_BYTES, dst, band_bytes);
+                    }
+                }
+                noc_async_write_barrier();
+            }
+            cb_pop_front(cb_output_sticks, WT_CHUNK);
+        }
+    };
+
+    // ---- one row-block of output ---------------------------------------------
+    // A LAMBDA, not a second loop, because the cross-core combine below has to
+    // interleave with it: the combine's round for block `blk+1` cannot start until
+    // compute has finished block `blk`, and compute cannot finish block `blk` until
+    // this writer has drained its output.  Running the whole combine first and the
+    // whole write-back second deadlocks as soon as num_blocks exceeds the output
+    // CB's depth -- which the TILE schemes never hit only because their shard fits
+    // in ONE row-block, and which the ROW_MAJOR BAND scheme hits immediately (its
+    // per-block gather CB is GROUP_SIZE fp32 tiles, so L1 caps BLOCK_ROWS low).
+    auto write_block = [&](uint32_t blk) {
+        if constexpr (NATIVE) {
+            return;  // zero-copy: compute packed into the shard; the pages ARE the tensor
+        }
+        const uint32_t r0 = blk * BLOCK_ROWS;
+        const uint32_t rows = (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
+        const uint32_t first_tile_row = row_start + r0;
+
+        for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+            if constexpr (RM) {
+                const uint32_t stick_start = stick_base + r0 * TILE_DIM;
+                uint32_t sticks = rows * TILE_DIM;
+                if (r0 * TILE_DIM + sticks > stick_count) {
+                    sticks = stick_count - r0 * TILE_DIM;  // short final tile-row
+                }
+                if constexpr (BAND_OUT) {
+                    write_band(stick_start, sticks);
+                } else {
+                    const uint32_t row_bytes = (c + 1 == NUM_W_CHUNKS) ? LAST_CHUNK_ROW_BYTES : CHUNK_ROW_BYTES;
+                    dataflow_kernel_lib::write_sticks_after_untilize<cb_output_sticks>(
+                        out_acc, sticks, row_bytes, stick_start, /*byte_offset_within_page=*/c * CHUNK_ROW_BYTES);
+                }
+            } else {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    // + w_start: this core's width slice under a cross-core width
+                    // split (0 on the whole-row schemes).
+                    const uint32_t tile_base = (first_tile_row + r) * WT + w_start + c * WT_CHUNK;
+                    cb_wait_front(cb_output_tiles, WT_CHUNK);
+                    uint32_t l1_addr = get_read_ptr(cb_output_tiles);
+                    for (uint32_t w = 0; w < WT_CHUNK; ++w) {
+                        const uint32_t wt = w_start + c * WT_CHUNK + w;
+                        if (wt < WT) {  // a ragged width shard ends in pad tiles
+                            noc_async_write_tile(tile_base + w, out_acc, l1_addr);
+                        }
+                        l1_addr += out_tile_bytes;
+                    }
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_output_tiles, WT_CHUNK);
+                }
+            }
+        }
+    };
 
     // The combine's pipes and semaphore are built ONCE, above the loop (their
     // ctors are the documented handshake init) and only on a participating core.
@@ -172,6 +286,10 @@ void kernel_main() {
                 }
                 cb_push_back(cb_row_final, rows);
                 cb_pop_front(cb_stat_handoff, rows);
+
+                // 4. drain THIS block's output before the next combine round, so
+                //    compute is never blocked on a full output CB (see write_block).
+                write_block(blk);
             }
         } else {
             auto receiver = mc.receiver(noc);
@@ -195,50 +313,21 @@ void kernel_main() {
                 cb_reserve_back(cb_row_final, rows);
                 receiver.receive();
                 cb_push_back(cb_row_final, rows);
+
+                // 4. same interleave as the root's.
+                write_block(blk);
             }
+        }
+    } else {
+        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+            write_block(blk);
         }
     }
 
     if constexpr (NATIVE) {
-        // Zero-copy output: compute packed into the shard itself.  Take the
-        // completion barrier and leave the pages pushed — they ARE the tensor.
+        // Zero-copy output: compute packed into the shard itself (write_block was a
+        // no-op).  Take the completion barrier and leave the pages pushed -- they
+        // ARE the tensor.
         cb_wait_front(cb_output_tiles, num_rows * WT_CHUNK);
-        return;
-    }
-
-    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-        const uint32_t r0 = blk * BLOCK_ROWS;
-        const uint32_t rows = (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
-        const uint32_t first_tile_row = row_start + r0;
-
-        for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
-            if constexpr (RM) {
-                const uint32_t stick_start = first_tile_row * TILE_DIM;
-                uint32_t sticks = rows * TILE_DIM;
-                if (stick_start + sticks > R_RM) {
-                    sticks = R_RM - stick_start;  // short final tile-row
-                }
-                const uint32_t row_bytes = (c + 1 == NUM_W_CHUNKS) ? LAST_CHUNK_ROW_BYTES : CHUNK_ROW_BYTES;
-                dataflow_kernel_lib::write_sticks_after_untilize<cb_output_sticks>(
-                    out_acc, sticks, row_bytes, stick_start, /*byte_offset_within_page=*/c * CHUNK_ROW_BYTES);
-            } else {
-                for (uint32_t r = 0; r < rows; ++r) {
-                    // + w_start: this core's width slice under a cross-core width
-                    // split (0 on the whole-row schemes).
-                    const uint32_t tile_base = (first_tile_row + r) * WT + w_start + c * WT_CHUNK;
-                    cb_wait_front(cb_output_tiles, WT_CHUNK);
-                    uint32_t l1_addr = get_read_ptr(cb_output_tiles);
-                    for (uint32_t w = 0; w < WT_CHUNK; ++w) {
-                        const uint32_t wt = w_start + c * WT_CHUNK + w;
-                        if (wt < WT) {  // a ragged width shard ends in pad tiles
-                            noc_async_write_tile(tile_base + w, out_acc, l1_addr);
-                        }
-                        l1_addr += out_tile_bytes;
-                    }
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_output_tiles, WT_CHUNK);
-                }
-            }
-        }
     }
 }
