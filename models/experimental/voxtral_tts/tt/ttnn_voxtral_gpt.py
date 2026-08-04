@@ -243,7 +243,7 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
 #     bf16 (all)                      0.99991     45.8            -             no
 #     + BFP8 on FF1, FF3              0.999884    34.7          0.86%           no
 #     + BFP8 on wqkv, wo   <- this    0.999852    31.4          0.86%           no
-#     + BFP8 on w2 (i.e. all)         0.99977+    28.9            -             HANGS
+#     + BFP8 on w2 (i.e. all)  <- now  0.99977+    28.9            -             no (fixed)
 #
 # W2 IS THE HANG, not BFP8 in general -- a distinction that cost a long investigation and is worth
 # keeping straight, because "all-BFP8 hangs" was true but over-attributed and it froze this line of
@@ -264,19 +264,19 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
 # /home/software/syseng/wh/tt-smi and the command is `-wr 0` (this vintage has no plain `-r`).
 # open_device simply hangs until you do it.
 #
-# ROOT-CAUSED, AND IT IS NOT A BLOCK 1 BUG -- full dump in ttnn_voxtral_pipeline. It is an
-# out-of-range NOC write inside ttnn's conv `halo_gather` kernel, on the SECOND execution of the
-# CODEC's output-projection conv (a program-cache hit). w2's dtype only matters because it shifts
-# DRAM allocation addresses by ~690 MB across 26 layers. So w2 in BFP8 -- worth 2.5 ms/frame -- is
-# blocked on a ttnn conv bug, not on anything about this weight. Run with TT_METAL_WATCHER=10 and
-# the hang becomes a clean abort with the kernel named, instead of a wedged card.
+# THE HANG IS FIXED and w2 SHIPS IN BFP8. It was never a Block 1 bug: an out-of-range NOC write in
+# ttnn's conv `halo_gather` kernel, on the second execution of the CODEC's output-projection conv.
+# That conv was OUR call, so we stopped making it -- see ttnn_voxtral_codec._graph, which computes
+# the projection as matmuls instead. 45 utterances clean. STATUS.md 6.12 (diagnosis) and 6.13 (fix).
+# If you ever need to debug a hang here again: TT_METAL_WATCHER=10 turns it into a clean abort with
+# the stuck kernel named, instead of a wedged card.
 #
 # The old five-condition repro, still the cheapest way to test a CHANGE meant to fix this: short gen + 128-bucket codec decode, then two long gens that both land in the
 # 512 bucket, the second a pure cache HIT. The shipped config clears it and the full 15-case set. Full diagnosis in ttnn_voxtral_pipeline.
 #
 # Judge any change here on MEAN and P90 worst-sample, never on max: max is an order statistic and
 # moved 1.28-4.28% across configs non-monotonically (STATUS.md 6.8).
-WEIGHT_DTYPE = ttnn.bfloat16          # w2 only
+WEIGHT_DTYPE = ttnn.bfloat8_b         # w2 -- BFP8, unlocked by the codec conv dodge
 FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
 ATTN_WEIGHT_DTYPE = ttnn.bfloat8_b    # wqkv and wo
 

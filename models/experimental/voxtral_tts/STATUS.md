@@ -33,8 +33,9 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → 49.0-52.5 ms/frame (mean 50.4), RTF 0.62-0.71 on 14 of 15 cases.** Per frame:
-Block 1 ~25.7 ms, Block 2 ~23.0 ms, host 0.2 ms. Block 1 is marginally the larger half.
+**Performance: 83.7 → 45.9-52.1 ms/frame (mean 47.5 over 45 utterances), RTF 0.58-0.81.**
+Per frame: Block 1 ~23 ms, Block 2 ~23 ms, host 0.2 ms. w2 is in BFP8 as of §6.13 — the hang that
+blocked it is fixed, by not calling `ttnn.conv1d` in the codec.
 goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
 width-sharded RMSNorm in Block 2, qkv fusion) and §6.8 (BFP8 on wqkv/wo, semantic head on device) —
 and §6.7 is the one to read first: it explains why the WER headline cannot gate any of this.
@@ -1044,10 +1045,53 @@ stdout is block-buffered and the abort discards it, so the absence of output mea
 in the THIRD utterance's codec decode, exactly where the original diagnosis put it. A single-case
 run completes cleanly, consistent with needing ≥2 buckets.
 
-**Worth 2.5 ms/frame** if it can be dodged or fixed. Untested ideas: we already pad manually and
-pass `padding=0`, so a `conv_config` avoiding the halo path may exist; or the output projection could
-skip `conv1d` entirely, since a k=7 stride-1 conv over a pre-padded tensor is a sliding-window
-matmul. Otherwise this is an upstream report, and it now has everything needed to file one.
+**DODGED — see §6.13.** The second idea works: the output projection skips `conv1d` entirely.
+
+
+### 6.13 — the hang, FIXED, and w2 shipped in BFP8
+
+§6.12 named the faulting op. It is **our own call**, so it was ours to remove: the codec's output
+projection no longer uses `ttnn.conv1d`. A k=7 stride-1 conv over a pre-padded tensor is a
+sliding-window matmul —
+
+    out[t] = sum_j  xpad[t+j] @ W[j]
+
+— so 7 slices + 7 matmuls + 6 adds compute it exactly and touch no `halo_gather` kernel.
+
+**It is slower here and overwhelmingly worth it**, because this runs once per utterance while w2
+saves 2.5 ms per frame:
+
+| output projection | ms (L=4096) |
+|---|---|
+| `ttnn.conv1d` (was) | 4.30 |
+| 7 matmuls, DRAM | 9.80 |
+| 7 matmuls, accumulating in L1 ← shipped | **9.16** |
+
+`+4.86 ms once` against `−2.5 ms × 460 frames = −1150 ms`. (Input in L1 as well would help but does
+not fit — 16.8 MB overflows the allocator.)
+
+**Result, 3 seeds × 15 cases = 45 utterances:**
+
+| | before | after |
+|---|---|---|
+| ms/frame | mean 50.4 | **mean 47.5** (45.9–52.1) |
+| RTF | 0.62–0.71 | **0.58–0.81** |
+| hang | w2 BFP8 impossible | **45/45 utterances clean** |
+| termination | 15/15 | 15/15 in all three seeds |
+| voice identity | PASS | PASS |
+| codec waveform PCC | 0.999915 | **0.999915**, unchanged |
+
+**THE COST, stated plainly.** Long-form errors across seeds 0/1/2 are **1 / 1 / 0 words of 298**,
+against a shipped baseline that was 0 at seed 0. The errors land in DIFFERENT cases each seed (case 3
+`"listened"→"listen"`, then case 2), which is the signature of noise rather than a systematic defect —
+and 1/1/0 is the identical spread to the sharded-norm change accepted in §6.9. Shipped on that basis.
+If a regression is ever traced to codec output quality, this and §6.9 are the two trades to question.
+
+**The generalisable lesson:** the hang was called "unexplained" for months and treated as a hardware
+mystery. It took one environment variable (`TT_METAL_WATCHER=10`, which turns the hang into a clean
+abort with the kernel named) and then one observation — that the faulting op was ours, not ttnn's, so
+we could simply stop calling it. Before writing something off as someone else's bug, check whether
+you are the one invoking it.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of

@@ -235,6 +235,10 @@ class TtVoxtralCodecDecoder:
         host = lambda t: ttnn.from_torch(t.contiguous(), dtype=DTYPE)  # conv weights stay on host
 
         self.semantic_host = w["semantic_embedding"].float()  # host gather; see _quantizer_host
+        # Per-tap weights for the output projection, which does NOT use ttnn.conv1d -- see _graph's
+        # last lines for why. torch stores the conv as [out, in, k]; ttnn.linear wants [in, out].
+        self._out_taps = [dev(w["output_proj.conv.weight"][:, :, j].t())
+                          for j in range(PATCH_PROJ_KERNEL)]
 
         # --- convs ---
         # Weights stay on HOST here and are prepared on first use by `_prepared`, which also
@@ -586,7 +590,33 @@ Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention, which was
                                          DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1])
                 if stages is not None:
                     stages[f"after_up{ci}"] = self._chw(x)
-        return self._conv1d(x, "out", CODEC_DIM, PATCH_SIZE, PATCH_PROJ_KERNEL, 1, "reflect")
+        # OUTPUT PROJECTION AS MATMULS, NOT ttnn.conv1d -- and the reason is a ttnn BUG, not speed.
+        #
+        # `ttnn.conv1d` here was the exact op that made Block 1's w2 unusable in BFP8. Its
+        # sliding_window `halo_gather` kernel issues an out-of-range NOC write (13,897,728 bytes to
+        # a nonexistent core) on the SECOND execution of this shape -- a program-cache hit -- and
+        # hangs the card. Full dump in ttnn_voxtral_pipeline; STATUS.md 6.12 has the investigation.
+        #
+        # A k=7 stride-1 conv over an ALREADY-PADDED tensor is just a sliding-window matmul:
+        #     out[t] = sum_j  xpad[t+j] @ W[j]
+        # so 7 slices, 7 matmuls and 6 adds compute it exactly, touching no halo kernel at all.
+        #
+        # IT IS SLOWER HERE AND STILL WORTH IT, by a wide margin, because this runs ONCE PER
+        # UTTERANCE while w2 saves 2.5 ms PER FRAME:
+        #     conv1d                        4.30 ms
+        #     7 matmuls, DRAM               9.80 ms
+        #     7 matmuls, accumulate in L1   9.16 ms   <- this, +4.86 ms
+        #     460-frame utterance: +4.9 ms once against -1150 ms of decode.
+        # (Input in L1 as well would save more but does not fit -- 16.8 MB overflows the allocator.)
+        L = x.shape[2]
+        xp = self._pad_causal(x, PATCH_PROJ_KERNEL - 1, "reflect")
+        acc = None
+        for j in range(PATCH_PROJ_KERNEL):
+            sl = ttnn.slice(xp, [0, 0, j, 0], [1, 1, j + L, CODEC_DIM])
+            y = ttnn.linear(sl, self._out_taps[j], compute_kernel_config=COMPUTE_CONFIG,
+                            memory_config=ttnn.L1_MEMORY_CONFIG)
+            acc = y if acc is None else ttnn.add(acc, y, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return acc
 
     @torch.no_grad()
     def __call__(self, codes, return_stages=False):
