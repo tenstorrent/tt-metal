@@ -380,6 +380,11 @@ def test_non_checkout_git_failure_stays_generic():
             InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE,
         ),
         (
+            "Unable to download artifact(s): Failed to GetSignedArtifactURL: Received non-retryable error: "
+            "Failed request: (404) Not Found: workflow run not found",
+            InfraErrorV1.ARTIFACT_DOWNLOAD_NOT_FOUND_FAILURE,
+        ),
+        (
             'Unable to download artifact(s): Failed to ListArtifacts: Received non-retryable error: '
             'Failed request: (403) Forbidden: Error from intermediary with HTTP status code 403 "Forbidden"',
             InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE,

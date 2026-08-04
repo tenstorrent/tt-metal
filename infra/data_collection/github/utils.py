@@ -130,6 +130,11 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         "No test report files were found": str(InfraErrorV1.TEST_REPORTER_NO_REPORTS_FAILURE),
         "/usr/bin/git' failed with exit code 128": str(InfraErrorV1.GIT_PROCESS_FAILURE),
         "Failed to FinalizeArtifact": str(InfraErrorV1.ARTIFACT_FINALIZE_FAILURE),
+        # Artifact/workflow-run record expired or was cleaned up server-side, distinct from the
+        # transient ECONNRESET case below — must be checked first since both share the same prefix
+        "Failed to GetSignedArtifactURL: Received non-retryable error: Failed request: (404) Not Found": str(
+            InfraErrorV1.ARTIFACT_DOWNLOAD_NOT_FOUND_FAILURE
+        ),
         "Failed to GetSignedArtifactURL": str(InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE),
         "Failed to ListArtifacts": str(InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE),
         "Upload progress stalled.": str(InfraErrorV1.ARTIFACT_UPLOAD_STALLED_FAILURE),
