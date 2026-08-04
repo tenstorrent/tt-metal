@@ -199,9 +199,8 @@ FORCE_INLINE void recordNocEventWithAddr(
 }
 }  // namespace noc_event_profiler
 
-#define RECORD_NOC_EVENT_WITH_ADDR(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)                      \
+#define RECORD_NOC_EVENT_WITH_ADDR_IMPL_(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)                \
     {                                                                                                                 \
-        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                            \
         if constexpr (                                                                                                \
             event_type != NocEventType::WRITE_MULTICAST && event_type != NocEventType::SEMAPHORE_SET_MULTICAST &&     \
             event_type != NocEventType::SEMAPHORE_INC_MULTICAST) {                                                    \
@@ -222,25 +221,85 @@ FORCE_INLINE void recordNocEventWithAddr(
         }                                                                                                             \
     }
 
+#define RECORD_NOC_EVENT_WITH_ADDR(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)             \
+    {                                                                                                        \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                   \
+        static_assert(                                                                                       \
+            !KernelProfilerNocEventMetadata::isDebugOnlyEventType(event_type),                               \
+            "This event type is classified debug-only; use RECORD_NOC_EVENT_WITH_ADDR_DEBUG_ONLY instead."); \
+        RECORD_NOC_EVENT_WITH_ADDR_IMPL_(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)       \
+    }
+
 #define RECORD_NOC_EVENT_WITH_ID(event_type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted, noc) \
     {                                                                                                         \
         using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                    \
+        static_assert(                                                                                        \
+            !KernelProfilerNocEventMetadata::isDebugOnlyEventType(event_type),                                \
+            "Debug-only event types have no RECORD_NOC_EVENT_WITH_ID variant; add one if this is intended."); \
         noc_event_profiler::recordNocEventWithID<event_type, posted>(                                         \
             local_addr, noc_id, addrgen, offset, num_bytes, vc, noc);                                         \
     }
 
-#define RECORD_NOC_EVENT(event_type, posted, noc)                          \
-    {                                                                      \
-        using NocEventType = KernelProfilerNocEventMetadata::NocEventType; \
-        noc_event_profiler::recordNocEvent<event_type, posted>(            \
-            /*dst_x=*/-1,                                                  \
-            /*dst_y=*/-1,                                                  \
-            /*num_bytes=*/0,                                               \
-            /*vc=*/-1,                                                     \
-            /*noc=*/noc,                                                   \
-            /*local_addr=*/0,                                              \
-            /*dst_local_addr=*/0);                                         \
+#define RECORD_NOC_EVENT_IMPL_(event_type, posted, noc)         \
+    {                                                           \
+        noc_event_profiler::recordNocEvent<event_type, posted>( \
+            /*dst_x=*/-1,                                       \
+            /*dst_y=*/-1,                                       \
+            /*num_bytes=*/0,                                    \
+            /*vc=*/-1,                                          \
+            /*noc=*/noc,                                        \
+            /*local_addr=*/0,                                   \
+            /*dst_local_addr=*/0);                              \
     }
+
+#define RECORD_NOC_EVENT(event_type, posted, noc)                                                  \
+    {                                                                                              \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                         \
+        static_assert(                                                                             \
+            !KernelProfilerNocEventMetadata::isDebugOnlyEventType(event_type),                     \
+            "This event type is classified debug-only; use RECORD_NOC_EVENT_DEBUG_ONLY instead."); \
+        RECORD_NOC_EVENT_IMPL_(event_type, posted, noc)                                            \
+    }
+
+#if defined(DEVICE_DEBUG_DUMP)
+
+#define RECORD_NOC_EVENT_DEBUG_ONLY(event_type, posted, noc)                                \
+    {                                                                                       \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                  \
+        static_assert(                                                                      \
+            KernelProfilerNocEventMetadata::isDebugOnlyEventType(event_type),               \
+            "This event type is not classified debug-only; use RECORD_NOC_EVENT instead."); \
+        RECORD_NOC_EVENT_IMPL_(event_type, posted, noc)                                     \
+    }
+
+#define RECORD_NOC_EVENT_WITH_ADDR_DEBUG_ONLY(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc) \
+    {                                                                                                       \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                  \
+        static_assert(                                                                                      \
+            KernelProfilerNocEventMetadata::isDebugOnlyEventType(event_type),                               \
+            "This event type is not classified debug-only; use RECORD_NOC_EVENT_WITH_ADDR instead.");       \
+        RECORD_NOC_EVENT_WITH_ADDR_IMPL_(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)      \
+    }
+
+#else
+
+#define RECORD_NOC_EVENT_DEBUG_ONLY(event_type, posted, noc)                                \
+    {                                                                                       \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                  \
+        static_assert(                                                                      \
+            KernelProfilerNocEventMetadata::isDebugOnlyEventType(event_type),               \
+            "This event type is not classified debug-only; use RECORD_NOC_EVENT instead."); \
+    }
+
+#define RECORD_NOC_EVENT_WITH_ADDR_DEBUG_ONLY(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc) \
+    {                                                                                                       \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                  \
+        static_assert(                                                                                      \
+            KernelProfilerNocEventMetadata::isDebugOnlyEventType(event_type),                               \
+            "This event type is not classified debug-only; use RECORD_NOC_EVENT_WITH_ADDR instead.");       \
+    }
+
+#endif  // DEVICE_DEBUG_DUMP
 
 // preemptive quick push if transitioning from unlinked state to linked state
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)         \
@@ -254,6 +313,8 @@ FORCE_INLINE void recordNocEventWithAddr(
 #define RECORD_NOC_EVENT_WITH_ADDR(type, local_addr, noc_addr, num_bytes, vc, posted, noc)
 #define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted, noc)
 #define RECORD_NOC_EVENT(type, posted, noc)
+#define RECORD_NOC_EVENT_WITH_ADDR_DEBUG_ONLY(type, local_addr, noc_addr, num_bytes, vc, posted, noc)
+#define RECORD_NOC_EVENT_DEBUG_ONLY(type, posted, noc)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 #endif

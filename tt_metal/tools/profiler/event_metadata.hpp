@@ -208,6 +208,27 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         return event_type == NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
     }
 
+    static constexpr bool isDebugOnlyEventType(NocEventType event_type) {
+        switch (event_type) {
+            case NocEventType::READ_BARRIER_START:
+            case NocEventType::READ_BARRIER_END:
+            case NocEventType::READ_BARRIER_WITH_TRID:
+            case NocEventType::WRITE_BARRIER_START:
+            case NocEventType::WRITE_BARRIER_END:
+            case NocEventType::WRITE_BARRIER_WITH_TRID:
+            case NocEventType::WRITE_FLUSH:
+            case NocEventType::WRITE_FLUSH_WITH_TRID:
+            case NocEventType::FULL_BARRIER:
+            case NocEventType::ATOMIC_BARRIER:
+            case NocEventType::SEMAPHORE_WAIT:
+            case NocEventType::SEMAPHORE_SET:
+            case NocEventType::WRITE_INLINE:
+            case NocEventType::SEMAPHORE_INC:
+            case NocEventType::SEMAPHORE_INC_MULTICAST: return true;
+            default: return false;
+        }
+    }
+
     // Getter to return the correct variant based on the tag (noc_xfer_type)
     std::variant<LocalNocEvent, FabricNoCEvent, FabricNoCScatterEvent, FabricRoutingFields1D, FabricRoutingFields2D>
     getContents() const {
