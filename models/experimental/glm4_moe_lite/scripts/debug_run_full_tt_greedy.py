@@ -540,7 +540,13 @@ def main() -> int:
         print(f"=== TT greedy decode ({mode_label}) ===", flush=True)
         print(
             f"mesh_shape=({mesh_rows},{mesh_cols}) device_ids={device_ids if device_ids is not None else 'auto'} "
-            f"kv_cache_dtype={args.kv_cache_dtype} dispatch=ETH phase={phase} batch_size={batch_size}",
+            # Report the dispatch config that was actually resolved. This used to be the
+            # literal "ETH", which was already wrong on WH Galaxy (that path passed
+            # DispatchCoreAxis.ROW, i.e. WORKER cores) and is wrong on BH (WORKER/COL).
+            f"kv_cache_dtype={args.kv_cache_dtype} "
+            f"dispatch={ttnn.device.get_default_dispatch_core_type().name}/"
+            f"{ttnn.device.get_default_dispatch_core_axis(ttnn.FabricTensixConfig.DISABLED).name} "
+            f"phase={phase} batch_size={batch_size}",
             flush=True,
         )
         print(

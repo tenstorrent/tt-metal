@@ -6,7 +6,8 @@
 **Hardware (BH Galaxy):** 32 Blackhole devices; 4x8 mesh — see [Blackhole Galaxy](#blackhole-galaxy)
 **Dispatch:** resolved from the cluster (`ttnn.device.get_default_dispatch_core_*`) — WORKER/ROW on WH Galaxy, WORKER/COL on Blackhole
 
-**Current best decode latency (Galaxy, batch=1):** **51.3 ms** @ ISL=128 (19.49 tok/s), 52.5 ms @ ISL=512 (19.05 tok/s), 53.4 ms @ ISL=1024 (18.73 tok/s)
+**Current best decode latency (WH Galaxy, batch=1):** **51.3 ms** @ ISL=128 (19.49 tok/s), 52.5 ms @ ISL=512 (19.05 tok/s), 53.4 ms @ ISL=1024 (18.73 tok/s)
+**Current best decode latency (BH Galaxy, batch=1):** **33.2 ms** @ ISL=128 (30.1 tok/s) — **1.51x WH**; see [Blackhole Galaxy](#blackhole-galaxy). Only ISL=128/bs=1 has been measured on BH so far.
 **Current best aggregate TPS (Galaxy):** **449 tok/s** @ batch=32/ISL=128, 431 tok/s @ batch=32/ISL=512, 408 tok/s @ batch=32/ISL=1024; peak **592 tok/s** @ batch=128/ISL=128
 
 > Measured on a 32-chip WH Galaxy (4x8 mesh) with traced sampling decode and the
@@ -239,9 +240,39 @@ acting on those op shares** — they were captured on the pre-optimization stack
 ## Blackhole Galaxy
 
 The model runs on a 32-chip Blackhole Galaxy from the same files as WH — everything below
-is derived from the cluster at runtime, not selected by a flag. Status: **bring-up
-verified, not yet benchmarked** (no BH decode latency numbers exist yet; the Performance
-section above is WH-only).
+is derived from the cluster at runtime, not selected by a flag. Status: **running and
+measured end to end at ISL=128 / bs=1** (47 layers, traced sampling decode, correct
+output). Wider sweeps (ISL 512/1024, batch > 1) have not been run on BH yet.
+
+### Measured decode, BH vs WH (bs=1, ISL=128, traced sampling)
+
+| | ms/token | tok/s | notes |
+|---|---|---|---|
+| WH Galaxy, default flags | 50.1 | 20.0 | the reference; ISL=128 sweep cell reports 51.3 |
+| **BH Galaxy, default flags** | **33.2** (min 32.7, max 39.3) | **30.1** | **1.51x WH** |
+| BH Galaxy, `FUSED_ROUTER=0` | 33.8 (min 33.6, max 35.7) | 29.6 | fused router is worth ~0.6 ms on BH |
+| BH Galaxy, real 15-token prompt | 32.6 (min 32.2, max 32.8) | 30.7 | the coherence run below |
+
+Coherence checked on the same build: prompt "What is the capital city of Australia?
+Answer with just the city name." generates **"Canberra"**, then continues sensibly. Note
+that a `--simulate-context-len 128` run pads the prompt *by repetition*, so its generated
+text is degenerate repetition by construction and is not a coherence signal — use a real
+prompt for that, as the smoke test does.
+
+The 1.51x is roughly what the hardware ratio predicts for a weight-bandwidth-bound decode
+(512 vs 258 GB/s peak DRAM, 1350 vs ~1000 MHz AICLK), which is consistent with the WH
+finding that this step is bound by weight reads rather than op count or collectives.
+
+Two things to know about reproducing it:
+
+- **The checkpoint is 62.5 GB** and did not fit the host disk on the machine used here.
+  It was staged in `/dev/shm` (566 GB RAM, 284 GB tmpfs) with `HF_HOME=/dev/shm/hf`, and
+  `--cache-dir` was pointed there too — the converted-weight cache is another 31 GB and
+  would otherwise nearly fill a 35 GB disk. Weight load from tmpfs is ~52 s versus ~410 s
+  cold.
+- **First-token latency includes trace capture** (~5 s) and prefill JIT (~40 s on the very
+  first run, ~1.7 s once the kernel cache is warm). Neither is part of the steady-state
+  decode number.
 
 ### What differs, and where it is handled
 
@@ -285,6 +316,38 @@ TT_ENABLE_HW_TESTS=1 TT_ENABLE_MULTI_DEVICE_TESTS=1 \
 (bf16-rounding error only), and `paged_update_cache` measured OK at batch 8/16/24/32,
 overflowing at 48 with "circular buffers ... grow to 2105872 B which is beyond max L1 size
 of 1572864 B" — which is what raises the KV-write cap to 32.
+
+The full-model run above is the end-to-end gate:
+
+```bash
+HF_HOME=/dev/shm/hf python models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+  --prompt "What is the capital city of Australia? Answer with just the city name." \
+  --simulate-context-len 128 --min-cache-tokens 256 --max-new-tokens 128 \
+  --batch-size 1 --mesh-rows 4 --mesh-cols 8 --kv-cache-dtype bf16 \
+  --phase both --enable-trace --trace-mode sampling --cache-dir /dev/shm/ttnn_cache
+```
+
+### One ttnn op needed an arch fix: `topk_router_gpt`
+
+The fused MoE router (`GLM4_MOE_LITE_FUSED_ROUTER=1`, on by default) failed to **JIT-compile**
+on Blackhole, taking decode down with it after prefill had already succeeded:
+
+```
+compute.cpp:89: error: macro 'TTI_ZEROACC' requires 5 arguments, but only 3 given
+```
+
+`ZEROACC`'s operand list is arch-specific — Wormhole takes `(clear_mode, AddrMode, dst)`,
+Blackhole inserts two fields and takes `(clear_mode, use_32_bit_mode, clear_zero_flags,
+addr_mode, where)`. The kernel only ever had the WH form, so the op was WH-only. Fixed with
+an `#ifdef ARCH_BLACKHOLE` branch that passes `use_32_bit_mode = !glm_mode`, mirroring how
+Blackhole's own `llk_pack_common.h` passes `is_fp32_dest_acc_en` there (the program factory
+sets `fp32_dest_acc_en = !glm_mode`).
+
+A **separate, pre-existing** BH limitation of the same op remains and is not fixed here:
+`required_cores = (num_experts / 32) * 3` DRAM-aligned cores, so 128 experts needs 12 and BH
+has only 8 DRAM banks. GLM uses 64 experts → 6 cores → fits. So `num_experts=128` callers
+(gpt-oss) still cannot use this op on BH, and 14 of its 16 nightly unit tests skip out on
+that check. The 2 that fit (`N=64`) now pass on BH and failed to compile before the fix.
 
 ### The GlobalCB prefetcher: the L1 verdict was ring-width-bound, not L1-bound
 
