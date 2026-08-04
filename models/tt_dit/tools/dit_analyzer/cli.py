@@ -87,6 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with --missing: print a copy-paste registration skeleton (shim rule + analyzer OpSpec) per op",
     )
+    o.add_argument(
+        "--fused",
+        action="store_true",
+        help="list the fused kernels that hide an internal collective, and what each hides",
+    )
     return p
 
 
@@ -213,12 +218,20 @@ def _ops_coverage(graph, fail: bool, stub: bool = False) -> int:
         print("op coverage: every op in '%s' has registered semantics." % graph.name)
         return 0
 
+    from .dryrun.fused import looks_fused
+
     report = analyze_graph(graph)
     print("op coverage: %d call(s) in '%s' have no semantics.\n" % (len(missing), graph.name))
     for call, entry in sorted(missing.items(), key=lambda kv: -kv[1]["count"]):
         print("  %s  x%d  (%d tensor args)" % (call, entry["count"], entry["arity"]))
         for where in entry["locs"][:3]:
             print("      at %s" % where)
+        hidden = looks_fused(call)
+        if hidden:
+            print(
+                "      ! looks like a fused kernel hiding a %s — modelled as a passthrough, so that "
+                "collective is invisible until it is registered (blocker 18)." % hidden
+            )
     blocked = [w for w in report.withheld if any(op in missing for op in w.ops)]
     print(
         "\n%d finding(s) are withheld because their proof passes through these ops." % len(blocked)
@@ -247,6 +260,11 @@ def main(argv: Optional[list] = None) -> int:
         return _dryrun(args)
 
     if args.cmd == "ops":
+        if getattr(args, "fused", False):
+            from .dryrun.fused import describe as describe_fused
+
+            print(describe_fused())
+            return 0
         if args.missing or args.check:
             return _ops_coverage(
                 load_graph(args.missing or args.check), fail=bool(args.check), stub=getattr(args, "stub", False)

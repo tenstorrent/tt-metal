@@ -75,6 +75,47 @@ def test_sd35_vae_resnet_is_clean():
     assert "no redundancy findings" in proc.stdout, proc.stdout
 
 
+def test_fused_kernel_table_drives_emission_and_inspection():
+    from dit_analyzer.dryrun import ops
+    from dit_analyzer.dryrun.fused import FUSED_KERNELS, looks_fused
+
+    # the two builder-driven kernels are declared in the table with their hidden
+    # collective and stage order -- the shim binds to the table, not vice versa
+    agmm = FUSED_KERNELS["all_gather_minimal_matmul_async"]
+    assert agmm.collective == "all_gather" and agmm.order == "gather_then_matmul" and agmm.chunked
+    mmrs = FUSED_KERNELS["minimal_matmul_strided_reduce_scatter_async"]
+    assert mmrs.collective == "reduce_scatter" and mmrs.order == "matmul_then_scatter"
+    assert ops.EXPERIMENTAL_OPS["all_gather_minimal_matmul_async"] is ops.all_gather_minimal_matmul_async
+
+    # looks_fused: a new/unregistered kernel that hides a collective is guessable
+    assert looks_fused("ttnn.experimental.all_gather_minimal_matmul_v2_async") == "all_gather"
+    assert looks_fused("ttnn.experimental.minimal_matmul_reduce_scatter_fused") == "reduce_scatter"
+    assert looks_fused("ring_joint_scaled_dot_product_attention") == "all_gather"
+    # ... but a plain collective or a plain compute op is not a hidden-collective kernel
+    assert looks_fused("ttnn.experimental.all_gather_async") is None
+    assert looks_fused("ttnn.matmul") is None
+    assert looks_fused("ttnn.experimental.mesh_partition") is None
+
+
+def test_ops_missing_flags_a_fused_looking_unregistered_op():
+    import io
+    from contextlib import redirect_stdout
+
+    from dit_analyzer.builder import GraphBuilder
+    from dit_analyzer.cli import _ops_coverage
+    from dit_analyzer.ir import Mesh
+
+    b = GraphBuilder(name="fused_miss", mesh=Mesh(shape=(2, 4), axis_names=("sp", "tp")))
+    x = b.input("x", [1, 512, 1024], shard={1: 2})
+    y = b.unregistered("ttnn.experimental.all_gather_minimal_matmul_v2_async", [x], loc="models/tt_dit/x.py:1")
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        _ops_coverage(b.finish([y]), fail=False)
+    out = buf.getvalue()
+    assert "looks like a fused kernel hiding a all_gather" in out, out
+    assert "blocker 18" in out
+
+
 def test_ops_missing_stub_generator_emits_both_halves():
     import io
     from contextlib import redirect_stdout

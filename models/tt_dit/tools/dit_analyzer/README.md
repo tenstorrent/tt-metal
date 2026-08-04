@@ -117,6 +117,7 @@ dryrun/
   install.py    shadow `ttnn` in sys.modules; refuse to displace a real one
   tensor.py     the metadata Tensor: local vs logical shape
   ops.py        one shape/distribution rule per ttnn op
+  fused.py      fused-kernel table: which kernels hide which collective (`ops --fused`)
   recorder.py   ops -> IR nodes, with a short tt_dit caller stack per node
   stubs.py      mesh device, mesh mappers, enums, program configs
   weights.py    load every Parameter from torch meta tensors, via the real path

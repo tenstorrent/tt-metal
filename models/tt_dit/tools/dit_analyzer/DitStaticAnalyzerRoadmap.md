@@ -50,7 +50,7 @@ real code. Plan phase 6 and roadmap phase 13 are the same work.
 | plan 5 — validate on historical wins | **partly** | rediscovers the LTX win from source and passes the SD3.5 precision test; no wider corpus of past AGMM graphs, and none of the human metrics (false-positive rate over a real backlog, time per finding) |
 | **roadmap 6 — dry-run front end** | **done** | — |
 | **roadmap 7 — shape and layout fidelity** | **done (7a); 7b on 2×4, Ring blocked** | tiling, exact shard division, block-float bytes, checkpoint keys, and the chunk rule all shipped and corroborated against real ttnn on the 2×4 Loudbox via `conform.py`; the 4×8 Ring corroboration needs a 32-chip Galaxy |
-| roadmap 8 — op coverage | **in progress** | LTX, SD3.5-large **and** the SD3.5 VAE ResnetBlock (conv/group_norm) now covered from source (0 unregistered); remaining: the one-registration merge, fused-kernel data table, and the LTX-VAE spatial family (halo/`neighbor_pad`) |
+| roadmap 8 — op coverage | **in progress** | LTX, SD3.5-large **and** the SD3.5 VAE ResnetBlock (conv/group_norm) covered from source (0 unregistered); fused-kernel data table done; remaining: the one-registration merge and the LTX-VAE spatial family (halo/`neighbor_pad`) |
 | roadmap 9 — scale | not started | 48-layer rollup, quadratic cost, finding rollup, stable IDs |
 | roadmap 10 — multi-mesh / stage / host | not started | submeshes, encoder→DiT→VAE, carried state, readbacks |
 | roadmap 11 — conformance (needs a device) | not started | **gates trusting findings**, not producing them |
@@ -210,7 +210,7 @@ call sites), plus 9 introduced by the shim (44 was found by the spike). `P` = ph
 | 15 | `mesh_partition` unmodelled although it *changes distribution* | 8 |
 | 16 | Point-to-point comm (`send_async`/`recv_async`) has no participant-group semantics | 8 |
 | 17 | Opaque reshapes (VAE's `b,h,w,c → 1,1,h*w,c`) degrade regions to full + taint | **closed in 8** — a reshape that only merges/splits leading axes preserves a shard on the kept trailing (channel) axis |
-| 18 | Fused-kernel internal comm is a hand-maintained registry; a new fused kernel silently hides its collective | 8 |
+| 18 | Fused-kernel internal comm is a hand-maintained registry; a new fused kernel silently hides its collective | **closed in 8** — `dryrun/fused.py` `FUSED_KERNELS` table drives AGMM/MMRS, is inspectable (`ops --fused`), and `ops --missing` flags fused-looking unregistered ops |
 | 19 | Non-DiT parallel configs (`EncoderParallelConfig`, `VaeHWParallelConfig`, `MochiVAEParallelConfig`, `AudioTParallelConfig`) don't map onto the single 2-axis `Dist` | 10 |
 
 ### D. Graph structure and scale
@@ -411,9 +411,11 @@ The conv/group-norm *shapes* are the shim's belief until on-device conformance
   of knowledge); extend `ops --missing` to stub all three functions. The
   `unregistered` node kind, the withhold-don't-guess rule and `ops --check` landed
   in phase 6.
-- Declare fused-kernel internal stages as **data** (fused op → comm stage, compute
-  stage, axis/dim argument names), so a new fused kernel is a table entry rather
-  than a silent miss.
+- ~~Declare fused-kernel internal stages as **data**~~ **done** — `dryrun/fused.py`
+  holds a `FUSED_KERNELS` table (call → hidden collective, stage order, chunked,
+  epilogue); AGMM and MMRS are now bound to shared builders from that table, the
+  set is inspectable via `ditcheck ops --fused`, and `ops --missing` flags an
+  unregistered op whose name looks like a collective-hiding kernel (blocker 18).
 - Tier-2 specs for what actually appears in DiT forwards: `mesh_partition`, `pad`,
   `copy`, `repeat`, `lerp`, `embedding`, `minimal_matmul_split`,
   `dit_minimal_matmul_addcmul_fused`, `dit_rms_norm_unary_fused`,

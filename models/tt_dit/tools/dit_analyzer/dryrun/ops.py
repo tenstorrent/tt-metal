@@ -21,6 +21,7 @@ from ..ir import PARAM, Dist
 from ..region import shard_chunk_size
 from . import recorder
 from .context import CTX
+from .fused import FUSED_KERNELS
 from .stubs import Enum, MeshMapper
 from .tensor import Shape, Tensor, local_shape
 
@@ -402,17 +403,20 @@ def minimal_matmul_split(input_tensor=None, weight_tensor=None, *a, **k) -> List
     ]
 
 
-def all_gather_minimal_matmul_async(input_tensor=None, weight_tensor=None, *a, **k) -> List[Tensor]:
-    """Fused: gather the activation over cluster_axis, then matmul (per chunk).
+def _fused_epilogue(out: Tensor, k: Dict[str, Any]) -> Tensor:
+    """The optional fused pointwise tail some kernels carry (``addcmul``)."""
+    if isinstance(k.get("addcmul_input_tensor1"), Tensor):
+        return pointwise("addcmul", [out, k["addcmul_input_tensor1"], k.get("addcmul_input_tensor2")])
+    return out
 
-    The internal stages are separate IR nodes tagged with the same ``fused_in``,
-    which is what lets the analyzer see a collective hiding inside a kernel.
-    Declaring these stages as data instead of code is blocker 18, phase 8.
-    """
+
+def _run_gather_then_matmul(spec, input_tensor, weight_tensor, a, k) -> List[Tensor]:
+    """Builder for the AGMM shape: gather the activation over cluster_axis, then
+    (optionally chunked) matmul. Structure comes from ``spec`` (blocker 18)."""
     x = _t(input_tensor, "input_tensor", a, k)
     w = _t(weight_tensor, "weight_tensor", a, k, index=1)
-    m = _cluster_axis(k, "all_gather_minimal_matmul_async")
-    tag = "agmm@" + (recorder.loc() or "?")
+    m = _cluster_axis(k, spec.call)
+    tag = "%s@%s" % (spec.tag, recorder.loc() or "?")
     gathered = recorder.emit(
         "all_gather",
         [x],
@@ -421,32 +425,30 @@ def all_gather_minimal_matmul_async(input_tensor=None, weight_tensor=None, *a, *
         attrs={"dim": len(x.logical) - 1},
         mesh_axis=m,
         fused_in=tag,
-        base="agmm_ag",
+        base="%s_ag" % spec.tag,
     )
-    chunks = int(k.get("chunks") or 1)
+    chunks = int(k.get("chunks") or 1) if spec.chunked else 1
     outs = []
     for i in range(chunks):
         out = _matmul(
             gathered,
             _weight_chunk(w, i, chunks),
             k.get("bias_tensor"),
-            label="agmm_mm%d" % i,
+            label="%s_mm%d" % (spec.tag, i),
             fused_in=tag,
             dtype=k.get("dtype"),
         )
-        if isinstance(k.get("addcmul_input_tensor1"), Tensor):  # fused epilogue
-            out = pointwise("addcmul", [out, k["addcmul_input_tensor1"], k.get("addcmul_input_tensor2")])
-        outs.append(out)
+        outs.append(_fused_epilogue(out, k) if spec.epilogue else out)
     return outs
 
 
-def minimal_matmul_strided_reduce_scatter_async(input_tensor=None, weight_tensor=None, *a, **k):
-    """Fused: matmul, then reduce-scatter the partial sums."""
+def _run_matmul_then_scatter(spec, input_tensor, weight_tensor, a, k):
+    """Builder for the MMRS shape: matmul, then reduce-scatter the partial sums."""
     x = _t(input_tensor, "input_tensor", a, k)
     w = _t(weight_tensor, "weight_tensor", a, k, index=1)
-    m = _cluster_axis(k, "minimal_matmul_strided_reduce_scatter_async")
-    tag = "mmrs@" + (recorder.loc() or "?")
-    partial = _matmul(x, w, k.get("bias"), label="mmrs_mm", fused_in=tag, dtype=k.get("dtype"))
+    m = _cluster_axis(k, spec.call)
+    tag = "%s@%s" % (spec.tag, recorder.loc() or "?")
+    partial = _matmul(x, w, k.get("bias"), label="%s_mm" % spec.tag, fused_in=tag, dtype=k.get("dtype"))
     dim = _dim(k, partial)
     out = recorder.emit(
         "reduce_scatter",
@@ -456,11 +458,26 @@ def minimal_matmul_strided_reduce_scatter_async(input_tensor=None, weight_tensor
         attrs={"dim": dim},
         mesh_axis=m,
         fused_in=tag,
-        base="mmrs_rs",
+        base="%s_rs" % spec.tag,
     )
-    if isinstance(k.get("addcmul_input_tensor1"), Tensor):
-        out = pointwise("addcmul", [out, k["addcmul_input_tensor1"], k.get("addcmul_input_tensor2")])
-    return None, out
+    return None, (_fused_epilogue(out, k) if spec.epilogue else out)
+
+
+_FUSED_BUILDERS = {
+    "gather_then_matmul": _run_gather_then_matmul,
+    "matmul_then_scatter": _run_matmul_then_scatter,
+}
+
+
+def _fused_dispatch(call: str):
+    """Bind a table-declared fused kernel to its builder (blocker 18)."""
+    spec = FUSED_KERNELS[call]
+    builder = _FUSED_BUILDERS[spec.order]
+    return lambda input_tensor=None, weight_tensor=None, *a, **k: builder(spec, input_tensor, weight_tensor, a, k)
+
+
+all_gather_minimal_matmul_async = _fused_dispatch("all_gather_minimal_matmul_async")
+minimal_matmul_strided_reduce_scatter_async = _fused_dispatch("minimal_matmul_strided_reduce_scatter_async")
 
 
 def dit_minimal_matmul_addcmul_fused(x, w, scalar=1.0, a1=None, a2=None, **k) -> Tensor:
