@@ -33,8 +33,8 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → 50.0-52.6 ms/frame (mean 50.9), RTF 0.63-0.71 on 14 of 15 cases.** Per frame:
-Block 1 ~26.6 ms, Block 2 ~23.0 ms, host 0.2 ms. Block 1 is now the larger half.
+**Performance: 83.7 → 49.0-52.5 ms/frame (mean 50.4), RTF 0.62-0.71 on 14 of 15 cases.** Per frame:
+Block 1 ~25.7 ms, Block 2 ~23.0 ms, host 0.2 ms. Block 1 is marginally the larger half.
 goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
 width-sharded RMSNorm in Block 2, qkv fusion) and §6.8 (BFP8 on wqkv/wo, semantic head on device) —
 and §6.7 is the one to read first: it explains why the WER headline cannot gate any of this.
@@ -907,9 +907,29 @@ the norm's output is immediately eaten by a big DRAM-weight matmul that dominate
 still §6.6: a width-SHARDED activation into a DRAM-weight matmul is slower. Interleaved-L1 is the
 useful middle.
 
-**Where this has NOT been tried yet: Block 1's interior and Block 3.** Block 1 forces sdpa_decode's
-output to DRAM and leaves its MLP intermediates on the default; Block 3 is where `ign/voxtral_opt`
-claims ~18 ms → ~6 ms from removing ~104 sharded/interleaved hops, which is the same idea again.
+**IT TRANSFERS TO BLOCK 1 TOO, for another 0.9 ms at zero accuracy cost** — min PCC 0.999850, mean
+worst-sample 0.85%, p90 1.09% and even max 1.40% all byte-identical before and after, over 44
+teacher-forced frames:
+
+| Block 1 decode | ms/step | vs shipped |
+|---|---|---|
+| shipped | 26.43 | — |
+| + wo output and residual L1 | 26.19 | 1.009x |
+| + MLP intermediates (g, u) L1 | **25.53** | **1.035x** ← shipped |
+
+And a THIRD negative that sharpens the rule: **sdpa_decode's output stays forced to DRAM.** That
+`to_memory_config(o, DRAM)` looks like exactly the round trip this whole finding is about, and
+routing it to L1 measures 0.999x — nothing. So the pattern is not "L1 is faster", nor even "avoid
+DRAM round trips". It is specifically **values with a consumer close behind**; the norm output and
+sdpa output both feed a single large op that dominates whatever the transfer cost was.
+
+`_mlp` is shared with prefill, so the memory config is passed in at the call site rather than baked
+in — prefill's `g` is [1,S,9216] with S up to 384, i.e. 6.8 MB, so it passes DRAM. That mirrors how
+`h` is already handled, and for the same reason: it is what the two paths do differently.
+
+**Still untried: Block 3.** This is the third finding in a row to point there — `ign/voxtral_opt`
+claims ~18 ms → ~6 ms from removing ~104 sharded/interleaved hops, which is this same idea again,
+and Block 3 is ~9% of wall with no optimization pass ever.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of

@@ -13,7 +13,7 @@ with `tt_transformers` on the same metric for comparison:
                              ours            ours all-BFP8   tt_transformers
     prefill, last position     0.999883        0.999881        0.999564
     decode step                0.99985+        0.99986         0.981
-    decode ms/step             26.6            33.6            48
+    decode ms/step             25.7            33.6            48
 
 There is deliberately no end-to-end WER row: the same code at three seeds spans 0.88-2.06% on that
 metric, so it cannot separate two builds. The gate is long-form WER (0.00% over 298 words) plus the
@@ -56,7 +56,7 @@ the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
                                                  residual adds -- all of it under 4% now, which
                                                  is the decode-native layout's payoff
     ------------------------------------------
-    Block 1 total                      26.6 ms   (Block 2 is now ~28, so Block 1 is still
+    Block 1 total                      25.7 ms   (Block 2 is now ~28, so Block 1 is still
                                                  the larger half -- see ttnn_voxtral_flow)
 
 So the only remaining lever on Block 1 is WEIGHT BYTES, and that is capped by the hang: BFP8 on
@@ -138,6 +138,22 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 DTYPE = ttnn.bfloat16
+
+# DECODE'S INTERMEDIATES LIVE IN L1, not DRAM -- the same finding as Block 2's `_L1`
+# (ttnn_voxtral_flow), and it transfers: 26.43 -> 25.53 ms/step for NO accuracy change at all (min
+# PCC 0.999850, mean worst-sample 0.85%, p90 1.09% -- byte-identical before and after over 44
+# teacher-forced frames). Decode's values are 6-24 KB and each is consumed within an op or two, so
+# a DRAM round trip per intermediate is pure latency.
+#
+#     shipped                          26.43 ms
+#     + wo output and residual L1       26.19    1.009x
+#     + MLP intermediates (g, u) L1     25.53    1.035x   <- shipped
+#
+# TWO THINGS THAT DO NOT PAY, so they are not done. sdpa_decode's output stays forced to DRAM:
+# routing it to L1 instead measures 0.999x, i.e. nothing (that `to_memory_config` looks like an
+# obvious round trip to remove, and is not). And in Block 2 the norm output was likewise neutral.
+# The pattern is narrower than "L1 is faster": it is values with a consumer close behind.
+_L1 = ttnn.L1_MEMORY_CONFIG
 
 # RMSNORM, WIDTH-SHARDED, for the DECODE shape. The interleaved op costs 115 us on a [1,1,3072] row
 # -- latency, not arithmetic: one core reduces the whole row with a DRAM round trip either side.
@@ -421,18 +437,25 @@ class TtVoxtralGPT:
         # bit-identical to permute(0,2,1,3) + reshape, in one dispatch
         return ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, S, Q_WIDTH])
 
-    def _mlp(self, x, h, w):
+    def _mlp(self, x, h, w, mc):
         """Residual + SwiGLU over an ALREADY-NORMED `h`. Shared by prefill and decode.
 
-        `h` is passed in rather than computed here so the norm stays visible at the call site --
-        it is the one op whose form has repeatedly mattered (see _norm).
+        `h` and `mc` are both passed in rather than decided here, because they are exactly what the
+        two paths do differently, and both are load-bearing:
+          * `h` -- decode norms width-sharded (`_norm_dec`), prefill interleaved (`_norm`). See
+            _norm for why that distinction has bitten twice.
+          * `mc` -- decode keeps intermediates in L1 (see _L1, worth 0.9 ms). Prefill cannot: its
+            `g` is [1,S,9216] and S reaches 384, i.e. 6.8 MB, so it passes DRAM.
 
         `activation="silu"` on the FF1 matmul is bit-identical to a separate `ttnn.silu` and one
         dispatch cheaper.
         """
-        g = ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG)
-        u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG))
-        return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG))
+        g = ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG,
+                        memory_config=mc)
+        u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
+                                         memory_config=mc), memory_config=mc)
+        return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
+                                       memory_config=mc), memory_config=mc)
 
     def _layer(self, x, w, S, cos, sin, mask, cache=None):
         """x [1,S,3072] -> same. Pre-norm GQA with RoPE + causal mask, then SwiGLU.
@@ -451,7 +474,7 @@ class TtVoxtralGPT:
             ttnn.fill_cache(cache[1], vh, 0)
         a = self._attend(qh, kh, vh, S, mask)
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
-        return self._mlp(x, self._norm(x, w["fn"]), w)
+        return self._mlp(x, self._norm(x, w["fn"]), w, ttnn.DRAM_MEMORY_CONFIG)
 
     # ----------------------------------------------------------------------------
     # DECODE PATH -- one frame at a time; THIS is the hot loop
@@ -477,9 +500,11 @@ class TtVoxtralGPT:
         o = ttnn.transformer.scaled_dot_product_attention_decode(
             qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
             compute_kernel_config=COMPUTE_CONFIG)
+        # o -> DRAM and not _L1 on purpose: L1 here measures 0.999x, see _L1.
         a = ttnn.reshape(ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG), [1, 1, Q_WIDTH])
-        x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
-        return self._mlp(x, self._norm_dec(x, w["fn"]), w)
+        x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
+                                    memory_config=_L1), memory_config=_L1)
+        return self._mlp(x, self._norm_dec(x, w["fn"]), w, _L1)
 
     @torch.no_grad()
     def prefill(self, embeds, apply_final_norm=True, last_only=False):
