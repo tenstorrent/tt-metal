@@ -20,16 +20,15 @@ using namespace tt::tt_metal;
 // ("tiled") when tile-rows underfill the grid and Wt_index has column parallelism; otherwise the
 // width-independent streaming fallback.
 GatherCodegenDeviceOperation::program_factory_t GatherCodegenDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_index_tensor = tensor_args.input_index_tensor;
-    const auto geometry = compute_gather_geometry(input_tensor, input_index_tensor);
 
-    if (gather_interleaved_fits_l1(input_tensor, input_index_tensor, geometry.Wt_input, geometry.Wt_index)) {
+    if (gather_interleaved_fits_l1(input_tensor, input_index_tensor, attributes.Wt_input, attributes.Wt_index)) {
         auto* device = input_tensor.device();
         const auto grid_size = device->compute_with_storage_grid_size();
         const uint32_t max_cores = grid_size.x * grid_size.y;
-        if (geometry.Wt_index >= 2 && geometry.Ht < max_cores) {
+        if (attributes.Wt_index >= 2 && attributes.Ht < max_cores) {
             return GatherCodegenProgramFactoryTiled{};
         }
         return GatherCodegenProgramFactoryInterleaved{};
@@ -138,8 +137,19 @@ Tensor gather_codegen(
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    const auto geometry = compute_gather_geometry(input_tensor, input_index_tensor);
     return ttnn::device_operation::launch<GatherCodegenDeviceOperation>(
-        GatherCodegenParams{dim, sparse_grad, output_memory_config, sub_core_grids},
+        GatherCodegenParams{
+            dim,
+            sparse_grad,
+            output_memory_config,
+            sub_core_grids,
+            geometry.Ht,
+            geometry.Wt_input,
+            geometry.Wt_index,
+            geometry.index_valid_h_last,
+            geometry.index_valid_w_last,
+            geometry.index_ht_per_batch},
         GatherCodegenInputs{input_tensor, input_index_tensor, output_tensor});
 }
 

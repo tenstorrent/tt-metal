@@ -13,10 +13,10 @@ namespace ttnn::prim {
 struct GatherCodegenParams;
 struct GatherCodegenInputs;
 
-// Host-computed tile-page geometry shared by all three factories AND by select_program_factory's
-// L1-fit / core-count routing (ops/gather/gather.py Step 6, `_gather_impl`). Derived purely from
-// tensor shapes (like native GatherDeviceOperation's own inline Ht/Wt_input/Wt_index computation),
-// so none of it needs to live in GatherCodegenParams for cache-key purposes.
+// Host-computed tile-page geometry (ops/gather/gather.py Step 6, `_gather_impl`), computed once
+// from tensor shapes and copied into GatherCodegenParams (the manifest's cache_key_fields) so it
+// participates in program-cache hashing; compute_gather_geometry itself is called only at the
+// gather_codegen() call site, never re-derived inside the factories or select_program_factory.
 struct GatherGeometry {
     uint32_t Ht = 0;
     uint32_t Wt_input = 0;

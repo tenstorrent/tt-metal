@@ -131,7 +131,13 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
     const GatherCodegenParams& attributes, const GatherCodegenInputs& tensor_args, Tensor& output_tensor) {
     const auto& in_t = tensor_args.input_tensor;
     const auto& index_t = tensor_args.input_index_tensor;
-    const auto geometry = compute_gather_geometry(in_t, index_t);
+    const GatherGeometry geometry{
+        attributes.Ht,
+        attributes.Wt_input,
+        attributes.Wt_index,
+        attributes.index_valid_h_last,
+        attributes.index_valid_w_last,
+        attributes.index_ht_per_batch};
 
     auto* device = in_t.device();
     const auto split = split_gather_work(device, attributes.sub_core_grids, geometry.Ht);
@@ -207,7 +213,13 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
     const GatherCodegenParams& attributes, const GatherCodegenInputs& tensor_args, Tensor& output_tensor) {
     const auto& in_t = tensor_args.input_tensor;
     const auto& index_t = tensor_args.input_index_tensor;
-    const auto geometry = compute_gather_geometry(in_t, index_t);
+    const GatherGeometry geometry{
+        attributes.Ht,
+        attributes.Wt_input,
+        attributes.Wt_index,
+        attributes.index_valid_h_last,
+        attributes.index_valid_w_last,
+        attributes.index_ht_per_batch};
     const uint32_t total_work = geometry.Ht * geometry.Wt_index;
 
     auto* device = in_t.device();
@@ -285,7 +297,13 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
     const GatherCodegenParams& attributes, const GatherCodegenInputs& tensor_args, Tensor& output_tensor) {
     const auto& in_t = tensor_args.input_tensor;
     const auto& index_t = tensor_args.input_index_tensor;
-    const auto geometry = compute_gather_geometry(in_t, index_t);
+    const GatherGeometry geometry{
+        attributes.Ht,
+        attributes.Wt_input,
+        attributes.Wt_index,
+        attributes.index_valid_h_last,
+        attributes.index_valid_w_last,
+        attributes.index_ht_per_batch};
 
     auto* device = in_t.device();
     const auto split = split_gather_work(device, attributes.sub_core_grids, geometry.Wt_index);
