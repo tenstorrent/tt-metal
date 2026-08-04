@@ -87,7 +87,8 @@ template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32_t block_ct_dim, const TensorShape& tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    LLK_ASSERT(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
+    // Using static_assert here for compile-time check.
+    static_assert(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
     LLK_ASSERT(
         tensor_shape.num_faces_c_dim == 2, "block reduce_max_row requires a 32-wide operand (num_faces_c_dim == 2); narrow tiles (32x16, 16x16) unsupported");
 
@@ -149,7 +150,7 @@ template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index, const TensorShape& tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    LLK_ASSERT(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
+    static_assert(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
 
     _set_dst_write_addr_by_rows_(dst_index);
 
