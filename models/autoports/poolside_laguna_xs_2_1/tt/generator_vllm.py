@@ -809,12 +809,26 @@ class LagunaForCausalLM:
         tokens = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1)
         B = int(tokens.shape[0])
         pos = torch.as_tensor(positions, dtype=torch.int32).reshape(B)
-        pt_host = torch.as_tensor(page_table, dtype=torch.int32)
-        if pt_host.dim() == 1:
-            pt_host = pt_host.unsqueeze(0)
-        if pt_host.shape[0] == 1 and B > 1:
-            pt_host = pt_host.repeat(B, 1)  # replicate the user's block row across candidates
-        pt = self._page_table_to_device(pt_host)
+
+        def _row_to_B(row):
+            """One user's block row -> [B, w] device page table (replicated across the K+1 candidates)."""
+            r = torch.as_tensor(row, dtype=torch.int32)
+            if r.dim() == 1:
+                r = r.unsqueeze(0)
+            r = r[:1]  # the single served user's row
+            if B > 1:
+                r = r.repeat(B, 1)
+            return self._page_table_to_device(r)
+
+        if page_tables_per_layer is not None:
+            # HYBRID serving: the 30 sliding layers read a different (smaller) KV pool than the 10 full
+            # layers, so each layer needs ITS group's block row. decode_layers routes a per-layer list
+            # (model.py: per_layer = isinstance(page_table,(list,tuple))). Build one device PT per built
+            # layer, each = that layer's group row replicated to the B=K+1 candidate batch. Without this
+            # the sliding layers would index the full pool -> silently wrong verify logits.
+            pt = [_row_to_B(ptl_i) for ptl_i in page_tables_per_layer]
+        else:
+            pt = _row_to_B(page_table)  # uniform: one row shared by all layers
         tok_tt = self.gen._rep(tokens.reshape(1, B).to(torch.int32), ttnn.uint32)
         cur = self.gen._rep(pos, ttnn.int32)
         ridx = self.gen._rep(pos.reshape(1, B), ttnn.uint32)
@@ -894,14 +908,24 @@ class LagunaForCausalLM:
         tokens = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1)
         K1 = int(tokens.shape[0])
         pos = torch.as_tensor(positions, dtype=torch.int32).reshape(K1)
+        if not traced:
+            # Eager verify: forward BOTH the uniform page_table and the hybrid page_tables_per_layer;
+            # verify_forward_decode replicates the user's row to the K1 candidate batch and routes the
+            # per-layer list to decode_layers (sliding layers read their own pool). page_table may be
+            # None in pure-hybrid serving, so hand it through unchanged.
+            logits = self.verify_forward_decode(
+                tokens,
+                pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                page_tables_per_layer=page_tables_per_layer,
+            )
+            return torch.argmax(logits, dim=-1).to(torch.int32)
         pt_row = torch.as_tensor(page_table, dtype=torch.int32)
         if pt_row.dim() == 1:
             pt_row = pt_row.unsqueeze(0)
         pt_row = pt_row[:1]  # the single user's block row (replicated below to the batch size used)
         pt_host = pt_row.repeat(K1, 1) if K1 > 1 else pt_row
-        if not traced:
-            logits = self.verify_forward_decode(tokens, pos, page_table=pt_host, kv_cache=kv_cache)
-            return torch.argmax(logits, dim=-1).to(torch.int32)
         st = self._verify_dec.get(K1)
         if st is None:
             # item 3.2: verify-decode trace for this K1 not pre-captured -> compile+capture in-request.
