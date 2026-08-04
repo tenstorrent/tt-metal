@@ -2,26 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end Bria FIBO text->image pipeline on the 2x2 Blackhole mesh.
-
-Wires the three sp1/sp2/sp3 components into one denoise loop, mirroring
-``models/tt_dit/pipelines/flux1/pipeline_flux1.py``:
-
-* SmolLM3 text encoder (``SmolLM3TextEncoderWrapper``, tensor-parallel on tp_axis of the submesh),
-* ``BriaFiboTransformer`` denoiser (sp=2, tp=2) + ``EulerSolver`` flow-match step,
-* Wan 2.2 residual VAE decoder (``WanVAEDecoderAdapter``).
-
-FIBO deltas vs flux1 (see the sub-project 4 design spec):
-
-* Latents are **not** 2x2-packed (``in_channels == VAE z_dim == 48``); the flux-style pack/unpack
-  is replaced by a plain permute/reshape (``_pack_latents_no_patch`` / ``_unpack_latents_no_patch``).
-* CFG runs as two **unpadded per-branch** forwards (positive / negative at their true token lengths),
-  combined with ``noise = uncond + guidance_scale * (cond - uncond)``. This avoids the reference's
-  padding attention-mask (the tt transformer has none) without touching the validated transformer.
-* Per-block caption conditioning: SmolLM3's 37 hidden states are stretched to the transformer's 46
-  blocks via ``build_text_encoder_layers``.
-
-This first correctness pass runs UNTRACED (tracing is a documented follow-up).
+"""
+End-to-end Bria FIBO text->image pipeline on the 2x2 Blackhole mesh.
 """
 
 from __future__ import annotations
@@ -77,10 +59,7 @@ class BriaFiboPipelineConfig:
     # True -> every prompt runs the DiT prompt branch at its bucket length (stable trace, one
     # matmul-config set per bucket); False -> true-length (unpadded) branch. Env-toggle: FIBO_KEEP_PADDING.
     # Default True: bucketing (see pad_bucket) keeps the short/empty negative branch at the small 256
-    # bucket, so CFG's uncond branch denoises at M=256 instead of the full bucket. NOTE: fixed padding
-    # still drops latent PCC to ~92% on the positive branch (the diffusers reference masks pad tokens but
-    # the tt joint SDPA exposes no mask kwarg); a masked joint-SDPA op would be needed to close that.
-    # Opt out via FIBO_KEEP_PADDING=0.
+    # bucket, so CFG's uncond branch denoises at M=256 instead of the full bucket.
     keep_padding: bool = True
 
     # Fixed padding bucket (tokens). Drives BOTH the encoder pad length AND -- when keep_padding is
@@ -115,9 +94,7 @@ class BriaFiboPipelineConfig:
 
         # num_links is bounded by the ethernet channels physically available between adjacent
         # devices on a mesh axis. Both the 4x8 Blackhole Galaxy and the 2x2 BH dev mesh expose only
-        # 2 channels per hop (num_links>=3 -> "Requested link index 2 out of bounds" fabric fatal).
-        # Shape-driven default (the only hardware-dependent preset FIBO carries); an explicit
-        # num_links= overrides. Unknown shapes fall back to the safe minimum of 1.
+        # 2 channels per hop Unknown shapes fall back to the safe minimum of 1.
         if num_links is None:
             num_links = {(2, 2): 2, (4, 8): 2}.get(mesh, 1)
 
@@ -134,8 +111,7 @@ class BriaFiboPipelineConfig:
         # on axis 0 (TP = mesh[0] = 4), on the whole mesh (same submesh as the DiT). The token sequence is
         # padded to its bucket (short/empty negative -> 256, long positive -> 1024) and sharded over the
         # SP axis; SmolLM3Attention all-gathers K/V over
-        # the SP axis and Q/K/V/O over the TP axis. PCC-validated by
-        # tests/models/bria_fibo/smollm3/test_smollm3.py::test_smollm3_encoder_sp. On the 4x8 Galaxy this SP=8 x
+        # the SP axis and Q/K/V/O over the TP axis. On the 4x8 Galaxy this SP=8 x
         # TP=4 layout measured ~12.5 s/encode vs ~23.8 s for SP=4 x TP=8 (test_fibo_encode_perf).
         enc_sp_axis, enc_tp_axis = 1, 0
         encoder_parallel_config = EncoderParallelConfig(
@@ -234,8 +210,7 @@ class BriaFiboPipeline:
         # CCLManager (not the transformer's): the transformer's CCLManager carries the resident denoise
         # trace, and CCLManager ping-pong buffers/semaphores are stateful (a Python index flips each
         # call). An untraced VAE/latent-gather all-gather on that same manager between traced
-        # generations would desync the state the trace baked, corrupting replay (verified: shared
-        # manager -> gen 2+ diverged to ~0.13 PCC). Separate manager mirrors wan/ltx
+        # generations would desync the state the trace baked, corrupting replay. Separate manager mirrors wan/ltx
         # (dit_ccl_manager vs vae_ccl_manager). Sharing the submesh still spreads the decode's
         # activations across all 4 devices.
         self._vae_ccl_manager = CCLManager(self._submesh, num_links=config.num_links, topology=config.topology)
