@@ -466,7 +466,22 @@ _MATERIAL_GAP_FRAC = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FRAC", "0.03"))
 _MATERIAL_GAP_FLOOR = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FLOOR", "0.05"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
 _STRUCTURAL_RUNGS = {"structural", "gather", "fusion", "fuse", "sparse", "cache", "kv-cache"}
-_LADDER_ORDER = ["grid", "fidelity", "dtype", "shard", "structural", "tt-lang", "cpp"]
+# THE ladder, in climb order. One definition, because two disagreeing ones is how "host" went
+# missing: summary.py renders the levels as a hardcoded display string
+# ("grid -> fidelity -> dtype -> shard -> host -> tt-lang -> cpp") and this constant was written
+# fresh from memory when the closed-rung refusal needed an ordered list, dropping `host`.
+#
+# The cost of that omission is specific: the refusal returns `rungs_still_open` to redirect the
+# agent, so on gemma-3-12b-it -- where EVERY top op reads bound_by=dispatch and host_overhead is
+# 62.4 ms, the second-largest bucket -- it was naming every remaining rung EXCEPT the one that
+# addresses the binding constraint. Across 158 attempts the dispatch axis was tried once.
+_LADDER_ORDER = ["grid", "fidelity", "dtype", "shard", "host", "structural", "tt-lang", "cpp"]
+
+
+def ladder_order() -> list:
+    """The canonical climb order. Import this rather than restating it."""
+    return list(_LADDER_ORDER)
+
 
 _KNOB_ORDER = {
     "memory": ("grid", "dtype", "shard", "fidelity"),

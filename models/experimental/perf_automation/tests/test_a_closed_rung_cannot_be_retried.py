@@ -185,3 +185,32 @@ def test_a_rung_tried_in_a_PREVIOUS_run_is_still_closed(mcp, monkeypatch):
     monkeypatch.setattr(mcp, "_attempt_fullpipe_verdict", lambda: {"own": True, "ms": 35.0, "ref": 35.0, "delta": 0.0})
     out = mcp.record_kernel_attempt("Matmul A", "grid", 399.0, False)
     assert out.get("recorded") is False, out
+
+
+# ---------------------------------------------------------------- the ladder has ONE definition
+
+
+def test_the_refusal_offers_the_host_rung(mcp):
+    """`host` was missing from _LADDER_ORDER, so the refusal named every remaining rung EXCEPT the
+    dispatch one -- on a model where every top op reads bound_by=dispatch and host_overhead is the
+    second-largest bucket. Across 158 attempts the dispatch axis was tried once."""
+    assert "host" in mcp.ladder_order(), mcp.ladder_order()
+
+
+def test_the_ladder_has_a_single_definition(mcp):
+    """summary.py used to restate the climb order as a hardcoded display string; writing this
+    constant fresh from memory is exactly how the two drifted."""
+    import importlib
+
+    summary = importlib.import_module("models.experimental.perf_automation.cc_optimize.summary")
+    rendered = summary._levels_display()
+    for rung in mcp.ladder_order():
+        if rung != "tt-lang":
+            assert rung in rendered, "%s missing from the rendered levels: %s" % (rung, rendered)
+
+
+def test_the_climb_order_is_cheapest_first(mcp):
+    """knobs before structural before hand-written kernels -- a long ladder must not spend its
+    budget on tt-lang/C++ before reaching a cheaper restructure."""
+    order = mcp.ladder_order()
+    assert order.index("grid") < order.index("structural") < order.index("tt-lang") < order.index("cpp")

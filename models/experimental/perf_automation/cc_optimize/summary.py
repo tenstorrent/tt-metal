@@ -241,6 +241,18 @@ def _disp_level(label: str) -> str:
 _MODEL_LEVER_PREFIX = "model:"
 
 
+def _levels_display() -> str:
+    """Render the ladder from its single definition in perf_mcp, not from a second hardcoded copy."""
+    try:
+        from .perf_mcp import ladder_order
+    except Exception:  # noqa: BLE001
+        try:
+            from perf_mcp import ladder_order  # type: ignore
+        except Exception:  # noqa: BLE001
+            return "grid -> fidelity -> dtype -> shard -> host -> tt-lang -> cpp"
+    return " -> ".join(_disp_level(r) if r == "tt-lang" else r for r in ladder_order())
+
+
 def _op_label(sig: str, width: int = 34) -> str:
     """Display label for an op, KEEPING THE SHAPE that distinguishes it.
 
@@ -1172,6 +1184,6 @@ def render_summary(
 
     lines.append("")
     lines.append(
-        f"levels: grid -> fidelity -> dtype -> shard -> host -> {_disp_level('tt-lang')} -> cpp   |   ✓win = new best so far, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
+        f"levels: {_levels_display()}   |   ✓win = new best so far, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
     )
     return "\n".join(lines)
