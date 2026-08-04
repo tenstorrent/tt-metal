@@ -63,8 +63,4 @@ void py_module_types(nb::module_& mod) {
             )doc");
 }
 
-void py_module(nb::module_& /* mod */) {
-    // No free functions; the service is exposed entirely via py_module_types.
-}
-
 }  // namespace ttnn::layer_ack_service
