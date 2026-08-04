@@ -2555,7 +2555,34 @@ def _promote_fullpipe_pending() -> bool:
     try:
         if not src.exists():
             return False
-        _FULLPIPE_BASELINE_1CQ_PATH.write_text(src.read_text())
+        # A RATCHET DOES NOT TURN BACKWARDS. This copied the pending reading in unconditionally, so
+        # the bar tracked the LAST committed measurement rather than the BEST one, and one bad commit
+        # replaced a good reference for every later verdict. gemma-3-12b-it: the ledger went
+        # 35.3772 -> 34.9066 -> 55.0264, all tagged committed-best. 55.0264 ms is 18.2 tok/s/u on a
+        # model that runs at 28.6, so the next run would have graded every attempt against 18.2 and
+        # banked anything at all as a ~20 ms win, written conclusive. A mode change still
+        # re-baselines: eager and trace numbers are not comparable, so the old value is meaningless
+        # rather than better.
+        _keep_old = False
+        try:
+            _new_doc = json.loads(src.read_text())
+            _new_ms = float(_new_doc.get("full_pipeline_ms") or 0.0)
+            if _FULLPIPE_BASELINE_1CQ_PATH.exists() and _new_ms > 0:
+                _cur_doc = json.loads(_FULLPIPE_BASELINE_1CQ_PATH.read_text())
+                _cur_ms = float(_cur_doc.get("full_pipeline_ms") or 0.0)
+                _same_mode = str(_cur_doc.get("mode") or "") == str(_new_doc.get("mode") or "")
+                if _cur_ms > 0 and _same_mode and _new_ms > _cur_ms:
+                    _keep_old = True
+                    print(
+                        "  [full-pipeline-gate] REFUSED to move the bar backwards: %.4f ms is slower "
+                        "than the committed best %.4f ms; keeping the best." % (_new_ms, _cur_ms),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+        except Exception:  # noqa: BLE001 -- a corrupt pending file must not take the bar with it
+            _keep_old = True
+        if not _keep_old:
+            _FULLPIPE_BASELINE_1CQ_PATH.write_text(src.read_text())
         # RECORD THE RATCHET. This is the reading a win is confirmed against -- trace_replay
         # end-to-end vs trace_replay end-to-end -- and it was written only to the gate's own baseline
         # file. The ledger's fullpipe rows therefore only ever held the run's START and END bookends,
