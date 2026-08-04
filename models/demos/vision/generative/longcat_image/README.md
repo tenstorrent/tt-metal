@@ -81,9 +81,10 @@ PCC, not rounding in any one matmul. That's why the DiT tolerates aggressive qua
 ./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_image_edit \
     --image <path.jpg> --prompt "change the cat to a dog"
 
-# Fastest path: 4-chip tensor-parallel, all-resident (needs a QB2 4-chip mesh) — see Performance below.
+# Fastest path: 4-chip tensor-parallel, all-resident warm server (needs a QB2 4-chip mesh).
+# Warms up once, then prompts for text at a REPL — see Performance below for numbers.
 ./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_4chip \
-    --prompt "a photograph of a cat sitting on a red sofa"
+    --steps 50 --size 512 --max_length 512 --cq 2
 
 # e2e correctness gates (on device)
 ./python_env/bin/python -m pytest models/demos/vision/generative/longcat_image/tests/e2e/ -s
@@ -94,7 +95,7 @@ Common flags (all three demos):
 | Flag | Effect |
 | --- | --- |
 | `--size 1024` | match the HF reference resolution exactly (default 512; use ≥ 512 — 256px is out-of-distribution for this 1024px-class model) |
-| `--cq 2` | run the denoise loop under trace + 2 command queues |
+| `--cq 2` | run the denoise loop under trace + 2 command queues (default on `demo_4chip.py`) |
 | `--compare_golden` | also run the slow CPU HF reference and print e2e PCC (minutes; omit for a normal run) |
 | `--profile` | print per-stage wall-clock timing (`LONGCAT_PROFILE=1` env var works too) |
 
@@ -104,74 +105,18 @@ correspond to HF with prompt-rewrite off.
 
 E2e gate caps (steps / size / token budget) are small by default for a fast on-device
 check and applied identically to the TT run and the (disk-cached) HF golden — override via
-`LONGCAT_E2E_{STEPS,SIZE,MAXLEN,GUIDANCE,PROMPT}`. For the bounded per-step device-latency
-harness (a small 128px/32-token relative-optimization figure, not the full-resolution cost):
+`LONGCAT_E2E_{STEPS,SIZE,MAXLEN,GUIDANCE,PROMPT}`.
 
-```bash
-LONGCAT_PERF_CQ=1 ./python_env/bin/python -m pytest -s \
-    models/demos/vision/generative/longcat_image/tests/e2e/test_text_to_image_perf.py
-```
-
-## Trace & command queues
-
-The denoise loop is captured **once** as a ttnn trace (`_tt_denoise_traced` in
-`tt/pipeline.py`) — both CFG forwards, the guidance combine, cfg-renorm, and the
-FlowMatch-Euler step — and replayed per step via `execute_trace`, removing per-op host
-dispatch. It falls back to eager on the image-edit path or any trace error.
-
-`--cq 2` additionally enables a **trace + 2CQ** variant (`_tt_denoise_traced_2cq`): CQ1
-stages the next step's `temb`/`dt` via DMA while CQ0 replays the trace (CQ1 may only issue
-DMA, never a program/kernel). Numerically identical to 1CQ (image PCC 1.0); roughly parity
-in speed here since the step is compute-bound with a tiny prefetchable input.
-
-`LongCatImagePipelineTT.warmup()` builds the DiT + VAE stubs and captures this trace once
-with dummy shape-matched inputs, so later `run_text_to_image()` calls whose
-`max_length`/`height`/`width`/`guidance_scale`/`enable_cfg_renorm`/`cfg_renorm_min` match
-replay the resident trace instead of rebuilding (a mismatched request falls back
-transparently to the cold path — correctness never depends on the caller remembering
-`warmup()`'s exact arguments, only the throughput win does). Call `close()` on shutdown.
-The VAE must be warmed **before** the trace is captured — warming it after corrupts its
-weights when the trace re-runs (fixed in `tt/pipeline.py`; multi-request warm generation
-is verified coherent across back-to-back requests at 512px and 1024px).
-
-## Performance
+## Performance (tp=4, all-resident, 4 chips)
 
 Measured on QB2 (`sjc2-qb2-9b22`), HF-reference 50 steps, warm trace + 2CQ steady-state
-(after the one-time warmup), unless noted.
+(after the one-time warmup). One 1×4 `FABRIC_1D_RING` mesh, everything **resident** with
+**no weight reloads**: the DiT is tensor-parallel tp=4, and the fp32 text encoder is ALSO
+tensor-parallel tp=4 (column q/k/v/gate/up, row o/down + all_reduce, one GQA group/chip)
+shrinking its ~28 GB to ~7 GB/chip so it co-fits with the ~1.5 GB/chip DiT shard + VAE
+(`demo/demo_4chip.py`):
 
-### Optimization timeline — 512×512, baseline → current
-
-| Milestone | ms/step | Speedup vs baseline | Gate PCC (512px/24-step) |
-| --- | --- | --- | --- |
-| Baseline (bf16 DiT + bf8_b weights, manual attention, single chip) | 915 ms | 1.00× | 0.9670 |
-| + FlashAttention-2 (`ttnn.transformer.scaled_dot_product_attention`) | 662 ms | 1.38× | 0.9719 |
-| + 8×8 attention core grid | 643 ms | 1.42× | 0.9794 |
-| + tensor-parallel **tp=4** (4-chip QB2 mesh, DiT + encoder both tp=4, all-resident) | **279 ms** | **3.28×** | e2e latent/pixel 0.987 / 0.991 |
-
-PCC actually **improved** alongside speed up through the SDPA step — FlashAttention's fp32
-online-softmax accumulation is more accurate than the manual QK^T→softmax→P@V path it
-replaced. All milestones stayed at/above the 0.95 e2e gate. (The full-130-core grid was
-faster still, 561 ms, but over-partitioned the K reduction and broke PCC to 0.9179 —
-reverted; 8×8 is the PCC-safe speed point.)
-
-### 1024×1024 (HF default resolution)
-
-| Config | ms/step | denoise (50 steps) | end-to-end |
-| --- | --- | --- | --- |
-| Single chip (pre-SDPA/grid baseline) | ~4.24 s | 211.8 s | ~214.9 s |
-| tp=4, all-resident (4-chip) | **819 ms** | 40.9 s | **43.6 s** |
-
-Per-step scales ~4.6× from 512→1024 in the single-chip case (image tokens 1024→4096;
-attention is O(n²) but only part of the step, so it lands near 4.6×, not 16×).
-
-### Current best — 4-chip tensor-parallel, all-resident
-
-One 1×4 `FABRIC_1D_RING` mesh, everything **resident** with **no weight reloads**: the DiT
-is tensor-parallel tp=4, and the fp32 text encoder is ALSO tensor-parallel tp=4 (column
-q/k/v/gate/up, row o/down + all_reduce, one GQA group/chip) shrinking its ~28 GB to
-~7 GB/chip so it co-fits with the ~1.5 GB/chip DiT shard + VAE (`demo/demo_4chip.py`):
-
-| Setting | text-enc ×2 | denoise / step | denoise (50) | VAE | end-to-end |
+| Setting | text-enc ×2 | denoise / step | denoise (50 steps) | VAE | end-to-end |
 | --- | --- | --- | --- | --- | --- |
 | 512×512 / 50 steps | ~1.14 s | 279 ms | 14.0 s | 0.31 s | **15.4 s** |
 | 1024×1024 / 50 steps | ~1.16 s | 819 ms | 40.9 s | 1.45 s | **43.6 s** |
@@ -189,15 +134,11 @@ M=192 tokens ≪ K=N=3584) — exact, no precision change, device_ms 1719.9 → 
 
 | Check | PCC | Gate |
 | --- | --- | --- |
-| e2e, fast 1-step gate (256px) | 0.9931 | ≥ 0.95 |
-| e2e, 512px / 24 steps (current, SDPA + 8×8 grid) | 0.9794 | ≥ 0.95 |
-| DiT tp=4 forward vs single-chip | 0.998 | — |
-| Text encoder tp=4 `last_hidden_state` vs single-chip | 0.9986 | — |
-| e2e latent, tp=4 all-resident (512px/50 steps) vs single-chip | 0.987 | ≥ 0.95 |
-| e2e pixel, tp=4 all-resident (512px/50 steps) vs single-chip | 0.991 | ≥ 0.95 |
+| DiT tp=4 forward vs. reference | 0.998 | — |
+| Text encoder tp=4 `last_hidden_state` vs. reference | 0.9986 | — |
+| e2e latent, tp=4 all-resident (512px/50 steps) | 0.987 | ≥ 0.95 |
+| e2e pixel, tp=4 all-resident (512px/50 steps) | 0.991 | ≥ 0.95 |
 | Encoder `_emul_linear` fuse (exactness check) | 0.994 | — |
 
-The demo generates a coherent, prompt-accurate image at every measured milestone (see the
-`e2e PCC=...` line printed on every run, pass or fail); images are also visually confirmed
-coherent at 512px and 1024px across back-to-back warm requests and across single-chip vs.
-tp=4.
+Images are visually confirmed coherent and prompt-accurate at both 512px and 1024px
+across back-to-back warm requests.
