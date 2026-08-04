@@ -342,9 +342,9 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
 
     const bool is_l1_aligned = stick_nbytes == aligned_stick_nbytes;
 
-    // src1 is an intermediate L1 scratch. It is bound for both specializations so the kernel can
-    // use a constexpr compile-time argument rather than a preprocessor guard; the aligned path
-    // compiles its uses away.
+    // src1 is an intermediate L1 scratch, present only when the stick is not L1-aligned.
+    // It is touched by a single kernel (the writer, by raw pointer) -> self-loop DFB, and its
+    // binding is conditional on !is_l1_aligned (matched by a kernel-side #ifdef).
     DataflowBufferSpec src1_dfb = make_dfb(SRC1, stick_nbytes * stride_w * stride_h, 1, cb_data_format);
 
     TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
@@ -357,8 +357,14 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         {"stride_w", stride_w},
         {"input_width", input_width},
         {"work_per_core", patches_per_core},
-        {"is_l1_aligned", static_cast<uint32_t>(is_l1_aligned)},
     };
+
+    // Emit the NOT_L1_ALIGNED define to the writer only when the src1 scratch is bound
+    // (the define and the binding share one condition — Pattern: Conditional / optional DFB bindings).
+    KernelSpec::CompilerOptions::Defines writer_defines;
+    if (!is_l1_aligned) {
+        writer_defines.insert({"FOLD_RM_NOT_L1_ALIGNED", "1"});
+    }
 
     KernelSpec reader_spec{
         .unique_id = READER,
@@ -371,15 +377,19 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
-    // Writer consumes src0 and has src1 as a self-loop scratch. The kernel compiles the scratch
-    // path out for L1-aligned sticks.
+    // Writer: consumes src0; when !is_l1_aligned it also uses src1 as a self-loop scratch.
     Group<DFBBinding> writer_dfbs{
-        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
-        DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER}};
+        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
+    if (!is_l1_aligned) {
+        writer_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER});
+        writer_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path{WRITER_RM},
+        .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = common_cta,
@@ -426,7 +436,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     ProgramSpec spec{
         .name = "fold_multi_core_row_major_interleaved",
         .kernels = {reader_spec, writer_spec},
-        .dataflow_buffers = {src0_dfb, src1_dfb},
+        .dataflow_buffers = {src0_dfb},
         .tensor_parameters = {input_param, output_param},
         .work_units = {WorkUnitSpec{
             .name = "main",
@@ -434,6 +444,9 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
             .target_nodes = all_cores,
         }},
     };
+    if (!is_l1_aligned) {
+        spec.dataflow_buffers.push_back(src1_dfb);
+    }
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {reader_run, writer_run};
     run_args.tensor_args = {
