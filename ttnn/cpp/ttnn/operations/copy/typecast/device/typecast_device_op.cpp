@@ -63,14 +63,14 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
         log_debug(tt::LogOp, "Using TypecastProgramFactory");
         return TypecastProgramFactory{};
     }
-    if (args.sub_core_grids.has_value()) {
-        log_debug(tt::LogOp, "Using TypecastSubgridProgramFactory");
-        return TypecastSubgridProgramFactory{};
-    }
-
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         log_debug(tt::LogOp, "Using TypecastRowMajorChunkedProgramFactory");
         return TypecastRowMajorChunkedProgramFactory{};
+    }
+
+    if (args.sub_core_grids.has_value()) {
+        log_debug(tt::LogOp, "Using TypecastSubgridProgramFactory");
+        return TypecastSubgridProgramFactory{};
     }
 
     log_debug(tt::LogOp, "Using TypecastProgramFactory");
@@ -96,11 +96,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
 
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(
-            args.sub_core_grids.has_value() == false,
-            "Typecast operation does not support sub_core_grids when input tensor is in Row-Major layout.");
-    }
+    TT_FATAL(
+        input_tensor.layout() != Layout::ROW_MAJOR || !input_tensor.is_sharded() || !args.sub_core_grids.has_value(),
+        "Typecast operation supports sub_core_grids for Row-Major input only when the tensor is interleaved.");
 
     const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
     TT_FATAL(

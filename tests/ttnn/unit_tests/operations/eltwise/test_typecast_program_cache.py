@@ -34,7 +34,7 @@ routes:
   - tiled + sub_core_grids     -> TypecastSubgridProgramFactory
   - L1-sharded, equal tile size-> TypecastShardedProgramFactory  (borrowed DFBs + output self-loop)
   - L1-sharded, tile mismatch  -> TypecastProgramFactory         (non-optimized-sharded fallback)
-  - ROW_MAJOR interleaved      -> TypecastRowMajorChunkedProgramFactory
+  - ROW_MAJOR interleaved      -> TypecastRowMajorChunkedProgramFactory (with or without sub_core_grids)
 
 Run on Wormhole / Blackhole:
     pytest tests/ttnn/unit_tests/operations/eltwise/test_typecast_program_cache.py
@@ -217,4 +217,17 @@ def test_typecast_row_major_chunked_program_cache_hit(device):
         output_dtype=ttnn.float32,
         golden=lambda t: t.to(torch.float32),
         typecast_kwargs={"memory_config": ttnn.DRAM_MEMORY_CONFIG},
+    )
+
+
+def test_typecast_row_major_subgrid_program_cache_hit(device):
+    """ROW_MAJOR typecast restricts its work split to sub_core_grids and preserves cache rebinding."""
+    torch.manual_seed(0)
+
+    _run_cache_hit_dispatches(
+        device,
+        make_input=_bf16_to_fp32_input(device, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT),
+        output_dtype=ttnn.float32,
+        golden=lambda t: t.to(torch.float32),
+        typecast_kwargs={"memory_config": ttnn.DRAM_MEMORY_CONFIG, "sub_core_grids": _CORE_RANGE_SET},
     )
