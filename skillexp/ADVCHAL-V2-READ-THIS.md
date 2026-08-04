@@ -36,7 +36,7 @@ that shipped scores **0.98347** — the *incumbent* is the one that fails the mo
 | **this file** | the account, and pointers |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
 | [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |
-| [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **9 stage settings changed one at a time** — what each would have found, with a scoreboard |
+| [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **10 stage settings changed one at a time** — what each would have found, with a scoreboard |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -97,7 +97,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The twelve findings that matter
+## 3. The thirteen findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -332,6 +332,27 @@ DS-matmul advice **last** because "it has not won a measurement in this corpus".
 So two-thirds of the cost in the biggest op class is exempt from screening by the agreement clause, and the
 ordering rule sends cells to it last anyway. → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E15
 
+### 3.13 One stage rule is doing more work than anyone said: traced replay
+
+The stage insists on **traced decode replay**, justified in the skill as "what production does". Measured, it
+is doing something much stronger — it is the only mode in which these wins exist at all:
+
+| north-mini layer 1, same config | frozen (1-core norm) | 16-core norm | verdict |
+|---|---|---|---|
+| **traced replay** | 0.577971 | **0.512764** | **−65.2 µs — a win** |
+| **eager** | 0.971305 | 1.016869 | **+45.6 µs — a regression** |
+
+The sharded norm **adds ~46 µs of host dispatch** and **saves ~65 µs of device time**. Traced replay captures
+the host cost once; eager pays it every call. **A cell that timed eagerly would have rejected every norm win
+in this corpus, including both that shipped.**
+
+Related, and reassuring: two *real* consecutive layers cost the sum of the two measured alone to within
+±1.8 % (sign-varying, inside the block spreads), so the per-layer → per-model multiplication is not
+introducing an error that matters. *(Measured eagerly; the traced two-layer case needs harness support no cell
+has.)*
+
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E18
+
 ---
 
 ## 4. What makes a model advisor-compatible
@@ -469,3 +490,5 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 | The advisor has a "fewer-cores bias" | Its ordering prefers *more* cores, at level 6 of 7. The low values come from elsewhere — §3.3, open question |
 | qwen's unreachable linear layers are "~91 %" of its model time | **97 %** — recomputed from its own per-kind medians and layer counts |
 | "Re-measure an overlapping candidate at 4× replays" (my proposal) | **Refuted by experiment.** No separation, and the floor got 3–4× worse (§3.7, E8) |
+| Implicit: that the wins generalise across batch | They do **not** — phi is batch-32-pinned by construction (E17), and nothing records it |
+| Implicit: that DS-matmul advice never wins | One *did* (gemma-4-12B `linear` 12→55c, kept), and 65 % of matmul cost was never screenable anyway (§3.12) |

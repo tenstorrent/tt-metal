@@ -1,7 +1,7 @@
 # advchal-v2 — counterfactuals: what the stage would have found if it were set differently
 
-Each section changes **one stage setting** and reports what the corpus would have produced. Nine settings:
-four decided by measurement on hardware, four by recomputation over the cells' own artifacts, one by reading
+Each section changes **one stage setting** and reports what the corpus would have produced. Ten settings:
+five decided by measurement on hardware, four by recomputation over the cells' own artifacts, one by reading
 the source. A scoreboard is at the end.
 
 Companion to [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) (E1–E8). Numbering continues from
@@ -18,6 +18,7 @@ there.
 | **E15** | stop screening **DS-matmul advice last** | a matmul candidate *did* win, and **65 % of matmul cost** is exempt from screening by the agreement clause (~5.0 ms) |
 | **E16** | report the **best measured decoder**, not the advisor delta | the stage credited the advisor with **67 %** of what its own directions deliver (13.6 ms vs 20.2 ms) |
 | **E17** | change the **batch** | **not testable** — the wins are batch-32-pinned by construction, and nothing records the dependency |
+| **E18** | measure **two layers**, or measure **eagerly** | two layers are additive to ±1.8 %; and **eager measurement inverts every norm win** — the traced-replay rule is load-bearing |
 
 ---
 
@@ -320,3 +321,65 @@ cell's own 0.807152 — a ~1.6 µs spread across the whole session, which is the
 | floor: drop the first repeat | **no action** — v2 fixed it; 13/17 unchanged, no verdict flips | nothing |
 | advisor optimization level | **no action** — 2 is the only meaningful setting | nothing |
 | batch | **record it** — the wins are batch-pinned and the pin is undocumented | correctness of every published delta |
+| one isolated layer | **no action** — two consecutive layers are additive to ±1.8 % (eager; traced case open) | nothing |
+| traced replay, not eager | **already right, and say why** — eager inverts every norm win in the corpus | the entire win class |
+
+---
+
+## E18 — if the stage measured more than one layer, or measured eagerly
+
+Two settings at once, because one probe answers both.
+
+**Setting 1.** The stage times **one isolated layer** — which gets all 110 cores and all of L1 to itself — and
+multiplies by the layer count. Every model-level number in the corpus rests on that extrapolation.
+
+**Setting 2.** The stage mandates **traced decode replay**. What if a cell timed eager execution instead?
+
+**Probe.** Built two *real* north-mini layers in one process (layer 1 = sliding MoE, layer 4 = full MoE),
+timed each alone and then both back to back, under the stage's block structure (10 untimed warm-ups, 5 timed
+blocks, each the mean of 50 replays). Repeated at three norm settings.
+
+### Additivity
+
+| norm cores | layer 1 alone | layer 4 alone | sum | measured together | excess |
+|---|---|---|---|---|---|
+| 0 (frozen) | 0.976412 | 0.929511 | 1.905923 | 1.872189 | **−33.7 µs (−1.77 %)** |
+| 0 (repeat) | 0.971305 | 0.926575 | 1.897880 | 1.905330 | **+7.5 µs (+0.39 %)** |
+| 16 | 1.016869 | 0.992450 | 2.009318 | 1.998050 | **−11.3 µs (−0.56 %)** |
+| 32 | 1.041693 | 0.974995 | 2.016689 | 2.027412 | **+10.7 µs (+0.53 %)** |
+
+**Two consecutive layers cost the sum of the two measured alone.** The excess is within ±1.8 %, changes sign
+between runs, and is far inside the 25–188 µs block spreads. **No contention penalty between consecutive
+layers** — so per-layer → per-model multiplication is not introducing an error of a size that matters.
+
+⚠ **Scope of that conclusion.** This probe runs **eager**, so host dispatch dominates and is trivially
+additive. It is therefore weak evidence about the *traced* case, where device work dominates and L1
+contention would show if it existed. Building a two-layer **trace** is beyond what any cell's harness
+supports, so the traced-mode question stays open. What can be said is that nothing in the additivity data
+suggests a problem, and the stage's own §6 arithmetic is not obviously wrong.
+
+### The accidental finding: eager measurement inverts every norm win
+
+Compare the same layer and config across the two execution modes:
+
+| north-mini layer 1, sliding MoE | frozen (1-core norm) | 16-core norm | verdict |
+|---|---|---|---|
+| **traced replay** (the stage's protocol, cell's own harness) | 0.577971 | **0.512764** | **−65.2 µs — a win** |
+| **eager** (this probe's loop) | 0.971305 | 1.016869 | **+45.6 µs — a regression** |
+
+The sharded norm **adds ~46 µs of host dispatch** (`to_memory_config`, `sharded_to_interleaved`, an extra
+program) and **saves ~65 µs of device time**. Under traced replay the host cost is captured once and replayed
+away; only the device saving remains. Eagerly, the host cost is paid every call and swamps the saving.
+
+**So a cell that timed eagerly would have rejected every single norm win in this corpus** — including the two
+that shipped. The stage's insistence on traced decode replay is not a detail; it is what makes this entire
+class of optimisation visible at all.
+
+That also explains a puzzle in the corpus: several cells' `*_profile` measurements are consistently ~1–3 %
+slower than their timed counterparts, and one cell found that trace-replay rows carry no host markers between
+signposts. Host-side work and device-side work move in opposite directions for these candidates, so any
+mixing of the two measurement modes will produce contradictory rankings.
+
+**No change needed — this setting is already right.** Recorded because it is the one place where the stage's
+strictness is load-bearing, and because the *reason* is not stated anywhere in the skill: the file justifies
+tracing as "what production does", not as "the only mode in which a placement win is visible".

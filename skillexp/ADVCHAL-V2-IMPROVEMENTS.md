@@ -274,6 +274,18 @@ confirmations.
 
 - **Files:** `harness_template.py` (record the diff), `check.sh` (fail on >1 changed field).
 
+### C2z. No action needed, but state the reason: traced replay is load-bearing
+
+The skill justifies traced decode replay as "what production does". Measured, it is stronger than that: the
+sharded norm **adds ~46 µs of host dispatch and saves ~65 µs of device time**, so eagerly it reads as a
+**regression** (+45.6 µs) and under traced replay as a **win** (−65.2 µs). **A cell that timed eagerly would
+have rejected every norm win in this corpus.** Say that in the skill, so nobody "simplifies" the protocol.
+
+It also explains why `*_profile` measurements run 1–3 % slower than their timed counterparts, and why one cell
+found trace-replay rows carry no host markers between signposts: host and device costs move in *opposite*
+directions for this candidate class, so mixing measurement modes produces contradictory rankings.
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E18.
+
 ### C2a. No action needed: the first-repeat floor is fixed
 
 Recorded here so nobody re-fixes it. v1's floors were mostly unfinished warm-up (one harness did **1** untimed
