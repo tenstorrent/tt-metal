@@ -20,10 +20,10 @@ Two facts drive the plumbing:
 The norm is :class:`MiniMaxH3DistributedFrameGroupNorm`, which computes the per-(frame,
 group) statistics itself. Three in-tree alternatives were measured and all lost --
 ``ttnn.group_norm`` with T as batch (2.7x slower, and bf16-only, which made every norm a
-bf16 island in an otherwise fp32 encoder), ``ttnn.experimental.dit_fused_distributed_groupnorm``
-per frame (1.6x slower, ~30 GB/s against the stats norm's ~112), and carrying the resnet
-chain in TILE to avoid the round trip (a wash). STATE.md amendments 52, 56 and 61 carry the
-numbers; do not re-derive them.
+bf16 island in an otherwise fp32 encoder), a fused distributed GroupNorm device op written
+for this branch and since dropped (1.6x slower per frame, ~30 GB/s against the stats norm's
+~112), and carrying the resnet chain in TILE to avoid the round trip (a wash). STATE.md
+amendments 52, 56 and 61 carry the numbers; do not re-derive them.
 
 Each norm is still specialised to its ``(T, H, W)`` at construction, because the divisor is
 the *global* element count per (frame, group) and only the constructor knows the mesh factor.
@@ -63,9 +63,10 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
 
     * ``ttnn.group_norm`` has no notion of the mesh, so a sharded ``H`` gives each device a
       statistic over its own strip only.
-    * ``ttnn.experimental.dit_fused_distributed_groupnorm`` hard-rejects ``N > 1``, and
-      here ``N`` is ``T`` (17/9/5) because the statistic is per frame. It also takes a
-      single ``cluster_axis``, so it cannot reduce over both mesh axes.
+    * A fused distributed GroupNorm device op was written for this branch and dropped: it
+      hard-rejects ``N > 1``, and here ``N`` is ``T`` (17/9/5) because the statistic is per
+      frame. It also took a single ``cluster_axis``, so it could not reduce over both mesh
+      axes -- and it measured 1.6x slower than this anyway (STATE.md amendment 56).
 
     So the statistics are computed directly: per ``(frame, group)`` local sums, an
     all-reduce of **only those** -- ``T x 32`` scalars, against a full-activation gather --

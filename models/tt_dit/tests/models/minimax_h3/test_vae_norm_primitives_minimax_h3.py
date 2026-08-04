@@ -4,11 +4,12 @@
 
 """Primitives probe for a spatially-distributed per-frame GroupNorm.
 
-The cherry-picked ``dit_fused_distributed_groupnorm`` cannot serve H3: it hard-rejects
-``N > 1`` (``v1 supports batch N==1 only``) because it folds the spatial extent as
-``physical_volume()/C``, which spans batches -- and H3's norm is per-frame, so ``N = T``
-(17/9/5). It also takes a single ``cluster_axis``, so it cannot reduce over both mesh
-axes.
+A fused distributed GroupNorm device op cannot serve H3, which is why these primitives
+exist. It hard-rejects ``N > 1`` (``v1 supports batch N==1 only``) because it folds the
+spatial extent as ``physical_volume()/C``, which spans batches -- and H3's norm is
+per-frame, so ``N = T`` (17/9/5). It also takes a single ``cluster_axis``, so it cannot
+reduce over both mesh axes. It measured 1.6x slower regardless, so it was dropped from this
+branch (STATE.md amendment 56).
 
 The replacement computes the statistics itself: per ``(frame, group)`` local sums, an
 all-reduce of **just those** (T x 32 scalars, against the fused op's full-activation
