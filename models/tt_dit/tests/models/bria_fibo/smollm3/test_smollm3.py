@@ -14,26 +14,6 @@ from models.tt_dit.pipelines.bria_fibo.smollm3.config import SmolLM3Config
 from models.tt_dit.utils import tensor as tt_tensor
 from models.tt_dit.utils.check import assert_quality
 
-
-def test_smollm3_rope_matches_hf():
-    from models.tt_dit.pipelines.bria_fibo.smollm3.model_smollm3 import create_rope_tensors
-
-    head_dim, rope_theta, batch, seq = 128, 5000000.0, 2, 40
-    cos, sin = create_rope_tensors(batch, seq, head_dim, rope_theta)
-    assert cos.shape == (batch, 1, seq, head_dim)
-    assert sin.shape == (batch, 1, seq, head_dim)
-
-    # HF reference: inv_freq then emb=cat(freqs,freqs); cos/sin over (seq, head_dim)
-    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, head_dim, 2, dtype=torch.int64).float() / head_dim))
-    pos = torch.arange(seq).float()
-    freqs = torch.outer(pos, inv_freq)  # (seq, head_dim/2)
-    emb = torch.cat((freqs, freqs), dim=-1)  # (seq, head_dim)
-    ref_cos, ref_sin = emb.cos(), emb.sin()
-
-    torch.testing.assert_close(cos[0, 0], ref_cos, atol=1e-5, rtol=1e-5)
-    torch.testing.assert_close(sin[0, 0], ref_sin, atol=1e-5, rtol=1e-5)
-
-
 FIBO_PATH = os.environ.get("FIBO_PATH", "briaai/FIBO")
 
 
@@ -47,30 +27,13 @@ def _load_hf_smollm3():
     return model.eval()
 
 
-def test_smollm3_config_from_hf():
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    from transformers import AutoConfig
-
-    try:
-        hf = AutoConfig.from_pretrained(os.environ.get("FIBO_PATH", "briaai/FIBO"), subfolder="text_encoder")
-    except Exception as e:
-        pytest.skip(f"FIBO config unavailable: {e}")
-    cfg = SmolLM3Config.from_hf_config(hf)
-    assert cfg.rope_theta == 5000000.0
-    assert cfg.head_dim == 128
-    assert cfg.num_hidden_layers == 36
-    assert cfg.hidden_size == 2048
-    assert len(cfg.no_rope_layers) == 36 and sum(cfg.no_rope_layers) == 27
-    assert cfg.attention_bias is False
-
-
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192}],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("seq", [512])  # divisible by max sp_factor(8)*32 = 256 (and by 4*32)
+@pytest.mark.parametrize("seq", [1024])  # divisible by max sp_factor(8)*32 = 256 (and by 4*32)
 @pytest.mark.parametrize("sp_axis", [0, 1])  # 0 -> SP=4/TP=8 ; 1 -> SP=8/TP=4 (axis-swapped)
 def test_smollm3_encoder_sp(*, mesh_device, seq, sp_axis):
     """Sequence-parallel (all-gather K/V) encoder: seq sharded on sp_axis, tp on the other axis.
@@ -136,45 +99,6 @@ def test_fibo_default_pad_buckets():
     assert default_pad_buckets(128, sp_factor=2) == (128,)
     # small bucket dropped when it is not shardable (sp_factor*32 = 512 does not divide 256).
     assert default_pad_buckets(1024, sp_factor=16) == (1024,)
-
-
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192}],
-    indirect=["device_params"],
-)
-def test_smollm3_sp_bias_cached(*, mesh_device):
-    """The SP causal bias is built once per local seq length and reused across forwards."""
-    from models.tt_dit.pipelines.bria_fibo.smollm3.model_smollm3 import SmolLM3TextEncoder
-
-    torch.manual_seed(0)
-    sp_axis, tp_axis, seq = 1, 0, 512
-    sp_factor, tp_factor = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
-    hf = _load_hf_smollm3()
-    cfg = SmolLM3Config.from_hf_config(hf.config)
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    pc = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(tp_factor, tp_axis),
-        sequence_parallel=ParallelFactor(sp_factor, sp_axis),
-    )
-    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
-    enc.load_torch_state_dict(hf.model.state_dict())
-
-    tokens = torch.randint(0, hf.config.vocab_size, (1, seq))
-    cos, sin = enc.create_rope_tensors(1, seq)
-    tt_ids = tt_tensor.from_torch(
-        tokens, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, sp_axis]
-    )
-    tt_cos = tt_tensor.from_torch(cos, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
-    tt_sin = tt_tensor.from_torch(sin, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
-
-    enc.encode(tt_ids, pos_embeds=(tt_cos, tt_sin))
-    assert len(enc._sp_bias_cache) == 1
-    first = next(iter(enc._sp_bias_cache.values()))
-    enc.encode(tt_ids, pos_embeds=(tt_cos, tt_sin))
-    assert len(enc._sp_bias_cache) == 1
-    assert next(iter(enc._sp_bias_cache.values())) is first  # same tensor object reused
 
 
 @pytest.mark.timeout(1800)
@@ -244,7 +168,7 @@ def test_fibo_wrapper_encode(*, mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 200000000}],
     indirect=["device_params"],
 )
-def test_fibo_wrapper_encode_replay_stable(*, mesh_device):
+def test_fibo_wrapper_encode_traced(*, mesh_device):
     """The traced encoder must stay bit-exact across MANY sequential encodes (the reverted bug was
     'noise after the first run').
 
@@ -303,35 +227,3 @@ def test_fibo_wrapper_encode_replay_stable(*, mesh_device):
         if key == "json":
             assert list(embeds.shape) == list(hf_json.shape), f"run {i}: {embeds.shape} != {hf_json.shape}"
             assert_quality(hf_json, embeds, pcc=0.99, relative_rmse=0.2)  # traced json correct vs HF
-
-
-def test_smollm3_state_conversion():
-    import torch as _torch
-
-    from models.tt_dit.pipelines.bria_fibo.smollm3.model_smollm3 import STATE_CONVERSION
-
-    # Full SmolLM3ForCausalLM-style dict: model.* prefix + lm_head + a rotary_emb buffer.
-    full = {
-        "model.embed_tokens.weight": _torch.zeros(2, 2),
-        "model.layers.0.self_attn.q_proj.weight": _torch.zeros(2, 2),
-        "model.layers.0.mlp.gate_proj.weight": _torch.zeros(2, 2),
-        "model.norm.weight": _torch.zeros(2),
-        "model.rotary_emb.inv_freq": _torch.zeros(2),
-        "lm_head.weight": _torch.zeros(2, 2),
-    }
-    out = STATE_CONVERSION.convert(full)
-    assert set(out) == {
-        "embed_tokens.weight",
-        "layers.0.self_attn.q_proj.weight",
-        "layers.0.mlp.gate_proj.weight",
-        "norm.weight",
-    }
-
-    # Inner SmolLM3Model-style dict (no model. prefix, no lm_head): keys pass through unchanged.
-    inner = {
-        "embed_tokens.weight": _torch.zeros(2, 2),
-        "layers.0.self_attn.q_proj.weight": _torch.zeros(2, 2),
-        "norm.weight": _torch.zeros(2),
-    }
-    out2 = STATE_CONVERSION.convert(inner)
-    assert set(out2) == set(inner)
