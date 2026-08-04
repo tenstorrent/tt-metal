@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose
@@ -35,15 +34,13 @@ def test_manual_seed_different_argument_calls(device):
     ttnn.manual_seed(seeds=seed_tensor, device=device, user_ids=user_id_tensor)
 
 
-def test_manual_tensors_wrong_config(device):
+def test_manual_tensors_wrong_config(device, expect_error):
     """
     Test that manual_seed correctly rejects invalid argument combinations.
     """
     torch.manual_seed(0)
     seed_tensor = ttnn.from_torch(torch.Tensor([42]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
-    with pytest.raises(
-        Exception, match="Seeds were provided as a tensor, so user_ids must not be provided as a scalar."
-    ):
+    with expect_error(Exception, "Seeds were provided as a tensor, so user_ids must not be provided as a scalar."):
         ttnn.manual_seed(seeds=seed_tensor, device=device, user_ids=7)
 
 
