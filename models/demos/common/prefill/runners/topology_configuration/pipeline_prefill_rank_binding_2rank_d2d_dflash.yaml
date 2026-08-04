@@ -1,0 +1,75 @@
+# tt-run rank binding: 2-rank pipeline prefill over the D2D socket, DFLASH ENABLED (issue #49586).
+#
+# This is pipeline_prefill_rank_binding_2rank_d2d.yaml + the DFlash knobs (and an explicit Kimi
+# manifest). Two galaxies, one inter-galaxy fabric link (mesh 0 <-> mesh 1):
+#   rank 0 (mesh 0, galaxy 1): taps its owned target layers, reduce_scatters its FC partial, and packs
+#     [hidden || partial] into the 2H-wide D2D activation (Part E), then sends to rank 1.
+#   rank 1 (mesh 1, galaxy 2, LAST rank): unpacks the 2H activation, import_partial()s the drafter
+#     partial, finalizes the drafter context-KV, and writes the runtime-owned drafter K/V cache.
+#
+# Launch (on galaxy 1; mpirun spawns rank 1 on galaxy 2 over the shared NFS clone + build):
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_2rank_d2d_dflash.yaml \
+#     <galaxy-1-host>:1,<galaxy-2-host>:1 \
+#     ens5f0np0
+#   host list is passed on the CLI (first host = galaxy 1 / rank 0, second = galaxy 2 / rank 1 = LAST);
+#   use your actual reserved connected-pair nodes for this allocation.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides: {}
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides: {}
+
+# Connected 2x 8x4 BH-galaxy MGD: one inter-galaxy fabric link (mesh 0 <-> mesh 1).
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
+
+global_env:
+  # Kimi verifier — DFlash requires the Kimi prefill model (the drafter taps its residual stream).
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi26.json"
+
+  PREFILL_STANDALONE: "1"    # merged runner: standalone (bring-up/pipeline) mode, not the request loop
+  PREFILL_FABRIC_MODE: "2d"  # D2D pipeline transport needs FABRIC_2D
+
+  # Per-rank main-model KV-cache PCC gate. With DFlash on, this is the corruption check: it proves the
+  # 2H-packed activation carried the hidden half across the inter-galaxy socket intact.
+  PREFILL_STANDALONE_PCC: "1"
+
+  # SINGLE chunk (Stage-2 first run): mirror Stage 1 EXACTLY so the only new variable vs the validated
+  # single-rank run is the D2D transport + the 2-rank distributed sliced-FC split. The drafter is
+  # single-shot (write_kv_cache positions_start=0), so exactly one chunk's context-KV is validated.
+  # 5120 tokens (default PREFILL_CHUNK_SIZE). (The full 11-chunk trace is a deferred follow-up: it also
+  # exercises the untested multi-chunk drafter path — wrong absolute rope offset on chunks 1..10, #50725.)
+  PREFILL_STANDALONE_NCHUNKS: "1"
+  # max_seq_len MUST be set explicitly and be > chunk_size: the verifier MLA always uses chunked-prefill
+  # attention (mla._chunked_attn -> ring_mla), whose KV-pad rotation asserts N_local_q < N_local_kv i.e.
+  # chunk_size < max_seq_len. At NCHUNKS=1 the auto-derive would equal chunk_size and the warm-up chunk
+  # would TT_FATAL. 56320 is the Stage-1 known-good value and the golden-trace length.
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+
+  # --- DFlash multi-galaxy (issue #49586, Part E) ---
+  PREFILL_DFLASH: "1"
+  DFLASH_HF_MODEL: "/mnt/models/Kimi-K2.6-DFlash"
+  # N>1 REQUIRES this (runner hard-errors otherwise): the last rank (rank 1) retains only its owned
+  # targets' hiddens {35,47,58}; rank 0 dumps its owned {1,12,24} here as hidden_g{idx}.pt and the last
+  # rank loads them to rebuild the full fc(concat) HF reference. MUST be a shared-FS path both galaxies
+  # see: /data is nfs4 (10.32.13.1:/data) — the same NFS clone the repo + venv launch from. The launcher
+  # clears this dir per run so no stale hidden_g*.pt from a prior run leaks in.
+  PREFILL_DFLASH_GATHER_DIR: "/data/nbabin/build_logs/dflash_stage2_gather"
+  # D2D activation fingerprint (this run only, off by default): per-shard CRC32 of the packed
+  # [hidden||partial] activation at SEND (rank 0, before deallocate) and RECV (rank 1), plus page
+  # geometry (width 2H vs H, pages/shard). ttrun does NOT forward shell PREFILL_* env, so it lives here.
+  PREFILL_D2D_DEBUG: "1"
+  # D2D activation capture (this run only): compose + torch.save the full packed [hidden||partial]
+  # activation at SEND (rank 0) and RECV (rank 1) to this shared-FS dir, one file per hop, so
+  # tools/compare_d2d_pcc.py can PCC the sent vs received tensor and split the hidden half [...,:H] from
+  # the drafter partial [...,H:]. ~150MB per file (2H*chunk*2B); a re-run overwrites same-named files.
+  PREFILL_D2D_DUMP_DIR: "/data/nbabin/build_logs/dflash_stage2_d2d_dump"
+  # Layer split: default even split (auto-snapped to valid boundaries), same as the known-good non-dflash
+  # 2rank binding. 61 layers / 2 ranks -> rank0 [0,31) owns {1,12,24}, rank1 [31,61) owns {35,47,58}:
+  # union == all 6 targets, and rank 1 is the last rank (holds the drafter KV tail + runs the PCC check).

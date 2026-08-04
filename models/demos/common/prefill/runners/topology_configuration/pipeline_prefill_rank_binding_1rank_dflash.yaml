@@ -1,0 +1,51 @@
+# tt-run rank binding: 1-rank single-galaxy prefill, DFLASH ENABLED (issue #49586) — Stage 1 validation.
+#
+# The single-rank precursor to pipeline_prefill_rank_binding_2rank_d2d_dflash.yaml: one galaxy owns the
+# WHOLE 61-layer verifier AND all 6 drafter target layers + the drafter KV tail, with NO cross-rank D2D
+# transport (Part E is a no-op at num_ranks==1). It validates, in isolation from the 2-host path, the
+# DFlash flag chain, the per-rank drafter build, the external drafter-cache lifecycle, on_layer_hidden
+# retention, and the last-rank dflash_pcc_check (drafter context-K/V vs the HF DFlashDraftModel, threshold
+# 0.999) through the PRODUCTION runtime — with zero transport risk. Single chunk only (the drafter is
+# single-shot: write_kv_cache asserts positions_start == 0).
+#
+# Launch (on the galaxy holding the devices; single local rank, no SLURM plm needed):
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_1rank_dflash.yaml \
+#     <this-host>:1 \
+#     ens5f0np0
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides: {}
+
+# In-tree known-good single-galaxy descriptor (8x4, [LINE, RING]); is_first == is_last == True, so the
+# runner builds the whole 61-layer model and runs it with NO cross-rank transport (per-galaxy FABRIC_1D).
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
+
+global_env:
+  # Kimi verifier — DFlash requires the Kimi prefill model (the drafter taps its residual stream).
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi26.json"
+
+  PREFILL_STANDALONE: "1"    # merged runner: standalone (bring-up/pipeline) mode, not the request loop
+
+  # Per-rank main-model KV-cache PCC gate (verifier KV) AND — with DFlash on — the ENABLE for the drafter
+  # context-KV PCC check (prefill_runner.py:570). Both run at the end of the single chunk.
+  PREFILL_STANDALONE_PCC: "1"
+
+  # SINGLE chunk: the drafter is single-shot (write_kv_cache positions_start=0) and retention is cleared
+  # each chunk, so exactly one chunk's context-KV is validated. 5120 tokens (default PREFILL_CHUNK_SIZE).
+  PREFILL_STANDALONE_NCHUNKS: "1"
+  # max_seq_len must be set EXPLICITLY here and be > chunk_size. The verifier MLA always uses the chunked
+  # prefill attention (mla._chunked_attn -> ring_mla), whose KV-pad rotation asserts N_local_q < N_local_kv
+  # i.e. chunk_size < max_seq_len (ring_joint_sdpa is_chunked). If max_seq_len auto-derived from
+  # NCHUNKS*chunk_size it would equal chunk_size at NCHUNKS=1 and the warm-up chunk would TT_FATAL. 56320 is
+  # the known-good value (run4 + the single-rank de-risk binding) and matches the golden-trace length.
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+
+  # --- DFlash (issue #49586) ---
+  PREFILL_DFLASH: "1"
+  DFLASH_HF_MODEL: "/mnt/models/Kimi-K2.6-DFlash"
+  # PREFILL_DFLASH_PCC defaults to 0.999; N=1 owns all 6 targets so needs no PREFILL_DFLASH_GATHER_DIR.
