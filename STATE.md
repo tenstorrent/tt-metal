@@ -3371,3 +3371,38 @@ calibration caveat written into `test_pipeline_minimax_h3.py` is now a measured 
 worry: **the gated prompt and its thresholds are a matched pair, and a showcase prompt belongs in a
 manual run.** Loosening the bar to 0.48 to admit a dark scene would have left it unable to detect
 anything.
+
+---
+
+## Amendment 88 (2026-08-04) — CORRECTION to amendment 72: `0c4ce3596b5` was never dangling. It was cglagovich's branch tip
+
+**What amendment 72 claimed.** That `0c4ce3596b5` is "a *dangling* commit, reachable from no ref, whose
+parent is `gh/cglagovich-minimax-h3` @ `b85be88d6d3`", and its method note: "a superset commit that no
+ref points at is one `git gc` from gone. It is now on a branch."
+
+**Why it was wrong.** `git branch -a --contains` and `git log --all` were run against a **local** clone
+whose `gh/cglagovich-minimax-h3` ref had been fetched when that branch was at `b85be88d6d3`. The ref
+was stale, not the commit orphaned. Asked directly:
+
+```
+git ls-remote https://github.com/tenstorrent/tt-metal.git refs/heads/cglagovich/minimax-h3
+0c4ce3596b53036d3b460670ebdcf1761c687bea    refs/heads/cglagovich/minimax-h3
+```
+
+`0c4ce3596b5` **was the tip of `cglagovich/minimax-h3` all along.** Nothing was ever at risk and
+nothing was rescued.
+
+**What does not change.** The tree that was branched from, and therefore every gate and measurement in
+amendments 73-87, is byte-identical either way. The decision to base on that commit was correct for the
+reason given (it is the only commit holding both the tuned DiT and the VAE work); only the "dangling"
+justification was fiction.
+
+**Where it landed.** `7d4797dad76` was pushed as a **fast-forward of exactly one commit** onto
+`cglagovich/minimax-h3` (`0c4ce3596b5..7d4797dad76`), verified with `git merge-base --is-ancestor`
+beforehand and no force. Also pushed as `kevinmi/minimax-h3-t2va` for reference.
+
+**The method note.** *Local reachability is not remote reachability.* `git branch -a --contains` answers
+a question about this clone's refs, and a `remotes/` ref is only as fresh as its last fetch. To ask
+whether a commit exists on the server, ask the server: `git ls-remote`. Convenient conclusions about
+someone else's branch deserve that extra round trip -- and this one had been carried, unchallenged,
+through sixteen amendments.
