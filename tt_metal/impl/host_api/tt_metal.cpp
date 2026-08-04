@@ -15,6 +15,7 @@
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
+#include "buffers/create_buffer.hpp"
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>

@@ -17,6 +17,7 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/buffers/create_buffer.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher tile counter log feature.

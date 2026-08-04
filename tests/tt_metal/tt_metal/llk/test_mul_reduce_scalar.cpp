@@ -21,6 +21,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>

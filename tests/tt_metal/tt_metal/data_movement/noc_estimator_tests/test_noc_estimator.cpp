@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include <algorithm>

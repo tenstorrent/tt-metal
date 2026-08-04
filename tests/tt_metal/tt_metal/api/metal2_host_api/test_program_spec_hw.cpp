@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>

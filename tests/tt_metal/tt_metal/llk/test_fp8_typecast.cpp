@@ -14,6 +14,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>

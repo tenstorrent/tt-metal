@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstddef>

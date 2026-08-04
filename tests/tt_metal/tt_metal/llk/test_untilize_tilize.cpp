@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <bit>

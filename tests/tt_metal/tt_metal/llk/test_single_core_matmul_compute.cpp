@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <unistd.h>
 #include <array>

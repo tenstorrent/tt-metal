@@ -14,6 +14,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/tt_metal.hpp>

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include <algorithm>
 #include <cstring>
 #include <exception>

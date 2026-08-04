@@ -10,6 +10,7 @@
 #include "metal/common/program_utils.hpp"
 #include "tt-metalium/device.hpp"
 #include "tt-metalium/host_api.hpp"
+#include "tt_metal/impl/buffers/create_buffer.hpp"
 
 namespace {
 

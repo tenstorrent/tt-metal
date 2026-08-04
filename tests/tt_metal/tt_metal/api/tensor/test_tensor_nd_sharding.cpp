@@ -51,6 +51,7 @@
 #include "impl/tensor/mesh_tensor_impl.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "impl/buffers/create_buffer.hpp"
 
 namespace tt::tt_metal {
 namespace {

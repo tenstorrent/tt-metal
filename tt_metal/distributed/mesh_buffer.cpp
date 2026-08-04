@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <host_api.hpp>
+#include "impl/buffers/create_buffer.hpp"
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
 #include <tt_stl/overloaded.hpp>
