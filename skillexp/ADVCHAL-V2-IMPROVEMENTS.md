@@ -169,6 +169,41 @@ it is a *detection* signal, not a *selection* one. Then B1.
 
 → [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md) §2–3.
 
+### A0. Consume the perf report the stage already runs ⭐⭐⭐ free, no build, and the most predictive signal available
+
+`tt-perf-report` already emits per op: **`Total %`**, `Bound`, `Cores`, `DRAM %`, `FLOPs %`, math fidelity — plus
+a **stacked report with an `Op Category` column** (`Compute`/`TM`/`DM`/`Other`), a roofline summary, and per-op
+advice (*"Increase grid size (currently using 2.0)"*, *"✅ Optimized"*). **`reconcile.py` reads three columns.**
+Nothing in the skill or gate mentions `--group-by category`, `--summary-file`, `--stacked-csv`, the roofline or
+the advice; 14/14 cells saved the CSV, only 4–5/14 saved the rest.
+
+**Four changes, no build required:**
+
+1. **Mandate the full invocation** — `--group-by category --summary-file … --stacked-csv …` — and gate on all
+   three artefacts existing.
+2. **Add a movement budget to the gate.** Compute the category split from the CSV the cell already saves and
+   **warn above ~10 % non-compute, fail above ~25 % without a recorded reason.** On this corpus that flags
+   qwen B (53.3 %) and all four phi arms (17–26 %) and passes both llamas — the right answer in every case.
+   **This rubric is strictly more predictive of where the wins were than the advisor's own output:** the two
+   cells that returned honest zeros are exactly the two cleanest (TM 0.9 %, 1.1 %).
+3. **Rank the profile's own conversion ops by cost** — see B0a below.
+4. **Record the tool's per-op advice** next to each screening decision; where stage and tool disagree, that is a
+   result. ⚠ Treat it as a hypothesis: it says "increase grid size" for DS matmuls where E20 measured widening
+   at **+65 %** slower.
+
+→ [`PERF-REPORT-AUDIT`](ADVCHAL-V2-PERF-REPORT-AUDIT.md)
+
+### A0b. Split the movement budget into layout-induced vs graph-structural
+
+Of the mean **18.5 %** non-compute time, **6.0 pp is layout-induced** (tilize/untilize/typecast/fill-pad/
+interleaved↔sharded/reshard/copy) and **12.5 pp is graph-structural** (permute/transpose/reshape/slice/concat/
+head-ops). Only the first is reachable by a layout assigner, and only with **D0**. The second belongs to
+`$optimize` or a new tt-mlir rewrite pass. **Report the two separately** so the right owner picks it up — the
+corpus's largest item (qwen's 191 ms `retilize`) is in the second bucket.
+
+One item may be trivially free: **`ReshapeViewDeviceOperation` costs 8.8 % of gemma-12B's window** and 4.0 % of
+qwen FN's. A *view* reshape should be metadata-only; if it is materialising, that is free money.
+
 ### B0a. Rank the profile's own conversion ops, not just the advisor's plan ⭐
 
 The stage's worklist is derived from the advisor's plan, so **it inherits the advisor's blind spots**. qwen B's
@@ -556,6 +591,26 @@ Blocks phi-3.5 B's fused-cache share.
 
 Cells already compute it. Put `reachable_by_advisor` / `total_layers` and the unreachable window share in
 `final.json` so a contribution of zero can be read as "nothing to find" vs "couldn't look".
+
+## F0. tt-metal — the one trivial fix worth proposing
+
+**`OPERATION_CATEGORIES` in `tt_perf_report/perf_report.py` is missing four op codes that are live in this
+corpus**, so their time lands in the meaningless `Other` bucket — **14.7 % of measured time on average, up to
+36.2 %** (phi B). The entire `Other` bucket is these four:
+
+| unclassified op code | share of `Other` | should be |
+|---|---|---|
+| `SdpaDecodeDeviceOperation` | 41.5 % | `Compute` |
+| `ReshapeViewDeviceOperation` | 40.4 % | `TM` |
+| `RotaryEmbeddingDeviceOperation` | 12.8 % | `Compute` |
+| `NLPCreateQKVHeadsDecodeDeviceOperation` | 5.2 % | `TM` |
+
+**Four strings.** The tool already prints *"Please add to OPERATION_CATEGORIES for proper classification"* for
+each, so it is a known gap. With them added the category split is usable directly, without a wrapper.
+
+**Everything else tt-metal-side is a recommendation only, not expected to ship:** tiled-input variants of the
+conv/recurrent composites; sharded output for GQA SDPA (gates two cells' top candidate *and* the
+`concatenate_heads` fix); `ttnn.sparse_matmul` and mutable-state `ttnn.copy` tracer support.
 
 ## F. Experiment design (for the next corpus)
 

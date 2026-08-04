@@ -44,6 +44,7 @@ that shipped scores **0.98347** — the *incumbent* is the one that fails the mo
 | [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |
 | [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **10 stage settings changed one at a time** — what each would have found, with a scoreboard |
 | [`ADVCHAL-V2-ADVISOR-VALUE.md`](ADVCHAL-V2-ADVISOR-VALUE.md) | **was the advisor necessary?** — detection, grid choice, hit rate, and what 7.4 h bought |
+| [`ADVCHAL-V2-PERF-REPORT-AUDIT.md`](ADVCHAL-V2-PERF-REPORT-AUDIT.md) | **the perf report the stage runs and throws away** — compute-vs-movement scorecard per cell |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -104,7 +105,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The nineteen findings that matter
+## 3. The twenty findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -531,6 +532,42 @@ Reason 4 is load-bearing: 1–3 are fixable, but even a perfect layout assigner 
 defect is **which axis the data lives on**, not where the tensor is placed.
 
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E22
+
+### 3.20 The stage already measures the best predictor of where wins are — and reads 3 columns out of it
+
+`tt-perf-report` emits, per op: **`Total %`**, `Bound`, `Cores`, `DRAM %`, `FLOPs %`, math fidelity — plus a
+**stacked report with an `Op Category` column (`Compute` / `TM` / `DM` / `Other`)**, a roofline summary, and
+per-op advice like *"Increase grid size (currently using 2.0)"*.
+
+**`reconcile.py` reads three columns**: `OP CODE`, `DEVICE KERNEL DURATION [ns]`, `CORE COUNT`. The skill and
+the gate never mention `--group-by category`, `--summary-file`, `--stacked-csv`, the roofline or the advice.
+14/14 cells saved the CSV; only 4–5/14 saved the summary, stacked report or terminal output.
+
+Scoring every cell's bounded window with the tool's own classifier:
+
+| cell | Compute % | **TM %** | DM % | Other % |
+|---|---|---|---|---|
+| **qwen B** | 42.6 | **53.3** | 1.5 | 2.6 |
+| phi A / B / FN / exp17 | 38.6–54.5 | **17.1–26.3** | 1.9–11.4 | 13.3–36.2 |
+| g26 B, gemma-12B, qwen FN | 75.0–78.5 | 4.3–8.6 | 2.4–4.5 | 8.4–14.7 |
+| **llama-1B / llama-8B** | **80.7 / 81.4** | **1.1 / 0.9** | 8.6 / 5.4 | 9.6 / 12.3 |
+| **mean** | **63.2** | **16.5** | **5.6** | **14.7** |
+
+**This rubric predicts the corpus's outcomes better than the advisor does.** The two cells that returned
+*honest zeros* after exhaustive screening are exactly the two cleanest (TM 0.9 %, 1.1 %); the cells where wins
+were found or missed are the dirty ones (phi 17–26 %, qwen B 53 %).
+
+**And splitting the non-compute time answers "could the advisor help?" directly:**
+
+| | mean share of window | can a layout assigner remove it? |
+|---|---|---|
+| **layout-induced** (tilize/untilize/typecast/fill-pad/interleaved↔sharded/reshard/copy) | **6.0 pp** | **potentially — with a conversion cost model (D0). Not today: `requiresReshard` is a boolean** |
+| **graph-structural** (permute/transpose/reshape/slice/concat/head-ops) | **12.5 pp** | **no — only a graph rewrite** |
+
+So **≈1/3 advisor-reachable, 2/3 not.** qwen's 191 ms `retilize` is in the second bucket, which is why §3.19
+concluded it needs a chain rewrite rather than a placement.
+
+→ [`PERF-REPORT-AUDIT`](ADVCHAL-V2-PERF-REPORT-AUDIT.md)
 
 ---
 
