@@ -1184,3 +1184,54 @@ What is still open is that the blockings were *measured* in fp32. bf16 halves th
 bytes, so larger blocks now fit L1 and the fp32-optimal choice is unlikely to be bf16-optimal
 -- `run_sweep` takes no dtype argument, so a bf16 sweep needs that plumbed first. Worth doing,
 but it is a fresh optimisation rather than recovering something the sweep failed to deliver.
+
+## Amendment 45 (2026-08-04) — bf16 encoder re-profile: the target is now the GroupNorm layout round-trip
+
+Re-profiled after the bf16 switch, because amendment 44's breakdown was measured in fp32 and
+two conclusions drawn from it were wrong.
+
+**Encoder device time 3167.4 ms -> 1117.0 ms (2.84x)**, 550 -> 517 ops -- matching the 2.83x
+wall clock, so the win is real device work, not dispatch.
+
+| op | fp32 ms | bf16 ms | bf16 % | fidelity |
+|---|---|---|---|---|
+| Conv3dDeviceOperation | 1383.9 | **266.6** | 23.9 % | HiFi2 |
+| **UntilizeDeviceOperation** | 234.7 | **235.8** | **21.1 %** | HiFi4 |
+| **GroupNormDeviceOperation** | 234.8 | **235.7** | **21.1 %** | HiFi4 |
+| BinaryNgDeviceOperation | 494.7 | 121.0 | 10.8 % | HiFi4 |
+| **TilizeWithValPaddingDeviceOperation** | 16.6 | **118.8** | 10.6 % | HiFi4 |
+| ConcatDeviceOperation | 109.9 | 97.6 | 8.7 % | -- |
+| UnaryDeviceOperation | 21.6 | 23.4 | 2.1 % | HiFi4 |
+| SliceDeviceOperation | 10.1 | 14.3 | 1.3 % | -- |
+| TypecastDeviceOperation | 661.0 | **3.7** | 0.3 % | HiFi4 |
+
+Two corrections to the follow-ups listed in amendment 44:
+
+* **"Encoder Conv3d is 43.7 % at HiFi4" is stale.** The conv already selects fidelity by
+  dtype (`math_fidelity=HiFi4 if (is_blackhole() and dtype == float32) else HiFi2`), so the
+  bf16 switch moved it to HiFi2 by itself. Conv3d fell **5.2x** (1383.9 -> 266.6 ms) and is
+  now 23.9 %, no longer the largest item.
+* **"BinaryNg at 15.6 %" is not a fidelity problem either** -- it fell 4x on its own.
+
+**The real target is the GroupNorm layout round-trip: Untilize 21.1 % + GroupNorm 21.1 % +
+Tilize 10.6 % = 52.8 % of encoder device time**, more than double the convolutions. It is
+also the only part that did not improve -- Untilize and GroupNorm are unchanged to within
+1 ms (234.7 -> 235.8, 234.8 -> 235.7), because `ttnn.group_norm` was always bf16 internally,
+and Tilize got **worse** (16.6 -> 118.8 ms) now that it is a larger share of a smaller total.
+
+The cause is structural: 35 tilize and 35 untilize per unit exist only because
+`ttnn.group_norm` requires TILE layout while `ttnn.experimental.conv3d` requires ROW_MAJOR,
+so every one of the thirteen norm sites converts in and back out.
+
+Two candidate fixes, in order of expected value:
+
+1. **Use `MiniMaxH3DistributedFrameGroupNorm`** (written in amendment 35, currently only for
+   the H/W path). It computes the statistics itself from sums and normalises elementwise, so
+   it needs neither the tilize/untilize pair nor `ttnn.group_norm` at all. Setting
+   `spatial_factor=1` makes it a drop-in for the unsharded path.
+2. Keep activations tilized across the norm where the neighbouring conv can accept it, to
+   collapse pairs of conversions.
+
+Either would attack over half the remaining encoder time. The projection at 768P/5s is
+currently ~7 s (encode ~5.6, decode 3.8) against the 3 s target; removing the round-trip is
+the plausible route to roughly 4 s.
