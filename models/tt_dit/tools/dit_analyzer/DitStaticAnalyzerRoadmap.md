@@ -205,9 +205,10 @@ Estimates are for one engineer. Only phase 11 needs device access.
   recorded at creation, so entry placements are known rather than declared.
 - A no-device pipeline construction path (or shim coverage of `CCLManager.__init__`
   and persistent-buffer allocation) so a pipeline object can exist on a laptop.
-- **Acceptance:** run the real `LTXTransformerBlock.forward` under the shim, with
-  `examples/ltx.py` deleted, and reproduce the same 6 `duplicate_gather` findings
-  with the same source lines.
+- **Acceptance:** run the real `LTXTransformerBlock.forward` under the shim and
+  reproduce the same 6 `duplicate_gather` findings with the same source lines.
+  `examples/ltx.py` stays: it is the oracle the dry run is diffed against, and
+  the regression test that catches shim drift later.
 
 ### Phase 7 — Shape and layout fidelity (2–3 weeks) · closes 10, 11, 12, 13, 36, 38
 
