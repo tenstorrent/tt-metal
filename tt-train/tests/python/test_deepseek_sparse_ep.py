@@ -18,11 +18,10 @@ Blackhole only: every bundled MGD and every measured EP configuration is
 Blackhole, so the module skips on other archs rather than exercising an untuned
 path.
 
-Needs ``EP_AXIS_SIZE`` chips on the "ep" axis; the module-scoped fixture skips
-otherwise. Override the axis size with ``TTML_EP_AXIS_SIZE`` and supply a
-matching ``TT_MESH_GRAPH_DESC_PATH`` for sizes that have no bundled MGD, e.g.
-
-    TTML_EP_AXIS_SIZE=8 TT_MESH_GRAPH_DESC_PATH=<1x8 mgd> pytest test_deepseek_sparse_ep.py
+Runs on a full 32-chip Blackhole galaxy as an ``8 x 4`` mesh (DP=8, EP=4). The
+module-scoped fixture skips if that mesh cannot be opened, so it is inert on
+smaller boards. The bundled ``bh_galaxy_8_4_torus_x`` descriptor is used unless
+``TT_MESH_GRAPH_DESC_PATH`` is already set.
 
 Multi-device only: this module opens a mesh, so it must not share a process with
 tests that open a default single-device context first — reopening the device as
@@ -49,20 +48,18 @@ from ttml.models.deepseek.moe_sparse_ep import SparseMoEEP
 
 SEED = 2026
 
-# Mesh is (DP_AXIS_SIZE, EP_AXIS_SIZE) with axes ("dp", "ep").
-#
-# EP size 2 is the smallest layout that actually exercises sharding (E split
-# over 2 shards). DP size 1 keeps the default runnable on a 2-chip board; on a
-# Blackhole galaxy use TTML_DP_AXIS_SIZE=8 for the 8x2 (16-chip) layout, which
-# exercises EP sharding *and* a real data-parallel axis at the same time.
-EP_AXIS_SIZE = int(os.environ.get("TTML_EP_AXIS_SIZE", "2"))
-DP_AXIS_SIZE = int(os.environ.get("TTML_DP_AXIS_SIZE", "1"))
+# Fixed 8x4 mesh: the full 32-chip Blackhole galaxy, DP=8 x EP=4.
+# EP=4 splits the 8 routed experts 2-per-shard, and DP=8 means EP sharding is
+# exercised alongside a real data-parallel axis.
+DP_AXIS_SIZE = 8
+EP_AXIS_SIZE = 4
+MESH_SHAPE = (DP_AXIS_SIZE, EP_AXIS_SIZE)
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-# Blackhole only — see the module docstring. No Wormhole MGDs are bundled.
+# Blackhole galaxy only — see the module docstring. The galaxy fabric is a torus
+# in X; a LINE/LINE descriptor faults with SIGBUS, so this must be the torus_x one.
 _MGD_FOR_SHAPE = {
-    (1, 2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
-    (8, 2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_8_2_line_line.textproto"),
+    MESH_SHAPE: os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_8_4_torus_x.textproto"),
 }
 
 
@@ -135,8 +132,8 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
 
 @pytest.fixture(scope="module")
 def ep_mesh():
-    """Open a ``[DP_AXIS_SIZE, EP_AXIS_SIZE]`` mesh with axes ``("dp", "ep")``."""
-    shape = (DP_AXIS_SIZE, EP_AXIS_SIZE)
+    """Open the ``[8, 4]`` galaxy mesh with axes ``("dp", "ep")``."""
+    shape = MESH_SHAPE
     previous_mgd = _ensure_mgd_path(shape)
 
     _close_device_quietly()
