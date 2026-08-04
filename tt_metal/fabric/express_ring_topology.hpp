@@ -13,10 +13,10 @@
 
 namespace tt::tt_fabric {
 
-// Ring-domain decomposition of a mesh's skip axis, constructed from the declared skip-link patterns.
+// Ring-domain decomposition of a mesh's express axis, constructed from the declared express-link patterns.
 // Membership is cycle membership: a member need not own a chord. Indexed by axis coordinate (row), so
 // one decomposition serves every line; derivation confirms every line carries the edges it implies.
-struct SkipRingTopology {
+struct ExpressRingTopology {
     static constexpr int kNone = -1;
 
     // A maximal run of skipped rows, bridging the two transit rows either side of it. The run is a
@@ -35,7 +35,7 @@ struct SkipRingTopology {
     std::vector<int> leaf_index_of;  // leaf row -> its index within that run
     std::vector<LeafRun> leaf_runs;
     std::vector<std::vector<int>> forward_cycle;  // domain -> canonical forward node order
-    std::vector<int> pos_in_domain;    // row -> index in its domain's forward cycle
+    std::vector<int> pos_in_domain;               // row -> index in its domain's forward cycle
 
     // Two-family axis only: the larger-span family, which may CONTINUE into the other; the reverse
     // direction is terminal. Crossovers are oriented (a in continue_src, b in the other family) and
@@ -49,16 +49,16 @@ struct SkipRingTopology {
     int next_row(int src, int dst) const;
 };
 
-// std::nullopt when the mesh declares no skip links, leaving base routing untouched. Throws on any
+// std::nullopt when the mesh declares no express links, leaving base routing untouched. Throws on any
 // topology this cut does not define; each check carries its own message.
-std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id);
+std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id);
 
 // The ordinary ring along `axis`, or std::nullopt when that dimension does not close. One domain over
 // every node in coordinate order, no chords, so both axes answer ring queries through one path.
-std::optional<SkipRingTopology> derive_ordinary_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis);
+std::optional<ExpressRingTopology> derive_ordinary_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis);
 
 // Human-readable dump of the stored decomposition plus the declared patterns it was built from and
 // the materialized edges it was checked against.
-std::string describe_skip_rings(const MeshGraph& mesh_graph, MeshId mesh_id, const SkipRingTopology& topo);
+std::string describe_express_rings(const MeshGraph& mesh_graph, MeshId mesh_id, const ExpressRingTopology& topo);
 
 }  // namespace tt::tt_fabric
