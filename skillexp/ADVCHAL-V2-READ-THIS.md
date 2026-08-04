@@ -19,6 +19,10 @@ layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned o
 **Total left on the table: ≈ 8.0 ms/model across four cells.** All four were identifiable by a **one-line
 static check that needs no device time** (§3.8).
 
+**And the correctness objection to the biggest one does not survive contact with an absolute oracle.** Against
+the model's own higher-precision reference, the discarded candidate scores **0.99931** and the configuration
+that shipped scores **0.98347** — the *incumbent* is the one that fails the model's bar (§3.1).
+
 ---
 
 ## Where everything lives
@@ -28,6 +32,7 @@ static check that needs no device time** (§3.8).
 | **this file** | the account, and pointers |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
 | [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |
+| [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | 5 stage settings changed one at a time — what each would have found |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -88,7 +93,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The eight findings that matter
+## 3. The ten findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -121,6 +126,19 @@ at ≈1.0. Cost: **−3,466 µs/model available, −1,267 µs shipped.**
 The cell whose change perturbed the output ~2,000× more shipped it. *(Not a controlled comparison — gemma's
 figure is on synthetic weights, phi's on real, different models. The asymmetry in outcome doesn't depend on
 that.)*
+
+**And a differential oracle cannot tell you which side moved.** I built the absolute oracle A1 prescribes —
+both configurations against the model's own bfloat16 `FunctionalDecoder`, same weights, same inputs — for
+gemma-4-26B B's discarded candidate:
+
+| layer kind | R=0 — **what shipped** | R=22 — **discarded** |
+|---|---|---|
+| sliding | **0.98347 — fails the 0.995 bar** | **0.99931 — passes** |
+| full | 0.999421 | 0.999683 |
+
+The differential number for the same pair is 0.98322, i.e. "the candidate moved". It did not: **the
+incumbent is the outlier.** That is now twice that the differential rule flagged the configuration closer to
+the reference. → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E9
 
 → [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E1, [`STAGE-ANALYSIS`](ADVCHAL-V2-STAGE-ANALYSIS.md) §D1,
 [`ORACLES`](ADVCHAL-V2-ORACLES.md)
@@ -241,12 +259,41 @@ check to predict that gemma-4-26B B had an unscreened win, then measured it: the
 **1.2583 → 1.1017 ms/layer (−12.44 %)** on sliding attention, reproduced four times, against floors of
 0.4–4.2 µs. That is ≈ **−3,918 µs/model** versus the **−147.9 µs** it shipped.
 
-⚠ **Its correctness is unverified.** gemma's real weights are absent from this host, and the differential PCC
-moves 0.0168 — the same magnitude as the change onA *shipped* after passing its absolute real-weight oracle
-at 0.999629. Benign reassociation is the likely reading, but it is inference. This is exactly the ambiguity
-§3.1's fix removes.
+**Its correctness is now settled** — see §3.1: against the model's own bfloat16 reference the candidate
+scores 0.99931 and the shipped incumbent 0.98347, on both layer kinds the candidate is closer. (Synthetic
+weights, since gemma's real ones are absent; what the ship rule turns on is the ordering, and that holds on
+both kinds.)
 
 → [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E7
+
+### 3.9 Half of what the stage delivers is invisible to the metric it steers by
+
+Splitting every shipped win by attribution channel — channel 1 = boundary conversions the ceiling prices,
+channel 2 = re-grids of ops that stay inside their chain, which it prices at **0.000 µs**:
+
+| | cells | sum of Δ model | mean per cell |
+|---|---|---|---|
+| channel 1 | 7 | −24.68 pp | −3.53 pp |
+| **channel 2** | **2** | **−23.23 pp** | **−11.62 pp** |
+
+**48.5 %** of the corpus's shipped improvement is channel 2. Add the four unshipped wins — all channel 2 —
+and it is **64.2 % of everything this stage can deliver.** A channel-2 win averages **3.3×** a channel-1 win.
+
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E12
+
+### 3.10 One recommended setting was used by no cell at all
+
+`layers_in_window` is **1 in 23 of 23** reconciliations — every cell, every layer kind — while `spill.ran`,
+the condition SKILL.md §2a cites for going to 2 layers, is **True in 8 of 8** cells checked. The
+recommendation is recorded, its trigger holds everywhere, and it was followed nowhere: the wording is
+*"consider"* and the gate does not check it.
+
+What that leaves open: **13 of 23** runs flagged *"this layer loads its input from DRAM but leaves its output
+in L1"* — a real per-layer conversion, declared out of scope and never quantified — and the other 8 report
+*"no round trip detected, **or the profile does not show it**"*. At a one-layer window the question is not
+answerable, because the py↔IR transition pins both ends to DRAM by construction.
+
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E11
 
 ---
 
@@ -361,7 +408,7 @@ fastest — and the whole win is usually just the first step off one core.**
 | 1 | Ship phi FN's combined candidate under an absolute oracle at the model's own bar | **+8.5 pp** on that cell |
 | 2 | Ship north-mini's 16-core MoE norm | **−264 µs/model**, ≈ +1 pp |
 | 2b | Ship gemma-4-26B onA's 44-core norm instead of 88 | **−375 µs/model**, at PCC 1.0 |
-| 2c | **Screen gemma-4-26B B's `GEMMA4_OPT_RESIDUAL_SHARD_CORES=22`** (sliding only) | **−3,918 µs/model** — 26× what it shipped. **Correctness needs the real weights** |
+| 2c | **Ship gemma-4-26B B's `GEMMA4_OPT_RESIDUAL_SHARD_CORES=22`** (sliding only) | **−3,918 µs/model** — 26× what it shipped, and **more accurate than what shipped** |
 | 3 | Tracer support for qwen's linear-attention `ttnn.copy` boundary | **97 %** of qwen's model decode time, currently unadvised |
 | 4 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window |
 | 5 | Sweep the legal ladder both sides of the advice in every norm cell | 1–5 pp per affected cell |

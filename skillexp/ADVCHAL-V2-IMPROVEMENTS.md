@@ -1,6 +1,7 @@
 # advchal-v2 — what to change
 
-Derived from the 15-cell corpus, the tt-mlir source at the pin, and five hardware experiments.
+Derived from the 15-cell corpus, the tt-mlir source at the pin, eight hardware experiments, and five
+counterfactuals that change one stage setting at a time.
 Evidence for every claim is in [`READ-THIS`](ADVCHAL-V2-READ-THIS.md) and the files it points to.
 
 **Part 1** is the general ideas — the principles worth arguing about.
@@ -127,6 +128,12 @@ observation (differential).
 - **The strongest single argument for this change:** gemma-4-26B onA's shipped norm change moves a
   differential PCC by **0.0177** and shipped (absolute oracle); phi FN's moved it by **0.0000089** and was
   rejected (differential oracle). The rule as written punishes the *less* perturbing change.
+- **And a differential oracle cannot identify which side moved.** Built the absolute version for
+  gemma-4-26B B's discarded candidate: against the model's own bfloat16 `FunctionalDecoder`, the candidate
+  scores **0.99931** and the **shipped incumbent 0.98347** — the incumbent is the one failing the model's bar.
+  The differential number for that pair (0.98322) reads as "the candidate moved"; it did not.
+  → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E9. This makes A1 not just a *permissive* change but
+  a **correctness** one: the current rule can ship the less accurate configuration and reject the better.
 - **Evidence:** [`EXPERIMENTS`](ADVCHAL-V2-EXPERIMENTS.md) §E1, [`ORACLES`](ADVCHAL-V2-ORACLES.md).
 
 ### A2. Ship the three wins the corpus already has
@@ -135,6 +142,11 @@ observation (differential).
   under A1 passes.
 - **north-mini FN**: `advisor_moe_norm_cores=16` instead of 32. Measured −5.4 µs/layer (sliding MoE) and
   −5.7 µs/layer (full MoE), ≈ −264 µs/model; PCC 0.99951 vs the model's 0.995 bar.
+- **gemma-4-26B B**: `GEMMA4_OPT_RESIDUAL_SHARD_CORES=22` for **sliding attention only** (it regresses
+  +4.64 % on full attention, so ship per-kind as the stage's own product rule requires). Measured
+  1.2583 → 1.1017 ms/layer, ≈ **−3,918 µs/model, 26× what that cell shipped**, and **more accurate than the
+  shipped configuration** against the functional reference (0.99931 vs 0.98347). The cell had *written* both
+  geometries and shipped `0`.
 - **gemma-4-26B onA**: `GEMMA4_ADVISOR_NORM_CORES=44` instead of 88. Measured −12.2 µs/layer (sliding) and
   −12.4 µs/layer (full), ≈ −375 µs/model; **bit-identical** to the shipped 88 on sliding (PCC 1.0), so it
   inherits the real-weight oracle already passed. Also **relax that cell's own `cores % 11 == 0` check** —
@@ -236,6 +248,23 @@ written, shipped disabled, and never screened, worth **26× what it did ship**.
 - **Files:** `scripts/reconcile.py` (emit it), `SKILL.md` §3 (screen flagged ops first), `check.sh` (fail a
   published zero that has an unscreened flagged op).
 - **Cost:** no device time. **Effect in this corpus:** would have surfaced ≈ 8 ms/model.
+- **It also fixes the screening order.** Ranking by the cliff instead of by advisor-boundary value moves the
+  winning candidate from rank 2/2/2/**4-of-27** to **rank 1 in all four** cells whose win was a low-core
+  reduction, and shrinks the list (27 → 2 on phi FN). → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E10.
+
+### C1c. Make the multi-layer capture mandatory when its own trigger fires
+
+`layers_in_window` is **1 in 23 of 23** reconciliations while `spill.ran` is **True in 8 of 8** cells — the
+exact condition SKILL.md §2a cites for going to N=2. A recommendation whose trigger holds everywhere and is
+followed nowhere is not a recommendation; it is dead text.
+
+**Change.** When `spill.ran` is true (or `layer_handoff.entry_from_dram and exit_in_l1`), **require** N ≥ 2
+and gate on it. At N=1 the layer-handoff question is unanswerable by construction — the py↔IR transition pins
+both ends to DRAM — and **13 of 23** runs flagged a real per-layer conversion the stage then declared out of
+scope without measuring. v1 measured that same cost at 33.6 µs (phi) and 48.0 µs (gemma-12B) per model.
+
+- **Files:** `SKILL.md` §2a (change "consider" to a conditional requirement), `check.sh`.
+- → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E11.
 
 ### C2. Enforce control-plus-one-knob
 
@@ -244,6 +273,16 @@ on it. The only cell that checked this found it *false* and had to remeasure six
 confirmations.
 
 - **Files:** `harness_template.py` (record the diff), `check.sh` (fail on >1 changed field).
+
+### C2a. No action needed: the first-repeat floor is fixed
+
+Recorded here so nobody re-fixes it. v1's floors were mostly unfinished warm-up (one harness did **1** untimed
+replay; the first timed repeat carried 45–73 % of the spread in 4 cells). Recomputing every v2 control's floor
+with the first repeat dropped: **13 of 17 change by exactly 1.00×**, the worst case is phi FN at 1.52×, and
+**no cell's `feasibility.verdict` flips**. `WARMUP ≥ 10` did its job.
+
+The floor that remains is **cross-process**, not first-repeat — see C3.
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E13.
 
 ### C3. Model the cross-process floor
 
