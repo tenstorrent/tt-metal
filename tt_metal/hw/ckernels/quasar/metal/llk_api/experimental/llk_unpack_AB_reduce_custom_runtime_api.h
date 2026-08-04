@@ -10,12 +10,16 @@
 /*************************************************************************
  * LLK UNPACK AB REDUCE CUSTOM (runtime) - Specialized reduce_max_row unpack (Quasar)
  *
- * Runtime-block_ct_dim variants. As with the compile-time wrappers, Quasar bakes the SrcA buffer
- * descriptor into the MOP at INIT, so init takes the input operands; execute only advances the tile.
+ * Mirrors native Quasar reduce (llk_unpack_AB_reduce_init): the input operands are bound at INIT, so the
+ * unpack MOP -- which bakes the SrcA buffer descriptor -- is programmed at init. Execute only advances
+ * the block-start tile and fires the MOP. No state is carried between init and execute.
  *************************************************************************/
 
 /**
- * @brief Initializes the block reduce_max_row unpacker (runtime block_ct_dim).
+ * @brief Initializes the block reduce_max_row unpacker (runtime block_ct_dim): programs the MOP.
+ *
+ * Resolves operandA/operandB to buffer descriptors and programs the block MOP -- the same operand-at-init
+ * pattern as native llk_unpack_AB_reduce_init.
  *
  * @tparam is_fp32_dest_acc_en  32-bit DEST accumulation mode.
  * @param block_ct_dim     Number of tiles in the width dimension processed as one block.
@@ -40,13 +44,13 @@ inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
 /**
  * @brief Unpacks a block of SrcA operand tiles + one SrcB scaler face (runtime).
  *
- * The block tile count is baked into the MOP by init, so it is not needed here. Resolves operands to
- * L1 tile indices, unpacks the scaler once, sets the SrcA block-start tile, and fires the MOP.
+ * The block tile count is baked into the MOP by init, so it is not needed here. Resolves operands to L1
+ * tile indices, unpacks the scaler once, sets the SrcA block-start tile, and fires the MOP.
  *
- * @param operandA          SrcA operand circular buffer identifier.
- * @param operandB          SrcB scaler operand circular buffer identifier.
- * @param row_start_index   Tile offset of the block's first SrcA tile within operandA's CB.
- * @param respect_trigger   Unsupported on Quasar; must stay false.
+ * @param operandA           SrcA operand circular buffer identifier.
+ * @param operandB           SrcB scaler operand circular buffer identifier.
+ * @param row_start_index    Tile offset of the block's first SrcA tile within operandA's CB.
+ * @param respect_trigger    Unsupported on Quasar; must stay false.
  * @param overlap_first_half Unsupported on Quasar; must stay false.
  */
 inline void llk_unpack_AB_reduce_block_max_row_runtime(
@@ -66,7 +70,7 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const std::uint32_t l1_tile_index_b = local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx;
 
     WAYPOINT("URBW");
-    // block_ct_dim is baked into the MOP at init; the lib ignores this execute-time argument.
+    // block_ct_dim is baked into the MOP by init; the lib ignores this execute-time argument.
     _llk_unpack_AB_reduce_block_max_row_runtime_(
         0 /*block_ct_dim*/,
         l1_tile_index_a,

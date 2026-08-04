@@ -291,9 +291,10 @@ ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit<respect_trigger>()));
 }
 
-// Runtime variants - block_ct_dim and respect_trigger are runtime parameters.
-#ifdef ARCH_QUASAR
-// Quasar bakes the SrcA buffer descriptor into the unpack MOP at init, so the input CBs are required here.
+// Runtime variants - block_ct_dim and respect_trigger are runtime parameters. The input CBs
+// (icb, icb_scaler) are bound at init: on Quasar this lets the unpack MOP -- which bakes the SrcA buffer
+// descriptor -- be programmed at init, like native Quasar reduce. WH/BH bind the operand at execute and
+// ignore the input CBs here.
 ALWI void reduce_block_max_row_init_runtime(
     const ckernel::TensorShape& tensor_shape,
     std::uint32_t ocb,
@@ -301,27 +302,21 @@ ALWI void reduce_block_max_row_init_runtime(
     std::uint32_t icb,
     std::uint32_t icb_scaler,
     bool respect_trigger = false) {
+#ifdef ARCH_QUASAR
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(
         block_ct_dim, respect_trigger, icb, icb_scaler, tensor_shape)));
+#else
+    // WH/BH bind the operand at execute (relative addressing), so the input CBs are unused at init.
+    (void)icb;
+    (void)icb_scaler;
+    UNPACK(
+        (llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, tensor_shape)));
+#endif
     MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
-#else
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void reduce_block_max_row_init_runtime(
-    const ckernel::TensorShape& tensor_shape,
-    std::uint32_t ocb,
-    std::uint32_t block_ct_dim,
-    bool respect_trigger = false) {
-    UNPACK(
-        (llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape)));
-    MATH((llk_math_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape)));
-    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
-}
-#endif
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
-#ifdef ARCH_QUASAR
 ALWI void reduce_block_max_row_init_runtime(
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
@@ -337,13 +332,6 @@ ALWI void reduce_block_max_row_init_runtime(
         icb_scaler,
         respect_trigger);
 }
-#else
-ALWI void reduce_block_max_row_init_runtime(
-    std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
-    reduce_block_max_row_init_runtime(
-        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
-}
-#endif
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_runtime(
