@@ -582,7 +582,7 @@ def test_kva_width_sharded_bfp4_replicate_data_round_trip(mesh_device):
 
     # per-device per-core addresses + data round-trip
     for dev_idx, dt in enumerate(ttnn.get_device_tensors(tensor)):
-        addrs = [dt.experimental_per_core_buffer_address(c) for c in kv_cores]
+        addrs = [_per_core_addr(dt, c) for c in kv_cores]
         result = ttnn.to_torch(ttnn.from_device(dt)).float()
         zero_shards = []
         for c in range(num_cores):

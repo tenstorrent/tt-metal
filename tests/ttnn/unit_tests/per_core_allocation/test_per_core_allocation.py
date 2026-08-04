@@ -456,7 +456,7 @@ def test_per_core_width_sharded_tiled_bfp4_round_trip(device):
         data, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
     )
 
-    addrs = {(c.x, c.y): tensor.experimental_per_core_buffer_address(c) for c in kv_cores}
+    addrs = {(c.x, c.y): _per_core_addr(tensor, c) for c in kv_cores}
     base = addrs[(1, 8)]
     relocated = [(c.x, c.y) for c in kv_cores if addrs[(c.x, c.y)] != base]
     print(f"\n[REPRO-KVA] distinct_addrs={len(set(addrs.values()))} relocated={relocated} base_addr={base}")
@@ -477,7 +477,7 @@ def test_per_core_width_sharded_tiled_bfp4_round_trip(device):
 
 # Inline data-movement kernel: copy `num_bytes` from a per-core SOURCE L1 address
 # (passed as a runtime arg, exactly how blaze wires weights via
-# experimental_per_core_buffer_address(core)) into a lockstep DESTINATION L1 address
+# experimental_per_core_buffer_address) into a lockstep DESTINATION L1 address
 # on the same core. A plain local L1->L1 word copy — no CB / NOC / TensorAccessor needed.
 _PER_CORE_READBACK_KERNEL = r"""
 #include "api/dataflow/dataflow_api.h"
@@ -503,7 +503,7 @@ def test_per_core_kernel_readback_honors_per_core_address(device):
 
     Unlike the host round-trip tests above, this introduces the asymmetry the bug
     needs: a kernel reads each core's shard at the per-core address
-    (``experimental_per_core_buffer_address(core)``, wired as a runtime arg exactly how
+    (``experimental_per_core_buffer_address``, wired as a runtime arg exactly how
     blaze's matmul reads weights), while ``from_torch`` writes via the host
     data-movement path.
 
@@ -556,7 +556,7 @@ def test_per_core_kernel_readback_honors_per_core_address(device):
 
     # Precondition: per-core addresses must be non-uniform, else scalar == per-core and
     # the bug is structurally invisible.
-    src_addrs = [src.experimental_per_core_buffer_address(c) for c in cores]
+    src_addrs = [_per_core_addr(src, c) for c in cores]
     assert len(set(src_addrs)) > 1, f"expected non-uniform per-core addresses; got {len(set(src_addrs))} distinct"
 
     # DESTINATION: a lockstep (uniform-address) uint8 tensor the kernel copies into,
@@ -575,7 +575,7 @@ def test_per_core_kernel_readback_honors_per_core_address(device):
     # destination = the lockstep base.
     rt_args = ttnn.RuntimeArgs()
     for c in cores:
-        rt_args[c.x][c.y] = [src.experimental_per_core_buffer_address(c), dst_base, SHARD_BYTES]
+        rt_args[c.x][c.y] = [_per_core_addr(src, c), dst_base, SHARD_BYTES]
 
     kernel = ttnn.KernelDescriptor(
         kernel_source=_PER_CORE_READBACK_KERNEL,
