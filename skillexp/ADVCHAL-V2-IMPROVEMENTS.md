@@ -169,6 +169,17 @@ it is a *detection* signal, not a *selection* one. Then B1.
 
 → [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md) §2–3.
 
+### B0a. Rank the profile's own conversion ops, not just the advisor's plan ⭐
+
+The stage's worklist is derived from the advisor's plan, so **it inherits the advisor's blind spots**. qwen B's
+largest cost — 3,983 µs/layer of `retilize`, 191 ms/model — was filed under `boundary` with an advisor ceiling of
+**0.000 µs**, which is *correct* (the advice places those conversions too) and therefore never actionable.
+
+**Change.** Independently of the advisor, rank every conversion op in the profile by cost and report the top ones
+with their effective bandwidth. A conversion moving 80 KB in 819 µs at **1 % of roofline** is a finding whatever
+the advisor thinks of it. In this corpus that one addition surfaces the single largest item in the whole
+exercise.
+
 ### B1. Emit the legal grid ladder, and sweep both sides of the advice ⭐
 
 **Measured value: two of the three cells with a low-core reduction shipped the wrong rung** — north-mini
@@ -376,6 +387,22 @@ levels 2 and 3 are identical for layout advice. **The stage already uses the onl
 the advice can only be improved by changing the objective below.
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E14.
 
+### D0. Price conversions as a cost, not a boolean — and enumerate row-major ⭐
+
+Two gaps that together make every layout crossing invisible to the advisor:
+
+- **`requiresReshard` is a boolean** at level 5 of `LayoutScore`, and the struct has no reference to tilize,
+  `isTiled`, or element type. **An 819 µs untilize and a 1.5 µs L1 regrid are the same value to it.** Given
+  `retilize` is 76.5 % of all boundary cost in this corpus, that is the wrong abstraction.
+- **`rowMajorEnabled` defaults to `false`** (`GreedyMemoryLayoutPropagation.h:20`) and the advisor never sets
+  it, so row-major candidates are never enumerated. And `RowMajorLayoutPropagation` is restricted to
+  *integer-typed function inputs* — it deletes redundant RM→Tile ops on page tables; it does not build
+  row-major compute chains.
+
+⚠ **Neither would have found the 191 ms item** (E-1) — that needs a graph rewrite, which the advisor cannot do
+by construction. But both are prerequisites for the advisor reasoning about layout crossings *at all*.
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E22.
+
 ### D1. Add a latency term to `LayoutScore` ⭐
 
 `getOpRuntime` already exists in `lib/OpModel/TTNN/TTNNOpModel.cpp` and is wired for many ops;
@@ -484,9 +511,26 @@ advice places these conversions too, because they are legally required. The stag
 `boundary`: reported, out of scope, uncredited. Both the advisor and the stage behaved correctly, and a quarter
 of a 27B model's decode time sits there.
 
-**Action.** Accept tiled input in the conv / recurrent composite kernels (or provide a tiled variant).
-`retilize` is **76.5 % of all boundary cost in the corpus** — the single highest-leverage kernel change
-identified anywhere in this analysis.
+⚠ **Re-aimed after reading the shapes.** I first wrote "accept tiled input in the kernels". The real cause is a
+**shape choice in the decoder**: `linear_conv_kernel_dim = 4`, and the conv state is
+**(1, 1, 10240, 4)** — the 4-element window sits on the **32-wide tile axis**, so the tiled form is
+**8× padded** (80 KB of real data → 640 KB). The conversions therefore run at
+**0.90 and 1.10 GB/s against this machine's measured ~90 GB/s roofline — about 1 %** — 819 µs to move 80 KB on
+109 cores. Not an inherent cost; a pathological shape.
+
+**Action, cheapest first — all decoder changes, no tt-metal work required:**
+
+1. **Keep the conv window on a leading axis.** Dims 0–1 are not tile-constrained; reduce over the window there
+   and both `permute`s disappear along with the 4-on-32 axis.
+2. **Replace shift-and-concat with a circular buffer.** Keep `kernel` slots, overwrite slot `t % kernel`, take
+   the weighted sum against rotated weights. No slice, no concat, no permute — **the layout never changes**.
+3. **Express the depthwise conv as a matmul** against a small banded matrix — tile-native by construction.
+
+*(A tiled 4-wide variant of the conv composites in tt-metal is a separate, optional question; it is not needed
+to recover the 191 ms.)*
+
+`retilize` is **76.5 % of all boundary cost in the corpus**, so this shape pattern is worth checking in every
+model with a short-window conv or recurrence.
 
 - ⚠ qwen **FN** almost certainly carries the same cost and it is **unmeasured** — that arm's linear kind was
   declared tracer-unreachable, so no reconciliation exists. Measuring it is the cheapest confirmation.

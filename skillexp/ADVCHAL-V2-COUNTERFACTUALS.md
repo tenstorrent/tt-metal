@@ -22,6 +22,7 @@ there.
 | **E19** | look for the **wrong op**, not the wrong layout | gemma-4-12B pays **23×** the corpus mean to concatenate heads because it calls a different TTNN op — a defect class the stage cannot express |
 | **E20** | widen **matmuls**, the largest apparent pool | **dead end, and it retracts part of my own C5** — DS matmuls are bandwidth-bound; the advisor's direction is **+65 %** slower |
 | **E21** | look at the **boundary** bucket my own dataset was dropping | **`retilize` is 76.5 % of all boundary cost** — 191 ms/model, **24.4 % of qwen B's decode time**, with the advisor's ceiling correctly at 0.000 µs |
+| **E22** | ask whether the **chain** could be written differently | **yes — it's a shape choice, not a kernel limit.** A 4-element conv window on the 32-wide tile axis; the conversions run at **~1 % of DRAM bandwidth**. And the advisor cannot help for 4 independent reasons |
 
 ---
 
@@ -611,3 +612,93 @@ proven class and the rest is small: `multiply` 9.0 %, `add` 4.8 %, `slice_static
 | 2 | qwen's untraced linear attention | 97 % of decode time unexamined | tt-metal: tracer support for mutable-state `ttnn.copy` |
 | 3 | `concatenate_heads` wrong-op in gemma-4-12B | ≈2.6 ms/model | tt-metal: sharded GQA SDPA output, then a decoder change |
 | 4 | the four unshipped placement wins | ≈8 ms/model total | stage: oracle rule + grid ladder |
+
+---
+
+## E22 — the 191 ms is a *shape* choice in the decoder, not a kernel limit. And the advisor structurally cannot help
+
+E21 found 191 ms/model in `retilize` and I called the fix "tt-metal: accept tiled input". **That was imprecise.**
+Reading the chain and the shapes gives a better answer.
+
+### The chain
+
+qwen's gated-delta causal depthwise conv, decode path
+(`tt/optimized_decoder.py:1207-1222`):
+
+```python
+mixed = ttnn.permute(mixed, (0, 2, 3, 1))                       # put the conv window LAST
+next_conv_state = ttnn.concat([self.caches["conv"][..., 1:], mixed],
+                              dim=-1, memory_config=DRAM)       # shift-and-append
+mixed = ttnn.sum(ttnn.multiply(next_conv_state, self.weights["conv"]),
+                 dim=-1, keepdim=True)                          # depthwise conv as a reduction
+mixed = ttnn.silu(mixed)
+ttnn.copy(next_conv_state, self.caches["conv"])
+mixed = ttnn.permute(mixed, (0, 3, 1, 2))                       # put it back
+```
+
+### The shapes, from the model's own config
+
+| | |
+|---|---|
+| `linear_conv_kernel_dim` | **4** |
+| conv state shape | **(1, 1, 10240, 4)** — the conv window is the **last** dim |
+| tile geometry | 32 × 32 |
+| so the last dim | **4 padded to 32 → 8× inflation** |
+| after the shift `[..., 1:]` | **3 elements on a 32-wide tile axis** |
+| real data | **80 KB** bf16 |
+| tiled + padded | **640 KB** |
+
+### What that costs, in bandwidth terms
+
+| op | measured | traffic | effective bandwidth |
+|---|---|---|---|
+| `UntilizeWithUnpaddingDeviceOperation` | **819.4 µs** | ~720 KB | **0.90 GB/s** |
+| `TilizeWithValPaddingDeviceOperation` | **671.1 µs** | ~720 KB | **1.10 GB/s** |
+
+The gemma profile measured this machine's DRAM roofline at **~90 GB/s**. These conversions run at **~1 % of
+achievable bandwidth** — 819 µs to move 80 KB of real data, on 109 cores.
+
+**So this is not an inherent cost and not really a kernel-capability gap. It is a pathological shape**: a
+4-element window sitting on the 32-wide tile axis, which forces an 8×-padded tiled form that nothing can move
+efficiently.
+
+### So yes — the chain could be written differently. Three ways, cheapest first
+
+1. **Don't put the conv window on the last axis.** Dims 0–1 are not tile-constrained. Keep the window on a
+   leading axis and reduce over it there — the `permute` pair disappears and with it the 4-on-32 tile axis.
+2. **Replace shift-and-concat with a circular buffer.** Keep `kernel` slots, overwrite slot `t % kernel`, and
+   take the weighted sum against rotated weights. No slice, no concat, no permute — **the state's layout never
+   changes**, so there is nothing to convert.
+3. **Express the depthwise conv as a matmul** against a small banded matrix. Tile-native by construction, and
+   it lands in the op class the hardware is best at.
+
+Any of these removes the axis, not the op. **That is a decoder change, not a tt-metal change** — correcting what
+I wrote in E21.
+
+*(Whether a tiled 4-wide variant of the conv composites would also be worth adding in tt-metal is a separate
+question; the point is that it is not required to recover the 191 ms.)*
+
+### Could the advisor have found this? No — four independent reasons
+
+| # | reason | evidence |
+|---|---|---|
+| 1 | **Row-major candidates are not enumerated.** `rowMajorEnabled` defaults to **`false`** and the advisor's option string never sets it | `GreedyMemoryLayoutPropagation.h:20`; `shard_advisor.py:_build_options` |
+| 2 | **Even enabled, the row-major pass does not build compute chains.** It starts only from function inputs with *integer* element type — *"Currently restricted to integer tensor types only"* — and its job is deleting redundant RM→Tile ops on things like page tables | `RowMajorLayoutPropagation.cpp:110-120` |
+| 3 | **The score cannot price a tilize.** `requiresReshard` is a **boolean** at level 5; `LayoutScore` contains no reference to tilize, `isTiled`, or element type. An **819 µs untilize and a 1.5 µs L1 regrid are the same value to it** | `OpModelStrategy.{h,cpp}`, `MemoryLayoutPropagationTypes.h:21` |
+| 4 | **Structurally: the advisor assigns layouts to a fixed graph.** It cannot delete a `permute`, a `slice` or a `concat`. Every fix above is a *graph rewrite* | by construction |
+
+Reason 4 is the load-bearing one. Reasons 1–3 are fixable; reason 4 says that even a perfect layout assigner
+would not have found this, because the defect is in **which axis the data lives on**, not in where the tensor is
+placed.
+
+### What this changes about the recommendations
+
+- **E-1 in [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md) is re-aimed** from "tt-metal: accept tiled input" to
+  "decoder: get the conv window off the tile axis", with the circular buffer as the concrete first attempt.
+- **A new advisor action point** (D6): give `LayoutScore` a *cost* for conversions instead of a boolean, and
+  enumerate row-major. Neither would have found this one, but both are needed before the advisor can reason
+  about layout crossings at all — and `retilize` is **76.5 % of all boundary cost in the corpus**.
+- **A new stage action point** (B5): the stage's ranked worklist is derived from the advisor's plan, so it
+  inherits the advisor's blind spot. It should *also* rank the profile's own conversion ops by cost,
+  independently of what the advisor says about them. In this corpus that single change surfaces a 191 ms item
+  the whole exercise reported as "out of scope, 0.000 µs".

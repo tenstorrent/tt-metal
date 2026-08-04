@@ -20,9 +20,10 @@ layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned o
 static check that needs no device time** (§3.8).
 
 **And placement is not where the money is.** The corpus's single largest cost is **191 ms/model — 24.4 % of
-qwen B's decode time — in tile ↔ row-major conversions** on one graph edge, correctly priced by the advisor at
-**0.000 µs** because they are legally required. That is 14× every shipped win in the corpus combined, and it is
-a kernel gap, not a placement problem (§3.18).
+qwen B's decode time — in tile ↔ row-major conversions** on one graph edge, 14× every shipped win combined. It is
+a **shape choice in the decoder** (a 4-element conv window sitting on the 32-wide tile axis; the conversions run
+at **~1 % of DRAM bandwidth**), it is fixable without touching tt-metal, and **no layout advisor could have
+found it** because the fix is a graph rewrite, not a placement (§3.18–3.19).
 
 **And the correctness objection to the biggest one does not survive contact with an absolute oracle.** Against
 the model's own higher-precision reference, the discarded candidate scores **0.99931** and the configuration
@@ -103,7 +104,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The eighteen findings that matter
+## 3. The nineteen findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -489,6 +490,48 @@ under `boundary`: reported, out of scope, uncredited. Honest, and enormous.
 
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E20–E21
 
+### 3.19 …and it is a shape choice, fixable in the decoder, that no advisor could have found
+
+I first called §3.18's fix "tt-metal: accept tiled input". Reading the chain and the shapes gives a better
+answer.
+
+The conv is a causal depthwise convolution written as **permute → slice `[..., 1:]` → concat on the last dim →
+multiply + sum → permute back**. From the model's own config:
+
+| | |
+|---|---|
+| `linear_conv_kernel_dim` | **4** |
+| conv state shape | **(1, 1, 10240, 4)** — the conv window is the **last** dim |
+| tile geometry 32 × 32 → the last dim | **4 padded to 32 = 8× inflation** |
+| real data / tiled+padded | **80 KB / 640 KB** |
+
+| op | measured | effective bandwidth |
+|---|---|---|
+| `UntilizeWithUnpadding` | **819.4 µs** | **0.90 GB/s** |
+| `TilizeWithValPadding` | **671.1 µs** | **1.10 GB/s** |
+
+This machine's measured DRAM roofline is **~90 GB/s**. These run at **~1 %** of it — 819 µs to move 80 KB, on
+109 cores. **So it is not an inherent cost and not a kernel-capability gap: it is a pathological shape.**
+
+**Three ways to write the chain differently**, cheapest first: keep the conv window on a *leading* axis (dims
+0–1 are not tile-constrained) so the permutes vanish; or replace shift-and-concat with a **circular buffer**
+(overwrite slot `t % 4`, rotated weights — the layout never changes, so there is nothing to convert); or express
+the depthwise conv as a **matmul against a banded matrix**, tile-native by construction.
+
+**Could the advisor have found it? No — four independent reasons:**
+
+| # | reason |
+|---|---|
+| 1 | **Row-major candidates are never enumerated** — `rowMajorEnabled` defaults `false` and the advisor's option string never sets it |
+| 2 | Even enabled, `RowMajorLayoutPropagation` starts only from **integer-typed function inputs** (*"Currently restricted to integer tensor types only"*) — it deletes redundant RM→Tile on page tables, it does not build RM compute chains |
+| 3 | **The score cannot price a tilize.** `requiresReshard` is a **boolean**; `LayoutScore` has no tilize/`isTiled`/element-type term. An **819 µs untilize and a 1.5 µs L1 regrid are the same value to it** |
+| 4 | **Structurally, the advisor assigns layouts to a fixed graph** — it cannot delete a `permute`, `slice` or `concat`. Every fix above is a graph rewrite |
+
+Reason 4 is load-bearing: 1–3 are fixable, but even a perfect layout assigner would miss this, because the
+defect is **which axis the data lives on**, not where the tensor is placed.
+
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E22
+
 ---
 
 ## 4. What makes a model advisor-compatible
@@ -606,7 +649,7 @@ corpus-wide: `rms_norm` 26.6 % (the proven class), then `multiply` 9.0 %, `add` 
 
 | # | opportunity | scale | kind of fix |
 |---|---|---|---|
-| 1 | **`retilize` on qwen's `add → rms_norm` edge** | **191 ms/model — 24.4 %** | tt-metal: tiled input for the conv/recurrent composites |
+| 1 | **`retilize` on qwen's conv chain** | **191 ms/model — 24.4 %** | **decoder**: get the 4-element conv window off the 32-wide tile axis (circular buffer) — §3.19 |
 | 2 | qwen's untraced linear attention | **97 %** of its decode time never advised on | tt-metal: tracer support for mutable-state `ttnn.copy` |
 | 3 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window | tt-metal |
 | 4 | `concatenate_heads` wrong-op in gemma-4-12B | ≈2.6 ms/model, 3.9× what that cell shipped | tt-metal (sharded GQA SDPA output) then a decoder change |
