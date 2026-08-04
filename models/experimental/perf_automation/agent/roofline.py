@@ -126,6 +126,16 @@ def annotate_op(op: dict[str, Any], env: dict[str, Any], dispatch_per_op: float 
             compute = ideal_ms_compute(flops, op.get("fidelity", ""), facts)
             achievable_compute = ideal_ms_compute(flops, "lofi", facts)  # highest peak -> lowest floor
 
+    # PERSIST the compute term and its FLOPs. Both were computed and thrown away, only the winning
+    # `ideal_ms` surviving -- so nothing downstream could say WHY a floor is what it is. The report's
+    # prefill ceiling needs them grouped by fidelity: peak differs 4x across LoFi/HiFi2/HiFi3/HiFi4,
+    # so a blanket peak is either optimistic (LoFi, a target unreachable without dropping precision)
+    # or pessimistic (HiFi4, punishing LoFi work already done). Summing each op against ITS OWN peak
+    # is the only honest total, and that needs these two numbers to leave this function.
+    if compute is not None:
+        op["compute_ms"] = round(float(compute), 4)
+        op["flops"] = int(flops)
+
     memory = ideal_ms_memory(float(op.get("bytes") or 0.0), op.get("memory", ""), facts)
     dispatch = (dispatch_per_op * count) if dispatch_per_op else None
 
@@ -248,6 +258,10 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
                 "ideal_ms": ideal,
                 "gap_ms": gap,
                 "achievable_gap_ms": o.get("achievable_gap_ms"),
+                # annotate_op computes these; without copying them here they never leave this
+                # function, and a caller cannot say WHICH fidelity a floor came from.
+                "compute_ms": o.get("compute_ms"),
+                "flops": o.get("flops"),
                 "eff_gap_ms": eff_gap,  # ranking key: precision-aware for matmuls, == gap_ms otherwise
                 "gap_pct": (round(100.0 * gap / ideal, 1) if ideal else None),
                 "bound_by": o.get("bound_by"),

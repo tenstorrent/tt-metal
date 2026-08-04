@@ -596,6 +596,48 @@ def _capacity_bytes():
         return None
 
 
+def _fidelity_breakdown(profile):
+    """[(fidelity, flops, peak_tflops, floor_ms), ...] and the summed compute ceiling, or (None, None).
+
+    Each op against ITS OWN peak, not one blanket figure. Peak differs 4x across the fidelity modes
+    (Blackhole: LoFi 5.4 / HiFi2 2.7 / HiFi3 1.8 / HiFi4 1.35 TFLOPS per core), so assuming LoFi gives
+    a ceiling unreachable without dropping precision, and assuming HiFi4 punishes a model for the LoFi
+    work it has already done. The mix is the only honest total.
+
+    The SPLIT is the actionable part: a fidelity slice that is a small share of the FLOPs but a large
+    share of the floor is exactly where the `fidelity` rung pays, and a single blended number hides it.
+
+    MATMUL ONLY -- a compute floor needs parsed MxKxN dims, so LayerNorm, BinaryNg and the rest
+    contribute nothing. This is a lower bound on prefill compute, not the whole of it.
+    """
+    try:
+        from agent import roofline as _rf
+        from agent.environment import ARCH_FACTS
+
+        # PASS THE ARCH. _facts() keys off env["arch"]; an empty env leaves peak_tflops_per_core
+        # unset, ideal_ms_compute returns None, and no op ever carries a compute floor -- the
+        # breakdown then silently renders "not modelled" on a profile that has everything it needs.
+        _arch = str((profile or {}).get("arch") or os.environ.get("PERF_MCP_ARCH") or "blackhole").lower()
+        rep = _rf.residual_report(profile or {}, {"arch": _arch})
+        ops = [o for o in (rep.get("open_ops") or []) if o.get("compute_ms") and o.get("flops")]
+        if not ops:
+            return None, None
+        bh = ARCH_FACTS.get(_arch) or ARCH_FACTS.get("blackhole") or {}
+        cores = int(bh.get("grid_x") or 0) * int(bh.get("grid_y") or 0)
+        peaks = bh.get("peak_tflops_per_core") or {}
+        agg = {}
+        for o in ops:
+            f = str(o.get("fidelity") or "hifi4").lower()
+            fl, ms = agg.get(f, (0, 0.0))
+            agg[f] = (fl + int(o["flops"]), ms + float(o["compute_ms"]))
+        order = ["lofi", "hifi2", "hifi3", "hifi4"]
+        keys = [f for f in order if f in agg] + [f for f in agg if f not in order]
+        rows = [(f, agg[f][0], (peaks.get(f) or 0.0) * cores, agg[f][1]) for f in keys]
+        return rows, sum(r[3] for r in rows)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, active_bytes, per_unit_ms, profile, tag=""):
     """The Roofline / Overheads / Utilization blocks.
 
@@ -631,10 +673,30 @@ def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, activ
         _bwm = ("%.0f GB/s" % bw_gbps) if bw_gbps else "\u2014"
         out.append(" %-25s %-18s \u2502 %-21s \u2502 %s" % ("", "%.0f GB/s" % peak_bw_gbps, _bwb, _bwm))
     out.append(_split(W))
-    out.append(
-        " %-25s %-18s \u2502 %-21s \u2502 %s   %s"
-        % ("Compute FLOPs", "not modelled", "\u2014", "not measured", "\u2717")
-    )
+    _fid, _cc = _fidelity_breakdown(profile)
+    if _cc and _cc > 0:
+        # The time band is INVERTED: lower ms is better, so 80% efficiency costs MORE time.
+        out.append(
+            " %-25s %-18s \u2502 %-21s \u2502 %s   %s"
+            % (
+                "Compute FLOPs   prefill",
+                "%.1f ms TTFT" % _cc,
+                "%.1f \u2013 %.1f ms" % (_cc / 0.80, _cc / 0.60),
+                "not measured",
+                "\u2717",
+            )
+        )
+        out.append("     at the current fidelity mix:")
+        for _f, _fl, _pk, _ms in _fid:
+            out.append(
+                "       %-6s %8.2fe12 FLOP  x %5.0f TFLOPS  \u2192 %6.2f ms"
+                % (_f.replace("lofi", "LoFi").replace("hifi", "HiFi"), _fl / 1e12, _pk, _ms)
+            )
+    else:
+        out.append(
+            " %-25s %-18s \u2502 %-21s \u2502 %s   %s"
+            % ("Compute FLOPs", "not modelled", "\u2014", "not measured", "\u2717")
+        )
     out.append(rule)
     out.append("")
 

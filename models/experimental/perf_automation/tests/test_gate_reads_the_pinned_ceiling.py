@@ -109,7 +109,10 @@ def test_the_gate_and_the_report_agree_on_one_run(tmp_path, monkeypatch):
 
     # 7.505 GB anchored -> (512*0.8)/7.505 = 54.6, in BOTH places, and never the 4 GB facts' 102.4.
     assert round(gate.theoretical_rate, 1) == 68.2
-    assert "54.6 tok/s/u" in txt, txt
+    # The band column no longer repeats the unit on every cell ("40.9 - 54.6", not "... 54.6 tok/s/u").
+    # What matters is unchanged: the ANCHORED value is what renders, never the 4 GB facts' 102.4.
+    assert "54.6" in txt, txt
+    assert "102.4" not in txt, txt
     assert "102.4" not in txt, txt
 
 
