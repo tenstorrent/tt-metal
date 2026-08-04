@@ -317,6 +317,36 @@ def _pcc_perturb_env() -> dict:
     return {"TT_PERF_FORCE_WEIGHT_DTYPE": "bfloat4_b", "PERF_PCC_SELFTEST_PERTURB": "1"}
 
 
+def _measure_baseline(run_baseline, stages):
+    """Take the baseline profile, retrying at a smaller seq len on a shape/program-config assertion.
+
+    Split out of before_loop so the reuse branch above can skip the whole measurement without
+    duplicating the retry ladder or early-returning out of before_loop (which continues on to
+    metric selection and target computation).
+    """
+    try:
+        return run_baseline()
+    except PerfRunFailed as _exc:
+        if not _SHAPE_CONFIG_CRASH_RE.search(_exc.error or ""):
+            raise
+        _cur = int(os.environ.get("TT_PERF_SEQ_LEN", "128") or "128")
+        for _seq in _seq_retry_candidates(_exc.error, _cur):
+            msg = (
+                f"baseline crashed at TT_PERF_SEQ_LEN={_cur} with a shape/program-config assertion "
+                f"(model program configs pinned to native shape); retrying at TT_PERF_SEQ_LEN={_seq}"
+            )
+            print(f"      ⚠ {msg}", file=sys.stderr, flush=True)
+            stages._event("note", msg)
+            os.environ["TT_PERF_SEQ_LEN"] = str(_seq)
+            try:
+                return run_baseline()
+            except PerfRunFailed as _exc2:
+                if not _SHAPE_CONFIG_CRASH_RE.search(_exc2.error or ""):
+                    raise
+                continue
+        raise
+
+
 def before_loop(
     config: dict[str, Any],
     env_probe: Callable[[], str],
@@ -679,8 +709,6 @@ def before_loop(
         print(f"      depth-bridge skipped: {str(_bl_e)[:160]}", file=sys.stderr, flush=True)
         print(_tb.format_exc()[-600:], file=sys.stderr, flush=True)
 
-    stages.start("tracy_baseline", "Measuring the baseline latency (trace+1CQ)")
-
     def _run_baseline():
         return profile_model(
             perf_test=perf_rel,
@@ -690,30 +718,44 @@ def before_loop(
             run_profiled=run_profiled_factory(perf_rel, case),
         )
 
-    try:
-        profile = _run_baseline()
-    except PerfRunFailed as _exc:
-        if not _SHAPE_CONFIG_CRASH_RE.search(_exc.error or ""):
-            raise
-        _cur = int(os.environ.get("TT_PERF_SEQ_LEN", "128") or "128")
-        profile = None
-        for _seq in _seq_retry_candidates(_exc.error, _cur):
-            msg = (
-                f"baseline crashed at TT_PERF_SEQ_LEN={_cur} with a shape/program-config assertion "
-                f"(model program configs pinned to native shape); retrying at TT_PERF_SEQ_LEN={_seq}"
-            )
-            print(f"      ⚠ {msg}", file=sys.stderr, flush=True)
-            stages._event("note", msg)
-            os.environ["TT_PERF_SEQ_LEN"] = str(_seq)
-            try:
-                profile = _run_baseline()
-                break
-            except PerfRunFailed as _exc2:
-                if not _SHAPE_CONFIG_CRASH_RE.search(_exc2.error or ""):
-                    raise
-                continue
-        if profile is None:
-            raise
+    # ENFORCED IN CODE, not advised in the prompt: a model that already HAS a baseline does not get
+    # a new one. The bar is established ONCE, the first time a model is optimized, and afterwards
+    # moves only downward on a win (perf_mcp._promote_baseline).
+    #
+    # Re-measuring is not merely wasteful (250 s on gemma-3-12b-it). It silently redefines what every
+    # later verdict is graded against: successive runs measured 381.186 / 381.222 / 381.263 / 381.291
+    # / 381.311 for IDENTICAL code, and the resume filter compares those stamps with exact equality,
+    # so a different subset of attempt history survived each run -- the upstream cause of the 38%
+    # repeat rate on this model.
+    #
+    # A note in GUIDELINES would be advice, and advice gets worked around; this is a branch the run
+    # cannot take. PERF_MCP_FORCE_REBASELINE=1 is the deliberate escape hatch, for when the model has
+    # changed enough that the stored bar means nothing.
+    _bl_key_model = Path(model_root).name or "model"
+    _bl_key_task = os.environ.get("PERF_MCP_TASK", "main")
+    _stored_baseline = None
+    if str(os.environ.get("PERF_MCP_FORCE_REBASELINE", "")).lower() not in ("1", "true", "yes"):
+        try:
+            _sp_path = state_dir() / ("perf_mcp_baseline_%s_%s.json" % (_bl_key_model, _bl_key_task))
+            _sp_doc = json.loads(_sp_path.read_text())
+            if float(_sp_doc.get("device_ms") or 0.0) > 0 and (_sp_doc.get("buckets") or []):
+                _stored_baseline = _sp_doc
+        except Exception:  # noqa: BLE001
+            _stored_baseline = None
+
+    if _stored_baseline is not None:
+        stages.start("tracy_baseline", "Reusing the baseline established on the first run")
+        print(
+            "      ✔ baseline REUSED: %.4f ms device, established previously and not re-measured "
+            "(it moves only on a win). PERF_MCP_FORCE_REBASELINE=1 forces a fresh one."
+            % float(_stored_baseline.get("device_ms") or 0.0),
+            file=sys.stderr,
+            flush=True,
+        )
+        profile = _stored_baseline
+    else:
+        stages.start("tracy_baseline", "Measuring the baseline latency (trace+1CQ)")
+        profile = _measure_baseline(_run_baseline, stages)
     _seq_env = os.environ.get("TT_PERF_SEQ_LEN")
     if _seq_env:
         (run.dir / "perf_seq_len").write_text(_seq_env)
@@ -737,7 +779,7 @@ def before_loop(
     try:
         pass
 
-        _bl_model = os.environ.get("PERF_MCP_MODEL_NAME") or Path(model_root).name or "model"
+        _bl_model = Path(model_root).name or os.environ.get("PERF_MCP_MODEL_NAME") or "model"
         _bl_task = os.environ.get("PERF_MCP_TASK", "main")
         _bl_name = "perf_mcp_baseline_%s_%s.json" % (_bl_model, _bl_task)
         (state_dir() / _bl_name).write_text(json.dumps(profile))

@@ -97,6 +97,75 @@ def _baseline_path():
     return state_dir() / ("perf_mcp_baseline_%s_%s.json" % (model, task))
 
 
+def baseline_exists() -> bool:
+    """Is there already a usable device_ms baseline for this (model, task)?
+
+    The bar is established ONCE, the first time a model is optimized, and then only ever moves down
+    on a win. Callers use this to skip re-measuring it -- a re-measure is not free (250 s on
+    gemma-3-12b-it) and, worse, it silently redefines what every later verdict is graded against.
+    """
+    try:
+        return float(json.loads(_baseline_path().read_text()).get("device_ms") or 0.0) > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _promote_baseline(prof: dict) -> dict:
+    """Store the profile, but move the device_ms BAR only DOWNWARD. Returns what was stored.
+
+    One file was doing two jobs. profile_model's own docstring invites re-profiling ("call this
+    again whenever you want a fresh picture"), because the agent needs current per-op buckets and
+    tags to choose its next target -- and that write was unconditional, so refreshing the PICTURE
+    also redefined the BAR. On gemma-3-12b-it profile_model ran ~44 times in one run.
+
+    The failure that produces: the agent applies an edit that makes the model slower, re-profiles
+    for a fresh picture, and the slower number becomes the baseline. measure_candidate now grades
+    against it, so REVERTING the bad edit reads as a win. It also drifts the baseline_at_record
+    stamps (381.186 / 381.222 / 381.263 / 381.291 / 381.311), which the resume filter compares with
+    exact equality -- a different subset of attempt history survives each run, which is the upstream
+    cause of the 38% repeat rate.
+
+    The full-pipeline bar has ratcheted since 9358229fa8; this is the same rule for the steering
+    metric. Refresh the picture freely, move the bar only on a real improvement.
+
+    A shape change (perf_layers) re-baselines outright: a 4-layer profile and a 48-layer profile are
+    different units, so "slower" is not a regression, it is a different measurement.
+    """
+    path = _baseline_path()
+    new_ms = 0.0
+    try:
+        new_ms = float(prof.get("device_ms") or 0.0)
+    except (TypeError, ValueError):
+        new_ms = 0.0
+    kept_ms = None
+    try:
+        cur = json.loads(path.read_text())
+        cur_ms = float(cur.get("device_ms") or 0.0)
+        same_shape = str(cur.get("perf_layers") or "") == str(prof.get("perf_layers") or "")
+        if cur_ms > 0 and new_ms > 0 and same_shape and new_ms > cur_ms:
+            kept_ms = cur_ms
+    except Exception:  # noqa: BLE001
+        kept_ms = None
+    out = dict(prof)
+    if kept_ms is not None:
+        out["device_ms"] = kept_ms
+        out["observed_device_ms"] = new_ms
+        print(
+            "  [baseline-ratchet] profile read %.4f ms, slower than the committed baseline %.4f ms; "
+            "picture refreshed, BAR unchanged (a re-profile must not redefine what wins are graded "
+            "against)" % (new_ms, kept_ms),
+            file=sys.stderr,
+            flush=True,
+        )
+    try:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(out))
+        os.replace(str(tmp), str(path))
+    except Exception:  # noqa: BLE001
+        path.write_text(json.dumps(out))
+    return out
+
+
 # The tool is trace+1cq end to end; this is the ONLY full-pipeline baseline (no 2-CQ twin).
 # KEYED by (model, task), like _baseline_path() and the measurement ledger. It was a single global
 # file, so anything on the box could overwrite a live run's AFTER number: on 2026-07-27 a unit test
@@ -1823,7 +1892,7 @@ def profile_model() -> dict:
             ),
         }
     prof.setdefault("perf_layers", (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all")
-    _baseline_path().write_text(json.dumps(prof))
+    prof = _promote_baseline(prof)
     _ledger_record(prof)
     dev = round(float(prof.get("device_ms", 0.0)), 4)
     target, at_floor, residual_gap, open_ops = None, None, None, []
