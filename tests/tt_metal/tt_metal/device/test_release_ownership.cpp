@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,7 +18,11 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "impl/context/metal_context.hpp"
+#include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <umd/device/firmware/firmware_info_provider.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
+#include <umd/device/types/arch.hpp>
 
 using namespace tt::tt_metal;
 
@@ -111,6 +117,109 @@ TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
     open_and_close_device();
 
     log_info(tt::LogTest, "Test passed: parent process successfully opened device after subprocess");
+}
+
+namespace {
+
+constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
+constexpr uint32_t kTestTdpLimitWatts = 200;
+
+// Mirrors TDP_LIMIT_MIN_FIRMWARE_VERSION in UMD's firmware_utils.cpp, which is file-local there.
+const umd::FirmwareBundleVersion kMinTdpLimitFirmware(19, 11, 0);
+
+// Rebuilds the cluster with TT_METAL_TDP_LIMIT_WATTS set to `value`, then reports the limit
+// firmware ends up enforcing on every PCIe-attached chip, since the limit is applied per ASIC. The
+// knob is read while a context builds its RunTimeOptions, so any existing context has to go first.
+std::map<ChipId, std::optional<uint32_t>> open_cluster_with_tdp_limit(const std::optional<std::string>& value) {
+    if (value.has_value()) {
+        setenv(kTdpLimitEnvVar, value->c_str(), /*overwrite=*/1);
+    } else {
+        unsetenv(kTdpLimitEnvVar);
+    }
+    if (MetalContext::instance_exists()) {
+        detail::ReleaseOwnership();
+    }
+
+    const Cluster& cluster = MetalContext::instance().get_cluster();
+    std::map<ChipId, std::optional<uint32_t>> limits;
+    for (const ChipId chip_id : cluster.mmio_chip_ids()) {
+        limits[chip_id] =
+            cluster.get_driver()->get_chip(chip_id)->get_tt_device()->get_firmware_info_provider()->get_tdp_limit();
+    }
+    return limits;
+}
+
+// Restores TT_METAL_TDP_LIMIT_WATTS and drops the context it configured, so the tests that follow
+// in this binary start from the environment they expect. Parsing of the variable itself is covered
+// by the TdpLimitEnv tests in test_device_init_and_teardown.cpp, which need no device.
+class TdpLimitFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        const char* prev = getenv(kTdpLimitEnvVar);
+        prev_ = prev != nullptr ? std::optional<std::string>(prev) : std::nullopt;
+    }
+
+    void TearDown() override {
+        if (prev_.has_value()) {
+            setenv(kTdpLimitEnvVar, prev_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv(kTdpLimitEnvVar);
+        }
+        if (MetalContext::instance_exists()) {
+            detail::ReleaseOwnership();
+        }
+    }
+
+private:
+    std::optional<std::string> prev_;
+};
+
+}  // namespace
+
+// The knob is optional, so nothing it can be handed may take a run down. This holds on any
+// architecture: Wormhole cannot set a limit at all, and Blackhole firmware rejects one below the
+// range it accepts. Both have to come out as a warning rather than a failed cluster open.
+TEST_F(TdpLimitFixture, RejectedLimitDoesNotFailClusterOpen) { EXPECT_NO_THROW(open_cluster_with_tdp_limit("1")); }
+
+// Surviving the rejection is not enough: firmware must still be enforcing what it was before.
+TEST_F(TdpLimitFixture, RejectedLimitLeavesFirmwareUntouched) {
+    const std::map<ChipId, std::optional<uint32_t>> before = open_cluster_with_tdp_limit(std::nullopt);
+
+    // 1 W is below the [50, 500] W window firmware accepts, so the write is refused and warned about.
+    for (const auto& [chip_id, limit] : open_cluster_with_tdp_limit("1")) {
+        EXPECT_EQ(limit, before.at(chip_id)) << "chip " << chip_id << " moved after a refused limit";
+    }
+}
+
+// The whole lifecycle: the limit is applied, it outlives the cluster that set it, an unset knob
+// leaves it alone, and the 0 sentinel puts the board default back. The last step is also cleanup.
+TEST_F(TdpLimitFixture, LimitOutlivesClusterAndSentinelRestoresIt) {
+    const std::map<ChipId, std::optional<uint32_t>> board_defaults = open_cluster_with_tdp_limit(std::nullopt);
+
+    // Metal requires one architecture across the cluster, so the first chip gates this for all.
+    const Cluster& cluster = MetalContext::instance().get_cluster();
+    const ChipId first_chip_id = *cluster.mmio_chip_ids().begin();
+    if (cluster.arch() != tt::ARCH::BLACKHOLE || cluster.get_driver()
+                                                         ->get_chip(first_chip_id)
+                                                         ->get_tt_device()
+                                                         ->get_firmware_info_provider()
+                                                         ->get_firmware_version() < kMinTdpLimitFirmware) {
+        GTEST_SKIP() << "TDP limit needs Blackhole with firmware " << kMinTdpLimitFirmware.to_string() << " or newer";
+    }
+    for (const auto& [chip_id, limit] : board_defaults) {
+        ASSERT_NE(limit, kTestTdpLimitWatts) << "chip " << chip_id << " already sits at the limit under test";
+    }
+
+    for (const auto& [chip_id, limit] : open_cluster_with_tdp_limit(std::to_string(kTestTdpLimitWatts))) {
+        EXPECT_EQ(limit, kTestTdpLimitWatts) << "chip " << chip_id << " did not take the limit";
+    }
+    for (const auto& [chip_id, limit] : open_cluster_with_tdp_limit(std::nullopt)) {
+        EXPECT_EQ(limit, kTestTdpLimitWatts) << "chip " << chip_id << " lost the limit when its cluster closed";
+    }
+    for (const auto& [chip_id, limit] :
+         open_cluster_with_tdp_limit(std::to_string(llrt::TDP_LIMIT_RESTORE_DEFAULT_SENTINEL))) {
+        EXPECT_EQ(limit, board_defaults.at(chip_id)) << "chip " << chip_id << " was not put back to its default";
+    }
 }
 
 }  // namespace tt::tt_metal
