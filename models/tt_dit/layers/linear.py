@@ -218,13 +218,36 @@ class ColParallelLinear(Module):
             state["bias"] = bias
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None, dtype=None
+        self,
+        x: ttnn.Tensor,
+        compute_kernel_config=None,
+        default_block_size=None,
+        parallel_config=None,
+        dtype=None,
+        addcmul_a=None,
+        addcmul_b=None,
+        addcmul_scalar: float = 1.0,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
         Return output fractured on columns.
         If chunks is set, returns a list of tensors split along the output dimension.
+
+        `addcmul_a` / `addcmul_b` fuse a gated residual into the matmul epilogue, returning
+        `addcmul_a + addcmul_scalar * matmul_result * addcmul_b`. Both must already be at the
+        per-TP-device output slice. Only the all-gather-matmul path supports it, so it requires
+        `parallel_config`; callers on the unfused path should apply the addcmul themselves.
         """
+        if addcmul_a is not None or addcmul_b is not None:
+            if (addcmul_a is None) != (addcmul_b is None):
+                msg = "addcmul_a and addcmul_b must be given together"
+                raise ValueError(msg)
+            if parallel_config is None or parallel_config.tensor_parallel.factor <= 1:
+                msg = "fused addcmul needs the all-gather-matmul path; pass parallel_config"
+                raise ValueError(msg)
+            if self.chunks is not None and self.chunks > 1:
+                msg = "fused addcmul is not supported alongside chunked output"
+                raise ValueError(msg)
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
@@ -266,6 +289,9 @@ class ColParallelLinear(Module):
                 chunks=self.chunks if self.chunks is not None else 1,
                 dtype=dtype,
                 fuse_swiglu=self.fuse_swiglu,
+                scalar=addcmul_scalar if addcmul_a is not None else None,
+                addcmul_input_tensor1=addcmul_a,
+                addcmul_input_tensor2=addcmul_b,
             )
 
             if self.chunks is not None and (self.chunks > 1):

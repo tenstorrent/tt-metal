@@ -259,8 +259,16 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_weight=modulation(_SCALE_MSA),
             dynamic_bias=modulation(_SHIFT_MSA),
         )
-        attn_out = self.attn(normed, N=N, rope_cos=rope_cos, rope_sin=rope_sin)
-        spatial_1BND = ttnn.addcmul(residual, attn_out, modulation(_GATE_MSA))
+        # The gated residual is fused into to_out's matmul epilogue, so `attn` returns
+        # `residual + attn_out * gate` directly rather than the block adding it afterwards.
+        spatial_1BND = self.attn(
+            normed,
+            N=N,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            addcmul_residual=residual,
+            addcmul_gate=modulation(_GATE_MSA),
+        )
 
         # 2. Modulated feed-forward.
         residual = spatial_1BND
@@ -273,6 +281,20 @@ class MiniMaxH3TransformerBlock(Module):
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
             normed = self.ccl_manager.all_gather_persistent_buffer(normed, dim=3, mesh_axis=self.tp_mesh_axis)
+        # NOTE: ff2's reduce-scatter and this gated residual can fuse into a single
+        # minimal_matmul_strided_reduce_scatter_async via ParallelFeedForward.forward_fused_addcmul,
+        # and it is tempting because it turns three ops into one. Measured, it is a 45% REGRESSION on
+        # that stage: 1.75 ms (ff2 0.94 + reduce-scatter 0.67 + this addcmul 0.15) becomes 2.55 ms,
+        # +3.3% on the whole block at 5s.
+        #
+        # The cause is blocking, not the fusion itself. The unfused path reaches
+        # get_matmul_config(..., default_block_size) and so uses our swept sizes, while the fused path
+        # goes through get_fused_mmrs_config, whose table is keyed on (M, K, N) and holds only Wan's
+        # shapes -- ours misses and takes default_fused_mmrs_config. Silently: that helper only warns
+        # when the *grid* is unknown, and the 12x10 grid is registered.
+        #
+        # So this needs a swept fused-MMRS entry per duration (M varies: 4768 / 9216 / 13632) before
+        # it is worth anything. See the perf log.
         ff_out = self.ff(
             normed,
             compute_kernel_config=self.mm_compute_kernel_config,
