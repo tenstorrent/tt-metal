@@ -2,11 +2,6 @@ name: (triage) Grouping CI Failures
 
 on:
   schedule:
-    # Every four hours. Each run re-reads the whole three-day Slack window rather
-    # than only what is new, so most of an hourly run was spent re-downloading
-    # threads it had already stored. A wider gap costs no coverage: a thread is
-    # still re-examined on every run for three days after it appears. What it
-    # costs is latency, up to four hours before a failure reaches the database.
     - cron: '0 */4 * * *'
   workflow_dispatch:
     inputs:
