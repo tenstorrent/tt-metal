@@ -270,7 +270,7 @@ def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeo
 
     The table is built + serialized by the model runtime (``runtime.build_kv_chunk_table`` — the model
     owns the cache layout / block-cyclic address math), and the runner runs the all-ranks device-map
-    delivery + all-gather barrie, so by the
+    delivery + all-gather barrier, so by the
     time this attaches the endpoint ``MigrationLayerClient`` on the master cmd/table/resp queues and
     SET_TABLEs, every rank's local device map has landed and the worker can reach WORKER_READY.
     """
