@@ -50,7 +50,7 @@ real code. Plan phase 6 and roadmap phase 13 are the same work.
 | plan 5 — validate on historical wins | **partly** | rediscovers the LTX win from source and passes the SD3.5 precision test; no wider corpus of past AGMM graphs, and none of the human metrics (false-positive rate over a real backlog, time per finding) |
 | **roadmap 6 — dry-run front end** | **done** | — |
 | **roadmap 7 — shape and layout fidelity** | **done (7a); 7b on 2×4, Ring blocked** | tiling, exact shard division, block-float bytes, checkpoint keys, and the chunk rule all shipped and corroborated against real ttnn on the 2×4 Loudbox via `conform.py`; the 4×8 Ring corroboration needs a 32-chip Galaxy |
-| roadmap 8 — op coverage | **in progress** | LTX, SD3.5-large **and** the SD3.5 VAE ResnetBlock (conv/group_norm) covered from source (0 unregistered); fused-kernel data table done; remaining: the one-registration merge and the LTX-VAE spatial family (halo/`neighbor_pad`) |
+| roadmap 8 — op coverage | **core done** | LTX, SD3.5-large **and** the SD3.5 VAE ResnetBlock covered from source (0 unregistered); fused-kernel data table + generic-op one-registration merge landed; the remaining tails (LTX-VAE halo/`neighbor_pad`, conv3d, Mochi/Wan tier-2) surface as those targets are added and are partly phase-10-gated |
 | roadmap 9 — scale | not started | 48-layer rollup, quadratic cost, finding rollup, stable IDs |
 | roadmap 10 — multi-mesh / stage / host | not started | submeshes, encoder→DiT→VAE, carried state, readbacks |
 | roadmap 11 — conformance (needs a device) | not started | **gates trusting findings**, not producing them |
@@ -137,18 +137,27 @@ ditcheck conform --block ltx --against ltx_bh4x8.graph.json  # flat collective l
 ## The one thing that stays manual: op registration
 
 Op semantics cannot be inferred from a call. That is by design (plan §"Key
-engineering choices", choice 3) and stays the single manual surface — but the
-dry-run design **halves** it: a shim shape rule and an analyzer semantics spec
-are the same knowledge, so they become one registration entry.
+engineering choices", choice 3) and stays the single manual surface.
+
+**Where the two halves genuinely are one piece of knowledge, they are now one
+registration.** For the generic families (pointwise / passthrough), a call is
+declared once in `semantics.GENERIC_OPS` — canonical op + shim shape-rule — and
+the shim's dispatch is generated from it (phase 8):
 
 ```python
-register(OpSpec(
-    name="all_gather", kind=COMM, is_collective=True, preserves_value=True,
-    shim=lambda c: c.out(shape=c.in_shape(0), dist=c.in_dist(0).replicated(c.axis)),  # dry run
-    apply=_all_gather_apply,    # forward availability
-    demand=_all_gather_demand,  # backward necessity
-))
+# semantics.py -- one line, one file; the shim reads this table
+GENERIC_OPS = { "silu": ("pointwise", "unary", "silu"), "to_layout": ("identity", "passthrough", None), ... }
 ```
+
+For a **new communication or compute op** the two halves live in two layers on
+purpose: the shim emits canonical op names, so the analyzer registry has to stand
+alone (a `dump`ed graph is `analyze`d with no shim — the CI path), which means the
+analyzer cannot import the shim. So a genuinely new op is an `OpSpec` in
+`semantics.py` (`apply` + `demand`) plus a shim rule in `dryrun/ops.py`; the
+`ops --missing --stub` generator emits both halves to paste. Revision 1 imagined a
+single fused `OpSpec` with a `shim=` callable — that does not fit the layering, so
+the realised form is the shared `GENERIC_OPS` table for the common case and a
+stub-assisted two-file entry for new semantics.
 
 Ergonomics, unchanged in intent from revision 1; 1, 2 and 4 are built:
 
@@ -404,13 +413,26 @@ instead of degrading to replicated+taint, which is what turned a spurious
 The conv/group-norm *shapes* are the shim's belief until on-device conformance
 (phase 11) — there is no independent VAE oracle yet.
 
+**One registration per op — done for the generic families, bounded by design.**
+The duplication that was real — the unary / binary / passthrough ttnn-name lists
+appearing in *both* `semantics.py` (analyzer aliases) and `dryrun/ops.py` (shim
+dispatch) — is now a single `semantics.GENERIC_OPS` table: each entry declares a
+call's canonical op *and* its shim shape-rule once, in the analyzer layer that is
+the source of truth, and the shim **generates** its dispatch from it. Adding a
+pointwise / view-like op is now one line in one file.
+
+The merge stops there deliberately, and the reason is architectural, not
+unfinished work: the shim already emits *canonical* op names, so the analyzer must
+own its registry independently — a `dump`ed graph is `analyze`d with no shim in
+the process (the phase-13 CI path). So the analyzer cannot import the shim, only
+the reverse. Bespoke comm/compute ops (matmul, collectives, conv2d, group_norm,
+the fused kernels, `from_torch`, reshape) therefore keep an analyzer spec *and* a
+shim rule in their two layers — which matches the plan's intent that "only new
+communication semantics should need real thought." The `ops --missing --stub`
+generator (phase 8) already emits both halves for a new such op.
+
 **Remaining:**
 
-- Merge shim shape rule and analyzer semantics into a single `OpSpec` (today a
-  rule in `dryrun/ops.py` and a spec in `semantics.py` are two edits for one piece
-  of knowledge); extend `ops --missing` to stub all three functions. The
-  `unregistered` node kind, the withhold-don't-guess rule and `ops --check` landed
-  in phase 6.
 - ~~Declare fused-kernel internal stages as **data**~~ **done** — `dryrun/fused.py`
   holds a `FUSED_KERNELS` table (call → hidden collective, stage order, chunked,
   epilogue); AGMM and MMRS are now bound to shared builders from that table, the

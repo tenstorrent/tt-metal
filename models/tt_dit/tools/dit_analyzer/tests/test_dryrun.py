@@ -75,6 +75,24 @@ def test_sd35_vae_resnet_is_clean():
     assert "no redundancy findings" in proc.stdout, proc.stdout
 
 
+def test_generic_ops_are_one_registration_across_both_layers():
+    # A pointwise / passthrough op is declared once, in semantics.GENERIC_OPS, and
+    # that single entry drives BOTH the analyzer alias and the shim dispatch -- so
+    # the two can't drift and adding one is a one-line, one-file change (phase 8).
+    from dit_analyzer import semantics as S
+    from dit_analyzer.dryrun import ops as O
+
+    assert S.GENERIC_OPS, "expected generic ops to be declared"
+    for leaf, (canon, rule, fn) in S.GENERIC_OPS.items():
+        assert S.lookup(leaf).name == canon, leaf  # analyzer alias, bare name
+        assert S.lookup("ttnn." + leaf).name == canon, leaf  # ... and qualified
+        assert leaf in O.TENSOR_OPS, leaf  # shim dispatch generated from the same table
+        if rule == "passthrough":
+            assert O.TENSOR_OPS[leaf] is O.identity
+    # spot-check the canonical routing that the shim relies on
+    assert S.lookup("sigmoid").name == "pointwise" and S.lookup("to_memory_config").name == "identity"
+
+
 def test_fused_kernel_table_drives_emission_and_inspection():
     from dit_analyzer.dryrun import ops
     from dit_analyzer.dryrun.fused import FUSED_KERNELS, looks_fused

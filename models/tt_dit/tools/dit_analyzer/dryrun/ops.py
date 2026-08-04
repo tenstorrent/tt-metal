@@ -693,29 +693,13 @@ TENSOR_OPS = {
     "unsqueeze": unsqueeze,
     "squeeze": squeeze,
     "unsqueeze_to_4D": unsqueeze_to_4D,
-    "to_layout": identity,
-    "typecast": identity,
-    "clone": identity,
-    "to_memory_config": identity,
     "chunk": chunk,
     "concat": concat,
     "permute": permute,
-    "add": _binary("add"),
-    "sub": _binary("sub"),
-    "subtract": _binary("sub"),
-    "mul": _binary("mul"),
-    "multiply": _binary("mul"),
-    "div": _binary("div"),
+    # unary/binary/passthrough (sigmoid, add, to_layout, ...) are generated below
+    # from semantics.GENERIC_OPS -- declared once, in the analyzer's source of truth.
     "lerp": lambda a, b, w, **k: pointwise("lerp", [a, b, w]),
     "addcmul": addcmul,
-    "sigmoid": _unary("sigmoid"),
-    "gelu": _unary("gelu"),
-    "silu": _unary("silu"),
-    "tanh": _unary("tanh"),
-    "sqrt": _unary("sqrt"),
-    "reciprocal": _unary("reciprocal"),
-    "neg": _unary("neg"),
-    "clamp": _unary("clamp"),
     "matmul": matmul,
     "linear": matmul,
     "conv2d": conv2d,
@@ -726,6 +710,25 @@ TENSOR_OPS = {
     "mul_": _inplace("mul"),
     "sub_": _inplace("sub"),
 }
+
+
+def _generic_shim(rule: str, fn):
+    """The shim shape rule for a GENERIC_OPS entry: unary/binary emit a pointwise
+    node, passthrough emits an identity (value/shape/dist preserved)."""
+    if rule == "unary":
+        return _unary(fn)
+    if rule == "binary":
+        return _binary(fn)
+    return identity  # passthrough
+
+
+# One registration per generic op (phase 8): the shim dispatch for the pointwise /
+# passthrough families comes from the single declaration in semantics.GENERIC_OPS,
+# so those ttnn names live in exactly one place across both layers.
+from ..semantics import GENERIC_OPS as _GENERIC_OPS  # noqa: E402
+
+for _leaf, (_canon, _rule, _fn) in _GENERIC_OPS.items():
+    TENSOR_OPS.setdefault(_leaf, _generic_shim(_rule, _fn))
 
 EXPERIMENTAL_OPS = {
     "all_gather_async": all_gather_async,

@@ -591,27 +591,15 @@ for _name, _aliases, _doc in [
     (
         "pointwise",
         (
-            "add",
-            "mul",
-            "sub",
-            "gelu",
+            # unary/binary ttnn names are declared once in GENERIC_OPS below (which
+            # also drives the shim); only the non-generic pointwise aliases remain.
             "gelu_tanh",
-            "silu",
             "swiglu",
-            "sigmoid",
-            "tanh",
             "residual_add",
             "rope",
             "scale_shift",
             "addcmul",
-            "multiply",
-            "subtract",
-            "div",
-            "ttnn.add",
-            "ttnn.mul",
-            "ttnn.multiply",
             "ttnn.addcmul",
-            "ttnn.sigmoid",
             "ttnn.experimental.rotary_embedding_llama",
             "rotary_embedding_llama",
             "ttnn.experimental.alt_complex_rotate90",
@@ -788,20 +776,53 @@ register(
         doc="View / squeeze / unsqueeze / to_layout / typecast: same logical value, tracked regions.",
     ),
     aliases=(
+        # shape-changing views keep bespoke shim rules; the pure passthroughs
+        # (to_layout / typecast / clone / to_memory_config) are in GENERIC_OPS.
         "view",
         "reshape",
         "squeeze",
         "unsqueeze",
         "unsqueeze_to_4D",
-        "to_layout",
-        "typecast",
-        "clone",
         "ttnn.reshape",
         "ttnn.squeeze",
         "ttnn.unsqueeze",
-        "ttnn.to_layout",
     ),
 )
+
+
+# One registration per generic op (phase 8, "one registration per op"). Each entry
+# declares -- in one place, in the analyzer layer that is the source of truth -- a
+# ttnn call's canonical op AND the shim shape-rule that builds its node, so a
+# pointwise / passthrough op is a single line here and the shim generates its
+# dispatch from this table (see dryrun/ops.py) instead of restating the same names
+# in a second file. Bespoke comm/compute ops (matmul, collectives, conv, fused,
+# from_torch, reshape, ...) keep an explicit shim rule -- by design, only genuinely
+# new semantics should need real thought.
+#   ttnn leaf : (canonical analyzer op, shim rule, pointwise fn label)
+GENERIC_OPS: Dict[str, Tuple[str, str, Optional[str]]] = {
+    "sigmoid": ("pointwise", "unary", "sigmoid"),
+    "gelu": ("pointwise", "unary", "gelu"),
+    "silu": ("pointwise", "unary", "silu"),
+    "tanh": ("pointwise", "unary", "tanh"),
+    "sqrt": ("pointwise", "unary", "sqrt"),
+    "reciprocal": ("pointwise", "unary", "reciprocal"),
+    "neg": ("pointwise", "unary", "neg"),
+    "clamp": ("pointwise", "unary", "clamp"),
+    "add": ("pointwise", "binary", "add"),
+    "sub": ("pointwise", "binary", "sub"),
+    "subtract": ("pointwise", "binary", "sub"),  # fn normalised to sub
+    "mul": ("pointwise", "binary", "mul"),
+    "multiply": ("pointwise", "binary", "mul"),  # fn normalised to mul
+    "div": ("pointwise", "binary", "div"),
+    "to_layout": ("identity", "passthrough", None),
+    "typecast": ("identity", "passthrough", None),
+    "clone": ("identity", "passthrough", None),
+    "to_memory_config": ("identity", "passthrough", None),
+}
+
+for _leaf, (_canon, _rule, _fn) in GENERIC_OPS.items():
+    ALIASES.setdefault(_leaf, _canon)
+    ALIASES.setdefault("ttnn." + _leaf, _canon)
 
 
 def _slice_apply(c: ApplyCtx) -> None:
