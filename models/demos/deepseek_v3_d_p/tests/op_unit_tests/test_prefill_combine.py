@@ -66,8 +66,8 @@ def run_combine(
     is_ci_v2_env,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
-    per-model test entrypoints below — they differ only on the model hyperparams (e.g. num_experts, embedded_dim, ...)
-    and scenario hyperparams (e.g. ISL, proxy test on scaled down HW, ...)."""
+    per-model test entrypoints below — they differ only on the model hyperparams (e.g. num_routed_experts,
+    emb_dim, num_experts_per_tok,...) and scenario hyperparams (e.g. ISL, proxy test on scaled down HW, ...)."""
 
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
@@ -387,8 +387,8 @@ def combine_shape_params():
                 config.NUM_ROUTED_EXPERTS,
                 config.NUM_EXPERTS_PER_TOKEN,
                 8,
-                True,
-            ),  # TODO: revert pcc check back to false before checkin
+                False,
+            ),
         ]
         for shape_id, seq, num_experts, topk, capacity, run_pcc in shapes:
             params.append(
@@ -423,7 +423,6 @@ def combine_shape_params():
     ids=["tile", "row_major"],
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
-@pytest.mark.parametrize("cmb_version", [1, 2], ids=["cmb_v1", "cmb_v2"])
 def test_ttnn_combine(
     mesh_device,
     seq_len_per_chip,
@@ -438,7 +437,6 @@ def test_ttnn_combine(
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
-    cmb_version,
     is_ci_env,
     is_ci_v2_env,
 ):
@@ -456,7 +454,6 @@ def test_ttnn_combine(
         run_pcc_check,
         dispatched_buffer_layout,
         use_fp8_output,
-        cmb_version,
         is_ci_env,
         is_ci_v2_env,
     )
