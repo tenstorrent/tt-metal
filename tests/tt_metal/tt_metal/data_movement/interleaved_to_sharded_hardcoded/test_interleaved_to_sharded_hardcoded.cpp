@@ -415,10 +415,10 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SWriterShardedDramRowMajor) {
         .master_core_coord = master_core_coord};
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        log_info(tt::LogTest, "Running test on device {}", id);
+    for (auto& device : this->devices_) {
+        log_info(tt::LogTest, "Running test on device {}", device->id());
         EXPECT_TRUE(unit_tests::dm::interleaved_to_sharded_hardcoded::test1_writer_sharded_dram_row_major::run_dm(
-            devices_.at(id), test_config));
+            device, test_config));
     }
 }
 
@@ -463,9 +463,9 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SWriterShardedDramTile) {
         .master_core_coord = master_core_coord};
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         EXPECT_TRUE(unit_tests::dm::interleaved_to_sharded_hardcoded::test2_writer_sharded_dram_tile::run_dm(
-            devices_.at(id), test_config));
+            device, test_config));
     }
 }
 
@@ -505,9 +505,9 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderTile) {
         .input_data_format = tt::DataFormat::Float16_b};
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         EXPECT_TRUE(unit_tests::dm::interleaved_to_sharded_hardcoded::test3_interleaved_reader_tile_dram::run_dm(
-            devices_.at(id), test_config));
+            device, test_config));
     }
 }
 
@@ -547,9 +547,9 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SL1InterleavedReaderTile) {
         .input_data_format = tt::DataFormat::Float16_b};
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         EXPECT_TRUE(unit_tests::dm::interleaved_to_sharded_hardcoded::test4_interleaved_reader_tile_l1::run_dm(
-            devices_.at(id), test_config));
+            device, test_config));
     }
 }
 
@@ -593,9 +593,9 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
         .master_core_coord = master_core_coord};
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         EXPECT_TRUE(unit_tests::dm::interleaved_to_sharded_hardcoded::test5_interleaved_reader_row_major_dram::run_dm(
-            devices_.at(id), test_config));
+            device, test_config));
     }
 }
 
@@ -639,9 +639,9 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SL1InterleavedReaderRowMajor) {
         .master_core_coord = master_core_coord};
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         EXPECT_TRUE(unit_tests::dm::interleaved_to_sharded_hardcoded::test6_interleaved_reader_row_major_l1::run_dm(
-            devices_.at(id), test_config));
+            device, test_config));
     }
 }
 

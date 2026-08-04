@@ -1123,7 +1123,18 @@ namespace reuse_mcast_optimized_helpers {
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // A multicast rectangle must be specified with start <= end. Two arch paths:
+        //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+        //  * Quasar (single NOC, non-torus): the rectangle must be ascending regardless of NOC. in0_noc =
+        //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
+        //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
+        //    ascending via min/max. (#48552)
+        if (device->arch() == tt::ARCH::QUASAR) {
+            uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            in0_mcast_receiver_grid_diff_coord_start = lo;
+            in0_mcast_receiver_grid_diff_coord_end = hi;
+        } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
@@ -2574,7 +2585,18 @@ create_program_mcast_in0_in1(
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // A multicast rectangle must be specified with start <= end. Two arch paths:
+        //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+        //  * Quasar (single NOC, non-torus): the rectangle must be ascending regardless of NOC. in0_noc =
+        //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
+        //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
+        //    ascending via min/max. (#48552)
+        if (device->arch() == tt::ARCH::QUASAR) {
+            uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            in0_mcast_receiver_grid_diff_coord_start = lo;
+            in0_mcast_receiver_grid_diff_coord_end = hi;
+        } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
@@ -3089,11 +3111,16 @@ namespace m2 = tt::tt_metal::experimental;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
-// processor & NOC; Gen2 (Quasar) uses the default config.
+// processor & NOC; Gen2 (Quasar) uses the default config, optionally opting the kernel's DFBs
+// out of implicit-sync credit accounting (disable_dfb_implicit_sync_for_all) — a Gen2-only concept
+// ignored on Gen1.
 m2::DataMovementHardwareConfig make_datamovement_hardware_config(
-    tt::ARCH arch, tt::tt_metal::DataMovementProcessor processor, tt::tt_metal::NOC noc) {
+    tt::ARCH arch,
+    tt::tt_metal::DataMovementProcessor processor,
+    tt::tt_metal::NOC noc,
+    bool disable_dfb_implicit_sync_for_all = false) {
     if (arch == tt::ARCH::QUASAR) {
-        return m2::DataMovementGen2Config{};
+        return m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
     }
     return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
 }
@@ -3585,7 +3612,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         for (auto v : in0_mcast_noc_y) {
             noc_y_str += std::to_string(v) + ",";
         }
-        log_warning(
+        log_debug(
             tt::LogOp,
             "[QSR-MCAST2D-DBG] transpose_mcast={} in0_sender_num_cores_along_width={} num_x_bs={} "
             "num_y_bs={} num_blocks_x(=in0_mcast_num_dests)={} num_blocks_y={} num_cores_c={} num_cores_r={} "
@@ -3947,7 +3974,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // in0_noc below, so the mcast must issue on in0_noc or it inverts and only the sender's
             // own column receives in0 (degenerate 2-corner delivery -> partial-grid hang).
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         };
         // Block-sharded in0 sender reads num_x + num_y per-core mcast-coord varargs (in0_mcast_noc_x/y);
         // declare the count so the framework allocates the vararg slots (else get_vararg is OOB).
@@ -3976,7 +4006,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
             // Pin RISCV_1 + in0_noc (legacy parity) to match the in0-mcast rectangle geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         };
         // Same varargs (in0_mcast_noc_x/y) as the work in0 sender (block-sharded only path).
         no_work_ks.advanced_options.num_runtime_varargs = num_x_bs + num_y_bs;
@@ -4014,7 +4047,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_1 + in0_noc (legacy parity). The m2 path computes a single in0-mcast geometry
             // on in0_noc for both the main and _other receivers, so both must use in0_noc.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
     if (has_in0_receiver) {
@@ -4137,7 +4173,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity): the in1 column-mcast dest rectangle is swapped
             // for in1_noc below, so the mcast must issue on in1_noc or it inverts and degenerates.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                in1_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
     }
 
@@ -4215,7 +4254,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // on in1_noc for both the main and _other receivers, so both must use in1_noc to match
             // the sender's multicast rectangle and semaphore signaling.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                in1_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
     const bool has_in1_receiver = in1_receiver.num_cores() > 0;
@@ -4347,7 +4389,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // A multicast rectangle must be specified with start <= end. Two arch paths:
+        //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+        //  * Quasar (single NOC, non-torus): the rectangle must be ascending regardless of NOC. in0_noc =
+        //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
+        //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
+        //    ascending via min/max. (#48552)
+        if (device->arch() == tt::ARCH::QUASAR) {
+            uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            in0_mcast_receiver_grid_diff_coord_start = lo;
+            in0_mcast_receiver_grid_diff_coord_end = hi;
+        } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }

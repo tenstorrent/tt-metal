@@ -105,7 +105,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "in"}},
         .compile_time_args = {{"num_dims", num_dims}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_tiles"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
         .advanced_options = {.num_runtime_varargs = num_dims, .num_common_runtime_varargs = 2 * num_dims},
     };
 
@@ -120,7 +121,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             .dfb_spec_name = C0, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // --- Per-core runtime args ---

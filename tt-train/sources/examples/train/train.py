@@ -37,12 +37,15 @@ import ttml
 import ttml.common.muon_optimizer
 from ttml.common.config import DeviceConfig, SpeedrunSchedulerConfig, TrainingConfig as BaseTrainingConfig, load_config
 from ttml.common.data import CharTokenizer
+from ttml.common.performance import (
+    get_available_device_memory_in_bytes,
+    get_device_peak_tflops_bf16,
+)
 from ttml.common.schedulers import SpeedrunScheduler
 from ttml.common.utils import (
     build_causal_mask,
     build_mesh,
     create_optimizer,
-    get_available_device_memory_in_bytes,
     get_tt_metal_runtime_root,
     round_up_to_tile,
     summary,
@@ -118,21 +121,6 @@ def _device_arch_name() -> str:
     if is_blackhole(device):
         return "blackhole"
     return "unknown"
-
-
-def get_device_peak_tflops_bf16() -> float:
-    """Per-device theoretical BF16 TFLOPS. Whole-mesh peak = this × num_devices."""
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    grid = device.compute_with_storage_grid_size()
-    num_cores = grid.x * grid.y
-    # Per-core BF16 TFLOPS for each supported TT architecture.
-    if is_wormhole_b0(device):
-        per_core = 1.0
-    elif is_blackhole(device):
-        per_core = 1.35
-    else:
-        raise ValueError(f"Unknown device: {device.arch()}")
-    return num_cores * per_core
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────

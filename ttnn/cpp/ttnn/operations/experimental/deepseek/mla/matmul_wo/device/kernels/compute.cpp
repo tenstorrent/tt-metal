@@ -101,7 +101,7 @@ void kernel_main() {
         tile_regs_wait();
 
         cb_c2w_out.reserve_back(num_n_tiles_per_iter);
-        pack_tile_block(0, cb_c2w_out_id, num_n_tiles_per_iter);
+        pack_block(0, cb_c2w_out_id, num_n_tiles_per_iter);
         cb_c2w_out.push_back(num_n_tiles_per_iter);
         tile_regs_release();
     }

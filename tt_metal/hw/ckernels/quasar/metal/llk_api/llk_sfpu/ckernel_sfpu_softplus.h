@@ -1,0 +1,154 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "ckernel.h"
+#include "ckernel_sfpu_converter.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_polyval.h"
+#include "ckernel_trisc_common.h"
+#include "cmath_common.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "sfpi.h"
+
+namespace ckernel::sfpu
+{
+
+// Softplus via abs(x) symmetry (ported from Blackhole): with f(a) = ln(1+exp(-a)),
+// softplus(t) = t + f(t) for t >= 0 and f(-t) for t < 0. is_fp32_dest_acc_en selects a degree-8 poly on
+// [0,5] + exp Taylor tail (32-bit Dest) vs a bf16-accurate degree-6 poly with the tail dropped (16-bit).
+
+constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
+
+// FP32 residual polynomial: f(a) = ln(1+exp(-a)) on [0, 5], degree 8
+constexpr float SOFTPLUS_POLY_C0 = 6.9310557842e-01f;
+constexpr float SOFTPLUS_POLY_C1 = -4.9926245213e-01f;
+constexpr float SOFTPLUS_POLY_C2 = 1.2186349183e-01f;
+constexpr float SOFTPLUS_POLY_C3 = 5.6753782555e-03f;
+constexpr float SOFTPLUS_POLY_C4 = -1.0528374463e-02f;
+constexpr float SOFTPLUS_POLY_C5 = 2.7290175203e-03f;
+constexpr float SOFTPLUS_POLY_C6 = -3.4358495031e-04f;
+constexpr float SOFTPLUS_POLY_C7 = 2.1285692128e-05f;
+constexpr float SOFTPLUS_POLY_C8 = -4.8245715334e-07f;
+
+// BF16 residual polynomial: f(a) = ln(1+exp(-a)) on [0, 5], degree 6
+// (ULP-weighted minimax fit; max error < 0.28 bf16 ULP over the domain)
+constexpr float SOFTPLUS_BF16_POLY_C0 = 6.9423984729e-01f;
+constexpr float SOFTPLUS_BF16_POLY_C1 = -5.0932420424e-01f;
+constexpr float SOFTPLUS_BF16_POLY_C2 = 1.4279095486e-01f;
+constexpr float SOFTPLUS_BF16_POLY_C3 = -1.3000584069e-02f;
+constexpr float SOFTPLUS_BF16_POLY_C4 = -1.8627923291e-03f;
+constexpr float SOFTPLUS_BF16_POLY_C5 = 5.0152968088e-04f;
+constexpr float SOFTPLUS_BF16_POLY_C6 = -3.1273466851e-05f;
+
+template <bool is_fp32_dest_acc_en>
+sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_reciprocal, const float threshold)
+{
+    sfpi::vFloat val = sfpi::dst_reg[0]; // load x from dest (SFPLOAD)
+    sfpi::vFloat t   = beta * val;
+
+    // Linear region (t >= threshold): softplus(x) = x; default for every lane so the single store covers it.
+    sfpi::vFloat result = val;
+
+    // `t < threshold` relies on vConstNeg1/LREG11 == -1.0 (re-established per launch by _init_sfpu_config_reg_).
+    v_if (t < threshold)
+    {
+        sfpi::vFloat a = sfpi::abs(t);
+        sfpi::vFloat residual;
+
+        if constexpr (is_fp32_dest_acc_en)
+        {
+            residual = PolynomialEvaluator::eval(
+                a,
+                SOFTPLUS_POLY_C0,
+                SOFTPLUS_POLY_C1,
+                SOFTPLUS_POLY_C2,
+                SOFTPLUS_POLY_C3,
+                SOFTPLUS_POLY_C4,
+                SOFTPLUS_POLY_C5,
+                SOFTPLUS_POLY_C6,
+                SOFTPLUS_POLY_C7,
+                SOFTPLUS_POLY_C8);
+
+            // Tail for a > 5: f(a) ~ exp(-a) via 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3)).
+            v_if (a > SOFTPLUS_POLY_BOUNDARY)
+            {
+                sfpi::vFloat e = _sfpu_exp_fp32_accurate_(-a);
+                residual       = e * (1.0f + e * (-0.5f + e * 0.333333343f));
+            }
+            v_endif;
+        }
+        else
+        {
+            residual = PolynomialEvaluator::eval(
+                a,
+                SOFTPLUS_BF16_POLY_C0,
+                SOFTPLUS_BF16_POLY_C1,
+                SOFTPLUS_BF16_POLY_C2,
+                SOFTPLUS_BF16_POLY_C3,
+                SOFTPLUS_BF16_POLY_C4,
+                SOFTPLUS_BF16_POLY_C5,
+                SOFTPLUS_BF16_POLY_C6);
+
+            // The degree-6 poly diverges past its [0, 5] fit domain, while the true residual <
+            // exp(-5) = 0.0067 there; clamp to 0 to keep softplus(t>0) = t within bf16 rounding.
+            v_if (a > SOFTPLUS_POLY_BOUNDARY)
+            {
+                residual = 0.0f;
+            }
+            v_endif;
+        }
+
+        // Reconstruct: t >= 0 -> max(0,t) + residual; t < 0 -> residual.
+        sfpi::vFloat tp = sfpi::max(t, 0.0f);
+        result          = beta_reciprocal * (tp + residual);
+
+        // Round-to-nearest for a 16-bit Dest (SFPSTORE defaults to truncation).
+        if constexpr (!is_fp32_dest_acc_en)
+        {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+    }
+    v_endif;
+
+    sfpi::dst_reg[0] = result;
+    sfpi::dst_reg++;
+}
+
+/**
+ * @brief Compute softplus (1/beta * ln(1 + exp(beta * x))) in-place over a Dest tile.
+ *
+ * Uses the abs(x) symmetry: with f(a) = ln(1 + exp(-a)) and t = beta * x,
+ * softplus(x) = 1/beta * (t + f(t)) for t >= 0 and 1/beta * f(-t) for t < 0. Above `threshold` the op
+ * is linear (returns x). is_fp32_dest_acc_en selects a degree-8 polynomial on [0, 5] plus an exp
+ * Taylor tail (32-bit Dest) or a bf16-accurate degree-6 polynomial with the tail dropped (16-bit
+ * Dest). APPROXIMATION_MODE is accepted for ABI parity but ignored (softplus is exact).
+ *
+ * @tparam APPROXIMATION_MODE: Accepted for ABI parity; ignored (softplus has no approximate variant).
+ * @tparam is_fp32_dest_acc_en: Select the fp32 (degree-8 + exp tail) vs bf16 (degree-6) residual path.
+ * @tparam ITERATIONS: Number of SFPU loop iterations over the Dest tile.
+ * @param beta: Sharpness parameter beta, as an fp32 bit pattern.
+ * @param beta_reciprocal: 1/beta, as an fp32 bit pattern.
+ * @param threshold: Linear-region threshold on beta*x above which softplus(x) = x, as an fp32 bit pattern.
+ * @note The fp32 tail calls @ref _sfpu_exp_fp32_accurate_. The `t < threshold` compare relies on
+ *       vConstNeg1/LREG11 == -1.0, re-established per launch by @ref _init_sfpu_config_reg_, so there
+ *       is no op-specific init step to pair with.
+ */
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_softplus(std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold)
+{
+    const float beta_f            = Converter::as_float(beta);
+    const float beta_reciprocal_f = Converter::as_float(beta_reciprocal);
+    const float threshold_f       = Converter::as_float(threshold);
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        _calculate_softplus_body_<is_fp32_dest_acc_en>(beta_f, beta_reciprocal_f, threshold_f);
+    }
+}
+
+} // namespace ckernel::sfpu

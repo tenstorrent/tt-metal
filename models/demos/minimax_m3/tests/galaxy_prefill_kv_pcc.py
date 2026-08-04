@@ -14,20 +14,23 @@ Env:
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
   PREFILL_SKIP_PCC    "1" -> perf only: skip the per-layer golden KV PCC (no kv_cache/ needed) [default 0]
+  PREFILL_STANDALONE_CHUNKED_PCC  min K/V/index_k PCC gate (fail below this)                 [default 0.88]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
                       M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8" (cache holds both)      [default bf4]
   HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
 
 Run (after weights are present on disk):
-  cd /data/philei/tt-metal
-  export TT_METAL_HOME=/data/philei/tt-metal PYTHONPATH=/data/philei/tt-metal
+  cd <your tt-metal checkout>
+  export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd)
   source python_env/bin/activate
-  export HF_MODEL=/data/vmelnykov/MiniMax-M3-ref
+  # Real bf16 weights + the tilized per-tensor cache both live here (the cache dir is derived from
+  # HF_MODEL, so a complete cache means the ~869GB bf16 source is never read):
+  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-  # chunked over the 8192-token golden (two 5120 chunks), 5 timed iterations:
+  # chunked over the 10240-token golden (two 5120 chunks, no pad tail), 5 timed iterations:
   PREFILL_CHUNKED=1 PREFILL_TPS_ITERS=5 \
-    PREFILL_TRACE_DIR=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_8192 \
+    PREFILL_TRACE_DIR=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240 \
     python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
 """
 
@@ -87,11 +90,16 @@ def plan(n_tokens, chunk_size, chunked):
 def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config):
     """Per-layer K / V / index_k PCC: device cache (gather_layer) vs the golden trace. The device
     stores K / index_k Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so
-    permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle)."""
+    permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle).
+
+    Fails if overall min PCC is below PREFILL_STANDALONE_CHUNKED_PCC (default 0.88), matching
+    models/demos/minimax_m3/tt/runners/prefill_kv_validation.py.
+    """
     from safetensors import safe_open
 
     from models.common.utility_functions import comp_pcc
 
+    threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     head_dim = hf_config.head_dim
     rotary_dim = getattr(hf_config, "rotary_dim", head_dim)
     half = rotary_dim // 2
@@ -122,10 +130,13 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
             line += f" index_k={pcc_ik:.5f}"
         logger.info(line)
 
+    min_pcc = min(mins.values())
     logger.info(
         f"[kv-pcc] min PCC across {num_layers} layers: "
-        f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f}"
+        f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f} "
+        f"(overall {min_pcc:.5f}, threshold {threshold})"
     )
+    assert min_pcc >= threshold, f"KV-cache PCC {min_pcc:.5f} < threshold {threshold}"
     return mins
 
 

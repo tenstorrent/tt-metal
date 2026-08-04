@@ -180,7 +180,7 @@ void kernel_main() {
                 constexpr uint32_t scale_blocks = sparse_sdpa::scale_block_count(latent_width);
                 constexpr uint32_t scale_bytes = sparse_sdpa::scaled_kv_scale_bytes(latent_width);
                 static_assert(
-                    sparse_sdpa::scaled_kv_rope_offset_is_aligned(latent_width),
+                    !scaled_kv || sparse_sdpa::scaled_kv_rope_offset_is_aligned(latent_width),
                     "scaled KV scale/RoPE boundary must be addressable in 16-byte units");
                 static_assert(
                     packed_row_bytes % (tt::constants::TILE_WIDTH * sizeof(uint16_t)) == 0,

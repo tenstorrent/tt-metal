@@ -32,12 +32,17 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnKernelGroup(
     std::set<DataMovementProcessor> processors_in_use;
     for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
         const std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
-        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
-            const std::shared_ptr<QuasarDataMovementKernel> dm_kernel =
-                std::dynamic_pointer_cast<QuasarDataMovementKernel>(kernel);
-            TT_ASSERT(dm_kernel != nullptr);
+        if (kernel->get_kernel_processor_class() != HalProcessorClassType::DM) {
+            continue;
+        }
+        if (const auto dm_kernel = std::dynamic_pointer_cast<QuasarDataMovementKernel>(kernel)) {
             const std::vector<DataMovementProcessor> dm_processors = dm_kernel->get_dm_processors();
             processors_in_use.insert(dm_processors.begin(), dm_processors.end());
+        } else if (const auto dispatch_kernel = std::dynamic_pointer_cast<DispatchEngineKernel>(kernel)) {
+            const std::vector<DataMovementProcessor> dm_processors = dispatch_kernel->get_dm_processors();
+            processors_in_use.insert(dm_processors.begin(), dm_processors.end());
+        } else {
+            TT_THROW("Unrecognized Quasar data-movement kernel type while reserving free DMs");
         }
     }
     return processors_in_use;
@@ -58,18 +63,22 @@ bool DoesKernelGroupHaveComputeKernel(Program& program, const KernelGroup* kerne
 
 template <typename ProcessorClassType>
 std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
-    Program& program, const CoreRangeSet& core_ranges, uint32_t num_processors_per_cluster) {
+    Program& program,
+    const CoreRangeSet& core_ranges,
+    uint32_t num_processors_per_cluster,
+    HalProgrammableCoreType programmable_core_type) {
     std::set<ProcessorClassType> processors(
         enchantum::values<ProcessorClassType>.begin(), enchantum::values<ProcessorClassType>.end());
     std::vector<std::set<DataMovementProcessor>> dm_processors_in_use_per_kernel_group;
 
+    const uint32_t programmable_core_type_index =
+        MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
     std::unordered_set<const KernelGroup*> kernel_groups;
     for (const CoreRange& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                const KernelGroup* kernel_group = program.impl().kernels_on_core(
-                    CoreCoord(x, y),
-                    MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                const KernelGroup* kernel_group =
+                    program.impl().kernels_on_core(CoreCoord(x, y), programmable_core_type_index);
                 kernel_groups.insert(kernel_group);
             }
         }
@@ -127,6 +136,15 @@ std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
     return processors;
 }
 
+std::set<DataMovementProcessor> GetAvailableDataMovementProcessors(
+    Program& program,
+    const CoreRangeSet& core_ranges,
+    uint32_t num_processors_per_cluster,
+    HalProgrammableCoreType programmable_core_type) {
+    return GetProcessorsPerClusterQuasar<DataMovementProcessor>(
+        program, core_ranges, num_processors_per_cluster, programmable_core_type);
+}
+
 KernelHandle CreateQuasarDataMovementKernel(
     Program& program,
     const KernelSource& kernel_src,
@@ -136,8 +154,8 @@ KernelHandle CreateQuasarDataMovementKernel(
         1 <= config.num_threads_per_cluster && config.num_threads_per_cluster <= QUASAR_NUM_DM_CORES_PER_CLUSTER,
         "Requested number of data movement cores per cluster must be between 1 and {} (inclusive)",
         QUASAR_NUM_DM_CORES_PER_CLUSTER);
-    const std::set<DataMovementProcessor> dm_processors =
-        GetProcessorsPerClusterQuasar<DataMovementProcessor>(program, core_ranges, config.num_threads_per_cluster);
+    const std::set<DataMovementProcessor> dm_processors = GetProcessorsPerClusterQuasar<DataMovementProcessor>(
+        program, core_ranges, config.num_threads_per_cluster, HalProgrammableCoreType::TENSIX);
     std::shared_ptr<Kernel> kernel =
         std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_processors);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
@@ -163,7 +181,10 @@ KernelHandle CreateQuasarComputeKernel(
         "Requested number of Tensix engines per cluster must be between 1 and {} (inclusive)",
         QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER);
     const std::set<QuasarComputeProcessor> compute_processors = GetProcessorsPerClusterQuasar<QuasarComputeProcessor>(
-        program, core_ranges, config.num_threads_per_cluster * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+        program,
+        core_ranges,
+        config.num_threads_per_cluster * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE,
+        HalProgrammableCoreType::TENSIX);
     std::shared_ptr<Kernel> kernel =
         std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config, compute_processors);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);

@@ -452,7 +452,7 @@ void ControlPlane::init_control_plane(
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
         // Generate corner pinning for full host galaxy systems
-        std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+        std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups;
 
         // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
         if (cluster.is_ubb_galaxy()) {
@@ -462,24 +462,21 @@ void ControlPlane::init_control_plane(
                 const size_t mesh_chip_count = mesh_shape.mesh_size();
 
                 if (!is_1d && mesh_chip_count % 32 == 0) {
-                    auto mesh_pinnings =
+                    auto mesh_pinning_groups =
                         tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
                             mesh_id,
                             mesh_shape,
                             /*hard_pin_node_0=*/world_size == 1,
                             /*nw_corner_only=*/false);
-                    fixed_asic_position_pinnings.insert(
-                        fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                    pinning_groups.insert(pinning_groups.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
                 }
             }
         }
 
-        // Add MGD pinnings to the topology mapper (only if mesh graph descriptor is available)
+        // Append MGD many-to-many pinning groups directly (no flattening).
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
-            const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
-            for (const auto& [pos, fabric_node] : pinnings) {
-                fixed_asic_position_pinnings.emplace_back(fabric_node, std::vector<AsicPosition>{pos});
-            }
+            const auto& mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            pinning_groups.insert(pinning_groups.end(), mgd_pinnings.begin(), mgd_pinnings.end());
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
@@ -488,7 +485,7 @@ void ControlPlane::init_control_plane(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
-            fixed_asic_position_pinnings,
+            pinning_groups,
             topology_mapping_timeout);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
@@ -496,7 +493,7 @@ void ControlPlane::init_control_plane(
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
-    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                         ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
                                          std::to_string(world_size) + ".yaml");
     try {
@@ -505,7 +502,7 @@ void ControlPlane::init_control_plane(
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
     }
 
-    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
@@ -524,7 +521,7 @@ void ControlPlane::init_control_plane(
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
     // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
     {
-        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" /
                                                        "fabric" /
                                                        ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
                                                         "_of_" + std::to_string(world_size) + ".yaml");
@@ -580,7 +577,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
     // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
     // bisect a device.
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+    std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups;
 
     // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
     if (cluster.is_ubb_galaxy()) {
@@ -590,11 +587,10 @@ void ControlPlane::init_control_plane_auto_discovery() {
             const size_t mesh_chip_count = mesh_shape.mesh_size();
 
             if (!is_1d && mesh_chip_count % 32 == 0) {
-                auto mesh_pinnings =
+                auto mesh_pinning_groups =
                     tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
                         mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
-                fixed_asic_position_pinnings.insert(
-                    fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                pinning_groups.insert(pinning_groups.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
             }
         }
     }
@@ -605,13 +601,13 @@ void ControlPlane::init_control_plane_auto_discovery() {
         *this->mesh_graph_,
         *this->physical_system_descriptor_,
         this->local_mesh_binding_,
-        fixed_asic_position_pinnings,
+        pinning_groups,
         topology_mapping_timeout);
     this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
-    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                         ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
                                          std::to_string(world_size) + ".yaml");
     try {
@@ -620,7 +616,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
     }
 
-    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
@@ -639,7 +635,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
     // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
     {
-        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" /
                                                        "fabric" /
                                                        ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
                                                         "_of_" + std::to_string(world_size) + ".yaml");
@@ -1264,24 +1260,36 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 }
 
 ChipId ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
-    auto it = logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
+    auto physical_chip_id = try_get_physical_chip_id_from_fabric_node_id(fabric_node_id);
     TT_FATAL(
-        it != logical_mesh_chip_id_to_physical_chip_id_mapping_.end(),
+        physical_chip_id.has_value(),
         "FabricNodeId {} not found in logical-to-physical chip mapping. Check for a fabric mesh/topology "
         "mismatch or a node outside the configured fabric cluster.",
         fabric_node_id);
+    return *physical_chip_id;
+}
+
+std::optional<ChipId> ControlPlane::try_get_physical_chip_id_from_fabric_node_id(
+    const FabricNodeId& fabric_node_id) const {
+    auto it = logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
+    if (it == logical_mesh_chip_id_to_physical_chip_id_mapping_.end()) {
+        return std::nullopt;
+    }
     return it->second;
 }
 
-std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_ids(
+std::optional<std::pair<FabricNodeId, chan_id_t>> ControlPlane::try_get_connected_mesh_chip_chan_ids(
     FabricNodeId fabric_node_id, chan_id_t chan_id) const {
     // TODO: simplify this and use Global Physical Desc in ControlPlane soon
     const auto& intra_mesh_connectivity = this->mesh_graph_->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->mesh_graph_->get_inter_mesh_connectivity();
     RoutingDirection port_direction = RoutingDirection::NONE;
     routing_plane_id_t routing_plane_id = 0;
-    for (const auto& [direction, eth_chans] :
-         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
+    const auto source_channels_it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
+    if (source_channels_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+        return std::nullopt;
+    }
+    for (const auto& [direction, eth_chans] : source_channels_it->second) {
         for (const auto& eth_chan : eth_chans) {
             if (eth_chan == chan_id) {
                 port_direction = direction;
@@ -1306,11 +1314,17 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     .at(fabric_node_id.chip_id)
                     .port_direction;
             // Find the eth chan on connected dst_fabric_chip_id based on routing_plane_id
-            const auto& dst_fabric_node = FabricNodeId(fabric_node_id.mesh_id, dst_fabric_chip_id);
-            const auto& dst_fabric_chip_eth_chans =
-                this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
-            for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
-                if (direction == reverse_port_direction) {
+            const auto dst_fabric_node = FabricNodeId(fabric_node_id.mesh_id, dst_fabric_chip_id);
+            const auto dst_channels_it = this->router_port_directions_to_physical_eth_chan_map_.find(dst_fabric_node);
+            if (dst_channels_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                continue;
+            }
+            for (const auto& [direction, eth_chans] : dst_channels_it->second) {
+                if (direction == reverse_port_direction && !eth_chans.empty()) {
+                    if (routing_plane_id >= eth_chans.size()) {
+                        // A routing-plane mismatch cannot identify the exact physical peer channel.
+                        return std::nullopt;
+                    }
                     return std::make_pair(dst_fabric_node, eth_chans[routing_plane_id]);
                 }
             }
@@ -1343,11 +1357,13 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     .at(fabric_node_id.mesh_id)
                     .port_direction;
             // Find the eth chan on connected dst_fabric_mesh_id based on routing_plane_id
-            const auto& dst_fabric_node = FabricNodeId(dst_fabric_mesh_id, dst_connected_fabric_chip_id);
-            const auto& dst_fabric_chip_eth_chans =
-                this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
-            for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
-                if (direction == reverse_port_direction) {
+            const auto dst_fabric_node = FabricNodeId(dst_fabric_mesh_id, dst_connected_fabric_chip_id);
+            const auto dst_channels_it = this->router_port_directions_to_physical_eth_chan_map_.find(dst_fabric_node);
+            if (dst_channels_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                continue;
+            }
+            for (const auto& [direction, eth_chans] : dst_channels_it->second) {
+                if (direction == reverse_port_direction && !eth_chans.empty()) {
                     if (routing_plane_id >= eth_chans.size()) {
                         // Only TG non-standard intermesh connections hits this
                         return std::make_pair(dst_fabric_node, eth_chans[0]);
@@ -1357,8 +1373,15 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
             }
         }
     }
-    TT_FATAL(false, "Could not find connected mesh chip chan ids for {} on chan {}", fabric_node_id, chan_id);
-    return std::make_pair(FabricNodeId(MeshId{0}, 0), 0);
+    return std::nullopt;
+}
+
+std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_ids(
+    FabricNodeId fabric_node_id, chan_id_t chan_id) const {
+    auto peer = try_get_connected_mesh_chip_chan_ids(fabric_node_id, chan_id);
+    TT_FATAL(
+        peer.has_value(), "Could not find connected mesh chip chan ids for {} on chan {}", fabric_node_id, chan_id);
+    return *peer;
 }
 
 std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
