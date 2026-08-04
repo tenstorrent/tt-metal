@@ -152,6 +152,13 @@ class CCLManager:
         self._persistent_rs_out: dict = {}
         self._persistent_rs_inter: dict = {}
 
+        # CP prefill masks, shared by every layer on this mesh and keyed by
+        # (local_seq_len, sliding_window). This lives here rather than on each
+        # attention module because the mask depends only on the sequence geometry
+        # and the layer's window, so a 60-layer stack needs exactly two entries
+        # (sliding, global) — not 60 copies of an 8 MiB tensor.
+        self._cp_mask_cache = {}
+
     def get_rs_semaphore(self):
         """Returns list of 3 semaphores for reduce_scatter (cycles double-buffer)."""
         sems = self._rs_semaphores[self._rs_idx]
