@@ -56,13 +56,32 @@ SPK_PREF = {
     "ko": ["韩语女"],
 }
 
+# CosyVoice-1 instruct takes a CHARACTER / STYLE DESCRIPTION, not a directive.
+#
+# frontend_instruct() puts this string into the LLM's `prompt_text` slot, and
+# TransformerLM.inference does `text = concat([prompt_text, text])` -- so the
+# instruct text is literally prepended to what the model reads, with
+# <|endofprompt|> marking the boundary. A description-shaped prefix conditions the
+# voice; a DIRECTIVE-shaped one gets read aloud.
+#
+# That is not hypothetical. An earlier version of this file used CosyVoice-2
+# instruct2 phrasing ("用四川话说这句话，语气轻快活泼。"), and the model dutifully
+# spoke the instruction before the sentence:
+#     "用四川话说这句话,语气轻快活泼。收到好友从远方寄来的生日礼物,..."
+# -- 42% CER against the intended text, and entirely self-inflicted. Directive
+# phrasing belongs to inference_instruct2 (CosyVoice-2), not inference_instruct.
+#
+# English descriptions are used for every language because that is the form the
+# 300M-Instruct checkpoint was trained on; the spoken text stays in-language.
 INSTRUCTS = {
-    "zh": "用四川话说这句话，语气轻快活泼。<|endofprompt|>",
+    "zh": "A gentle female speaker with normal pitch, slow speaking rate, " "and a warm, happy emotion.<|endofprompt|>",
     "en": "Theo 'Crimson', is a fiery, passionate rebel leader. Fights with fervor "
     "for justice, but struggles with impulsiveness.<|endofprompt|>",
-    "ja": "落ち着いた優しい声で話してください。<|endofprompt|>",
-    "yue": "用開心嘅語氣講呢句話。<|endofprompt|>",
-    "ko": "차분하고 따뜻한 목소리로 말해 주세요.<|endofprompt|>",
+    "ja": "A calm male speaker with low pitch, steady speaking rate, "
+    "and a neutral, reassuring emotion.<|endofprompt|>",
+    "yue": "A cheerful female speaker with bright pitch, brisk speaking rate, " "and a lively emotion.<|endofprompt|>",
+    "ko": "A soft female speaker with normal pitch, gentle speaking rate, "
+    "and a kind, comforting emotion.<|endofprompt|>",
 }
 
 ZERO_SHOT_PROMPT_TEXT = "希望你以后能够做的比我还好呦。"
