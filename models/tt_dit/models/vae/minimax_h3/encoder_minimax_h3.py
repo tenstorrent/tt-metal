@@ -14,26 +14,19 @@ MiniMax layout an earlier draft assumed.
 Two facts drive the plumbing:
 
 * ``ttnn.experimental.conv3d`` requires **ROW_MAJOR** input.
-* ``ttnn.group_norm`` has no fp32 path and needs a tilized input, so every norm is a
-  **bf16** island inside an otherwise fp32 encoder. :func:`_norm_silu` is the single
-  place that boundary is crossed, and it is the encoder's precision floor.
+* Every norm is per *frame*: ``MiniMaxH3VideoGroupNorm`` in the reference folds T into
+  the batch axis so no statistic ever mixes across frames.
 
-``MiniMaxH3VideoGroupNorm`` in the reference folds T into the batch axis so statistics
-never mix across frames. That is obtained here by reusing ``GroupNorm3D`` **with T fed
-as its batch axis**: its ``dims=3`` pooling over ``(C_group, T', H, W)`` with a
-singleton ``T'`` degenerates to exactly per-frame ``(C_group, H, W)`` statistics.
+The norm is :class:`MiniMaxH3DistributedFrameGroupNorm`, which computes the per-(frame,
+group) statistics itself. Three in-tree alternatives were measured and all lost --
+``ttnn.group_norm`` with T as batch (2.7x slower, and bf16-only, which made every norm a
+bf16 island in an otherwise fp32 encoder), ``ttnn.experimental.dit_fused_distributed_groupnorm``
+per frame (1.6x slower, ~30 GB/s against the stats norm's ~112), and carrying the resnet
+chain in TILE to avoid the round trip (a wash). STATE.md amendments 52, 56 and 61 carry the
+numbers; do not re-derive them.
 
-Reusing ``GroupNorm3D`` rather than the plain 2D ``GroupNorm`` is load-bearing, not
-stylistic. It pins ``core_grid`` at construction via
-``ttnn.determine_expected_group_norm_dram_grid_size``, which guarantees **uniform
-multicast groups**. A grid that merely satisfies the ``Ht % nvr == 0`` divisibility
-rules can still **deadlock the mcast at small spatial sizes** -- observed: a heuristic
-grid search picked ``CoreGrid(8, 5)`` for (C=128, T=5, HW=256) and hung the device hard
-enough to need ``tt-smi -glx_reset``, where the pinned API picks ``(8, 10)`` and runs
-clean. ``num_out_blocks`` is then tuned per site (:data:`MINIMAX_H3_GN_OUT_BLOCKS`),
-because the built-in ``-1`` heuristic under-chunks at large spatial and overflows L1.
-
-The consequence is that each norm is specialised to its ``(T, H, W)`` at construction.
+Each norm is still specialised to its ``(T, H, W)`` at construction, because the divisor is
+the *global* element count per (frame, group) and only the constructor knows the mesh factor.
 That costs nothing: the encoder has exactly one activation shape per level, since the
 reference always encodes a 256x256 tile over a 17-frame clip.
 """
@@ -45,33 +38,13 @@ import torch
 import ttnn
 
 from ....layers.module import Module, ModuleList, Parameter
-from ....layers.normalization import GroupNorm3D
 from .conv_minimax_h3 import MiniMaxH3CausalConv3d
-
-# Use the self-computed-statistics norm instead of ``ttnn.group_norm``. Profiling the bf16
-# encoder put Untilize at 21.1 %, GroupNorm at 21.1 % and Tilize at 10.6 % of device time --
-# 52.8 %, more than double the convolutions -- and all of it exists because ``group_norm``
-# requires TILE layout while ``conv3d`` requires ROW_MAJOR, so all thirteen norm sites
-# convert in and back out. The stats norm needs neither.
-# Default False: correct (7 passed, PCC 99.930 % against 99.988 % for the group_norm path)
-# but its performance effect is **unproven**. The wall-clock comparison was inconclusive --
-# the encoder moved 0.857 -> 0.978 s while the *untouched* decoder moved 0.538 -> 0.654 s in
-# the same run, so the encoder delta sits inside the run-to-run drift of amendment 41.
-# Settle it with the device profiler (as the head-fusion change in amendment 43 was settled),
-# not wall clock, then flip this.
-MINIMAX_H3_USE_STATS_GROUPNORM = True
 
 MINIMAX_H3_VAE_NUM_GROUPS = 32
 MINIMAX_H3_VAE_NORM_EPS = 1e-6
 
 # ``ttnn.add(..., activations=[...])`` takes EltwiseUnaryWithParam, not a string.
 _SILU_ACTIVATION = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
-
-# Carry the resnet chain in TILE (see :func:`_as_flat_tile`) rather than ROW_MAJOR.
-# **Measured a wash and left off** (STATE.md amendment 56): a ROW_MAJOR add of two 285 MB
-# tensors profiles at 23.5 ms against ~2.2 ms tiled, but carrying TILE moves the cost into
-# Tilize rather than removing it -- level 0 goes 432 -> 439 ms, level 1 322 -> 327.
-MINIMAX_H3_FLAT_TILE_RESIDUAL = False
 
 # Compute the group variance as E[x^2] - E[x]^2 rather than centring first. Saves one full
 # pass over the activation per norm site (four -> three). The class docstring explains why
@@ -80,102 +53,16 @@ MINIMAX_H3_FLAT_TILE_RESIDUAL = False
 # per-(frame, group) stats in fp32 -- 32 scalars per frame -- so only the *sums* are bf16.
 MINIMAX_H3_ONE_PASS_VARIANCE = True
 
-# Measured on BH Galaxy: the minimal num_out_blocks whose circular buffers fit L1, per
-# (C, T, H, W) site. -1 is GroupNorm3D's built-in heuristic and is fine almost
-# everywhere; the three large-spatial clip sites need explicit chunking, e.g.
-# (256, 17, 128, 128) at -1 asks for 5467008 B against a 1572864 B L1. Every entry was
-# verified at pcc >= 0.99985 against torch per-frame GroupNorm.
-MINIMAX_H3_GN_OUT_BLOCKS: dict[tuple[int, int, int, int], int] = {
-    (256, 17, 128, 128): 4,
-    (128, 17, 128, 128): 4,
-    (128, 17, 256, 256): 16,
-}
-
-
-def make_frame_group_norm(num_channels: int, **kwargs):
-    """The per-frame norm, either ``ttnn.group_norm``-based or self-computed statistics."""
-    if MINIMAX_H3_USE_STATS_GROUPNORM:
-        return MiniMaxH3DistributedFrameGroupNorm(num_channels, **kwargs)
-    kwargs.pop("dtype", None)
-    return MiniMaxH3FrameGroupNorm(num_channels, **kwargs)
-
-
-class MiniMaxH3FrameGroupNorm(GroupNorm3D):
-    """Per-frame GroupNorm: statistics pool over ``(C_group, H, W)`` within one frame.
-
-    Takes and returns ``(1, T, H, W, C)`` ROW_MAJOR. T is passed to ``GroupNorm3D`` as
-    its batch axis, so no statistic ever crosses a frame boundary.
-    """
-
-    def __init__(
-        self,
-        num_channels: int,
-        *,
-        num_frames: int,
-        height: int,
-        width: int,
-        mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.bfloat16,
-    ) -> None:
-        super().__init__(
-            num_channels=num_channels,
-            num_groups=MINIMAX_H3_VAE_NUM_GROUPS,
-            input_nhw=num_frames * height * width,
-            num_batches=num_frames,
-            eps=MINIMAX_H3_VAE_NORM_EPS,
-            mesh_device=mesh_device,
-            dtype=dtype,
-        )
-        self.num_frames = num_frames
-        self.height = height
-        self.width = width
-        self.num_out_blocks = MINIMAX_H3_GN_OUT_BLOCKS.get((num_channels, num_frames, height, width), -1)
-
-    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
-        B, T, H, W, C = x_BTHWC.shape
-        assert B == 1, f"one tile per device, got B={B}"
-        assert (T, H, W) == (self.num_frames, self.height, self.width), (
-            f"norm built for (T,H,W)=({self.num_frames},{self.height},{self.width}), "
-            f"got ({T},{H},{W}) -- the grid is pinned at construction"
-        )
-        # (1,T,H,W,C) -> (T,1,H,W,C) puts T in the batch slot; row-major order is
-        # unchanged, so this is free.
-        x = ttnn.reshape(x_BTHWC, (T, 1, H, W, C))
-        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        if x.get_dtype() != ttnn.bfloat16:
-            # The group_norm kernel is bf16-only.
-            x = ttnn.typecast(x, ttnn.bfloat16)
-
-        tilized = ttnn.tilize_with_zero_padding(ttnn.reshape(x, (T, 1, H * W, C)), use_multicore=True)
-        out = ttnn.group_norm(
-            tilized,
-            num_groups=self.num_groups,
-            num_out_blocks=self.num_out_blocks,
-            input_mask=self.mask.data,
-            weight=self.weight.data,
-            bias=self.bias.data,
-            epsilon=self.eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_layout=ttnn.TILE_LAYOUT,
-            core_grid=self.core_grid,
-            inplace=False,
-            use_welford=self.use_welford,
-        )
-        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
-        return ttnn.reshape(out, (B, T, H, W, C))
-
 
 class MiniMaxH3DistributedFrameGroupNorm(Module):
     """Per-frame GroupNorm whose spatial extent is sharded across a mesh axis.
 
-    Drop-in for :class:`MiniMaxH3FrameGroupNorm` -- same ``(1, T, H, W, C)`` in and out,
-    with ``H`` the **local** height -- for the H/W-parallel encoder.
+    Takes and returns ``(1, T, H, W, C)`` ROW_MAJOR, with ``H`` the **local** height.
 
     Neither existing primitive can do this job:
 
-    * ``ttnn.group_norm`` (what :class:`MiniMaxH3FrameGroupNorm` uses) has no notion of the
-      mesh, so a sharded ``H`` gives each device a statistic over its own strip only.
+    * ``ttnn.group_norm`` has no notion of the mesh, so a sharded ``H`` gives each device a
+      statistic over its own strip only.
     * ``ttnn.experimental.dit_fused_distributed_groupnorm`` hard-rejects ``N > 1``, and
       here ``N`` is ``T`` (17/9/5) because the statistic is per frame. It also takes a
       single ``cluster_axis``, so it cannot reduce over both mesh axes.
@@ -185,13 +72,15 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
     then an elementwise normalise. Channel-to-group contraction is a matmul with a 0/1
     matrix, and its transpose spreads the result back over channels.
 
-    Two passes, mean then *centred* variance, rather than one pass on ``E[x^2] - E[x]^2``:
-    the group means here are not near zero, and that is the cancellation
-    :class:`GroupNorm3D` uses Welford to avoid.
+    The default form is one pass on ``E[x^2] - E[x]^2``
+    (:data:`MINIMAX_H3_ONE_PASS_VARIANCE`). The two-pass centred form is kept behind that
+    flag because the group means here are *not* near zero -- exactly the cancellation
+    ``GroupNorm3D`` uses Welford to avoid. What contains it is that the subtraction happens
+    on the ``(T,1,1,G)`` stats tensor in fp32, never on the activation; PCC gates the
+    difference at 0.02 pp (STATE.md amendment 61).
 
-    Runs in the activation dtype, so unlike the local path it is **not** forced to bf16 --
-    ``ttnn.group_norm`` is bf16-only, which STATE.md records as the encoder's precision
-    floor. Here fp32 activations stay fp32.
+    Runs in the activation dtype, so unlike ``ttnn.group_norm`` -- which is bf16-only, and
+    was the encoder's precision floor while it was in use -- fp32 activations stay fp32.
     """
 
     def __init__(
@@ -256,26 +145,18 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
         """``(T,1,1,G)`` -> ``(T,1,1,C)``, each channel taking its own group's value."""
         return ttnn.matmul(per_group, self.from_groups.data)
 
-    def forward(self, x_BTHWC: ttnn.Tensor, *, fuse_silu: bool = False, keep_flat_tile: bool = False) -> ttnn.Tensor:
-        """Accepts ``(1,T,H,W,C)`` ROW_MAJOR **or** the flat-tile ``(T,1,H*W,C)`` TILE form.
-
-        The flat-tile form is what :class:`MiniMaxH3ResnetBlock3d` chains between blocks
-        (see :func:`_as_flat_tile`): the residual add and the next norm both want TILE, so
-        carrying it avoids a tilize/untilize round trip per resnet.
+    def forward(self, x_BTHWC: ttnn.Tensor, *, fuse_silu: bool = False) -> ttnn.Tensor:
+        """``(1,T,H,W,C)`` ROW_MAJOR in and out.
 
         ``fuse_silu`` folds the SiLU into the final broadcast add. That matters more than it
         looks: the SiLU used to run on the ROW_MAJOR output, where a 285 MB unary costs
         3.7 ms, and as a fused activation on an op that already runs it costs nothing.
         """
         T, H, W, C = self.num_frames, self.local_height, self.width, self.num_channels
-        if len(x_BTHWC.shape) == 4:
-            assert tuple(x_BTHWC.shape) == (T, 1, H * W, C), f"flat-tile shape {x_BTHWC.shape} != {(T, 1, H * W, C)}"
-            x = x_BTHWC
-        else:
-            B, xt, xh, xw, xc = x_BTHWC.shape
-            assert B == 1, f"one unit per device, got B={B}"
-            assert (xt, xh, xw) == (T, H, W), f"norm built for local (T,H,W)=({T},{H},{W}), got ({xt},{xh},{xw})"
-            x = ttnn.reshape(x_BTHWC, (T, 1, H * W, C))
+        B, xt, xh, xw, xc = x_BTHWC.shape
+        assert B == 1, f"one unit per device, got B={B}"
+        assert (xt, xh, xw) == (T, H, W), f"norm built for local (T,H,W)=({T},{H},{W}), got ({xt},{xh},{xw})"
+        x = ttnn.reshape(x_BTHWC, (T, 1, H * W, C))
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
@@ -310,19 +191,18 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
             scaled = ttnn.multiply(centred, gamma)
         out = ttnn.add(scaled, beta, activations=[_SILU_ACTIVATION]) if fuse_silu else ttnn.add(scaled, beta)
 
-        if keep_flat_tile:
-            return out
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.reshape(out, (1, T, H, W, C))
 
 
-def _gn_hw_sharded(norm: MiniMaxH3FrameGroupNorm, x_BTHWC: ttnn.Tensor, parallel_config, ccl_manager) -> ttnn.Tensor:
+def _gn_hw_sharded(
+    norm: MiniMaxH3DistributedFrameGroupNorm, x_BTHWC: ttnn.Tensor, parallel_config, ccl_manager
+) -> ttnn.Tensor:
     """Per-frame GroupNorm on an H/W-sharded tensor: gather the spatial extent, norm, re-shard.
 
     The shape of ``upsampler/latent_upsampler_ltx.py:_gn_hw_sharded``, which is the only
-    in-tree solution to this problem -- and it takes a ``GroupNorm3D``, which
-    :class:`MiniMaxH3FrameGroupNorm` already is, so the norms stay built at the **global**
-    H/W while the convs are built at the local shard.
+    in-tree solution to this problem, so the norms stay built at the **global** H/W while the
+    convs are built at the local shard.
 
     Minus that function's crop/re-pad branch, deliberately: it exists for mesh-factor
     padding, and H3 never has any. Its spatial extents are dyadic (256/128/64/32/16), so at
@@ -364,34 +244,8 @@ def _hw_sharded(parallel_config) -> bool:
     return parallel_config.height_parallel.factor > 1 or parallel_config.width_parallel.factor > 1
 
 
-def _as_flat_tile(x: ttnn.Tensor, num_frames: int, height: int, width: int, channels: int) -> ttnn.Tensor:
-    """``(1,T,H,W,C)`` any layout -> ``(T,1,H*W,C)`` TILE. A no-op if already flat-tile.
-
-    The flat-tile form is the encoder's inter-resnet currency. Elementwise work is roughly
-    an order of magnitude faster tiled than ROW_MAJOR here -- the block-0 residual add
-    measured 23.5 ms ROW_MAJOR against ~2.2 ms tiled on the same 285 MB tensor -- and the
-    norm wants TILE anyway, so tilizing once at the residual add and carrying it forward
-    pays for itself twice.
-    """
-    if len(x.shape) == 4 and x.layout == ttnn.TILE_LAYOUT:
-        return x
-    x = ttnn.reshape(x, (num_frames, 1, height * width, channels))
-    if x.layout != ttnn.TILE_LAYOUT:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-    return x
-
-
-def _as_row_major_5d(x: ttnn.Tensor, num_frames: int, height: int, width: int, channels: int) -> ttnn.Tensor:
-    """Inverse of :func:`_as_flat_tile`: back to what ``conv3d`` requires."""
-    if len(x.shape) == 5 and x.layout == ttnn.ROW_MAJOR_LAYOUT:
-        return x
-    if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    return ttnn.reshape(x, (1, num_frames, height, width, channels))
-
-
 def _norm_silu(
-    norm: MiniMaxH3FrameGroupNorm,
+    norm: MiniMaxH3DistributedFrameGroupNorm,
     x_BTHWC: ttnn.Tensor,
     dtype: ttnn.DataType = ttnn.bfloat16,
     *,
@@ -400,15 +254,12 @@ def _norm_silu(
 ) -> ttnn.Tensor:
     """``silu(norm(x))``, returned ROW_MAJOR in ``dtype``, ready for the next conv.
 
-    The norm is bf16 whatever the surrounding precision -- ``ttnn.group_norm`` has no
-    fp32 path -- so this is where the encoder's precision floor sits. Everything else
-    stays fp32 to match the reference, which is why the cast back is explicit rather
-    than letting bf16 propagate through the convolutions.
+    The norm runs in the activation dtype, so this is not a precision boundary; the cast is
+    kept explicit because ``conv3d`` requires input and weight dtypes to match exactly.
     """
-    if isinstance(norm, MiniMaxH3DistributedFrameGroupNorm) and not _hw_sharded(parallel_config):
-        # The stats norm can take the flat-tile input the resnet chain carries, and can fold
-        # the SiLU into its own final add. _gn_hw_sharded is bypassed only when there is no
-        # sharding to gather for, so the sharded path is untouched.
+    if not _hw_sharded(parallel_config):
+        # The norm folds the SiLU into its own final add. _gn_hw_sharded is bypassed only
+        # when there is no sharding to gather for, so the sharded path is untouched.
         h = norm(x_BTHWC, fuse_silu=True)
         if h.get_dtype() != dtype:
             h = ttnn.typecast(h, dtype)
@@ -463,9 +314,9 @@ class MiniMaxH3ResnetBlock3d(Module):
         # before calling them. Only the convs see the per-device shard.
         norm_kwargs = dict(num_frames=num_frames, height=height, width=width, mesh_device=mesh_device)
         # A resnet never changes T/H/W, so both norms share one shape.
-        self.norm1 = make_frame_group_norm(in_channels, **norm_kwargs)
+        self.norm1 = MiniMaxH3DistributedFrameGroupNorm(in_channels, **norm_kwargs)
         self.conv1 = MiniMaxH3CausalConv3d(in_channels, out_channels, kernel_size=3, spatial_padding=1, **conv_kwargs)
-        self.norm2 = make_frame_group_norm(out_channels, **norm_kwargs)
+        self.norm2 = MiniMaxH3DistributedFrameGroupNorm(out_channels, **norm_kwargs)
         self.conv2 = MiniMaxH3CausalConv3d(out_channels, out_channels, kernel_size=3, spatial_padding=1, **conv_kwargs)
         if in_channels != out_channels:
             self.conv_shortcut = MiniMaxH3CausalConv3d(
@@ -473,32 +324,17 @@ class MiniMaxH3ResnetBlock3d(Module):
             )
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
-        """Returns the flat-tile form when the stats norm is in use; ROW_MAJOR otherwise.
+        """``(1,T,H,W,C)`` ROW_MAJOR in and out -- what ``conv3d`` requires on both sides.
 
-        Both consumers of a resnet's output -- the next resnet's ``norm1`` and its residual
-        add -- want TILE, so the block keeps it that way rather than untilizing for the
-        conv and re-tilizing for the norm. Anything that needs ROW_MAJOR (a downsampler, a
-        ``conv_shortcut``) converts with :func:`_as_row_major_5d`.
+        Carrying the chain in TILE instead, to make the residual add cheaper, was measured
+        and is a wash: it moves the cost into Tilize rather than removing it (STATE.md
+        amendment 56).
         """
         norm_kwargs = dict(parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
-        fast = (
-            MINIMAX_H3_FLAT_TILE_RESIDUAL
-            and isinstance(self.norm1, MiniMaxH3DistributedFrameGroupNorm)
-            and not _hw_sharded(self.parallel_config)
-        )
-        shape = (self.num_frames, self.height, self.width, self.out_channels)
-
         h = self.conv1(_norm_silu(self.norm1, x_BTHWC, self.dtype, **norm_kwargs))
         h = self.conv2(_norm_silu(self.norm2, h, self.dtype, **norm_kwargs))
-        if self.in_channels != self.out_channels:
-            residual = self.conv_shortcut(
-                _as_row_major_5d(x_BTHWC, self.num_frames, self.height, self.width, self.in_channels)
-            )
-        else:
-            residual = x_BTHWC
-        if not fast:
-            return ttnn.add(residual, h)
-        return ttnn.add(_as_flat_tile(residual, *shape), _as_flat_tile(h, *shape))
+        residual = self.conv_shortcut(x_BTHWC) if self.in_channels != self.out_channels else x_BTHWC
+        return ttnn.add(residual, h)
 
 
 class MiniMaxH3Downsample3d(Module):
@@ -609,13 +445,9 @@ class MiniMaxH3DownBlock3d(Module):
             )
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
-        """The resnets may hand back the flat-tile form; the downsampler is a conv, so it
-        needs ROW_MAJOR. A block with no downsampler passes the flat-tile form straight on
-        to the next block's first norm, which is exactly where it is cheapest."""
         for resnet in self.resnets:
             x_BTHWC = resnet(x_BTHWC)
         if self.has_downsamplers:
-            x_BTHWC = _as_row_major_5d(x_BTHWC, self.num_frames, self.height, self.width, self.out_channels)
             for downsampler in self.downsamplers:
                 x_BTHWC = downsampler(x_BTHWC)
         return x_BTHWC
@@ -701,7 +533,7 @@ class MiniMaxH3Encoder3d(Module):
         self.down_blocks = ModuleList(blocks)
         self.latent_shape = (t, h, w)
 
-        self.norm_out = make_frame_group_norm(
+        self.norm_out = MiniMaxH3DistributedFrameGroupNorm(
             block_out_channels[-1], num_frames=t, height=h, width=w, mesh_device=mesh_device
         )
         self.conv_out = MiniMaxH3CausalConv3d(

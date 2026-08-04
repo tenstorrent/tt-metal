@@ -2198,3 +2198,57 @@ where one is possible, and each pass is already near bandwidth. A fused depthwis
 34 passes to 2 and is the only change with the magnitude the target needs — worth an estimated
 5-10x on `Activation1d`, i.e. audio decode to roughly 0.15-0.25 s, with trace then available on
 top. That is `tt-dit-kernel-research` work, and it is the recommended next task.
+
+## Amendment 70 (2026-08-04) — cleanup pass 2: both dead code groups deleted from the encoder
+
+`encoder_minimax_h3.py`: **50 insertions, 218 deletions.** Both groups amendment 65 identified,
+each verified to have zero references outside that file before deletion.
+
+**Group 1 — the flat-tile residual.** `MINIMAX_H3_FLAT_TILE_RESIDUAL` (default False, measured a
+wash in amendment 56) plus `_as_flat_tile` / `_as_row_major_5d`, which were reachable only
+through it. With the flag off the resnet always returned a ROW_MAJOR 5D tensor, so both
+`_as_row_major_5d` call sites (the `conv_shortcut` input and the down-block's downsampler input)
+were no-ops. Also removed the norm's `keep_flat_tile` parameter and its 4D-input branch, which
+existed only to accept the flat-tile form.
+
+**Group 2 — the `ttnn.group_norm` path.** `MiniMaxH3FrameGroupNorm`, the
+`MINIMAX_H3_USE_STATS_GROUPNORM` switch, the `make_frame_group_norm` factory (now a direct
+constructor call at all three sites) and `MINIMAX_H3_GN_OUT_BLOCKS`, which only that class read.
+The `GroupNorm3D` import goes with it. `_gn_hw_sharded` is **kept** — the H/W-sharded path still
+calls it — with its type hint corrected to `MiniMaxH3DistributedFrameGroupNorm`, and
+`_norm_silu`'s `isinstance(norm, MiniMaxH3DistributedFrameGroupNorm) and not _hw_sharded(...)`
+collapses to `not _hw_sharded(...)` since that is now the only norm class.
+
+Docstrings that described the deleted code were rewritten rather than dropped: the module
+docstring now records the three measured losers (`ttnn.group_norm` 2.7x, fused distributed GN
+1.6x, flat-tile a wash) with amendment pointers, so the negatives survive the code.
+
+Gates, both re-run after the deletions:
+
+| gate | result |
+|---|---|
+| `test_vae_encoder_minimax_h3.py` | **7 passed**, PCC 99.9094 % / 99.9132 % — identical to amendment 65 |
+| `test_vae_hw_parallel_minimax_h3.py -k halo` | **6 passed** — the sharded path `_gn_hw_sharded` serves |
+
+**Test-file count is unchanged at 19 against LTX's 13.** The dead code was inside a model file,
+not a test file, so this pass does not move that number. What remains for it:
+`test_audio_trace_minimax_h3.py` and `test_audio_parallel_minimax_h3.py` are both audio-decode
+performance gates and merge cleanly; `test_vae_norm_primitives_minimax_h3.py` and
+`test_vae_distributed_norm_minimax_h3.py` both gate the stats norm at a different altitude.
+Neither merge was attempted here.
+
+**`test_vae_hw_parallel_minimax_h3.py::test_encoder_sharded_matches_unsharded` is very slow and
+reads as a hang.** It goes silent for >15 minutes at ~130 % CPU immediately after the conv3d
+blocking warnings from encoder construction: that is the **torch reference encoder running on
+host CPU** over a 17-frame 256x256 clip, not a device hang. Bound it by CPU rather than by log
+growth — the log stays byte-for-byte static the whole time — or deselect it and run `-k halo`.
+
+### Note on the measurement technique amendments 66-69 used
+
+Tracy is unusable for the audio decoder (it under-reads 6x, amendment 66). What replaced it, and
+what to rebuild if it is needed again: wrap the leaf submodules' `forward` with
+`synchronize_device` on both sides and accumulate per label; for op-level attribution, also wrap
+the `ttnn.*` entry points (`concat`, `slice`, `multiply`, `add`, `reshape`, `conv1d`,
+`to_layout`, `snake_beta`) and tag each call with the enclosing module label. Serializing host
+and device inflates the total ~10 %, but every entry is honest device time. The probe file was
+deleted per amendment 65's precedent.
