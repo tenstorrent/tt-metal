@@ -31,6 +31,8 @@ set(FABRIC_SOURCES
     builder/fabric_builder_config.cpp
     builder/fabric_builder_helpers.cpp
     builder/fabric_edge_capability.cpp
+    builder/protected_domain_effect.cpp
+    builder/injection_policy.cpp
     builder/fabric_stream_assignment.cpp
     builder/fabric_core_placement.cpp
     builder/fabric_channel_allocator.cpp

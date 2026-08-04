@@ -162,10 +162,10 @@ bool wires_into(
 
 PerDirectionCapabilities canonical_express_endpoint_capabilities() {
     PerDirectionCapabilities caps;
-    for (size_t i = 0; i < caps.size() - 1; ++i) {
-        caps[i] = EdgeCapability::INTRAMESH_CARDINAL;
+    for (const auto direction : k_cardinal_directions) {
+        caps.at(direction) = EdgeCapability::INTRAMESH_CARDINAL;
     }
-    caps[static_cast<size_t>(RoutingDirection::Z)] = EdgeCapability::INTRAMESH_EXPRESS;
+    caps.at(RoutingDirection::Z) = EdgeCapability::INTRAMESH_EXPRESS;
     return caps;
 }
 
@@ -178,7 +178,7 @@ uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirecti
         if (producer == direction) {
             continue;
         }
-        const auto& capability = caps[static_cast<size_t>(producer)];
+        const auto& capability = caps.at(producer);
         if (!capability.has_value()) {
             continue;  // direction absent on this chip: no producer to wire
         }

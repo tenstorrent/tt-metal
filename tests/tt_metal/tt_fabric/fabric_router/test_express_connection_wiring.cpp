@@ -446,7 +446,7 @@ TEST(ExpressConnectionWiringTest, ArityRespectsPerChipCapabilities) {
     // intermesh landing, that landing producer wires into every Y egress, so a Y-facing router's
     // arity is 4, not the canonical 3. The family max is still attained by E/W facings (5).
     auto landing = canonical_express_endpoint_capabilities();
-    landing[static_cast<size_t>(RoutingDirection::E)] = EdgeCapability::INTERMESH;
+    landing.at(RoutingDirection::E) = EdgeCapability::INTERMESH;
 
     EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, landing), 4u);
     EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::Z, landing), 4u);
@@ -454,7 +454,7 @@ TEST(ExpressConnectionWiringTest, ArityRespectsPerChipCapabilities) {
 
     // A leaf chip has no chord: no Z producer exists to wire, so arities drop accordingly.
     auto leaf = canonical_express_endpoint_capabilities();
-    leaf[static_cast<size_t>(RoutingDirection::Z)] = std::nullopt;
+    leaf.at(RoutingDirection::Z) = std::nullopt;
     EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, leaf), 2u);
     EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::E, leaf), 4u);
 }

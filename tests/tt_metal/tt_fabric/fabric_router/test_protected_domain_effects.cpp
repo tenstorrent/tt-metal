@@ -14,9 +14,10 @@
 #include <enchantum/enchantum.hpp>
 #include <vector>
 
-#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
+#include "tt_metal/fabric/builder/injection_policy.hpp"
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
-#include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/protected_ring_model.hpp"
 
 namespace tt::tt_fabric {
@@ -211,11 +212,11 @@ TEST(ProtectedDomainEffectsTest, EffectNamesAreStable) {
 
 // --- The slot-level derivation: bound facts to per-channel flags ---
 //
-// compute_sender_channel_injection_flags_for_express takes only bound facts (the ring predicates,
-// the chip's capability set, its Z port role), so it is drivable from this real derived model
-// without a ControlPlane. The expected effects are the same section 6 worked tables asserted
-// above; what these cases add is the slot arithmetic around them: which producer lands on which
-// channel, the VC1 shift, the dimension-order skip, and the absent-direction skip.
+// ExpressInjectionPolicy takes only bound facts (the ring predicates, the chip's capability set,
+// its Z port role), so the unified slot walk is drivable from this real derived model without a
+// ControlPlane. The expected effects are the same section 6 worked tables asserted above; what
+// these cases add is the slot arithmetic around them: which producer lands on which channel, the
+// VC1 shift, the dimension-order skip, and the absent-direction skip.
 
 TEST(ProtectedDomainEffectsTest, ExpressEgressFlagsLandOnTheirProducerSlots) {
     const auto model = quad_galaxy_model();
@@ -225,8 +226,10 @@ TEST(ProtectedDomainEffectsTest, ExpressEgressFlagsLandOnTheirProducerSlots) {
 
     // Z egress, VC0. Slots [worker, E, W, N, S]: the worker and the leaf-fed S producer acquire;
     // the ring-fed N producer is transit; both X producers are dimension-order-unwired.
-    const auto flags = ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_express(
-        q, caps, ZPortRole::EXPRESS_CHORD, RoutingDirection::Z, k_express, /*vc=*/0, /*num_channels=*/5);
+    const builder::RouterProducerSlots slots(
+        builder::routing_direction_to_eth_direction(RoutingDirection::Z), {5, 4, 0});
+    const ExpressInjectionPolicy policy(q, caps, ZPortRole::EXPRESS_CHORD, RoutingDirection::Z, k_express);
+    const auto flags = compute_sender_channel_injection_flags(slots, /*vc=*/0, policy);
     EXPECT_EQ(flags, std::vector<bool>({true, false, false, false, true}));
 }
 
@@ -237,8 +240,10 @@ TEST(ProtectedDomainEffectsTest, UnprotectedEgressFlagsNothing) {
 
     // S egress toward the leaf: 2->3 is not a protected edge, so every wired producer is NON_RING
     // -- including the chord producer, which wires in but acquires nothing.
-    const auto flags = ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_express(
-        q, caps, ZPortRole::EXPRESS_CHORD, RoutingDirection::S, k_cardinal, /*vc=*/0, /*num_channels=*/5);
+    const builder::RouterProducerSlots slots(
+        builder::routing_direction_to_eth_direction(RoutingDirection::S), {5, 4, 0});
+    const ExpressInjectionPolicy policy(q, caps, ZPortRole::EXPRESS_CHORD, RoutingDirection::S, k_cardinal);
+    const auto flags = compute_sender_channel_injection_flags(slots, /*vc=*/0, policy);
     EXPECT_EQ(flags, std::vector<bool>({false, false, false, false, false}));
 }
 
@@ -249,8 +254,10 @@ TEST(ProtectedDomainEffectsTest, ReverseCardinalEgressFlagsTheLeafAndWorker) {
 
     // N egress (2->1, on the reverse ring). Slots [worker, E, W, S, Z]: the worker and the
     // leaf-fed S producer acquire; the chord producer is reverse-ring transit; X unwired.
-    const auto flags = ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_express(
-        q, caps, ZPortRole::EXPRESS_CHORD, RoutingDirection::N, k_cardinal, /*vc=*/0, /*num_channels=*/5);
+    const builder::RouterProducerSlots slots(
+        builder::routing_direction_to_eth_direction(RoutingDirection::N), {5, 4, 0});
+    const ExpressInjectionPolicy policy(q, caps, ZPortRole::EXPRESS_CHORD, RoutingDirection::N, k_cardinal);
+    const auto flags = compute_sender_channel_injection_flags(slots, /*vc=*/0, policy);
     EXPECT_EQ(flags, std::vector<bool>({true, false, false, true, false}));
 }
 
@@ -260,7 +267,7 @@ TEST(ProtectedDomainEffectsTest, LeafRouterSkipsTheAbsentZSlot) {
     // A leaf terminates no chord: no Z entry, so the family-max slot for the Z producer stays
     // unfilled -- per-router wiring fills a subset of the family count.
     auto caps = canonical_express_endpoint_capabilities();
-    caps[static_cast<size_t>(RoutingDirection::Z)] = std::nullopt;
+    caps.at(RoutingDirection::Z) = std::nullopt;
 
     // N egress toward the anchor: an attachment, not a ring acquisition -- the acquisition lives
     // at the anchor's Z sender (the first case above), not at the leaf's own worker.
@@ -269,8 +276,10 @@ TEST(ProtectedDomainEffectsTest, LeafRouterSkipsTheAbsentZSlot) {
     // false for its own reason (unprotected egress, dimension order), and a leaf's Z slot can
     // never legitimately flag. What the case guards is the guard itself: dropping the nullopt
     // check dereferences it, which crashes here rather than failing cleanly.
-    const auto flags = ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_express(
-        q, caps, ZPortRole::NONE, RoutingDirection::N, k_cardinal, /*vc=*/0, /*num_channels=*/5);
+    const builder::RouterProducerSlots slots(
+        builder::routing_direction_to_eth_direction(RoutingDirection::N), {5, 4, 0});
+    const ExpressInjectionPolicy policy(q, caps, ZPortRole::NONE, RoutingDirection::N, k_cardinal);
+    const auto flags = compute_sender_channel_injection_flags(slots, /*vc=*/0, policy);
     EXPECT_EQ(flags, std::vector<bool>({false, false, false, false, false}));
 }
 
@@ -280,12 +289,14 @@ TEST(ProtectedDomainEffectsTest, Vc1ShiftsProducerSlotsAndLandedCarrierAcquires)
     // The E port is an intermesh landing: exempt from dimension order, and its first protected
     // egress is an acquisition on the landed VC.
     auto caps = canonical_express_endpoint_capabilities();
-    caps[static_cast<size_t>(RoutingDirection::E)] = k_intermesh;
+    caps.at(RoutingDirection::E) = k_intermesh;
 
     // VC1 has no worker channel, so the producer slots shift down one: [E, W, N, S] at channels
     // 0..3. The landing acquires; W is dimension-order-unwired; N is transit; S acquires.
-    const auto flags = ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_express(
-        q, caps, ZPortRole::EXPRESS_CHORD, RoutingDirection::Z, k_express, /*vc=*/1, /*num_channels=*/4);
+    const builder::RouterProducerSlots slots(
+        builder::routing_direction_to_eth_direction(RoutingDirection::Z), {5, 4, 0});
+    const ExpressInjectionPolicy policy(q, caps, ZPortRole::EXPRESS_CHORD, RoutingDirection::Z, k_express);
+    const auto flags = compute_sender_channel_injection_flags(slots, /*vc=*/1, policy);
     EXPECT_EQ(flags, std::vector<bool>({true, false, false, true}));
 }
 

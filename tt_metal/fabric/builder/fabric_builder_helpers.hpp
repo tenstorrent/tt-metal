@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include <array>
+#include <optional>
 #include <utility>
 #include <vector>
+
+#include <tt_stl/small_vector.hpp>
 
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
@@ -63,6 +67,54 @@ constexpr inline eth_chan_directions direction_from_compact_index(eth_chan_direc
     const size_t f = static_cast<size_t>(facing);
     return static_cast<eth_chan_directions>(compact < f ? compact : compact + 1);
 }
+
+// The producer slots of one router: which sender channel each non-self direction feeds, and which
+// direction feeds each channel. One rule, both directions, the VC worker offset included.
+//
+// eth vocabulary deliberately: the compact ranking is defined by eth_chan_directions order
+// (E,W,N,S,Z), which is NOT RoutingDirection order (N,E,S,W,Z). Callers reasoning in
+// RoutingDirection convert at the boundary, which is where that difference belongs.
+//
+// The ERISC kernel encodes the same ranking in its own tables (cross-area); if this changes, they
+// must change with it.
+class RouterProducerSlots {
+public:
+    struct Slot {
+        uint32_t channel;
+        eth_chan_directions producer;
+    };
+
+    // Per router, not per VC: the ranking depends only on facing, and the VC contributes only the
+    // worker offset. Takes this router's own sender counts so slot ranges are its, not the family
+    // max's.
+    RouterProducerSlots(
+        eth_chan_directions facing, const std::array<uint32_t, builder_config::MAX_NUM_VCS>& sender_counts);
+
+    // Channel 0 on a VC whose channel 0 is worker-type (VC0 always; VC2 when this router has a VC2
+    // sender); nullopt on VC1, which has no worker. Whether that channel carries an injection
+    // guard is not decided here.
+    std::optional<uint32_t> worker_channel(uint32_t vc) const;
+
+    // The producer feeding `channel` on `vc`, or nullopt: the worker slot, a channel this router
+    // does not have, and VC2 (whose single sender is worker-type) have no producer.
+    std::optional<eth_chan_directions> producer_at(uint32_t vc, uint32_t channel) const;
+
+    // The channel `producer` feeds on `vc`, or nullopt for the facing direction itself, a VC with
+    // no producer mapping (VC2), or a slot this router does not have.
+    std::optional<uint32_t> channel_for(uint32_t vc, eth_chan_directions producer) const;
+
+    // Only the producer slots this router actually has (bounded by its own count), in eth order;
+    // empty on VC2.
+    ttsl::SmallVector<Slot, 4> producer_slots(uint32_t vc) const;
+
+    uint32_t sender_count(uint32_t vc) const;
+
+private:
+    eth_chan_directions facing_;
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_counts_;
+
+    static constexpr uint32_t worker_offset(uint32_t vc) { return vc == 0 ? 1 : 0; }  // the ONE place the VC rule lives
+};
 
 eth_chan_directions get_sender_channel_direction(eth_chan_directions my_direction, size_t sender_channel_index);
 

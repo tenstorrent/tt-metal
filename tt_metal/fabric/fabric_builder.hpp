@@ -10,7 +10,7 @@
 #include <unordered_set>
 #include <vector>
 #include "tt_metal/fabric/fabric_router_builder.hpp"
-#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
@@ -123,9 +123,10 @@ private:
     std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors_;
     std::unordered_set<chan_id_t> dispatch_links_;
 
-    // Each present direction's edge capability, classified once at discovery and threaded into the
-    // per-router build; only peer-chip facts are live ControlPlane queries downstream.
-    PerDirectionCapabilities per_direction_capabilities_;
+    // The per-chip facts threaded into every per-router build: edge capabilities classified once
+    // at discovery, ring predicates bound once in the constructor. Only peer-chip facts are live
+    // ControlPlane queries downstream.
+    ChipRoutingFacts chip_facts_;
 
     // Master router channel (first in map)
     chan_id_t master_router_chan_ = 0;

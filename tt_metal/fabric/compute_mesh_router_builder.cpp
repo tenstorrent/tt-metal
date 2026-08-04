@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/injection_policy.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -247,7 +248,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     tt::tt_metal::Program& program,
     FabricNodeId local_node,
     const RouterLocation& location,
-    const PerDirectionCapabilities& per_direction_capabilities,
+    const ChipRoutingFacts& chip_facts,
     std::shared_ptr<ConnectionRegistry> connection_registry) {
     // Get fabric context and config
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
@@ -302,14 +303,14 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     //
     // The router exists because discovery found and classified a neighbor in this direction, so
     // the array entry must be present.
-    const auto& facing_capability = per_direction_capabilities[static_cast<size_t>(location.direction)];
+    const auto& facing_capability = chip_facts.per_direction_capabilities.at(location.direction);
     TT_FATAL(
         facing_capability.has_value(),
         "Router facing {} has no classified edge from discovery",
         enchantum::to_string(location.direction));
     const auto edge_capability = *facing_capability;
     // What this chip's Z port is for: an intermesh boundary, an express chord, or nothing.
-    const auto chip_z_role = z_role_of(per_direction_capabilities);
+    const auto chip_z_role = z_role_of(chip_facts.per_direction_capabilities);
 
     // Create the archetype EARLY (the shape is needed for computing injection flags). The
     // Z-related channel shapes exist to reach an intermesh Z router, so they are gated on that
@@ -344,23 +345,25 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // axis-turn heuristic cannot express it: at an express node the same Z output is transit when fed
     // by the ring and an acquisition when fed by a leaf attachment, and both share one axis pair.
     // Non-express meshes keep the heuristic untouched.
-    const bool express_injection = express_enabled;
-    // Bound once for every VC's derivation: the predicates describe this node's rings.
-    const auto protected_ring_queries = make_protected_ring_queries(control_plane, local_node);
+    // This router's producer-slot mapping, shared by every VC's derivation.
+    const builder::RouterProducerSlots producer_slots(
+        builder::routing_direction_to_eth_direction(location.direction), vc_shape.sender_counts);
+    // The policy is a per-router fact: express enablement is mesh-wide, so it is selected once,
+    // not per VC. Its facts arrive bound from the chip scope (the queries were bound in the
+    // FabricBuilder constructor; the capabilities were classified at discovery).
+    const NonExpressInjectionPolicy non_express_policy(topology, eth_direction);
+    const ExpressInjectionPolicy express_policy(
+        chip_facts.protected_ring_queries,
+        chip_facts.per_direction_capabilities,
+        chip_z_role,
+        location.direction,
+        edge_capability);
+    const InjectionPolicy& injection_policy = express_enabled ? static_cast<const InjectionPolicy&>(express_policy)
+                                                              : static_cast<const InjectionPolicy&>(non_express_policy);
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         uint32_t num_channels_in_vc = vc_shape.sender_counts[vc];
-        auto vc_injection_flags = express_injection ? compute_sender_channel_injection_flags_for_express(
-                                                          protected_ring_queries,
-                                                          per_direction_capabilities,
-                                                          chip_z_role,
-                                                          location.direction,
-                                                          edge_capability,
-                                                          vc,
-                                                          num_channels_in_vc)
-                                                    : compute_sender_channel_injection_flags_for_vc(
-                                                          topology, eth_direction, vc, num_channels_in_vc);
-
+        auto vc_injection_flags = compute_sender_channel_injection_flags(producer_slots, vc, injection_policy);
         // Flatten into router-level vector
         for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {
             router_injection_flags.push_back(vc_injection_flags.at(ch_idx));
@@ -507,10 +510,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
 uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
     const bool is_2D_routing, const eth_chan_directions downstream_direction, uint32_t vc) const {
-    // Which slot on the downstream router this router (as producer) feeds. Delegates to the one
-    // placement rule in fabric_builder_helpers -- the same relation that get_sender_channel_direction
-    // inverts when the injection-flag derivation names a slot's producer, so placement and naming
-    // cannot drift apart.
+    // Which slot on the downstream router this router (as producer) feeds. The 2D establishment
+    // path reads it off the downstream router's own RouterProducerSlots at the call site; this
+    // delegates to the free helper, whose 1D branch (a single forwarding channel, no compact
+    // ranking) is the one in use.
     return builder::get_downstream_sender_channel_for_vc(
         is_2D_routing, vc, this->get_eth_direction(), downstream_direction);
 }
@@ -523,124 +526,6 @@ size_t ComputeMeshRouterBuilder::get_noc_y() const { return erisc_builder_->get_
 
 size_t ComputeMeshRouterBuilder::get_configured_risc_count() const {
     return erisc_builder_->get_configured_risc_count();
-}
-
-std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_express(
-    const ProtectedRingQueries& queries,
-    const PerDirectionCapabilities& per_direction_capabilities,
-    ZPortRole chip_z_role,
-    RoutingDirection egress,
-    EdgeCapability egress_capability,
-    uint32_t vc,
-    uint32_t num_channels) {
-    std::vector<bool> injection_flags(num_channels, false);
-
-    // This router transmits over its own link, so its direction is the egress. Each sender channel is
-    // fed by one upstream producer, and the channel index identifies which ingress that is.
-    const auto egress_eth = builder::routing_direction_to_eth_direction(egress);
-
-    // VC2 stays out of the derivation: the optional existing VC2 behavior is separate from the
-    // express design, and its sender is not a fixed-direction producer slot that the table below
-    // can name. It keeps the ordinary non-injection guard until its express-mesh role is defined.
-    if (vc >= 2) {
-        return injection_flags;
-    }
-
-    // Only VC0 carries a local worker; VC1 producers are all forwarding paths.
-    if (vc == 0) {
-        injection_flags.at(get_worker_connected_sender_channel()) =
-            is_injection_effect(classify_worker_effect(queries, egress));
-    }
-
-    const uint32_t first_forwarding_channel = (vc == 0) ? 1 : 0;
-    for (uint32_t ch_idx = first_forwarding_channel; ch_idx < num_channels; ++ch_idx) {
-        // VC1 has no worker channel, so its producer slots are shifted down by one relative to the
-        // direction table, which is indexed from VC0's layout.
-        const uint32_t direction_slot = (vc == 0) ? ch_idx : ch_idx + 1;
-        if (direction_slot >= static_cast<uint32_t>(eth_chan_directions::COUNT)) {
-            continue;  // beyond the four possible non-self producers
-        }
-
-        const auto ingress_eth = builder::get_sender_channel_direction(egress_eth, direction_slot);
-        if (ingress_eth == eth_chan_directions::COUNT) {
-            continue;  // this slot has no producer direction
-        }
-        const auto ingress = builder::eth_direction_to_routing_direction(ingress_eth);
-
-        const auto& ingress_capability = per_direction_capabilities[static_cast<size_t>(ingress)];
-        if (!ingress_capability.has_value()) {
-            continue;  // no neighbour that way, so nothing is wired into this slot
-        }
-
-        // Classify only producers the connection map actually wired, using the same turn-matrix
-        // primitive the map is built from. The sender-channel direction table is static and names
-        // an ingress for every slot, but under express wiring some slots carry no producer: an
-        // intramesh X ingress is dimension-order-unwired from every intramesh Y egress, and
-        // nothing is wired into a Z egress on a chip with no Z port. Skipping those slots here
-        // is what keeps the derivation's dimension-order failure meaningful -- a DOR-forbidden
-        // turn that still reaches classify_producer_effect genuinely signals a disagreement
-        // between the maps and this derivation, not a correctly unwired slot.
-        if (!wires_into(ingress, *ingress_capability, egress, chip_z_role, /*express_routing_enabled=*/true, vc)) {
-            continue;
-        }
-
-        const auto effect =
-            classify_producer_effect(queries, ingress, *ingress_capability, egress, egress_capability);
-        injection_flags.at(ch_idx) = is_injection_effect(effect);
-    }
-
-    // Each sender channel is fed by exactly one producer direction, so an ENTER/REMAIN alias on one
-    // concrete sender cannot arise here by construction. It would only become possible if several
-    // producers were ever mapped onto one channel.
-    return injection_flags;
-}
-
-std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_vc(
-    Topology topology, eth_chan_directions direction, uint32_t vc, uint32_t num_channels) {
-    std::vector<bool> injection_flags(num_channels, false);
-
-    // VC1 is for inter-mesh routing and doesn't need bubble flow control
-    // All VC1 channels are marked as non-injection (false) regardless of topology
-    if (vc == 1) {
-        return injection_flags;
-    }
-
-    // Early return for Linear/Mesh - no injection channels marked
-    if (topology == Topology::Linear || topology == Topology::Mesh) {
-        return injection_flags;
-    }
-
-    // VC0: Worker channel (idx 0) is always an injection channel
-    injection_flags.at(0) = true;
-
-    if (topology != Topology::Torus) {
-        return injection_flags;
-    }
-
-    // For Torus: Turn channels are injection channels (VC0 only)
-    // A turn channel is where my_direction differs from sender_channel_direction
-
-    bool I_am_ew = builder::is_east_or_west(direction);
-    bool I_am_ns = builder::is_north_or_south(direction);
-    bool I_am_z = direction == eth_chan_directions::Z;
-
-    TT_FATAL(
-        I_am_ew + I_am_ns + I_am_z == 1,
-        "Internal error: In compute_sender_channel_injection_flags_for_vc, exactly one of I_am_ew, I_am_ns, and I_am_z "
-        "must be true");
-
-    for (size_t ch_idx = 1; ch_idx < num_channels; ++ch_idx) {
-        // Map to VC0 equivalent channel for direction lookup
-        auto sender_channel_direction = builder::get_sender_channel_direction(direction, ch_idx);
-
-        bool sender_channel_is_ew = builder::is_east_or_west(sender_channel_direction);
-        bool sender_channel_is_ns = builder::is_north_or_south(sender_channel_direction);
-        bool sender_channel_is_turn = (I_am_ew && !sender_channel_is_ew) || (I_am_ns && !sender_channel_is_ns);
-
-        injection_flags.at(ch_idx) = sender_channel_is_turn;
-    }
-
-    return injection_flags;
 }
 
 std::vector<bool> ComputeMeshRouterBuilder::get_child_builder_variant_sender_channel_injection_flags(
@@ -741,6 +626,12 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
+    // The downstream router's own producer-slot mapping, with its actual channel counts: the slot
+    // this router (as producer) feeds is read off the same mapping the injection-flag derivation
+    // names producers from, so placement and naming cannot drift apart.
+    const builder::RouterProducerSlots downstream_slots(
+        downstream_router.get_eth_direction(), downstream_router.vc_shape_.sender_counts);
+
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         const auto& targets = turns_by_vc_[vc];
         log_debug(
@@ -770,18 +661,33 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
                 continue;
             }
 
-            // Compute sender channel on downstream router based on directions and VC
-            uint32_t downstream_sender_channel =
-                get_downstream_sender_channel(is_2D_routing, downstream_router.get_eth_direction(), vc);
+            // Compute the sender channel on the downstream router this router (as producer) feeds.
+            // 2D reads it off the downstream's own slot mapping (constructed above); 1D keeps its
+            // own layout -- a single forwarding channel, no compact ranking.
+            uint32_t downstream_sender_channel;
+            if (is_2D_routing) {
+                const auto slot = downstream_slots.channel_for(vc, get_eth_direction());
+                TT_FATAL(
+                    slot.has_value(),
+                    "The {}-facing producer has no slot on the downstream router's VC{}: the turn is "
+                    "wired but that router does not have the slot",
+                    enchantum::to_string(get_eth_direction()),
+                    vc);
+                downstream_sender_channel = *slot;
+            } else {
+                downstream_sender_channel =
+                    get_downstream_sender_channel(is_2D_routing, downstream_router.get_eth_direction(), vc);
 
-            // Validate the channel index against the downstream router's shape, then take the
-            // flat channel ID from its prefix sums (bounds-checked there as well).
-            TT_FATAL(
-                downstream_sender_channel < downstream_router.vc_shape_.sender_counts[vc],
-                "Computed downstream sender channel {} exceeds available channels ({}) for VC{} on downstream router",
-                downstream_sender_channel,
-                downstream_router.vc_shape_.sender_counts[vc],
-                vc);
+                // 1D computes without the downstream's counts, so validate against them before
+                // taking the flat channel ID from its prefix sums (bounds-checked there as well).
+                TT_FATAL(
+                    downstream_sender_channel < downstream_router.vc_shape_.sender_counts[vc],
+                    "Computed downstream sender channel {} exceeds available channels ({}) for VC{} on downstream "
+                    "router",
+                    downstream_sender_channel,
+                    downstream_router.vc_shape_.sender_counts[vc],
+                    vc);
+            }
 
             // Get downstream builder and the flat channel ID
             auto* downstream_builder = downstream_router.get_builder_for_vc_channel(vc, downstream_sender_channel);

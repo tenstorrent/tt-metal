@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -24,6 +25,10 @@ FabricBuilder::FabricBuilder(
     local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
         device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
+    // Bind this node's ring predicates once: every router on the chip shares them.
+    chip_facts_.protected_ring_queries =
+        make_protected_ring_queries(tt::tt_metal::MetalContext::instance().get_control_plane(), local_node_);
+
     // Determine if this device has tunneling dispatch
     auto mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
@@ -74,7 +79,7 @@ void FabricBuilder::discover_channels() {
         //
         // An express chord needs no rejection here any more: it is wired like any other direction, on
         // the fifth VC0 sender, with its guard derived from the protected-ring effects.
-        per_direction_capabilities_[static_cast<size_t>(direction)] =
+        chip_facts_.per_direction_capabilities.at(direction) =
             classify_fabric_edge(control_plane, local_node_, neighbor_fabric_node_id, direction);
 
         chip_neighbors_.emplace(direction, neighbor_fabric_node_id);
@@ -115,8 +120,7 @@ void FabricBuilder::create_routers() {
             cluster.register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
 
-            auto router_builder =
-                FabricRouterBuilder::create(device_, program_, local_node_, location, per_direction_capabilities_);
+            auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location, chip_facts_);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }

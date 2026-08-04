@@ -22,8 +22,28 @@ ZPortRole z_port_role(const ControlPlane& control_plane, FabricNodeId node) {
     return ZPortRole::NONE;
 }
 
+namespace {
+
+size_t checked_direction_index(RoutingDirection direction) {
+    TT_FATAL(
+        direction <= RoutingDirection::Z,
+        "RoutingDirection {} is not a port and cannot index PerDirectionCapabilities",
+        enchantum::to_string(direction));
+    return static_cast<size_t>(direction);
+}
+
+}  // namespace
+
+std::optional<EdgeCapability>& PerDirectionCapabilities::at(RoutingDirection direction) {
+    return by_direction_[checked_direction_index(direction)];
+}
+
+const std::optional<EdgeCapability>& PerDirectionCapabilities::at(RoutingDirection direction) const {
+    return by_direction_[checked_direction_index(direction)];
+}
+
 ZPortRole z_role_of(const PerDirectionCapabilities& caps) {
-    const auto& z = caps[static_cast<size_t>(RoutingDirection::Z)];
+    const auto& z = caps.at(RoutingDirection::Z);
     if (!z.has_value()) {
         return ZPortRole::NONE;
     }
@@ -116,84 +136,6 @@ std::optional<EdgeCapability> capability_in_direction(
         return classify_fabric_edge(control_plane, local, FabricNodeId(neighbor_mesh, chips.front()), direction);
     }
     return std::nullopt;
-}
-
-bool is_injection_effect(ProtectedDomainEffect effect) { return effect == ProtectedDomainEffect::ENTER; }
-
-ProtectedRingQueries make_protected_ring_queries(const ControlPlane& control_plane, FabricNodeId local) {
-    ProtectedRingQueries queries;
-    queries.is_protected_ring_edge = [&control_plane, local](RoutingDirection egress) {
-        return control_plane.is_protected_ring_edge(local, egress);
-    };
-    queries.are_same_directed_ring_edges = [&control_plane, local](RoutingDirection ingress, RoutingDirection egress) {
-        return control_plane.are_same_directed_ring_edges(local, ingress, egress);
-    };
-    queries.continuation_allowed = [&control_plane, local](RoutingDirection ingress, RoutingDirection egress) {
-        return control_plane.continuation_allowed(local, ingress, egress);
-    };
-    return queries;
-}
-
-ProtectedDomainEffect classify_worker_effect(const ProtectedRingQueries& queries, RoutingDirection egress) {
-    return queries.is_protected_ring_edge(egress) ? ProtectedDomainEffect::ENTER : ProtectedDomainEffect::NON_RING;
-}
-
-ProtectedDomainEffect classify_producer_effect(
-    const ProtectedRingQueries& queries,
-    RoutingDirection ingress,
-    EdgeCapability ingress_capability,
-    RoutingDirection egress,
-    EdgeCapability egress_capability) {
-    TT_FATAL(
-        !is_static_dor_forbidden(ingress, ingress_capability, egress, egress_capability),
-        "Producer {} -> {} violates dimension order but is still wired. Connection mapping should have unwired it, so "
-        "the maps and this derivation disagree.",
-        enchantum::to_string(ingress),
-        enchantum::to_string(egress));
-
-    if (!queries.is_protected_ring_edge(egress)) {
-        return ProtectedDomainEffect::NON_RING;
-    }
-
-    if (ingress_capability == EdgeCapability::INTERMESH) {
-        // A landed carrier holds no position on this mesh's rings, so its first protected egress is an
-        // acquisition. The landing map rebuild itself does not acquire anything.
-        return ProtectedDomainEffect::ENTER;
-    }
-
-    if (queries.are_same_directed_ring_edges(ingress, egress)) {
-        return ProtectedDomainEffect::REMAIN;
-    }
-
-    if (is_y_axis_direction(ingress) != is_y_axis_direction(egress)) {
-        // A dimension change. Dimension order leaves Y->X as the only legal case here, and the first
-        // X hop acquires the X ring.
-        return ProtectedDomainEffect::ENTER;
-    }
-
-    if (queries.continuation_allowed(ingress, egress)) {
-        return ProtectedDomainEffect::ENTER;
-    }
-
-    return ProtectedDomainEffect::NON_CANONICAL;
-}
-
-bool is_static_dor_forbidden(
-    RoutingDirection ingress,
-    EdgeCapability ingress_capability,
-    RoutingDirection egress,
-    EdgeCapability egress_capability) {
-    // Only an ordinary same-mesh X edge puts a packet in its X phase. An INTERMESH port is a landing
-    // root even when its local compass letter is E or W, so it is not an X ingress.
-    const bool is_intramesh_x_ingress =
-        ingress_capability == EdgeCapability::INTRAMESH_CARDINAL && is_x_axis_direction(ingress);
-
-    const bool is_intramesh_y_egress =
-        (egress_capability == EdgeCapability::INTRAMESH_CARDINAL && (egress == RoutingDirection::N ||
-                                                                    egress == RoutingDirection::S)) ||
-        (egress_capability == EdgeCapability::INTRAMESH_EXPRESS && egress == RoutingDirection::Z);
-
-    return is_intramesh_x_ingress && is_intramesh_y_egress;
 }
 
 }  // namespace tt::tt_fabric

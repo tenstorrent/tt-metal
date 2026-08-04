@@ -9,7 +9,8 @@
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
-#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/connection_registry.hpp"
 
@@ -38,7 +39,7 @@ public:
      * @param program The fabric program
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
-     * @param per_direction_capabilities The chip's edge capabilities, classified at discovery
+     * @param chip_facts The chip's routing facts (edge capabilities, ring predicates), bound at chip scope
      * @param connection_registry Optional registry to record connections for testing
      * @return A unique_ptr to the constructed ComputeMeshRouterBuilder
      */
@@ -47,39 +48,8 @@ public:
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
         const RouterLocation& location,
-        const PerDirectionCapabilities& per_direction_capabilities,
+        const ChipRoutingFacts& chip_facts,
         std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
-
-    /**
-     * Injection flags for an express-routing mesh, derived from protected-ring facts.
-     *
-     * Replaces the cardinal axis-turn heuristic, which cannot represent express routing: at an
-     * express node the same Z output is same-ring transit when fed by the ring and a ring
-     * acquisition when fed by a leaf attachment, and both producers share one axis pair. Each
-     * producer's total effect is derived instead, and only an acquisition becomes an injection
-     * channel.
-     *
-     * Every fact arrives bound -- the ring predicates, the chip's edge capabilities, and its Z
-     * port role -- so the slot arithmetic is drivable from a host-side ring model without a
-     * ControlPlane. Public for that regression.
-     *
-     * @param queries Protected-ring predicates bound to the local node
-     * @param per_direction_capabilities The chip's edge capabilities, classified at discovery
-     * @param chip_z_role The chip's Z port role (boundary, chord, or none)
-     * @param egress The router's own direction, which is its egress edge
-     * @param egress_capability Capability of this router's own edge
-     * @param vc The virtual channel to compute flags for
-     * @param num_channels Number of channels in this VC
-     * @return Array indicating which sender channels are injection channels for this VC
-     */
-    static std::vector<bool> compute_sender_channel_injection_flags_for_express(
-        const ProtectedRingQueries& queries,
-        const PerDirectionCapabilities& per_direction_capabilities,
-        ZPortRole chip_z_role,
-        RoutingDirection egress,
-        EdgeCapability egress_capability,
-        uint32_t vc,
-        uint32_t num_channels);
 
     // ============ FabricRouterBuilder Interface Implementation ============
 
@@ -155,22 +125,6 @@ private:
      * @param downstream_router The target router to connect to
      */
     void establish_connections_to_router(ComputeMeshRouterBuilder& downstream_router);
-
-    /**
-     * Compute which sender channels are traffic injection channels for a specific VC.
-     * Injection channels are channels where traffic originates (not forwarded):
-     * - VC0: Worker channel (channel 0) is always an injection channel
-     * - VC1+: No worker channel; channel 0 maps to VC0's channel 1 semantics
-     * - In Torus topology, "turn channels" are injection channels (where traffic changes direction)
-     *
-     * @param topology The fabric topology
-     * @param direction The router's direction
-     * @param vc The virtual channel to compute flags for
-     * @param num_channels Number of channels in this VC
-     * @return Array indicating which sender channels are injection channels for this VC
-     */
-    static std::vector<bool> compute_sender_channel_injection_flags_for_vc(
-        Topology topology, eth_chan_directions direction, uint32_t vc, uint32_t num_channels);
 
     /**
      * Map router-level injection flags to a child builder variant's channel space.

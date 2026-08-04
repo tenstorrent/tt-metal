@@ -75,5 +75,25 @@ TEST(FabricEdgeCapabilityTest, CapabilityNamesAreStable) {
     EXPECT_EQ(enchantum::to_string(EdgeCapability::INTERMESH), "INTERMESH");
 }
 
+TEST(FabricEdgeCapabilityTest, CapabilitiesAtChecksThePortDomain) {
+    // The five ports round-trip through at(); C and NONE are not ports and must never index the
+    // set -- the array has five slots and the enum has seven values, so the check is the point.
+    PerDirectionCapabilities caps;
+    for (const auto direction :
+         {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
+        caps.at(direction) = EdgeCapability::INTRAMESH_CARDINAL;
+    }
+    for (const auto direction :
+         {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
+        EXPECT_EQ(caps.at(direction), EdgeCapability::INTRAMESH_CARDINAL)
+            << "direction " << enchantum::to_string(direction);
+    }
+    // A direction never written is absent.
+    EXPECT_FALSE(PerDirectionCapabilities().at(RoutingDirection::Z).has_value());
+
+    EXPECT_ANY_THROW(caps.at(RoutingDirection::C));
+    EXPECT_ANY_THROW(caps.at(RoutingDirection::NONE));
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric
