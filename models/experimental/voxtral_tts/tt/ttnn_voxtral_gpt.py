@@ -143,6 +143,17 @@ DTYPE = ttnn.bfloat16
 # paged_update_cache wants them, already sharded -- so there is no permute, no hand-built shard,
 # no cache slice and no attention mask (sdpa_decode bounds the cache with cur_pos instead).
 # Worth 6.6 ms/frame over a hand-rolled interior, at the same decode PCC.
+#
+# THE 8 IS NOT THE CORE COUNT and it does not matter -- measured, so nobody re-asks. The device has
+# 64 Tensix cores (8x8); this uses one row. Swept over every head-aligned option (6144 = 48 heads x
+# 128, so the core count must divide 48: 8/12/16/24/48 qualify, 32 does not) and the whole decode
+# step reads 31.36-31.46 ms across all of them, identical PCC. The shard fill plus the head split
+# is a fraction of a millisecond out of a step that is ~20 ms of pure weight streaming, so how the
+# 393 KB is spread is invisible.
+#
+# Contrast the NORM's grid (_NORM_SHARD in ttnn_voxtral_flow), where the count DOES matter: 16.2 us
+# on 8 cores against 21.2 on 32. That op is a REDUCTION across the row, so more cores means more
+# partial sums to combine and more cores to wait on -- and there the op IS the thing being timed.
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
 _QKV_SHARD = ttnn.create_sharded_memory_config(
     (TILE, _QKV_WIDTH // 8), core_grid=ttnn.CoreGrid(y=1, x=8),
