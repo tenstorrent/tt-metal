@@ -160,15 +160,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
     const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
-    const int store_offset        = 2 * PARAM_SRCS_YDIM; // store folded into the macro; results land in the next SrcS slice
 
     // One-time setup: program the self-contained exp LOADMACRO sequence (load -> EXP->STG ->
     // store to load_addr + store_offset) and record one macro per element into replay slot 0.
-    _exp_init_loadmacro_(load_base_addr, store_offset, num_sfpu_iterations);
+    // store_offset (= 2 * YDIM = slice size) must be a compile-time constant for the instr-reg-6
+    // store capture, so branch on the (runtime) 32-bit mode into constexpr specializations.
+    if (PARAM_SRCS_32BIT_MODE)
+    {
+        _exp_init_loadmacro_<2 * srcs_dims::ydim(true)>(load_base_addr, num_sfpu_iterations);
+    }
+    else
+    {
+        _exp_init_loadmacro_<2 * srcs_dims::ydim(false)>(load_base_addr, num_sfpu_iterations);
+    }
     const std::uint32_t exp_replay_len = _exp_loadmacro_replay_len_(num_sfpu_iterations);
 
     // Full TRISC3 path: UNP_S -> SFPU exp (self-contained SFPLOADMACRO replay) -> PACK1.
-    // The final LOADMACRO's `done` bit resets the SrcS dvalids, so no per-slice clear_vlds / NOPs.
+    // Per slice: replay the macro, then clear_vlds to signal SrcS read+write done for PACK/unpack.
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
         _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
@@ -177,13 +185,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
             TT_REPLAY(0, exp_replay_len, 0, 0, 0, 0);
+            // Drain the folded STORE, then signal SrcS read+write done so PACK1 sees the output
+            // slice valid and the unpacker can refill the input slice. clear_vlds == SFPNOP(1,1,0);
+            // the macro `done` bit only toggles the write bank, it does not raise these dvalids.
+            TTI_SFPNOP(0, 0, 0);
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
         }
     }
-
-    // Drain the LOADMACRO pipeline before returning: pad with SFPNOPs (>= remaining sequence
-    // length after the final LOADMACRO); the last one toggles the RF done bit.
-    TTI_SFPNOP(0, 0, 0);
-    TTI_SFPNOP(0, 0, 1);
 
     wait_unpack_idle();
     wait_sfpu_idle();

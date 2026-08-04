@@ -25,18 +25,21 @@ inline constexpr std::uint32_t _exp_loadmacro_replay_len_(const int num_sfpu_ite
 // lands in a separate SrcS slice (store_offset from the load base) with no discrete SFPSTORE.
 // The final macro sets the `done` bit to reset the SrcS dvalids, so callers must NOT issue
 // _llk_math_eltwise_sfpu_srcs_clear_vlds_ or drain NOPs per slice.
-// SFPLOADMACRO addr is the [10:1] field, hence >> 1; store_offset is a raw address delta.
-inline void _exp_init_loadmacro_(const std::uint32_t load_base_addr, const std::uint32_t store_offset, const int num_sfpu_iterations)
+// SFPLOADMACRO addr is the [10:1] field, hence >> 1; STORE_OFFSET is a raw address delta and must
+// be a compile-time constant so the instr-reg-6 store is captured via the immediate (TTI_) path.
+template <std::uint32_t STORE_OFFSET>
+inline void _exp_init_loadmacro_(const std::uint32_t load_base_addr, const int num_sfpu_iterations)
 {
     // LOADMACRO CONTROL register (config_dest 0x8): default store mode, zero all other fields.
     TTI_SFPLOADI(0x0, 0x2, 0x0002);
     TTI_SFPCONFIG(0x0000, 0x8, 0x0);
+    TTI_SFPNOP(0, 0, 0); // SFPCONFIG hazard: no instr may issue the cycle after SFPCONFIG (state affects S2)
 
     // Instr reg 4: STG <- EXP[LREG]  (VD=0xC is the capture backdoor)
     TTI_SFPNONLINEAR(0x0 /* VC */, 0xC /* VD */, p_sfpnonlinear::EXP_MODE);
 
-    // Instr reg 6: ST[load_addr + store_offset] <- STG  (0xE = staging register source)
-    TT_SFPSTORE(0xE, 0x2, 0x0, 0b0, store_offset);
+    // Instr reg 6: ST[load_addr + STORE_OFFSET] <- STG  (0xE = staging register source)
+    TTI_SFPSTORE(0xE, 0x2, 0x0, 0b0, STORE_OFFSET);
 
     // Sequence register 0:
     //   SIMPLE = 0x44 -> instr 4 (EXP) with USE_STAGING (result to STG)
@@ -44,6 +47,7 @@ inline void _exp_init_loadmacro_(const std::uint32_t load_base_addr, const std::
     TTI_SFPLOADI(0x0, 0xA, 0x0244); // [MAD | SIMPLE]
     TTI_SFPLOADI(0x0, 0x8, 0xCE02); // [STORE | ROUND]
     TTI_SFPCONFIG(0x0000, 0x4, 0x0);
+    TTI_SFPNOP(0, 0, 0); // SFPCONFIG hazard: no instr may issue the cycle after SFPCONFIG (state affects S2)
 
     load_replay_buf(
         0,
