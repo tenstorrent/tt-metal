@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-03",
+  "last_scan_date": "2026-08-04",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -10,7 +10,8 @@
     "30618649345",
     "30675480001",
     "30765286317",
-    "30789033630"
+    "30789033630",
+    "30227858718"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -20,7 +21,8 @@
     "galaxy-unit-tests.yaml",
     "t3000-unit-tests.yaml",
     "galaxy-sanity.yaml",
-    "single-card-demo-tests.yaml"
+    "single-card-demo-tests.yaml",
+    "t3000-demo-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -72,10 +74,16 @@
       "pattern": "[Real-time profiler] Device {} sync complete - info log firing once per device per periodic resync (352x in one job sample)",
       "status": "pr-just-opened-dispatch-requested",
       "note": "Demoted log_info->log_debug in tt_metal/distributed/realtime_profiler_manager.cpp:1390 (run_sync()). Dispatched galaxy-sanity safe-output tool in same turn for validation. Next run: resolve PR number via search_pull_requests and check_runs."
+    },
+    {
+      "branch": "silencer/unused-var-groupnorm-out-block-hw-actual",
+      "pattern": "-Wunused-but-set-variable: out_block_hw_actual dead-computed in groupnorm dataflow kernels (198x across 3 files in job sample)",
+      "status": "pr-just-opened-dispatch-requested",
+      "note": "Removed unused out_block_hw_actual (only out_block_h_actual/out_block_hw_normal are read) from reader_mcast_receiver_unary_gn.cpp, reader_mcast_sender_unary_gn.cpp, writer_unary_gn_rm_gb.cpp. Dispatched t3000-demo-tests safe-output tool in same turn for compile validation. Next run: resolve PR number via search_pull_requests and check CI status."
     }
   ],
   "backlog_cursor": {
     "next_category": 6,
-    "note": "From histogram of run 30765286317 (galaxy-sanity): remaining candidates - warning/UMD hwloc_set_area_membind + init_hugepage NUMA warnings (352x each) tracked upstream in tt-umd submodule, out of scope. info/Distributed 'Using auto discovery to generate mesh graph' + 'Constructing control plane using auto-discovery' (13x each, metal_env.cpp:437,499) - low frequency, likely one-time startup info, deprioritize unless frequency grows. Need a fresh scan next run to find new top_noise.txt candidates since current histogram is getting exhausted of easy wins."
+    "note": "From histogram of run 30227858718 (t3000-demo-tests, jobs 89870148981/89870149000): conv_bmm_tilize.cpp -Wdeprecated-declarations (pack_tile_block/copy_block_matmul_partials) already fixed on main - do not re-target. Remaining candidates from same diagnostic TSV: -Wunused-but-set-variable reset_index (36x) and output_tile_index (36x), likely in groupnorm-adjacent or other normalization kernels - verify file/line and liveness before targeting. info/Metal Fabric-initialized-per-device already covered by PR #51849. Need fresh workflow rotation next run (t3000-demo-tests now sampled)."
   }
 }
