@@ -90,6 +90,11 @@ bool supported_by_codegen(const TilizeCodegenParams& operation_attributes, const
 
 bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+    // The dispatch query needs the device's grid and per-core L1. A host tensor has no answer and
+    // no perf question: leave it to the prim's structural TT_FATALs.
+    if (!is_device_tensor(input_tensor)) {
+        return false;
+    }
     // The general arms below are conditions on WHICH builder create_descriptor selects and on the
     // work that builder hands each core, so they key on the shared dispatch query rather than on
     // shapes. Where measurement found no such condition, the ledger entry is an enumerated exact
@@ -100,28 +105,38 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     const uint32_t grid_cores = grid.x * grid.y;
     const auto dispatch = tilize_codegen_dispatch(input_tensor.device(), operation_attributes, input_tensor);
 
-    // UNGENERALIZED. One-tile-per-core column splits were demoted wholesale by an earlier round on
-    // the theory that build_2d_column's `minimal_work` clamp (CB depth 1, write_batch 1) leaves
-    // nothing to overlap against codegen's heavier per-core setup. Measurement on the ported kernel
-    // refuted that as a general condition: thirteen one-tile-per-core column configurations cleared
-    // parity (native/ported 1.02-2.18 with generic/ported ~1.00), so the arm is gone. These three
-    // stayed below it, with no mechanism separating them from the thirteen that did not, so they are
-    // enumerated exact matches rather than a predicate. All three are Column-path,
-    // max_tiles_per_column_block == 1; the buffer_type term is load-bearing on the third, whose
-    // DRAM twin measured above parity.
+    // UNGENERALIZED. One-tile-per-core column splits are NOT demoted as a class: thirteen such
+    // configurations measured above parity (native/ported 1.02-2.18, generic/ported ~1.00) against
+    // these three below it, and nothing separates them, so these are enumerated exact matches.
+    // build_2d_column's `minimal_work` clamp (CB depth 1, write_batch 1) applies to all of them
+    // alike, which is why it is not the predicate.
     if (dispatch.path == TilizeCodegenPath::Column && dispatch.max_tiles_per_column_block == 1) {
-        const bool is_l1 = operation_attributes.input_mem_config.buffer_type() == BufferType::L1;
+        // The ledger's DRAM/L1 discriminator is the OUTPUT placement (the sweep varies
+        // output_memory_config while every input is interleaved DRAM), so these arms key on
+        // output_mem_config; keying on the input would collapse each pair into one answer.
+        const bool out_is_l1 = operation_attributes.output_mem_config.buffer_type() == BufferType::L1;
         const uint32_t nc = operation_attributes.NC;
         const uint32_t ht = operation_attributes.Ht;
         const uint32_t wt = operation_attributes.Wt;
-        // [1, 32, 64] and [32, 64], uint16, DRAM — a single tile-row split two ways.
-        if (operation_attributes.input_dtype == DataType::UINT16 && !is_l1 && nc == 1 && ht == 1 && wt == 2) {
+        // [1, 32, 64] and [32, 64], uint16, DRAM out — a single tile-row split two ways.
+        if (operation_attributes.input_dtype == DataType::UINT16 && !out_is_l1 && nc == 1 && ht == 1 && wt == 2) {
             return true;
         }
-        // [12, 32, 160], bfloat16, L1 — twelve tile-rows split five ways.
-        if (operation_attributes.input_dtype == DataType::BFLOAT16 && is_l1 && nc == 12 && ht == 1 && wt == 5) {
+        // [12, 32, 160], bfloat16, L1 out — twelve tile-rows split five ways.
+        if (operation_attributes.input_dtype == DataType::BFLOAT16 && out_is_l1 && nc == 12 && ht == 1 && wt == 5) {
             return true;
         }
+    }
+
+    // A column split whose blocks are not all the same width needs a second reader/compute kernel
+    // instance for the one-tile-wider cliff group, doubling the program's kernel count over the
+    // same core set. The two non-divisor configurations measured on wormhole_b0 (Wt=7 split five
+    // ways, Wt=5 split three ways) beat native on device (~2.1x / ~1.5x, generic parity) but lost
+    // wall-clock (0.68 / 0.64 of native): the extra group's host-side program cost outweighs the
+    // device saving at these sizes. Every column configuration at or above wall-clock parity has a
+    // uniform width, so `auto` keeps the cliff on native while forced codegen still exercises it.
+    if (dispatch.path == TilizeCodegenPath::Column && (operation_attributes.Wt % dispatch.ncol) != 0) {
+        return true;
     }
 
     // A caller-forced single-core route (use_multicore=false / use_low_perf) has no parallelism for
@@ -138,21 +153,22 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     // core on every core to pay off: with total_Ht > grid_cores a core owns several tile-rows,
     // which forces write_batch back to 1 (writer_tilize_interleaved's batched branch mis-orders
     // rows), and with total_Ht < grid_cores the split leaves cores idle that the column split was
-    // unable to recruit (no divisor of Wt fits grid_cores / total_Ht).
+    // unable to recruit (grid_cores / total_Ht < 2, or Wt == 1).
     //
-    // This is the only remaining general arm, and it carries the bulk of the demoted ledger
-    // (~65 entries). Its boundary position rests on a single measured row-path configuration above
-    // parity (total_Ht == grid_cores) rather than on a swept range, plus the two reversals below.
+    // This arm carries the bulk of the demoted ledger (~65 entries). Its boundary position rests on
+    // a single measured row-path configuration above parity (total_Ht == grid_cores) rather than on
+    // a swept range, plus the two reversals below.
     if (dispatch.path == TilizeCodegenPath::Row && total_ht != grid_cores) {
         // UNGENERALIZED reversals. Two row-path configurations measured above parity on the ported
         // kernel (native/ported 1.09 and 1.04, generic/ported ~1.00) and are no longer demoted.
-        // Both sit within ~9% of parity and both have an L1 twin that measured below it, so the
-        // separating term is the input buffer type and nothing more general is claimed here.
-        const bool is_dram = operation_attributes.input_mem_config.buffer_type() == BufferType::DRAM;
+        // Both sit within ~9% of parity and both have an L1-output twin that measured below it, so
+        // the separating term is the OUTPUT buffer type (what the sweep varies) and nothing more
+        // general is claimed here.
+        const bool out_is_dram = operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM;
         const uint32_t nc = operation_attributes.NC;
         const uint32_t ht = operation_attributes.Ht;
         const uint32_t wt = operation_attributes.Wt;
-        if (operation_attributes.input_dtype == DataType::BFLOAT16 && is_dram && wt == 2 &&
+        if (operation_attributes.input_dtype == DataType::BFLOAT16 && out_is_dram && wt == 2 &&
             // [5, 8, 64, 64] (total_Ht 80) and [6, 4, 96, 64] (total_Ht 72).
             ((nc == 40 && ht == 2) || (nc == 24 && ht == 3))) {
             return false;
