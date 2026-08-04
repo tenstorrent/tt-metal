@@ -123,9 +123,26 @@ class ASR:
         self.model = whisper.load_model(name, device="cpu")
         self.name = name
 
+    @staticmethod
+    def _load_16k_mono(wav_path: str):
+        """Decode to the float32 16 kHz mono array whisper wants.
+
+        whisper.load_audio() shells out to `ffmpeg`, which is a system binary this
+        harness has no business requiring -- it is not installed on this host and
+        would be one more thing to get right in every container. torchaudio reads
+        wav directly, so we hand whisper the array and skip the subprocess.
+        """
+        import torchaudio
+
+        wav, sr = torchaudio.load(wav_path)
+        wav = wav.mean(0)  # to mono
+        if sr != 16000:
+            wav = torchaudio.functional.resample(wav, sr, 16000)
+        return wav.contiguous().float().numpy()
+
     def transcribe(self, wav_path: str, lang: str) -> str:
         out = self.model.transcribe(
-            wav_path,
+            self._load_16k_mono(wav_path),
             language=WHISPER_LANG.get(lang, lang),
             fp16=False,
             temperature=0.0,
