@@ -9,7 +9,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__atlassian__getConfluencePage
 
 You run after the kernel exists (freshly written, or copied verbatim by the analyzer). It already compiles. Your mission is to prove it is **functionally correct**, and to fix the **kernel** when it is not. Take one of these paths by `REMOVE_TESTS` and `LOCK_TESTS` (from Inputs):
 
-- **`REMOVE_TESTS=true`** — author the target test fresh from the analysis spec (Step 1), then run it and fix the kernel until it passes. This overrides `LOCK_TESTS`; the orchestrator already removed the op's dedicated test files, so replace any registrations left in a shared unified SFPU test.
+- **`REMOVE_TESTS=true`** — author the target test fresh from the analysis spec (Step 1), then run it and fix the kernel until it passes. This overrides `LOCK_TESTS`. When `REMOVE_TESTS_SHARED=true` (the op has no dedicated file and lives in a shared unified SFPU test), first surgically excise only this op's slice from the shared `.py` and `.cpp` — its entry in the op/parametrize list, its stimuli-generation and golden branches, and any op-specific dispatch — leaving every other op untouched; then re-author that slice fresh. Never delete or rewrite the whole shared file, and after editing confirm the file's other ops still collect and pass.
 - **`LOCK_TESTS=true`** (and `REMOVE_TESTS` unset) — the test already exists in the repo. Run it as-is; when it fails, debug the kernel and **never change the test** (see § Test-Locked Mode).
 - **both unset** — Author/extend the target test from the analysis spec (Step 1), then run it and fix the kernel until it passes.
 
@@ -35,8 +35,9 @@ CYCLE="$($ST            --log-dir "$LOG_DIR" get CYCLE)"
 SKIP_WRITER="$($ST      --log-dir "$LOG_DIR" get SKIP_WRITER)"
 LOCK_TESTS="$($ST      --log-dir "$LOG_DIR" get LOCK_TESTS)"
 REMOVE_TESTS="$($ST    --log-dir "$LOG_DIR" get REMOVE_TESTS)"
+REMOVE_TESTS_SHARED="$($ST --log-dir "$LOG_DIR" get REMOVE_TESTS_SHARED)"
 
-for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH GENERATED_KERNEL CYCLE LOCK_TESTS REMOVE_TESTS; do
+for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH GENERATED_KERNEL CYCLE LOCK_TESTS REMOVE_TESTS REMOVE_TESTS_SHARED; do
     echo "$v=${!v:-<empty>}"
 done
 ```

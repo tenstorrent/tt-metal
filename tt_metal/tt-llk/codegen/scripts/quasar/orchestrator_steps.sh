@@ -414,14 +414,14 @@ execute_step_hide_existing_kernel() {
 }
 
 # ===========================================================================
-# Step 1c — remove the op's existing dedicated tests so the tester authors them
-# fresh. When REMOVE_TESTS=true, git-remove AND commit the op's arch-specific
-# dedicated test files (Python test + C++ source) on the worktree branch. Only
-# whole dedicated files are removed; ops that register into a shared unified
-# SFPU test have no dedicated file, so none is removed and the tester replaces
-# the op's registrations in author-fresh mode. No-op unless the flag is set.
-# base_commit (GIT_COMMIT, captured at setup BEFORE this) is unchanged, so the
-# final generated.patch still diffs against origin/main.
+# Step 1c — remove the op's existing tests so the tester authors them fresh. When
+# REMOVE_TESTS=true, git-remove AND commit the op's arch-specific dedicated test
+# files (Python test + C++ source) on the worktree branch. Ops that register into a
+# shared unified SFPU test own no dedicated file: remove nothing (deleting the shared
+# file would destroy every other op's test), set REMOVE_TESTS_SHARED=true, and let the
+# tester surgically excise and re-author only this op's slice of the shared .py/.cpp.
+# No-op unless the flag is set. base_commit (GIT_COMMIT, captured at setup BEFORE this)
+# is unchanged, so the final generated.patch still diffs against origin/main.
 # Run AFTER execute_step_set_kernel_identity and BEFORE the analyzer.
 # ===========================================================================
 execute_step_remove_existing_tests() {
@@ -446,11 +446,13 @@ execute_step_remove_existing_tests() {
         done < <(git -C "$wt" ls-files -- "$pat")
     done
     if [ "$removed" -gt 0 ]; then
+        ss REMOVE_TESTS_SHARED false --json
         git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
             commit -q -m "codegen: remove existing ${kn} tests for regeneration" || true
         echo "remove_existing_tests: removed ${removed} file(s), committed on worktree branch"
     else
-        echo "remove_existing_tests: no dedicated ${kn} test files — tester re-authors shared registrations"
+        ss REMOVE_TESTS_SHARED true --json
+        echo "remove_existing_tests: no dedicated ${kn} test files — set REMOVE_TESTS_SHARED=true; tester excises and re-authors only the op's slice of the shared test"
     fi
 }
 
