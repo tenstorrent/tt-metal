@@ -1350,6 +1350,73 @@ WER 1 word of 298, 15/15 `[END_AUDIO]`, voice identity PASS, Block 2 3-of-74 cod
 bit-identical. min PCC 0.998 is still far above tt_transformers' 0.981. This is a
 margin-and-headroom argument, not a "the model is broken" argument.
 
+### 6.17 — Block 2: BFP4 rejected, and three op-level wins that improve accuracy too
+
+Block 2 is ~23 ms of a ~51 ms frame and the module docstring put it ~1.6x above a 13.4 ms weight-read
+floor, so that was the target. First finding: **the matmuls are already AT the floor.** The five
+weight matmuls measured 13.28 ms of the block's 19.24 (168–205 GB/s each by prefix timing), leaving
+~6 ms of non-matmul work inside `_block` plus 3.6 ms outside it.
+
+**BFP4 WEIGHTS — REJECTED, and it fails on both axes at once.** Never previously tried; `bfloat4_b`
+exists and halves the bytes again (0.5625 vs 1.0625 B/param). 8 draws, per-weight granularity:
+
+| weights in BFP4 | GB/frame | ms/frame | vel PCC | acoustic codes wrong |
+|---|---|---|---|---|
+| none — ships | 2.60 | 25.70 | 0.9999816 | **19 / 576** |
+| w1, w3 (49%) | 2.00 | 22.99 | 0.9998741 | 93 / 576 |
+| w2 (24%) | 2.30 | 25.68 | 0.9999413 | 49 / 576 |
+| wqkv, wo (27%) | 2.27 | 25.28 | 0.9996631 | 117 / 576 |
+| all five (100%) | 1.37 | 22.56 | 0.9994959 | **159 / 576** |
+
+**8.4x the differing codes for 1.139x.** sdpa was rejected twice at 3x the codes for 1.147x — BFP4
+is the same speed for nearly triple the damage. w2 in BFP4 is the clearest reject of all: 0.016 ms
+(nothing) for 2.6x the errors.
+
+**But the more useful half of that result is the timing.** Cutting bytes 47% (2.60 → 1.37 GB) returned
+only 12% of the time (25.70 → 22.56 ms), where the bandwidth model predicts ~6.3 ms. **So weight bytes
+are NOT the lever in Block 2 that they are in Block 1** — halving them returns about a quarter of what
+the arithmetic promises, and the "1.6x above the floor" framing overstates how much of Block 2 that
+floor governs. Do not plan future Block 2 work around byte counts.
+
+**SHIPPED — three op-level changes, +1.19 ms/frame in isolation, and accuracy slightly BETTER:**
+
+| | ms/frame | vel PCC | acoustic wrong |
+|---|---|---|---|
+| shipped before | 25.86 | 0.9999816 | 19 / 576 |
+| A — silu fused into the w1 matmul | 25.70 | 0.9999816 | 19 / 576 |
+| B — `SCALE` folded into wqkv's q rows | 25.58 | 0.9999851 | 16 / 576 |
+| C — `_trunk` slices 36-wide, not 3072 | 24.77 | 0.9999816 | 19 / 576 |
+| **A+B+C** | **24.67** | **0.9999851** | **16 / 576** |
+
+- **A** — `activation="silu"` on the w1 linear. Bit-identical, and Block 1 has always done it; Block 2
+  just never picked it up. Not the idea §6.8 rejected — that was fusing silu into the *multiply* via
+  `input_tensor_a_activations`, which really is worthless.
+- **B** — `1/sqrt(head_dim)` lives in the weight instead of a `multiply(s, SCALE)` per block call.
+  21 launches gone, and **more accurate**: the scores round once instead of twice.
+- **C** — the biggest, 1.09 of the 1.19. `_trunk` used to reshape to `[B,3,3072]`, slice position 0 at
+  3072 wide, then project to 36. Now it projects the 6-row sequence first and reshapes/slices at 36
+  wide: 85x less data moved, and the linear drops from batch-2 (which re-reads the whole weight per
+  batch element) to batch-1 over 6 rows in one tile. **Same lesson as the codec in §6.13/6.14 — shift
+  the narrow side** — which is now the third time it has paid here.
+
+Gates: velocity PCC 0.99998164 → **0.99998510**, codes differing 3/74 → **2/74**, semantic exact,
+long-form WER **0 of 298**, 15/15 `[END_AUDIO]`, voice identity PASS.
+
+**⚠ THE ISOLATED WIN DOES NOT FULLY APPEAR END TO END.** Isolated Block 2 is −1.19 ms/frame
+(deterministic, 30 reps). The pipeline over 8 comparable cases is **−0.36 ms/frame**, and the longest
+case (463 → 485 frames) is −0.37. Per-case scatter is ±1 ms. I cannot account for the factor of ~3.
+Quote **−0.4 ms/frame end to end**, ~0.7%, and treat the isolated number as evidence the change is
+real rather than as the user-visible gain. All three are strictly fewer ops with no accuracy cost, so
+they ship regardless of which number you prefer.
+
+**A measurement trap this run walked into.** Raw RTF showed wild outliers (case 0 at 5.01, case 2 at
+1.12) that survived a warm re-run and looked like a regression. They are not: changing Block 2's
+numerics changes the emitted codes, which changes trajectory LENGTH (case 2: 443 → 465 frames, case
+10: 211 → 271), and a new length is a new codec bucket that compiles ~5 conv programs at 1–5 s each.
+Case 4 separately collapsed 73 → 8 frames — it is the chaotic one-word prompt. **Comparing RTF across
+builds requires excluding cases whose frame count moved, or the compile lands in the number.** Same
+family as the trap in §6.7 and the "case 0 RTF 1.89" one.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
