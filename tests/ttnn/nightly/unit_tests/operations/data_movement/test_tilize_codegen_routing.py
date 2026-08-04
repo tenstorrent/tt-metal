@@ -255,5 +255,5 @@ def test_tilize_codegen_rejects_an_unknown_implementation(device, expect_error, 
     xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
     # The selector is parsed on every call, including ones a front-end shortcut would
     # otherwise answer without dispatching, so an unknown value never passes silently.
-    with expect_error(RuntimeError, "invalid implementation"):
+    with expect_error(RuntimeError, "unknown implementation selector"):
         ttnn.tilize(xt, **kwargs, implementation=selector)
