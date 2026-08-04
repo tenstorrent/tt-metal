@@ -124,7 +124,15 @@ class MiniMaxH3AudioDecoder(Module):
             x = torch.nn.functional.pad(x, (0, 0, 0, t_pad))
 
         x_device = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
-        projected = ttnn.to_torch(self.dec_in_proj(x_device)).float()
+        projected_device = self.dec_in_proj(x_device)
+        # The upload replicates, and dec_in_proj is a k1 conv, so every device holds the same
+        # result: read back one. A bare ``ttnn.to_torch`` asserts ``buffers.size() == 1`` and
+        # so only ever worked on a single-device mesh -- which is what kept this decoder off
+        # the mesh entirely, ``parallel_config`` or not. Same shape as the vocoder's own
+        # ``_device_to_host``.
+        if self.mesh_device.get_num_devices() > 1:
+            projected_device = ttnn.get_device_tensors(projected_device)[0]
+        projected = ttnn.to_torch(projected_device).float()
         if t_pad:
             # Crop the alignment padding back off before handing T to the vocoder, which
             # applies its own padding for its own sharding.

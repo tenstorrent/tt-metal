@@ -1832,3 +1832,33 @@ against a 0.99 gate. Gates: 7 passed.
 Decode unchanged at 1.0 s. **Visual total 4.0 s.**
 
 Flag: `MINIMAX_H3_ONE_PASS_VARIANCE`, default True.
+
+## Amendment 62 (2026-08-04) — audio decode cannot reach the mesh yet: a bare `to_torch` blocked it
+
+Amendment 60 identified T-sharding as the only route to 0.05 s. Attempting it exposed why it
+had never been tried: **`MiniMaxH3AudioDecoder` could not run on a multi-device mesh at all**,
+sharded or not. `_project_latents_device` read its result back with a bare `ttnn.to_torch`,
+which asserts `buffers.size() == 1` (`pytensor.cpp:299`), so every factor — including
+`t_factor=1`, where the tensor is merely *replicated* across 32 devices — died there.
+
+Fixed: the upload replicates and `dec_in_proj` is a k1 conv, so every device holds the same
+result and one is read back via `ttnn.get_device_tensors(...)[0]`, the same shape the
+vocoder's own `_device_to_host` uses. Guarded on `get_num_devices() > 1`, so the single-device
+path is untouched — re-verified at 1.284 s untraced / 1.213 s traced, PSNR inf.
+
+`test_audio_parallel_minimax_h3.py` sweeps `t_factor` 1/4/8 on the 4x8 mesh and gates each
+against the single-device output (PSNR > 40 dB) so a speedup from dropped work fails rather
+than reports. **It has not yet produced a number**: past the readback fix the run reached the
+vocoder and was killed before reporting, with the log full of
+
+    DRAM Auto slice could not find valid slice configuration ... height-slicing
+    depthwise conv1d unavailable at T_pad=1041, C=512, K=7; MAC fallback
+
+so the conv1d slicer is failing at the sharded shapes and falling back per-tap. **That is the
+next thing to chase**, and it is the same class of failure `audio_ops.py:232` already
+documents at the latent rate. Audio decode therefore stands at **1.284 s against 0.05 s**.
+
+Note the `4x8` mesh gives at most 8-way T-sharding through `ParallelFactor`, which is one
+axis. `AudioTCParallelConfig` (time *and* channel) is what LTX uses to reach both axes, and
+`MiniMaxH3AudioDecoder` accepts only `ParallelFactor` — widening that is likely required to
+get past 8x.
