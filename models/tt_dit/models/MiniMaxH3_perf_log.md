@@ -26,10 +26,11 @@ python models/tt_dit/tests/models/minimax_h3/project_block_perf.py 5s=<csv>
 | 2 | 2026-08-03 | addcmul gates + adaLN scale/shift folded into the fused norm | 25.61 ms | 57.19 ms | 97.63 ms | `1739353a695` |
 | 3 | 2026-08-04 | ring SDPA chunk sizes tuned from a measured sweep | 24.80 ms | 57.19 ms | 97.63 ms | `acfc6885b12` |
 | 4 | 2026-08-04 | QK-norm + head split + RoPE fused into one op | 18.53 ms | not measured | not measured | `9c9f54d877d` |
-| 5 | 2026-08-04 | all-gather folded into the matmuls (AGMM), placeholder block sizes | 18.20 ms | 43.22 ms | 78.26 ms | (pending) |
+| 5 | 2026-08-04 | all-gather folded into the matmuls (AGMM), placeholder block sizes | 18.20 ms | 43.22 ms | 78.26 ms | `368722dcf48` |
+| 6 | 2026-08-04 | AGMM block sizes from a measured sweep | 17.79 ms | 42.43 ms | 77.01 ms | `45489e2b6ba` |
 
-Cumulative at 5s: **26.03 -> 18.20 ms, -30.1%**; 1.30 -> 0.91 s per 50-layer step, 65.1 -> 45.5 s per video.
-At 10s: 57.65 -> 43.22 ms (-25.0%). At 15s: 98.72 -> 78.26 ms (-20.7%).
+Cumulative at 5s: **26.03 -> 17.79 ms, -31.7%**; 1.30 -> 0.89 s per 50-layer step, 65.1 -> 44.5 s per video.
+At 10s: 57.65 -> 42.43 ms (-26.4%). At 15s: 98.72 -> 77.01 ms (-22.0%).
 
 ## Notes per entry
 
@@ -60,11 +61,25 @@ the block sizes are legality-driven placeholders, not swept: `K_block` must divi
 `K_tiles_per_device` and `N_block` must be even, and the generic 8x8x8 default satisfies neither. The
 sweep is the follow-up; these numbers are the floor, not the result.
 
-## Standing opportunities, from the 5s profile after entry 4
+**6. AGMM block sizes.** 811 combos over the three shapes with
+`models/tt_dit/utils/sweep_mm_block_sizes.py`. to_qkv (8,7,8)->(8,7,12) -13.4%, ff1
+(8,7,8)->(8,3,14) -11.7%, to_out already optimal. Neither winner was reachable by guessing: N_block
+12 and 14 sit outside the 8-or-16 range one would try, and ff1's K_block swings 11.7% between two
+legal divisors of 42. The three AGMM ops fall 5.02 -> 4.58 ms at 5s. The (K, N) keying transferred --
+the same block shapes were swept at M=4768 and hold at 10s and 15s.
+
+## Standing opportunities, from the 5s profile after entry 6
 
 | target | share of block | note |
 |--------|----------------|------|
-| ring SDPA | ~41% | already chunk-tuned; further needs kernel work |
-| FF matmuls + CCL | ~21% | three matmuls flagged SLOW at 57-65% FLOP util |
-| all-gathers / reduce-scatter | ~10% | unfused TP path, folds into `all_gather_minimal_matmul_async` |
-| adaLN table build + 6 gathers | ~13% | `adaln_proj` runs at 2.4% FLOP util (M=32, 2 real rows) |
+| ring SDPA | 43% (7.61 ms) | chunk-tuned; further needs kernel work |
+| the three AGMM matmuls | 26% (4.58 ms) | block sizes swept; what remains is kernel efficiency |
+| adaLN table build + 6 row gathers | ~15% | `adaln_proj` runs at 2.4% FLOP util -- M=32, of which 2 rows are real. All 50 blocks' projections could batch into one matmul |
+| `ff2` reduce-scatter | ~4% | the one CCL still standing on its own |
+
+Two measurement habits this log exists to enforce:
+
+- After a `--profile` run, check the pytest summary line. `--profile` masks the exit code, so a failed
+  run still prints PASS and leaves a truncated CSV.
+- Do not quote the gap-inclusive total as a result. It has moved in both directions across changes
+  that only ever removed ops, and one sample per config cannot separate it from noise.

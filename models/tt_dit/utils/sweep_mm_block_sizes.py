@@ -144,6 +144,16 @@ SHAPES = [
     (3072, 5120, 3840, 8, 8, True, "plain"),
     (3072, 5120, 1280, 8, 8, True, "plain"),
     (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
+    # MiniMax-H3 AGMM shapes, BH Galaxy TP=4 / SP=8, 12x9 grid (the model reserves one core column
+    # for CCL). M is the per-device packed sequence length at 768P; 4768 is the 5s case and is used
+    # for all three because the model keys its block sizes on (K, N) only -- M changes with the
+    # requested duration while K and N are fixed by the architecture and the TP factor.
+    #   to_qkv  K_tiles_per_device = 42
+    #   to_out  K_tiles_per_device = 56
+    #   ff1     K_tiles_per_device = 42, fused SwiGLU
+    (4768, 5376, 5376, 12, 9, True, "qkv"),
+    (4768, 7168, 1344, 12, 9, True, "plain"),
+    (4768, 5376, 7168, 12, 9, True, "ff1_swiglu"),
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
