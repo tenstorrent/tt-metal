@@ -25,7 +25,7 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
-    TT_FATAL(t.x.storage_type() == tt::tt_metal::StorageType::DEVICE, "x must be on device");
+    TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
     // x layout/dtype depends on x_is_row_major:
     //   false (default): x is TILE BFLOAT8_B — the reader reads tile pages directly.
     //   true: x is ROW_MAJOR BFLOAT16 (the dispatch output) — the reader streams
@@ -90,7 +90,7 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     // or sharded weights (the kernel reader assumes DRAM-interleaved).
     for (const auto& [name, w] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
              {"gate_proj", t.gate_proj}, {"up_proj", t.up_proj}, {"down_proj", t.down_proj}}) {
-        TT_FATAL(w.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+        TT_FATAL(w.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
         TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
         TT_FATAL(is_dram_interleaved(w), "{} must be DRAM-interleaved", name);
     }
@@ -106,7 +106,7 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     // reads at runtime.
     for (const auto& [name, a] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
              {"counts", t.counts}, {"global_expert_idx_table", t.global_expert_idx_table}}) {
-        TT_FATAL(a.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+        TT_FATAL(a.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
         TT_FATAL(a.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32", name);
         TT_FATAL(is_dram_interleaved(a), "{} must be DRAM-interleaved", name);
         const uint32_t num_entries = a.logical_shape()[-1];
@@ -136,7 +136,7 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         // enforce the same invariants insert did. The writer does a single
         // noc_async_read_page(page 0) and indexes start[global_id], which is
         // only correct for a contiguous ROW_MAJOR single-page UINT32 vector.
-        TT_FATAL(start.storage_type() == tt::tt_metal::StorageType::DEVICE, "expert_region_offsets must be on device");
+        TT_FATAL(start.storage_type() == ttnn::StorageType::DEVICE, "expert_region_offsets must be on device");
         TT_FATAL(start.dtype() == tt::tt_metal::DataType::UINT32, "expert_region_offsets must be UINT32");
         TT_FATAL(
             start.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -170,7 +170,7 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
 
     if (t.optional_output.has_value()) {
         const auto& out = *t.optional_output;
-        TT_FATAL(out.storage_type() == tt::tt_metal::StorageType::DEVICE, "optional_output must be on device");
+        TT_FATAL(out.storage_type() == ttnn::StorageType::DEVICE, "optional_output must be on device");
         TT_FATAL(out.layout() == tt::tt_metal::Layout::TILE, "optional_output must be TILE layout");
         TT_FATAL(is_dram_interleaved(out), "optional_output must be DRAM-interleaved");
         // Output dtype must match x EXCEPT in row-major mode: there x is bf16
@@ -236,7 +236,7 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                  {"gate_bias", *t.gate_bias, static_cast<uint32_t>(gate_shape[-1])},
                  {"up_bias", *t.up_bias, static_cast<uint32_t>(up_shape[-1])},
                  {"down_bias", *t.down_bias, static_cast<uint32_t>(down_shape[-1])}}) {
-            TT_FATAL(b.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+            TT_FATAL(b.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
             TT_FATAL(b.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
             TT_FATAL(is_dram_interleaved(b), "{} must be DRAM-interleaved", name);
             // Exact LOGICAL shape: a single row of exactly `expected_n` columns. The
@@ -288,8 +288,9 @@ UnifiedRoutedExpertFfnDeviceOperation::spec_return_value_t UnifiedRoutedExpertFf
     const ttnn::Shape output_shape(t.x.padded_shape());
     const auto mem =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    return TensorSpec(
-        output_shape, tt::tt_metal::TensorLayout(t.x.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem));
+    return tt::tt_metal::TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(t.x.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem));
 }
 
 UnifiedRoutedExpertFfnDeviceOperation::tensor_return_value_t

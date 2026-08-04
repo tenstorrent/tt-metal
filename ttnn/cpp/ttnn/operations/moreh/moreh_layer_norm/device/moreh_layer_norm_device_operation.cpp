@@ -114,12 +114,12 @@ void MorehLayerNormOperation::validate_on_program_cache_miss(
 MorehLayerNormOperation::spec_return_value_t MorehLayerNormOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input = tensor_args.input;
-    std::vector<std::optional<TensorSpec>> result(3);
+    std::vector<std::optional<tt::tt_metal::TensorSpec>> result(3);
 
     if (tensor_args.output.has_value()) {
         result[0] = tensor_args.output->tensor_spec();
     } else {
-        result[0] = TensorSpec(
+        result[0] = tt::tt_metal::TensorSpec(
             input.logical_shape(),
             TensorLayout(input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
     }

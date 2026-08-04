@@ -9,7 +9,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #ifdef REDUCE_POST_MUL
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -24,20 +24,20 @@ void kernel_main() {
     constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
 #endif
 
-    constexpr uint32_t cb_input = tt::CBIndex::c_0;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_output = tt::CBIndex::c_3;
-    constexpr uint32_t cb_acc = tt::CBIndex::c_4;
-    constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
+    constexpr uint32_t dfb_input = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_scaler = tt::CBIndex::c_2;
+    constexpr uint32_t dfb_output = tt::CBIndex::c_3;
+    constexpr uint32_t dfb_acc = tt::CBIndex::c_4;
+    constexpr uint32_t dfb_ineg = tt::CBIndex::c_5;
 
-    CircularBuffer cb_input_obj(cb_input);
-    CircularBuffer cb_scaler_obj(cb_scaler);
-    CircularBuffer cb_output_obj(cb_output);
-    CircularBuffer cb_acc_obj(cb_acc);
-    CircularBuffer cb_ineg_obj(cb_ineg);
+    DataflowBuffer dfb_input_obj(dfb_input);
+    DataflowBuffer dfb_scaler_obj(dfb_scaler);
+    DataflowBuffer dfb_output_obj(dfb_output);
+    DataflowBuffer dfb_acc_obj(dfb_acc);
+    DataflowBuffer dfb_ineg_obj(dfb_ineg);
 
-    compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
-    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+    compute_kernel_hw_startup(dfb_input, dfb_scaler, dfb_output);
+    dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
         constexpr int onetile = 1;
         int reduce_dst_idx = 0;
@@ -46,64 +46,64 @@ void kernel_main() {
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                cb_input_obj.wait_front(onetile);
+                dfb_input_obj.wait_front(onetile);
 
                 tile_regs_acquire();
-                copy_tile_init(cb_input);
-                copy_tile(cb_input, 0, reduce_dst_idx);
+                copy_tile_init(dfb_input);
+                copy_tile(dfb_input, 0, reduce_dst_idx);
                 negative_tile_init();
                 negative_tile(reduce_dst_idx);
                 tile_regs_commit();
 
-                cb_input_obj.pop_front(onetile);
+                dfb_input_obj.pop_front(onetile);
 
-                cb_ineg_obj.reserve_back(onetile);
+                dfb_ineg_obj.reserve_back(onetile);
 
                 tile_regs_wait();
-                pack_tile(reduce_dst_idx, cb_ineg);
+                pack_tile(reduce_dst_idx, dfb_ineg);
                 tile_regs_release();
 
-                cb_ineg_obj.push_back(onetile);
+                dfb_ineg_obj.push_back(onetile);
 
                 if (wt > 0 || ht > 0) {
-                    cb_acc_obj.wait_front(onetile);
+                    dfb_acc_obj.wait_front(onetile);
                 }
-                cb_ineg_obj.wait_front(onetile);
+                dfb_ineg_obj.wait_front(onetile);
 
                 tile_regs_acquire();
                 if (wt > 0 || ht > 0) {
-                    copy_tile_init(cb_acc);
-                    copy_tile(cb_acc, 0, reduce_dst_idx);
+                    copy_tile_init(dfb_acc);
+                    copy_tile(dfb_acc, 0, reduce_dst_idx);
                 }
                 constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
                 if constexpr (swap_operands) {
-                    reconfig_data_format(cb_scaler, cb_ineg);
+                    reconfig_data_format(dfb_scaler, dfb_ineg);
                 }
-                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
-                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, 0, 0, reduce_dst_idx);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(dfb_ineg, dfb_scaler, dfb_acc);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb_ineg, dfb_scaler, 0, 0, reduce_dst_idx);
                 reduce_uninit();
                 tile_regs_commit();
 
-                cb_ineg_obj.pop_front(onetile);
+                dfb_ineg_obj.pop_front(onetile);
                 if (wt > 0 || ht > 0) {
-                    cb_acc_obj.pop_front(onetile);
+                    dfb_acc_obj.pop_front(onetile);
                 }
 
-                cb_acc_obj.reserve_back(onetile);
+                dfb_acc_obj.reserve_back(onetile);
 
                 tile_regs_wait();
-                pack_tile(reduce_dst_idx, cb_acc);
+                pack_tile(reduce_dst_idx, dfb_acc);
                 tile_regs_release();
 
-                cb_acc_obj.push_back(onetile);
+                dfb_acc_obj.push_back(onetile);
             }  // wt
         }  // ht
 
-        cb_acc_obj.wait_front(onetile);
+        dfb_acc_obj.wait_front(onetile);
 
         tile_regs_acquire();
-        copy_tile_init(cb_acc);
-        copy_tile(cb_acc, 0, reduce_dst_idx);
+        copy_tile_init(dfb_acc);
+        copy_tile(dfb_acc, 0, reduce_dst_idx);
         negative_tile_init();
         negative_tile(reduce_dst_idx);
 #ifdef REDUCE_POST_MUL
@@ -115,14 +115,14 @@ void kernel_main() {
 #endif
         tile_regs_commit();
 
-        cb_acc_obj.pop_front(onetile);
+        dfb_acc_obj.pop_front(onetile);
 
-        cb_output_obj.reserve_back(onetile);
+        dfb_output_obj.reserve_back(onetile);
 
         tile_regs_wait();
-        pack_tile(reduce_dst_idx, cb_output);
+        pack_tile(reduce_dst_idx, dfb_output);
         tile_regs_release();
 
-        cb_output_obj.push_back(onetile);
+        dfb_output_obj.push_back(onetile);
     }  // nc
 }

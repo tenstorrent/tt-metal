@@ -28,6 +28,20 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         "fused_rms_minimal requires a pre-allocated stats tensor; passing stats=None is not supported. It backs "
         "an internal globally-allocated circular buffer.");
 
+    {
+        const bool fp32_dest_acc_en =
+            std::get<2>(get_compute_kernel_config_args(a.device()->arch(), args.compute_kernel_config));
+        const auto expected_stats_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
+        TT_FATAL(
+            tensor_args.stats->dtype() == expected_stats_dtype,
+            "fused_rms_minimal: stats tensor dtype ({}) must match the compute accumulation format; with "
+            "fp32_dest_acc_en={} the stats tensor must be {}. Allocate the stats tensor with that dtype (this is "
+            "required for correct circular-buffer sizing and the internal all-gather handshake).",
+            tensor_args.stats->dtype(),
+            fp32_dest_acc_en,
+            expected_stats_dtype);
+    }
+
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
     TT_FATAL(
         a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] <= 32 &&
@@ -203,7 +217,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         shard_spec.shape[1]);
 }
 
-TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     if (args.inplace) {
@@ -231,7 +245,7 @@ TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
 
     auto mem_config = args.output_mem_config;
 
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             args.dtype.value_or(input_tensor.dtype()),

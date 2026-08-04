@@ -1,0 +1,55 @@
+# Quasar emulator regression tests
+#
+# Structure:
+#   <group>:              gtest binary under build/test/tt_metal/, or pytest file path
+#                         relative to TT_METAL_HOME
+#     - filter: <pattern> gtest filter glob, or pytest node id after :: (e.g. test_foo)
+#       config: <config>  Simulator grid (emu-quasar-<config>): 1x3, 2x3, 2x3_DISPATCH
+#       runner: <type>    (optional) gtest (default) or pytest
+#       env:              (optional) Extra environment variables as key: value pairs
+#       gtest_repeat:     (optional, gtest only) --gtest_repeat=N
+#       back2back:        (optional, gtest only) When true, run this entry in the same
+#                         process as other consecutive back2back entries that share the
+#                         same group, config, env, and gtest_repeat. Used by
+#                         run_quasar_regression.sh. Defaults to false.
+#                         Illegal for runner: pytest.
+#
+# Example gtest entry
+#
+# unit_tests_legacy:
+#   - filter: "*SingleDmL1Write*"
+#     config: 1x3
+#     env:
+#       TT_METAL_SOMETHING: 1
+#
+# Example pytest entry
+#
+# tests/tt_metal/tools/profiler/test_device_profiler.py:
+#   - filter: test_custom_cycle_count
+#     runner: pytest
+#     config: 2x3_DISPATCH
+#     env:
+#       TT_METAL_DEVICE_PROFILER: 1
+
+
+# Profiler tests
+tests/tt_metal/tools/profiler/test_device_profiler.py:
+  - filter: test_custom_cycle_count_slow_dispatch
+    runner: pytest
+    config: 1x3
+    env:
+      TT_METAL_DEVICE_PROFILER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: test_custom_cycle_count
+    runner: pytest
+    config: 2x3_DISPATCH
+    env:
+      TT_METAL_DEVICE_PROFILER: 1
+
+  - filter: test_full_buffer
+    runner: pytest
+    config: 2x3_DISPATCH
+    env:
+      TT_METAL_DEVICE_PROFILER: 1
+      ARCH_NAME: quasar

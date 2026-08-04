@@ -21,6 +21,27 @@ from models.tt_transformers.tt.rope import rotary_embedding_factory
 
 from ..test_factory import parametrize_mesh_with_fabric
 
+# bf16 tolerance for rope cos/sin at position 0 where all elements share the same
+# value (cos(0)·scale = const).  PCC is undefined on constant tensors; allclose
+# with this atol covers normal bf16 quantisation error (observed ~0.003, <1 ULP).
+_ROPE_BF16_ATOL = 0.01
+_ROPE_BF16_RTOL = 1e-5
+
+
+def _compare_rope_vector(golden, calculated, pcc_threshold=0.99):
+    """Compare two rope embedding vectors, handling constant-tensor PCC edge case.
+
+    When both tensors are constant (e.g. cos at position 0), PCC is undefined.
+    Fall back to allclose with bf16-appropriate tolerance instead of relying on
+    comp_pcc's internal fallback whose default atol is too tight for bf16.
+    """
+    is_golden_const = golden.numel() > 0 and (golden.max() == golden.min()).item()
+    is_calc_const = calculated.numel() > 0 and (calculated.max() == calculated.min()).item()
+    if is_golden_const and is_calc_const:
+        close = torch.allclose(golden, calculated, rtol=_ROPE_BF16_RTOL, atol=_ROPE_BF16_ATOL)
+        return close, 1.0 if close else 0.0
+    return comp_pcc(golden, calculated, pcc_threshold)
+
 
 def get_rope_cos_sin_from_tt_setup(rope_setup, mesh_device, seq_len):
     """
@@ -504,9 +525,9 @@ def test_rope_embedding_lookup_multi_user(mesh_device, device_params, batch_size
         cos_hf_pos = cos_hf_unique[pos, :]  # [head_dim/2]
         sin_hf_pos = sin_hf_unique[pos, :]  # [head_dim/2]
 
-        # Compare
-        cos_passing, cos_pcc = comp_pcc(cos_hf_pos.float(), cos_tt_user.float(), 0.99)
-        sin_passing, sin_pcc = comp_pcc(sin_hf_pos.float(), sin_tt_user.float(), 0.99)
+        # Compare (constant-tensor safe: cos at position 0 is constant across head_dim)
+        cos_passing, cos_pcc = _compare_rope_vector(cos_hf_pos.float(), cos_tt_user.float(), 0.99)
+        sin_passing, sin_pcc = _compare_rope_vector(sin_hf_pos.float(), sin_tt_user.float(), 0.99)
 
         if user_idx < 4 or user_idx == users_to_compare - 1:  # Log first few and last user
             logger.info(f"User {user_idx} at position {pos}: cos PCC={cos_pcc:.6f}, sin PCC={sin_pcc:.6f}")
@@ -620,9 +641,9 @@ def test_rope_embedding_lookup_users_row_sharded(mesh_device, device_params, max
         cos_hf_pos = cos_hf_unique[pos, :]
         sin_hf_pos = sin_hf_unique[pos, :]
 
-        # Compare
-        cos_passing, cos_pcc = comp_pcc(cos_hf_pos.float(), cos_tt_user.float(), 0.99)
-        sin_passing, sin_pcc = comp_pcc(sin_hf_pos.float(), sin_tt_user.float(), 0.99)
+        # Compare (constant-tensor safe: cos at position 0 is constant across head_dim)
+        cos_passing, cos_pcc = _compare_rope_vector(cos_hf_pos.float(), cos_tt_user.float(), 0.99)
+        sin_passing, sin_pcc = _compare_rope_vector(sin_hf_pos.float(), sin_tt_user.float(), 0.99)
 
         if user_idx < 4 or user_idx == users_to_compare - 1:
             logger.info(f"User {user_idx} at position {pos}: cos PCC={cos_pcc:.6f}, sin PCC={sin_pcc:.6f}")

@@ -125,6 +125,7 @@ Model type and architecture configuration loaded from separate files.
 | `intermediate_dim` | int | null | Feed-forward intermediate dimension |
 | `theta` | float | null | RoPE theta parameter |
 | `num_groups` | int | 3 | Number of groups for grouped attention |
+| `embedding_placement` | str | "replicated" | Token-embedding TP placement (only under TP): `replicated` (sharding off), `vocab_parallel`, or `feature_parallel`. Overridable on the CLI via `--embedding-placement`. |
 
 ### RoPE Scaling (`rope_scaling`)
 | Parameter | Type | Default | Description |

@@ -19,22 +19,26 @@ from helpers.llk_params import (
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
+    PerfRunType,
     ReduceDimension,
     ReducePool,
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -59,13 +63,56 @@ MATH_FIDELITY_MODES = [
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
 
-def generate_pool_type_and_math_fidelity_combinations():
+REDUCE_FORMATS = input_output_formats(
+    [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ],
+)
+
+
+def reduce_dest_sync_modes(*, is_perf=False):
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
+
+
+def reduce_dest_acc_modes(*, is_perf=False):
+    return (
+        [DestAccumulation.No]
+        if is_perf
+        else [DestAccumulation.No, DestAccumulation.Yes]
+    )
+
+
+def reduce_implied_math_formats(formats, *, is_perf=False):
+    if is_perf:
+        return [ImpliedMathFormat.Yes]
+    if formats.input_format.is_mx_format():
+        return [ImpliedMathFormat.Yes]
+    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+
+
+def reduce_input_dimensions(*, is_perf=False):
+    return [64, 64]
+
+
+def generate_pool_type_and_math_fidelity_combinations(*, is_perf=False):
     def is_valid_combination(pool_type, math_fidelity):
         # Max pool only supports LoFi
         if pool_type == ReducePool.Max:
             return math_fidelity == MathFidelity.LoFi
         # Sum and Average support all fidelities
         return True
+
+    if is_perf:
+        return [
+            combo
+            for combo in product(POOL_TYPES, [MathFidelity.LoFi])
+            if is_valid_combination(*combo)
+        ]
 
     return [
         combo
@@ -74,62 +121,31 @@ def generate_pool_type_and_math_fidelity_combinations():
     ]
 
 
-def generate_int8_pool_type_and_math_fidelity_combinations():
-    # Int8 reduce is exact-integer accumulation: only LoFi
-    return [
-        (ReducePool.Max, MathFidelity.LoFi),
-        (ReducePool.Sum, MathFidelity.LoFi),
-    ]
+def reduce_pool_type_and_math_fidelity_combinations(*, is_perf=False):
+    return generate_pool_type_and_math_fidelity_combinations(is_perf=is_perf)
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
-        ],
-    )
-    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
-    # Int8 reduce uses int32 dest accumulation
-    dest_acc=lambda formats: (
-        [DestAccumulation.Yes]
-        if formats.input_format == DataFormat.Int8
-        else [DestAccumulation.No, DestAccumulation.Yes]
-    ),
-    reduce_dim=[ReduceDimension.Column, ReduceDimension.Row, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=lambda formats: (
-        generate_int8_pool_type_and_math_fidelity_combinations()
-        if formats.input_format == DataFormat.Int8
-        else generate_pool_type_and_math_fidelity_combinations()
-    ),
-    # Int8→Int32 FPU reduce is 32x32-only for now (no tiny-tile int path yet).
-    tile_dimensions=lambda formats: (
-        [(32, 32)]
-        if formats.input_format == DataFormat.Int8
-        else [
-            td
-            for td in SUPPORTED_TILE_SIZES
-            if not is_mx_unsupported_tile_dims(
-                formats.input_format, formats.output_format, td
-            )
-        ]
-    ),
-    dest_sync_mode=[DestSync.Half, DestSync.Full],
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    implied_math_format=lambda formats: (
-        [ImpliedMathFormat.No]
-        if formats.input_format == DataFormat.Int8
-        else (
-            [ImpliedMathFormat.Yes]
-            if formats.input_format.is_mx_format()
-            else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    formats=REDUCE_FORMATS,
+    tile_dimensions=lambda formats: [
+        td
+        for td in SUPPORTED_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, td
         )
+    ],
+    dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
+    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
+    pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
+        is_perf=False
     ),
+    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
+    implied_math_format=lambda formats: reduce_implied_math_formats(
+        formats, is_perf=False
+    ),
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_reduce_quasar(
     formats,
@@ -139,17 +155,15 @@ def test_reduce_quasar(
     pool_type_and_math_fidelity,
     dest_sync_mode,
     implied_math_format,
+    run_types,
+    loop_factor,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
 
     pool_type, math_fidelity = pool_type_and_math_fidelity
     tile_shape = construct_tile_shape(tile_dimensions)
-
-    if (
-        formats.input_format == DataFormat.Int8
-        and reduce_dim == ReduceDimension.Scalar
-        and pool_type in (ReducePool.Sum, ReducePool.Average)
-    ):
-        pytest.skip("Int8->Int32 scalar SUM/AVG reduce is not supported yet on Quasar ")
 
     if (
         formats.input_format == DataFormat.MxInt8
@@ -170,20 +184,18 @@ def test_reduce_quasar(
             "Row reduce variants, so the residual is accepted as expected."
         )
 
-    input_dimensions = [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
+    input_dimensions = (
+        reduce_input_dimensions(is_perf=True)
+        if is_perf
+        else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
+    )
 
-    if formats.input_format == DataFormat.Int8:
-        stimuli_spec = StimuliSpec.uniform(low=-127, high=127)
-    else:
-        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=tile_dimensions,
         tile_dimensions=tile_dimensions,
-        spec_A=stimuli_spec,
-        spec_B=stimuli_spec,
     )
 
     if pool_type in [
@@ -203,51 +215,56 @@ def test_reduce_quasar(
                 1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1]),
             )
 
-    if pool_type == ReducePool.Max:
-        generate_golden = get_golden_generator(ReduceGolden)
-        golden_tensor = generate_golden(
-            src_A,
-            reduce_dim,
-            pool_type,
-            formats.output_format,
-            tile_cnt,
-            tile_shape=tile_shape,
-            input_format=formats.input_format,
-        )
-    else:
-        generate_golden = get_golden_generator(ReduceGapoolGolden)
-        golden_tensor = generate_golden(
-            src_A,
-            src_B,
-            formats.output_format,
-            reduce_dim,
-            math_fidelity,
-            tile_cnt,
-            tile_shape=tile_shape,
-            input_format=formats.input_format,
-            dest_acc=dest_acc,
-        )
+    if not is_perf:
+        if pool_type == ReducePool.Max:
+            generate_golden = get_golden_generator(ReduceGolden)
+            golden_tensor = generate_golden(
+                src_A,
+                reduce_dim,
+                pool_type,
+                formats.output_format,
+                tile_cnt,
+                tile_shape=tile_shape,
+                input_format=formats.input_format,
+            )
+        else:
+            generate_golden = get_golden_generator(ReduceGapoolGolden)
+            golden_tensor = generate_golden(
+                src_A,
+                src_B,
+                formats.output_format,
+                reduce_dim,
+                math_fidelity,
+                tile_cnt,
+                tile_shape=tile_shape,
+                input_format=formats.input_format,
+                dest_acc=dest_acc,
+            )
 
     mathop = mathop_mapping[reduce_dim]
 
-    configuration = TestConfig(
-        "sources/quasar/reduce_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/reduce_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync_mode),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             NUM_FACES(tile_shape.total_num_faces()),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -261,14 +278,28 @@ def test_reduce_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        unpack_to_dest=(
+        "unpack_to_dest": (
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
-        dest_acc=dest_acc,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
-        disable_format_inference=formats.input_format.is_mx_format(),
-    )
+        "dest_acc": dest_acc,
+        "disable_format_inference": (
+            implied_math_format == ImpliedMathFormat.Yes
+            and formats.input_format.is_mx_format()
+        ),
+    }
 
+    if is_perf:
+        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
+        configuration.run(perf_report)
+        return
+
+    configuration = TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        },
+    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
@@ -325,7 +356,9 @@ _ARCH = get_chip_architecture()
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=MATH_FIDELITY_MODES,
-    dest_sync_mode=[DestSync.Half, DestSync.Full],
+    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_reduce_quasar_mxfp4_2x_gapool(
     register_format_hint,
@@ -335,8 +368,13 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     pool_type,
     math_fidelity,
     dest_sync_mode,
+    run_types,
+    loop_factor,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
-    input_dimensions = [64, 64]
+    input_dimensions = reduce_input_dimensions(is_perf=is_perf)
     tile_shape = construct_tile_shape((32, 32))
 
     src_A, tile_cnt, _, _ = generate_stimuli(
@@ -353,38 +391,42 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     else:  # Average
         src_B = torch.full((tile_shape.total_tile_size(),), 1 / 32)
 
-    generate_golden = get_golden_generator(ReduceGapoolGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        src_B,
-        formats.output_format,
-        reduce_dim,
-        math_fidelity,
-        tile_cnt,
-        input_format=formats.input_format,
-    )
+    if not is_perf:
+        generate_golden = get_golden_generator(ReduceGapoolGolden)
+        golden_tensor = generate_golden(
+            src_A,
+            src_B,
+            formats.output_format,
+            reduce_dim,
+            math_fidelity,
+            tile_cnt,
+            input_format=formats.input_format,
+        )
 
     mathop = mathop_mapping[reduce_dim]
 
-    configuration = TestConfig(
-        "sources/quasar/reduce_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/reduce_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            # MX input -> implied math format on the kernel side (matches matmul 2x).
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync_mode),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             NUM_FACES(tile_shape.total_num_faces()),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -398,11 +440,23 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             tile_dimensions=(32, 32),
             use_dense_tile_dimensions=True,
         ),
-        unpack_to_dest=False,
-        dest_acc=dest_acc,
-        disable_format_inference=False,
-    )
+        "unpack_to_dest": False,
+        "dest_acc": dest_acc,
+        "disable_format_inference": False,
+    }
 
+    if is_perf:
+        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
+        configuration.run(perf_report)
+        return
+
+    configuration = TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        },
+    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

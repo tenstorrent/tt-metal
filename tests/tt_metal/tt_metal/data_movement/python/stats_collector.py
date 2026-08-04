@@ -13,11 +13,12 @@ from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
 
 class StatsCollector:
-    def __init__(self, file_path, test_id_to_name, test_type_attributes, verbose=False):
+    def __init__(self, file_path, test_id_to_name, test_type_attributes, verbose=False, arch=None):
         self.file_path = file_path
         self.verbose = verbose
         self.test_id_to_name = test_id_to_name
         self.test_type_attributes = test_type_attributes
+        self.arch = arch
         # Map each RISC-V processor to its corresponding analysis/event key
         self.riscv_to_analysis_event = {
             "riscv_1": {"analysis": "riscv_1_analysis", "events": "riscv_1_events"},
@@ -34,6 +35,7 @@ class StatsCollector:
             if (
                 "BRISC" in stats["devices"][0]["cores"][key]["riscs"]
                 or "NCRISC" in stats["devices"][0]["cores"][key]["riscs"]
+                or any(str(r).startswith("QUASAR_DM") for r in stats["devices"][0]["cores"][key]["riscs"])
             )
             and key != "DEVICE"
         ]
@@ -111,7 +113,10 @@ class StatsCollector:
             }
 
             # Add events configuration
-            marker_risc = "NCRISC" if risc == "riscv_1" else "BRISC"
+            if self.arch == "quasar":
+                marker_risc = "QUASAR_DM2" if risc == "riscv_1" else "QUASAR_DM0"
+            else:
+                marker_risc = "NCRISC" if risc == "riscv_1" else "BRISC"
             timer_analysis[events_key] = {
                 "across": "device",
                 "type": "event",

@@ -186,7 +186,6 @@ class TtMiniMaxMoE(LightweightModule):
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
-            seq_len_per_chip=self.seq_len_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
         )
         indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)

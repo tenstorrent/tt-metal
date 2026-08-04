@@ -22,7 +22,7 @@ struct RotaryEmbeddingLlamaMultiCorePrefillSharded {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const RotaryEmbeddingLlamaParams& operation_attributes,
         const RotaryEmbeddingLlamaInputs& tensor_args,
-        tt::tt_metal::Tensor& output);
+        ttnn::Tensor& output);
 };
 
 }  // namespace ttnn::experimental::prim

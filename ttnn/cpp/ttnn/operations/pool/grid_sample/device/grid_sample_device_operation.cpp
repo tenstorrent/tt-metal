@@ -143,7 +143,7 @@ void GridSampleOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape());
 }
 
-TensorSpec GridSampleOperation::compute_output_specs(
+tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& grid_tensor = tensor_args.grid;
@@ -285,7 +285,7 @@ TensorSpec GridSampleOperation::compute_output_specs(
 
     ttnn::Shape output_padded_shape({N_padded, H_out_padded, W_out_padded, C_padded});
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_logical_shape,
         TensorLayout::fromPaddedShape(
             output_data_type,
