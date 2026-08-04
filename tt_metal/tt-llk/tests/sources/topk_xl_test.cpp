@@ -169,7 +169,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "sfpu/ckernel_sfpu_topk_xl.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
 
 using namespace ckernel;
 
@@ -402,7 +402,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#include "sfpu/ckernel_sfpu_topk_xl.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
 
 // remove_msb_values on PACK: verbatim reproduction of the Metal wrapper
 // llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values, which Compute API invokes through
