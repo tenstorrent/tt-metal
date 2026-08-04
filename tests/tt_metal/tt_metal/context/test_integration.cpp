@@ -24,10 +24,14 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 
+#include <umd/device/firmware/firmware_info_provider.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/types/arch.hpp>
 
 // Internal access
 #include "dispatch/system_memory_manager.hpp"
+#include "llrt/rtoptions.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "impl/context/context_types.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "context/metal_env_accessor.hpp"
@@ -229,6 +233,50 @@ struct ScopedProfilerSyncEnv {
     std::optional<std::string> prev_device_profiler_;
     std::optional<std::string> prev_profiler_sync_;
 };
+
+constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
+constexpr uint32_t kTestTdpLimitWatts = 200;
+
+// Mirrors TDP_LIMIT_MIN_FIRMWARE_VERSION in UMD's firmware_utils.cpp, which is file-local there.
+const umd::FirmwareBundleVersion kMinTdpLimitFirmware(19, 11, 0);
+
+// Points TT_METAL_TDP_LIMIT_WATTS at `value` for the object's lifetime, or clears it when `value`
+// is nullopt. Read when a context's RunTimeOptions is constructed, so each MetalEnv below picks up
+// whatever is in scope at the time.
+struct ScopedTdpLimitEnv {
+    explicit ScopedTdpLimitEnv(const std::optional<std::string>& value) : prev_(SaveEnv(kTdpLimitEnvVar)) {
+        RestoreEnv(kTdpLimitEnvVar, value);
+    }
+    ~ScopedTdpLimitEnv() { RestoreEnv(kTdpLimitEnvVar, prev_); }
+
+    std::optional<std::string> prev_;
+};
+
+// Firmware for the first PCIe-attached chip, which is where the TDP limit is read back from.
+umd::FirmwareInfoProvider* FirmwareInfo(MetalEnv& env) {
+    Cluster& cluster = MetalEnvAccessor(env).impl().get_cluster();
+    const ChipId chip_id = *cluster.all_pci_chip_ids().begin();
+    return cluster.get_driver()->get_chip(chip_id)->get_tt_device()->get_firmware_info_provider();
+}
+
+// What RunTimeOptions makes of `value`, without opening a device.
+std::optional<uint32_t> ParseTdpLimitEnv(const std::optional<std::string>& value) {
+    ScopedTdpLimitEnv env_var(value);
+    return llrt::RunTimeOptions().get_tdp_limit_watts();
+}
+
+// Opens a cluster with the knob set to `value` and returns the limit firmware ends up enforcing.
+std::optional<uint32_t> OpenClusterWithTdpLimit(const std::optional<std::string>& value) {
+    ScopedTdpLimitEnv env_var(value);
+    MetalEnv env;
+    return FirmwareInfo(env)->get_tdp_limit();
+}
+
+// Setting the limit needs Blackhole on firmware new enough to take the ARC message.
+bool TdpLimitSupported() {
+    MetalEnv env;
+    return env.get_arch() == tt::ARCH::BLACKHOLE && FirmwareInfo(env)->get_firmware_version() >= kMinTdpLimitFirmware;
+}
 
 // Enqueues a single no-op kernel on one worker core of `target`, exercising the full
 // create-program / create-kernel / JIT-compile / enqueue-workload pipeline for that context.
@@ -733,6 +781,43 @@ TEST(MetalEnvMockCCL, LegacyConfigureMockMode_QueryPasses) {
 
     EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Success)
         << "query failed: " << response.error_message.value_or("(no message)");
+}
+
+TEST(TdpLimitEnv, ParsesEnvVar) {
+    EXPECT_FALSE(ParseTdpLimitEnv(std::nullopt).has_value());
+    // Exporting the variable empty is how a shared profile disables the knob without unsetting it.
+    EXPECT_FALSE(ParseTdpLimitEnv("").has_value());
+    EXPECT_EQ(ParseTdpLimitEnv("300"), 300u);
+    EXPECT_EQ(ParseTdpLimitEnv("0"), llrt::TDP_LIMIT_RESTORE_DEFAULT_SENTINEL);
+}
+
+// A typo must not quietly leave the run at full power, so parsing is strict.
+TEST(TdpLimitEnv, MalformedEnvVarThrows) {
+    EXPECT_ANY_THROW(ParseTdpLimitEnv("abc"));
+    EXPECT_ANY_THROW(ParseTdpLimitEnv("99999999999999999999"));
+}
+
+// The knob is optional, so nothing it can be handed may take a run down. This holds on any
+// architecture: Wormhole cannot set a limit at all, and Blackhole firmware rejects one below the
+// range it accepts. Both have to come out as a warning rather than a failed cluster open.
+TEST(TdpLimitEnv, RejectedLimitDoesNotFailClusterOpen) {
+    ScopedTdpLimitEnv env_var("1");
+    EXPECT_NO_THROW({ MetalEnv env; });
+}
+
+// The whole lifecycle: the limit is applied, it outlives the cluster that set it, an unset knob
+// leaves it alone, and the 0 sentinel puts the board default back. The last step is also cleanup.
+TEST(TdpLimitEnv, LimitOutlivesClusterAndSentinelRestoresIt) {
+    if (!TdpLimitSupported()) {
+        GTEST_SKIP() << "TDP limit needs Blackhole with firmware " << kMinTdpLimitFirmware.to_string() << " or newer";
+    }
+
+    const std::optional<uint32_t> board_default = OpenClusterWithTdpLimit(std::nullopt);
+    ASSERT_NE(board_default, kTestTdpLimitWatts) << "test limit must differ from the board default to prove anything";
+
+    EXPECT_EQ(OpenClusterWithTdpLimit(std::to_string(kTestTdpLimitWatts)), kTestTdpLimitWatts);
+    EXPECT_EQ(OpenClusterWithTdpLimit(std::nullopt), kTestTdpLimitWatts) << "nothing restores the limit on teardown";
+    EXPECT_EQ(OpenClusterWithTdpLimit("0"), board_default) << "the 0 sentinel restores the board default";
 }
 
 }  // namespace tt::tt_metal
