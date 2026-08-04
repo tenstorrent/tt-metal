@@ -2565,6 +2565,48 @@ def _record_fullpipe_candidate(ms: float, method: str, mode: str) -> None:
         pass
 
 
+def _read_fullpipe_bar():
+    """Return (best_ms, mode, readable). `readable` distinguishes "no baseline" from "could not read".
+
+    The gate used to swallow a parse failure into an empty dict, so an existing-but-damaged bar was
+    indistinguishable from no bar at all -- and the `best <= 0` branch responds to that by adopting
+    whatever it just measured. gemma-3-12b-it went from 34.9066 to 67.2294 (28.6 -> 14.9 tok/s/u)
+    through exactly that branch, right after two readings had been correctly REJECTED against the
+    healthy bar. The next run would have banked anything at all as a ~20 ms win.
+
+    readable=False means a reference exists and we failed to load it; the caller must refuse rather
+    than re-baseline. An absent file is readable=True with best 0.0, which is the genuine
+    nothing-to-compare-against case.
+    """
+    p = _FULLPIPE_BASELINE_1CQ_PATH
+    if not p.exists():
+        return 0.0, "", True
+    try:
+        doc = json.loads(p.read_text())
+        ms = float(doc.get("full_pipeline_ms", 0.0) or 0.0)
+    except Exception:  # noqa: BLE001
+        return 0.0, "", False
+    if ms <= 0:
+        return 0.0, "", False
+    return ms, (doc.get("mode") or _fullpipe_mode(doc.get("method", "eager"), None)), True
+
+
+def _write_fullpipe_bar(doc: dict) -> None:
+    """Write the bar atomically. `write_text` truncates before writing, so a concurrent reader sees a
+    partial file -- which is one way _read_fullpipe_bar's readable=False arises. temp + os.replace
+    means a reader gets either the old contents or the new, never half of either."""
+    p = _FULLPIPE_BASELINE_1CQ_PATH
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(doc))
+        os.replace(str(tmp), str(p))
+    except Exception:  # noqa: BLE001
+        try:
+            tmp.unlink()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _promote_fullpipe_if_committed() -> bool:
     """Promote a pending reading once HEAD has actually moved past the sha it was measured at.
 
@@ -2617,7 +2659,10 @@ def _promote_fullpipe_pending() -> bool:
         except Exception:  # noqa: BLE001 -- a corrupt pending file must not take the bar with it
             _keep_old = True
         if not _keep_old:
-            _FULLPIPE_BASELINE_1CQ_PATH.write_text(src.read_text())
+            try:
+                _write_fullpipe_bar(json.loads(src.read_text()))
+            except Exception:  # noqa: BLE001
+                _FULLPIPE_BASELINE_1CQ_PATH.write_text(src.read_text())
         # RECORD THE RATCHET. This is the reading a win is confirmed against -- trace_replay
         # end-to-end vs trace_replay end-to-end -- and it was written only to the gate's own baseline
         # file. The ledger's fullpipe rows therefore only ever held the run's START and END bookends,
@@ -2667,15 +2712,13 @@ def _establish_fullpipe_baseline(ms: float, method: str, mode: str) -> None:
     is no commit to wait for, and keeping the old number would make every later delta meaningless.
     """
     try:
-        _FULLPIPE_BASELINE_1CQ_PATH.write_text(
-            json.dumps(
-                {
-                    "full_pipeline_ms": ms,
-                    "method": method,
-                    "mode": mode,
-                    "unit": os.environ.get("PERF_MCP_LAST_HEADLINE_UNIT", ""),
-                }
-            )
+        _write_fullpipe_bar(
+            {
+                "full_pipeline_ms": ms,
+                "method": method,
+                "mode": mode,
+                "unit": os.environ.get("PERF_MCP_LAST_HEADLINE_UNIT", ""),
+            }
         )
     except Exception:  # noqa: BLE001
         pass
@@ -2945,14 +2988,27 @@ def check_full_pipeline_latency() -> dict:
     # A commit may have landed since the last reading (by the tool or by the agent's own git);
     # promote first so `best` reflects the committed tree rather than a stale pre-commit value.
     _promote_fullpipe_if_committed()
-    base = {}
-    if base_path.exists():
-        try:
-            base = json.loads(base_path.read_text())
-        except Exception:  # noqa: BLE001
-            base = {}
-    best = float(base.get("full_pipeline_ms", 0.0) or 0.0)
-    base_mode = base.get("mode") or _fullpipe_mode(base.get("method", "eager"), None)
+    # THREE STATES, NOT TWO. A parse failure used to collapse into "no baseline", and the
+    # `best <= 0` branch answers that by adopting whatever was just measured -- which is how the bar
+    # went 34.9066 -> 67.2294 (28.6 -> 14.9 tok/s/u) immediately after two readings had been
+    # correctly rejected against the healthy bar.
+    best, base_mode, _bar_readable = _read_fullpipe_bar()
+    if not _bar_readable:
+        return _emit_fullpipe(
+            {
+                "status": "bar_unreadable",
+                "full_pipeline_ms": round(ms, 4),
+                "method": method,
+                "metric": metric,
+                "mode": mode,
+                "cq": cq,
+                "error": (
+                    "the committed-best file exists but could not be read (%s). REFUSING to "
+                    "re-baseline from this reading -- a damaged reference is not an absent one. "
+                    "Restore or delete it before continuing." % base_path
+                ),
+            }
+        )
     if best > 0 and _mode_rank(mode) < _mode_rank(base_mode):
         return _emit_fullpipe(
             {
