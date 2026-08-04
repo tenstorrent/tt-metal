@@ -44,3 +44,6 @@ doc/vllm_integration/**/sweep.tsv
 doc/vllm_integration/**/sweep.log
 swebench_*.json
 doc/optimized_multichip_decoder/perf_before_after_layer4.json
+
+# HTML reports (published as Artifacts, not version-controlled)
+*.html
