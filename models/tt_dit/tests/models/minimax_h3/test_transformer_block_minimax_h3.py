@@ -10,6 +10,7 @@ from loguru import logger
 
 import ttnn
 
+from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -166,6 +167,7 @@ def test_minimax_h3_transformer_block(
     rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
     rope_cos, rope_sin = rope(position_ids)  # each (seq_len, 96)
     rotary_dim = rope_cos.shape[-1]
+    tt_rope_cos_t, tt_rope_sin_t = prepare_rope_tables(rope_cos, rope_sin, HEAD_DIM)
 
     spatial_input = torch.randn((B, seq_len, HIDDEN_SIZE), dtype=torch.float32)
     # `temb` is the shared timestep embedding: one row per *distinct* timestep, not per batch item.
@@ -192,6 +194,7 @@ def test_minimax_h3_transformer_block(
         hidden_size=HIDDEN_SIZE,
         num_heads=NUM_HEADS,
         head_dim=HEAD_DIM,
+        rotary_dim=rotary_dim,
         ffn_dim=FFN_DIM,
         time_embed_dim=TIME_EMBED_DIM,
         norm_eps=NORM_EPS,
@@ -224,13 +227,13 @@ def test_minimax_h3_transformer_block(
     )
     # cos/sin are shared by every head: fractured on SP, replicated on TP.
     tt_rope_cos = from_torch(
-        rope_cos.reshape(1, 1, seq_len, rotary_dim),
+        tt_rope_cos_t.reshape(1, 1, seq_len, HEAD_DIM),
         device=mesh_device,
         dtype=ttnn.float32,
         mesh_axes=[..., sp_axis, None],
     )
     tt_rope_sin = from_torch(
-        rope_sin.reshape(1, 1, seq_len, rotary_dim),
+        tt_rope_sin_t.reshape(1, 1, seq_len, HEAD_DIM),
         device=mesh_device,
         dtype=ttnn.float32,
         mesh_axes=[..., sp_axis, None],

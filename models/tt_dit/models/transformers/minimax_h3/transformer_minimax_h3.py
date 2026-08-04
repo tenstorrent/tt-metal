@@ -185,9 +185,12 @@ class MiniMaxH3Transformer3DModel(Module):
         freq_dim: int = 256,
         time_embed_hidden_dim: int = 5376,
         time_embed_dim: int = 2688,
-        # NOTE: `rope_freq_dim` and `rope_theta` from the checkpoint config are deliberately absent.
-        # The rotary embedding is computed by the caller and passed in as cos/sin, so accepting them
-        # here would imply this module uses them.
+        # `rope_freq_dim` sets how many of each head's channels rotate: the reference builds cos/sin
+        # of width 2 * 3 * rope_freq_dim and passes the rest of the head through. The tables
+        # themselves are still the caller's job (see `prepare_rope_tables`), but attention needs the
+        # width to relayout the Q/K rotary channels at weight-load time. `rope_theta` is absent
+        # because only the caller's table construction uses it.
+        rope_freq_dim: int = 16,
         norm_eps: float = 1e-5,
         qk_norm_eps: float = 1e-5,
         final_norm_eps: float = 1e-5,
@@ -210,6 +213,9 @@ class MiniMaxH3Transformer3DModel(Module):
         self.hidden_local = hidden_size // self.tp_factor
 
         video_patch_dim = in_channels * patch_size[0] * patch_size[1] * patch_size[2]
+        # 3 rotary axes (t, h, w), each contributing rope_freq_dim frequencies, doubled by the
+        # rotate-half convention.
+        rotary_dim = 2 * 3 * rope_freq_dim
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
         col_kwargs = {
@@ -268,6 +274,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     hidden_size=hidden_size,
                     num_heads=num_attention_heads,
                     head_dim=attention_head_dim,
+                    rotary_dim=rotary_dim,
                     ffn_dim=ffn_dim,
                     time_embed_dim=time_embed_dim,
                     norm_eps=norm_eps,

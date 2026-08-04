@@ -19,6 +19,7 @@ from safetensors import safe_open
 
 import ttnn
 
+from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -233,6 +234,9 @@ def test_minimax_h3_transformer(
     rope = torch_model.rope
     with torch.no_grad():
         rope_cos, rope_sin = rope(padded_position_ids)
+    # The fused RoPE wants head_dim-wide tables in the interleaved layout, not the reference's
+    # rotary_dim-wide half-split ones.
+    rope_cos, rope_sin = prepare_rope_tables(rope_cos, rope_sin, ATTENTION_HEAD_DIM)
     rotary_dim = rope_cos.shape[-1]
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -455,6 +459,7 @@ def test_minimax_h3_transformer_real_weights(
     rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=rope_freq_dim, rope_theta=rope_theta)
     with torch.no_grad():
         rope_cos, rope_sin = rope(pad_rows(position_ids))
+    rope_cos, rope_sin = prepare_rope_tables(rope_cos, rope_sin, model_kwargs["attention_head_dim"])
     rotary_dim = rope_cos.shape[-1]
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
