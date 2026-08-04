@@ -1894,3 +1894,46 @@ more parallelism on top of a per-tap fallback will not get there.
 
 **Audio decode stands at 0.988 s against 0.05 s.** Encoder and decoder targets are met
 (2.99 s and 1.0 s); this one is not.
+
+## Amendment 64 (2026-08-04) — audio decode profiled: 1680 ops, 224 ms device against 1284 ms wall
+
+New targets this session: **audio decode 0.05 s, visual decode 0.8 s**, then visual encode
+< 1 s, audio encode last. Current: audio decode 0.988 s (T-parallel factor 4), visual decode
+1.0 s, visual encode 2.99 s.
+
+First op-level profile of the audio decoder. Tracy's report generation asserts
+(`Device data missing: Op 1443840`, the same failure mode as amendment 53), but
+`generated/profiler/.logs/cpp_device_perf_report.csv` is written regardless and can be
+aggregated directly — **do that instead of re-running when the report step fails.**
+
+Single device, 5 s clip, warm half of two iterations:
+
+| op | calls | ms | share |
+|---|---|---|---|
+| Conv3dDeviceOperation | 60 | 65.97 | 29.4 % |
+| TernaryDeviceOperation | 56 | 46.93 | 20.9 % |
+| BinaryNgDeviceOperation | **437** | 41.85 | 18.7 % |
+| ConcatDeviceOperation | 175 | 21.34 | 9.5 % |
+| ReshapeViewDeviceOperation | 110 | 14.31 | 6.4 % |
+| SliceDeviceOperation | **298** | 12.10 | 5.4 % |
+| UntilizeWithUnpadding | 135 | 11.49 | 5.1 % |
+| **TOTAL** | **1680** | **224.2** | |
+
+**The headline is the gap: 224 ms of device time inside a 1284 ms wall clock.** 83 % of audio
+decode is not device work — ~630 us of host time per op, an order of magnitude above a normal
+ttnn dispatch.
+
+**And trace does not remove it** (1.284 -> 1.203 s, amendment 60), which it should: trace
+exists to delete exactly this. Two candidate explanations are already eliminated —
+`Tracer(prep_run=True)` runs the function once *before capture*, not per call, and the
+un-traced stages are 2.8 ms total (amendment 60's split). So either the replay is stalling on
+device in a way `DEVICE FW DURATION` does not count, or the captured region is not what is
+being replayed. **Resolving this is worth ~5x on audio decode and is the next thing to do** --
+more parallelism or fewer ops on top of a 1 s host overhead cannot reach 0.05 s.
+
+Secondary, once that is settled: **910 of the 1680 ops are elementwise and data movement**
+(437 BinaryNg + 298 Slice + 175 Concat). `_depthwise_tap_mac` emits `2K-1` ops per call for a
+K-tap filter, and the AMP blocks use K = 3, 7, 11, so the conv1d slicer fallback is the
+likely bulk of those counts. `TernaryDeviceOperation` at 20.9 % over 56 calls is the snake
+activation (`x + (1/alpha) sin^2(alpha x)`) -- worth checking against
+`existing-fast-paths.md` for a fused form before hand-rolling.
