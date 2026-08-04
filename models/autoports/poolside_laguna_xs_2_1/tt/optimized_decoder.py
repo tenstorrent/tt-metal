@@ -571,6 +571,18 @@ class OptimizedDecoder(LightweightModule):
         # DEFAULT ON (validated bit-identical @B=1 AND @B=32): fused HF rotate_half decode RoPE
         # (rotary_embedding_hf). Part of the +~6% combined decode win. TT_LAGUNA_FUSED_ROPE=0 reverts.
         self._use_fused_rope = os.environ.get("TT_LAGUNA_FUSED_ROPE", "1") == "1"
+        # W3a: fused decode QKV head-split output template (HEIGHT_SHARDED, one user/core). The op
+        # (nlp_create_qkv_heads_decode) derives q/k/v shard specs from this; grid must cover >= B cores.
+        # Mirrors attention_1d.py Blackhole decode: 32 cores, shard (TILE, head_dim). Gated by
+        # TT_LAGUNA_FUSE_QKV_DECODE (default off until fast-loop PCC + timing validate).
+        self._fuse_qkv_decode = os.environ.get("TT_LAGUNA_FUSE_QKV_DECODE", "0") == "1"
+        self._qkv_heads_decode_memcfg = ttnn.create_sharded_memory_config(
+            shape=(TILE, self.cfg.head_dim),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
         # fidelity assignment per matmul group — READ FROM THE POLICY so the selected
         # compute-fidelity config is actually consumed by the measured runtime path
         # (defaults preserve the stage-06 policy: LoFi projections, HiFi2 gate/router).
@@ -1094,7 +1106,22 @@ class OptimizedDecoder(LightweightModule):
         # DRAM interleaved: paged SDPA decode (esp. sliding-window) requires Q in DRAM.
         if self.use_dram_sharded:
             qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)
-        q, k, v = self._split_qkv(qkv, B)
+        if self._fuse_qkv_decode:  # W3a: fused head-split replaces _split_qkv (3 slice + 3 reshape).
+            # s2i all three so the UNCHANGED per_head_norm / rope / _shard_kv tail runs byte-identical
+            # (Stage 1: isolate "does the fused op emit the same q/k/v as _split_qkv?").
+            qkv = ttnn.reshape(qkv, (1, 1, B, self.meta["qkv_w"]), (1, 1, TILE, self.meta["qkv_w"]))
+            q_sh, k_sh_raw, v_sh_raw = ttnn.experimental.nlp_create_qkv_heads_decode(
+                qkv,
+                num_heads=cfg.num_heads,
+                num_kv_heads=cfg.num_kv_heads,
+                overlap_qk_coregrid=True,
+                memory_config=self._qkv_heads_decode_memcfg,
+            )
+            q = ttnn.sharded_to_interleaved(q_sh, ttnn.DRAM_MEMORY_CONFIG)
+            k = ttnn.sharded_to_interleaved(k_sh_raw, ttnn.DRAM_MEMORY_CONFIG)
+            v = ttnn.sharded_to_interleaved(v_sh_raw, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            q, k, v = self._split_qkv(qkv, B)
         q = self._per_head_norm(q, self.w["q_norm"])
         k = self._per_head_norm(k, self.w["k_norm"])
         # item 2.3: share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
