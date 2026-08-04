@@ -69,7 +69,7 @@ bool reduce_scatter_minimal_direct_is_applicable(
         return false;
     }
 
-    const auto padded_shape = input_tensor.padded_shape();
+    const auto& padded_shape = input_tensor.padded_shape();
     const uint32_t rank = padded_shape.rank();
     if (rank < 2) {
         return false;
