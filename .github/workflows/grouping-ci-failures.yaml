@@ -90,8 +90,12 @@ jobs:
       - name: Run grouping ci failures
         uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@main
         with:
-          # github_token: read-only access to job metadata and workflow artifacts
-          github_token: ${{ secrets.ERROR_GROUPING_TOKEN }}
+          # Every call the action makes is a read against this repository: run
+          # and job metadata for commit hashes and job names, the run list, and
+          # the previous error report artifact. The built-in token covers all of
+          # that under the actions: read permission above, so no personal access
+          # token is involved and there is nothing to expire.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           # slack_token: Slack Bot Token for fetching messages
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
           # channel_id: Slack channel ID to fetch messages from
