@@ -375,9 +375,33 @@ away; only the device saving remains. Eagerly, the host cost is paid every call 
 that shipped. The stage's insistence on traced decode replay is not a detail; it is what makes this entire
 class of optimisation visible at all.
 
+### E18b — and the inversion separates the two attribution channels exactly
+
+Repeated the mode comparison on a second model, phi-3.5 FN, dense layer, batch 32 — and measured *both* of its
+candidate classes:
+
+| candidate | traced replay | eager | class |
+|---|---|---|---|
+| frozen control | 0.807203 | 1.258255 / 1.261008 | — |
+| **rope query_key** — *what shipped* | 0.769096 → **−38.1 µs, win** | 1.203638 → **−56.0 µs, win** | **channel 1**: removes conversions |
+| **norm 11 cores** | 0.746605 → **−60.6 µs, win** | 1.332182 → **+72.6 µs, LOSS** | **channel 2**: in-chain re-grid |
+| rope + norm 11 | 0.701036 → −106.2 µs, win | 1.310241 → +50.6 µs, loss | mixed |
+
+**The split is exact:**
+
+- **Channel 1 wins in *both* modes.** Keeping the rope chain L1-resident *removes* work — fewer conversions on
+  the device and fewer programs on the host. Nothing about how you measure it can hide it.
+- **Channel 2 wins *only* under traced replay.** Re-gridding an op inside its chain *moves* work: it adds host
+  programs (`to_memory_config`, `sharded_to_interleaved`) to buy device parallelism. Traced replay pays the
+  host cost once; eager pays it every call.
+
+So the measurement mode is not a detail of protocol hygiene — **it is what decides whether channel 2 exists at
+all**, and channel 2 is 48–64 % of everything this stage can deliver (§E12). Two models, same direction, same
+magnitude class (+46 µs host on north-mini, +73 µs on phi).
+
 That also explains a puzzle in the corpus: several cells' `*_profile` measurements are consistently ~1–3 %
 slower than their timed counterparts, and one cell found that trace-replay rows carry no host markers between
-signposts. Host-side work and device-side work move in opposite directions for these candidates, so any
+signposts. Host-side work and device-side work move in opposite directions for channel-2 candidates, so any
 mixing of the two measurement modes will produce contradictory rankings.
 
 **No change needed — this setting is already right.** Recorded because it is the one place where the stage's

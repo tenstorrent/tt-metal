@@ -337,14 +337,18 @@ ordering rule sends cells to it last anyway. → [`COUNTERFACTUALS`](ADVCHAL-V2-
 The stage insists on **traced decode replay**, justified in the skill as "what production does". Measured, it
 is doing something much stronger — it is the only mode in which these wins exist at all:
 
-| north-mini layer 1, same config | frozen (1-core norm) | 16-core norm | verdict |
+| candidate | traced replay | eager | class |
 |---|---|---|---|
-| **traced replay** | 0.577971 | **0.512764** | **−65.2 µs — a win** |
-| **eager** | 0.971305 | 1.016869 | **+45.6 µs — a regression** |
+| phi FN **rope only** — *what shipped* | −38.1 µs **win** | −56.0 µs **win** | **channel 1**: removes conversions |
+| phi FN **norm 11 cores** | −60.6 µs **win** | **+72.6 µs LOSS** | **channel 2**: in-chain re-grid |
+| north-mini **norm 16 cores** | −65.2 µs **win** | **+45.6 µs LOSS** | **channel 2** |
 
-The sharded norm **adds ~46 µs of host dispatch** and **saves ~65 µs of device time**. Traced replay captures
-the host cost once; eager pays it every call. **A cell that timed eagerly would have rejected every norm win
-in this corpus, including both that shipped.**
+**The split is exact.** Channel 1 *removes* work, so it wins however you measure. Channel 2 *moves* work — it
+buys device parallelism with extra host programs — so it wins only under traced replay, which pays the host
+cost once instead of every call.
+
+**A cell that timed eagerly would have rejected every channel-2 win in this corpus, including both that
+shipped** — and channel 2 is 48–64 % of everything the stage can deliver (§3.9). Two models, same direction.
 
 Related, and reassuring: two *real* consecutive layers cost the sum of the two measured alone to within
 ±1.8 % (sign-varying, inside the block spreads), so the per-layer → per-model multiplication is not
