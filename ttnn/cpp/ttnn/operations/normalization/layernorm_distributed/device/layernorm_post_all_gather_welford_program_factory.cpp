@@ -303,9 +303,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
 
     uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
-    // gamma / beta select which buffers exist, and the compute kernel gates its handles on the same
-    // two defines the reader already used. Both kernels get them: a handle that is not bound cannot
-    // be named even on a branch the compiler will discard.
+    // gamma and beta are optional, and the kernel-side handle for a buffer exists only where the host
+    // binds that buffer: the build emits `dfb::gamma` into a kernel's generated bindings only if this
+    // factory gave that kernel a gamma binding. So when gamma is absent, a kernel's source must not
+    // contain the text `dfb::gamma` at all. Gating the use with `if constexpr` does not achieve that,
+    // the gate has to be `#ifdef`, which removes the text before the compiler sees it.
+    // These two defines are what the kernels gate on.
     m2::KernelSpec::CompilerOptions::Defines gb_defines;
     if (gamma.has_value()) {
         gb_defines.emplace("FUSE_GAMMA", "1");

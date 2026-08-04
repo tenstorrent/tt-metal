@@ -186,9 +186,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
                      "layernorm_pre_allgather.cpp";
 
-    // The residual buffers exist only on the fused path, so the define that gates their kernel-side
-    // handles is emitted only there — an always-emitted 0/1 define would still leave the unbound
-    // handle names in scope.
+    // The residual buffers exist only on the fused path, and the kernel-side handle for a buffer exists
+    // only where the host binds it, so a kernel's source must not contain the text `dfb::res` when
+    // there is no residual. That means this define is emitted only when the path is taken, and the
+    // kernels gate on `#ifdef`. Emitting it always as "0" or "1" and testing it with `#if` would not
+    // work: the text naming the unbound handle would still reach the compiler.
     m2::KernelSpec::CompilerOptions::Defines fuse_defines;
     if (fuse_pre_add) {
         fuse_defines.emplace("FUSE_PRE_ADD", "1");

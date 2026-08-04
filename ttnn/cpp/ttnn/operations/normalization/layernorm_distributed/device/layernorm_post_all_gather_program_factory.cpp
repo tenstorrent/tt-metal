@@ -284,9 +284,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
 
     uint32_t eps_u = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
-    // gamma / beta select which buffers exist, and the compute kernels gate their handles on the
-    // same two defines the reader already used. Both kernels get them: a handle that is not bound
-    // cannot be named even on a branch the compiler will discard.
+    // gamma and beta are optional, and the kernel-side handle for a buffer exists only where the host
+    // binds that buffer: the build emits `dfb::gamma` into a kernel's generated bindings only if this
+    // factory gave that kernel a gamma binding. So when gamma is absent, a kernel's source must not
+    // contain the text `dfb::gamma` at all. Gating the use with `if constexpr` does not achieve that,
+    // the gate has to be `#ifdef`, which removes the text before the compiler sees it.
+    // These two defines are what the kernels gate on.
     m2::KernelSpec::CompilerOptions::Defines gb_defines;
     if (gamma.has_value()) {
         gb_defines.emplace("FUSE_GAMMA", "1");
@@ -320,7 +323,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     }
     dfbs.push_back(make_dfb(POST_EPS, in4_tiles, bfloat16_tile_size, tt::DataFormat::Float16_b));
     dfbs.push_back(make_dfb(POST_REDUCE, in5_tiles, scaler_tile_size, scaler_data_format));
-    // [mean(x**2), mean(x)] — layernorm only; RMSNorm reduces the stats straight into the variance
+    // [mean(x**2), mean(x)], layernorm only. RMSNorm reduces the stats straight into the variance
     // buffer and never touches this one.
     if (!is_rmsnorm) {
         dfbs.push_back(make_dfb(POST_STATS_REDUCED, intermed0_tiles, single_tile_size, cb_data_format));
@@ -469,8 +472,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     // explicit unpack mode. In this kernel every consumed buffer is read by an FPU op (the stats row
     // reduce, mul_tiles / sub_tiles / add_tiles for the variance, and the broadcast multiplies and adds
     // of the gamma / beta chain), and the FPU takes its operands from SrcA/SrcB, so SrcA/B is the mode
-    // for all of them. They are listed one by one on purpose: a Float32 buffer added here later should
-    // trip the validator rather than inherit a mode nobody chose.
+    // for all of them. They are listed one by one on purpose: any "catch all" clever method that set
+    // unpack_via_src on all of them could  accidentally include a future DFB where unpack_via_src would
+    // not be appropriate.
     if (compute_gen1.enable_32_bit_dest) {
         // The intermediates all carry cb_data_format, which is Float32 exactly when the Dest register is.
         unpack_via_src(compute_gen1, POST_VAR);

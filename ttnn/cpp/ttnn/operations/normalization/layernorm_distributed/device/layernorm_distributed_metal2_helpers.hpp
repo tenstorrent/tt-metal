@@ -52,10 +52,9 @@ inline void bind_self_loop(m2::KernelSpec& kernel, const m2::DFBSpecName& dfb, s
 // Record that a buffer is unpacked through the SrcA/SrcB register files.
 //
 // A compute kernel with the 32-bit Dest register enabled has to state a mode for every Float32 buffer
-// it consumes: at that combination the choice between SrcA/B and Dest is a real precision/throughput
-// tradeoff, so there is no implicit default to fall back on. Each call site below is one such choice,
-// named and conditioned exactly like the binding it belongs to, so that adding a Float32 buffer later
-// does not silently inherit a mode nobody picked.
+// it consumes: at that combination the choice between SrcA/B and Dest is a real precision and
+// throughput tradeoff, so there is no implicit default to fall back on. A program factory should call
+// this once per such buffer, under the same condition that binds the buffer.
 inline void unpack_via_src(m2::ComputeGen1Config& compute_config, const m2::DFBSpecName& dfb) {
     compute_config.unpack_modes.emplace(dfb, tt::tt_metal::UnpackMode::UnpackToSrc);
 }
@@ -70,7 +69,7 @@ inline void unpack_via_dest(m2::ComputeGen1Config& compute_config, const m2::DFB
 // A compute hardware config holds one generation's settings, and this op only ever builds the Gen1
 // (Wormhole / Blackhole) alternative: `to_compute_hardware_config` returns the Gen2 alternative on
 // Quasar, and nothing here populates the Gen2-only fields or makes the Quasar-specific choices those
-// need. Say so plainly rather than letting the access below raise std::bad_variant_access.
+// need. Say so plainly rather than letting the std::get raise std::bad_variant_access.
 inline m2::ComputeGen1Config& gen1_compute_config(m2::ComputeHardwareConfig& config) {
     TT_FATAL(
         std::holds_alternative<m2::ComputeGen1Config>(config),

@@ -40,7 +40,7 @@ void kernel_main() {
     Noc noc;
     // Input tiles, consumed downstream by the compute kernel.
     DataflowBuffer dfb_inp_buf(dfb::inp);
-    // This core's partial statistic, produced by compute and shipped to the merge core below.
+    // This core's partial statistic: produced by compute, then shipped over the NoC to the merge core.
     DataflowBuffer dfb_out_buf(dfb::out);
     // Gather buffer on the merge core: every core in the column lands its partial here.
     DataflowBuffer dfb_x2_merge_buf(dfb::x2_merge);
