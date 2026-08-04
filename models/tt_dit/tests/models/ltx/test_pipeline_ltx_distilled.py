@@ -56,11 +56,11 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
         except (LocalEntryNotFoundError, EntryNotFoundError, FileNotFoundError):
             return False
     return False
+from models.tt_dit.utils.vbench import assert_vbench_quality
 
 
-# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
-# (no checkpoint present). Runs the same prompt as the girl audio fixture (DEFAULT_LTX_PROMPT — the
-# "young woman with a guitar sings Doo-be-doo" clip the audio tests use), so e2e and audio stay aligned.
+
+# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
 @pytest.mark.skipif(
     not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
