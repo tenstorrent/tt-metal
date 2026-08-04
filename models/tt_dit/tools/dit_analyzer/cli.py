@@ -82,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
     o = sub.add_parser("ops", help="list registered op semantics, or a graph's coverage gaps")
     o.add_argument("--missing", default=None, metavar="GRAPH", help="list the ops a graph uses that have no spec")
     o.add_argument("--check", default=None, metavar="GRAPH", help="exit 1 if a graph contains an uncovered op")
+    o.add_argument(
+        "--stub",
+        action="store_true",
+        help="with --missing: print a copy-paste registration skeleton (shim rule + analyzer OpSpec) per op",
+    )
     return p
 
 
@@ -156,7 +161,38 @@ def _dryrun(args) -> int:
     return 0
 
 
-def _ops_coverage(graph, fail: bool) -> int:
+def _registration_stub(call: str, arity: int) -> str:
+    """A copy-paste registration skeleton for one unregistered op.
+
+    Emits both halves a new op needs -- the shim shape rule in ``dryrun/ops.py``
+    (build the IR node) and the analyzer ``OpSpec`` in ``semantics.py`` (reason
+    through it) -- with ``shim`` / ``apply`` / ``demand`` left as ``TODO``. Until
+    the phase-8 one-registration merge lands, these live in two files, so the stub
+    names both (roadmap "op registration", ergonomic point 3).
+    """
+    canon = call.split(".")[-1]
+    n = max(1, int(arity))
+    params = ", ".join(["x"] + ["a%d" % i for i in range(1, n)])
+    ins = ", ".join(["x"] + ["a%d" % i for i in range(1, n)])
+    return (
+        "  # --- shim shape rule -> dryrun/ops.py (build the IR node) ------------\n"
+        "  def %s(%s, **k):\n"
+        '      # TODO(shim): return recorder.emit("%s", [%s], <out_logical>, <out_dist>, base="%s")\n'
+        '      raise NotImplementedError("shim shape rule for %s")\n'
+        "  # register in the matching table: TENSOR_OPS / EXPERIMENTAL_OPS / TRANSFORMER_OPS\n"
+        '  #     "%s": %s,\n'
+        "\n"
+        "  # --- analyzer semantics -> semantics.py (reason through it) ----------\n"
+        "  def _%s_apply(c):    # forward availability\n"
+        "      ...  # TODO(apply): c.define(0, dist, regions, value_id, tainted)\n"
+        "  def _%s_demand(c):   # backward necessity\n"
+        "      ...  # TODO(demand): c.need(c.node.inputs[i], dev, region)\n"
+        '  register(OpSpec("%s", COMPUTE, _%s_apply, _%s_demand), aliases=("%s",))\n'
+        % (canon, params, canon, ins, canon, call, canon, canon, canon, canon, canon, canon, canon, call)
+    )
+
+
+def _ops_coverage(graph, fail: bool, stub: bool = False) -> int:
     """Which ops in this graph have no semantics, and what that costs the analysis."""
     from .ir import UNREGISTERED_OP
 
@@ -185,6 +221,13 @@ def _ops_coverage(graph, fail: bool) -> int:
         "\n%d finding(s) are withheld because their proof passes through these ops." % len(blocked)
         + ("" if blocked else " Nothing is currently blocked on them.")
     )
+    if stub:
+        print("\nregistration skeletons (fill the TODOs, then re-run):\n")
+        for call, entry in sorted(missing.items(), key=lambda kv: -kv[1]["count"]):
+            print("%s:" % call)
+            print(_registration_stub(call, entry["arity"]))
+    else:
+        print("\nre-run with --stub for a copy-paste registration skeleton per op.")
     return 1 if fail else 0
 
 
@@ -202,7 +245,9 @@ def main(argv: Optional[list] = None) -> int:
 
     if args.cmd == "ops":
         if args.missing or args.check:
-            return _ops_coverage(load_graph(args.missing or args.check), fail=bool(args.check))
+            return _ops_coverage(
+                load_graph(args.missing or args.check), fail=bool(args.check), stub=getattr(args, "stub", False)
+            )
         print(describe_registry())
         return 0
 

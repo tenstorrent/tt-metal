@@ -59,6 +59,31 @@ def test_ltx_linear_is_clean():
     assert "identical multiset" in proc.stdout, proc.stdout
 
 
+def test_ops_missing_stub_generator_emits_both_halves():
+    import io
+    from contextlib import redirect_stdout
+
+    from dit_analyzer.cli import _ops_coverage
+
+    graph = _graph_with_unregistered_op(unregistered=True)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        _ops_coverage(graph, fail=False, stub=True)
+    out = buf.getvalue()
+    # the op is named, and both registration halves are stubbed
+    assert "ttnn.experimental.mesh_partition" in out
+    assert "def mesh_partition(" in out  # shim shape rule, canonical name
+    assert "recorder.emit(" in out
+    assert "_mesh_partition_apply" in out and "_mesh_partition_demand" in out  # analyzer OpSpec
+    assert 'register(OpSpec("mesh_partition"' in out
+    assert "TODO" in out
+    # and without --stub it points at the flag instead of dumping skeletons
+    buf2 = io.StringIO()
+    with redirect_stdout(buf2):
+        _ops_coverage(graph, fail=False, stub=False)
+    assert "--stub" in buf2.getvalue() and "def mesh_partition(" not in buf2.getvalue()
+
+
 def test_sd35_block_matches_oracle():
     """SD3.5-large joint block from source: a second block, second oracle.
 
