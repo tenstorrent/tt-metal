@@ -34,9 +34,11 @@ outside the old rollout report and is the active work queue.
    CT/RT block insertion in the same atomic change.
 3. Address the remaining migration-specific cleanup: MIG-001's Conv CT/RT
    offset chaining and MIG-002's sort row-start handshake.
-4. Run PERF-001 before considering the GroupNorm migration performance-closed.
-   It now calls three rectangle sends on every iteration, including degenerate
-   calls for absent edge rectangles.
+4. Fix PERF-002 using its measured root cause: the per-send completion fence is
+   the dominant SDXL VAE cost, followed by the send hot path not remaining fully
+   inline. PERF-003's SegFormer width-sharded regression still needs equivalent
+   ablation. PERF-001 found no regression for the rectangular SDXL GroupNorm
+   model shape, but still needs deliberate wrapped-group coverage.
 
 No priority below this list should be inferred from the order of historical
 documents or ledger rows.
@@ -47,8 +49,8 @@ documents or ledger rows.
   (API-001 through API-004).
 - [`migration_feedback.md`](migration_feedback.md) — concrete robustness issues
   in existing ports (MIG-001 through MIG-003).
-- [`perf_feedback.md`](perf_feedback.md) — required performance comparisons
-  (currently PERF-001 for GroupNorm).
+- [`perf_feedback.md`](perf_feedback.md) — measured performance comparisons and
+  open follow-ups (PERF-001 through PERF-003).
 
 These three files are intake logs. When an item is resolved, update its status
 there and record an implemented API change in `changelog.md`.
