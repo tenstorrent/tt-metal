@@ -1,11 +1,12 @@
 # Roadmap: from hand-modelled graphs to real pipelines, without a device
 
 Companion to [`DitStaticAnalyzerPlan.md`](DitStaticAnalyzerPlan.md), which covers
-phases 0–6 of the original design. Phases 1–4 are prototyped in this directory
-and phase 5 was exercised against LTX-2.3 — but only against a graph
-**hand-written from the source** (`examples/ltx.py`). This document inventories
-what stands between that and running the checker on a real pipeline, and lays out
-the work to close it.
+phases 0–6 of the original design. Phases 1–4 are prototyped in this directory and
+phase 5 was exercised against LTX-2.3 — originally against a graph **hand-written
+from the source** (`examples/ltx.py`), and now against one derived from the source
+by the dry run, with the hand-written version kept as the oracle. This document
+inventories what stands between that and running the checker on a real *pipeline*,
+and lays out the work to close it.
 
 > **Revision 2 — adopts a dry-run front end.** The first version of this roadmap
 > assumed on-device graph capture was the way in, and spent its first two phases
@@ -15,21 +16,21 @@ the work to close it.
 > outright; nine new shim-specific ones replace them. The critical path gets
 > shorter and, more importantly, the everyday analysis stops needing hardware.
 >
-> **The design has been spiked** — see [`spike/FINDINGS.md`](spike/FINDINGS.md).
-> The real LTX block runs under a metadata-only ttnn on a laptop and reproduces
-> the phase-5 findings byte for byte, so what follows is calibrated against a
-> working prototype rather than an estimate.
+> **Phase 6 is built** — [`dryrun/`](dryrun/) is the front end, driven by
+> `ditcheck dryrun`. It grew out of the spike recorded in
+> [`spike/FINDINGS.md`](spike/FINDINGS.md), so the phases below are calibrated
+> against working code rather than an estimate.
 
 ## Where we are
 
 | | |
 |---|---|
 | Analysis | works offline, pure Python: forward availability + backward demand + 6 redundancy rules + proofs |
-| Op semantics | 18 specs, 80 call-name aliases |
-| Capture | 30 monkeypatch hooks written, **never run on hardware** |
-| Dry run | spike proven: real `LTXTransformerBlock.forward` under a fake ttnn, 18 ttnn ops, 212 nodes, findings byte-identical to the oracle on both BH configs |
-| Graph source | hand-written via `builder.py`, or the spike's dry run; a trace still needs hand-declared placements |
-| Validated on | SD3.5-large block (0 findings), LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), both reproduced from source by the dry run |
+| Op semantics | 19 analyzer specs, 80 call-name aliases; 65 shim call names + 15 no-ops in `dryrun/ops.py` |
+| Dry run | **built**: `ditcheck dryrun ltx_block --preset bh_4x8`, real forward under a metadata-only ttnn, weights from torch meta tensors, caller stack per node, `--check-oracle` as the drift test |
+| Capture | 30 monkeypatch hooks written, **never run on hardware**; demoted to the phase 11 conformance path |
+| Graph source | `ditcheck dryrun` from source, or hand-written via `builder.py`; a trace still needs hand-declared placements |
+| Validated on | SD3.5-large block (0 findings), LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), both reproduced from source by the dry run and asserted in `tests/test_dryrun.py` |
 
 ## The design: dry run first, device as validator
 
@@ -68,7 +69,10 @@ runs real kernels far too slowly for whole-pipeline graphs.
 ## Target end state
 
 ```bash
-# on a laptop: no device, no weights, no capture
+# on a laptop: no device, no weights, no capture. Works today for one block:
+ditcheck dryrun ltx_block --preset bh_4x8 --out ltx_bh4x8.graph.json --analyze
+
+# the pipeline-level form is phases 10 and 12:
 ditcheck dryrun --pipeline models.tt_dit.pipelines.ltx --preset bh_4x8 \
     --frames 121 --height 704 --width 1216 --out ltx_bh4x8.graph.json
 ditcheck analyze ltx_bh4x8.graph.json --top 10
@@ -94,18 +98,23 @@ register(OpSpec(
 ))
 ```
 
-Ergonomics, unchanged in intent from revision 1:
+Ergonomics, unchanged in intent from revision 1; 1, 2 and 4 are built:
 
 1. **Nothing is invisible.** An unregistered op still runs under the shim and
    still appears in the IR as an `unregistered` node with real inputs, outputs,
-   shapes and source location — it just can't propagate metadata, so the dry run
-   stops there with a precise error instead of silently drifting.
+   shapes and source location. It cannot propagate metadata, so the shim assumes
+   its output matches input 0 and records that assumption on the node — the run
+   continues deliberately, so one pass lists *every* missing op rather than
+   stopping at the first. Nothing built on the assumption is ever reported (2).
 2. **Analysis withholds, never guesses.** A finding whose proof depends on an
-   `unregistered` node is not emitted, not downgraded. The report lists what to
-   register and what each registration unlocks.
+   `unregistered` node is not emitted, not downgraded. `Report.withheld` carries it
+   with the registrations that would unlock it, and the text report prints them as
+   a queue. Provenance propagates automatically in `ApplyCtx.define`, so a spec
+   author cannot forget to pass it on.
 3. **`ditcheck ops --missing`** prints, per unregistered op: call name, arity,
-   observed shapes, call sites, count, and a copy-paste stub with `shim`,
-   `apply` and `demand` left as `TODO`.
+   call sites and count — plus how many findings it blocks. Still to add: the
+   copy-paste stub with `shim`, `apply` and `demand` left as `TODO` (phase 8, once
+   the two halves are one entry).
 4. **`ditcheck ops --check`** fails CI when a graph contains an uncovered op, so
    coverage debt is visible rather than accumulating as suppressed findings.
 
@@ -127,7 +136,7 @@ call sites), plus 9 introduced by the shim (44 was found by the spike). `P` = ph
 | 3 | `ttnn` trace capture: 9 `begin_trace_capture` sites; `execute_trace` replays with no Python ops | **dissolved** — the shim no-ops trace capture; the forward runs in Python every time |
 | 4 | `Tracer` returns the same tensor objects every call and overwrites post-capture allocations → `id()` identity aliases distinct values | **dissolved** — the shim mints fresh SSA symbols; no object reuse |
 | 5 | `ttnn.deallocate` (92 sites) frees buffers whose `id()` can be recycled | **dissolved** — no buffers exist |
-| 6 | In-place ops (`ttnn.copy`, `multiply_`, `add_`, `StateTensor.update`) break the SSA assumption | **dissolved** as a hazard — each becomes an explicit new symbol (spec in P8) |
+| 6 | In-place ops (`ttnn.copy`, `multiply_`, `add_`, `StateTensor.update`) break the SSA assumption | **dissolved** as a hazard — the shim repoints the caller's tensor at a fresh symbol, so a write is an ordinary node; done in P6 for `copy`/`*_`, `StateTensor` in P10 |
 | 7 | Mesh mappers/composers unhooked (`ShardTensor2dMesh`, `ConcatMesh2dToTensor`, `create_mesh_composer`) | **dissolved** — the shim *is* the mapper, so distribution is known at creation |
 
 ### B. Information a trace doesn't carry
@@ -188,44 +197,82 @@ call sites), plus 9 introduced by the shim (44 was found by the spike). `P` = ph
 | # | Blocker | P |
 |---|---|---|
 | 36 | **Per-device shape and tile-padding math must be exact.** The graph branches on it — `attention_ltx.py:483` does `need_gather = k_BHNE.shape[2] < _k_cos_pe.shape[2]`. An off-by-a-factor doesn't perturb the graph, it flips a collective in or out of existence | 7 |
-| 37 | **`weight._data is None` gates the graph.** `attention_ltx.py:379`: `_compute_gate` returns `None` when the gate weight is unloaded, so a weightless dry run silently loses the exact finding phase 5 reported. Needs `torch.device('meta')` weights so `Parameter._data` is non-None without bytes | 6 |
+| 37 | **`weight._data is None` gates the graph.** `attention_ltx.py:379`: `_compute_gate` returns `None` when the gate weight is unloaded, so a weightless dry run silently loses the exact finding phase 5 reported. Needs `torch.device('meta')` weights so `Parameter._data` is non-None without bytes | **closed in 6** |
 | 38 | **Checkpoint-derived flags.** `has_gate` comes from state-dict *keys* (`transformer_ltx.py:1090`), as does `cross_attention_adaln`. Needs a key list from a safetensors index without downloading weights | 7 |
 | 39 | **Host-value dependence.** `transformer_mochi.py:575` derives `valid_prompt_length` via `encoder_attention_mask.sum(dim=1).max().int().item()`, which drives shapes. Needs representative host inputs or supplied lengths | 12 |
-| 40 | **Device and config object stubs.** `MeshDevice.shape/arch/compute_with_storage_grid_size/create_submeshes`, `CoreGrid`/`CoreCoord`/`CoreRangeSet`, `SDPAProgramConfig`, `MemoryConfig`, compute-kernel configs, `SubDevice`, `create_global_semaphore` — and `get_matmul_config`'s assertions must be satisfiable from fake shapes | 6 |
-| 41 | **Pipeline construction touches the device before any forward.** `CCLManager.__init__` calls `_init_subdevice()` and `_init_semaphores()` (many `create_global_semaphore`) and `synchronize_device`; pipelines also build persistent buffers and prepare weights at init | 6 |
+| 40 | **Device and config object stubs.** `MeshDevice.shape/arch/compute_with_storage_grid_size/create_submeshes`, `CoreGrid`/`CoreCoord`/`CoreRangeSet`, `SDPAProgramConfig`, `MemoryConfig`, compute-kernel configs, `SubDevice`, `create_global_semaphore` — and `get_matmul_config`'s assertions must be satisfiable from fake shapes | **closed in 6** |
+| 41 | **Pipeline construction touches the device before any forward.** `CCLManager.__init__` calls `_init_subdevice()` and `_init_semaphores()` (many `create_global_semaphore`) and `synchronize_device`; pipelines also build persistent buffers and prepare weights at init | **closed in 6** |
 | 42 | **Shim/ttnn divergence over time.** The shim is a second implementation of ttnn's shape/layout semantics and will rot | 11 |
-| 44 | **Source attribution points at shared library code.** Spike findings landed on `layers/linear.py:250` (the AGMM call site inside `ColParallelLinear`) rather than `attention_ltx.py:428` (`to_qkv`). Both are true; only the second is actionable. Record a short caller stack (2-3 tt_dit frames), not one line | 6 |
+| 44 | **Source attribution points at shared library code.** Spike findings landed on `layers/linear.py:250` (the AGMM call site inside `ColParallelLinear`) rather than `attention_ltx.py:428` (`to_qkv`). Both are true; only the second is actionable. Record a short caller stack (2-3 tt_dit frames), not one line | **closed in 6** |
 | 43 | **Readback boundaries end the graph.** Everything after `to_torch(get_device_tensors(...))` (`transformer_ltx.py:1068`, `bwe_ltx.py:85`, `mel_decoder_ltx.py:483`) is host code on fake data; and no kernel-level constraint (program-config asserts, L1 fit, hangs) is visible in a dry run | 10 |
 
 ## Phases
 
 Estimates are for one engineer. Only phase 11 needs device access.
 
-### Phase 6 — Dry-run shim core (2–3 weeks) · closes 37, 40, 41, 44; dissolves 3–9
+### Phase 6 — Dry-run shim core · **done** · closes 37, 40, 41, 44; dissolves 3–9
 
-- A `ttnn` stand-in (installed by import shadowing, not by editing model code): metadata
-  `Tensor`, `MeshDevice`, mesh mappers/composers, config objects, semaphores,
-  subdevices, `synchronize_device`, trace capture as no-ops.
-- `from_torch` accepts `torch.device('meta')` tensors, so `Module`/`Parameter`
-  loads shapes with zero bytes and `_data` is non-None (37).
+Built as [`dryrun/`](dryrun/); the spike it grew from is deleted, its findings
+kept. What shipped:
+
+- A `ttnn` stand-in installed by import shadowing, not by editing model code:
+  metadata `Tensor` (per-device `.shape`, logical shape underneath), `MeshDevice`,
+  mesh mappers/composers, config objects, semaphores, subdevices,
+  `synchronize_device` and trace capture as no-ops. `install()` refuses to
+  displace a real `ttnn`, `uninstall()` restores `sys.modules`, and
+  `assert_installed()` guards graph emission (the "import shadowing is fragile"
+  risk).
 - Ops emit IR nodes as a side effect of returning metadata; distribution is
   recorded at creation, so entry placements are known rather than declared.
-- A no-device pipeline construction path (or shim coverage of `CCLManager.__init__`
-  and persistent-buffer allocation) so a pipeline object can exist on a laptop.
-- Record a short caller stack per node, not a single innermost frame (44), so a
-  finding names the model call site and the library line under it.
-- **Acceptance — met by the spike** for one block: the real forward runs, the
-  collectives match `examples/ltx.py` as an identical multiset (31 vs 31 on Ring,
-  25 vs 25 on Linear), and the findings are byte-identical (6 provable
-  `duplicate_gather`, 128.7 GiB/forward; 0 on Linear). `examples/ltx.py` stays as
-  the oracle and the drift regression test (`spike/test_dryrun_matches_oracle.py`).
-  What remains for the production version: real torch-meta weights instead of
-  `fake_torch`, the `unregistered` node kind, pipeline-level construction, and the
-  caller stack.
-- **Prerequisites the spike surfaced:** the repo needs Python ≥ 3.10 (PEP 604
-  unions in evaluated annotations, `types.NoneType`), and
+- Weights load through the real `Parameter.load_torch_tensor` on
+  `torch.empty(..., device='meta')` (37) rather than by assigning `_data`. That
+  makes `utils/tensor.from_torch` build the real mesh mapper and
+  `Parameter._check_data` compare the shim's per-device shape against tt_dit's own
+  `local_shape` on every parameter — a free check on the shard math (36). It
+  required `create_mesh_mapper` / `PlacementShard` / `MeshMapperConfig` and
+  `ttnn.Layout` to be real objects: a stub mapper reads as "replicated" and
+  silently loses a tensor's distribution.
+- Real torch is preferred and a metadata-only stand-in is the fallback, so a
+  device-free CI job needs no torch install. Whatever was substituted is printed
+  with every run. Verified both ways: on an interpreter with torch, loguru,
+  safetensors, numpy and pytest the substitution list is empty apart from the
+  Python-version hook, the real `models.common.utility_functions` is used, and the
+  graph is identical to the fallback run's.
+- `CCLManager.__init__` (subdevices, semaphores, persistent buffers) and
+  `get_matmul_config` run unmodified against the shim (41, 40).
+- A short caller stack per node (44): findings lead with
+  `attention_ltx.py:428` and name `layers/linear.py:250` beneath it, with
+  `Module.__call__` dispatch frames filtered out.
+- The `unregistered` node kind, with provenance propagated automatically in
+  `ApplyCtx.define`, so findings downstream of an op with no semantics are
+  withheld and reported as registrations to make. `ditcheck ops --missing` /
+  `--check` are the user-facing end.
+- In-place ops (`copy`, `multiply_`) SSA-ified by repointing the caller's tensor
+  at a fresh symbol, which closes 6 for those calls rather than deferring it.
+- **Acceptance — met.** For both shipped Blackhole configs, from source: the real
+  forward runs (212 nodes / 341 symbols on 4×8, 206 / 343 on 2×4), no
+  unregistered ops, no analyzer diagnostics, the collectives match
+  `examples/ltx.py` as an identical multiset (31 vs 31 on Ring, 25 vs 25 on
+  Linear), and the findings match (6 provable `duplicate_gather`, 128.7
+  GiB/forward; 0 on Linear). `examples/ltx.py` stays as the oracle and the drift
+  test: `ditcheck dryrun --check-oracle`, asserted by `tests/test_dryrun.py`.
+- **Not in phase 6, by design:** pipeline-level construction over submeshes and
+  stages is phase 10, and the branch/shape sweep is phase 12. What exists is a
+  target registry (`dryrun/targets.py`) holding the little a dry run cannot read
+  off the source — mesh shape, axis roles, activation shapes, checkpoint-derived
+  flags — which is also what phase 12 sweeps.
+- **Prerequisites the spike surfaced, still true:** the repo needs Python ≥ 3.10
+  (PEP 604 unions in evaluated annotations, `types.NoneType`) — `hostenv.py`
+  works around it with an import hook on older interpreters — and
   `models.common.utility_functions` pulls in numpy *and pytest* for the sake of
-  `is_blackhole` — worth splitting upstream.
+  `is_blackhole`, worth splitting upstream. The dry run now imports the real module
+  when it can and stubs it otherwise, so this is a soft dependency; two things had
+  to be right for that, both of them traps for anything else added to `hostenv.py`:
+  the probe must happen *after* the shim is installed (or tt_dit's module-level
+  `import ttnn` pulls in real ttnn and `install()` refuses to run), and
+  `ttnn.get_arch_name` must be implemented, because `is_blackhole()` reads it and
+  the generic stub would answer "not blackhole" for every mesh while the model keys
+  chunk sizes and program configs off it.
 
 ### Phase 7 — Shape and layout fidelity (2–3 weeks) · closes 10, 11, 12, 13, 36, 38
 
@@ -250,9 +297,11 @@ Between them they produced 15 spurious findings next to the 6 real ones.
 
 ### Phase 8 — Op coverage, one registration per op (3–4 weeks) · closes 2, 14, 15, 16, 17, 18
 
-- Merge shim shape rule and analyzer semantics into a single `OpSpec`; extend
-  `ops --missing` to stub all three functions; build the `unregistered` node kind
-  and the withhold-don't-guess rule; add `ops --check` for CI.
+- Merge shim shape rule and analyzer semantics into a single `OpSpec` (today a
+  rule in `dryrun/ops.py` and a spec in `semantics.py` are two edits for one piece
+  of knowledge); extend `ops --missing` to stub all three functions. The
+  `unregistered` node kind, the withhold-don't-guess rule and `ops --check` landed
+  in phase 6.
 - Declare fused-kernel internal stages as **data** (fused op → comm stage, compute
   stage, axis/dim argument names), so a new fused kernel is a table entry rather
   than a silent miss.
@@ -346,18 +395,26 @@ Nearly free once the dry run works: sweeps are laptop CPU time, not device time.
 ## Ordering
 
 ```
-6 (shim core) ──► 7 (shape fidelity) ──► 8 (op coverage) ──► 9 (scale) ──► 13 (device-free CI)
-                                              │
+6 (shim core) ══► 7 (shape fidelity) ──► 8 (op coverage) ──► 9 (scale) ──► 13 (device-free CI)
+    done                                      │
                                               ├──► 10 (multi-mesh / stage)
                                               ├──► 11 (conformance + soundness, on device)
                                               └──► 12 (coverage matrix)
 ```
 
 6 → 7 → 8 is the critical path to "runs on a real pipeline with no hand-written
-model" (~8–11 weeks). Phase 11 does not gate producing findings, but it does gate
-*trusting* them: until per-op conformance is green, every dry-run finding should
-be read as "the shim believes", and phase 7's acceptance criterion depends on one
-recorded collective log, so a small amount of device time is needed early.
+model"; with 6 done, 7 → 8 is ~5–7 weeks of it. **Next is phase 7**, and the
+reason it comes before op coverage is that shapes decide branches: the two shim
+bugs the spike found produced 15 spurious findings next to the 6 real ones, and
+neither perturbed the graph. Phase 11 does not gate producing findings, but it does
+gate *trusting* them: until per-op conformance is green, every dry-run finding
+should be read as "the shim believes", and phase 7's acceptance criterion depends
+on one recorded collective log, so a small amount of device time is needed early.
+
+Two cheap checks already push against the top risk, and both are free to keep
+running: loading weights through `Parameter.load_torch_tensor` makes tt_dit's own
+`local_shape` disagree loudly with the shim's per-device shape, and `--check-oracle`
+diffs the derived graph against the hand-written one on every test run.
 
 ## Risks
 
@@ -365,8 +422,8 @@ recorded collective log, so a small amount of device time is needed early.
 |---|---|
 | Shim shape math diverges from ttnn and flips a branch (36) — the worst failure mode, because it produces confident wrong findings, **observed in the spike: 2 bugs, 15 spurious findings** | Per-op conformance in device CI (11); phase 7 acceptance is a per-device-shape diff against a real run; keep the hand-written `examples/` graphs as regression oracles rather than deleting them |
 | The shim rots as ttnn adds or changes ops (42) | `ops --check` makes coverage debt visible; conformance failures name the op; fused-kernel behaviour lives in a data table |
-| A weightless or input-free dry run silently changes the graph (37, 38, 39) | Meta-tensor weights so `_data` is non-None; checkpoint key lists; the coverage matrix reports which branches were never exercised |
-| Import shadowing `ttnn` is fragile or leaks into real runs | Install the shim only under an explicit entry point, and assert `ttnn.__file__` is the shim at graph-emit time |
+| A weightless or input-free dry run silently changes the graph (37, 38, 39) | Meta-tensor weights so `_data` is non-None (**done in 6**, through the real `Parameter` load path); checkpoint key lists (7); the coverage matrix reports which branches were never exercised (12) |
+| Import shadowing `ttnn` is fragile or leaks into real runs | **Done in phase 6:** the shim installs only under `ditcheck dryrun`, `install()` refuses to displace an already-imported real `ttnn`, `uninstall()` restores `sys.modules`, `assert_installed()` runs before any graph is emitted, and the oracle tests run each config in a subprocess |
 | Findings scale faster than anyone reads them | Rollup by source location plus top-N ranking; the report is a queue, not a dump |
 
 ## Out of scope

@@ -9,10 +9,19 @@ proof-based redundancy checks. It answers, for every collective in a forward
 pass: *what did each device already have, what does anything downstream actually
 need, and is this collective doing any work?*
 
-It is pure Python and imports no `ttnn`, so the analysis runs on a laptop
-against a captured graph. Only [`capture.py`](capture.py) needs a live device.
+It is pure Python and imports no real `ttnn`, so both the analysis *and* the graph
+it analyses come off a laptop: [`dryrun/`](dryrun/) runs the real model code
+against a metadata-only `ttnn` and emits the graph as a side effect. Only
+[`capture.py`](capture.py) needs a live device, and nothing in the daily loop
+uses it.
 
 ```bash
+# derive the graph from models/tt_dit source -- no device, no checkpoint, no capture
+models/tt_dit/tools/ditcheck dryrun ltx_block --preset bh_4x8 --analyze --top 1
+
+# ... and check it still agrees with the hand-written graph for the same block
+models/tt_dit/tools/ditcheck dryrun ltx_block --preset bh_4x8 --check-oracle
+
 # LTX-2.3 A+V block on BH 4x8 (Ring): 6 provably duplicate TP gathers per block
 models/tt_dit/tools/ditcheck analyze example:ltx_block_bh_4x8 --top 1
 
@@ -28,8 +37,10 @@ models/tt_dit/tools/ditcheck analyze example:sd35_block_double_gather --top 3
 # per-device state table around each collective
 models/tt_dit/tools/ditcheck states example:sd35_block --node pre_attn
 
+models/tt_dit/tools/ditcheck dryrun            # list dry-run targets and presets
 models/tt_dit/tools/ditcheck examples          # list built-in graphs
 models/tt_dit/tools/ditcheck ops               # list registered op semantics
+models/tt_dit/tools/ditcheck ops --check g.json  # exit 1 if a graph uses an uncovered op
 models/tt_dit/tools/ditcheck dump example:sd35_block > g.json
 models/tt_dit/tools/ditcheck analyze g.json --json findings.json --fail-on provable
 ```
@@ -37,19 +48,82 @@ models/tt_dit/tools/ditcheck analyze g.json --json findings.json --fail-on prova
 Tests (no device, no pytest needed):
 
 ```bash
-python3 models/tt_dit/tools/dit_analyzer/tests/test_dit_analyzer.py          # analyzer, 20 tests
-python3 models/tt_dit/tools/dit_analyzer/spike/test_dryrun_matches_oracle.py # dry run vs oracle
+python3 models/tt_dit/tools/dit_analyzer/tests/test_dit_analyzer.py   # analyzer, 20 tests
+python3 models/tt_dit/tools/dit_analyzer/tests/test_dryrun.py         # dry run, 11 tests
 # or: pytest models/tt_dit/tools/dit_analyzer/
 ```
 
-The dry-run spike derives the LTX graph from the model source instead of
-restating it by hand, and reproduces the findings below byte for byte on both
-Blackhole configs — see [`spike/FINDINGS.md`](spike/FINDINGS.md):
+## The dry run
 
-```bash
-python3 models/tt_dit/tools/dit_analyzer/spike/run_ltx_block.py            # BH 4x8, Ring
-python3 models/tt_dit/tools/dit_analyzer/spike/run_ltx_block.py --linear   # BH 2x4, Linear
+`ditcheck dryrun` runs a real `models/tt_dit` module against a `ttnn` whose
+`Tensor` carries only metadata — per-device shape, logical shape, dtype, layout,
+distribution — and whose ops compute output metadata and append IR nodes.
+`LTXTransformerBlock.forward` is ordinary Python: if
+`all_gather_minimal_matmul_async` returns a metadata tensor instead of doing work,
+the forward runs on a laptop and emits the graph directly. No hardware, no
+checkpoint download, no trace capture, and no hand-written model.
+
+It derives the same findings the hand-written `examples/ltx.py` states, on both
+shipped Blackhole configs — 31 vs 31 collectives and 6 provable duplicate gathers
+on Ring, 25 vs 25 and none on Linear — which is what `--check-oracle` asserts. The
+examples stay as oracles rather than scaffolding: a shim shape rule that drifts
+does not perturb the graph, it *invents* redundancy, so the diff is the regression
+test. [`spike/FINDINGS.md`](spike/FINDINGS.md) is the record of the prototype this
+grew from, including the two shape bugs that produced 15 spurious findings.
+
+What a dry run still needs stated, because it cannot be read off the source: mesh
+shape, which mesh axis carries which parallel role, activation shapes, and
+checkpoint-derived branch flags (`has_audio`, `has_gate`). Those live in one place
+per target, [`dryrun/targets.py`](dryrun/targets.py), which is also what phase 12's
+coverage matrix will sweep.
+
+### The host environment
+
+Weights are `torch.empty(..., device='meta')`: shapes with no bytes and no kernels,
+so torch is only ever asked for metadata — no CUDA, no MPS, no compute backend. A
+plain `pip install torch` is enough, including on an Apple Silicon laptop (Python
+3.9 resolves to torch 2.8.0, the last release with a `cp39` macOS-arm64 wheel).
+
+Every run prints what it had to stand in for, so it is never quietly less faithful
+than it looks:
+
 ```
+torch: real (device='meta')
+  substituted loguru: silent logger
+```
+
+With torch, loguru, safetensors, numpy and pytest present the list is empty and
+the run uses the real `models.common.utility_functions`. Without them the dry run
+still works: there is a metadata-only torch in [`dryrun/hostfakes.py`](dryrun/hostfakes.py)
+and stubs for the rest, because the point of this design is a redundancy check at
+unit-test cost — a device-free CI job should not need a torch install to run it.
+Order matters, and one thing to keep in mind when adding to `hostenv.py`: nothing
+under `models.` may be imported before the shim is installed, or tt_dit's
+module-level `import ttnn` drags in the real one and `install()` then refuses to
+run at all.
+
+```
+dryrun/
+  install.py    shadow `ttnn` in sys.modules; refuse to displace a real one
+  tensor.py     the metadata Tensor: local vs logical shape
+  ops.py        one shape/distribution rule per ttnn op
+  recorder.py   ops -> IR nodes, with a short tt_dit caller stack per node
+  stubs.py      mesh device, mesh mappers, enums, program configs
+  weights.py    load every Parameter from torch meta tensors, via the real path
+  hostenv.py    host-side imports; prefers real torch, reports what it substituted
+  targets.py    named targets and mesh presets
+  verify.py     the four acceptance criteria against an examples/ oracle
+```
+
+Two honesty properties are worth knowing about before reading a report:
+
+* **Nothing is invisible.** A ttnn call with no shape rule still runs, and still
+  appears in the IR as an `unregistered` node with real inputs, outputs, shapes and
+  source location. `ditcheck ops --missing <graph>` lists them; `--check` fails CI.
+* **Analysis withholds, never guesses.** The output metadata of an `unregistered`
+  node is *assumed* to match its first input, so any finding whose proof passes
+  through one is not reported and not downgraded. It goes to a `withheld` queue
+  that names the registration that would unlock it.
 
 ## Phase 5: what it found in LTX-2.3
 
@@ -155,8 +229,9 @@ rules.py      redundancy rules -> Finding + machine-readable proof
 report.py     text rendering: state tables, ranked findings, proofs, diagnostics
 builder.py    DSL for writing/lifting graphs; expands fused ttnn ops into stages
 capture.py    record a real ttnn forward pass -> trace -> graph
+dryrun/       real model code under a metadata-only ttnn -> graph, no device
 examples/     gold graphs (LTX-2.3 block x2 topologies, SD3.5 block, synthetic patterns)
-spike/        dry-run prototype: real model code under a metadata-only ttnn + FINDINGS.md
+spike/        FINDINGS.md: what the dry-run prototype answered, and what it cost
 ```
 
 Three ideas carry most of the weight:
@@ -197,10 +272,24 @@ Every finding carries `severity`, `confidence`, the affected nodes with source
 locations, a per-device proof object, and a byte estimate scaled by how many
 times the node runs (`calls`, e.g. 38 blocks) and by denoise steps.
 
+Source locations are a short caller stack, not one line: a duplicate gather
+reported at `layers/linear.py:250` is true but not actionable, so a finding leads
+with the model frame that chose to gather and names the library frame underneath.
+
+```
+source: models/tt_dit/models/transformers/ltx/attention_ltx.py:428
+        via models/tt_dit/layers/linear.py:250
+```
+
 ### Honesty rules the analyzer follows
 
-* An unregistered op gets pessimistic semantics **and** taints everything
-  downstream; findings touching tainted values are demoted to `suspicious`.
+* An op with unknown semantics gets pessimistic semantics **and** taints
+  everything downstream; findings touching tainted values are demoted to
+  `suspicious`.
+* An `unregistered` op — one the dry run saw and had no shape rule for, so its
+  output metadata is a guess — goes further: findings downstream of it are
+  **withheld**, listed with the registration that would unlock them. A wrong shape
+  does not weaken a finding, it invents one.
 * Anything the analyzer cannot model is a `diagnostic` (`UNKNOWN_OP`,
   `GATHER_OF_PARTIAL`, `LAYOUT_MISMATCH`, `K_COVERAGE`, …), printed with the
   findings. Read those before trusting a report.
@@ -253,7 +342,7 @@ path and pick up ops nobody remembered to hook.
 
 ## Scope, and what is deliberately not here
 
-Built (plan phases 1–4, narrowed to the v1 scope in the plan):
+Built (plan phases 1–4 and roadmap phase 6, narrowed to the v1 scope in the plan):
 
 * IR + JSON serialisation, device mesh, region algebra, value identity
 * Tier-1 op semantics: all-gather, reduce-scatter, all-reduce, matmul (column /
@@ -263,22 +352,31 @@ Built (plan phases 1–4, narrowed to the v1 scope in the plan):
   merge-heads, SDPA (incl. ring-SDPA's internal K/V gathers), host readback
 * forward availability + backward demand, proof objects, ranked text report,
   JSON output, `--fail-on` for CI, per-device state tables
+* the dry-run front end: `ditcheck dryrun` builds a real tt_dit module against the
+  metadata-only `ttnn`, loads its weights from torch meta tensors through the real
+  `Parameter` path, records a caller stack per node, and diffs against the
+  hand-written oracle
 
 Not built (and where it would go):
 
-* **Tier-2 semantics**: KV-cache updates, MoE routing, conv/VAE spatial
-  collectives (`neighbor_pad_async`, `slice_reshard_async`), cross-device
-  concat variants. These currently fall through to `unknown` → tainted →
-  `suspicious`, which is the intended failure mode. Add specs in
-  `semantics.py`; nothing else changes.
+* **Tier-2 semantics**: `mesh_partition`, `pad`, `repeat`, KV-cache updates, MoE
+  routing, conv/VAE spatial collectives (`neighbor_pad_async`,
+  `slice_reshard_async`), cross-device concat variants. Under the dry run these
+  become `unregistered` nodes → withheld findings, which is the intended failure
+  mode. Add a shape rule in `dryrun/ops.py` and a spec in `semantics.py`; nothing
+  else changes. Roadmap phase 8 merges the two into one registration.
 * **Automated rewrites.** Diagnostics only, per the plan's "proofs before
   auto-fixes".
-* **A production dry-run front end.** `spike/` proves the approach for one block
-  (the real forward under a metadata-only `ttnn`, matching the oracle byte for
-  byte), but it is throwaway: it fakes torch, ignores tiling, covers one block and
-  no pipeline entry point. Roadmap phases 6-8 turn it into the real front end,
-  which also covers the branches the hand model fixes by construction (image
-  conditioning, `skip_qk`, LoRA, the non-audio config).
+* **Shape fidelity.** Tiling is a placeholder (`padded_shape` rounds the last two
+  axes to 32), uneven shards raise rather than divide, and weight preprocessing
+  (`_interleave_heads`, swiglu permutation) is not run — so a chunked fused weight
+  is modelled as separate per-chunk weights. This is roadmap phase 7, and it is the
+  load-bearing one: shapes decide branches, and a wrong shape invents redundancy
+  rather than perturbing the graph.
+* **Whole pipelines.** One block on one mesh, not encoder → DiT → VAE across
+  submeshes with carried latents (phase 10), and no branch/shape sweep (phase 12).
+* **Trusting the shim.** Until per-op conformance runs on a device (phase 11),
+  every dry-run finding should be read as "the shim believes".
 * **On-device conformance.** `capture.py` remains for the device's two jobs in
   the new design -- per-op shape/layout conformance and one flat collective log to
   diff the dry run against -- and has not been run on hardware yet.

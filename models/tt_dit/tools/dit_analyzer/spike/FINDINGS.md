@@ -1,16 +1,22 @@
 # Dry-run spike: findings
 
+> **The spike's code has graduated to [`../dryrun/`](../dryrun/) and been
+> deleted.** This page is kept as the record of what the throwaway version
+> answered and what it cost, because the roadmap's phase estimates and its top
+> risk are calibrated against it. Everything below describes the spike as it ran;
+> "What the production version added" at the end says how it differs.
+
 **Verdict: the design works.** The real `LTXTransformerBlock.forward` runs under a
 metadata-only `ttnn`, on a laptop, with no device, no checkpoint and (here) not
 even torch installed — and the analyzer finds the same 6 provable duplicate
 gathers as the hand-written oracle, byte for byte.
 
-Run it:
+Run the production equivalent:
 
 ```bash
-python3 models/tt_dit/tools/dit_analyzer/spike/run_ltx_block.py            # BH 4x8, Ring
-python3 models/tt_dit/tools/dit_analyzer/spike/run_ltx_block.py --linear   # BH 2x4, Linear
-python3 models/tt_dit/tools/dit_analyzer/spike/test_dryrun_matches_oracle.py  # drift test
+ditcheck dryrun ltx_block --preset bh_4x8 --check-oracle   # BH 4x8, Ring
+ditcheck dryrun ltx_block --preset bh_2x4 --check-oracle   # BH 2x4, Linear
+python3 models/tt_dit/tools/dit_analyzer/tests/test_dryrun.py
 ```
 
 Each driver run enforces the four criteria below and exits non-zero on any
@@ -85,13 +91,16 @@ findings, `examples/` kept as oracles) do their job.
 
 ## Environment notes, not design findings
 
-* This machine has no torch, numpy or loguru, so the spike fakes the slice of
-  torch the import path touches (`fake_torch.py`). **A real dry run should use
-  real torch with `device='meta'`** — same idea, nothing to maintain.
+* This machine has no torch, numpy or loguru, so the spike faked the slice of
+  torch the import path touches. **A real dry run uses real torch with
+  `device='meta'`** — same idea, nothing to maintain. The production version
+  prefers real torch and keeps the stand-in (`dryrun/hostfakes.py`) only as a
+  fallback, so device-free CI does not need a torch install.
 * The repo needs **Python ≥ 3.10** (PEP 604 unions in evaluated annotation
   positions, `types.NoneType`); this box has 3.9.6. Worked around by compiling
-  tt_dit sources with the `annotations` future flag via an import hook. A real
-  dry run just uses the repo's interpreter.
+  tt_dit sources with the `annotations` future flag via an import hook
+  (`dryrun/hostenv.py`, skipped on 3.10+). A real dry run just uses the repo's
+  interpreter.
 * `models.common.utility_functions` pulls in numpy *and pytest*; tt_dit only
   wants `is_blackhole` from it. Worth splitting upstream, or the shim stubs it.
 
@@ -124,3 +133,30 @@ entry points; block rollup (the block is emitted once with `calls=48`); any
 device conformance. The weight-chunk layout is modelled as separate per-chunk
 weights, which is right for the maths but wants a real `chunked_weight` spec so
 the per-device interleave is explicit.
+
+## What the production version added
+
+[`../dryrun/`](../dryrun/) reproduces every number above (212 nodes / 341 symbols
+on 4×8, 206 / 343 on 2×4, 31 vs 31 and 25 vs 25 collectives, 6 provable duplicate
+gathers vs 0) and closes the four gaps this page listed:
+
+* **Weights go through the real load path.** `Parameter.load_torch_tensor` on
+  `torch.empty(..., device='meta')` instead of assigning `_data`, which means
+  `utils/tensor.from_torch` builds the real mesh mapper and
+  `Parameter._check_data` compares the shim's per-device shape against tt_dit's
+  own `local_shape` on all 84 parameters — a free check on the shard math that
+  blocker 36 says is load-bearing. Needs `create_mesh_mapper`,
+  `PlacementShard`/`PlacementReplicate` and `ttnn.Layout` to be real objects
+  rather than stubs; a stub mesh mapper would have read as "replicated".
+* **The `unregistered` node kind**, with provenance propagated through
+  `ApplyCtx.define`, so a finding whose proof passes through an op with no
+  semantics is withheld and reported as a registration to make, not as a weaker
+  claim. `ditcheck ops --missing` / `--check` are the user-facing end of it.
+* **A caller stack per node** (blocker 44): findings now lead with
+  `attention_ltx.py:428` and name `layers/linear.py:250` underneath.
+* **A target registry and `ditcheck dryrun`**, plus `--check-oracle` as the drift
+  test, and `install()`/`uninstall()`/`assert_installed()` so shadowing `ttnn`
+  cannot leak into a real run.
+
+Still open, and still phase 7: tiling, uneven shards, `_prepare_torch_state` on
+meta tensors, and the `chunked_weight` spec.
