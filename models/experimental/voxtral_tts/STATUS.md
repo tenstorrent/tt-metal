@@ -1061,14 +1061,24 @@ sliding-window matmul —
 **It is slower here and overwhelmingly worth it**, because this runs once per utterance while w2
 saves 2.5 ms per frame:
 
-| output projection | ms (L=4096) |
-|---|---|
-| `ttnn.conv1d` (was) | 4.30 |
-| 7 matmuls, DRAM | 9.80 |
-| 7 matmuls, accumulating in L1 ← shipped | **9.16** |
+| output projection | ms (L=4096) | vs conv |
+|---|---|---|
+| `ttnn.conv1d` (was, and broken) | 4.29 | — |
+| 7 matmuls, shifting the INPUT | 9.16 | +4.87 |
+| 7 matmuls, shifting the OUTPUT ← shipped | **6.27** | **+1.98** |
 
-`+4.86 ms once` against `−2.5 ms × 460 frames = −1150 ms`. (Input in L1 as well would help but does
-not fit — 16.8 MB overflows the allocator.)
+**Shift the OUTPUT, not the input.** Both orders compute the same sum, but the shift must be a
+slice, and slicing the 1024-wide input costs 0.624 ms a time against 0.145 for the 240-wide output.
+Breaking down the 9.16 ms version: input slices 4.37 ms, the seven matmuls only 1.93, adds 1.16 —
+**the slices cost more than the matmuls**. Multiplying the full padded input first and slicing the
+narrow result instead saves 2.89 ms.
+
+`+2.0 ms once` against `−2.5 ms × 460 frames = −1150 ms`.
+
+**Not parallelisable**, before anyone asks: the seven passes are independent, but every ttnn op
+already uses the whole 64-core grid, so running them concurrently would just give each pass 9 cores.
+Nothing is idle. Holding `xp` in L1 to avoid re-reading it does not fit either — 16.8 MB overflows
+the allocator. At 42 GB/s (22% of ceiling) there is still headroom here, but not via either route.
 
 **Result, 3 seeds × 15 cases = 45 utterances:**
 
