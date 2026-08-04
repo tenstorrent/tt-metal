@@ -276,3 +276,105 @@
   every placement, a native-dataflow assertion (the plan really is zero-copy, checked
   against the descriptor rather than against output values), and a `GRID_W > 1` case that
   exercises the interleaved width split so the knob is live rather than dead code.
+
+## Refinement 2b — ROW_MAJOR shards that cut the width axis
+- Date: 2026-08-04
+- What was done: closed the two `EXCLUSIONS` Refinement 2 added
+  (`{ROW_MAJOR, WIDTH_SHARDED}` and `{ROW_MAJOR, BLOCK_SHARDED}`) with the **BAND scheme**
+  (`_plan_band`, descriptor deviation **D10**). The op's `EXCLUSIONS` list is back to its
+  single `{float32, fp32_dest_acc_en: False}` entry — **zero new exclusions** — so the
+  layout × placement rectangle is now complete and native throughout.
+  - **The insight both listed levers missed: nothing has to reach a whole ROW.** An RM shard
+    edge rounds to (1 stick × `L1_align/elem_size` elements) — 8 for bf16, 4 for fp32 — so the
+    tensor's page is a row SEGMENT and no core holds a whole width TILE. Refinement 2 read
+    that as structural. But the §3.4 combine sums the group's per-row partials
+    **elementwise**, so a partial may cover *any* contiguous element range: `Σx²` over a row is
+    the sum over the bands however the bands are cut, and pass B scales, gamma-multiplies and
+    writes back entirely inside the band. So each core reduces the band it **already holds**,
+    staged out of its **own L1** (`x_addr + local_stick * shard_row_bytes`) — no DRAM traffic
+    for x or the output, and no accessor on a local shard.
+  - Listed lever 2 ("native band tilize when `shard_w % 32 == 0`") survives as the
+    **contiguous fast path**: when the band fills its tile columns and the shard stride
+    matches, a whole tile-row of 32 sticks moves in ONE local transaction instead of 32. It is
+    no longer the precondition for the scheme, which matters because `per_w % 4 == 0` is rare
+    (3 of the 44 resilience shapes). Listed lever 1's `ceil(W / shard_w)` reads per stick
+    (96 for `(1,1,224,3072)`; 8 × 100 000 for `(99991,64)`) are **never paid**, so its `nw`
+    ceiling and its above-the-ceiling refusal are both unnecessary.
+  - **Reuse**: the whole cross-core combine (`cb_sum_handoff` → gather → root finalize →
+    `mcast_pipe` stat broadcast), the RM `tilize`/`untilize` compute path, and every block /
+    depth / datapath knob are UNCHANGED — the compute kernel needed no edit at all. Added:
+    `_plan_band`, the reader's `stage_band`, the writer's `write_band`, and a `_Work` record
+    that carries the tile-axis and stick/element views of one core's slice together (derived
+    from each other, so they cannot drift).
+  - The band is staged in the tensor's **GLOBAL tile frame** (first element at lane
+    `w_off_elems % 32`), which is what keeps gamma fetchable — and therefore keeps **TILE
+    gamma working**, so no exclusion was needed for it.
+  - `WT_CHUNK` is the widest global tile span any core's band touches (it is a compile-time
+    template on tilize/untilize); a core spanning fewer tiles stages an all-zero pad column.
+  - New named CT-arg indices `READER_CT_BAND` / `WRITER_CT_OUT_SHARD_ROW_BYTES` (asserted
+    against the built arg lists) so the acceptance test can name an index without a magic
+    number.
+- Accuracy achieved: PCC **1.000000** / rel RMS **0.0017–0.0025** across
+  `(1,1,{64,256},512)`, `(1,1,224,3072)`, `(1,1,224,1000)`, `(1,1,32,50)`, `(4,8,32,47)`,
+  `(1,1,3232,96)`, `(7136,736)`, `(1,224,11008)` × {WIDTH, BLOCK}_SHARDED × {RM gamma, TILE
+  gamma, no gamma} × {matching, DRAM, L1-interleaved} output placements. Gate is
+  `TOLERANCES[bfloat16]` (pcc 0.995 / rms 0.04).
+- Golden test progress: **387 / 387 loose cases** (384 pass, 3 infeasible-skipped, **0 xfail**
+  — the 85 that were this refinement's cells all pass) and the full **40320-cell cartesian**
+  (**5037 pass** vs Refinement 2's 4407, 1365 xfail vs 1995, `supported_fail = 0`,
+  `xpass_drift = 0`). Zero hangs, clean under `--dev`'s watcher. No regression: unit dir
+  **406 passed / 30 skipped** (was 397 / 30 before this refinement's own cases were added).
+  The one remaining golden failure is the pre-existing `test_translated.py::
+  test_rms_norm_sharded_uneven_multicore_logical_width[w200_c3_nonaligned-bfloat8_b]`,
+  bit-identical at **frobenius 0.11224** to the value Refinement 2 recorded as a known
+  non-issue (the `{bfloat8_b, w_non_aligned}` corner `feature_spec.INVALID` declares out of
+  scope).
+- Issues encountered (all three diagnosed to a root cause, none guessed):
+  1. **An unaligned DRAM read offset is SILENTLY TRUNCATED to the 64-byte alignment.** Staging
+     each band at its own byte offset meant gamma was fetched at `w_off * elem_bytes`; with an
+     8-element shard, bands 1, 2 and 3 all received `gamma[0..8)`. The tell was that a
+     positional gamma (`gamma[w] = w+1`) printed `1,2,…,8,1,2,…,8,1,2,…,8,33,34,…` — a period
+     of exactly 64 bytes. PCC 0.32 overall while band 0 and every spot-checked ratio read
+     1.000, which is why a scalar check would have missed it. Fixed by the global tile frame:
+     every gamma fetch lands on a tile column, a multiple of 64 bytes for every dtype.
+  2. **A latent deadlock in Refinement 2's writer.** Its combine loop ran *all* row-blocks
+     before *any* output write. But compute cannot finish block `blk+1`'s pass A until block
+     `blk`'s pass B has been drained, so that ordering deadlocks as soon as `num_blocks`
+     exceeds the output CB's depth. The TILE schemes never hit it — their shard fits in ONE
+     row-block — and the band scheme hit it immediately, because its per-block gather CB is
+     `GROUP_SIZE` fp32 tiles and L1 therefore caps `BLOCK_ROWS` low. Triage was unambiguous:
+     TRISC2 stuck in `untilize`'s `reserve_back` on `cb_output_sticks` while BRISC sat in the
+     combine's `cb_wait_front(cb_sum_handoff)`. The write-back is a per-block lambda now,
+     called from inside both combine branches.
+  3. **The reduce mask does not generalize to a band — it is replaced.** A band boundary is
+     per-core and cannot be one program-wide `PARTIAL_W`. It does not need to be: the staging
+     ring is zeroed once at boot (R3) and only the band's own bytes are ever written into it,
+     so every lane outside `[delta, delta + band)` multiplies to an exact 0. `kernel_partial_w`
+     is 0 on this path and the reader's boot-zero gate became an explicit `STAGE_ZERO`
+     ("some staged stick is narrower than the ring's padded row") that both cases share.
+- Perf measured for the record (not a gate; blackhole p150b, 110-core grid, ~1.35 GHz,
+  bf16/HiFi2/`fp32_dest_acc_en=False`, one fresh-cache profiled run per variant): against the
+  **equivalent TILE shard at the same placement**, the band costs **+2.7 %** on
+  `(1,1,224,3072)` WIDTH (133224 → 136856 ns, 96-core group) and **+21 %** on the same shape
+  BLOCK (10373 → 12509 ns, 11-core group — and still **2.7× faster than interleaved**'s
+  33434 ns). `(1,1,256,512)` WIDTH is 29004 → 96479 ns, and that gap is **not** the band: an
+  RM granule of 8 elements makes `auto_shard_config` cut W=512 into 64 slices where the TILE
+  granule cuts it into 16, so the same tensor gets a 4× larger combine *group* — a placement
+  cost the caller chose, and one the TILE path pays identically at equal group size (the WIDTH
+  row, where both are 96 cores, agrees to 3 %). The lever a later perf round would attack is
+  the sub-tile band's one-local-read-per-stick staging. No supported shape got slower: the D7
+  datapath probes re-measured at 41770 / 22447 / 11160 / 746859 ns vs 42253 / 22544 / 10881 /
+  752410 recorded.
+- Tests added: `test_rms_norm_sharded.py` gained `test_row_major_width_band` (8 band
+  geometries × WIDTH/BLOCK — sub-tile bands whose in-tile offset cycles, a band that is
+  exactly one tile column, short last bands, non-aligned W, a 92-core band group, many row
+  blocks), `test_row_major_width_band_gamma_layouts` (the 64-byte-alignment regression net,
+  which needs a RANDOM gamma to be visible), `test_row_major_width_band_is_local` (asserts on
+  the DESCRIPTOR that the reader is on the BAND path and the writer writes into the resident
+  output shard — the golden suite cannot see this) and
+  `test_row_major_width_band_non_matching_output` (a band input with a DRAM / L1-interleaved
+  output, which nothing else covers since the golden harness always requests a matching output
+  shard). `test_sharded_row_major` now sweeps all four placements. `test_rms_norm_perf.py`
+  gained `test_rms_norm_perf_row_major_band` (both band granularities plus their interleaved
+  controls) so the trailing perf rounds can re-measure this dataflow. The refusal test
+  `test_row_major_width_shard_refused` is gone — its subject is now supported.

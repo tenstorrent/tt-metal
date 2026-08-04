@@ -321,7 +321,7 @@ passing.
 
 ---
 
-### [ ] Refinement 2b — ROW_MAJOR shards that cut the width axis
+### [x] Refinement 2b — ROW_MAJOR shards that cut the width axis
 
 **Goal**: close the two `EXCLUSIONS` Refinement 2 added —
 `{layout: ROW_MAJOR, memory_layout: WIDTH_SHARDED}` and
@@ -365,6 +365,52 @@ consequences, both measured:
   cells (2 per shape × 44 shapes) plus `test_rms_norm.py`'s RM regime-pinned cases. Watch
   for the out-of-bounds signature specifically: a wrong page mapping shows up as a
   *cascading* dispatch failure in later tests, not as a local PCC miss.
+
+**Outcome** (`[x]` full): both cells are CLOSED and the op's `EXCLUSIONS` list is back to the
+single `{float32, fp32_dest_acc_en: False}` entry — **zero new exclusions**, and the
+layout × placement rectangle is now complete and native throughout. Golden: **387 / 387 loose
+cases** (384 pass, 3 infeasible-skipped, **0 xfail** — the 85 this refinement's cells used to
+occupy all pass) and the full **40320-cell cartesian** (5037 pass vs Refinement 2's 4407,
+1365 xfail vs 1995, `supported_fail = 0`, `xpass_drift = 0`), zero hangs, unit dir 406/406.
+The only remaining golden failure is the pre-existing `test_translated.py` bf8b pad-poison
+cell, bit-identical at **frobenius 0.11224** to the value Refinement 2 recorded as a known
+non-issue.
+
+Neither listed lever was the answer, and the reason is the finding: **both assumed a core has
+to reach a whole ROW.** It does not. The §3.4 combine sums the group's per-row partials
+**elementwise**, so a partial may cover *any* contiguous element range — a band need not start
+or end on a tile column. So each core reduces the band it already holds, staged out of its
+**own L1** (`_plan_band`, descriptor **D10**): lever 2 generalized off its
+`shard_w % 32 == 0` precondition (it survives as the *contiguous fast path* — one local
+transaction per tile-row instead of one per stick), and lever 1's `ceil(W / shard_w)` reads per
+stick are never paid at all, so no `nw` ceiling and no refusal is needed. Three findings:
+* **An unaligned DRAM read offset is silently TRUNCATED to the 64-byte alignment.** Staging at
+  the band's own byte offset gave bands 1–3 of an 8-element shard `gamma[0..8)` — PCC 0.32
+  *while band 0 and every spot-checked position read exactly 1.000*. Fixed by staging in the
+  tensor's **global tile frame** (the band's first element at lane `w_off_elems % 32`), which
+  keeps every gamma fetch on a tile column for x's dtype and gamma's independently. That is
+  also why **TILE gamma works on this path**, so the corner
+  `feature_spec.INVALID` reserves needed no op-side exclusion.
+* **The reduce mask is replaced, not generalized.** A band boundary is per-core and cannot be
+  one program-wide `PARTIAL_W`; it does not need to be. The staging ring is zeroed once at
+  boot and only the band's bytes are ever written into it, so every lane outside the band
+  multiplies to an exact 0. `kernel_partial_w` is 0 on this path.
+* **A latent deadlock in Refinement 2's writer, now fixed.** Its combine ran *all* row-blocks
+  before *any* output write, but compute cannot finish block `blk+1`'s pass A until block
+  `blk`'s pass B is drained — so it deadlocks the moment `num_blocks` exceeds the output CB's
+  depth. The TILE schemes never hit it (their shard is one row-block); the band scheme hit it
+  on the first shape tried, because its per-block gather CB is `GROUP_SIZE` fp32 tiles and L1
+  caps `BLOCK_ROWS` low. The two are interleaved per block now.
+
+Perf, measured for the record (not a gate — this is a generality refinement): the band's own
+cost over the **equivalent TILE shard at the same placement** is **+2.7 %** on
+`(1,1,224,3072)` WIDTH (133224 → 136856 ns, a 96-core group) and **+21 %** on the same shape
+BLOCK (10373 → 12509 ns, an 11-core group, and still **2.7× faster than interleaved**). The
+one large gap, `(1,1,256,512)` WIDTH at 29004 → 96479 ns, is **not** the band: an RM shard's
+8-element granule makes `auto_shard_config` cut W=512 into 64 slices where the TILE granule
+cuts it into 16, so the same tensor gets a 4× larger combine *group*. The lever a later perf
+round would attack is the sub-tile band's one-local-read-per-stick staging
+(`test_rms_norm_perf.py::test_rms_norm_perf_row_major_band` pins both granularities).
 
 ---
 

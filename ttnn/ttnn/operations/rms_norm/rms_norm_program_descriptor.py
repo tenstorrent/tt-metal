@@ -16,6 +16,8 @@ Knob map (all tunable parameters, none inlined):
     CB_DEPTH_CANDIDATES     ordered depths the regime search may give the two
                             cross-processor CBs (see D4)
     GRID_W                  cores along `width` (Lamp L1 lives at its trivial 1)
+    (no new knob in Refinement 2b -- the BAND scheme's extents are all read off
+     the shard spec; see D10)
     REDUCE_BULK             reduce input policy (BulkWaitBulkPop vs per-tile)
     CB_ROW_STAT_DEPTH       ring depth of cb_row_stat, in units of BLOCK_ROWS.
                             NOT a perf knob -- >= 2 is a CORRECTNESS floor for
@@ -229,6 +231,62 @@ the scheme, topology, work split and helper mapping are unchanged):
       Narrow rows are unaffected and BOTH datapaths stay covered: the pad-poison
       shapes span Wt = 2, 3 (partial-SCALER pair) and 5, 7 (0/1 MASK tile), and
       those are RESIDENT, so wt_per_core == WT_CHUNK == Wt there.
+  D10 Refinement 2b's ROW_MAJOR BAND scheme (_plan_band).  An RM shard that cuts
+      the WIDTH axis has a sub-tile edge -- `eval.sharding` rounds it to
+      (1 stick x L1_align/elem_size elements), 8 for bf16 and 4 for fp32 -- so its
+      PAGE is a row SEGMENT and no core holds a whole width TILE.  Refinement 2
+      read that as structural and excluded the two cells.  It is not: the
+      section-3.4 combine sums the group's per-row PARTIALS **elementwise**, so a
+      partial may cover ANY contiguous element range of the row.  Each core
+      therefore reduces the BAND it already holds, staged out of its OWN L1, and
+      the combine, the compute kernel and every knob are untouched.
+
+      Two things are NOT free, and both are why this is a descriptor note:
+
+        * THE STAGING FRAME IS THE TENSOR'S GLOBAL TILE GRID, not the band's own
+          byte offset: the band's first element is placed at lane
+          (w_off_elems % 32) of the staged stick.  A DRAM read whose SOURCE offset
+          is not 64-byte aligned is silently TRUNCATED down to the alignment --
+          measured, with an 8-element shard: bands 1, 2 and 3 all received
+          gamma[0..8), a whole-tensor PCC of 0.32 that a spot check of band 0 sees
+          as perfect.  Staging in the global tile frame keeps every gamma fetch on
+          a tile column (a multiple of 64 bytes for every dtype, x's and gamma's
+          independently), which is why gamma works at BOTH layouts here and why
+          this refinement added no EXCLUSIONS.  The shard granule is itself a
+          multiple of L1_align/elem_size, so the shifted L1 destination stays
+          16-byte aligned, matching the local source.
+        * PARTIAL_W IS PASSED TO THE KERNELS AS 0 (`kernel_partial_w`).  A band
+          boundary is per-core and cannot be one program-wide PARTIAL_W, and it
+          does not need to be: the staging ring is zeroed once at boot and only
+          the band's own bytes are ever written into it, so every lane outside
+          [delta, delta + band) contributes an exact 0 to sum(x^2).  Zero-staging
+          REPLACES the reduce mask on this path; the finalize's 1/W is the LOGICAL
+          width as always.  STAGE_ZERO (which used to be spelled PARTIAL_W != 0 in
+          the reader) is now the explicit "some staged stick is narrower than the
+          ring's padded row" flag that both cases share.
+
+      WT_CHUNK is the WIDEST global tile span any core's band touches (it is a
+      compile-time template on tilize / untilize, so it must cover every core); a
+      core whose band spans fewer tiles stages an all-zero pad tile column, which
+      the reduce adds 0 for and the writer never writes back.
+
+      MEASURED (blackhole p150b, 110-core grid, ~1.35 GHz, bf16 / HiFi2 /
+      fp32_dest_acc_en=False, one fresh-cache profiled run per variant,
+      test_rms_norm_perf.py::test_rms_norm_perf_row_major_band):
+
+        (1,1,224,3072)  WIDTH   TILE shard 133224 ns   RM BAND 136856 ns  +2.7 %
+        (1,1,224,3072)  BLOCK   TILE shard  10373 ns   RM BAND  12509 ns  +21 %
+        (1,1,256,512)   WIDTH   TILE shard  29004 ns   RM BAND  96479 ns  +233 %
+
+      The band's OWN overhead is the +2.7 % / +21 %: the sub-tile case stages one
+      local read per stick instead of one per tile-row (the reader takes the single
+      wide transfer only when the band fills its tile columns and the shard stride
+      matches -- true for (1,1,224,3072) WIDTH, whose shard is exactly 32
+      elements).  The +233 % is NOT the band: an RM shard's 8-element granule makes
+      `auto_shard_config` cut W=512 into 64 slices where the TILE granule cuts it
+      into 16, so the same tensor gets a 4x larger combine GROUP -- a placement
+      cost the caller chose, and the same cost the TILE path pays at the same group
+      size (see the WIDTH row, where both are 96 cores and the two agree to 3 %).
   D9  Refinement 2's placement layer.  The three SCHEME_* values, the zero-copy
       (shard-backed) cb_input_tiles / cb_output_tiles, the cross-core width
       combine's four CBs and L1_CB_ARENA_BASE_RESERVE are all documented at
@@ -419,6 +477,12 @@ CB_GAMMA_TILES = 6  # gamma tiles (row 0 valid)
 CB_NORMALIZED = 7  # x * (1/rms), only when gamma is present
 CB_OUTPUT_TILES = 8  # output tiles
 CB_OUTPUT_STICKS = 9  # ROW_MAJOR only: untilized row-major staging of out
+# CT-arg indices the acceptance tests assert on -- named HERE so the index has one
+# source of truth (the lists below assert against these, so a reordering fails in
+# Python rather than silently re-pointing a test).
+READER_CT_BAND = 15
+WRITER_CT_OUT_SHARD_ROW_BYTES = 14
+
 # --- Refinement 2, WIDTH/BLOCK sharded only (cross-core width combine) -------
 CB_SUM_HANDOFF = 10  # fp32: this core's raw partial sum(x^2), compute -> writer
 CB_PARTIALS_GATHERED = 11  # fp32: root's per-sender landing slots, writer -> compute
@@ -1322,6 +1386,7 @@ def create_program_descriptor(
     # the scalar CT-arg count above.  Assert it here so adding a scalar arg fails
     # in Python instead of mis-parsing on device.
     assert len(reader_ct_args) == 18, "rms_norm_reader.cpp expects TensorAccessorArgs<18>()"
+    assert reader_ct_args[READER_CT_BAND] == (1 if plan.band else 0), "READER_CT_BAND index drifted"
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -1351,6 +1416,9 @@ def create_program_descriptor(
         plan.out_shard_row_bytes,  # 14 L1 stick stride inside the out shard (0 => accessor)
     ]
     assert len(writer_ct_args) == 15, "rms_norm_writer.cpp expects McastArgs<15, 10>()"
+    assert (
+        writer_ct_args[WRITER_CT_OUT_SHARD_ROW_BYTES] == plan.out_shard_row_bytes
+    ), "WRITER_CT_OUT_SHARD_ROW_BYTES index drifted"
     writer_ct_args.extend(plan.mcast.compile_time_args() if combine else [0] * 5)
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 

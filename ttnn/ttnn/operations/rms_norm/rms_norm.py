@@ -116,6 +116,12 @@ SUPPORTED = {
     # dependent `width` axis, so per-core partial sums are gathered to each
     # group's root, finalized there and multicast back).  See op_design.md 5.3
     # and the SCHEME_* map in rms_norm_program_descriptor.py.
+    #
+    # Refinement 2b completed the layout x placement rectangle: a ROW_MAJOR shard
+    # cutting the width axis has a sub-tile edge, so no core holds a whole width
+    # TILE -- but the combine sums per-row PARTIALS elementwise and never needs
+    # one, so each core reduces the BAND it already holds, staged from its own L1
+    # (descriptor D10).  Every layout x memory_layout pair is now native.
     "memory_layout": [
         ttnn.TensorMemoryLayout.INTERLEAVED,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

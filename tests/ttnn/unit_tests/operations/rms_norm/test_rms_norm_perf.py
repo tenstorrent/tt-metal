@@ -127,3 +127,58 @@ def test_rms_norm_perf_reduce_datapath(device, shape):
     )
     out = rms_norm(x, gamma=g, compute_kernel_config=_perf_case_config())
     assert tuple(out.shape) == tuple(shape)
+
+
+# ---------------------------------------------------------------------------
+# The ROW_MAJOR BAND scheme (Refinement 2b).
+#
+# A distinct dataflow from every probe above: x and the output never leave L1
+# (each core stages the band it already holds out of its own shard), and the
+# per-row stat comes from the cross-core combine rather than a local reduce.  Two
+# band geometries, because they take DIFFERENT transaction granularities:
+#   band_is_tile_column  shard_w == 32 -> band fills its tile columns exactly, so
+#                        a whole tile-row of 32 sticks moves in ONE local read
+#                        (and one local write back);
+#   sub_tile_band        shard_w == 8  -> the band is a quarter of a tile column,
+#                        so the staging is one local read per stick.  This is the
+#                        granularity a later perf round would attack.
+# Paired with the same shape INTERLEAVED, so the sharded number always has its
+# DRAM-fed control measured in the same run.
+# ---------------------------------------------------------------------------
+
+_ML = ttnn.TensorMemoryLayout
+
+BAND_PERF_CASES = [
+    pytest.param((1, 1, 224, 3072), _ML.WIDTH_SHARDED, id="band_is_tile_column_w3072"),
+    pytest.param((1, 1, 224, 3072), _ML.INTERLEAVED, id="control_interleaved_w3072"),
+    pytest.param((1, 1, 256, 512), _ML.WIDTH_SHARDED, id="sub_tile_band_w512"),
+    pytest.param((1, 1, 256, 512), _ML.INTERLEAVED, id="control_interleaved_w512"),
+    pytest.param((1, 1, 224, 3072), _ML.BLOCK_SHARDED, id="band_block_w3072"),
+]
+
+
+@pytest.mark.parametrize("shape, memory_layout", BAND_PERF_CASES)
+def test_rms_norm_perf_row_major_band(device, shape, memory_layout):
+    from eval.sharding import auto_shard_config
+
+    torch.manual_seed(42)
+    W = shape[-1]
+    mc = None
+    if memory_layout != _ML.INTERLEAVED:
+        mc = auto_shard_config(
+            list(shape), memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device
+        )
+    x = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mc,
+    )
+    g = ttnn.from_torch(
+        torch.randn(W, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    out = rms_norm(
+        x, gamma=g, compute_kernel_config=_perf_case_config(), memory_config=(mc if mc is not None else None)
+    )
+    assert tuple(out.shape) == tuple(shape)

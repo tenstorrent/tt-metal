@@ -57,7 +57,17 @@ def _check(got, expected, *, pcc_min=0.995, rms_max=0.04, label=""):
     return pcc, rms
 
 
-def _run(device, shape, memory_layout, *, layout=ttnn.TILE_LAYOUT, gamma=True, fp32_acc=True, poison=None):
+def _run(
+    device,
+    shape,
+    memory_layout,
+    *,
+    layout=ttnn.TILE_LAYOUT,
+    gamma=True,
+    fp32_acc=True,
+    poison=None,
+    gamma_layout=None,
+):
     """Build a legal shard for `shape`, run the op, return (got, expected)."""
     torch.manual_seed(0)
     x = torch.randn(*shape, dtype=torch.bfloat16)
@@ -68,9 +78,10 @@ def _run(device, shape, memory_layout, *, layout=ttnn.TILE_LAYOUT, gamma=True, f
 
     gd = g = None
     if gamma:
+        gl = gamma_layout if gamma_layout is not None else layout
         g = torch.randn(shape[-1], dtype=torch.bfloat16)
-        gt = g.reshape(1, 1, 1, -1) if layout == ttnn.TILE_LAYOUT else g
-        gd = ttnn.from_torch(gt, dtype=ttnn.bfloat16, layout=layout, device=device)
+        gt = g.reshape(1, 1, 1, -1) if gl == ttnn.TILE_LAYOUT else g
+        gd = ttnn.from_torch(gt, dtype=ttnn.bfloat16, layout=gl, device=device)
 
     if poison is not None:
         # The reference is built from the LOGICAL tensor, so a padded-width reduce
@@ -184,17 +195,48 @@ def test_sharded_tile_schemes(device, shape, label, memory_layout):
 
 @pytest.mark.parametrize(
     "memory_layout",
-    [_ML.INTERLEAVED, _ML.HEIGHT_SHARDED],
-    ids=["interleaved", "height"],
+    [_ML.INTERLEAVED, _ML.HEIGHT_SHARDED, _ML.WIDTH_SHARDED, _ML.BLOCK_SHARDED],
+    ids=["interleaved", "height", "width", "block"],
 )
 @pytest.mark.parametrize("shape,label", _SCHEME_SHAPES[:4], ids=[c[1] for c in _SCHEME_SHAPES[:4]])
 def test_sharded_row_major(device, shape, label, memory_layout):
-    """ROW_MAJOR activations.  Only HEIGHT is in scope for a sharded RM tensor --
-    its shard spans the full row, so the tensor's page IS the stick.  WIDTH/BLOCK
-    are op-side EXCLUSIONS (Refinement 2b); `test_row_major_width_shard_refused`
-    pins that refusal."""
+    """ROW_MAJOR activations under every placement.
+
+    INTERLEAVED and HEIGHT go through SCHEME_ROWS (a height shard spans the full
+    row, so the tensor's page IS the stick and the accessor addresses rows
+    exactly).  WIDTH and BLOCK are Refinement 2b's BAND scheme: their page is a
+    row SEGMENT, so no accessor read can reach a row -- each core stages the band
+    it already holds out of its own L1 instead.
+    """
     got, expected = _run(device, shape, memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT)
     _check(got, expected, label=f"rm/{label}/{memory_layout}")
+
+
+# ---------------------------------------------------------------------------
+# 2b. The ROW_MAJOR BAND scheme (Refinement 2b)
+# ---------------------------------------------------------------------------
+
+# Shapes chosen for the BAND GEOMETRY they force, which is what this scheme turns
+# on -- the shard granule is L1_align/elem_size (8 for bf16, 4 for fp32), so the
+# per-core band is generally NOT a whole tile column and generally does NOT start
+# on one.  auto_shard_config picks the geometry, so these are the shapes whose
+# geometry is interesting:
+#   W=512  bf16 WIDTH -> [.., 8]   : band = 1/4 of a tile column, delta 0/8/16/24
+#   W=512  bf16 BLOCK -> [.., 48]  : band spans TWO tile columns, delta 0 or 16
+#   W=3072 bf16 WIDTH -> [.., 32]  : band == exactly one tile column, delta 0
+#                                    (the contiguous fast path: one read per tile-row)
+#   W=1000 / 50 / 47   : non-tile-aligned W, so the last band is short as well
+#   W=64   BLOCK       : tiny width, many row blocks
+_BAND_SHAPES = [
+    ((1, 1, 256, 512), "sub_tile_band_delta_cycles"),
+    ((1, 1, 224, 3072), "band_is_one_whole_tile_column"),
+    ((1, 1, 224, 1000), "w_non_aligned_short_last_band"),
+    ((1, 1, 32, 50), "tiny_w_non_aligned"),
+    ((4, 8, 32, 47), "rank4_multibatch_w_non_aligned"),
+    ((1, 1, 3232, 96), "very_tall_many_row_blocks"),
+    ((7136, 736), "rank2_tall_92_band_group"),
+    ((1, 224, 11008), "rank3_wide_ffn"),
+]
 
 
 @pytest.mark.parametrize(
@@ -202,14 +244,56 @@ def test_sharded_row_major(device, shape, label, memory_layout):
     [_ML.WIDTH_SHARDED, _ML.BLOCK_SHARDED],
     ids=["width", "block"],
 )
-def test_row_major_width_shard_refused(device, memory_layout, expect_error):
-    """An RM shard that cuts the WIDTH axis must be REFUSED, not answered wrongly.
+@pytest.mark.parametrize("shape,label", _BAND_SHAPES, ids=[c[1] for c in _BAND_SHAPES])
+def test_row_major_width_band(device, shape, label, memory_layout):
+    """An RM shard that cuts the WIDTH axis is ANSWERED, not refused.
 
-    Its shard edge rounds to a sub-tile granule, so the tensor's page becomes the
-    shard's row segment: reading a row off the page index lands inside one segment
-    and runs off the end of the shard (measured PCC 0.005).  Refusing is the whole
-    point of the EXCLUSIONS entry -- a silent wrong answer here also produced
-    out-of-bounds L1 traffic that cascaded later programs into dispatch failures.
+    Before Refinement 2b these two cells were op-side EXCLUSIONS: the shard's page
+    is a row SEGMENT, so a stick read keyed on the page index landed inside one
+    segment and ran off the end of the shard (measured PCC 0.005).  The BAND
+    scheme never reads a row -- the cross-core combine sums per-row PARTIALS
+    elementwise, so each core reduces only the band it already holds.
+    """
+    got, expected = _run(device, shape, memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT)
+    _check(got, expected, label=f"band/{label}/{memory_layout}")
+
+
+@pytest.mark.parametrize(
+    "memory_layout",
+    [_ML.WIDTH_SHARDED, _ML.BLOCK_SHARDED],
+    ids=["width", "block"],
+)
+@pytest.mark.parametrize("gamma_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["g_rm", "g_tile"])
+def test_row_major_width_band_gamma_layouts(device, memory_layout, gamma_layout):
+    """gamma at BOTH layouts on the BAND scheme -- the alignment regression net.
+
+    The band is staged in the tensor's GLOBAL tile frame precisely so gamma stays
+    fetchable: a DRAM read whose source offset is not 64-byte aligned is SILENTLY
+    TRUNCATED to the alignment, so staging at the band's own byte offset handed
+    three cores in four the wrong weights (measured: bands 1..3 of an 8-element
+    shard all received gamma[0..8), PCC 0.32 with a gamma that is 1.0 everywhere
+    it was checked -- i.e. invisible to a spot check).  A random gamma makes the
+    mismatch a whole-tensor PCC collapse.
+    """
+    got, expected = _run(
+        device, (1, 1, 256, 512), memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT, gamma_layout=gamma_layout
+    )
+    _check(got, expected, label=f"band_gamma/{gamma_layout}/{memory_layout}")
+
+
+@pytest.mark.parametrize(
+    "memory_layout",
+    [_ML.WIDTH_SHARDED, _ML.BLOCK_SHARDED],
+    ids=["width", "block"],
+)
+def test_row_major_width_band_is_local(device, memory_layout):
+    """The band must be read from THIS core's own L1, never through an accessor.
+
+    Asserted on the descriptor, because the golden suite cannot see the
+    difference: an accessor path that happened to address the right segments
+    would produce identical numbers.  The reader's BAND compile-time arg is the
+    switch between "stage from x_addr + local_stick * shard_row_bytes" (local L1,
+    zero DRAM traffic) and the interleaved accessor dataflow.
     """
     shape = (1, 1, 256, 512)
     mc = auto_shard_config(list(shape), memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
@@ -220,8 +304,49 @@ def test_row_major_width_shard_refused(device, memory_layout, expect_error):
         device=device,
         memory_config=mc,
     )
-    with expect_error(Exception, "unsupported combination"):
-        rms_norm(xd, compute_kernel_config=_cfg())
+    od = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, mc)
+    gd = ttnn.from_torch(
+        torch.randn(shape[-1], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    desc = pdmod.create_program_descriptor(xd, od, gamma=gd, compute_kernel_config=_cfg())
+    reader = next(k for k in desc.kernels if "reader" in k.kernel_source)
+    writer = next(k for k in desc.kernels if "writer" in k.kernel_source)
+    assert reader.compile_time_args[pdmod.READER_CT_BAND] == 1, (
+        f"{memory_layout}: the reader is NOT on the BAND path -- an RM width shard is being read "
+        f"through a TensorAccessor, which cannot address a row at all (its page is a row segment)"
+    )
+    assert (
+        writer.compile_time_args[pdmod.WRITER_CT_OUT_SHARD_ROW_BYTES] != 0
+    ), f"{memory_layout}: the writer is not writing back into the resident output shard"
+
+
+@pytest.mark.parametrize(
+    "memory_layout",
+    [_ML.WIDTH_SHARDED, _ML.BLOCK_SHARDED],
+    ids=["width", "block"],
+)
+@pytest.mark.parametrize(
+    "out_mc,out_id",
+    [(ttnn.DRAM_MEMORY_CONFIG, "dram"), (ttnn.L1_MEMORY_CONFIG, "l1_interleaved")],
+    ids=["out_dram", "out_l1_interleaved"],
+)
+def test_row_major_width_band_non_matching_output(device, memory_layout, out_mc, out_id):
+    """A BAND input with an output placement that is NOT the input's shard.
+
+    Then the band cannot be written in place, and the writer addresses the output
+    through the accessor at the band's byte offset instead -- legal exactly because
+    an interleaved ROW_MAJOR page IS a whole stick.  Nothing else covers this: the
+    golden harness always requests an output shard matching the input's.
+    """
+    shape = (1, 1, 256, 512)
+    torch.manual_seed(0)
+    x = torch.randn(*shape, dtype=torch.bfloat16)
+    g = torch.randn(shape[-1], dtype=torch.bfloat16)
+    mc = auto_shard_config(list(shape), memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    xd = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mc)
+    gd = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out = ttnn.to_torch(rms_norm(xd, gamma=gd, compute_kernel_config=_cfg(), memory_config=out_mc))
+    _check(out, _ref(x, g), label=f"band_out/{out_id}/{memory_layout}")
 
 
 @pytest.mark.parametrize(
