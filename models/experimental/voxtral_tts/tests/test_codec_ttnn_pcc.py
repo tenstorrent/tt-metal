@@ -211,19 +211,22 @@ def test_real_speech_frames_decode_correctly(device):
 
 
 def test_prepared_weights_are_deduplicated(device):
-    """Prepared conv layouts change at only ONE length threshold per conv (and never for up6 or
-    out), so keying the cache by length alone stored up to 12 BYTE-IDENTICAL copies: 730 MB for 8
-    distinct layouts. Content dedup brings it to 98 MB with no accuracy question, since the
-    tensors are bit-identical.
+    """Prepared conv layouts change at only ONE length threshold per conv (and never for up6), so
+    keying the cache by length alone stored up to 12 BYTE-IDENTICAL copies: 730 MB for 8 distinct
+    layouts. Content dedup brings it to 98 MB with no accuracy question, since the tensors are
+    bit-identical.
 
-    Guards the memory ceiling, which matters once the 3.4B backbone shares the device."""
+    Guards the memory ceiling, which matters once the 3.4B backbone shares the device.
+
+    FOUR convs are prepared, not five: `out` left ttnn.conv1d when its halo_gather kernel turned out
+    to hang the card (STATUS.md 6.13), so the expected count went 5x4 = 20 -> 4x4 = 16."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     gen = TtVoxtralCodecDecoder(device)
-    for b in (128, 256, 512, 1024):  # four different buckets -> 20 (conv, length) pairs
+    for b in (128, 256, 512, 1024):  # four different buckets -> 16 (conv, length) pairs
         gen(ref.make_synthetic_codes(b))
     entries, distinct, mb = gen.prepared_weight_stats()
-    assert entries == 20, f"expected 20 (conv,length) entries, got {entries}"
+    assert entries == 16, f"expected 16 (conv,length) entries, got {entries}"
     assert distinct <= 8, f"distinct layouts grew to {distinct} (was 8); dedup may have broken"
     assert mb < 150, f"prepared weights hold {mb:.0f} MB; dedup regressed (naive would be ~240 MB)"
 

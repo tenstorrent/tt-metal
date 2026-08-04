@@ -45,8 +45,14 @@ def test_codec_output_projection_does_not_use_conv1d():
     from models.experimental.voxtral_tts.tt import ttnn_voxtral_codec as codec
 
     src = inspect.getsource(codec.TtVoxtralCodecDecoder._graph)
+    init = inspect.getsource(codec.TtVoxtralCodecDecoder.__init__)
     assert '_conv1d(x, "out"' not in src, "the output projection is back on ttnn.conv1d -- see 6.13"
-    assert "_out_taps" in inspect.getsource(codec.TtVoxtralCodecDecoder.__init__)
+    assert "_out_taps" in init
+    # And its prefix must come from ttnn.gather, not _pad_causal's six single-row slices: one such
+    # slice of the 16 MiB input costs 0.381 ms, so the six of them were 2.28 of the op's 6.26 ms.
+    # Bit-identical either way, so only the clock catches a revert. STATUS.md 6.14.
+    assert "self._pad_causal(" not in src, "the projection is back on the slice-built pad -- see 6.14"
+    assert "ttnn.gather(" in src and "_out_prefix_idx" in init
 
 
 def test_block1_math_config_keeps_fp32_accumulation():

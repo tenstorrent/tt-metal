@@ -205,6 +205,12 @@ CHUNK_MIN = 512
 # buckets for the model's ~1500-frame ceiling. Set None if you truly decode one fixed length.
 # NOTE: 128 is wrong for STREAMING -- a 1-second chunk then costs the same as a 10-second one.
 BUCKET = 128
+# Rows in the output projection's reflected prefix. It only NEEDS PATCH_PROJ_KERNEL-1 = 6, but a
+# 6-row prefix makes the following concat land off a tile boundary, and the ragged version costs
+# 1.815 ms against 0.281 for the aligned one. So pad the prefix to a full 32-row tile and start the
+# output slices at OUT_PREFIX-6 instead of 0. The extra 26 rows are copies of x[0]; they are finite,
+# they feed the matmul, and every output row they touch is sliced away again. See _graph.
+OUT_PREFIX = 32
 
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -239,6 +245,14 @@ class TtVoxtralCodecDecoder:
         # last lines for why. torch stores the conv as [out, in, k]; ttnn.linear wants [in, out].
         self._out_taps = [dev(w["output_proj.conv.weight"][:, :, j].t())
                           for j in range(PATCH_PROJ_KERNEL)]
+        # ...and the reflected prefix those taps slide over, as a GATHER INDEX rather than six
+        # single-row slices. Row OUT_PREFIX-6+m of the prefix takes x[6-m], giving x6,x5,x4,x3,x2,x1;
+        # rows 0..OUT_PREFIX-7 take x[0] and are discarded. Length-independent, so it is built once.
+        idx = torch.zeros(1, 1, OUT_PREFIX, CODEC_DIM, dtype=torch.int32)
+        for m in range(PATCH_PROJ_KERNEL - 1):
+            idx[0, 0, OUT_PREFIX - (PATCH_PROJ_KERNEL - 1) + m, :] = (PATCH_PROJ_KERNEL - 1) - m
+        self._out_prefix_idx = ttnn.from_torch(
+            idx.contiguous(), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
 
         # --- convs ---
         # Weights stay on HOST here and are prepared on first use by `_prepared`, which also
@@ -368,7 +382,12 @@ class TtVoxtralCodecDecoder:
     # ----------------------------------------------------------------------------------
     def _pad_causal(self, x, pad, mode):
         """x [1,1,L,C] -> [1,1,L+pad,C]. `mode` mirrors torch F.pad on the length axis:
-        replicate repeats column 0; reflect mirrors about column 0, excluding it."""
+        replicate repeats column 0; reflect mirrors about column 0, excluding it.
+
+        Production only reaches `replicate` now -- it needs one slice, so it is cheap. `reflect`
+        needs `pad` of them and cost 3.07 ms in the output projection, which builds its prefix with
+        ttnn.gather instead (see _graph). The branch stays because it is the faithful mirror of
+        F.pad and test_codec_ttnn_pcc checks both modes against torch."""
         if pad == 0:
             return x
         L = x.shape[2]
@@ -606,23 +625,44 @@ Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention, which was
         # 240-wide OUTPUT. Multiply the full padded input by each tap, THEN slice the narrow result:
         #     conv1d (broken)                              4.29 ms
         #     7 matmuls, shift the INPUT  (slice xp)        9.16 ms   +4.87
-        #     7 matmuls, shift the OUTPUT (slice y)         6.27 ms   +1.98   <- this
+        #     7 matmuls, shift the OUTPUT (slice y)         6.26 ms   +1.98
+        #     + GATHERED prefix instead of _pad_causal      3.45 ms   -0.84   <- this, BIT-IDENTICAL
         # The input slices were 4.37 of the 9.16 ms, more than the seven matmuls together (1.93).
         #
-        # STILL SLOWER THAN conv1d AND STILL WORTH IT, because this runs ONCE PER UTTERANCE while
-        # w2 in BFP8 saves 2.5 ms PER FRAME: +2.0 ms once against -1150 ms over 460 frames.
+        # THE PAD WAS THE EXPENSE, NOT THE MATMULS -- 3.07 of the 6.26 ms. `_pad_causal` builds the
+        # reflection with SIX single-row slices, and against a 16 MiB TILE_LAYOUT tensor one
+        # single-row slice costs 0.381 ms whether it returns 1 row or 6:
+        #     one single-row slice of x        0.381 ms      six of them   2.282 ms
+        #     one SIX-row slice of x           0.358 ms      ragged concat 1.815 ms
+        # Cost is per op, not per byte. So take the prefix in ONE aligned 32-row slice and do the
+        # reversal with ttnn.gather (see _out_prefix_idx): 3 ops and 0.071 ms instead of 8 and 3.07.
+        # Bit-identical output, verified max-abs-diff exactly 0 -- gather moves data, it does not
+        # arithmetic. A permutation MATMUL also works and is equally fast, but loses 2.4e-04: fp32
+        # matmul multiplies at bf16 precision here, and HiFi4 + fp32_dest_acc does not change it.
+        #
+        # FUSING THE TAPS was measured and NOT taken. Concatenating g taps into one [1024, g*256]
+        # weight cuts the 7 matmuls to 7/g and reads xp once per group instead of once per tap:
+        #     g=1 (this)  3.45 ms  bit-exact      g=3   2.94 ms  err 1.1e-04
+        #     g=2         3.15 ms  err 3.6e-04    g=7   worse -- its 28 MiB output goes to DRAM
+        # 0.51 ms more, at the price of exactness (a [1024,768] matmul decomposes differently from
+        # three [1024,240] ones) on an op that is 0.01% of wall. Not a trade worth making here.
+        # Note also that blocks must be 256-aligned: at pitch 240 the half-tile column offset comes
+        # back SILENTLY WRONG out of L1 (rel err 5e-01, no exception raised).
         #
         # Not parallelisable, before anyone tries: the seven passes are independent, but every ttnn
         # op already uses the whole 64-core grid, so running them at once would just give each pass
         # 9 cores. Nothing is idle. And holding xp in L1 to avoid re-reading it does not fit --
         # 16.8 MB overflows the allocator.
         L = x.shape[2]
-        xp = self._pad_causal(x, PATCH_PROJ_KERNEL - 1, "reflect")
+        assert L >= OUT_PREFIX, f"output projection needs >= {OUT_PREFIX} rows, got {L}"
+        off = OUT_PREFIX - (PATCH_PROJ_KERNEL - 1)
+        head = ttnn.slice(x, [0, 0, 0, 0], [1, 1, OUT_PREFIX, CODEC_DIM])
+        xp = ttnn.concat([ttnn.gather(head, dim=2, index=self._out_prefix_idx), x], dim=2)
         acc = None
         for j in range(PATCH_PROJ_KERNEL):
             y = ttnn.linear(xp, self._out_taps[j], compute_kernel_config=COMPUTE_CONFIG,
                             memory_config=ttnn.L1_MEMORY_CONFIG)
-            sl = ttnn.slice(y, [0, 0, j, 0], [1, 1, j + L, PATCH_SIZE],
+            sl = ttnn.slice(y, [0, 0, off + j, 0], [1, 1, off + j + L, PATCH_SIZE],
                             memory_config=ttnn.L1_MEMORY_CONFIG)
             acc = sl if acc is None else ttnn.add(acc, sl, memory_config=ttnn.L1_MEMORY_CONFIG)
         return acc
