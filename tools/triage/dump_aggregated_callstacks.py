@@ -12,7 +12,7 @@ Options:
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
 
 Description:
-    Aggregates callstacks by (Kernel Path, ELF-relative PC, RISC Name and Operation Id) and shows:
+    Aggregates callstacks by (Kernel Path, kernel-relative PC and Operation Id) and shows:
       - Kernel Name / # Kernel IDs (one group spans every kernel id that ran the same ELF)
       - Op Id (host_assigned_id, for correlation with dump_running_operations.py)
       - Callstack
@@ -20,6 +20,8 @@ Description:
       - RISC Name
       - Locations or device visualizations (if --device-visualization)
     This significantly reduces the number of rows vs raw dump_callstacks.
+
+    Only RISCs stopped inside their kernel are shown.
 
     By default, the locations are trimmed to 10 entries. Use -v or -vv to show all locations.
 
@@ -50,7 +52,6 @@ from run_checks import run as get_run_checks, device_description_serializer
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
-from ttexalens.elf import ElfFile
 from ttexalens.memory_access import NO_MEMORY_ACCESS
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
@@ -61,16 +62,6 @@ script_config = ScriptConfig(
 
 BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 DEFAULT_MAX_LOCATIONS = 10
-
-
-def _normalize_pc(pc: int | None, kernel_elf: ElfFile | None, kernel_offset: int | None) -> tuple[bool, int | None]:
-    """Make a PC comparable across cores, returning (whether it is a kernel PC, the PC to key on)."""
-
-    if pc is None or kernel_elf is None or kernel_offset is None:
-        return False, pc
-    if kernel_elf.get_frame_description(pc, NO_MEMORY_ACCESS) is None:
-        return False, pc
-    return True, pc - kernel_offset
 
 
 def _render_device_for_bucket(
@@ -196,7 +187,7 @@ def _collect_aggregated(
     verbose: bool,
     context: Context,
 ) -> list[AggregatedCallstackRow] | None:
-    """Collect callstacks and aggregate by (kernel_path, ELF-relative pc, risc_name, op_id)."""
+    """Collect callstacks and aggregate the cores stopped in a kernel by (kernel_path, pc, op_id)."""
 
     def per_core(location: OnChipCoordinate, risc_name: str) -> CallstacksData | None:
         try:
@@ -226,8 +217,8 @@ def _collect_aggregated(
     if not results:
         return None
 
-    # Aggregate by (kernel_path, whether the PC is a kernel PC, normalized PC, risc_name, op_id)
-    buckets: dict[tuple[str | None, bool, int | None, str, int | None], AggregationBucket] = {}
+    # Aggregate by (kernel_path, normalized PC, op_id)
+    buckets: dict[tuple[str, int, int | None], AggregationBucket] = {}
 
     for check_result in results:
         if check_result.result is None:
@@ -237,12 +228,15 @@ def _collect_aggregated(
         d = cs_data.dispatcher_core_data
         pc = cs_data.pc
 
-        kernel_elf = None
-        if d.kernel_path is not None and d.kernel_offset is not None:
-            kernel_elf = callstack_provider.elfs_cache[d.kernel_path].with_load_address(d.kernel_offset)
-        in_kernel, normalized_pc = _normalize_pc(pc, kernel_elf, d.kernel_offset)
+        if pc is None or d.kernel_path is None or d.kernel_offset is None:
+            continue
 
-        key = (d.kernel_path, in_kernel, normalized_pc, check_result.risc_name, d.host_assigned_id)
+        # Skip cores not in kernel
+        kernel_elf = callstack_provider.elfs_cache[d.kernel_path].with_load_address(d.kernel_offset)
+        if kernel_elf.get_frame_description(pc, NO_MEMORY_ACCESS) is None:
+            continue
+
+        key = (d.kernel_path, pc - d.kernel_offset, d.host_assigned_id)
         bucket = buckets.get(key)
         if bucket is None:
             bucket = AggregationBucket(cs_data, check_result.risc_name)
