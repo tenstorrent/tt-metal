@@ -41,23 +41,49 @@ those two does not actually match** (`typecast`, advised `l1/height_sharded/1x1`
 
 `neg` ×2, `concat` ×2, `multiply` ×2 — the advisor advised `l1/height_sharded/32x1` and the cell shipped
 `l1/interleaved`. So the shipped win took the **buffer type** (DRAM→L1, the advisor's first-ranked criterion)
-and left the **sharding** half of the advice unimplemented.
+and left the **sharding** half unimplemented. **Measured below: that half cannot be implemented at all** — so
+this is not a shortcut the cell took, it is the only legal placement.
 
-⚠ **Correction to something I said earlier.** I claimed that advice was *illegal* because a probe of mine hit
-`TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!`. **That was my probe's fault, not the
-advisor's.** My probe skipped the staging conversion entirely, which left the *slices* height-sharded — but the
-advisor advises the slices as `l1/interleaved` (rows 9, 11, 24, 26) and only the ops after them as
-height-sharded. Checked against the advisor's own decision trace:
+### Measured: what happens if you *do* implement the advised sharding
+
+I implemented the advice faithfully — slices `l1/interleaved`, then `neg`/`concat`/`multiply`/`add` on
+`l1/height_sharded` over 32 cores, shard `(32, width)`, matching the incoming
+`l1/height_sharded, shard=(32,96), cores=32` the trace shows. Two variants, because the ops have two widths:
+
+| variant | what it shards | result |
+|---|---|---|
+| `partial` | only the **96-wide** ops (`concat` output, `multiply` ×2, `add`) — shard `(32,96)` = 3 tiles, tile-aligned | **`TT_FATAL: Cannot concat interleaved inputs into a sharded output. Either shard the inputs first or use an interleaved output memory config.`** |
+| `full` | also the **48-wide** `neg`, which the advice requires — shard `(32,48)` | **`TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!`** |
+| *(control)* `shipped` — `l1/interleaved` | — | **runs: 0.768758 / 0.768047 ms** |
+
+Both failures reproduced twice. They **chain**: to give `concat` a sharded output you must shard its inputs;
+its inputs are the 48-wide halves; a 48-wide shard is not tile-aligned. So **there is no way to reach the
+advised placement for this rope body**, and the shipped `l1/interleaved` form is not a shortcut — it is the only
+legal option. **The time cannot be measured because the configuration does not run.**
+
+Phi's own source says why the widths are awkward, in `_apply_rope`:
+
+> *`ttnn.experimental.rotary_embedding` requires a width divisible by 64, whereas Phi-3.5's 96-wide heads split
+> at 48. The explicit topology is the exact HF operation and has no host fallback.*
+
+### The real finding: the advisor's validation and the runtime disagree
+
+This is worth separating from the outcome. The advisor **validated** the configuration it advised — from its own
+decision trace:
 
 | op | evaluations | valid | is `height_sharded/32x1` among the valid? |
 |---|---|---|---|
 | `ttnn.neg` op10 | 296 | **296 (all valid)** | **yes** — one of 112 valid height-sharded candidates |
 | `ttnn.concat` op11 | 512 | 256 | **yes** |
 
-**The advised config passed the advisor's op-constraint validation.** It remains *untested on hardware* — the
-advisor validates against the op model on a mock device, which is not the same as a runtime trial. Implementing
-it properly (slices interleaved, then `neg`/`concat`/`multiply` height-sharded on 32) is a real open experiment
-and the natural next step for this cell.
+**So the op model accepts a `(32,48)` height shard and the runtime rejects it.** The advisor validates against
+the op model on a mock device (`op_constraint_validation::validateOperation`), and that check does not enforce
+the runtime's tile-sized-shard rule. That is a genuine consistency gap between tt-mlir's validation and
+tt-metal's runtime, and it is the reason a validated plan is unimplementable.
+
+*(A note on my own trail here: I first called the advice illegal on the basis of a probe that did not implement
+it — that reasoning was wrong and I retracted it. With a faithful implementation the conclusion holds, but the
+substantive result is the validation gap above, not the illegality per se.)*
 
 ## Known artefact in row 19
 
