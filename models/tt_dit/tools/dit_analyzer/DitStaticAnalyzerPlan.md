@@ -1,5 +1,15 @@
 # Plan for a Collective-Redundancy Static Analyzer for the DiT Team
 
+> **This is the original design, kept as written.** It is not updated as work
+> lands, so do not read it as a statement of what exists. Current status —
+> which phases are done, what is next, and which of the 44 blockers are still
+> open — lives in one place:
+> [`DitStaticAnalyzerRoadmap.md` § "Where we are"](DitStaticAnalyzerRoadmap.md#where-we-are).
+> In short, at the last update: the analyzer and the device-free dry-run front end
+> are built and the v1 bar below is met; shape fidelity is the next phase, and
+> on-device conformance is what stands between "the shim believes" and "this is
+> true".
+
 ## Executive summary
 
 Build a **forward-pass communication analyzer** that models device topology, tensor placement, tensor ownership, and per-op data requirements, then flags collectives that are **provably redundant**, **potentially reducible**, or **suspicious enough for human review**.

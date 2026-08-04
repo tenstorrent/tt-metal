@@ -51,12 +51,34 @@ tt_dit/
 │   ├── encoders/       # Encoder tests
 │   ├── blocks/         # Block-level tests
 │   └── unit/          # Unit tests for layers
+├── tools/             # Developer tools
+│   └── dit_analyzer/  # ditcheck: finds redundant collectives in a forward pass
 └── utils/             # Utility functions
     ├── check.py       # Validation utilities
     ├── padding.py     # Padding operations
     ├── substate.py    # State management
     └── tensor.py      # Tensor operations
 ```
+
+## Tools
+
+**[ditcheck](tools/dit_analyzer/README.md)** — a collective-redundancy analyzer for
+DiT forward passes. It answers, for every collective: what did each device already
+hold, what does anything downstream actually need, and is this collective doing any
+work? Findings come with a per-device proof and a byte estimate.
+
+It runs the real model code against a metadata-only `ttnn`, so it needs no device,
+no checkpoint and no trace capture:
+
+```bash
+models/tt_dit/tools/ditcheck dryrun ltx_block --preset bh_4x8 --analyze
+```
+
+On the LTX-2.3 block at BH 4x8 it reports 6 provably duplicate TP gathers per
+block, and nothing on the SD3.5-large block. Findings are a queue to triage, not
+ground truth: see
+[§ "Where we are"](tools/dit_analyzer/DitStaticAnalyzerRoadmap.md#where-we-are) for
+what is verified and what is still the analyzer taking the shim's word for it.
 
 ## Core Components
 

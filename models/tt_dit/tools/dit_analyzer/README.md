@@ -1,9 +1,6 @@
 # ditcheck — collective-redundancy static analyzer for DiT forward graphs
 
-Prototype of the tool described in [`DitStaticAnalyzerPlan.md`](DitStaticAnalyzerPlan.md)
-(see [`DitStaticAnalyzerRoadmap.md`](DitStaticAnalyzerRoadmap.md) for the blocker
-inventory and the plan to run this on real pipelines — via a metadata-only `ttnn`
-shim, with no device and no hand-written model):
+The tool described in [`DitStaticAnalyzerPlan.md`](DitStaticAnalyzerPlan.md):
 a **distributed forward-pass state analyzer** with a backward demand engine and
 proof-based redundancy checks. It answers, for every collective in a forward
 pass: *what did each device already have, what does anything downstream actually
@@ -14,6 +11,11 @@ it analyses come off a laptop: [`dryrun/`](dryrun/) runs the real model code
 against a metadata-only `ttnn` and emits the graph as a side effect. Only
 [`capture.py`](capture.py) needs a live device, and nothing in the daily loop
 uses it.
+
+**Status** — what is built, what is next, and how much of a finding to believe
+today: [`DitStaticAnalyzerRoadmap.md` § "Where we are"](DitStaticAnalyzerRoadmap.md#where-we-are).
+That section is the status of record; this file describes the tool as it stands and
+the roadmap holds the remaining work and the 44-item blocker inventory.
 
 ```bash
 # derive the graph from models/tt_dit source -- no device, no checkpoint, no capture

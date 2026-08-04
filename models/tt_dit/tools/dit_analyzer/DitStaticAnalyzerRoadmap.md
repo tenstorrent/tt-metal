@@ -23,6 +23,10 @@ and lays out the work to close it.
 
 ## Where we are
 
+**This section is the project's status of record.** The plan and the README point
+here rather than restating it, so there is one place to update and nowhere for a
+stale copy to disagree.
+
 | | |
 |---|---|
 | Analysis | works offline, pure Python: forward availability + backward demand + 6 redundancy rules + proofs |
@@ -31,6 +35,42 @@ and lays out the work to close it.
 | Capture | 30 monkeypatch hooks written, **never run on hardware**; demoted to the phase 11 conformance path |
 | Graph source | `ditcheck dryrun` from source, or hand-written via `builder.py`; a trace still needs hand-declared placements |
 | Validated on | SD3.5-large block (0 findings), LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), both reproduced from source by the dry run and asserted in `tests/test_dryrun.py` |
+| Tests | 20 analyzer + 15 dry-run, no device and no pytest required |
+
+### Phases
+
+Plan phases 0–5 built the analyzer; roadmap phases 6–13 are about running it on
+real code. Plan phase 6 and roadmap phase 13 are the same work.
+
+| phase | state | what remains |
+|---|---|---|
+| plan 0–4 — IR, simulator, demand, rules | **done** | — |
+| plan 1 — graph capture | **superseded** | replaced by the dry run; capture survives as the phase 11 validator, still never run on hardware |
+| plan 5 — validate on historical wins | **partly** | rediscovers the LTX win from source and passes the SD3.5 precision test; no wider corpus of past AGMM graphs, and none of the human metrics (false-positive rate over a real backlog, time per finding) |
+| **roadmap 6 — dry-run front end** | **done** | — |
+| **roadmap 7 — shape and layout fidelity** | **next** | tiling, uneven shards, weight layout, block-float bytes, checkpoint keys |
+| roadmap 8 — op coverage | not started | DiT block is covered; the tail is VAE/encoder |
+| roadmap 9 — scale | not started | 48-layer rollup, quadratic cost, finding rollup, stable IDs |
+| roadmap 10 — multi-mesh / stage / host | not started | submeshes, encoder→DiT→VAE, carried state, readbacks |
+| roadmap 11 — conformance (needs a device) | not started | **gates trusting findings**, not producing them |
+| roadmap 12 — branch and shape matrix | not started | one graph is currently one branch |
+| roadmap 13 / plan 6 — workflow | **partly** | CLI and `ops --check` exist; no CI job, no golden baselines, no time-based ranking |
+
+**Blockers: 33 of 44 open** — 7 dissolved by the dry-run design, 4 closed by phase
+6. Open counts by phase: 7→6, 8→6, 9→4, 10→6, 11→5, 12→3, 13→3.
+
+**The plan's v1 bar is met.** It set the go/no-go at "if it can reliably rediscover
+Kevin's finding, and do so early in bring-up, it is already worth the build cost"
+(plan § "What 'done' looks like"). The tool now finds it with a proof and a byte
+estimate, from the model source, on a laptop, in a few seconds — and reports
+nothing on the SD3.5 block where every collective is load-bearing. What the phases
+above are still buying is *reach*: one block is not a pipeline, and one
+corroborated block is not a trustworthy tool.
+
+Until phase 11's per-op conformance is green, a dry-run finding means *"the shim
+believes"*. Today's 6 LTX findings are corroborated by a hand-written oracle built
+independently from the same source, which is real evidence — but it is the only
+block that has one.
 
 ## The design: dry run first, device as validator
 
