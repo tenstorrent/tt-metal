@@ -2966,6 +2966,11 @@ void DeviceProfiler::pollDebugDumpResults(
                     continue;
                 }
 
+                // TODO: Intentionally skipping Quasar for now.
+                if (risc_type > tracy::RiscType::NONE) {
+                    continue;
+                }
+
                 const uint8_t active_dram_buffer_index = active_risc_map[risc_type];
 
                 TT_ASSERT(active_dram_buffer_index < 2, "DRAM Buffer Index can only be 0 or 1");
@@ -3085,6 +3090,11 @@ void DeviceProfiler::pollDebugDumpResults(
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
                     (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    continue;
+                }
+
+                // TODO: Intentionally skipping Quasar for now.
+                if (risc_type > tracy::RiscType::NONE) {
                     continue;
                 }
 
