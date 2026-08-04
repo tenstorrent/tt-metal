@@ -1171,7 +1171,16 @@ dtype is worse than one cast at the entry.
 
 Gates: **16 passed** (encoder + e2e), encoder PCC 99.982-99.988 %, decoder 99.9977-99.9979 %.
 
-**Open follow-up:** the log shows 60 `conv3d blocking [fallback]` warnings under bf16. The
-swept table is keyed into both `_DEFAULT_BLOCKINGS` and `_FP32_BLOCKINGS`, but bf16 is
-clearly missing entries the fp32 path hits -- so the 2.83x above is *without* the sweep fully
-applying. Re-sweeping at bf16 is the obvious next win and should compound.
+**Correction on the 60 `conv3d blocking [fallback]` warnings under bf16: they are not
+misses.** `conv3d.py:607-621` has three tiers -- `[exact]` (a mesh+shape+T+spatial key in
+`_BLOCKINGS`), `[fallback]` (a channel-key hit in `_DEFAULT_BLOCKINGS`), and a true miss
+(`in_channels, 32, 1, 1, 1`). `[fallback]` is the channel-key tier matching, and it is logged
+at **warning** level, which reads like a failure. The logged values confirm it: `channel_key=
+(1024, 48, (1,3,3)) -> Cin=128 Cout=32 T=1 H=16 W=2` is exactly the swept entry
+`(1024, 48): (128, 32, 1, 16, 2)`. **The sweep applies fully under bf16**, and the 2.83x
+already includes it.
+
+What is still open is that the blockings were *measured* in fp32. bf16 halves the activation
+bytes, so larger blocks now fit L1 and the fp32-optimal choice is unlikely to be bf16-optimal
+-- `run_sweep` takes no dtype argument, so a bf16 sweep needs that plumbed first. Worth doing,
+but it is a fresh optimisation rather than recovering something the sweep failed to deliver.
