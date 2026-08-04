@@ -49,6 +49,7 @@ inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
  * @param operandA           SrcA operand circular buffer identifier.
  * @param operandB           SrcB scaler operand circular buffer identifier.
  * @param row_start_index    Tile offset of the block's first SrcA tile within operandA's CB.
+ * @param tensor_shape       Operand tile shape -- the SAME shape the math thread uses.
  * @param respect_trigger    Unsupported on Quasar; must stay false.
  * @param overlap_first_half Unsupported on Quasar; must stay false.
  */
@@ -56,11 +57,13 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
     const std::uint32_t row_start_index,
+    const ckernel::TensorShape& tensor_shape,
     const bool respect_trigger = false,
     const bool overlap_first_half = false) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    // Use the caller tensor_shape (single source of truth with the math thread); the CB provides only
+    // the physical L1 read pointer below.
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
