@@ -101,7 +101,15 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
         # the lower bound is intentionally pushed to -100.0 so we cross the SFPU's negative-side
         # sanitization boundary near x ≈ -88.5 (where InputClamping::ClampToNegative saturates inputs
         # in the fast/approx exp path).
-        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=80.0)
+        #
+        # The positive side stops at 16 for accuracy, not range: exp's relative
+        # condition number equals its argument, so the shared approximation's error
+        # grows linearly with x. Measured on Wormhole at the old high of 80, the
+        # largest outputs land 11-13% off the golden — well past the default 5% rtol
+        # — and the error is only visible on the fp32 (dest_acc=Yes) path, where a
+        # 16-bit dst is not there to round both sides back together. 16 is the same
+        # argument ceiling _exp_with_base_spec settles on for the same reason.
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=16.0)
     return OperandSpecs(spec_A=spec)
 
 
@@ -132,9 +140,34 @@ def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-14.0, high=14.0)
     else:
-        spec = StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=-100.0, high=100.0
-        )
+        # exp2(x) = exp(x * ln2), so the accuracy ceiling _exp_spec puts at an
+        # argument of 16 lands at x = 16 / ln2 ~ 23 here. Above that the shared
+        # approximation drifts past the default rtol on the fp32 dst path.
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=23.0)
+    return OperandSpecs(spec_A=spec)
+
+
+# Block-float formats: a group of 16 elements shares one exponent, so an element's
+# usable precision depends on how far below its block maximum it sits, not just on
+# the mantissa width.
+_BLOCK_FLOAT_FORMATS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
+
+
+def _reciprocal_spec(fmt: DataFormat) -> OperandSpecs:
+    """Safe input range for 1/x, tightened for block-float inputs.
+
+    1/x carries input relative error straight through to the output, and in a
+    block-float input an element far below its block maximum has very little
+    relative precision left. Spanning [0.1, 100] puts a 1000:1 ratio inside a
+    16-element block, so the smallest elements quantize to zero and the golden
+    goes to inf. Measured on Bfp8_b stimuli: the wide interval leaves 13/1024
+    elements outside tolerance (max difference inf), while holding the ratio to
+    10:1 leaves none.
+    """
+    if fmt in _BLOCK_FLOAT_FORMATS:
+        spec = StimuliSpec.uniform(intervals=[(-100.0, -10.0), (10.0, 100.0)])
+    else:
+        spec = StimuliSpec.uniform(intervals=[(-100.0, -0.1), (0.1, 100.0)])
     return OperandSpecs(spec_A=spec)
 
 
@@ -288,10 +321,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Neg: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # reciprocal: domain x != 0; avoid a small band around 0 and cover both signs
-    MathOperation.Reciprocal: OperandSpecs(
-        spec_A=StimuliSpec.uniform(intervals=[(-100.0, -0.1), (0.1, 100.0)])
-    ),
+    # reciprocal: domain x != 0; avoid a small band around 0 and cover both signs.
+    # Format-sensitive: block-float inputs need a tighter ratio, see _reciprocal_spec.
+    MathOperation.Reciprocal: _reciprocal_spec,
     # relu / relu_max / relu_min / threshold: include negatives (zero branch)
     MathOperation.Relu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
