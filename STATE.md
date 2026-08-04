@@ -1445,3 +1445,48 @@ Consequences:
   checking the op-to-op gap *distribution* (median vs mean) on a warm window. Prefer
   signposts, or slice the tail, so construction is excluded. The per-op device ranking from
   the same report was correct throughout -- it was only the gap aggregate that misled.
+
+## Amendment 52 (2026-08-04) — stats GroupNorm settled by profile: 1.78x on the block, flag ON
+
+The measurement amendment 46 was waiting for. Profiling **one down_block** rather than the
+whole encoder sidesteps Tracy's 1000-op buffer (block 0 is ~90 ops against the encoder's
+~550), which is what made the amendment-50 profile fail. Same block, flag both ways, warm
+iteration:
+
+| | device time | ops |
+|---|---|---|
+| `ttnn.group_norm` | 852.74 ms | 82 |
+| **stats GroupNorm** | **478.66 ms** | 140 |
+| | **1.782x** | |
+
+| op | group_norm | stats | delta |
+|---|---|---|---|
+| GroupNormDeviceOperation | 219.22 | **0** | -219.22 |
+| UntilizeDeviceOperation | 218.72 | **14.14** | -204.58 |
+| TilizeWithValPaddingDeviceOperation | 71.60 | **0** | -71.60 |
+| Conv3dDeviceOperation | 139.63 | 122.01 | -17.62 |
+| ConcatDeviceOperation | 100.61 | 88.15 | -12.46 |
+| BinaryNgDeviceOperation | 70.35 | 147.39 | +77.04 |
+| TilizeDeviceOperation | 0 | 50.58 | +50.58 |
+| ReduceDeviceOperation | 0 | 23.34 | +23.34 |
+
+The layout round-trip is gone: GroupNorm and TilizeWithValPadding to zero, Untilize down 94 %.
+The replacement costs (BinaryNg, Tilize, Reduce) total +151 ms against -525 ms removed.
+
+**Op count rose 82 -> 140 while device time fell 44 %**, which independently confirms
+amendment 51: this workload is device-bound, not dispatch-bound. Under amendment 49's
+withdrawn "97.1 % gap" reading, adding 58 ops would have been a clear loss.
+
+`MINIMAX_H3_USE_STATS_GROUPNORM` is now **True**. Gates: **16 passed** (encoder + e2e),
+encoder PCC 99.9264 %, e2e 99.9940 %, decoder 99.9977-99.9979 %. The encoder's PCC is lower
+than the group_norm path's 99.988 % -- two-pass mean/variance in bf16 rather than Welford --
+and still far clear of the 0.99 gate.
+
+End-to-end, 32-unit waves: encoder **0.911 s**, decoder 0.652 s.
+**768P/5s projection: encode 6.4 s + decode 4.6 s = 10.9 s.**
+
+Note the whole-encoder gain is far smaller than the block's 1.78x: block 0 is the largest
+spatial extent, where the round trip cost most, and the deeper levels have far less to
+recover. Wall-clock run-to-run drift (amendment 41) also remains wide enough that 0.857 vs
+0.911 s across runs carries little signal -- the block profile is the trustworthy number here,
+and it says the change is right.

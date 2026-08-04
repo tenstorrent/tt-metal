@@ -59,7 +59,7 @@ from .conv_minimax_h3 import MiniMaxH3CausalConv3d
 # the same run, so the encoder delta sits inside the run-to-run drift of amendment 41.
 # Settle it with the device profiler (as the head-fusion change in amendment 43 was settled),
 # not wall clock, then flip this.
-MINIMAX_H3_USE_STATS_GROUPNORM = False
+MINIMAX_H3_USE_STATS_GROUPNORM = True
 
 MINIMAX_H3_VAE_NUM_GROUPS = 32
 MINIMAX_H3_VAE_NORM_EPS = 1e-6
