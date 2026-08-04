@@ -68,6 +68,65 @@ def _load_audio_22k(ref_audio, max_seconds):
     return load_reference_audio(sample=ref_audio, max_seconds=max_seconds)
 
 
+MAX_TEXT_IDS = 352  # keep the padded text under MAX_TEXT_POS (404) with headroom
+# TWO budgets, because the wall behaves differently in the two cases. It is an ALLOCATION COLLISION
+# ("Statically allocated circular buffers ... clash with L1 buffers"), not a clean size limit, so it
+# degrades as device open/close cycles accumulate in a process. Measured on p150 by running the demo:
+#
+#   ONE pass, fresh device (words -> codes):  20->175 PASS | 23->177,182,184 PASS | 22->192 PASS
+#                                             25->203 PASS | 24->207 PASS  <-- highest seen to pass
+#                                             27-> FAIL cb-clash | 29-> FAIL
+#   Nth pass, same process:                   a chunk estimated at ~204 codes FAILED as the 5th cycle,
+#                                             while 207 passed as the 1st -> per-chunk headroom SHRINKS
+#                                             with chunk count, so the chunk budget must be lower.
+# Note the same text varies +/-4% run to run (23 words gave 177/182/184), so leave margin.
+MAX_SINGLE_PASS_CODES = 205  # above this, split into chunks
+MAX_CHUNK_CODES = 165  # per chunk once splitting; lower than the single-pass budget on purpose
+CODES_PER_ID = 156 / 71.0  # measured: 71 text ids -> 156 audio codes
+
+
+def _split_into_chunks(text, lang):
+    """Return the sentence groups to synthesise. ONE group (single pass) whenever the whole text fits.
+
+    XTTS generates one utterance per pass, bounded by the text position embedding (MAX_TEXT_POS 404),
+    the audio-code budget, and the single-shot vocoder's circular buffers. If the whole text fits in a
+    pass it is returned unsplit — that is the fast path and what the default text is sized for.
+
+    Only when it does not fit is it split at sentence boundaries, and then against the SMALLER
+    MAX_CHUNK_CODES, because per-chunk headroom shrinks as device cycles accumulate (see the budgets).
+    A sentence is never split, so a single sentence over ~25 words cannot be made to fit — the caller
+    is warned rather than silently crashing.
+    """
+
+    def ids_of(t):
+        return preprocess_text(re.sub(r"[.!?]+\s*$", "", t), lang=lang).shape[-1]
+
+    whole = text.strip()
+    if ids_of(whole) <= MAX_TEXT_IDS and ids_of(whole) * CODES_PER_ID <= MAX_SINGLE_PASS_CODES:
+        return [whole]  # single pass
+
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", whole) if p.strip()]
+    for p in parts:
+        if ids_of(p) * CODES_PER_ID > MAX_SINGLE_PASS_CODES:
+            logger.warning(
+                f"sentence is {len(p.split())} words (~{int(ids_of(p) * CODES_PER_ID)} audio codes) — over the "
+                f"~{int(MAX_SINGLE_PASS_CODES / CODES_PER_ID / 3.7)}-word single-pass limit. A sentence is never "
+                f"split, so this pass may fail with an L1 circular-buffer clash. Shorten it or add punctuation."
+            )
+    chunks, cur = [], []
+    for part in parts:
+        cand = " ".join(cur + [part])
+        n = ids_of(cand)
+        if cur and (n > MAX_TEXT_IDS or n * CODES_PER_ID > MAX_CHUNK_CODES):
+            chunks.append(" ".join(cur))
+            cur = [part]
+        else:
+            cur.append(part)
+    if cur:
+        chunks.append(" ".join(cur))
+    return chunks
+
+
 def _postprocess(wav_np):
     """Fix the abrupt ("crimped") onset: short raised-cosine fade in/out + leading/trailing
     silence (the vocoder starts at the first content code with no natural lead-in)."""
@@ -159,7 +218,7 @@ def main():
         "--text",
         # "can already" (not "can now"): "can now" is a /n/#/n/ nasal collision the vocoder
         # merges into "cannow/cannot" — "already" starts with a vowel and transcribes cleanly (CER 0.008).
-        default="Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey how are you doing?",
+        default="Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey how are you doing?.",
     )
     ap.add_argument(
         "--ref-audio",
@@ -211,21 +270,35 @@ def main():
 
     # Strip trailing sentence-final punctuation: the final "." is its own token (id 9) and the
     # model tends to VERBALIZE it as "dot" at the tail. Internal commas (prosody) are kept.
-    clean_text = re.sub(r"[.!?]+\s*$", "", args.text.strip())
-    wrapped = wrap_text_ids(preprocess_text(clean_text, lang=args.lang))
-    pad = (-wrapped.shape[1]) % TILE
-    if pad:
-        wrapped = F.pad(wrapped, (0, pad), value=STOP_TEXT_TOKEN)
-    logger.info(f"text: {clean_text!r} -> {wrapped.shape[1]} tokens (wrapped/padded)")
-
-    # Resolve the STOP-suppression floor. Auto (-1) scales with the text (~2x the wrapped length),
-    # clamped below max-tokens, so a longer prompt is protected from stopping short while a short one
-    # isn't forced to ramble. 0 disables (HF default).
-    if args.min_tokens < 0:
-        args.min_tokens_resolved = min(int(2.0 * wrapped.shape[1]), args.max_tokens - 1)
+    # Text that fits ONE pass stays a single pass (the fast path); only text over the single-pass
+    # budget is split at sentence boundaries into several passes that are joined back together.
+    chunk_texts = _split_into_chunks(args.text, args.lang)
+    chunks = []
+    for ct in chunk_texts:
+        clean = re.sub(r"[.!?]+\s*$", "", ct.strip())
+        w = wrap_text_ids(preprocess_text(clean, lang=args.lang))
+        pad = (-w.shape[1]) % TILE
+        if pad:
+            w = F.pad(w, (0, pad), value=STOP_TEXT_TOKEN)
+        chunks.append((clean, w))
+    if len(chunks) == 1:
+        logger.info(f"text fits ONE pass ({chunks[0][1].shape[1]} tokens): {chunks[0][0]!r}")
     else:
-        args.min_tokens_resolved = min(args.min_tokens, args.max_tokens - 1)
-    logger.info(f"min audio codes before STOP allowed: {args.min_tokens_resolved} (0 = disabled)")
+        logger.info(f"text exceeds the single-pass budget -> CHUNKED into {len(chunks)} passes:")
+        for i, (clean, w) in enumerate(chunks):
+            logger.info(f"  [{i + 1}/{len(chunks)}] {w.shape[1]:3d} tokens  {clean!r}")
+
+    # Resolve the STOP-suppression floor, PER CHUNK. Auto (-1) scales with that chunk's text (~2x its
+    # wrapped length), clamped below max-tokens, so a longer prompt is protected from stopping short
+    # while a short one isn't forced to ramble. 0 disables (HF default).
+    def resolve_min_tokens(n_tok):
+        floor = int(2.0 * n_tok) if args.min_tokens < 0 else args.min_tokens
+        return max(0, min(floor, args.max_tokens - 1))
+
+    logger.info(
+        f"min audio codes before STOP allowed: {[resolve_min_tokens(w.shape[1]) for _, w in chunks]} "
+        f"(0 = disabled, per chunk)"
+    )
 
     reference = XttsReference(sd)  # supplies decoder/speaker/mel weights (and optional A/B wav)
 
@@ -240,8 +313,29 @@ def main():
     # Each take runs on its own freshly-opened device (see _take_on_device); best-of-N keeps
     # the lowest-CER take. A single take (default) is just one open/generate/close.
     wav_tt, codes, best_score, best_detail = None, None, None, None
+    gap = np.zeros(int(0.12 * OUTPUT_SAMPLE_RATE), dtype="float32")  # ~120 ms between chunks
     for i in range(n):
-        wav_i, codes_i, dt = _take_on_device(sd, reference.decoder_full, wrapped, wav, spk_wav, args, i)
+        pieces, code_parts, dt = [], [], 0.0
+        for j, (clean, w) in enumerate(chunks):
+            args.min_tokens_resolved = resolve_min_tokens(w.shape[1])
+            wav_j, codes_j, dt_j = _take_on_device(sd, reference.decoder_full, w, wav, spk_wav, args, i)
+            dt += dt_j
+            pieces.append(wav_j.astype("float32"))
+            code_parts.append(codes_j)
+            nc = codes_j.shape[1]
+            if len(chunks) > 1:
+                logger.info(
+                    f"  take {i + 1}/{n} chunk {j + 1}/{len(chunks)}: {nc} codes "
+                    f"({'stop' if nc < args.max_tokens else 'max'}), "
+                    f"{wav_j.shape[0] / OUTPUT_SAMPLE_RATE:.2f}s, {dt_j:.1f}s"
+                )
+        # single pass -> the waveform IS the output, no join
+        wav_i = (
+            pieces[0]
+            if len(pieces) == 1
+            else np.concatenate([p for k, pc in enumerate(pieces) for p in ((gap, pc) if k else (pc,))])
+        )
+        codes_i = torch.cat(code_parts, dim=1)
         n_codes = codes_i.shape[1]
         stopped = n_codes < args.max_tokens
         score, detail = _score_take(wav_i, args.text, codes_i) if n > 1 else (0.0, "")
@@ -264,8 +358,12 @@ def main():
         # A/B on the SAME codes the best device take produced (teacher-forced), so the two WAVs
         # are the same utterance — not an independent greedy run (which would collapse). Runs on
         # host (CPU torch), so no device is needed here (torch reference uses the host wav_to_mel).
+        # Single-pass A/B only: with several chunks the codes are the concatenation of all passes,
+        # so they no longer correspond to one text prompt.
+        if len(chunks) > 1:
+            logger.warning("--write-torch-ref uses chunk 1's text against all chunks' codes; A/B is approximate")
         cond_mel = wav_to_mel(wav, sd["mel_stats"].cpu())  # host 80-mel [1, 80, s] for the torch reference
-        wav_ref = reference.wav_from_codes(wrapped, cond_mel, spk_wav, codes[0].tolist())
+        wav_ref = reference.wav_from_codes(chunks[0][1], cond_mel, spk_wav, codes[0].tolist())
         ref_path = args.output.replace(".wav", "_reference.wav")
         sf.write(ref_path, wav_ref.reshape(-1).numpy(), OUTPUT_SAMPLE_RATE)
         logger.info(f"wrote torch reference audio (same codes) -> {os.path.abspath(ref_path)}")
