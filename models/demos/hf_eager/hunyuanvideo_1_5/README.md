@@ -100,16 +100,20 @@ the tuned `ttnn` matmul. C++ Metalium `generic_op` matmul: same result. Both rev
 
 Real weights, 24-chip sp=3, 480×848, 121 frames, 50 steps, tiled VAE (128px).
 
-| mode | steady-state s/it | denoise | **e2e total** | frames |
+Trace+2CQ numbers are **steady-state** (the ~52 s one-time trace capture is excluded —
+it's paid once and amortized across all subsequent generations).
+
+| mode | steady-state s/it | denoise (50 steps) | **e2e total** | frames |
 |---|---|---|---|---|
 | **Eager** (`HY_TRACE=0`) | 4.18 | 3:50 | **8:18** | 121 ✓ |
-| **Trace+2CQ** (`HY_TRACE=1`) | 4.15 | 4:19 (+~56 s one-time capture) | **9:36** | 121 ✓ |
+| **Trace+2CQ** (`HY_TRACE=1`) | 4.15 | ~3:28 | **~8:44** | 121 ✓ |
 
-**Eager is faster for one-shot 121f** — steady-state per-step is identical (the DiT is
-compute-bound, so 2CQ input-overlap buys nothing), and trace's capture cost isn't
-amortized over a single 50-step run. The `device_ms` wins above are at the tiny
-dispatch-bound profiling scale and **do not materially speed up the compute-bound 121f
-e2e** (which is also ~half model-load + VAE).
+Steady-state per-step is **essentially identical** (4.15 vs 4.18 s/it) — the DiT is
+compute-bound, so 2CQ input-overlap buys almost nothing; trace's slightly lower s/it is
+offset by other e2e overhead. The `device_ms` wins above are at the tiny dispatch-bound
+profiling scale and **do not materially speed up the compute-bound 121f e2e** (which is
+also ~half model-load + VAE). For a single one-shot generation, eager avoids the ~52 s
+capture; trace wins only once that capture is amortized across many generations.
 
 ## PCC validation
 
