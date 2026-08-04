@@ -468,8 +468,43 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         compute.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = POST_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
-    fill_default_unpack_modes(
-        gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config)), compute, dfbs);
+    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs an
+    // explicit unpack mode. In this kernel every consumed buffer is read by an FPU op (the stats row
+    // reduce, mul_tiles / sub_tiles / add_tiles for the variance, and the broadcast multiplies and adds
+    // of the gamma / beta chain), and the FPU takes its operands from SrcA/SrcB, so SrcA/B is the mode
+    // for all of them. They are listed one by one on purpose: a Float32 buffer added here later should
+    // trip the validator rather than inherit a mode nobody chose.
+    if (compute_gen1.enable_32_bit_dest) {
+        // The intermediates all carry cb_data_format, which is Float32 exactly when the Dest register is.
+        unpack_via_src(compute_gen1, POST_VAR);
+        unpack_via_src(compute_gen1, POST_RECIP_SQRT_VAR);
+        if (!is_rmsnorm) {
+            unpack_via_src(compute_gen1, POST_STATS_REDUCED);
+            unpack_via_src(compute_gen1, POST_MEAN_SQUARED);
+            unpack_via_src(compute_gen1, POST_X_MINUS_MEAN);
+        }
+        if (uses_x_normed) {
+            unpack_via_src(compute_gen1, POST_X_NORMED);
+        }
+        if (uses_times_gamma_out) {
+            unpack_via_src(compute_gen1, POST_TIMES_GAMMA_OUT);
+        }
+        // The inputs carry their own tensor's dtype. The epsilon buffer is always Float16_b.
+        if (in_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_INPUT);
+            unpack_via_src(compute_gen1, POST_REDUCE);  // the scaler tile mirrors the input's dtype
+        }
+        if (stats_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_STATS);
+        }
+        if (gamma.has_value() && gamma_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_GAMMA);
+        }
+        if (beta.has_value() && beta_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_BETA);
+        }
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Tensor parameters

@@ -281,8 +281,20 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         compute.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
-    fill_default_unpack_modes(
-        gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config)), compute, dfbs);
+    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs an
+    // explicit unpack mode. Here each one feeds an FPU op (mul_tiles for x**2, the row reduce for the
+    // sums), and the FPU reads its operands out of SrcA/SrcB, so SrcA/B is the mode for all of them.
+    // The intermediates are Float16_b whatever the Dest width, so only the inputs can qualify.
+    if (compute_gen1.enable_32_bit_dest) {
+        if (in_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, PRE1D_INPUT);
+            unpack_via_src(compute_gen1, PRE1D_REDUCE);  // the scaler tile mirrors the input's dtype
+        }
+        if (fuse_pre_add && inb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, PRE1D_RESIDUAL);
+        }
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Tensor parameters
@@ -603,8 +615,21 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                 .accessor_name = "out_final",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER});
         }
-        fill_default_unpack_modes(
-            gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config)), compute, dfbs);
+        auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+        // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs
+        // an explicit unpack mode. Here each one feeds an FPU op (mul_tiles for x**2, the row reduce for
+        // the sums, add_tiles for the cross-core merge), and the FPU reads its operands out of
+        // SrcA/SrcB, so SrcA/B is the mode for all of them. The intermediates and the merge buffers are
+        // Float16_b whatever the Dest width, so only the inputs can qualify.
+        if (compute_gen1.enable_32_bit_dest) {
+            if (in_data_format == tt::DataFormat::Float32) {
+                unpack_via_src(compute_gen1, PRE2D_INPUT);
+                unpack_via_src(compute_gen1, PRE2D_REDUCE);  // the scaler tile mirrors the input's dtype
+            }
+            if (fuse_pre_add && inb_data_format == tt::DataFormat::Float32) {
+                unpack_via_src(compute_gen1, PRE2D_RESIDUAL);
+            }
+        }
         return compute;
     };
 

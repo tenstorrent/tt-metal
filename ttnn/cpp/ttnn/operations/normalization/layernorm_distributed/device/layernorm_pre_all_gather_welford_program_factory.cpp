@@ -309,10 +309,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     //   fuse_pre_add  -> UnpackToDest on the input, residual and fused buffers (copy_tile pre-add
     //   unpack + transpose_tile on the post-add result).
     if (welford_unpack_fp32_active) {
-        compute_gen1.unpack_modes.emplace(PREWF_INPUT, tt::tt_metal::UnpackMode::UnpackToDest);
+        unpack_via_dest(compute_gen1, PREWF_INPUT);
         if (fuse_pre_add) {
-            compute_gen1.unpack_modes.emplace(PREWF_RESIDUAL, tt::tt_metal::UnpackMode::UnpackToDest);
-            compute_gen1.unpack_modes.emplace(PREWF_FUSED, tt::tt_metal::UnpackMode::UnpackToDest);
+            unpack_via_dest(compute_gen1, PREWF_RESIDUAL);
+            unpack_via_dest(compute_gen1, PREWF_FUSED);
         }
     }
     // The transpose scratch holds data only for the final transpose operation, so its format
@@ -320,16 +320,34 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     // UnpackToDest on it too so the read-back doesn't truncate to TF32. For non-FP32 outputs the
     // final pack to the output buffer truncates anyway, so unpacking to FP32 would not be useful.
     if (out_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
-        compute_gen1.unpack_modes.emplace(PREWF_SCRATCH, tt::tt_metal::UnpackMode::UnpackToDest);
+        unpack_via_dest(compute_gen1, PREWF_SCRATCH);
     }
     // The Welford spill buffers hold the FP32 accumulator between block iterations and are reloaded
     // into DEST via copy_tile. On the SrcA/B path that round-trip truncates FP32 to TF32 on every
     // block iteration. Force UnpackToDest on them so the FP32 precision survives the spill cycle.
     if (fuse_pre_add && fp32_dest_acc_en) {
-        compute_gen1.unpack_modes.emplace(PREWF_MEAN_SPILL, tt::tt_metal::UnpackMode::UnpackToDest);
-        compute_gen1.unpack_modes.emplace(PREWF_M2_SPILL, tt::tt_metal::UnpackMode::UnpackToDest);
+        unpack_via_dest(compute_gen1, PREWF_MEAN_SPILL);
+        unpack_via_dest(compute_gen1, PREWF_M2_SPILL);
     }
-    fill_default_unpack_modes(compute_gen1, compute, dfbs);
+    // The remaining Float32 buffers this kernel consumes take the SrcA/B path. Each needs saying out
+    // loud, because with the 32-bit Dest register enabled a Float32 buffer has no implicit default.
+    if (fp32_dest_acc_en) {
+        // The reciprocal table is never unpacked at all: the kernel reads it through a base pointer.
+        // SrcA/B is the inert choice for a buffer no unpacker touches.
+        unpack_via_src(compute_gen1, PREWF_RECIP);
+        // A narrower input leaves welford_unpack_fp32_active off, which puts the pre-add on the FPU
+        // add_tiles path instead of the SFPU copy_tile one. The residual and the fused result are then
+        // read through SrcA/B, even though the 32-bit Dest register still makes the fused buffer Float32.
+        if (fuse_pre_add && !welford_unpack_fp32_active) {
+            unpack_via_src(compute_gen1, PREWF_FUSED);
+            if (inb_data_format == tt::DataFormat::Float32) {
+                unpack_via_src(compute_gen1, PREWF_RESIDUAL);
+            }
+        }
+    }
+    // The input and the transpose scratch need nothing further: each is Float32 only when its own
+    // tensor is, and both of those conditions already gave it UnpackToDest above. The spill buffers are
+    // likewise covered, on the fuse_pre_add && fp32_dest_acc_en condition that creates them.
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Tensor parameters

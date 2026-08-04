@@ -480,9 +480,39 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     //     recombine.
     //   - rmsnorm path: consumed by reduce_tile (FPU). Must NOT enable UnpackToDest.
     if (!is_rmsnorm && fp32_dest_acc_en && stats_data_format == tt::DataFormat::Float32) {
-        compute_gen1.unpack_modes.emplace(POSTWF_STATS, tt::tt_metal::UnpackMode::UnpackToDest);
+        unpack_via_dest(compute_gen1, POSTWF_STATS);
     }
-    fill_default_unpack_modes(compute_gen1, compute, dfbs);
+    // The rest of the Float32 buffers this kernel consumes take the SrcA/B path, each stated
+    // individually because a Float32 buffer has no implicit default once the 32-bit Dest register is
+    // enabled. Everything below is read by an FPU op: sub_tiles_bcast_cols for x - mean, add_tiles for
+    // var + epsilon, and the broadcast multiplies and adds of the gamma / beta chain.
+    if (fp32_dest_acc_en) {
+        // The intermediates all carry cb_data_format, which is Float32 exactly when the Dest register is.
+        unpack_via_src(compute_gen1, POSTWF_STATS_REDUCED);
+        unpack_via_src(compute_gen1, POSTWF_RECIP_SQRT_VAR);
+        unpack_via_src(compute_gen1, POSTWF_X_MINUS_MEAN);
+        if (uses_x_normed) {
+            unpack_via_src(compute_gen1, POSTWF_X_NORMED);
+        }
+        if (uses_times_gamma_out) {
+            unpack_via_src(compute_gen1, POSTWF_TIMES_GAMMA_OUT);
+        }
+        // The inputs carry their own tensor's dtype. The epsilon buffer is always Float16_b, and the
+        // reduce-scalar buffer never reaches this kernel (the reader is its only endpoint).
+        if (in_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POSTWF_INPUT);
+        }
+        // A Float32 stats buffer on the layernorm path already took UnpackToDest just above.
+        if (stats_data_format == tt::DataFormat::Float32 && is_rmsnorm) {
+            unpack_via_src(compute_gen1, POSTWF_STATS);
+        }
+        if (gamma.has_value() && gamma_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POSTWF_GAMMA);
+        }
+        if (beta.has_value() && beta_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POSTWF_BETA);
+        }
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Tensor parameters
