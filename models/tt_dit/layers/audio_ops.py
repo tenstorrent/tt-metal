@@ -203,6 +203,76 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
         )
     conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    try:
+        return _depthwise_tap_conv1d(
+            x_BTC,
+            weight,
+            B=B,
+            C=C,
+            T_pad=T_pad,
+            T_out=T_out,
+            K=K,
+            stride=stride,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            conv_config=conv_config,
+            compute_config=cache["cc"],
+            cache=cache,
+            wkey=wkey,
+            prepared=prepared,
+        )
+    except RuntimeError as exc:
+        # HEIGHT_SHARDED conv1d needs enough rows to spread over the core grid. Every LTX call
+        # site has tens of thousands of frames, but MiniMax-H3's BigVGAN starts at the latent
+        # rate (T=207, and T=40 in a short test), where the DRAM slicer cannot find any valid
+        # configuration. Fall back to the shift-multiply-add form, which has no sharding
+        # constraint at all -- slower, but this is a correctness path.
+        if "slice configuration" not in str(exc) and "found_valid_config" not in str(exc):
+            raise
+        logger.warning(f"depthwise conv1d unavailable at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback")
+        return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out)
+
+
+def _depthwise_tap_mac(x_BTC, taps, stride, *, T_out: int):
+    """Depthwise K-tap filter as ``sum_k tap_k * x[k : k + stride*T_out : stride]``.
+
+    No convolution op, so no shard-layout or slicing constraints. Used when ``ttnn.conv1d``
+    cannot find a valid configuration for the shape.
+    """
+    accumulator = None
+    for offset, tap in enumerate(taps):
+        if tap == 0.0:
+            continue
+        window = ttnn.slice(
+            x_BTC,
+            [0, offset, 0],
+            [x_BTC.shape[0], offset + stride * (T_out - 1) + 1, x_BTC.shape[2]],
+            [1, stride, 1],
+        )
+        scaled = ttnn.multiply(window, float(tap))
+        accumulator = scaled if accumulator is None else ttnn.add(accumulator, scaled)
+    return accumulator
+
+
+def _depthwise_tap_conv1d(
+    x_BTC,
+    weight,
+    *,
+    B,
+    C,
+    T_pad,
+    T_out,
+    K,
+    stride,
+    mesh_device,
+    dtype,
+    conv_config,
+    compute_config,
+    cache,
+    wkey,
+    prepared,
+):
+    """The HEIGHT_SHARDED ``ttnn.conv1d`` fast path (unchanged behaviour for LTX)."""
     out, _, (weight, _bias) = ttnn.conv1d(
         input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
         weight_tensor=weight,
@@ -218,7 +288,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         groups=C,
         dtype=dtype,
         conv_config=conv_config,
-        compute_config=cache["cc"],
+        compute_config=compute_config,
         return_output_dim=True,
         return_weights_and_bias=True,
     )
@@ -551,6 +621,7 @@ class Conv1dViaConv3d(Module):
         kernel_size: int,
         stride: int = 1,
         dilation: int = 1,
+        padding: int | None = None,
         padding_mode: str = "zeros",
         bias: bool = True,
         mesh_device: ttnn.MeshDevice,
@@ -589,19 +660,25 @@ class Conv1dViaConv3d(Module):
         self.ccl_manager = ccl_manager
 
         eff_k = (kernel_size - 1) * dilation + 1
+        # ``eff_k // 2`` is torch's "same" padding and is right for every LTX call site.
+        # A strided conv need not use it: MiniMax-H3's DAC encoder pairs ``kernel = 2 *
+        # stride`` with ``padding = ceil(stride / 2)``, which yields exactly ``L / stride``
+        # where ``eff_k // 2`` would yield ``L / stride + 1``. ``padding=None`` keeps the
+        # existing behaviour, so no LTX call site changes.
+        same_pad = eff_k // 2 if padding is None else padding
 
         if sharded:
             # Zero internal T pad; halo exchange in forward() supplies context.
             self.internal_padding = (0, 0, 0)
             self.external_pad_front = 0
             if padding_mode == "zeros":
-                self.halo_pad_left = eff_k // 2
-                self.halo_pad_right = eff_k // 2
+                self.halo_pad_left = same_pad
+                self.halo_pad_right = same_pad
             else:  # causal
                 self.halo_pad_left = eff_k - 1
                 self.halo_pad_right = 0
         elif padding_mode == "zeros":
-            self.internal_padding = (eff_k // 2, 0, 0)
+            self.internal_padding = (same_pad, 0, 0)
             self.external_pad_front = 0
             self.halo_pad_left = 0
             self.halo_pad_right = 0
@@ -759,6 +836,7 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
         kernel_size: int,
         stride: int = 1,
         dilation: int = 1,
+        padding: int | None = None,
         padding_mode: str = "zeros",
         bias: bool = True,
         mesh_device: ttnn.MeshDevice,
@@ -773,6 +851,7 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
             kernel_size=kernel_size,
             stride=stride,
             dilation=dilation,
+            padding=padding,
             padding_mode=padding_mode,
             bias=bias,
             mesh_device=mesh_device,
