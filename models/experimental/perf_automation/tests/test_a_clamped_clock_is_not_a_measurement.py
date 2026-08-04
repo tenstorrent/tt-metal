@@ -287,8 +287,24 @@ def test_the_umd_clamp_warning_is_what_we_key_on(mcp):
         "AICLK failed to settle after 200 ms. Expected 1350, observed 800. ASIC temperature: "
         "78.28347778320312, AICLK clamped by max-arbiter index 7 at 800 MHz"
     )
-    assert any(m in line for m in mcp._CLAMP_MARKERS)
+    assert mcp._run_reported_clamp(line)
 
 
 def test_a_clean_run_does_not_look_clamped(mcp):
-    assert not any(m in "TRACE_PER_TOKEN_MS=35.8279\n1 passed" for m in mcp._CLAMP_MARKERS)
+    assert not mcp._run_reported_clamp("TRACE_PER_TOKEN_MS=35.8279\n1 passed")
+
+
+def test_it_reuses_the_existing_overheat_detector(mcp):
+    """The tool already had detect_overheat guarding the tracy path. A second detector would be one
+    more thing to keep in step; this asserts the gate goes through the shared one."""
+    from models.experimental.perf_automation.agent.probes import detect_overheat
+
+    line = "AICLK failed to settle after 200 ms. Expected 1350, observed 800."
+    assert detect_overheat(line), "probes must recognise the CURRENT UMD wording"
+    assert mcp._run_reported_clamp(line)
+
+
+def test_a_clamp_without_the_arbiter_tag_is_still_caught(mcp):
+    """AICLK_ARB_MAX is guarded by is_entry_available(), so on a part whose telemetry enum lacks it
+    UMD prints only the settle failure. Keying solely on 'AICLK clamped' missed exactly that."""
+    assert mcp._run_reported_clamp("AICLK failed to settle after 200 ms. Expected 1000, observed 500.")

@@ -2232,10 +2232,9 @@ def _run_full_pipeline_ms():
         # a different depth. perf_test_gen has had this since a5aa6a96af ("no fixed magic number")
         # -- it was simply never wired into this path.
         out, r = _grow_trace_region_and_retry(cmd, repo, env, out, r)
-        # UMD prints the clamp itself ("AICLK failed to settle ... clamped by max-arbiter index 7 at
-        # 800 MHz"), so the run tells us whether its own clock was valid. Cheaper and more reliable
-        # than sampling telemetry alongside, which aliases against short runs.
-        if any(m in out for m in _CLAMP_MARKERS):
+        # UMD prints the clamp itself, so the run tells us whether its own clock was valid. Cheaper
+        # and more reliable than sampling telemetry alongside, which aliases against short runs.
+        if _run_reported_clamp(out):
             globals()["_LAST_RUN_CLAMPED"] = True
         for line in out.splitlines():
             if "TRACE_PER_TOKEN_MS=" in line:
@@ -2342,12 +2341,36 @@ _THERMAL_POLL_S = float(os.environ.get("PERF_MCP_THERMAL_POLL_S", "15"))
 _THERMAL_RETRIES = int(os.environ.get("PERF_MCP_THERMAL_RETRIES", "3"))
 _THERMAL_MARGIN_C = float(os.environ.get("PERF_MCP_THERMAL_MARGIN_C", "3"))
 
-# "failed to settle" is the arch-independent half: UMD emits it whenever the clock does not reach
-# what it asked for. The arbiter detail rides on TelemetryTag::AICLK_ARB_MAX, which UMD guards with
-# is_entry_available(), so it is present on Blackhole and absent on parts whose telemetry enum does
-# not carry it (wormhole_telemetry.hpp is a separate enum). Matching both means the general signal
-# still fires where the specific one does not.
-_CLAMP_MARKERS = ("AICLK failed to settle", "clamped by max-arbiter")
+# Fallback only. The real detector is agent.probes.detect_overheat, which already existed for the
+# tracy path; this list is used if that import fails, so a broken import degrades to a weaker check
+# rather than to no check.
+_CLAMP_MARKERS = ("AICLK failed to settle", "clamped by max-arbiter", "AICLK clamped")
+
+
+def _run_reported_clamp(out):
+    """Did the device tell us its own clock was clamped during this run?
+
+    agent.probes.detect_overheat is the tool's existing signal for exactly this and already guards
+    the tracy profiling path (probes.py:1055). What it did NOT cover is the full-pipeline gate --
+    _run_full_pipeline_ms drives _adaptive_run directly and never reaches that runner -- which is
+    why a 68.3 ms clamped reading became a ledger anchor while the profiling path was protected.
+    Reuse it here rather than growing a second detector.
+    """
+    if not out:
+        return False
+    # OR, not delegate-and-trust. `agent` resolves off sys.path, so WHICH copy of probes answers
+    # depends on how the process was launched -- and a copy predating "AICLK failed to settle" in
+    # _DEVICE_OVERHEAT_RE returns False for a genuinely clamped run. Checking the current wording
+    # locally as well means a stale import can only ADD coverage, never silently remove it.
+    if any(m in out for m in _CLAMP_MARKERS):
+        return True
+    try:
+        from agent.probes import detect_overheat
+
+        return bool(detect_overheat(out))
+    except Exception:  # noqa: BLE001
+        return False
+
 
 _LAST_RUN_CLAMPED = False
 
@@ -2419,35 +2442,26 @@ def _clamp_threshold_c():
 def _read_die_temp_c():
     """Hottest ASIC temperature across the chips this run can see, or None if unreadable.
 
-    MAX is the right reduction on a mesh: a collective runs at the pace of its slowest chip, so one
-    clamped member spoils the reading for every other one.
+    Delegates to agent.probes._read_asic_temp -- the tool already had this and a second copy would
+    be one more place to fix. MAX is the right reduction on a mesh: a collective runs at the pace
+    of its slowest chip, so one clamped member spoils the reading for every other one.
 
-    No index filtering is needed to scope that to the mesh -- tt-smi honours TT_VISIBLE_DEVICES
-    itself, verified on a 4-chip p300c: unset reports 4 chips, "0" reports 1, "0,1" and "2,3" each
-    report 2. A filter on top would also be WRONG for a non-zero-based set, since tt-smi returns
-    "2,3" at list positions 0 and 1.
-
-    When visibility is unset -- which is how --devices single presents -- this reduces over every
-    chip on the host. That is deliberate: without the variable there is nothing that says which
-    chip the run will open, and over-waiting is the safe direction.
+    Scoping to the mesh needs no index filtering: tt-smi honours TT_VISIBLE_DEVICES itself,
+    verified on a 4-chip p300c -- unset reports 4 chips, "0" reports 1, "0,1" and "2,3" each report
+    2. Filtering on top would be WRONG for a non-zero-based set, since tt-smi returns "2,3" at list
+    positions 0 and 1. With visibility unset -- how --devices single presents -- this reduces over
+    every chip on the host, deliberately: nothing says which chip the run will open, and
+    over-waiting is the safe direction.
 
     None means "cannot tell", and every caller treats that as permission to proceed: a board whose
-    telemetry we cannot read must not become a board we refuse to measure. That is also what
-    happens if TT_VISIBLE_DEVICES names a chip that does not exist -- tt-smi exits non-zero and
-    prints no JSON.
+    telemetry we cannot read must not become a board we refuse to measure.
     """
     try:
-        r = _sp.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=60)
-        doc = json.loads(r.stdout or "{}")
+        from agent.probes import _read_asic_temp
+
+        return _read_asic_temp()
     except Exception:  # noqa: BLE001
         return None
-    temps = []
-    for dev in doc.get("device_info") or []:
-        try:
-            temps.append(float((dev.get("telemetry") or {}).get("asic_temperature")))
-        except (TypeError, ValueError):
-            continue
-    return max(temps) if temps else None
 
 
 def _wait_for_thermal_headroom():

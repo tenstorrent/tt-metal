@@ -693,7 +693,15 @@ def _device_reset(error_text: str = "", config_target: str = "") -> bool:
     return _dr.recover("probes", _issue, error_text=error_text, config_target=config_target)
 
 
-_DEVICE_OVERHEAT_RE = re.compile(r"Waiting for AICLK value to settle failed|possible overheating|AICLK clamped")
+# "AICLK failed to settle" is what UMD emits TODAY (tt_device.cpp:342) and is arch-independent: it
+# fires whenever the clock misses what was asked for. The older "Waiting for AICLK value to settle
+# failed" and "possible overheating" wordings are no longer anywhere in UMD, and are kept only so
+# archived logs still match. Without the current phrasing this caught a clamp ONLY via the "AICLK
+# clamped" arbiter tag, which rides on TelemetryTag::AICLK_ARB_MAX behind is_entry_available() --
+# so on a part whose telemetry enum lacks that tag, a clamped run read as perfectly healthy.
+_DEVICE_OVERHEAT_RE = re.compile(
+    r"Waiting for AICLK value to settle failed|possible overheating|AICLK clamped|AICLK failed to settle"
+)
 _COOL_MARGIN_C = float(os.environ.get("PERF_MCP_COOL_MARGIN_C", "5") or "5")
 _COOL_POLL_S = float(os.environ.get("PERF_MCP_COOL_POLL_S", "5") or "5")
 _COOL_MAX_S = float(os.environ.get("PERF_MCP_COOL_MAX_S", "120") or "120")
