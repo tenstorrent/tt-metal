@@ -35,6 +35,10 @@ public:
     // Overriding it is outside this API, see experimental/tensor_layout_apis_with_custom_alignment.hpp.
     TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
 
+    // Wraps an already-built TensorLayoutImpl. Used by experimental custom-alignment factories
+    // that construct TensorLayoutImpl with a caller-supplied Alignment.
+    explicit TensorLayout(std::unique_ptr<TensorLayoutImpl> impl);
+
     ~TensorLayout();
     TensorLayout(const TensorLayout& other);
     TensorLayout& operator=(const TensorLayout& other);

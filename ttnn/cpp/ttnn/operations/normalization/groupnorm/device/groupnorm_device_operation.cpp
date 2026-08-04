@@ -292,7 +292,7 @@ tt::tt_metal::TensorSpec GroupNormDeviceOperation::compute_output_specs(
             auto mem_config = args.output_mem_config;
             return tt::tt_metal::TensorSpec(
                 input_tensor.logical_shape(),
-                experimental::tensor_layout_from_padded_shape(
+                tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                     program_config.out_data_format,
                     PageConfig(program_config.output_layout),
                     mem_config,
