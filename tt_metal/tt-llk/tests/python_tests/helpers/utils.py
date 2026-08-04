@@ -554,7 +554,18 @@ def passed_test(
     golden_tensor = golden_tensor.type(format_dict[output_data_format])
     res_tensor = res_tensor.type(format_dict[output_data_format])
 
-    if output_data_format == DataFormat.Bfp4_b:
+    if output_data_format == DataFormat.Bfp8_b:
+        # Bfp8_b is a block format like its Bfp4_b/Bfp2_b siblings — 7 magnitude bits
+        # against an exponent shared by 16 elements — but it used to fall through to
+        # the flat isclose path below. That only held while outputs stayed in a narrow
+        # band: once a block spans a wide magnitude range, the elements far below the
+        # block max are unrepresentable and quantize toward zero, which a fixed atol
+        # reads as a mismatch even though the hardware produced the closest value the
+        # format can express. Judge it on its own lattice, same as Bfp4_b/Bfp2_b.
+        is_valid = _bfp_block_aware_compare(
+            golden_tensor, res_tensor, mantissa_bits=7, max_ulp_diff=1
+        )
+    elif output_data_format == DataFormat.Bfp4_b:
         ulp = custom_bfp4_max_ulp_diff if custom_bfp4_max_ulp_diff is not None else 1
         is_valid = _bfp_block_aware_compare(
             golden_tensor, res_tensor, mantissa_bits=3, max_ulp_diff=ulp
