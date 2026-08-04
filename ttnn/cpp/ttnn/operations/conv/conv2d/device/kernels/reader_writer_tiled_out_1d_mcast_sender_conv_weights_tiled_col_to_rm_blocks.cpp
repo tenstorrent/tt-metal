@@ -119,6 +119,14 @@ void kernel_main() {
     constexpr uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base);
 
+    // With multiple output-height blocks, normal height-sharded Conv fully buffers every weight
+    // block because bh==0 loads them once and later bh iterations reuse them. A single weight block
+    // is likewise never overwritten after its send. The remaining streaming case completes the
+    // previous multicast immediately before it reuses the source slot below, rather than serializing
+    // every send at issue time.
+    constexpr bool weight_sources_are_persistent =
+        num_blocks_weight_h == 1 || (out_num_blocks_h > 1 && !activation_reuse_enabled);
+
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     constexpr uint32_t weight_inner_block_stride_h =
@@ -202,6 +210,11 @@ void kernel_main() {
             // Do weights read + mcast
             dfb_weight_obj.reserve_back(weight_block_num_tiles);
             if (bh == 0) {
+                if constexpr (!weight_sources_are_persistent) {
+                    if (block_weight_h != 0) {
+                        noc.async_writes_flushed();
+                    }
+                }
                 uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id + weight_h_offset;
 
                 uint32_t weight_write_offset = 0;
@@ -229,7 +242,8 @@ void kernel_main() {
 
 #ifndef SKIP_MCAST
                 const uint32_t weights_addr = dfb_weight_obj.get_write_ptr();
-                weights_pipe.send(weights_addr, weights_addr, weights_block_size_bytes);
+                weights_pipe.send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
+                    weights_addr, weights_addr, weights_block_size_bytes);
 #endif
 
                 weight_current_block_start_tile_id += weight_next_block_stride_h;
@@ -260,7 +274,9 @@ void kernel_main() {
 // MCAST BIAS (shares some mcast args with weights)
 #ifndef SKIP_MCAST
                 const uint32_t bias_addr_l1 = dfb_bias_obj.get_write_ptr();
-                weights_pipe.send(bias_addr_l1, bias_addr_l1, bias_block_size_bytes);
+                // Bias is loaded once and this source location is never rewritten in this kernel.
+                weights_pipe.send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
+                    bias_addr_l1, bias_addr_l1, bias_block_size_bytes);
 #endif
 
                 dfb_bias_obj.push_back(bias_ntiles);

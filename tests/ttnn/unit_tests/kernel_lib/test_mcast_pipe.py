@@ -48,7 +48,16 @@ VARIANTS = {
 
 
 def _run_pipe(
-    device, variant, recv_rect, sender_logical, payload_tiles, n_iters, pre_handshake, sender_noc=0, ack_count=None
+    device,
+    variant,
+    recv_rect,
+    sender_logical,
+    payload_tiles,
+    n_iters,
+    pre_handshake,
+    sender_noc=0,
+    ack_count=None,
+    guard_source_l1=True,
 ):
     """recv_rect = ((rx0,ry0),(rx1,ry1)) logical; sender_logical = (sx,sy) logical.
     sender_noc selects which NoC the sender mcasts on: 0 (reader) or 1 (writer). On NoC1 the
@@ -136,7 +145,7 @@ def _run_pipe(
     # pre_handshake + signal are in the mcast block (flags word) now — no separate pre_handshake CT word.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
-    sender_ct += [payload_pages, page_bytes, n_iters]
+    sender_ct += [payload_pages, page_bytes, n_iters, int(guard_source_l1)]
     sender_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     sender_rt = ttnn.RuntimeArgs()
     # RT: [input_addr, start_id] + the dest rect (virtual, NOC-ordered) the helper emits for the sender.
@@ -196,6 +205,19 @@ def test_smoke(device):
         payload_tiles=1,
         n_iters=1,
         pre_handshake=False,
+    )
+
+
+def test_caller_managed_source_l1(device):
+    _run_pipe(
+        device,
+        variant="flag_linked",
+        recv_rect=((0, 0), (0, 1)),
+        sender_logical=(1, 1),
+        payload_tiles=1,
+        n_iters=4,
+        pre_handshake=False,
+        guard_source_l1=False,
     )
 
 
@@ -447,7 +469,7 @@ def _run_split_count(device, payload_tiles, recv_rect=((0, 0), (0, 3)), ack_subs
     #      num_active=2 is the ack subset the sender waits on (the D2 split-count regression) ----
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
-    sender_ct += [payload_pages, page_bytes, 1]
+    sender_ct += [payload_pages, page_bytes, 1, 1]  # one iteration; default guarded source lifetime
     sender_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     sender_rt = ttnn.RuntimeArgs()
     sender_rt[sx][sy] = [input_tensor.buffer_address(), 0] + list(mc.runtime_args(ttnn.CoreCoord(sx, sy)))

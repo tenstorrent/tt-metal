@@ -64,7 +64,8 @@ template <
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send(
+template <SourceL1Guard SOURCE_GUARD>
+FORCE_INLINE void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send(
     uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
     // Degenerate: no receiver cores. If the sender is in its own box and lands a copy elsewhere, do
     // a local copy (a loopback to just self may hang); else nothing.
@@ -88,10 +89,10 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     const uint32_t mcast_dests = loopback ? num_dests_incl_ : num_dests_excl_;
     send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
     signal_ready_(loopback, mcast_dests);  // the signal rides the same mode as the data
-    // The post-signal fence is also the source-L1 lifetime guard. For remote-only traffic, SENT is
-    // sufficient because each receiver's signal wait proves arrival. A real loopback copy has no
-    // sender-side receive/wait, so its destination must be ACKED before send() returns.
-    fence_(loopback);
+    // The default post-signal fence is also the source-L1 lifetime guard. CallerManaged may omit the
+    // remote-only SENT wait, but cannot omit completion required by loopback, rotating-Flag reset, or
+    // Counter atomic acknowledgement semantics.
+    fence_<SOURCE_GUARD>(loopback);
     // Rotating sender: put our own flag cell back to INVALID now that the broadcast is flushed (the
     // fence above proved the cell is done as the set_multicast source). Otherwise this core's next
     // RECEIVER turn would wait(VALID) on the stale VALID we just left and return before the new
@@ -113,7 +114,7 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
         return;  // nobody to signal
     }
     signal_ready_(/*loopback=*/false, num_dests_excl_);
-    fence_(/*loopback=*/false);
+    fence_<SourceL1Guard::Guard>(/*loopback=*/false);
 }
 
 template <
@@ -123,7 +124,7 @@ template <
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send_data_(
+FORCE_INLINE void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send_data_(
     uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
     const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
     UnicastEndpoint src_ep;
@@ -149,7 +150,7 @@ template <
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::signal_ready_(
+FORCE_INLINE void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::signal_ready_(
     bool loopback, uint32_t mcast_dests) {
     const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
@@ -176,17 +177,20 @@ template <
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::fence_(
+template <SourceL1Guard SOURCE_GUARD>
+FORCE_INLINE void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::fence_(
     bool loopback) {
-    // Drain the linked data+signal chain together. This preserves both their ordering and the
-    // source-L1 lifetime contract on every architecture; no architecture-specific intermediate
-    // flush is needed between them.
+    // A real sender loopback always needs ACKED completion: this protects the locally published
+    // destination as well as the source lifetime, independent of SOURCE_GUARD.
     if (loopback) {
         // The sender never calls receive() on itself, so it has no data-ready wait that proves its
         // destination arrived before a same-core consumer observes the caller's publication.
         noc_.async_write_barrier();
-    } else {
-        // Remote receivers wait for the linked signal, which proves payload arrival.
+    } else if constexpr (
+        SOURCE_GUARD == SourceL1Guard::Guard ||
+        (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag)) {
+        // Guard waits for the remote-only payload source to depart. A rotating Flag sender also
+        // needs this wait before send() resets the local semaphore cell used as the signal source.
         noc_.async_writes_flushed();
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
@@ -231,13 +235,8 @@ template <
     DataReadySignal DATA_READY_SIGNAL,
     uint32_t NUM_SENDERS>
 ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::ReceiverPipe(
-    const Noc& noc, const uint32_t (&sender_coords)[2 * NUM_SENDERS]) :
-    noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
-    // Keep the sender coords (copied in, so the caller's array can be a temporary) — the pipe owns them
-    // and never reads runtime args itself.
-    for (uint32_t i = 0; i < 2 * NUM_SENDERS; ++i) {
-        coords_[i] = sender_coords[i];
-    }
+    const Noc& noc, const uint32_t* sender_coords) :
+    noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID), coords_(sender_coords) {
     // Init the flag THIS side waits on. The Counter signal needs no reset/init (monotone).
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
