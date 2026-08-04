@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::matmul_decode::detail {
 void bind_matmul_decode_operation(nb::module_& mod) {
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -33,6 +33,9 @@ void bind_matmul_decode_operation(nb::module_& mod) {
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to None.
             output_mem_config (ttnn.MemoryConfig, optional): memory config for the output tensor.
                 Defaults to None.
+            global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender global circular buffer
+                supplying the weights from the tensor prefetcher. Requires the full width-sharded
+                factory and a DRAM ND-sharded (receiver-contiguous) weight. Defaults to None.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -43,7 +46,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("partial_width_sharded") = false,
         nb::arg("dtype") = nb::none(),
-        nb::arg("output_mem_config") = nb::none());
+        nb::arg("output_mem_config") = nb::none(),
+        nb::arg("global_cb") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::matmul_decode::detail
