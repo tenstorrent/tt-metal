@@ -161,32 +161,6 @@ def _guard_cp_rope_alignment(mesh_device, chunk):
         pytest.skip(f"chunk={chunk} is not divisible by CP={cp}")
 
 
-def _guard_cp_last_token_slice(mesh_device):
-    """Skip the lm_head test under CP: the last-token slice is not CP-aware.
-
-    This test takes the logits for one absolute position, and both paths select it
-    with a mesh-wide scalar index — ``get_last_token=tile_start`` eagerly, or
-    ``process_logits_after_prefill_trace(..., last_token_idx)`` after a trace. Under
-    CP the sequence is sharded, so that scalar indexes into each rank's *local*
-    shard and picks the wrong tokens; the position actually lives on exactly one rank.
-
-    Gathering the logits instead is not viable — 4096 x 262144 is ~4.3 GB, which is
-    why the head is fed a 32-row slice in the first place. The fix is to CP-gather
-    the hidden states before lm_head (~44 MB) so the existing slice stays valid;
-    that is a model-path change and is not done yet.
-    """
-    from models.demos.gemma4.tt.ccl import cp_degree
-
-    cp = cp_degree(_mesh_config(mesh_device))
-    if cp > 1:
-        pytest.skip(
-            f"test_prefill_full's last-token slice is not CP-aware (CP={cp}): the slice index is a "
-            f"mesh-wide scalar into a sequence-sharded tensor. Needs a CP gather of the hidden states "
-            f"before lm_head. Run with GEMMA4_PREFILL_MESH=1x32 (CP=1), or use test_prefill_layers for "
-            f"the 60-layer body under CP."
-        )
-
-
 # ── Weight loading from the tensor cache ──────────────────────────────────────
 
 
@@ -769,13 +743,17 @@ def test_prefill_full(mesh_device, chunk, traced, reset_seeds, request):
     the reported numbers stay comparable.
     """
     _guard_chunk(request, chunk)
-    _guard_cp_last_token_slice(mesh_device)
+    _guard_cp_rope_alignment(mesh_device, chunk)
 
     model_path = _model_path()
+    mesh_config = _mesh_config(mesh_device)
     model_args, model, kv_cache, page_table_tt = _build_prefill_model(mesh_device, model_path, chunk)
 
     tokens, tokenizer, prompt_len = _prompt_tokens(model_path, chunk)
-    host_input = _host_tensor(mesh_device, tokens, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    # Token ids are [1, chunk], so the sequence axis is -1, not -2.
+    host_input = _host_tensor(
+        mesh_device, tokens, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_config=mesh_config, seq_dim=-1
+    )
 
     last_token_idx = prompt_len - 1
     tile_start = (last_token_idx // 32) * 32
