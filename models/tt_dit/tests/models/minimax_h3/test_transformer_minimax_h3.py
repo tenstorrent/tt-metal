@@ -55,14 +55,18 @@ VIDEO_PATCH_DIM = IN_CHANNELS * PATCH_SIZE[0] * PATCH_SIZE[1] * PATCH_SIZE[2]  #
 TAG_VIDEO, TAG_TEXT, TAG_AUDIO = 0, 1, 2
 
 
-def _modality_metadata(num_text: int, num_audio: int, num_video: int):
+def _modality_metadata(num_text: int, num_audio: int, num_video: int, grid: tuple[int, int] = (8, 8)):
     """Per-modality `(position_ids, token_tags, timestep_indices)` for one packed layout.
 
     Video rows get a (t, h, w) patch grid; text and audio rows advance the shared `t` clock with
     h = w = 0. Text and the first video frame are clean (timestep 0), the rest noisy (timestep 1), so
     the AdaLN table is addressed at four distinct `(timestep, modality)` rows including row 0.
+
+    `grid` is the (h, w) patch grid of one latent frame. It is a parameter because the default 8x8
+    gives 64 rows per frame, which is a multiple of TILE for any frame count and so can never
+    exercise the unaligned assembly path. Production is 24x42 = 1008 rows/frame == 16 mod 32.
     """
-    grid_h = grid_w = 8
+    grid_h, grid_w = grid
     frame = grid_h * grid_w
     assert num_video % frame == 0, "num_video must fill whole (h, w) frames"
     grid_t = num_video // frame
@@ -113,14 +117,22 @@ def _modality_metadata(num_text: int, num_audio: int, num_video: int):
     ],
 )
 @pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video"),
+    ("num_text", "num_audio", "num_video", "grid"),
     [
-        # Each modality's row count only needs to be a multiple of TILE (32); the packed sequence is
-        # assembled globally and its tail padded to a multiple of SP * TILE (256).
-        pytest.param(512, 256, 1280, id="small_s2048"),  # 2048: already aligned, no padding
-        # 2112 is a multiple of TILE but not of SP * TILE, so this one exercises the padding path.
-        pytest.param(512, 256, 1344, id="unaligned_s2112"),  # 2112 -> padded to 2304
-        pytest.param(512, 256, 20736, id="s21504"),
+        # The three tile-aligned cases: every modality is a multiple of TILE (32), so the packed
+        # sequence is assembled directly in TILE_LAYOUT. This is the cheap path and stays covered.
+        pytest.param(512, 256, 1280, (8, 8), id="small_s2048"),  # 2048: already aligned, no padding
+        # 2112 is a multiple of TILE but not of SP * TILE, so this one exercises the tail padding.
+        pytest.param(512, 256, 1344, (8, 8), id="unaligned_s2112"),  # 2112 -> padded to 2304
+        pytest.param(512, 256, 20736, (8, 8), id="s21504"),
+        # The shape that ships: 1344x768 / 124 frames, 512-token prompt. 37 latent frames over a
+        # 24x42 patch grid = 37296 video rows (== 16 mod 32) and 207 audio latents x 2 channels =
+        # 414 audio rows (== 30 mod 32), so this is the ROW_MAJOR assembly path -- and before that
+        # path existed, this case asserted rather than ran.
+        #
+        # The three cases above are tile-aligned by construction and cannot reach it. They are kept
+        # as the cheap regression net for the TILE path, but this is the one that gates what ships.
+        pytest.param(512, 414, 37296, (24, 42), id="prod_768p_5s"),  # 38222 -> padded to 38400
     ],
 )
 def test_minimax_h3_transformer(
@@ -131,6 +143,7 @@ def test_minimax_h3_transformer(
     num_text: int,
     num_audio: int,
     num_video: int,
+    grid: tuple[int, int],
     weights: str,
     is_fsdp: bool,
     topology: ttnn.Topology,
@@ -159,7 +172,7 @@ def test_minimax_h3_transformer(
 
     B = 1
     seq_len = num_text + num_audio + num_video
-    per_modality = _modality_metadata(num_text, num_audio, num_video)
+    per_modality = _modality_metadata(num_text, num_audio, num_video, grid)
 
     # ---- reference layout: packed as [text | audio | video], contiguous ----
     ref_position_ids = torch.cat([per_modality[m]["pos"] for m in ("text", "audio", "video")])
@@ -443,10 +456,16 @@ def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, t
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video"),
+    ("num_text", "num_audio", "num_video", "grid"),
     [
-        pytest.param(512, 256, 1280, id="small_s2048"),
-        pytest.param(512, 256, 20736, id="s21504"),
+        pytest.param(512, 256, 1280, (8, 8), id="small_s2048"),
+        pytest.param(512, 256, 20736, (8, 8), id="s21504"),
+        # The shape that ships: 1344x768 / 124 frames / 512-token prompt. 37 latent frames over a
+        # 24x42 patch grid = 37296 video rows, 207 audio latents x 2 channels = 414 audio rows,
+        # total 38222 padded to 38400 -- 4800 rows per device at SP=8. Neither of the two cases
+        # above reaches this: they are tile-aligned by construction and 1.8x smaller, so they ask
+        # neither the ROW_MAJOR assembly question nor the residency one at full depth.
+        pytest.param(512, 414, 37296, (24, 42), id="prod_768p_5s"),
     ],
 )
 def test_minimax_h3_transformer_real_weights(
@@ -457,6 +476,7 @@ def test_minimax_h3_transformer_real_weights(
     num_text: int,
     num_audio: int,
     num_video: int,
+    grid: tuple[int, int],
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
@@ -501,7 +521,7 @@ def test_minimax_h3_transformer_real_weights(
     audio_channels = model_kwargs["audio_in_channels"]
     video_patch_dim = model_kwargs["in_channels"] * int(torch.tensor(model_kwargs["patch_size"]).prod())
 
-    per_modality = _modality_metadata(num_text, num_audio, num_video)
+    per_modality = _modality_metadata(num_text, num_audio, num_video, grid)
     position_ids = torch.cat([per_modality[m]["pos"] for m in ("text", "audio", "video")])
     tags = torch.cat([per_modality[m]["tags"] for m in ("text", "audio", "video")])
     ts_idx = torch.cat([per_modality[m]["ts"] for m in ("text", "audio", "video")])

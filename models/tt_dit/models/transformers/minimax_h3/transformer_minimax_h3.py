@@ -148,17 +148,21 @@ class MiniMaxH3Transformer3DModel(Module):
     the model. Outputs are gathered back on SP and sliced per modality, so each modality's rows come
     back in its own order, matching what the reference returns.
 
-    The only remaining constraint is that each modality's row count be a multiple of `TILE_SIZE`, so
-    that the device-side concat lands on tile boundaries. That is much weaker than requiring each to
-    divide `sp_factor * TILE`. (Fully arbitrary per-modality lengths would need the concat done in
-    ROW_MAJOR and converted back, which costs two layout passes over the whole packed sequence.)
+    Per-modality row counts are unconstrained. A concat in `TILE_LAYOUT` can only cut on a tile
+    boundary, so when all three lengths are multiples of `TILE_SIZE` the assembly happens there
+    directly; otherwise the three streams are converted to ROW_MAJOR, concatenated at row
+    granularity, and the assembled sequence -- whose padded length *is* tile aligned -- is converted
+    back once. Production t2va needs the second path: at 1344x768 / 124 frames the video rows are
+    37296 (= 16 mod 32) and the audio rows 414 (= 30 mod 32).
 
     Padding
     -------
     Trailing zero rows only, and they need no attention mask: ring attention's `logical_n` masks the
     tail beyond the true sequence length internally. The reference's `-1`-tagged separate-document
-    mask is therefore unnecessary. Interior padding would need a real mask, which is why each modality
-    is tile-aligned rather than individually padded.
+    mask is therefore unnecessary. Interior padding is what is *not* allowed -- a pad row between two
+    modalities is inside `logical_n`, so every real row would attend to it as a key and value. That is
+    why unaligned modalities are handled by changing the layout of the concat, not by padding each
+    modality up to a tile.
 
     Precision
     ---------
@@ -324,8 +328,8 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
 
-        V, A and L must each be a multiple of `ttnn.TILE_SIZE`. The true packed length `L + A + V` is
-        derived here, so the caller passes no lengths; the padded length is read off `rope_cos`.
+        V, A and L are arbitrary; only their sum is padded, to a multiple of `sp_factor * TILE`. The
+        true packed length `L + A + V` is derived here, so the caller passes no lengths.
 
         Returns `(video_velocity, audio_velocity)`, each replicated, in that modality's row order.
         """
@@ -334,28 +338,46 @@ class MiniMaxH3Transformer3DModel(Module):
         l_len = prompt_1BLP.shape[2]
         seq_len = l_len + a_len + v_len
         tile = ttnn.TILE_SIZE
-        for name, n in (("video", v_len), ("audio", a_len), ("text", l_len)):
-            assert n % tile == 0, f"{name} rows ({n}) must be a multiple of TILE_SIZE ({tile})"
+        # A tile-layout concat can only cut on a tile boundary, so it needs every modality's row
+        # count to be a multiple of TILE. Production t2va satisfies none of that: at 1344x768 /
+        # 124 frames the video rows are 37 * 1008 = 37296 (= 16 mod 32) and the audio rows
+        # 207 * 2 = 414 (= 30 mod 32), and the text rows are whatever the prompt tokenizes to.
+        # Assembling in ROW_MAJOR instead costs two layout passes over the packed sequence and
+        # accepts any lengths. The tile path is kept for the aligned case rather than deleted:
+        # it is strictly cheaper, and keeping it means this change cannot move a shape that
+        # already worked.
+        tile_aligned = not (v_len % tile or a_len % tile or l_len % tile)
 
         # 1. Project each modality and refine the text stream, all still replicated on SP, then
         # assemble the full packed sequence in natural order.
         video_embeds = self.proj_in(video_1BVC)
         audio_embeds = self.audio_proj_in(audio_1BAC)
         text_embeds = self.token_refiner(self.context_embedder(prompt_1BLP))
-        hidden = ttnn.concat([text_embeds, audio_embeds, video_embeds], dim=2)
+        streams = [text_embeds, audio_embeds, video_embeds]
 
         # 2. Zero-pad the tail up to a multiple of sp_factor * TILE, then fracture across SP.
-        # Ring attention masks the pad rows via logical_n = seq_len, so no attention mask is needed.
+        # Ring attention masks the pad rows via logical_n = seq_len, so no attention mask is
+        # needed. The padding must stay at the tail: interior pad rows would be attended to as
+        # keys and values by every real row, which is why unaligned modalities are handled by
+        # changing the layout of the concat rather than by padding each modality.
         alignment = self.sp_factor * tile
         padded_len = ((seq_len + alignment - 1) // alignment) * alignment
+        pad_layout = ttnn.TILE_LAYOUT if tile_aligned else ttnn.ROW_MAJOR_LAYOUT
+        if not tile_aligned:
+            streams = [ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) for t in streams]
+        hidden = ttnn.concat(streams, dim=2)
         if padded_len != seq_len:
             pad = ttnn.zeros(
                 [1, 1, padded_len - seq_len, self.hidden_local],
                 dtype=hidden.dtype,
-                layout=ttnn.TILE_LAYOUT,
+                layout=pad_layout,
                 device=self.mesh_device,
             )
             hidden = ttnn.concat([hidden, pad], dim=2)
+        if not tile_aligned:
+            # `padded_len` is a multiple of sp_factor * TILE, so the assembled sequence is tile
+            # aligned even though none of its parts was.
+            hidden = ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
         # 3. One timestep embedding per distinct noise level, shared by every AdaLN projection.

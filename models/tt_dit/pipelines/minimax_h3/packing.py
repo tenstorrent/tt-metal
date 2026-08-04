@@ -325,6 +325,35 @@ def build_packed_sequence(
     )
 
 
+def build_rope_tables(
+    position_ids: torch.Tensor, *, rope_freq_dim: int, rope_theta: float
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Rotary cos/sin for every row of a packed sequence, from its ``(t, h, w)`` grid.
+
+    One ``inv_freq`` of ``rope_freq_dim`` frequencies is shared by the three axes; each axis
+    contributes its own block, the three are concatenated to ``3 * rope_freq_dim`` and then
+    concatenated with themselves so ``rotate_half`` rotates ``2 * 3 * rope_freq_dim`` of each
+    head's channels and passes the rest through.
+
+    ``rope_freq_dim`` and ``rope_theta`` are the transformer's, read from its ``config.json``
+    (16 and 10000.0 for the released checkpoint). ``rope_theta`` here is unrelated to the video
+    VAE decoder's 100.0 and to the text encoder's 5e6.
+
+    A mirror of the reference ``MiniMaxH3RotaryPosEmbed``, op for op and in its order, so the
+    result is bit-exact against it -- pinned by ``test_rope_tables_match_reference``. The
+    ``float64`` position grid is cast to ``float32`` first, as the reference does; casting later
+    would change the last ulp of every angle. The head-width interleaved relayout the fused RoPE
+    op wants is a separate step, ``attention_minimax_h3.prepare_rope_tables``.
+    """
+    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, 2 * rope_freq_dim, 2, dtype=torch.float32) / (2 * rope_freq_dim)))
+    position_ids = position_ids.to(torch.float32)
+    freqs = position_ids.unsqueeze(-1) * inv_freq.view(1, 1, -1)
+    freqs_t, freqs_h, freqs_w = freqs.unbind(dim=1)
+    freqs = torch.cat((freqs_t, freqs_h, freqs_w), dim=-1)
+    freqs = torch.cat((freqs, freqs), dim=-1)
+    return freqs.cos(), freqs.sin()
+
+
 def build_row_timesteps(
     layout: MiniMaxH3PackedSequence,
     video_timestep: float,
