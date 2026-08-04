@@ -34,6 +34,7 @@
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape) {
+    static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
     static_assert(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
     static_assert(!respect_trigger, "respect_trigger (MOP-split handshake) not supported on Quasar");
     (void)tensor_shape;  // the MOP (which uses the shape + buffer descriptor) is programmed at execute

@@ -31,6 +31,7 @@
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void llk_math_reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape) {
+    static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
     _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
 }
 
