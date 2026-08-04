@@ -10,6 +10,9 @@
 
 namespace hal
 {
+template <auto>
+inline constexpr bool dependent_false_v = false;
+
 /**
  * Enum class for address counter client selection
  */
@@ -376,7 +379,7 @@ public:
             else
             {
                 static_assert(
-                    SetMask != SetMask,
+                    dependent_false_v<SetMask>,
                     "unsupported selection — matches none of the valid op() patterns (single counter/single channel, X/Y any channel, or Z/W any channel)");
             }
         }
@@ -398,12 +401,12 @@ public:
             }
             else
             {
-                static_assert(SetMask != SetMask, "misuse - nothing to increment");
+                static_assert(dependent_false_v<SetMask>, "misuse - nothing to increment");
             }
         }
         else
         {
-            static_assert(operation != operation, "Invalid operation type");
+            static_assert(dependent_false_v<operation>, "Invalid operation type");
         }
     }
 
