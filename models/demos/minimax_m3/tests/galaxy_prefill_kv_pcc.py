@@ -30,7 +30,7 @@ Run (after weights are present on disk):
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   # chunked over the 10240-token golden (two 5120 chunks, no pad tail), 5 timed iterations:
   PREFILL_CHUNKED=1 PREFILL_TPS_ITERS=5 \
-    PREFILL_TRACE_DIR=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240 \
+    PREFILL_TRACE_DIR=$HF_MODEL/golden/longbook_10240 \
     python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
 """
 
