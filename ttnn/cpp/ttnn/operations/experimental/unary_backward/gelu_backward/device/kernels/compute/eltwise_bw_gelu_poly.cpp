@@ -27,21 +27,24 @@ void kernel_main() {
         ckl::CopyTile<
             ckl::input(
                 cb_grad_out,
-                ckl::WaitPolicy::PerChunk,
-                ckl::PopPolicy::PerChunk,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::CopyTile<
             ckl::input(
                 cb_input,
-                ckl::WaitPolicy::PerChunk,
-                ckl::PopPolicy::PerChunk,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
         ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            cb_grad_in, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>{});
+            cb_grad_in,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Disabled)>{});
 }

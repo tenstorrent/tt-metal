@@ -28,24 +28,24 @@ void kernel_main() {
         ckl::CopyTile<
             ckl::input(
                 cb_in0,
-                ckl::WaitPolicy::PerChunk,
-                ckl::PopPolicy::PerChunk,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::CopyTile<
             ckl::input(
                 cb_in1,
-                ckl::WaitPolicy::PerChunk,
-                ckl::PopPolicy::PerChunk,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
         ckl::CopyTile<
             ckl::input(
                 cb_in2,
-                ckl::WaitPolicy::PerChunk,
-                ckl::PopPolicy::PerChunk,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D2>{},
@@ -54,5 +54,8 @@ void kernel_main() {
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D2, ckl::Dst::D2>{},  // D2 = D3*in2
         ckl::AddIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0>{},  // D0 = in0 + D2
         ckl::PackTile<ckl::output(
-            cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>{});
+            cb_out,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Disabled)>{});
 }

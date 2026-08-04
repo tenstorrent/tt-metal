@@ -93,7 +93,7 @@ def test_fixed_block_tail_executes_only_valid_tiles(device, n):
     actual = ttnn.to_torch(output).to(torch.float32)[..., :valid_columns]
     golden = torch.exp(torch_in.to(torch.float32)[..., :valid_columns])
     pcc_ok, msg = comp_pcc(golden, actual, lib.pcc_threshold([dt]))
-    logger.info(f"padded Chunked tail n={n}, physical_n={physical_n} | {msg}")
+    logger.info(f"padded PerBlockSize tail n={n}, physical_n={physical_n} | {msg}")
     assert pcc_ok, msg
 
 
@@ -130,7 +130,7 @@ def test_fixed_block_tail_is_synchronized_per_row(device, Ht, Wt):
 
 @pytest.mark.parametrize("Ht,Wt", [(2, 3), (2, 9)])
 def test_clamped_block_tail_synchronizes_only_valid_tiles(device, Ht, Wt):
-    """ValidTiles mode clamps both Chunked synchronization and math to each logical row tail."""
+    """ValidTiles mode clamps both PerBlockSize synchronization and math to each logical row tail."""
     block_size = 8
     n = Ht * Wt
     dt = ttnn.bfloat16
@@ -154,5 +154,5 @@ def test_clamped_block_tail_synchronizes_only_valid_tiles(device, Ht, Wt):
     actual = ttnn.to_torch(output).to(torch.float32)
     golden = torch.exp(torch_in.to(torch.float32))
     pcc_ok, msg = comp_pcc(golden, actual, lib.pcc_threshold([dt]))
-    logger.info(f"clamped Chunked tail Ht={Ht}, Wt={Wt} | {msg}")
+    logger.info(f"clamped PerBlockSize tail Ht={Ht}, Wt={Wt} | {msg}")
     assert pcc_ok, msg

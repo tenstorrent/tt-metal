@@ -131,8 +131,8 @@ void kernel_main() {
                     ckl::BinaryFpu<
                         ckl::input(
                             mul_rms_result_cb,
-                            ckl::WaitPolicy::PerChunk,
-                            ckl::PopPolicy::PerChunk,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
                         ckl::input(
                             weight_cb,
@@ -144,7 +144,7 @@ void kernel_main() {
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{0u, col_tile},
                     ckl::PackTile<ckl::output(
-                        mul_weight_result_cb, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                        mul_weight_result_cb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
 
             /**

@@ -46,11 +46,11 @@ void kernel_main() {
         ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
         // cond -> D0 (block read, init_short for cb_cond).
         ckl::CopyTile<
-            ckl::input(cb_cond, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(cb_cond, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::Dst::D0>{},
         // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for cb_tensor).
         ckl::CopyTile<
-            ckl::input(cb_tensor, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(cb_tensor, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             kTensorSlot>{},
         // scalar fill -> the other slot. Inactive flavor folds to a no-op.
         ckl::OptionalChainElement<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},
@@ -58,5 +58,8 @@ void kernel_main() {
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>{});
+            cb_out,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Disabled)>{});
 }

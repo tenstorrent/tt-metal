@@ -195,6 +195,6 @@ void kernel_main() {
     ckl::mul<
         ckl::input(cb_im, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
         ckl::input(cb_gamma, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
-        ckl::output(cb_outgamma, ckl::ReservePolicy::Upfront, ckl::PushPolicy::PerChunk),
+        ckl::output(cb_outgamma, ckl::ReservePolicy::Upfront, ckl::PushPolicy::PerBlockSize),
         ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 }

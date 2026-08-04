@@ -42,15 +42,15 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef FUSE_PRE_ADD
         ckl::add<
-            ckl::input(dfb::in0, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-            ckl::input(dfb::res, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-            ckl::output(dfb_inp_id, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+            ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
             ckl::BroadcastDim::None>(squaring_shape);
 #endif
 
         ckl::square<
             ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::OperandKind::Block),
-            ckl::output(dfb::x2, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>(squaring_shape);
+            ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
 
         ckl::reduce<
             PoolType::AVG,

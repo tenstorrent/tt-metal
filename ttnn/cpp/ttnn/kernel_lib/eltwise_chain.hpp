@@ -87,7 +87,7 @@ namespace compute_kernel_lib {
 // 1a. 2D shape — (Ht, Wt) tile grid for the 2D chain overload
 // =============================================================================
 
-/// How a Chunked lifecycle synchronizes the partial tail of a blocked walk.
+/// How a `PerBlockSize` lifecycle synchronizes the partial tail of a blocked walk.
 ///
 /// Math and pack always execute only valid tiles. This policy controls only the CB lifecycle
 /// count (wait/pop/reserve/push) of the partial final block.
@@ -212,17 +212,22 @@ enum class InitReconfigOwner {
 // 1b. Input and output CB synchronization policies
 // =============================================================================
 
+/// `PerBlockSize` synchronizes a CB once per `EltwiseShape::block_size` group. It is unrelated to
+/// `OperandKind::Block`, which controls how an input tile index maps onto the output shape. On a
+/// partial final group, `BlockTailSync` selects whether the synchronized count is the valid
+/// remainder or the full `block_size`.
+
 /// When the chain waits for an input CB.
-enum class WaitPolicy : uint8_t { None, PerTile, PerChunk, PerOuter, Upfront, Cumulative };
+enum class WaitPolicy : uint8_t { None, PerTile, PerBlockSize, PerOuter, Upfront, Cumulative };
 
 /// When the chain pops an input CB.
-enum class PopPolicy : uint8_t { None, PerTile, PerChunk, PerOuter, AtEnd };
+enum class PopPolicy : uint8_t { None, PerTile, PerBlockSize, PerOuter, AtEnd };
 
 /// When the chain reserves an output CB.
-enum class ReservePolicy : uint8_t { None, PerTile, PerChunk, Upfront, PerOuter, OneUpfront };
+enum class ReservePolicy : uint8_t { None, PerTile, PerBlockSize, Upfront, PerOuter, OneUpfront };
 
 /// When the chain pushes an output CB.
-enum class PushPolicy : uint8_t { None, PerTile, PerChunk, AtEnd, PerOuter, OneAtEnd };
+enum class PushPolicy : uint8_t { None, PerTile, PerBlockSize, AtEnd, PerOuter, OneAtEnd };
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
 /// Pick the one that matches how your input maps onto the output:
@@ -388,7 +393,7 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 /// `grid(H, W, blk)`), passed as the shape to `eltwise_chain(shape, ...)`. Each full outer iter
 /// processes `block_size` tiles across `block_size` DEST lanes (lane j at slot
 /// dst_slot + j * chain_lane_width); `block_size == 1` is the per-tile shape. A partial final
-/// iter always executes only its valid remainder. `BlockTailSync` selects whether Chunked
+/// iter always executes only its valid remainder. `BlockTailSync` selects whether `PerBlockSize`
 /// lifecycles synchronize that valid remainder or the full `block_size`.
 ///
 /// For numeric shapes, the chain clamps `block_size` at runtime so
@@ -504,7 +509,7 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 /// Index-mode (OperandKind) and block-mode behavior match the enum docs above: Block /
 /// Row / Col / Scalar pick the per-iter tile index; input policies that own a staged CB
 /// window take the upfront-block path; Streaming chains clamp block_size to 1.
-/// `BlockTailSync` affects only per-chunk synchronization counts. Row/Col need a non-streaming policy.
+/// `BlockTailSync` affects only per-block-size synchronization counts. Row/Col need a non-streaming policy.
 template <InitReconfigOwner Owner = InitReconfigOwner::Chain, EltwiseShapeKind Kind, class... Es>
 ALWI void eltwise_chain(TypedEltwiseShape<Kind> shape, Es... elts);
 
