@@ -444,6 +444,44 @@ def _matmul_demand(c: DemandCtx) -> None:
         c.need_all_local(i)
 
 
+def _conv2d_apply(c: ApplyCtx) -> None:
+    """[B,H,W,Cin] -> [B,Hout,Wout,Cout], channel-parallel like a col-parallel matmul.
+
+    The conv contracts the full input channels (and a spatial neighbourhood), so
+    the output's channel axis is fractured wherever the weight's out-channel axis
+    (axis 0) is; nothing is a partial sum here (the reduced K axis is not sharded).
+    """
+    from .state import device_region
+
+    ys = c.out_sym(0)
+    dist = Dist.replicated(c.mesh)
+    if len(c.node.inputs) > 1:
+        w, ws = c.in_state(1), c.in_sym(1)
+        for m in range(len(c.mesh.shape)):
+            a = w.dist.shard[m]
+            if a is not None and _axis(a, ws.ndim) == 0:  # weight out-channel axis
+                dist = dist.with_shard(m, _cols_axis(ys))  # -> output channel axis (last)
+    regions = {d: device_region(c.mesh, ys, dist, d) for d in c.mesh.devices()}
+    c.define(0, dist, regions, derive_value_id("conv2d", c.value_of_inputs(), c.node.attrs), c.tainted_inputs())
+
+
+def _conv2d_demand(c: DemandCtx) -> None:
+    # Contracts the full input channels and a spatial neighbourhood, and reads the
+    # weight over its output-channel shard: demand whatever each device holds.
+    for i in range(len(c.node.inputs)):
+        c.need_all_local(i)
+
+
+register(
+    OpSpec(
+        "conv2d",
+        COMPUTE,
+        _conv2d_apply,
+        _conv2d_demand,
+        doc="2-D convolution (NHWC), channel-parallel: output channels fractured where the weight's out axis is.",
+    ),
+    aliases=("ttnn.conv2d",),
+)
 register(
     OpSpec(
         "matmul",
@@ -588,6 +626,14 @@ for _name, _aliases, _doc in [
     ),
     ("softmax", (), "Reduces over the last axis."),
     (
+        # VAE group norm: channels are TP-fractured but each device holds whole
+        # groups and the spatial axis is not sharded, so the reduction is
+        # device-local -- ordinary layout-preserving pointwise, no full-axis need.
+        "group_norm",
+        ("ttnn.group_norm",),
+        "Group norm over NHWC channels; device-local (whole groups per device), keeps the layout.",
+    ),
+    (
         # dit_fused_distributed_{layernorm,rmsnorm}: the reduction statistics are
         # exchanged inside the kernel over a mesh axis, so the *activation* stays
         # fractured and no activation-sized collective is implied. The stats
@@ -611,6 +657,22 @@ for _name, _aliases, _doc in [
 # -----------------------------------------------------------------------------
 # metadata-only ops
 # -----------------------------------------------------------------------------
+def _suffix_preserved_map(src: Sequence[int], dst: Sequence[int]) -> Dict[int, int]:
+    """Trailing axes whose size is unchanged, ``src axis -> dst axis``.
+
+    A reshape that only merges or splits *leading* axes (the VAE's
+    ``[B,H,W,C] <-> [B,1,H*W,C]``) leaves a common suffix intact, so a shard on
+    any preserved trailing axis survives it (roadmap blocker 17).
+    """
+    m: Dict[int, int] = {}
+    i, j = len(src) - 1, len(dst) - 1
+    while i >= 0 and j >= 0 and src[i] == dst[j]:
+        m[i] = j
+        i -= 1
+        j -= 1
+    return m
+
+
 def _identity_apply(c: ApplyCtx) -> None:
     x = c.in_state(0)
     ys = c.out_sym(0)
@@ -620,6 +682,29 @@ def _identity_apply(c: ApplyCtx) -> None:
     else:  # trivial rank change (squeeze / unsqueeze of size-1 axes)
         mapping = _trivial_axis_map(c.in_sym(0).shape, ys.shape)
         if mapping is None:
+            xs = c.in_sym(0)
+            suffix = _suffix_preserved_map(xs.shape, ys.shape)
+            if suffix and all(a is None or _axis(a, xs.ndim) in suffix for a in x.dist.shard):
+                # Only leading (unsharded) axes are reshaped; every shard sits on a
+                # preserved trailing axis, so keep it and set the reshaped prefix to
+                # full. The value and the shard's coverage survive, so this is not
+                # opaque and not tainted -- the VAE's spatial merge (blocker 17).
+                dist = Dist(
+                    tuple(None if a is None else suffix[_axis(a, xs.ndim)] for a in x.dist.shard), x.dist.partial
+                )
+                regions = {}
+                for d in c.mesh.devices():
+                    if x.regions[d].is_empty:
+                        regions[d] = RegionSet.empty(ys.ndim)
+                        continue
+                    box = Box.full(ys.shape)
+                    for sa, da in suffix.items():
+                        b = x.regions[d].bounds(sa)
+                        if b is not None:
+                            box = box.replace_axis(da, *b)
+                    regions[d] = RegionSet.of(box)
+                c.define(0, dist, regions, x.value_id, x.tainted)
+                return
             c.warn("OPAQUE_RESHAPE", "cannot track regions through reshape %s -> %s" % (c.in_sym(0).shape, ys.shape))
             regions = {
                 d: (RegionSet.empty(ys.ndim) if x.regions[d].is_empty else ys.full_region()) for d in c.mesh.devices()
@@ -643,6 +728,20 @@ def _identity_demand(c: DemandCtx) -> None:
             c.need(xid, dev, dem[dev])
         return
     mapping = _trivial_axis_map(ys.shape, xs.shape)
+    if mapping is None:
+        suffix = _suffix_preserved_map(xs.shape, ys.shape)  # src=input, dst=output
+        if suffix:  # map the preserved trailing bounds back; leading axes -> full
+            inverse = {da: sa for sa, da in suffix.items()}
+            for dev in c.mesh.devices():
+                if dem[dev].is_empty:
+                    continue
+                box = Box.full(xs.shape)
+                for da, sa in inverse.items():
+                    b = dem[dev].bounds(da)
+                    if b is not None:
+                        box = box.replace_axis(sa, *b)
+                c.need(xid, dev, RegionSet.of(box))
+            return
     for dev in c.mesh.devices():
         if dem[dev].is_empty:
             continue

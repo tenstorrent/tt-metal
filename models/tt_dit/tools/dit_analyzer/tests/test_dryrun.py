@@ -59,6 +59,22 @@ def test_ltx_linear_is_clean():
     assert "identical multiset" in proc.stdout, proc.stdout
 
 
+def test_sd35_vae_resnet_is_clean():
+    """SD3.5 VAE ResnetBlock from source: the conv/group_norm family, no oracle.
+
+    There is no hand-written VAE oracle, so the check is the honest one available:
+    the block runs with zero unregistered ops, no analyzer diagnostics (conv2d,
+    group_norm and the NHWC<->N,1,HW,C reshape all tracked, blockers 14/17), and
+    no findings -- both vae_all_gathers are load-bearing. The conv/group_norm
+    *shapes* are the shim's belief until on-device conformance (phase 11).
+    """
+    proc = _dryrun("dryrun", "sd35_vae_resnet", "--preset", "bh_2x4", "--analyze")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "unregistered ops: none" in proc.stdout, proc.stdout
+    assert "no diagnostics" in proc.stdout, proc.stdout
+    assert "no redundancy findings" in proc.stdout, proc.stdout
+
+
 def test_ops_missing_stub_generator_emits_both_halves():
     import io
     from contextlib import redirect_stdout

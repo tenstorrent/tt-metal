@@ -93,6 +93,7 @@ def from_torch(x, layout=None, dtype=None, device=None, mesh_mapper=None, memory
         kind=PARAM if CTX.loading_weights else CTX.entry_kind,
         base=CTX.entry_base or "const",
         host=device is None,
+        layout=layout,
     )
 
 
@@ -467,6 +468,61 @@ def dit_minimal_matmul_addcmul_fused(x, w, scalar=1.0, a1=None, a2=None, **k) ->
     return pointwise("addcmul", [out, a1, a2])
 
 
+def _pair(v) -> Tuple[int, int]:
+    if isinstance(v, (list, tuple)):
+        return int(v[0]), int(v[1])
+    return int(v), int(v)
+
+
+def conv2d(input_tensor=None, weight_tensor=None, bias_tensor=None, **k):
+    """[B,H,W,Cin] -> [B,Hout,Wout,Cout], channel-parallel (blocker 14).
+
+    The conv contracts the full input channels and a spatial neighbourhood, so
+    it behaves like a column-parallel projection: the output's channel axis is
+    fractured wherever the weight's out-channel axis (axis 0) is, and nothing is
+    a partial sum. Returns ``(output, (Hout, Wout), (weight, bias))`` to match
+    ttnn's ``return_output_dim=True, return_weights_and_bias=True`` tuple.
+    """
+    x = _t(input_tensor, "input_tensor", kwargs=k, index=0)
+    w = weight_tensor if isinstance(weight_tensor, Tensor) else _t(weight_tensor, "weight_tensor", kwargs=k, index=1)
+    bias = bias_tensor if isinstance(bias_tensor, Tensor) else None
+    b, h, w_in = int(k["batch_size"]), int(k["input_height"]), int(k["input_width"])
+    kh, kw = _pair(k["kernel_size"])
+    sh, sw = _pair(k.get("stride", 1))
+    ph, pw = _pair(k.get("padding", 0))
+    out_h = (h + 2 * ph - kh) // sh + 1
+    out_w = (w_in + 2 * pw - kw) // sw + 1
+    channel_axis = len(x.logical) - 1  # NHWC
+    out_dist = Dist(
+        tuple(channel_axis if (a is not None and a % len(w.logical) == 0) else None for a in w.dist.shard),
+        (False,) * len(w.dist.shard),
+    )
+    out = recorder.emit(
+        "conv2d",
+        [x, w, *([bias] if isinstance(bias, Tensor) else [])],
+        [b, out_h, out_w, w.logical[0]],
+        out_dist,
+        attrs={"kernel": [kh, kw], "stride": [sh, sw], "padding": [ph, pw]},
+        base="conv",
+    )
+    return out, (out_h, out_w), (w, bias)
+
+
+def group_norm(input_tensor=None, **k) -> Tensor:
+    """VAE group norm over NHWC channels (blocker 14).
+
+    Channels (last axis) are TP-fractured, but each device holds whole groups
+    (``num_groups`` and ``num_channels`` are both divided by the mesh factor at
+    construction), and the spatial axis is not sharded -- so the reduction is
+    device-local and no collective is implied. Shape- and layout-preserving,
+    value-changing; modelled with the local ``pointwise`` semantics, with the
+    weight/bias/mask riding along as broadcast operands.
+    """
+    x = _t(input_tensor, "input_tensor", kwargs=k, index=0)
+    extra = [t for t in (k.get("weight"), k.get("bias"), k.get("input_mask")) if isinstance(t, Tensor)]
+    return recorder.emit("group_norm", [x, *extra], x.logical, x.dist, base="gnorm")
+
+
 def dit_rms_norm_unary_fused(x, weight=None, bias=None, **k) -> Tensor:
     """Local RMS norm over the last axis, with a fused unary activation.
 
@@ -645,6 +701,8 @@ TENSOR_OPS = {
     "clamp": _unary("clamp"),
     "matmul": matmul,
     "linear": matmul,
+    "conv2d": conv2d,
+    "group_norm": group_norm,
     "copy": copy,
     "add_": _inplace("add"),
     "multiply_": _inplace("mul"),

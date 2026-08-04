@@ -27,6 +27,9 @@ models/tt_dit/tools/ditcheck dryrun ltx_block --preset bh_4x8 --check-oracle
 # a second block from source: the SD3.5-large joint block (every collective load-bearing)
 models/tt_dit/tools/ditcheck dryrun sd35_block --preset bh_2x4 --check-oracle
 
+# a VAE block from source: SD3.5 VAE ResnetBlock (conv2d / group_norm), runs clean
+models/tt_dit/tools/ditcheck dryrun sd35_vae_resnet --preset bh_2x4 --analyze
+
 # LTX-2.3 A+V block on BH 4x8 (Ring): 6 provably duplicate TP gathers per block
 models/tt_dit/tools/ditcheck analyze example:ltx_block_bh_4x8 --top 1
 

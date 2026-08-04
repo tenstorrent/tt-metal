@@ -134,7 +134,22 @@ def build_ttnn() -> ShimModule:
     ttnn.experimental = ShimModule("ttnn.experimental", ops.EXPERIMENTAL_OPS)
     ttnn.transformer = ShimModule("ttnn.transformer", ops.TRANSFORMER_OPS)
     ttnn.device = _device_module()
-    ttnn.operations = ShimModule("ttnn.operations", {})
+    ttnn.operations = ShimModule(
+        "ttnn.operations",
+        {
+            # Group-norm core-grid helpers: they size program configs and the
+            # (opaque) norm weight/mask tensors, not any activation the analyzer
+            # reasons about, so a benign 1 keeps the forward running. Exact values
+            # are a conformance concern, not a redundancy one.
+            "normalization": ShimModule(
+                "ttnn.operations.normalization",
+                {
+                    "dram_group_norm_virtual_columns": lambda *a, **k: 1,
+                    "find_max_tile_span": lambda *a, **k: 1,
+                },
+            ),
+        },
+    )
     ttnn.distributed = ShimModule("ttnn.distributed", {})
     return ttnn
 

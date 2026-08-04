@@ -79,13 +79,15 @@ def loc() -> Optional[str]:
 # -----------------------------------------------------------------------------
 # symbols and nodes
 # -----------------------------------------------------------------------------
-def entry(logical, dist: Dist, dtype=None, kind: str = ACT, base: str = "in", host: bool = False) -> Tensor:
+def entry(
+    logical, dist: Dist, dtype=None, kind: str = ACT, base: str = "in", host: bool = False, layout=None
+) -> Tensor:
     """A tensor entering the graph from the host, with its placement recorded."""
     graph = CTX.require_graph()
     sid = fresh(base)
     graph.symbols[sid] = TensorSymbol(id=sid, shape=tuple(logical), dtype=dtype_tag(dtype), kind=kind, value_id=sid)
     graph.placements[sid] = Placement(dist=dist)
-    return Tensor(logical, dist, dtype, sym=sid, host=host)
+    return Tensor(logical, dist, dtype, sym=sid, host=host, layout=layout)
 
 
 def emit(

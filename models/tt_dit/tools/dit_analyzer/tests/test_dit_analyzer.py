@@ -312,6 +312,25 @@ def test_trace_to_graph_lifts_local_shapes_and_flags_assumptions():
     assert graph2.meta["assumptions"]
 
 
+def test_reshape_preserves_a_shard_on_a_kept_trailing_axis():
+    # the VAE's [B,H,W,C] <-> [B,1,H*W,C] merges leading axes but keeps the
+    # channel axis; a shard on it must survive, not degrade to replicated+taint.
+    b = GraphBuilder(name="vae_reshape", mesh=MESH)
+    x = b.input("x", [1, 4, 4, 8], shard={TP: 3})  # channels fractured on tp
+    merged = b.view(x, [1, 1, 16, 8], label="merge_hw")  # H,W -> H*W, C kept
+    g = b.all_gather(merged, dim=3, mesh_axis=TP, label="ag")  # real gather of the shard
+    report = analyze_graph(b.finish([b.pointwise("silu", [g], label="out")]))
+    codes = {d.code for d in report.diagnostics}
+    assert "OPAQUE_RESHAPE" not in codes, codes  # the shard was tracked through
+    assert "GATHER_OF_REPLICATED" not in codes, codes  # so the gather isn't seen as a no-op
+    # and a shard that IS on a reshaped (merged) axis must still be opaque
+    b2 = GraphBuilder(name="vae_reshape_opaque", mesh=MESH)
+    y = b2.input("y", [1, 4, 4, 8], shard={TP: 1})  # fractured on a merged spatial axis
+    b2.view(y, [1, 1, 16, 8], label="merge_hw")
+    report2 = analyze_graph(b2.finish([y]))
+    assert "OPAQUE_RESHAPE" in {d.code for d in report2.diagnostics}
+
+
 def test_shard_chunk_matches_ttnn_torch_chunk_semantics():
     from dit_analyzer.region import RegionSet, shard_chunk_count, shard_chunk_size
 

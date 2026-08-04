@@ -34,8 +34,8 @@ stale copy to disagree.
 | Dry run | **built**: `ditcheck dryrun ltx_block --preset bh_4x8`, real forward under a metadata-only ttnn, weights from torch meta tensors, caller stack per node, `--check-oracle` as the drift test |
 | Capture | 30 monkeypatch hooks written, **never run on hardware**; demoted to the phase 11 conformance path |
 | Graph source | `ditcheck dryrun` from source, or hand-written via `builder.py`; a trace still needs hand-declared placements |
-| Validated on | LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear) **and** the SD3.5-large joint block (0 findings) — **both derived from source** by the dry run and diffed against a hand-written oracle, asserted in `tests/test_dryrun.py` |
-| Tests | 24 analyzer + 20 dry-run, no device and no pytest required; plus `conform.py` on a device |
+| Validated on | LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), the SD3.5-large joint block (0 findings), **and** the SD3.5 VAE ResnetBlock (conv/group_norm, 0 findings) — **all derived from source** by the dry run; the two DiT blocks diffed against a hand-written oracle, the VAE checked for zero unregistered ops + zero diagnostics; asserted in `tests/test_dryrun.py` |
+| Tests | 25 analyzer + 22 dry-run, no device and no pytest required; plus `conform.py` on a device |
 | Conformance | `conform.py`: per-device shape diff vs real ttnn, **green on the 2×4 Loudbox** (the LTX block's shapes match; 4×8 Ring needs a Galaxy) |
 
 ### Phases
@@ -50,7 +50,7 @@ real code. Plan phase 6 and roadmap phase 13 are the same work.
 | plan 5 — validate on historical wins | **partly** | rediscovers the LTX win from source and passes the SD3.5 precision test; no wider corpus of past AGMM graphs, and none of the human metrics (false-positive rate over a real backlog, time per finding) |
 | **roadmap 6 — dry-run front end** | **done** | — |
 | **roadmap 7 — shape and layout fidelity** | **done (7a); 7b on 2×4, Ring blocked** | tiling, exact shard division, block-float bytes, checkpoint keys, and the chunk rule all shipped and corroborated against real ttnn on the 2×4 Loudbox via `conform.py`; the 4×8 Ring corroboration needs a 32-chip Galaxy |
-| roadmap 8 — op coverage | **in progress** | LTX **and** SD3.5-large blocks now covered from source (0 unregistered); remaining tail is conv/VAE + the one-registration merge |
+| roadmap 8 — op coverage | **in progress** | LTX, SD3.5-large **and** the SD3.5 VAE ResnetBlock (conv/group_norm) now covered from source (0 unregistered); remaining: the one-registration merge, fused-kernel data table, and the LTX-VAE spatial family (halo/`neighbor_pad`) |
 | roadmap 9 — scale | not started | 48-layer rollup, quadratic cost, finding rollup, stable IDs |
 | roadmap 10 — multi-mesh / stage / host | not started | submeshes, encoder→DiT→VAE, carried state, readbacks |
 | roadmap 11 — conformance (needs a device) | not started | **gates trusting findings**, not producing them |
@@ -206,10 +206,10 @@ call sites), plus 9 introduced by the shim (44 was found by the spike). `P` = ph
 
 | # | Blocker | P |
 |---|---|---|
-| 14 | Conv/VAE family missing (conv2d/3d, group norm, upsample, `neighbor_pad_async` halo, `slice_reshard_async`) | 8 |
+| 14 | Conv/VAE family missing (conv2d/3d, group norm, upsample, `neighbor_pad_async` halo, `slice_reshard_async`) | **partly closed in 8** — `conv2d` + `group_norm` done (SD3.5 VAE ResnetBlock is clean); conv3d + LTX-VAE halo/`slice_reshard` remain |
 | 15 | `mesh_partition` unmodelled although it *changes distribution* | 8 |
 | 16 | Point-to-point comm (`send_async`/`recv_async`) has no participant-group semantics | 8 |
-| 17 | Opaque reshapes (VAE's `b,h,w,c → 1,1,h*w,c`) degrade regions to full + taint | 8 |
+| 17 | Opaque reshapes (VAE's `b,h,w,c → 1,1,h*w,c`) degrade regions to full + taint | **closed in 8** — a reshape that only merges/splits leading axes preserves a shard on the kept trailing (channel) axis |
 | 18 | Fused-kernel internal comm is a hand-maintained registry; a new fused kernel silently hides its collective | 8 |
 | 19 | Non-DiT parallel configs (`EncoderParallelConfig`, `VaeHWParallelConfig`, `MochiVAEParallelConfig`, `AudioTParallelConfig`) don't map onto the single 2-axis `Dist` | 10 |
 
@@ -385,6 +385,24 @@ a new `recorder.emit_multi` for its three outputs, and the `dit_rms_norm_unary_f
 spec (the q/k RMSNorm, mapped to the local `layernorm` semantics). It also runs the
 38→40 padded-head case through the phase-7a shard/shape math on a real block.
 Asserted by `tests/test_dryrun.py::test_sd35_block_matches_oracle`.
+
+**Landed — the conv/VAE family, a third block.** `ditcheck dryrun sd35_vae_resnet`
+builds the real SD3.5 VAE `ResnetBlock` (`models/vae/vae_sd35.py`) and runs clean:
+0 unregistered ops, 2 load-bearing `vae_all_gather`s, 0 findings, **0 diagnostics**.
+SD3.5's VAE is single-axis (`VAEParallelConfig.tensor_parallel`), so it maps onto
+the one-axis `Dist` and sidesteps the phase-10 multi-mesh work the LTX VAE's
+`VaeHWParallelConfig` needs. What it took: a `conv2d` spec (channel-parallel, like a
+column-parallel matmul — output channels fractured where the weight's out axis is;
+blocker 14), a `group_norm` spec (device-local: whole groups per device, spatial
+unsharded → the local `pointwise` semantics), the `ttnn.operations.normalization`
+core-grid helper stubs, ROW_MAJOR weight-layout threading through `from_torch`, and
+— the analytically real part — **the VAE stops tainting (blocker 17)**: the
+`[B,H,W,C] ↔ [B,1,H*W,C]` reshape now preserves a shard on the kept channel axis
+instead of degrading to replicated+taint, which is what turned a spurious
+`suspicious unused_gather` into a correct clean run. Asserted by
+`test_sd35_vae_resnet_is_clean` and `test_reshape_preserves_a_shard_on_a_kept_trailing_axis`.
+The conv/group-norm *shapes* are the shim's belief until on-device conformance
+(phase 11) — there is no independent VAE oracle yet.
 
 **Remaining:**
 

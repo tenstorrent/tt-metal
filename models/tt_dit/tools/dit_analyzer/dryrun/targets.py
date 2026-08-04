@@ -292,6 +292,57 @@ def _sd35_inputs(preset: Preset) -> Dict[str, Any]:
     )
 
 
+# -----------------------------------------------------------------------------
+# SD3.5 VAE decoder ResnetBlock (models/vae/vae_sd35.py) -- the conv/VAE family.
+# SD3.5's VAE is single-axis (VAEParallelConfig.tensor_parallel), so it maps onto
+# the one-axis Dist and does not need the phase-10 multi-mesh work the LTX VAE's
+# VaeHWParallelConfig does.
+# -----------------------------------------------------------------------------
+SD35_VAE_C, SD35_VAE_HW, SD35_VAE_GROUPS = 512, 64, 32
+
+
+def _sd35_vae_resnet(preset: Preset) -> Graph:
+    """One SD3.5 VAE ``ResnetBlock``: GroupNorm/Conv2d/silu, channel-parallel."""
+    mesh_device = install(preset.mesh_shape, preset.arch)
+
+    from models.tt_dit.models.vae.vae_sd35 import ResnetBlock
+    from models.tt_dit.parallel.config import ParallelFactor, VAEParallelConfig
+    from models.tt_dit.parallel.manager import CCLManager
+
+    graph = _start(mesh_device, preset, name="sd35_vae_resnet_%s" % preset.name)
+    graph.meta.update({"model": "SD3.5 VAE decoder ResnetBlock, dry run from source"})
+
+    parallel_config = VAEParallelConfig(
+        tensor_parallel=ParallelFactor(factor=preset.mesh_shape[preset.tp_axis], mesh_axis=preset.tp_axis)
+    )
+    ccl = CCLManager(mesh_device, num_links=2, topology=ttnn_topology(preset))
+    block = ResnetBlock(
+        in_channels=SD35_VAE_C,
+        out_channels=SD35_VAE_C,
+        num_groups=SD35_VAE_GROUPS,
+        eps=1e-6,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl,
+    )
+    graph.meta["parameters"] = load_meta_weights(block)
+
+    # A VAE decoder block receives its predecessor's output: channels fractured on
+    # the TP axis (NHWC, axis 3). conv1 gathers them back before convolving.
+    x = recorder.entry(
+        [1, SD35_VAE_HW, SD35_VAE_HW, SD35_VAE_C], Dist.make(CTX.mesh, {preset.tp_axis: 3}), base="input"
+    )
+    out = block(x)
+    graph.outputs = [out.sym]
+    return graph
+
+
+def ttnn_topology(preset: Preset):
+    import ttnn
+
+    return ttnn.Topology.Ring if preset.topology == "Ring" else ttnn.Topology.Linear
+
+
 def _start(mesh_device, preset: Preset, name: str, calls: int = 1, steps: int = 1) -> Graph:
     from . import start
 
@@ -344,6 +395,21 @@ TARGETS: Dict[str, Target] = {
                 tp_axis=1,
                 oracle="sd35_block",
                 description="Blackhole 2x4: SP=2 (axis0), TP=4 (axis1); every collective load-bearing",
+            ),
+        },
+    ),
+    "sd35_vae_resnet": Target(
+        name="sd35_vae_resnet",
+        description="SD3.5 VAE decoder ResnetBlock (conv/group_norm), from models/tt_dit source",
+        build=_sd35_vae_resnet,
+        presets={
+            "bh_2x4": Preset(
+                name="bh_2x4",
+                mesh_shape=(2, 4),
+                topology="Linear",
+                sp_axis=0,
+                tp_axis=1,
+                description="Blackhole 2x4: channel TP=4 on axis1",
             ),
         },
     ),
