@@ -11,7 +11,6 @@ yaml_files += sorted((FUSER_CONFIG_DIR / "quasar").glob("*.yaml"))
 test_names = [str(f.relative_to(FUSER_CONFIG_DIR).with_suffix("")) for f in yaml_files]
 
 
-@pytest.mark.quasar
 @skip_for_blackhole
 @skip_for_wormhole
 @skip_for_coverage
