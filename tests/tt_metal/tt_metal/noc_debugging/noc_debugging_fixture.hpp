@@ -110,6 +110,27 @@ public:
         return mesh_device->arch() != tt::ARCH::QUASAR;
     }
 
+    bool has_write_to_unlocked_dfb_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
+        auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+        if (!noc_debug_state) {
+            return false;
+        }
+        tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
+        const NOCDebugIssue& issue = noc_debug_state->get_issues(core, processor_id);
+        return issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_UNLOCKED_DFB);
+    }
+
+    std::vector<NOCDebugIssueType> get_write_to_unlocked_dfb_issues(
+        ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
+        auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+        if (!noc_debug_state) {
+            return {};
+        }
+        tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
+        const NOCDebugIssue& issue = noc_debug_state->get_issues(core, processor_id);
+        return issue.get_issues_by_base(NOCDebugIssueBaseType::WRITE_TO_UNLOCKED_DFB);
+    }
+
     std::vector<NOCDebugIssueType> get_write_to_locked_issues(
         ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
         auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
