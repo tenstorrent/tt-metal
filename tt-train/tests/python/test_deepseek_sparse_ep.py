@@ -49,14 +49,20 @@ from ttml.models.deepseek.moe_sparse_ep import SparseMoEEP
 
 SEED = 2026
 
-# Chips required on the "ep" axis. 2 is the smallest layout that actually
-# exercises sharding (E split over 2 shards); bundled MGDs only cover (1, 2).
+# Mesh is (DP_AXIS_SIZE, EP_AXIS_SIZE) with axes ("dp", "ep").
+#
+# EP size 2 is the smallest layout that actually exercises sharding (E split
+# over 2 shards). DP size 1 keeps the default runnable on a 2-chip board; on a
+# Blackhole galaxy use TTML_DP_AXIS_SIZE=8 for the 8x2 (16-chip) layout, which
+# exercises EP sharding *and* a real data-parallel axis at the same time.
 EP_AXIS_SIZE = int(os.environ.get("TTML_EP_AXIS_SIZE", "2"))
+DP_AXIS_SIZE = int(os.environ.get("TTML_DP_AXIS_SIZE", "1"))
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 # Blackhole only — see the module docstring. No Wormhole MGDs are bundled.
 _MGD_FOR_SHAPE = {
     (1, 2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
+    (8, 2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_8_2_line_line.textproto"),
 }
 
 
@@ -129,8 +135,8 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
 
 @pytest.fixture(scope="module")
 def ep_mesh():
-    """Open a ``[1, EP_AXIS_SIZE]`` mesh with axes ``("dp", "ep")``."""
-    shape = (1, EP_AXIS_SIZE)
+    """Open a ``[DP_AXIS_SIZE, EP_AXIS_SIZE]`` mesh with axes ``("dp", "ep")``."""
+    shape = (DP_AXIS_SIZE, EP_AXIS_SIZE)
     previous_mgd = _ensure_mgd_path(shape)
 
     _close_device_quietly()
@@ -138,7 +144,7 @@ def ep_mesh():
         ttml.open_device_mesh(ttml.Mesh(shape, ("dp", "ep")))
     except Exception as e:  # noqa: BLE001
         _restore_mgd_path(previous_mgd)
-        pytest.skip(f"sparse_ep tests need {EP_AXIS_SIZE} devices on the 'ep' axis: {e}")
+        pytest.skip(f"sparse_ep tests need a {shape[0]}x{shape[1]} mesh ('ep' axis = {EP_AXIS_SIZE}): {e}")
 
     yield ttml.mesh()
 
