@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/hal.hpp>
+#include <cstdint>
 
 using namespace tt::tt_metal;
 
@@ -48,8 +49,8 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
         }
     }
 
-    return !args.sub_core_grids
-                .has_value();  // Typecast operation has no sub_core_grids support for optimized 2D sharded input path.
+    // Restricted grids use the generic factory; the optimized path runs directly on every shard core.
+    return !args.sub_core_grids.has_value();
 }
 }  // namespace
 
@@ -96,10 +97,6 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
 
-    TT_FATAL(
-        input_tensor.layout() != Layout::ROW_MAJOR || !input_tensor.is_sharded() || !args.sub_core_grids.has_value(),
-        "Typecast operation supports sub_core_grids for Row-Major input only when the tensor is interleaved.");
-
     const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
     TT_FATAL(
         input_tensor_memory_layout == out_memory_config.memory_layout(),
@@ -108,8 +105,8 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         out_memory_config.memory_layout());
 
     if (input_tensor.is_sharded()) {
-        const uint32_t l1_alignment = hal::get_l1_alignment();
-        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const std::uint32_t l1_alignment = hal::get_l1_alignment();
+        const std::uint32_t page_size_bytes = input_tensor.buffer()->page_size();
         TT_FATAL(
             page_size_bytes == input_tensor.buffer()->aligned_page_size(),
             "Typecast operation requires sharded input tensor page size ({} bytes) to be aligned to L1 ({} bytes)",

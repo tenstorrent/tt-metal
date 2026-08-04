@@ -127,8 +127,9 @@ def test_binary_int32_float_scalar_promotion_with_sub_device_id(device, op_fn):
 
 
 @pytest.mark.parametrize("op_fn", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @skip_for_slow_dispatch()
-def test_binary_sharded_int32_float_scalar_promotion_with_sub_device_id(device, op_fn):
+def test_binary_sharded_int32_float_scalar_promotion_with_sub_device_id(device, op_fn, layout):
     """Promotion of an L1-sharded INT32 input stays on the requested sub-device."""
     sub_device_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 4))})
     torch_input = torch.arange(-80, 80, dtype=torch.int32).reshape(1, 1, 160, 1).expand(1, 1, 160, 32).contiguous()
@@ -142,7 +143,7 @@ def test_binary_sharded_int32_float_scalar_promotion_with_sub_device_id(device, 
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
+        layout=layout,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )

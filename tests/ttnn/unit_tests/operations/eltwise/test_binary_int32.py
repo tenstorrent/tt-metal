@@ -1428,6 +1428,33 @@ def test_binary_remainder_fmod_int32_float_scalar(ttnn_op, layout, use_sub_core_
     assert_equal(expected, actual)
 
 
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+def test_binary_remainder_fmod_row_major_sharded_int32_float_scalar_subgrid(ttnn_op, device):
+    torch_input_tensor = torch.arange(-1024, 1024, dtype=torch.int32).reshape(1, 1, 64, 32)
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=sub_core_grids,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=sharded_memory_config,
+    )
+
+    scalar = 1.5
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    expected = golden_function(torch_input_tensor, scalar, device=device)
+    actual = ttnn.to_torch(ttnn_op(input_tensor, scalar, sub_core_grids=sub_core_grids))
+
+    assert_equal(expected, actual)
+
+
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("use_sub_core_grids", [False, True])
 def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_sub_core_grids, device):
