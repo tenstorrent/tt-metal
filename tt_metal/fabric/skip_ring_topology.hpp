@@ -14,10 +14,8 @@
 namespace tt::tt_fabric {
 
 // Ring-domain decomposition of a mesh's skip axis, constructed from the declared skip-link patterns.
-// Membership is cycle membership, not chord span: a member need not own a chord (rows 1 and 14 of the
-// merged 16-row ring), and chords of one pattern can end up in different roles. Indexed by axis
-// coordinate (row), so one decomposition serves every line; derivation confirms every line carries
-// the edges it implies.
+// Membership is cycle membership: a member need not own a chord. Indexed by axis coordinate (row), so
+// one decomposition serves every line; derivation confirms every line carries the edges it implies.
 struct SkipRingTopology {
     static constexpr int kNone = -1;
 
@@ -46,20 +44,18 @@ struct SkipRingTopology {
     std::vector<std::pair<int, int>> crossovers;
 
     bool is_leaf(int row) const { return domain_of[row] == kNone; }
-    // Hops from `from` to `to` along whichever orientation of `domain` is shorter.
     int ring_distance(int domain, int from, int to) const;
-    // Next node on the canonical route from `src` to `dst`: leaf-run entry and inward walk, same-family
-    // shortest walk with exact ties taking canonical forward, terminal landing, and CONTINUE late exit.
     // Which end a run is entered by depends only on `dst`, which is what keeps routes suffix-consistent.
     int next_row(int src, int dst) const;
 };
 
-// std::nullopt when the mesh declares no skip links, leaving base routing untouched. Throws on
-// anything this cut does not define: patterns off dim 0 or on more than one dimension, more than two
-// patterns, a step that does not tile the axis, a skipped run without a transit row either side of
-// it, a single pattern on an axis with no end wrap, a missing paired landing, or a line that does not
-// carry the edges the patterns imply.
+// std::nullopt when the mesh declares no skip links, leaving base routing untouched. Throws on any
+// topology this cut does not define; each check carries its own message.
 std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id);
+
+// The ordinary ring along `axis`, or std::nullopt when that dimension does not close. One domain over
+// every node in coordinate order, no chords, so both axes answer ring queries through one path.
+std::optional<SkipRingTopology> derive_ordinary_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis);
 
 // Human-readable dump of the stored decomposition plus the declared patterns it was built from and
 // the materialized edges it was checked against.

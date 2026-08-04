@@ -26,6 +26,9 @@ using RoutingTable =
 class RoutingTableGenerator {
 public:
     explicit RoutingTableGenerator(const TopologyMapper& topology_mapper);
+    // Table generation reads only the logical mesh graph, so it needs no cluster, discovery or
+    // logical-to-physical mapping. The graph must outlive this generator.
+    explicit RoutingTableGenerator(const MeshGraph& mesh_graph);
     ~RoutingTableGenerator();  // out of line: skip_rings_ holds an incomplete type
 
     void dump_to_yaml();
@@ -37,6 +40,9 @@ public:
     // Ring decomposition of a mesh's skip axis, or nullptr when the mesh declares no skip links.
     // The type stays incomplete here; only tt_metal/fabric consumers include its definition.
     const SkipRingTopology* get_skip_rings(MeshId mesh_id) const;
+
+    // The ordinary X ring, or nullptr when the mesh has no skip rings or that dimension does not close.
+    const SkipRingTopology* get_x_rings(MeshId mesh_id) const;
 
     void print_routing_tables() const;
     // Return a list of all exit nodes, across all meshes that are connected to the requested
@@ -58,6 +64,8 @@ private:
     RoutingTable inter_mesh_table_;
     // Per mesh, null when the mesh declares no skip links.
     std::vector<std::unique_ptr<SkipRingTopology>> skip_rings_;
+    // Per mesh, null when the X dimension does not close.
+    std::vector<std::unique_ptr<SkipRingTopology>> x_rings_;
     std::unordered_map<MeshId, std::vector<FabricNodeId>> mesh_to_exit_nodes_;
     // Direct lookup table: [src_mesh][src_chip][dst_mesh] -> exit chip_id in src_mesh
     std::vector<std::vector<std::vector<ChipId>>> exit_node_lut_;
@@ -65,6 +73,9 @@ private:
     std::vector<std::vector<std::pair<ChipId, MeshId>>> get_first_hops_to_all_meshes(
         MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const;
     void generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity);
+    // Setup validation for a mesh whose skip rings were derived: walks every ordered pair of the
+    // generated table and rejects the configuration on any violation. No-op for other meshes.
+    void validate_skip_ring_routes(std::uint32_t mesh_id_val, const IntraMeshConnectivity& intra_mesh_connectivity);
     // when generating intermesh routing table, we use the intramesh connectivity table to find the shortest path to
     // the exit chip
     void generate_intermesh_routing_table(

@@ -2558,10 +2558,9 @@ TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
     const auto& m0 = intra[0];
     ASSERT_EQ(m0.size(), 32u);  // 8x4 = 32 chips
 
-    // LINE row axis (len 8): the step-4 pattern keeps only block [2,5] and the step-8 pattern block
-    // [0,7]; the wrapping blocks are dropped. chip = row*4 + col.
-    const std::vector<std::pair<int, int>> expected_skip_edges = {
-        {8, 20}, {9, 21}, {10, 22}, {11, 23}, {0, 28}, {1, 29}, {2, 30}, {3, 31}};
+    // wrap: LINE on the step-4 pattern keeps only block [2,5]; the wrapping block is dropped even
+    // though the row axis is RING. Row 0 <-> row 7 is the ordinary wrap, not a skip. chip = row*4 + col.
+    const std::vector<std::pair<int, int>> expected_skip_edges = {{8, 20}, {9, 21}, {10, 22}, {11, 23}};
 
     for (const auto& [a, b] : expected_skip_edges) {
         EXPECT_EQ(m0[a].count(b), 1u) << "missing skip edge " << a << " -> " << b;
@@ -2572,7 +2571,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
         }
     }
 
-    EXPECT_EQ(m0[4].count(24), 0u);  // row 1 is not a block endpoint of either pattern, so it gets no skip
+    EXPECT_EQ(m0[4].count(24), 0u);  // row 1 is not a block endpoint, so it gets no skip
 
     // chip 8 keeps its 4 base-grid neighbors plus the one skip edge
     EXPECT_EQ(m0[8].count(4), 1u);
@@ -2581,7 +2580,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
     EXPECT_EQ(m0[8].count(11), 1u);
     EXPECT_EQ(m0[8].size(), 5u);
 
-    // 8 bidirectional skip edges = 16 directed Z entries, no others
+    // 4 bidirectional skip edges = 8 directed Z entries, no others
     int z_directed = 0;
     for (int c = 0; c < 32; ++c) {
         for (const auto& [nb, edge] : m0[c]) {
@@ -2590,7 +2589,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
             }
         }
     }
-    EXPECT_EQ(z_directed, 16) << "expected exactly 8 bidirectional skip edges (16 directed Z entries)";
+    EXPECT_EQ(z_directed, 8) << "expected exactly 4 bidirectional skip edges (8 directed Z entries)";
 }
 
 // skip_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.

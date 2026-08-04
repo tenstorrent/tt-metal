@@ -207,20 +207,24 @@ public:
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
 
     // Whether the mesh declares skip links and their ring decomposition was validated.
+    // TODO: per-line rings, where a line with dead chords falls back to the base policy, would make a
+    // MeshId-scoped answer ill-defined; this and the ring predicates below would need a per-line form.
+    // Liveness is a PSD question, answerable at derivation time via TopologyMapper's asic id mapping.
     bool express_routing_enabled(MeshId mesh_id) const;
 
-    // Whether a protected ring family covers this node along the given dimension.
+    // Whether a protected ring family covers this node along the given dimension. Ring state is only
+    // derived for meshes with skip links, so check express_routing_enabled before relying on this.
     bool has_protected_ring(FabricNodeId fabric_node_id, RoutingDimension dimension) const;
 
     // Whether the edge leaving `local` in `egress` belongs to a protected ring.
     bool is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const;
 
-    // For the turn U->V->W around local node V, whether both hops ride one oriented view of the same
-    // protected ring, i.e. the packet stays on the ring it is already on.
+    // For traffic arriving at `local` from its `ingress` neighbor and leaving toward its `egress` one,
+    // whether both hops ride one oriented view of the same ring, i.e. it stays on the ring it is on.
     bool are_same_directed_ring_edges(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
 
-    // For the same turn, whether a non-transit protected-ring acquisition is permitted. A crossing
-    // into the family that may continue is terminal and returns false.
+    // For that same turn, whether a non-transit ring acquisition is permitted. A crossing into the
+    // family that may continue is terminal and returns false.
     bool continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
 
     // Return eth channels that can forward the data from src to dest.
@@ -382,11 +386,11 @@ private:
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 
-    // Skip-axis row of the neighbor reached from `local` by `direction`, or nullopt when there is
-    // none. Only valid for a mesh that has a ring decomposition.
-    std::optional<int> skip_axis_row_of_neighbor(FabricNodeId local, RoutingDirection direction) const;
-    // Whether the E/W dimension closes into a ring.
-    bool x_axis_closes(MeshId mesh_id) const;
+    // The ring a direction rides: the skip decomposition for an axis hop, the ordinary X ring for E/W.
+    const SkipRingTopology* ring_for_direction(MeshId mesh_id, RoutingDirection direction) const;
+    // Coordinate along that ring's axis of the neighbor reached by `direction`.
+    std::optional<int> ring_coord_of_neighbor(
+        const SkipRingTopology& rings, FabricNodeId local, RoutingDirection direction) const;
 
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;

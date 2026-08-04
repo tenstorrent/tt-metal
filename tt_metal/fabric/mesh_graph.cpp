@@ -466,8 +466,8 @@ void MeshGraph::initialize_from_mgd(
         // Layer declared skip links on top of the fully-populated base grid. Each pattern expands to
         // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
         // physical channels occupy a bucket separate from the N/S/E/W grid and escape its plane
-        // trimming). Wrap follows the dimension's torus-ness in effective_fabric_type (TORUS_Y wraps
-        // dim 0, TORUS_X dim 1), matching get_valid_connections.
+        // trimming). Tiling wrap comes from the pattern, defaulting to the dimension's torus-ness in
+        // effective_fabric_type (TORUS_Y wraps dim 0, TORUS_X dim 1).
         for (const auto& skip : mesh_desc->skip_links()) {
             const uint32_t dim = skip.dim_idx();
             TT_FATAL(dim < 2, "MeshGraph: SkipLink dim_idx {} out of range for 2D mesh (mesh M{})", dim, *mesh_id);
@@ -482,8 +482,10 @@ void MeshGraph::initialize_from_mgd(
                 dim,
                 dim_len,
                 *mesh_id);
-            const bool ring_wrap = along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
-                                              : has_flag(effective_fabric_type, FabricType::TORUS_X);
+            const bool ring_wrap = skip.wrap() != proto::TorusTopology::INVALID_TYPE
+                                       ? skip.wrap() == proto::TorusTopology::RING
+                                   : along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
+                                                : has_flag(effective_fabric_type, FabricType::TORUS_X);
             for (const auto& [a, b] :
                  expand_skip_link_edges(mesh_shape, along_rows, skip.pattern().start(), step, ring_wrap)) {
                 this->add_to_connectivity(mesh_id, a, mesh_id, b, RoutingDirection::Z);
