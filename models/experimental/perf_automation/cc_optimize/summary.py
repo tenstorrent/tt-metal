@@ -689,11 +689,15 @@ def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, activ
                 "\u2717",
             )
         )
-        out.append("     at the current fidelity mix:")
+        out.append(" %-25s %-18s \u2502 %-21s \u2502" % ("   fidelity mix:", "", ""))
         for _f, _fl, _pk, _ms in _fid:
             out.append(
-                "       %-6s %8.2fe12 FLOP  x %5.0f TFLOPS  \u2192 %6.2f ms"
-                % (_f.replace("lofi", "LoFi").replace("hifi", "HiFi"), _fl / 1e12, _pk, _ms)
+                " %-25s %-18s \u2502 %-21s \u2502"
+                % (
+                    "    %-6s %6.2fe12 FLOP" % (_f.replace("lofi", "LoFi").replace("hifi", "HiFi"), _fl / 1e12),
+                    "x %.0f TFLOPS" % _pk,
+                    "%.2f ms" % _ms,
+                )
             )
     else:
         out.append(
@@ -724,7 +728,7 @@ def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, activ
                 )
             )
             if _ops:
-                out.append(" %-25s %-18s \u2502 %-21s \u2502" % ("", "%d ops in profile" % _ops, ""))
+                out.append(" %-25s %-18s \u2502 %-21s \u2502" % ("", "%d ops" % _ops, ""))
         if cap and active_bytes:
             _used = 100.0 * active_bytes / cap
             out.append(
