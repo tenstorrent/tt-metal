@@ -399,9 +399,9 @@
 
 # ── Gemma ──────────────────────────────────────────────────────────
 
-# Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N150 (2B)
-# and N300 (2B + 9B). Requires gemma-2-{2b,9b}-it.refpt under
-# models/tt_transformers/tests/reference_outputs/.
+# Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N300
+# (2B + 9B); 2B also runs on N150 (single-chip, covered by CI). Requires
+# gemma-2-{2b,9b}-it.refpt under models/tt_transformers/tests/reference_outputs/.
 - name: Gemma-2-2B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-2-2b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-2b-it
