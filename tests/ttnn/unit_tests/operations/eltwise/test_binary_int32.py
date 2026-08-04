@@ -1380,7 +1380,9 @@ def test_binary_remainder_fmod_int32_min(ttnn_op, device):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("divisor", [-1, 2**22, 239823930, -(2**30), -(2**31)])
 def test_binary_remainder_fmod_int32_scalar_layout_and_extreme_values(ttnn_op, layout, divisor, device):
-    torch_input_tensor = torch.tensor([-(2**31), -2140947629, -(2**30), -1, 0, 1, 2**30, 2**31 - 1], dtype=torch.int32)
+    torch_input_tensor = torch.tensor(
+        [-(2**31), -2140947629, -(2**30), -1, 0, 1, 2**30, 2**31 - 1], dtype=torch.int32
+    )
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.int32,
@@ -1390,8 +1392,35 @@ def test_binary_remainder_fmod_int32_scalar_layout_and_extreme_values(ttnn_op, l
     )
 
     golden_function = ttnn.get_golden_function(ttnn_op)
-    expected = golden_function(torch_input_tensor, divisor, device=device)
+    # PyTorch's int32 implementation traps on INT_MIN % -1 even though the
+    # mathematical remainder is representable, so widen the golden calculation.
+    expected = golden_function(torch_input_tensor.to(torch.int64), divisor, device=device).to(torch.int32)
     actual = ttnn.to_torch(ttnn_op(input_tensor, divisor))
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.remainder,
+        ttnn.fmod,
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_binary_remainder_fmod_int32_float_scalar(ttnn_op, layout, device):
+    torch_input_tensor = torch.tensor([-5, -1, 0, 1, 5], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    scalar = 1.5
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    expected = golden_function(torch_input_tensor, scalar, device=device)
+    actual = ttnn.to_torch(ttnn_op(input_tensor, scalar))
     assert_equal(expected, actual)
 
 

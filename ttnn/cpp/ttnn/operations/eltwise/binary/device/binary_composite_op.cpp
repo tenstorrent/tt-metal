@@ -519,14 +519,19 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    // TODO: add INT32 support for unary SFPU fast path. Until then int32 must route through
-    // binary_ng, since the float kernel would reinterpret the tile.
-    if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
+    Tensor operation_input = input;
+    if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
+        operation_input = ttnn::typecast(input, DataType::FLOAT32);
+    }
+
+    // The unary SFPU fast path does not support INT32. Float scalars promote INT32 inputs
+    // above; integral scalars must route through binary_ng.
+    if (operation_input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
         post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
-        return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
+        return ttnn::unary_remainder(operation_input, scalar, output_mem_config, output_tensor, sub_core_grids);
     }
     return ttnn::detail::invoke_binary_ng(
-        input,
+        operation_input,
         scalar,
         binary::BinaryOpType::REMAINDER,
         output_dtype,
@@ -568,10 +573,8 @@ Tensor fmod(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    // TODO: add INT32 support for unary SFPU fast path. Until then int32 must route through
-    // binary_ng, since the float kernel would reinterpret the tile. The fast path also cannot
-    // honor sub_device_id.
-    if (input.dtype() == DataType::INT32 || sub_device_id.has_value()) {
+    if ((input.dtype() == DataType::INT32 && !std::holds_alternative<float>(scalar)) ||
+        sub_device_id.has_value()) {
         return ttnn::detail::invoke_binary_ng(
             input,
             scalar,
@@ -586,8 +589,9 @@ Tensor fmod(
             sub_core_grids,
             sub_device_id);
     }
+    const Tensor operation_input = input.dtype() == DataType::INT32 ? ttnn::typecast(input, DataType::FLOAT32) : input;
     float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
-    return ttnn::unary_fmod(input, scalar_f, output_mem_config, std::nullopt, sub_core_grids);
+    return ttnn::unary_fmod(operation_input, scalar_f, output_mem_config, std::nullopt, sub_core_grids);
 }
 
 Tensor floor_div(
