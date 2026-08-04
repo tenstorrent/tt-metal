@@ -1130,3 +1130,48 @@ decoder headroom, in order: SDPA is now 40 % of layer device time (4282 us, unch
 this work), NLPConcatHeads is oddly 5.5x NlpCreateHeads, and BinaryNg/LayerNorm/Typecast
 still run HiFi4. But the encoder is 80 % of wall time and has never been profiled per-op --
 that is where the 3 s target is won.
+
+## Amendment 44 (2026-08-04) — per-op profile of the encoder, and bf16: 2.83x
+
+Profiling the encoder (`profile_encoder_minimax_h3.py`), one unit, second iteration:
+**3167.38 ms of device time over 550 ops**.
+
+| op | n | total ms | % | fidelity |
+|---|---|---|---|---|
+| Conv3dDeviceOperation | 46 | 1383.9 | 43.7 % | HiFi4 |
+| **TypecastDeviceOperation** | 70 | **661.0** | **20.9 %** | HiFi4 |
+| BinaryNgDeviceOperation | 17 | 494.8 | 15.6 % | HiFi4 |
+| GroupNormDeviceOperation | 35 | 234.8 | 7.4 % | HiFi4 |
+| **UntilizeDeviceOperation** | 35 | 234.7 | 7.4 % | HiFi4 |
+| ConcatDeviceOperation | 123 | 109.9 | 3.5 % | -- |
+| UnaryDeviceOperation | 35 | 21.6 | 0.7 % | HiFi4 |
+| TilizeWithValPadding | 35 | 16.6 | 0.5 % | HiFi4 |
+| SliceDeviceOperation | 154 | 10.1 | 0.3 % | -- |
+
+**70 typecasts costing 661 ms, a fifth of the encoder.** That is the bf16 island this file's
+docstring describes: the encoder ran fp32 while `ttnn.group_norm` is bf16-only, so all
+thirteen norm sites round-tripped fp32 -> bf16 -> tilize -> norm -> untilize -> fp32.
+Typecast + Untilize + Tilize + Concat + Slice together are **32.6 %** of device time.
+
+Running the encoder in **bf16 throughout** removes the round trip and speeds the convs:
+
+| | wave (32 units) | per unit | PCC vs reference |
+|---|---|---|---|
+| fp32 | 2.425 s | 75.8 ms | 99.5399 % |
+| **bf16** | **0.857 s** | **26.8 ms** | 99.5014 % |
+
+**2.83x for 0.04 percentage points of PCC.** The encoder's precision floor was already the
+bf16 GroupNorm islands, so making the rest match costs almost nothing -- the fp32 activations
+were being rounded to bf16 thirteen times anyway.
+
+`MiniMaxH3Encoder3d` now defaults to `dtype=ttnn.bfloat16`, and its `forward` casts the input
+to that dtype: `conv3d` requires input and weight dtypes to match exactly
+(`conv3d_device_operation.cpp:82`), and making every call site know the encoder's compute
+dtype is worse than one cast at the entry.
+
+Gates: **16 passed** (encoder + e2e), encoder PCC 99.982-99.988 %, decoder 99.9977-99.9979 %.
+
+**Open follow-up:** the log shows 60 `conv3d blocking [fallback]` warnings under bf16. The
+swept table is keyed into both `_DEFAULT_BLOCKINGS` and `_FP32_BLOCKINGS`, but bf16 is
+clearly missing entries the fp32 path hits -- so the 2.83x above is *without* the sweep fully
+applying. Re-sweeping at bf16 is the obvious next win and should compound.

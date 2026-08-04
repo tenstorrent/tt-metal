@@ -283,7 +283,7 @@ def _gn_hw_sharded(norm: MiniMaxH3FrameGroupNorm, x_BTHWC: ttnn.Tensor, parallel
 def _norm_silu(
     norm: MiniMaxH3FrameGroupNorm,
     x_BTHWC: ttnn.Tensor,
-    dtype: ttnn.DataType = ttnn.float32,
+    dtype: ttnn.DataType = ttnn.bfloat16,
     *,
     parallel_config=None,
     ccl_manager=None,
@@ -320,7 +320,7 @@ class MiniMaxH3ResnetBlock3d(Module):
         width: int,
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
         parallel_config=None,
         ccl_manager=None,
     ) -> None:
@@ -375,7 +375,7 @@ class MiniMaxH3Downsample3d(Module):
         spatial_stride: int = 2,
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
         parallel_config=None,
         ccl_manager=None,
     ) -> None:
@@ -422,7 +422,7 @@ class MiniMaxH3DownBlock3d(Module):
         spatial_downsample_factor: int,
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
         parallel_config=None,
         ccl_manager=None,
     ) -> None:
@@ -494,7 +494,7 @@ class MiniMaxH3Encoder3d(Module):
         temporal_downsample_factors: tuple[int, ...] = (1, 2, 2, 1, 1, 1),
         temporal_taps: int = 3,
         mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
         parallel_config=None,
         ccl_manager=None,
     ) -> None:
@@ -559,6 +559,11 @@ class MiniMaxH3Encoder3d(Module):
         )
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        # conv3d requires input and weight dtypes to match exactly, so accept whatever the
+        # caller has and cast once here rather than making every call site know the
+        # encoder's compute dtype.
+        if x_BTHWC.get_dtype() != self.dtype:
+            x_BTHWC = ttnn.typecast(x_BTHWC, self.dtype)
         h = self.conv_in(x_BTHWC)
         for down_block in self.down_blocks:
             h = down_block(h)
