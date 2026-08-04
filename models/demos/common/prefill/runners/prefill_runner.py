@@ -121,10 +121,6 @@ CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 # Per-user KV cache length. In request mode the external producer decides the chunk count, so this is
 # the one cache-sizing knob; a chunk must not push a slot past it. Default holds 11 chunks.
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
-# Chunks one slot's cache holds. Only the migration self-test needs a chunk count (it bounds the
-# otherwise-unbounded loop so the post-loop verify can run); the producer fills a slot to its cache
-# depth there, so the two agree by construction.
-CHUNKS_PER_SLOT = MAX_SEQ_LEN // CHUNK_SIZE
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
@@ -466,17 +462,11 @@ def run_request_loop(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
-    # Self-test bound: PREFILL_MIGRATION_SELFTEST=1 makes the loop run exactly CHUNKS_PER_SLOT chunks
-    # then exit CLEANLY so the post-loop migrate can run — without it the unbounded loop blocks in recv
-    # and only SIGKILL exits, which kills before the migrate. 0 == unbounded serving.
-    n_selftest = CHUNKS_PER_SLOT if os.environ.get("PREFILL_MIGRATION_SELFTEST", "0") == "1" else 0
     t0 = time.perf_counter()
     c = 0
     first = None
     real_end_per_slot: dict = {}
     while not _shutdown:
-        if n_selftest and c >= n_selftest:
-            break
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
             inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
@@ -507,8 +497,6 @@ def run_request_loop(
         if first is None:
             first = t
         c += 1
-    if num_ranks > 1 and n_selftest:
-        ttnn.distributed_context_barrier()
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
     return real_end_per_slot, c
 
@@ -714,9 +702,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # rank asks its model runtime to build the merged table and sends it to the worker (mirroring
     # tt-blaze where all ranks all-gather but only mesh 0 builds + sends). Previously single-rank only.
     migration_endpoint = None
-    # Single opt-in: PREFILL_MIGRATION_SELFTEST=1 runs the migrate + slot==slot verify AND implies the
-    # table publish it depends on, so you don't also have to set PREFILL_ENABLE_MIGRATION. The latter
-    # still works on its own for production publish-without-selftest.
+    # Single opt-in: PREFILL_MIGRATION_SELFTEST=1 runs the post-loop migrate AND implies the table
+    # publish it depends on, so you don't also have to set PREFILL_ENABLE_MIGRATION. The latter still
+    # works on its own for production publish-without-selftest.
     _selftest = os.environ.get("PREFILL_MIGRATION_SELFTEST", "0") == "1"
     # Mock integration: publish the KV chunk table + device map for an external reader
     # (prefill_producer.py's PREFILL_PRODUCER_CHECK_PCC) with NO migration worker. It must open this
@@ -897,6 +885,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
             completion_check = CompletionCheckConsumer(ack_shm_name, num_layers=NUM_LAYERS)
 
+    # The self-test's migrate runs AFTER the request loop, and the loop only ends on the producer's
+    # shutdown sentinel — a producer that never sends one leaves every rank parked in recv and the
+    # migrate unreached (the runner cannot see the producer's env, hence a warning, not a check).
+    if _selftest:
+        logger.warning(
+            "[migration-selftest] the post-loop migrate needs the request loop to end: run the producer "
+            "with PREFILL_SEND_SHUTDOWN=1 (or have the scheduler close the stream)"
+        )
+
     # Interleaved migration self-test: rank 0 stands in for the scheduler — consume the per-layer ack
     # channel and migrate each chunk as its layers complete, overlapping later chunks' prefill (replaces
     # the post-loop bulk migrate). Rank 0 only (it holds the migration client); other ranks just verify.
@@ -944,7 +941,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:
-        real_end_per_slot, _ = run_request_loop(
+        real_end_per_slot, total_chunks = run_request_loop(
             runtime,
             kv_caches,
             rank,
@@ -981,7 +978,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             if is_first_rank and mig_driver is not None:
                 # Interleaved: per-chunk migrates were already issued during the loop; drain the tail
                 # (consume any remaining acks + wait_complete the deferred copies).
-                mig_driver.drain(expected_chunks=CHUNKS_PER_SLOT)
+                mig_driver.drain(expected_chunks=total_chunks)
             elif is_first_rank:
                 assert migration_endpoint is not None, "rank 0 must hold the migration client for the self-test"
                 # Loopback target is THIS endpoint's own id (A->B loopback; no peer, no connect_to).
