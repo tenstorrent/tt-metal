@@ -1,7 +1,8 @@
 # advchal-v2 — counterfactuals: what the stage would have found if it were set differently
 
-Each section changes **one stage setting** and reports what the corpus would have produced. Five settings;
-three are decided by measurement on hardware, two by recomputation over the cells' own artifacts.
+Each section changes **one stage setting** and reports what the corpus would have produced. Nine settings:
+four decided by measurement on hardware, four by recomputation over the cells' own artifacts, one by reading
+the source. A scoreboard is at the end.
 
 Companion to [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) (E1–E8). Numbering continues from
 there.
@@ -13,6 +14,10 @@ there.
 | **E11** | capture **2 layers**, as the skill's own §2a recommends | **never tried: 23 of 23 reconciliations ran at 1 layer** while the trigger condition held in 8/8 |
 | **E12** | attribute in-chain re-grids to a **second channel** | **48.5 %** of the corpus's shipped gain is invisible to its own ceiling; **64.2 %** including the unshipped wins |
 | **E13** | drop the **first timed repeat** from the floor | **nothing** — v2 already fixed this; no verdict flips. A v1 fix that is no longer needed |
+| **E14** | run the advisor at a higher **optimization level** | **nothing exists above 2** for layout advice — closed by reading the source |
+| **E15** | stop screening **DS-matmul advice last** | a matmul candidate *did* win, and **65 % of matmul cost** is exempt from screening by the agreement clause (~5.0 ms) |
+| **E16** | report the **best measured decoder**, not the advisor delta | the stage credited the advisor with **67 %** of what its own directions deliver (13.6 ms vs 20.2 ms) |
+| **E17** | change the **batch** | **not testable** — the wins are batch-32-pinned by construction, and nothing records the dependency |
 
 ---
 
@@ -191,3 +196,127 @@ Ranked by what each setting was worth on this corpus:
 4. **One recommended setting was never exercised by any cell** (E11) — because it says "consider" and
    nothing checks it.
 5. **One v1 defect is genuinely fixed** and needs no further change (E13).
+
+---
+
+## E14 — if the advisor were run at a higher optimization level: there isn't one
+
+**Setting changed.** `ShardAdvisor(optimization_level=...)`; the stage uses **2**, and `ttnn-advise` exposes
+`--opt-level` (default 2).
+
+**Answer, from source — no run needed.** In `tools/ttnn-jit/_src/shard_advisor.py:166` the level does exactly
+one thing for layout advice:
+
+```python
+mem_layout = "true" if self.optimization_level >= 2 else "false"
+```
+
+Beyond gating `memory-layout-analysis-enabled`, the level reaches only `workaroundOptions.optimizationLevel`
+and a Conv3d config path. **Levels 2 and 3 are identical for sharding advice; ≤1 turns it off entirely.**
+
+**The stage already uses the only setting that matters.** This line of inquiry is closed — the advice cannot
+be improved by asking the advisor harder, only by changing its objective
+([`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §7).
+
+---
+
+## E15 — if DS-matmul advice were not screened last
+
+**Setting changed.** SKILL.md §4: *"Screen DS-matmul advice **last**. It has not won a measurement in this
+corpus, and where it agrees with a shipped DS config there is nothing to screen."*
+
+**Both halves are wrong for v2.**
+
+**1. A matmul candidate did win.** Of 90 matmul/linear rows in the corpus, 26 are genuine screened
+disagreements, and **one was kept**: gemma-4-12B full-attention `linear`, 129.4 µs, 12 → 55 cores. That cell's
+shipped change (`Q+K+V+MLP` residency) is a change to linear ops. The "never wins" claim is v1-derived and
+v2 contradicts it.
+
+**2. Most DS cost was never screenable, so "it never wins" is self-fulfilling.** Classifying every
+matmul/linear row by cost:
+
+| classification | rows | share of matmul cost |
+|---|---|---|
+| **grid differs from shipped, but NO verdict** — the DS-family agreement clause | **55** | **64.7 %** (4,993 µs) |
+| grid differs, screened and rejected | 25 | 27.1 % |
+| exact grid agreement | 7 | 7.3 % |
+| grid differs, screened and **kept** | 1 | 1.7 % |
+
+Matmul/linear rows are **62.3 % of the profiled window on average** and up to **89.8 %** (qwen B linear
+attention). Of that, roughly two-thirds sits in rows where **the shipped and advised grids differ but the tool
+records agreement because both are DRAM-sharded** — the level-3 rule in `LayoutScore`
+([`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §2). Nobody ever screened any of it.
+
+**So the stage tells cells to deprioritise the ops carrying two-thirds of the cost, and its accounting exempts
+two-thirds of those from screening in the first place.** Action point C5 (`agreed_on: grid | ds_family`) is
+what makes that ~5.0 ms visible.
+
+---
+
+## E16 — if the stage reported the best measured decoder instead of the advisor delta
+
+**Setting changed.** The stage's headline is *contribution* — incumbent minus candidate, with the incumbent
+frozen. What would "best decoder reachable from the advisor's own directions" have been?
+
+| cell / kind | incumbent | shipped | best measured | stage says | best says |
+|---|---|---|---|---|---|
+| phi FN dense | 0.808757 | 0.769096 | **0.700431** | −4.90 % | **−13.39 %** |
+| g26 B sliding | 1.258327 | 1.254000 | **1.101768** | −0.34 % | **−12.44 %** |
+| g26 onA sliding | 1.823508 | 1.587511 | **1.574985** | −12.94 % | −13.63 % |
+| nm FN sliding MoE | 0.577971 | 0.518022 | **0.512764** | −10.37 % | −11.28 % |
+| g26 FN sliding | 1.341153 | 1.318449 | 1.316251 | −1.69 % | −1.86 % |
+| phi A dense | 0.656989 | 0.607172 | 0.607172 | −7.58 % | −7.58 % |
+| phi B dense | 0.788610 | 0.748458 | 0.748458 | −5.09 % | −5.09 % |
+| llama-8B dense | 0.667737 | 0.667737 | 0.667737 | 0.00 % | 0.00 % |
+
+| | summed model-level saving |
+|---|---|
+| what the stage shipped | **13,601 µs** |
+| best measured on the same decoders | **20,225 µs** (1.5×) |
+
+**The stage credited the advisor with 67 % of what the advisor's own directions could deliver.** The missing
+33 % is not new ideas — it is the same directions at a different grid, or the same candidate past an oracle
+that should have passed it.
+
+---
+
+## E17 — if the batch were different: the wins are batch-pinned by construction, and nothing records it
+
+**Setting changed.** The stage pins batch (32 for dense cells, 1 for MoE). Does the norm win survive another?
+
+| batch | control | norm 11 | rope+norm 11 |
+|---|---|---|---|
+| 8 | **fails at build** (`assert.hpp:104`) | fails | fails |
+| **32** | 0.807203 | 0.746605 | **0.701036** |
+| 64 | **fails**: `TT_FATAL: Unsupported input shape` | **fails**: `TT_FATAL: Shard height 32 must match physical height 64 for width sharded` | fails |
+
+**Not testable — phi's decoder only runs at batch 32**, and the norm knob is *separately* pinned: its memory
+config hardcodes a one-tile-row shard height,
+
+```python
+shape=(ttnn.TILE_SIZE, width_tiles * ttnn.TILE_SIZE)   # height = 32 = exactly one tile row
+```
+
+so at any batch that is not exactly one tile row the shard spec is invalid.
+
+**The finding is the pinning itself.** The corpus's largest wins are **batch-32-specific by construction**,
+and nothing in `final.json` records that dependency — a reader sees "−13.4 %/layer" with no indication that
+it evaporates at batch 64. `decode_batch` is recorded; *the candidate's batch-shape assumption* is not.
+
+(Incidental: the batch-32 control reproduced at 0.807203 here against 0.808757 sixteen hours earlier and the
+cell's own 0.807152 — a ~1.6 µs spread across the whole session, which is the honest cross-session floor.)
+
+---
+
+## Counterfactual scoreboard
+
+| setting | verdict | worth |
+|---|---|---|
+| oracle: absolute, not differential | **change it** — the current rule can reject the more accurate configuration | the two largest wins |
+| screening order: cliff, not boundary value | **change it** — free, and ranks the winner 1st in 4/4 | found every big win |
+| attribution: add the in-chain channel | **change it** — 48–64 % of deliverable value is priced at zero | decides what gets screened |
+| capture window: N≥2 when spill fires | **change it** — 23/23 ran at N=1; the trigger held in 8/8 | unquantified layer-handoff cost |
+| DS-matmul: screen last | **drop the rule** — a matmul candidate won, and 65 % of matmul cost is exempt from screening anyway | ~5.0 ms invisible |
+| floor: drop the first repeat | **no action** — v2 fixed it; 13/17 unchanged, no verdict flips | nothing |
+| advisor optimization level | **no action** — 2 is the only meaningful setting | nothing |
+| batch | **record it** — the wins are batch-pinned and the pin is undocumented | correctness of every published delta |

@@ -23,6 +23,10 @@ static check that needs no device time** (§3.8).
 the model's own higher-precision reference, the discarded candidate scores **0.99931** and the configuration
 that shipped scores **0.98347** — the *incumbent* is the one that fails the model's bar (§3.1).
 
+**Bottom line across the eight cell/kinds I could re-measure: the stage shipped 13,601 µs/model of saving where
+20,225 µs was reachable from the advisor's own directions — it credited the advisor with 67 % of what it found**
+(§3.11).
+
 ---
 
 ## Where everything lives
@@ -32,7 +36,7 @@ that shipped scores **0.98347** — the *incumbent* is the one that fails the mo
 | **this file** | the account, and pointers |
 | [`ADVCHAL-V2-IMPROVEMENTS.md`](ADVCHAL-V2-IMPROVEMENTS.md) | what to change — ideas, then action points |
 | [`ADVCHAL-V2-EXPERIMENTS.md`](ADVCHAL-V2-EXPERIMENTS.md) | 8 experiments run on hardware to test the analysis |
-| [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | 5 stage settings changed one at a time — what each would have found |
+| [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **9 stage settings changed one at a time** — what each would have found, with a scoreboard |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -93,7 +97,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The ten findings that matter
+## 3. The twelve findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -294,6 +298,39 @@ in L1"* — a real per-layer conversion, declared out of scope and never quantif
 answerable, because the py↔IR transition pins both ends to DRAM by construction.
 
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E11
+
+### 3.11 The stage credited the advisor with two-thirds of what it actually found
+
+Comparing what each cell shipped against the best configuration reachable from the advisor's *own* directions
+on the *same* decoder (my re-measurements included):
+
+| cell / kind | incumbent | shipped | best measured | stage says | best says |
+|---|---|---|---|---|---|
+| phi FN dense | 0.808757 | 0.769096 | **0.700431** | −4.90 % | **−13.39 %** |
+| g26 B sliding | 1.258327 | 1.254000 | **1.101768** | −0.34 % | **−12.44 %** |
+| g26 onA sliding | 1.823508 | 1.587511 | **1.574985** | −12.94 % | −13.63 % |
+| nm FN sliding MoE | 0.577971 | 0.518022 | **0.512764** | −10.37 % | −11.28 % |
+| g26 FN sliding | 1.341153 | 1.318449 | 1.316251 | −1.69 % | −1.86 % |
+| phi A / phi B / llama-8B | — | = best | = best | — | nothing further found |
+
+**Shipped 13,601 µs/model. Reachable 20,225 µs/model — 1.5×.** The missing third is not new ideas: it is the
+same directions at a different grid, or the same candidate past an oracle that should have passed it.
+
+### 3.12 Two rules that steer cells away from most of the cost
+
+**Matmul/linear ops are 62.3 % of the profiled window on average** (up to 89.8 %), and the stage says to screen
+DS-matmul advice **last** because "it has not won a measurement in this corpus". In v2 one *did* win
+(gemma-4-12B, `linear` 12→55 cores, 129.4 µs, kept). And of all matmul cost:
+
+| | rows | share of matmul cost |
+|---|---|---|
+| **grid differs from shipped, but recorded as agreement** (both DRAM-sharded) | **55** | **64.7 %** (≈5.0 ms) |
+| screened and rejected | 25 | 27.1 % |
+| exact agreement | 7 | 7.3 % |
+| screened and **kept** | 1 | 1.7 % |
+
+So two-thirds of the cost in the biggest op class is exempt from screening by the agreement clause, and the
+ordering rule sends cells to it last anyway. → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E15
 
 ---
 

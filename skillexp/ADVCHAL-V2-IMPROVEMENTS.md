@@ -299,11 +299,34 @@ comes back **empty**; and 250 timing replays overflow the device profiler buffer
 single-eager-replay profile wrapper and Tracy mid-run dumping as the documented path instead of letting each
 cell rediscover it. Three cells, three workarounds.
 
-### C5. Record `agreed_on: grid | ds_family`
+### C5. Record `agreed_on: grid | ds_family`, and stop treating ds_family as nothing to screen ⭐
 
 An `agrees_with_shipped` row can carry a different advised core count, because a DRAM-sharded match counts as
 agreement regardless of grid (advisor score level 3 beats core count). Without the field the data invites
 misreading — it misled this analysis once.
+
+**Quantified.** Matmul/linear ops are **62.3 %** of the profiled window on average (up to 89.8 %), and
+**55 rows carrying 64.7 % of all matmul cost — ≈5.0 ms across the corpus — differ in grid from the shipped
+placement yet carry no verdict** because both sides are DS. None was ever screened. A `ds_family` match with a
+*different grid* is a candidate, not an agreement.
+
+### C5a. Drop the "screen DS-matmul advice last" rule
+
+The rule's stated basis — *"it has not won a measurement in this corpus"* — is v1-derived and **v2 contradicts
+it**: gemma-4-12B kept a `linear` 12→55-core change worth 129.4 µs, and that cell's shipped win is on linear
+ops. Combined with C5, the rule is self-fulfilling: it sends cells last to the op class holding two-thirds of
+the cost, most of which the accounting has already exempted.
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E15.
+
+### C5b. Record the candidate's batch-shape assumption, not just `decode_batch`
+
+The corpus's largest wins are **batch-pinned by construction** and nothing says so. phi's norm memory config
+hardcodes a one-tile-row shard height (`shape=(ttnn.TILE_SIZE, width_tiles * ttnn.TILE_SIZE)`), so at batch 64
+it fails with `TT_FATAL: Shard height 32 must match physical height 64 for width sharded`; batch 8 fails at
+build. A reader of `final.json` sees "−13.4 %/layer" with no indication that it evaporates off batch 32.
+
+**Change.** Require `candidate_shape_assumptions` per shipped knob (tile rows, divisibility, grid shape), and
+have the gate fail a shipped change that has none. → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E17.
 
 ### C6. Keep the decision trace, compressed, as a deliverable
 
@@ -312,6 +335,12 @@ another gzipped 118 MB to 7 MB. Require gzip, and `.gitignore` the raw profiler 
 delete by hand after a 1.2 GB push rejection.
 
 ## D. The advisor (tt-mlir)
+
+**First, what will *not* help:** raising the advisor's `optimization_level`. In
+`tools/ttnn-jit/_src/shard_advisor.py:166` the level only gates `memory-layout-analysis-enabled` (true at ≥2);
+levels 2 and 3 are identical for layout advice. **The stage already uses the only setting that matters**, so
+the advice can only be improved by changing the objective below.
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E14.
 
 ### D1. Add a latency term to `LayoutScore` ⭐
 
