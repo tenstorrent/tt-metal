@@ -68,14 +68,94 @@ sweep is the follow-up; these numbers are the floor, not the result.
 legal divisors of 42. The three AGMM ops fall 5.02 -> 4.58 ms at 5s. The (K, N) keying transferred --
 the same block shapes were swept at M=4768 and hold at 10s and 15s.
 
-## Standing opportunities, from the 5s profile after entry 6
+## Where the time goes, from the 5s profile after entry 6
 
-| target | share of block | note |
-|--------|----------------|------|
-| ring SDPA | 43% (7.61 ms) | chunk-tuned; further needs kernel work |
-| the three AGMM matmuls | 26% (4.58 ms) | block sizes swept; what remains is kernel efficiency |
-| adaLN table build + 6 row gathers | ~15% | `adaln_proj` runs at 2.4% FLOP util -- M=32, of which 2 rows are real. All 50 blocks' projections could batch into one matmul |
-| `ff2` reduce-scatter | ~4% | the one CCL still standing on its own |
+54 ops, 17.78 ms. Measured shares:
+
+| target | share | note |
+|--------|-------|------|
+| ring SDPA | 42.8% (7.61 ms) | chunk-tuned (entry 3); util 56.7% at 5s, 67.9% at 15s |
+| the three AGMM matmuls | 25.7% (4.58 ms) | block sizes swept (entry 6); ~0.9 ms of gather still exposed |
+| 6 modulation row gathers | 10.2% (1.81 ms) | 294-305 us each |
+| `ff2` matmul + reduce-scatter | 9.1% (1.61 ms) | ff2 is the one matmul at healthy util (64.5%) |
+| adaLN table build | 3.8% (0.68 ms) | `adaln_proj` at 2.4% FLOP util (M=32, 2 real rows) + 25 tiny layout ops |
+| 2 fused norm+RoPE ops | 1.5% (0.27 ms) | entry 4 |
+| gate addcmuls (2) | 1.6% (0.29 ms) | |
+
+## Opportunities
+
+Ordered by expected value. "Measured" means taken from a profile; "est." is a projection from
+measured shares and should be treated as a hypothesis, not a result.
+
+### A. Reachable from existing building blocks -- no new kernels
+
+1. **Fused matmul + reduce-scatter + addcmul for the feed-forward.**
+   `ParallelFeedForward.forward_fused_addcmul` -> `RowParallelLinear.forward_fused_addcmul` ->
+   `minimal_matmul_strided_reduce_scatter_async` already exists and computes
+   `addcmul_a + scalar * rs_result * addcmul_b`, which is exactly this block's
+   `addcmul(residual, ff_out, gate_mlp)`. Collapses ff2 + reduce-scatter + gate addcmul into one op:
+   **1.76 ms measured today, 9.9% of the block.** We simply do not call it.
+2. **Fold the attention gate into the `to_out` AGMM.** `all_gather_minimal_matmul_async` takes
+   `addcmul_input_tensor1/2`; `WanAttention._to_out_fused_addcmul` is the precedent. Removes the
+   gate-MSA addcmul, 139 us measured.
+
+### B. Dispatch -- the largest wall-clock lever, and not a device-time item
+
+3. **Trace capture in the pipeline.** Device time is 17.78 ms but the gap-inclusive total has run
+   3-5x that: at 5s the machine is idle for most of the wall clock. Every other item on this list
+   optimises the 17.78 ms; this one attacks the other ~40 ms. Nothing else here can outweigh it at
+   short durations.
+
+### C. Ring SDPA -- 42.8% of the block
+
+4. **Try `exp_ring_joint_scaled_dot_product_attention`.** Wan enables it only for (tp=4, sp=32), and
+   notably configures it on the *full* grid rather than reserving a CCL column -- 120 cores against
+   our 110. +9% cores on 43% of the block, for a config change. Unknown whether it holds at sp=8.
+5. **Revisit the TP/SP split.** Everything tuned so far assumes TP=4 / SP=8. The 5s util deficit
+   (56.7% vs 67.9% at 15s) is fundamentally that 4768 rows/device is too little work to fill 110
+   cores. SP=4 / TP=8 doubles per-device sequence length at 5s at the cost of more TP traffic, which
+   AGMM now partly hides. The one item that specifically targets short durations.
+
+   **Ruled out: lowering K/V precision (e.g. bfloat8_b).** Considered and explicitly declined -- do
+   not re-propose. The remaining SDPA work is grid/parallelism/kernel, not numerics.
+
+### D. AGMM overlap -- ~0.9 ms of gather still exposed at 5s
+
+Measured overlap efficiency (gather hidden behind matmul compute): 46% at 5s, 78% at 10s, 59% at 15s.
+Perfect overlap would have been worth -9.1% of the block at 5s; fusion captured -1.8%. ~1.43 ms/block
+still on the table there.
+
+6. **Sweep `num_workers_per_link` and `num_buffers_per_channel`.** Both are currently derived
+   (`full_grid.x // num_links` = 6) or hardcoded (24 on Blackhole) and have never been swept for
+   these shapes -- only block sizes were. They govern how finely the ring streams.
+7. **Treat `K_block` as streaming granularity, not just a compute parameter.** ff1 landed on 3 of 42
+   (14 ring chunks), qkv on 7 (6 chunks). The sweep minimised total time without isolating overlap,
+   so it may have chosen good compute at the cost of streaming. Sweeping K_block against measured
+   overlap efficiency would show whether the 1.43 ms is reachable or a kernel limit.
+
+### E. adaLN modulation -- 14% combined
+
+8. **Cache all modulations for every block up front.** The timestep schedule and the modality tags are
+   known before sampling starts, so every `(step, block, param)` modulation table can be computed once
+   per video and reused -- eliminating the `adaln_proj` matmul and the 25-op table build from the
+   per-block path entirely (0.68 ms/block measured). Note this is *not* caching across steps of a
+   recomputed value: `temb` changes every step, so the win comes from precomputing the whole known
+   schedule, not from reuse within it. Cost is memory: 50 steps x 50 blocks x 6 params x 6 rows x
+   hidden_local in bf16 is roughly 240 MB/device -- affordable, but worth confirming against the
+   weight footprint before committing.
+9. **Remove the row gathers by broadcasting inside the consuming ops.** 1.81 ms measured. The fused
+   norm kernel already has a per-batch adaLN broadcast mode (`[batch, 1, H]`, broadcast over seq); it
+   does not fit per-row modulation directly, but this model's packed sequence is contiguous runs per
+   (timestep, modality), so a segment-wise broadcast is closer to reachable than a general gather-free
+   path would be.
+
+### F. Small, and only worth doing while nearby
+
+10. **Reduce-scatter runs on 12 cores** against 112-120 everywhere else -- 673 us on ~10% of the
+    machine. May be inherent to the ring. Moot if item 1 lands.
+11. **The fused RoPE rotates 4 tiles where 3 would do.** The pass-through tile is rotated then
+    discarded by `sin=0` (see `prepare_rope_tables`). A fraction of 0.27 ms -- noted for completeness,
+    not worth chasing.
 
 Two measurement habits this log exists to enforce:
 
