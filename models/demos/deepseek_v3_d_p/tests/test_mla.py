@@ -948,9 +948,10 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     GPU traces in MLA_CHUNKED_TRACE_DIR). It otherwise runs the same
     config-driven driver on any arch/mesh.
 
-    kimi_k3 (NoPE + output gate, 96 heads) runs 'cpu' and 'func' only -- supports_pretrained=False, and
-    'trace' forces pretrained. Its rotation scenarios still matter: rotation comes from the
-    block-cyclic cache write and the causal offset, not from RoPE."""
+    kimi_k3 (NoPE + output gate, 96 heads) runs 'cpu' and 'func' only, and 'scalar' only -- 'trace'
+    and 'metadata' are both skipped explicitly below. Random weights only (supports_pretrained=False).
+    Its rotation scenarios still matter: rotation comes from the block-cyclic cache write and the
+    causal offset, not from RoPE."""
     # Per-variant, not module-level: two CI selectors for this test are variant-unqualified, so
     # without this a kimi_k3 case would run on Wormhole T3K where it has never been validated.
     if variant.name == "kimi_k3" and not is_blackhole():
@@ -961,6 +962,13 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:
         pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
+    # No K3 checkpoint is reachable, so no GPU trace was ever recorded for it. _run_chunked_prefill
+    # already asserts on supports_pretrained, but only once a trace root is configured -- so on a box
+    # with MLA_CHUNKED_TRACE_DIR set these cases would hard-fail instead of being cleanly out of
+    # scope. Skip up front; the assert stays as the backstop for any future supports_pretrained=False
+    # variant and for the silent K2.6-trace-substitution it was written to catch.
+    if variant.name == "kimi_k3" and reference == "trace":
+        pytest.skip("kimi_k3 has no reachable checkpoint, so no GPU trace exists for it")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
