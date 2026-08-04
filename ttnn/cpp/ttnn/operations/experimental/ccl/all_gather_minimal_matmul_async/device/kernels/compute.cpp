@@ -165,7 +165,6 @@ void add_bias_and_addcmul_block(
     // Unpacker waits for intermediate_cb to be ready
     intermediate_cb.wait_front(out_block_num_tiles);
 
-    compute_kernel_hw_startup(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             uint32_t tile_id = m * N_block_tiles + n;
@@ -209,7 +208,10 @@ void add_bias_and_addcmul_block(
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
 #else
-        reconfig_data_format_srca(ternary_b_cb.get_cb_id());
+        // Full re-arm (hw_configure + pack_dest/math_pack_sync), matching the pre-cleanup
+        // 2-arg unary_bcast_init(ternary_b_cb, intermediate_cb); this runs after matmul_blocks
+        // regardless of FUSE_BIAS, so a plain reconfig would drop the MATH<->PACK DST re-arm.
+        compute_kernel_hw_startup(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
         unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id());
 #endif  // TERNARY_B_IS_FLOAT32
 
@@ -234,7 +236,7 @@ void add_bias_and_addcmul_block(
                     intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                reconfig_data_format_srca(ternary_b_cb.get_cb_id());
+                compute_kernel_hw_startup(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
                 unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id());
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
 

@@ -42,7 +42,7 @@ constexpr uint32_t stats_tile_stride = 2;
 
 struct x_minus_mean_node {
     static constexpr LLK_Node node{
-        .llk_init = sub_bcast_cols_init_short,
+        .llk_init = sub_bcast_cols_init,
         .llk = FN_compute(sub_tiles_bcast_cols),
         .CB_A = cb_inp,
         .CB_B = cb_stats_reduced_idx,
@@ -57,7 +57,7 @@ constexpr uint32_t normed_output_cb =
     do_gamma || do_beta ? cb_x_normed : cb_out;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 struct normed_output_node {
     static constexpr LLK_Node node{
-        .llk_init = mul_bcast_cols_init_short,
+        .llk_init = mul_bcast_cols_init,
         .llk = FN_compute(mul_tiles_bcast_cols),
         .CB_A = cb_norm_x_input,
         .CB_B = cb_recip_sqrt_var_idx,
@@ -74,7 +74,7 @@ constexpr uint32_t pop_gamma_beta = Wt == cb_length ? 0xDDDD : 0xFFFF;
 constexpr uint32_t cb_times_gamma_out = do_beta ? tt::CBIndex::c_13 : cb_out;
 struct gamma_optional_node {
     static constexpr LLK_Node node{
-        .llk_init = mul_bcast_rows_init_short,
+        .llk_init = mul_bcast_rows_init,
         .llk = FN_compute(mul_tiles_bcast_rows),
         .CB_A = cb_x_normed,
         .CB_B = cb_gamma,
@@ -87,7 +87,7 @@ constexpr uint32_t cb_in_beta = do_gamma ? cb_times_gamma_out : normed_output_cb
 constexpr uint32_t cb_beta = tt::CBIndex::c_3;
 struct beta_optional_node {
     static constexpr LLK_Node node{
-        .llk_init = add_bcast_rows_init_short,
+        .llk_init = add_bcast_rows_init,
         .llk = FN_compute(add_tiles_bcast_rows),
         .CB_A = cb_in_beta,
         .CB_B = cb_beta,
