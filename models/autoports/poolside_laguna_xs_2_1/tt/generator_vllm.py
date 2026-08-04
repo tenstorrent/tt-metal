@@ -134,6 +134,15 @@ class LagunaForCausalLM:
         # the serving-shape page-table buffer before the decode trace is captured.
         self._max_blocks: Optional[int] = None
         self.already_warmed_up_prefill = False
+        self._in_prefill_warmup = False  # True only while warmup_model_prefill runs (suppresses the
+        # _prefill_pt diagnostic for intentional warmup pre-allocs; a warning outside warmup = the W1 bug).
+        # ---- eager spec-decode (opt-in) — served in-adapter, B==1 greedy. Phase 2. ----
+        # TT_LAGUNA_SPEC_DECODE: "" off | "probe" = run the one-shot feasibility probe (does eager verify
+        # run under the resident decode trace without an alloc-under-trace hang?) | "1" = full buffered loop.
+        self._spec_mode = os.environ.get("TT_LAGUNA_SPEC_DECODE", "")
+        self._spec_probed = False
+        self._spec_buf: list = []  # pending committed token ids, returned one per vLLM step
+        self._spec_hist: list = []  # running token history for the single served request (ngram source)
         # vLLM-owned cache dtype (from the selected precision policy), used for allocation.
         self._kv_dtype = self.model.precision_policy.kv_cache
 
@@ -430,6 +439,14 @@ class LagunaForCausalLM:
         key = tuple(pt.shape)
         buf = self._pf_pt.get(key)
         if buf is None:
+            if self.already_warmed_up_prefill and not self._in_prefill_warmup:
+                # W1 diagnostic: any allocation AFTER warmup happens under the resident decode trace and
+                # is the multi-minute stall. Warmup should have pre-touched every (N, serve_w) shape.
+                print(
+                    f"[laguna] WARNING: prefill page-table alloc for unwarmed shape {key} AT SERVING "
+                    f"(under resident decode trace — this is the W1 stall). Widen warmup_model_prefill.",
+                    flush=True,
+                )
             buf = self.gen._rep(torch.zeros(pt.shape, dtype=torch.int32), ttnn.int32)
             self._pf_pt[key] = buf
         ttnn.copy_host_to_device_tensor(self.gen._host(pt, ttnn.int32), buf)
@@ -785,6 +802,38 @@ class LagunaForCausalLM:
         logits = torch.stack([self._row_logits(h, r, L, st) for r in rows], dim=0)  # [len(rows), vocab]
         return logits
 
+    def _spec_feasibility_probe(self, tokens, pos, page_table, kv_cache, page_tables_per_layer):
+        """PHASE-2 FEASIBILITY PROBE (TT_LAGUNA_SPEC_DECODE=probe): run ONE eager batched-decode VERIFY
+        (K1=2 = anchor + 1 dummy draft) under the RESIDENT decode trace and report whether it completes
+        without an alloc-under-trace hang. This is the open question blocking eager in-adapter spec-decode
+        (the eager verify allocates activation buffers; doing that under a resident trace may be the
+        allocator.cpp:123 hazard). Writes throwaway KV at pos+1 -> probe boot only, never real serving."""
+        import time as _t
+
+        try:
+            anchor = int(tokens[0, 0])
+            p0 = int(pos[0])
+            toks = [anchor, anchor]  # K1=2: anchor + one dummy draft at the next position
+            positions = [p0, p0 + 1]
+            pt_arg = None if page_tables_per_layer is not None else page_table
+            t0 = _t.perf_counter()
+            g = self.verify_greedy_decode(
+                toks,
+                positions,
+                page_table=pt_arg,
+                kv_cache=kv_cache,
+                page_tables_per_layer=page_tables_per_layer,
+                traced=False,
+            )
+            dt = (_t.perf_counter() - t0) * 1000.0
+            print(
+                f"[laguna] SPEC-PROBE OK: eager verify under resident decode trace returned "
+                f"{[int(x) for x in g]} in {dt:.0f}ms (no hang) -> eager in-adapter spec-decode FEASIBLE.",
+                flush=True,
+            )
+        except Exception as e:  # noqa: BLE001 - diagnostic probe, report any failure verbatim
+            print(f"[laguna] SPEC-PROBE FAILED under resident decode trace: {type(e).__name__}: {e}", flush=True)
+
     def verify_forward_decode(
         self,
         tokens,
@@ -1112,6 +1161,11 @@ class LagunaForCausalLM:
             return self._decode_host_sampling(tokens, pos, page_table, kv_cache, read_from_device)
 
         hybrid = page_tables_per_layer is not None
+        if self._spec_mode == "probe" and B == 1 and not reset_batch and not self._spec_probed:
+            # Phase-2 feasibility probe: run ONE eager verify under the resident decode trace, then fall
+            # through to normal decode (output unaffected except throwaway KV at pos+1 — probe boot only).
+            self._spec_probed = True
+            self._spec_feasibility_probe(tokens, pos, page_table, kv_cache, page_tables_per_layer)
         st = self._decode.get(B)
         if st is None:
             # item 3.2: the decode trace for this batch B was NOT pre-captured by warmup, so we compile +
@@ -1245,6 +1299,7 @@ class LagunaForCausalLM:
         if kv_cache is None or self.already_warmed_up_prefill:
             return None
         self.already_warmed_up_prefill = True
+        self._in_prefill_warmup = True  # suppress the _prefill_pt diagnostic for intentional warmup allocs
         # Allocate persistent sampling buffers AND the per-bucket-L one-hot selector buffers (item 2.2),
         # all pre-trace. The selector MATMUL program (sel[1,1,1,L] @ h[1,1,L,H]) + the [1,L,H]->[1,1,L,H]
         # reshape are compiled for every bucket L by the per-L ``prefill_forward`` calls below, which run
@@ -1301,6 +1356,21 @@ class LagunaForCausalLM:
                 self.prefill_forward(
                     dummy, page_table=pt, kv_cache=kv_cache, prompt_lens=[L], start_pos=[0], sampling_params=greedy
                 )
+        # W1 fix — warm the serving ROW-COUNT dimension of the prefill page table. Serving batches up to
+        # ``max_num_seqs`` new requests into ONE prefill call (page_table ``[num_reqs, serve_w]``), and
+        # ``_prefill_pt``/``_prefill_pt_grouped`` are SHAPE-KEYED — an unseen ``(num_reqs>1, serve_w)`` shape
+        # would allocate its persistent buffer under the resident decode trace at serving, i.e. the
+        # allocator.cpp:123 "unsafe alloc under active trace" -> the multi-minute recompile/alloc stall (W1).
+        # The bucket loop above only warmed row-count 1. Pre-allocate every ``(N, serve_w)`` buffer here
+        # (pure allocation, before the decode trace exists — same as the (1,w) warmup), so serving-time
+        # concurrent prefill is allocation-free for all batch sizes. Cheap: N buffer allocs, no compute.
+        if serve_w:
+            for N in range(1, int(self.max_batch_size) + 1):
+                if hybrid:
+                    self._prefill_pt_grouped([torch.zeros((N, serve_w), dtype=torch.int32) for _ in kv_cache])
+                else:
+                    self._prefill_pt(torch.zeros((N, serve_w), dtype=torch.int32))
+        self._in_prefill_warmup = False
         return None
 
     def warmup_model_decode(
