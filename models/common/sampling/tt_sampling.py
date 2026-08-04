@@ -643,18 +643,18 @@ class TTSampling(LightweightModule):
         only narrows the window.
 
         is_winner = (value == rowmax) AND (global_index == lowest_index_among_maxima)  # exactly one candidate
-            lowest_index_among_maxima = min(global_index + (rowmax - value)*LARGE)     # == idx at maxima, huge else
+            lowest_index_among_maxima = min(where(value == rowmax, global_index, LARGE))
         Validated on a restricted active sub-device by
         tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py.
         """
         scg = self.sub_core_grids
-        BIG = 1.0e9  # >> max vocab index; EXACT binary offset (no bf16 (maxv-value) magnitude dependence)
+        BIG = 1_000_000_000  # >> max vocab index; exactly representable in int32
         # Every intermediate is deallocated as soon as its last reader is issued: this runs once per
         # decode step, so leaving them to Python refcounting would hold ~9 extra buffers per step.
         maxv = ttnn.max(gathered_values, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] bf16
-        idx_f = ttnn.typecast(gathered_global_indices, ttnn.float32, sub_core_grids=scg)
         is_max = ttnn.eq(gathered_values, maxv, sub_core_grids=scg)  # 1.0 at the (tied) maxima, exact
-        not_max = ttnn.lt(gathered_values, maxv, sub_core_grids=scg)  # 1.0 strictly below max
+        is_max_i = ttnn.typecast(is_max, ttnn.int32, sub_core_grids=scg)
+        ttnn.deallocate(is_max)
 
         # Per-row boost, >= 2 bf16 ULP of that row's maximum whatever its magnitude or sign.
         abs_max = ttnn.abs(maxv, sub_core_grids=scg)
@@ -664,24 +664,23 @@ class TTSampling(LightweightModule):
         delta = ttnn.add(delta_scaled, TIEBREAK_DELTA_FLOOR, sub_core_grids=scg)  # [1,1,B,1] bf16
         ttnn.deallocate(delta_scaled)
 
-        # lowest global index among the maxima: push non-maxima up by BIG (exact, robust), then min.
-        not_max_scaled = ttnn.multiply(not_max, BIG, sub_core_grids=scg)
-        ttnn.deallocate(not_max)
-        masked_idx = ttnn.add(idx_f, not_max_scaled, sub_core_grids=scg)
-        ttnn.deallocate(not_max_scaled)
-        greedy_i = ttnn.min(masked_idx, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] f32
+        # Lowest global index among the maxima: preserve exact int32 indices and replace non-maxima with BIG.
+        # Float arithmetic here would round nearby indices through TF32 precision in eltwise kernels.
+        masked_idx = ttnn.where(is_max_i, gathered_global_indices, BIG, sub_core_grids=scg)
+        greedy_i = ttnn.min(masked_idx, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] int32
         ttnn.deallocate(masked_idx)
 
-        is_lowidx = ttnn.eq(idx_f, greedy_i, sub_core_grids=scg)  # broadcast over W
-        ttnn.deallocate(idx_f)
+        is_lowidx = ttnn.eq(gathered_global_indices, greedy_i, sub_core_grids=scg)  # broadcast over W
         ttnn.deallocate(greedy_i)
-        is_winner = ttnn.multiply(is_max, is_lowidx, sub_core_grids=scg)  # 1.0 at exactly one candidate
-        ttnn.deallocate(is_max)
+        is_winner = ttnn.multiply(is_max_i, is_lowidx, sub_core_grids=scg)  # 1 at exactly one candidate
+        ttnn.deallocate(is_max_i)
         ttnn.deallocate(is_lowidx)
 
         # gate by k==1 (self._greedy_col [1,1,B,1]); random users get boost 0 => values unchanged
-        winner_gated = ttnn.multiply(is_winner, self._greedy_col, sub_core_grids=scg)
+        winner_f = ttnn.typecast(is_winner, ttnn.float32, sub_core_grids=scg)
         ttnn.deallocate(is_winner)
+        winner_gated = ttnn.multiply(winner_f, self._greedy_col, sub_core_grids=scg)
+        ttnn.deallocate(winner_f)
         winner_bf16 = ttnn.typecast(winner_gated, ttnn.bfloat16, sub_core_grids=scg)
         ttnn.deallocate(winner_gated)
         boost = ttnn.multiply(winner_bf16, delta, sub_core_grids=scg)  # delta broadcasts over W
