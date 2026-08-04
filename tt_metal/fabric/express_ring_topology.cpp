@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "skip_ring_topology.hpp"
+#include "express_ring_topology.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -23,7 +23,7 @@ namespace tt::tt_fabric {
 
 namespace {
 
-constexpr int kNone = SkipRingTopology::kNone;
+constexpr int kNone = ExpressRingTopology::kNone;
 
 struct Pattern {
     int step = 0;
@@ -34,12 +34,12 @@ struct Pattern {
     std::vector<std::pair<int, int>> blocks;  // {first, last} row of each block, in block order
 };
 
-// Block tiling for one declared pattern. Mirrors expand_skip_link_edges in mesh_graph.cpp: a block
+// Block tiling for one declared pattern. Mirrors expand_express_link_edges in mesh_graph.cpp: a block
 // straddling the boundary wraps when the pattern wraps and is dropped otherwise.
 void fill_blocks(Pattern& pattern, MeshId mesh_id, int len) {
     TT_FATAL(
         pattern.step >= 2 && len % pattern.step == 0,
-        "SkipRingTopology: mesh M{} skip step {} does not tile axis length {}",
+        "ExpressRingTopology: mesh M{} express step {} does not tile axis length {}",
         *mesh_id,
         pattern.step,
         len);
@@ -53,13 +53,13 @@ void fill_blocks(Pattern& pattern, MeshId mesh_id, int len) {
     }
     TT_FATAL(
         !pattern.blocks.empty(),
-        "SkipRingTopology: mesh M{} skip pattern (start {}, step {}) tiles no block",
+        "ExpressRingTopology: mesh M{} express pattern (start {}, step {}) tiles no block",
         *mesh_id,
         pattern.start,
         pattern.step);
 }
 
-// Declared skip-link patterns for one mesh, ascending by step. Empty when the mesh declares none.
+// Declared express-link patterns for one mesh, ascending by step. Empty when the mesh declares none.
 std::vector<Pattern> read_patterns(const MeshGraph& mesh_graph, MeshId mesh_id, int& axis) {
     std::vector<Pattern> patterns;
     if (!mesh_graph.get_mesh_graph_descriptor_path().has_value()) {
@@ -77,18 +77,18 @@ std::vector<Pattern> read_patterns(const MeshGraph& mesh_graph, MeshId mesh_id, 
     if (desc == nullptr) {
         return patterns;
     }
-    for (const auto& skip : desc->skip_links()) {
-        const int declared_axis = static_cast<int>(skip.dim_idx());
+    for (const auto& express : desc->express_links()) {
+        const int declared_axis = static_cast<int>(express.dim_idx());
         TT_FATAL(
             axis == kNone || axis == declared_axis,
-            "SkipRingTopology: mesh M{} declares skip links on more than one dimension",
+            "ExpressRingTopology: mesh M{} declares express links on more than one dimension",
             *mesh_id);
         axis = declared_axis;
         Pattern pattern;
-        pattern.step = static_cast<int>(skip.pattern().step());
-        pattern.start = static_cast<int>(skip.pattern().start());
-        if (skip.wrap() != proto::TorusTopology::INVALID_TYPE) {
-            pattern.declared_wrap = skip.wrap() == proto::TorusTopology::RING;
+        pattern.step = static_cast<int>(express.pattern().step());
+        pattern.start = static_cast<int>(express.pattern().start());
+        if (express.wrap() != proto::TorusTopology::INVALID_TYPE) {
+            pattern.declared_wrap = express.wrap() == proto::TorusTopology::RING;
         }
         patterns.push_back(std::move(pattern));
     }
@@ -99,9 +99,7 @@ std::vector<Pattern> read_patterns(const MeshGraph& mesh_graph, MeshId mesh_id, 
 // port_direction of the axis edge between two rows of one line, or nullopt when there is none.
 std::optional<RoutingDirection> edge_dir(
     const MeshGraph& mesh_graph, MeshId mesh_id, int axis, int ortho, int row_a, int row_b) {
-    const auto coord = [&](int row) {
-        return axis == 0 ? MeshCoordinate(row, ortho) : MeshCoordinate(ortho, row);
-    };
+    const auto coord = [&](int row) { return axis == 0 ? MeshCoordinate(row, ortho) : MeshCoordinate(ortho, row); };
     const auto& conn = mesh_graph.get_intra_mesh_connectivity()[*mesh_id];
     const ChipId chip_a = mesh_graph.coordinate_to_chip(mesh_id, coord(row_a));
     const auto it = conn[chip_a].find(mesh_graph.coordinate_to_chip(mesh_id, coord(row_b)));
@@ -170,13 +168,13 @@ std::vector<int> merged_cycle(const Pattern& small, const Pattern& large) {
 
 }  // namespace
 
-int SkipRingTopology::ring_distance(int domain, int from, int to) const {
+int ExpressRingTopology::ring_distance(int domain, int from, int to) const {
     const int n = static_cast<int>(forward_cycle[domain].size());
     const int d = (pos_in_domain[to] - pos_in_domain[from] + n) % n;
     return std::min(d, n - d);
 }
 
-int SkipRingTopology::next_row(int src, int dst) const {
+int ExpressRingTopology::next_row(int src, int dst) const {
     const auto step = [&](int domain, int from, int to) {
         const int n = static_cast<int>(forward_cycle[domain].size());
         const int p = pos_in_domain[from];
@@ -236,23 +234,23 @@ int SkipRingTopology::next_row(int src, int dst) const {
             return src == b ? dst : step(src_domain, src, b);
         }
     }
-    TT_THROW("SkipRingTopology: no paired landing for row {} from row {}", dst, src);
+    TT_THROW("ExpressRingTopology: no paired landing for row {} from row {}", dst, src);
 }
 
-std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id) {
+std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id) {
     int axis = kNone;
     auto patterns = read_patterns(mesh_graph, mesh_id, axis);
     if (patterns.empty()) {
-        return std::nullopt;  // no skip links: base routing is unchanged
+        return std::nullopt;  // no express links: base routing is unchanged
     }
     TT_FATAL(
         axis == 0,
-        "SkipRingTopology: mesh M{} declares skip links along dimension {}; this cut supports dimension 0 only",
+        "ExpressRingTopology: mesh M{} declares express links along dimension {}; this cut supports dimension 0 only",
         *mesh_id,
         axis);
     TT_FATAL(
         patterns.size() <= 2,
-        "SkipRingTopology: mesh M{} declares {} skip patterns; only one or two are defined",
+        "ExpressRingTopology: mesh M{} declares {} express patterns; only one or two are defined",
         *mesh_id,
         patterns.size());
 
@@ -267,7 +265,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
         fill_blocks(pattern, mesh_id, len);
     }
 
-    SkipRingTopology topo;
+    ExpressRingTopology topo;
     topo.axis_dim = axis;
     topo.axis_len = len;
     topo.domain_of.assign(len, kNone);
@@ -305,7 +303,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
         if (!leaf[row] || (before != kNone && leaf[before])) {
             continue;  // not a leaf, or not the first row of its run
         }
-        SkipRingTopology::LeafRun run;
+        ExpressRingTopology::LeafRun run;
         run.anchor_before = before;
         for (int r = row; r != kNone && leaf[r] && static_cast<int>(run.rows.size()) < len; r = neighbour(r, 1)) {
             topo.leaf_run_of[r] = static_cast<int>(topo.leaf_runs.size());
@@ -316,7 +314,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
         TT_FATAL(
             run.anchor_before != kNone && run.anchor_after != kNone && !leaf[run.anchor_before] &&
                 !leaf[run.anchor_after],
-            "SkipRingTopology: mesh M{} skipped run starting at row {} has no transit row on both sides",
+            "ExpressRingTopology: mesh M{} skipped run starting at row {} has no transit row on both sides",
             *mesh_id,
             row);
         topo.leaf_runs.push_back(std::move(run));
@@ -330,7 +328,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
     } else {
         TT_FATAL(
             patterns.size() == 2,
-            "SkipRingTopology: mesh M{} has no end wrap, so a single skip pattern cannot close a ring",
+            "ExpressRingTopology: mesh M{} has no end wrap, so a single express pattern cannot close a ring",
             *mesh_id);
         cycles.push_back(canonicalize(merged_cycle(patterns.front(), patterns.back())));
     }
@@ -339,7 +337,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
             const int row = cycles[domain][p];
             TT_FATAL(
                 topo.domain_of[row] == kNone && topo.leaf_run_of[row] == kNone,
-                "SkipRingTopology: mesh M{} row {} is a leaf or already in another ring",
+                "ExpressRingTopology: mesh M{} row {} is a leaf or already in another ring",
                 *mesh_id,
                 row);
             topo.domain_of[row] = static_cast<int>(domain);
@@ -350,7 +348,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
     for (int row = 0; row < len; row++) {
         TT_FATAL(
             (topo.domain_of[row] == kNone) == (topo.leaf_run_of[row] != kNone),
-            "SkipRingTopology: mesh M{} row {} is neither a ring member nor a leaf",
+            "ExpressRingTopology: mesh M{} row {} is neither a ring member nor a leaf",
             *mesh_id,
             row);
     }
@@ -379,7 +377,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
         std::sort(expected.begin(), expected.end());
         TT_FATAL(
             landings == expected,
-            "SkipRingTopology: mesh M{} has {} paired landings for {} continuing-family members",
+            "ExpressRingTopology: mesh M{} has {} paired landings for {} continuing-family members",
             *mesh_id,
             landings.size(),
             expected.size());
@@ -390,7 +388,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
     const auto require_edge = [&](int ortho, int row_a, int row_b, const char* what) {
         TT_FATAL(
             edge_dir(mesh_graph, mesh_id, axis, ortho, row_a, row_b).has_value(),
-            "SkipRingTopology: mesh M{} line {} is missing the {} edge {}-{}",
+            "ExpressRingTopology: mesh M{} line {} is missing the {} edge {}-{}",
             *mesh_id,
             ortho,
             what,
@@ -428,7 +426,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
         }
         TT_FATAL(
             chords == declared_chords,
-            "SkipRingTopology: mesh M{} line {} carries {} chords but the declared patterns imply {}",
+            "ExpressRingTopology: mesh M{} line {} carries {} chords but the declared patterns imply {}",
             *mesh_id,
             ortho,
             chords,
@@ -438,14 +436,15 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
     return topo;
 }
 
-std::optional<SkipRingTopology> derive_ordinary_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
+std::optional<ExpressRingTopology> derive_ordinary_ring_topology(
+    const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
     const auto shape = mesh_graph.get_mesh_shape(mesh_id);
     const int len = static_cast<int>(shape[axis]);
     if (!axis_wraps(mesh_graph, mesh_id, axis, len)) {
         return std::nullopt;
     }
 
-    SkipRingTopology topo;
+    ExpressRingTopology topo;
     topo.axis_dim = axis;
     topo.axis_len = len;
     topo.domain_of.assign(len, 0);
@@ -474,7 +473,7 @@ std::optional<SkipRingTopology> derive_ordinary_ring_topology(const MeshGraph& m
     return topo;
 }
 
-std::string describe_skip_rings(const MeshGraph& mesh_graph, MeshId mesh_id, const SkipRingTopology& topo) {
+std::string describe_express_rings(const MeshGraph& mesh_graph, MeshId mesh_id, const ExpressRingTopology& topo) {
     const int axis = topo.axis_dim;
     const int len = topo.axis_len;
     const int ortho_len = static_cast<int>(mesh_graph.get_mesh_shape(mesh_id)[1 - axis]);
@@ -485,7 +484,7 @@ std::string describe_skip_rings(const MeshGraph& mesh_graph, MeshId mesh_id, con
     };
 
     std::ostringstream out;
-    out << "skip rings: mesh M" << *mesh_id << "  axis dim " << axis << "  len " << len
+    out << "express rings: mesh M" << *mesh_id << "  axis dim " << axis << "  len " << len
         << "  end wrap: " << (wraps ? "yes" : "no") << "\n";
 
     int declared_chords = 0;
@@ -528,7 +527,7 @@ std::string describe_skip_rings(const MeshGraph& mesh_graph, MeshId mesh_id, con
         attachments += static_cast<int>(run.rows.size()) + 1;
     }
 
-    if (topo.continue_src_domain == SkipRingTopology::kNone) {
+    if (topo.continue_src_domain == ExpressRingTopology::kNone) {
         out << "transitions: single family, no cross-ring transition\n";
     } else {
         out << "transitions: domain " << topo.continue_src_domain << " may continue into the other; the reverse "
@@ -555,8 +554,8 @@ std::string describe_skip_rings(const MeshGraph& mesh_graph, MeshId mesh_id, con
         ring_edges += static_cast<int>(cycle.size());
     }
     out << "verified against materialized edges: " << ortho_len << " line(s) x (" << ring_edges << " ring + "
-        << topo.crossovers.size() << " crossover + " << attachments << " attachment) edges present, "
-        << declared_chords << " chords per line matching the declared blocks\n";
+        << topo.crossovers.size() << " crossover + " << attachments << " attachment) edges present, " << declared_chords
+        << " chords per line matching the declared blocks\n";
     return out.str();
 }
 

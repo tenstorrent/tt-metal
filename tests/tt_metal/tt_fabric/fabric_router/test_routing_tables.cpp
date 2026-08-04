@@ -25,7 +25,7 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/skip_ring_topology.hpp"
+#include "tt_metal/fabric/express_ring_topology.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
@@ -143,7 +143,7 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::fi
 }
 
 // True if a mock descriptor was provided or live hardware is a Blackhole Galaxy; else the caller skips.
-bool skip_link_cluster_available() {
+bool express_link_cluster_available() {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled()) {
         return true;
     }
@@ -2371,11 +2371,11 @@ TEST(BlitzDecodePipelineAssignment, InfeasibleOddRingTwoCables) {
 }  // namespace blitz_assign_tests
 
 namespace {
-// Build the generated intra-mesh routing table from a skip descriptor, letting TopologyMapper solve
+// Build the generated intra-mesh routing table from an express descriptor, letting TopologyMapper solve
 // the placement against the discovered PSD -- the same stack the other RoutingTableGenerator tests
 // use, so the logical mesh must actually be placeable on the hardware present.
 // The mesh graph is returned via out-param to keep it alive for the caller.
-std::vector<std::vector<std::vector<tt::tt_fabric::RoutingDirection>>> build_skip_intra_table(
+std::vector<std::vector<std::vector<tt::tt_fabric::RoutingDirection>>> build_express_intra_table(
     const std::string& desc_rel_path, std::unique_ptr<tt::tt_fabric::MeshGraph>& mesh_graph_out) {
     auto& metal = tt::tt_metal::MetalContext::instance();
     const auto desc_path = std::filesystem::path(metal.rtoptions().get_root_dir()) / desc_rel_path;
@@ -2392,7 +2392,7 @@ std::vector<std::vector<std::vector<tt::tt_fabric::RoutingDirection>>> build_ski
     return rtg.get_intra_mesh_table();
 }
 
-// Walk the memoryless intra-mesh table for every same-column row pair along the skip (dim-0) axis
+// Walk the memoryless intra-mesh table for every same-column row pair along the express (dim-0) axis
 // and assert the deadlock-free invariants of the generated table:
 //   * every route reaches its destination in bounded hops (loop-free / memoryless-consistent),
 //   * a leaf is never an intermediate toward a destination outside its own skipped run,
@@ -2407,8 +2407,8 @@ void assert_spine_deadlock_free(
     const tt::tt_fabric::MeshId mesh{0};
     const auto& conn = mesh_graph.get_intra_mesh_connectivity()[0];
 
-    const auto rings = tt::tt_fabric::derive_skip_ring_topology(mesh_graph, mesh);
-    ASSERT_TRUE(rings.has_value()) << "descriptor declares no skip links";
+    const auto rings = tt::tt_fabric::derive_express_ring_topology(mesh_graph, mesh);
+    ASSERT_TRUE(rings.has_value()) << "descriptor declares no express links";
     const auto row_of = [&](int chip) { return static_cast<int>(mesh_graph.chip_to_coordinate(mesh, chip)[0]); };
     const auto step = [&](int c, D dir) -> int {
         for (const auto& [v, edge] : conn[c]) {
@@ -2464,15 +2464,15 @@ void assert_spine_deadlock_free(
 }
 }  // namespace
 
-// Generate intra-mesh routing tables from the skip MeshGraph; assert first-hop directions including Z
-// (skip) hops. TopologyMapper solves the placement, so the mesh must be realizable on the hardware.
-TEST(SkipLinkRouting, IntraMesh8x4Replay) {
-    if (!skip_link_cluster_available()) {
+// Generate intra-mesh routing tables from the express MeshGraph; assert first-hop directions including Z
+// (express) hops. TopologyMapper solves the placement, so the mesh must be realizable on the hardware.
+TEST(ExpressLinkRouting, IntraMesh8x4Replay) {
+    if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
     std::unique_ptr<tt::tt_fabric::MeshGraph> mg;
-    const auto intra = build_skip_intra_table(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto", mg);
+    const auto intra = build_express_intra_table(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto", mg);
     ASSERT_EQ(intra.size(), 1u);
     const auto& t = intra[0];
     ASSERT_EQ(t.size(), 32u);
@@ -2480,11 +2480,11 @@ TEST(SkipLinkRouting, IntraMesh8x4Replay) {
     // First hops under the ring policy. chip = row*4+col; [LINE, RING] with the span-4 chord r2<->r5
     // and the span-8 chord r0<->r7 per column, fusing into one ring over rows {0,1,2,5,6,7}.
     using D = RoutingDirection;
-    EXPECT_EQ(t[8][20], D::Z);  // skip endpoint
+    EXPECT_EQ(t[8][20], D::Z);  // express endpoint
     EXPECT_EQ(t[20][8], D::Z);  // reverse
-    EXPECT_EQ(t[4][24], D::S);  // base-then-Z: S toward the skip, Z taken later
-    EXPECT_EQ(t[8][24], D::Z);  // skip then S
-    EXPECT_EQ(t[8][12], D::S);  // adjacent, no skip
+    EXPECT_EQ(t[4][24], D::S);  // base-then-Z: S toward the express link, Z taken later
+    EXPECT_EQ(t[8][24], D::Z);  // express then S
+    EXPECT_EQ(t[8][12], D::S);  // adjacent, no express link
     EXPECT_EQ(t[8][16], D::Z);  // leaf row 4 is entered from its anchor row 5, not through leaf row 3
     EXPECT_EQ(t[0][1], D::E);   // base routing unperturbed
     EXPECT_EQ(t[0][4], D::S);
@@ -2492,15 +2492,15 @@ TEST(SkipLinkRouting, IntraMesh8x4Replay) {
     EXPECT_EQ(t[8][8], D::C);  // self
 }
 
-// 8x4 single galaxy (one quad): ex4-only skip descriptor. The overlay must keep the whole spine
+// 8x4 single galaxy (one quad): ex4-only express descriptor. The overlay must keep the whole spine
 // deadlock-free (single ring family -> zero crossovers). Machine-free via mock cluster desc.
-TEST(SkipLinkRouting, IntraMesh8x4DeadlockFree) {
-    if (!skip_link_cluster_available()) {
+TEST(ExpressLinkRouting, IntraMesh8x4DeadlockFree) {
+    if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
     std::unique_ptr<tt::tt_fabric::MeshGraph> mg;
-    const auto intra = build_skip_intra_table(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto", mg);
+    const auto intra = build_express_intra_table(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto", mg);
     ASSERT_EQ(intra.size(), 1u);
     ASSERT_EQ(intra[0].size(), 32u);
     assert_spine_deadlock_free(*mg, intra, /*L0=*/8, /*row_size=*/4);
@@ -2510,16 +2510,16 @@ TEST(SkipLinkRouting, IntraMesh8x4DeadlockFree) {
 // and ex4 + ex8 fuse into ONE ring for the whole column. The generator must merge them (one family,
 // no ex4<->ex8 crossover) and route shortest-path on the single ring. Validated for reachability +
 // loop-freedom (the merged ring has no crossover to bound). Machine-free via mock cluster desc.
-TEST(SkipLinkRouting, IntraMesh16x4Merged) {
-    if (!skip_link_cluster_available()) {
+TEST(ExpressLinkRouting, IntraMesh16x4Merged) {
+    if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
     if (world_size() != 2) {
-        GTEST_SKIP() << "skip_links_16x4 declares 2 host ranks; run under tt-run with 2 ranks";
+        GTEST_SKIP() << "express_links_16x4 declares 2 host ranks; run under tt-run with 2 ranks";
     }
     std::unique_ptr<tt::tt_fabric::MeshGraph> mg;
-    const auto intra = build_skip_intra_table(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_16x4_mesh_graph_descriptor.textproto", mg);
+    const auto intra = build_express_intra_table(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_16x4_mesh_graph_descriptor.textproto", mg);
     ASSERT_EQ(intra.size(), 1u);
     ASSERT_EQ(intra[0].size(), 64u);
     assert_spine_deadlock_free(*mg, intra, /*L0=*/16, /*row_size=*/4);
@@ -2528,16 +2528,16 @@ TEST(SkipLinkRouting, IntraMesh16x4Merged) {
 // 24x4 partial sub-torus (3 quads, NO Y-torus wrap): same merged single-ring regime as 16x4 -- dim-0
 // is LINE, so ex4 + ex8 fuse into ONE ring for the whole column. Validated for reachability +
 // loop-freedom. Machine-free via mock cluster desc.
-TEST(SkipLinkRouting, IntraMesh24x4Merged) {
-    if (!skip_link_cluster_available()) {
+TEST(ExpressLinkRouting, IntraMesh24x4Merged) {
+    if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
     if (world_size() != 3) {
-        GTEST_SKIP() << "skip_links_24x4 declares 3 host ranks; run under tt-run with 3 ranks";
+        GTEST_SKIP() << "express_links_24x4 declares 3 host ranks; run under tt-run with 3 ranks";
     }
     std::unique_ptr<tt::tt_fabric::MeshGraph> mg;
-    const auto intra = build_skip_intra_table(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_24x4_mesh_graph_descriptor.textproto", mg);
+    const auto intra = build_express_intra_table(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_24x4_mesh_graph_descriptor.textproto", mg);
     ASSERT_EQ(intra.size(), 1u);
     ASSERT_EQ(intra[0].size(), 96u);
     assert_spine_deadlock_free(*mg, intra, /*L0=*/24, /*row_size=*/4);
@@ -2546,16 +2546,16 @@ TEST(SkipLinkRouting, IntraMesh24x4Merged) {
 // 32x4 four-quad galaxy: ex4 + ex8 sub-torus. Deadlock-free routing along the 32-row spine.
 // Spot-check representative first hops (chip = row*4 in column 0; ex8 chord rows 0<->7, ex4 rows
 // 2<->5), then assert containment + <=1 crossover + loop-free over the entire spine. Machine-free.
-TEST(SkipLinkRouting, IntraMesh32x4DeadlockFree) {
-    if (!skip_link_cluster_available()) {
+TEST(ExpressLinkRouting, IntraMesh32x4DeadlockFree) {
+    if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
     if (world_size() != 4) {
-        GTEST_SKIP() << "skip_links_32x4 declares 4 host ranks; run under tt-run with 4 ranks";
+        GTEST_SKIP() << "express_links_32x4 declares 4 host ranks; run under tt-run with 4 ranks";
     }
     std::unique_ptr<tt::tt_fabric::MeshGraph> mg;
-    const auto intra = build_skip_intra_table(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_32x4_mesh_graph_descriptor.textproto", mg);
+    const auto intra = build_express_intra_table(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto", mg);
     ASSERT_EQ(intra.size(), 1u);
     ASSERT_EQ(intra[0].size(), 128u);
 
@@ -2574,15 +2574,15 @@ TEST(SkipLinkRouting, IntraMesh32x4DeadlockFree) {
     assert_spine_deadlock_free(*mg, intra, /*L0=*/32, /*row_size=*/4);
 }
 
-// Build the control plane on the 8x4 skip descriptor and verify the forwarding directions match
+// Build the control plane on the 8x4 express descriptor and verify the forwarding directions match
 // IntraMesh8x4Replay, and that direct-hop forwarding channels physically connect src->dst.
 TEST_F(ControlPlaneFixture, PhysicalLowering8x4) {
-    if (!skip_link_cluster_available()) {
+    if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
     const std::filesystem::path desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
 
     // RELAXED: bind whatever physical channels exist. FABRIC_2D_TORUS_XY matches the descriptor's
     // [RING, RING], keeping both wraps; a narrower config would strip the row wrap the ring needs.
@@ -2664,18 +2664,18 @@ TEST_F(ControlPlaneFixture, PhysicalLowering8x4) {
     }
 }
 
-// 32x4 multi-rank skip lowering: every skip-endpoint pair routes via Z, backed by physical Z channels on
+// 32x4 multi-rank express lowering: every express-endpoint pair routes via Z, backed by physical Z channels on
 // the rank that owns the source chip. Run multi-rank under tt-run with a 4-rank subtorus mock mapping.
 TEST_F(ControlPlaneFixture, PhysicalLowering32x4) {
-    if (!skip_link_cluster_available()) {
+    if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
     if (world_size() != 4) {
-        GTEST_SKIP() << "skip_links_32x4 declares 4 host ranks; run under tt-run with 4 ranks";
+        GTEST_SKIP() << "express_links_32x4 declares 4 host ranks; run under tt-run with 4 ranks";
     }
     const std::filesystem::path desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_32x4_mesh_graph_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto";
 
     // FABRIC_2D_TORUS_XY: [RING, RING] keeps both wraps.
     auto control_plane = make_control_plane(
@@ -2684,7 +2684,7 @@ TEST_F(ControlPlaneFixture, PhysicalLowering32x4) {
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
 
     using D = tt::tt_fabric::RoutingDirection;
-    // skip endpoint row pairs (last wraps); chip = row*4 + col
+    // express endpoint row pairs (last wraps); chip = row*4 + col
     const std::vector<std::pair<int, int>> row_blocks = {
         {2, 5}, {6, 9}, {10, 13}, {14, 17}, {18, 21}, {22, 25}, {26, 29}, {30, 1}};
     for (const auto& [ra, rb] : row_blocks) {
@@ -2694,7 +2694,7 @@ TEST_F(ControlPlaneFixture, PhysicalLowering32x4) {
 
             auto dir = control_plane->get_forwarding_direction(src, dst);
             EXPECT_TRUE(dir.has_value() && *dir == D::Z)
-                << "skip r" << ra << "->r" << rb << " col " << col << " not routed via Z";
+                << "express r" << ra << "->r" << rb << " col " << col << " not routed via Z";
 
             // local chips must have physical Z channels (throws for chips not owned by this rank)
             try {

@@ -58,7 +58,7 @@
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
-#include "tt_metal/fabric/skip_ring_topology.hpp"
+#include "tt_metal/fabric/express_ring_topology.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
@@ -1603,20 +1603,20 @@ std::vector<FabricNodeId> ControlPlane::get_canonical_intramesh_route(
 }
 
 bool ControlPlane::express_routing_enabled(MeshId mesh_id) const {
-    return this->routing_table_generator_->get_skip_rings(mesh_id) != nullptr;
+    return this->routing_table_generator_->get_express_rings(mesh_id) != nullptr;
 }
 
-// The ring covering `direction` from `local`: the skip decomposition for an axis hop, the ordinary X
+// The ring covering `direction` from `local`: the express decomposition for an axis hop, the ordinary X
 // ring for E/W. Null when that dimension carries no ring.
-const SkipRingTopology* ControlPlane::ring_for_direction(MeshId mesh_id, RoutingDirection direction) const {
+const ExpressRingTopology* ControlPlane::ring_for_direction(MeshId mesh_id, RoutingDirection direction) const {
     const bool orthogonal = direction == RoutingDirection::E || direction == RoutingDirection::W;
     return orthogonal ? this->routing_table_generator_->get_x_rings(mesh_id)
-                      : this->routing_table_generator_->get_skip_rings(mesh_id);
+                      : this->routing_table_generator_->get_express_rings(mesh_id);
 }
 
 // Coordinate of `node` along the ring's axis, and of the neighbor reached by `direction`.
 std::optional<int> ControlPlane::ring_coord_of_neighbor(
-    const SkipRingTopology& rings, FabricNodeId local, RoutingDirection direction) const {
+    const ExpressRingTopology& rings, FabricNodeId local, RoutingDirection direction) const {
     const auto neighbors = this->get_intra_chip_neighbors(local, direction);
     if (neighbors.empty()) {
         return std::nullopt;
@@ -1627,7 +1627,7 @@ std::optional<int> ControlPlane::ring_coord_of_neighbor(
 bool ControlPlane::has_protected_ring(FabricNodeId fabric_node_id, RoutingDimension dimension) const {
     const auto* rings = dimension == RoutingDimension::X
                             ? this->routing_table_generator_->get_x_rings(fabric_node_id.mesh_id)
-                            : this->routing_table_generator_->get_skip_rings(fabric_node_id.mesh_id);
+                            : this->routing_table_generator_->get_express_rings(fabric_node_id.mesh_id);
     if (rings == nullptr) {
         return false;
     }
@@ -1680,7 +1680,7 @@ bool ControlPlane::are_same_directed_ring_edges(
 }
 
 bool ControlPlane::continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const {
-    const auto* rings = this->routing_table_generator_->get_skip_rings(local.mesh_id);
+    const auto* rings = this->routing_table_generator_->get_express_rings(local.mesh_id);
     if (rings == nullptr || !this->is_protected_ring_edge(local, egress)) {
         return true;  // nothing protected is being acquired, so nothing to gate
     }

@@ -230,13 +230,13 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     return valid_connections;
 }
 
-// Expand a SkipLink pattern into intra-mesh endpoint chip-id pairs (linearized row-major).
+// Expand a ExpressLink pattern into intra-mesh endpoint chip-id pairs (linearized row-major).
 // Tiles the chosen axis into `step`-wide blocks starting at `start`, connecting each block's
 // endpoints (block_start <-> block_start + step - 1) and skipping the interior nodes. The
 // pattern is replicated across every line in the orthogonal axis. `ring_wrap` wraps the final
 // block past the boundary (RING); LINE drops blocks that would wrap. Caller validates step >= 2
 // and axis_len % step == 0.
-static std::vector<std::pair<ChipId, ChipId>> expand_skip_link_edges(
+static std::vector<std::pair<ChipId, ChipId>> expand_express_link_edges(
     const MeshShape& mesh_shape, bool along_rows, uint32_t start, uint32_t step, bool ring_wrap) {
     std::vector<std::pair<ChipId, ChipId>> edges;
     const uint32_t rows = mesh_shape[0];  // device_topology dim 0
@@ -463,31 +463,31 @@ void MeshGraph::initialize_from_mgd(
                 this->get_valid_connections(src_mesh_coord, mesh_coord_range, effective_fabric_type);
         }
 
-        // Layer declared skip links on top of the fully-populated base grid. Each pattern expands to
+        // Layer declared express links on top of the fully-populated base grid. Each pattern expands to
         // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
         // physical channels occupy a bucket separate from the N/S/E/W grid and escape its plane
         // trimming). Tiling wrap comes from the pattern, defaulting to the dimension's torus-ness in
         // effective_fabric_type (TORUS_Y wraps dim 0, TORUS_X dim 1).
-        for (const auto& skip : mesh_desc->skip_links()) {
-            const uint32_t dim = skip.dim_idx();
-            TT_FATAL(dim < 2, "MeshGraph: SkipLink dim_idx {} out of range for 2D mesh (mesh M{})", dim, *mesh_id);
+        for (const auto& express : mesh_desc->express_links()) {
+            const uint32_t dim = express.dim_idx();
+            TT_FATAL(dim < 2, "MeshGraph: ExpressLink dim_idx {} out of range for 2D mesh (mesh M{})", dim, *mesh_id);
             const bool along_rows = (dim == 0);
             const uint32_t dim_len = mesh_shape[dim];
-            const uint32_t step = skip.pattern().step();
-            TT_FATAL(step >= 2, "MeshGraph: SkipLink step must be >= 2 (mesh M{})", *mesh_id);
+            const uint32_t step = express.pattern().step();
+            TT_FATAL(step >= 2, "MeshGraph: ExpressLink step must be >= 2 (mesh M{})", *mesh_id);
             TT_FATAL(
                 dim_len % step == 0,
-                "MeshGraph: SkipLink step {} must divide dim {} length {} for uniform tiling (mesh M{})",
+                "MeshGraph: ExpressLink step {} must divide dim {} length {} for uniform tiling (mesh M{})",
                 step,
                 dim,
                 dim_len,
                 *mesh_id);
-            const bool ring_wrap = skip.wrap() != proto::TorusTopology::INVALID_TYPE
-                                       ? skip.wrap() == proto::TorusTopology::RING
+            const bool ring_wrap = express.wrap() != proto::TorusTopology::INVALID_TYPE
+                                       ? express.wrap() == proto::TorusTopology::RING
                                    : along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
                                                 : has_flag(effective_fabric_type, FabricType::TORUS_X);
             for (const auto& [a, b] :
-                 expand_skip_link_edges(mesh_shape, along_rows, skip.pattern().start(), step, ring_wrap)) {
+                 expand_express_link_edges(mesh_shape, along_rows, express.pattern().start(), step, ring_wrap)) {
                 this->add_to_connectivity(mesh_id, a, mesh_id, b, RoutingDirection::Z);
                 this->add_to_connectivity(mesh_id, b, mesh_id, a, RoutingDirection::Z);
             }
