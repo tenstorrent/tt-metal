@@ -2232,6 +2232,11 @@ def _run_full_pipeline_ms():
         # a different depth. perf_test_gen has had this since a5aa6a96af ("no fixed magic number")
         # -- it was simply never wired into this path.
         out, r = _grow_trace_region_and_retry(cmd, repo, env, out, r)
+        # UMD prints the clamp itself ("AICLK failed to settle ... clamped by max-arbiter index 7 at
+        # 800 MHz"), so the run tells us whether its own clock was valid. Cheaper and more reliable
+        # than sampling telemetry alongside, which aliases against short runs.
+        if any(m in out for m in _CLAMP_MARKERS):
+            globals()["_LAST_RUN_CLAMPED"] = True
         for line in out.splitlines():
             if "TRACE_PER_TOKEN_MS=" in line:
                 try:
@@ -2331,6 +2336,87 @@ def _run_full_pipeline_ms():
 
 _GATE_REPS = max(1, int(os.environ.get("PERF_MCP_GATE_REPS", "3")))
 
+_THERMAL_GATE = str(os.environ.get("PERF_MCP_THERMAL_GATE", "1")).lower() not in ("0", "false", "no")
+_THERMAL_MAX_START_C = float(os.environ.get("PERF_MCP_MAX_START_TEMP_C", "70"))
+_THERMAL_WAIT_S = float(os.environ.get("PERF_MCP_THERMAL_WAIT_S", "900"))
+_THERMAL_POLL_S = float(os.environ.get("PERF_MCP_THERMAL_POLL_S", "15"))
+_THERMAL_RETRIES = int(os.environ.get("PERF_MCP_THERMAL_RETRIES", "3"))
+_CLAMP_MARKERS = ("AICLK failed to settle", "clamped by max-arbiter")
+
+_LAST_RUN_CLAMPED = False
+
+
+def _read_die_temp_c():
+    """Hottest ASIC temperature across visible chips, or None when telemetry is unreadable.
+
+    None means "cannot tell", and every caller treats that as permission to proceed: a board whose
+    telemetry we cannot read must not become a board we refuse to measure.
+    """
+    try:
+        r = _sp.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=60)
+        doc = json.loads(r.stdout or "{}")
+    except Exception:  # noqa: BLE001
+        return None
+    temps = []
+    for dev in doc.get("device_info") or []:
+        try:
+            temps.append(float((dev.get("telemetry") or {}).get("asic_temperature")))
+        except (TypeError, ValueError):
+            continue
+    return max(temps) if temps else None
+
+
+def _wait_for_thermal_headroom():
+    """Block until the hottest die is below the AICLK clamp threshold.
+
+    Measured on a liquid-cooled p300c running gemma-3-12b-it, IDENTICAL code each time:
+
+        start 69.8C -> 35.83 ms   AICLK settles at 1350
+        start 73.5C -> 36.75 ms   settles, but the NEXT run no longer does
+        start 78.3C -> 58.06 ms   UMD: "clamped by max-arbiter index 7 at 800 MHz"
+        start 79.9C -> 69.94 ms   same clamp
+
+    A 1.9x swing with no code change. That is what wrote a 68.3 ms BEFORE-anchor into the gemma3
+    ledger and made a whole run's verdicts meaningless. Note the two clamped readings differ by
+    20% from each other, so "just measure everything hot" is not a valid alternative -- the
+    clamped state is not a stable operating point.
+
+    A device reset does NOT clear this; it does not cool the board. Roughly 6 minutes of idle does.
+    Starting below the threshold is enough: a 17-second measurement does not generate the heat to
+    cross it, so consecutive readings stay valid.
+    """
+    if not _THERMAL_GATE:
+        return True, None
+    t0 = time.time()
+    cur = _read_die_temp_c()
+    if cur is None or cur <= _THERMAL_MAX_START_C:
+        return True, cur
+    print(
+        "  [thermal-gate] die at %.1fC, need <=%.1fC before measuring; waiting (up to %.0fs)"
+        % (cur, _THERMAL_MAX_START_C, _THERMAL_WAIT_S),
+        file=sys.stderr,
+        flush=True,
+    )
+    while time.time() - t0 < _THERMAL_WAIT_S:
+        time.sleep(_THERMAL_POLL_S)
+        cur = _read_die_temp_c()
+        if cur is None:
+            return True, None
+        if cur <= _THERMAL_MAX_START_C:
+            print(
+                "  [thermal-gate] cooled to %.1fC after %.0fs" % (cur, time.time() - t0),
+                file=sys.stderr,
+                flush=True,
+            )
+            return True, cur
+    print(
+        "  [thermal-gate] STILL %.1fC after %.0fs; measuring anyway, the clamp check decides"
+        % (cur if cur is not None else -1.0, _THERMAL_WAIT_S),
+        file=sys.stderr,
+        flush=True,
+    )
+    return False, cur
+
 
 def _measure_full_pipeline_median():
     """Measure the pipeline _GATE_REPS times; return (median_ms, method, err, path, spread).
@@ -2349,14 +2435,33 @@ def _measure_full_pipeline_median():
     from. PERF_MCP_GATE_REPS=1 restores single-shot exactly.
     """
     vals, method, path, err = [], None, None, None
-    for _ in range(_GATE_REPS):
+    discarded, attempts = 0, 0
+    max_attempts = _GATE_REPS + max(0, _THERMAL_RETRIES)
+    while len(vals) < _GATE_REPS and attempts < max_attempts:
+        attempts += 1
+        _wait_for_thermal_headroom()
+        globals()["_LAST_RUN_CLAMPED"] = False
         _ms, _m, _e, _p = _run_full_pipeline_ms()
         if _ms is None:
             err = _e or err
             continue
+        if _THERMAL_GATE and _LAST_RUN_CLAMPED:
+            discarded += 1
+            print(
+                "  [thermal-gate] DISCARDED %.4f ms: AICLK was clamped during the run, so this "
+                "reading is not comparable to an unclamped one" % float(_ms),
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
         vals.append(float(_ms))
         method, path = _m, _p
     if not vals:
+        if discarded:
+            err = (
+                "every reading was discarded: AICLK was clamped on all %d attempts (board too hot "
+                "to measure; die never fell below %.1fC)" % (discarded, _THERMAL_MAX_START_C)
+            )
         return None, method, (err or "all measurement attempts failed"), path, None
     vals.sort()
     n = len(vals)
