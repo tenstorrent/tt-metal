@@ -398,14 +398,17 @@ def test_sharded_wide_w_keeps_the_reduce_datapath(device):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("grid_w", [1, 2, 8], ids=["gw1_default", "gw2", "gw8"])
+@pytest.mark.parametrize("grid_w", [0, 1, 2, 8, 16, 56], ids=["auto", "gw1_off", "gw2", "gw8", "gw16", "gw56"])
 @pytest.mark.parametrize("shape", [(1, 1, 32, 2048), (1, 1, 96, 1024)], ids=["rt1_decode", "rt3"])
 def test_interleaved_width_split_knob(device, shape, grid_w):
-    """`GRID_W > 1` runs the SAME combine on an interleaved input.
+    """The GRID_W override runs the SAME combine on an interleaved input.
 
-    This refinement deleted the knob's NotImplementedError guard; it ships at its
-    byte-identical 1, so this is what keeps the path live rather than dead code.
-    Refinement 3 turns it to fill the grid on an `Rt = 1` decode profile.
+    Refinement 2 deleted the knob's NotImplementedError guard; Refinement 3 turned
+    it on by default (GRID_W == 0, the AUTO policy).  The overrides stay covered
+    because they are the A/B handle the perf sweep measures with -- including
+    `gw56`, which is wider than the 11-core grid row and therefore takes the
+    PACKED single-group topology (Mcast2D over a ragged bounding box) rather than
+    the gw x gh rectangle.
     """
     saved = pdmod.GRID_W
     try:
@@ -414,3 +417,55 @@ def test_interleaved_width_split_knob(device, shape, grid_w):
         _check(got, expected, label=f"grid_w={grid_w}/{shape}")
     finally:
         pdmod.GRID_W = saved
+
+
+# (shape, expect_split) -- the AUTO policy's decision, per regime.  It is a pure
+# function of (Rt, Wt, grid), so these are exact on an 11x10 grid:
+#   Rt = 1  decode      : the row split fills ONE core -> always split
+#   Rt = 32 mid         : the row split already engages 32 cores and the best
+#                         split reaches 80 -> below WIDTH_SPLIT_MIN_GAIN, no split
+#   Rt >= num_cores     : grid-filling prefill -> no split
+#   prime Wt            : no divisor <= the cap exists -> no split (D1 granularity)
+#   Wt < 2*MIN_WT       : nothing worth splitting
+_AUTO_POLICY_CASES = [
+    ((1, 1, 32, 7168), True, "decode_wide"),
+    ((1, 1, 32, 1024), True, "decode_narrow"),
+    ((1, 1, 224, 3072), True, "few_rows"),
+    ((1, 1, 224, 1000), True, "few_rows_w_non_aligned"),
+    ((1024, 1024), False, "mid_rt_below_min_gain"),
+    ((1, 1, 8192, 1024), False, "prefill_grid_filled"),
+    ((1, 1, 32, 4064), False, "prime_wt_no_divisor"),
+    ((1, 1, 32, 128), False, "too_narrow"),
+]
+
+
+@pytest.mark.parametrize("shape,expect_split,label", _AUTO_POLICY_CASES, ids=[c[2] for c in _AUTO_POLICY_CASES])
+def test_interleaved_width_split_auto_policy(device, shape, expect_split, label):
+    """The shipped AUTO policy (D11): does the width split engage, and is it right?
+
+    Asserted on the DESCRIPTOR as well as the values, because the golden suite
+    cannot see the difference -- a decode shape computes the same numbers on one
+    core as on sixteen, just 3x slower, so occupancy is invisible to output
+    checking.  COMBINE / GROUP_SIZE are the compute kernel's CT args 12 / 13.
+    """
+    torch.manual_seed(0)
+    x = torch.randn(*shape, dtype=torch.bfloat16)
+    xd = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    g = torch.randn(shape[-1], dtype=torch.bfloat16)
+    gd = ttnn.from_torch(g.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    od = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    desc = pdmod.create_program_descriptor(xd, od, gamma=gd, compute_kernel_config=_cfg(False))
+    compute = next(k for k in desc.kernels if "compute" in k.kernel_source)
+    combine, group_size = compute.compile_time_args[12], compute.compile_time_args[13]
+    assert bool(combine) == expect_split, f"{label}: COMBINE={combine}, expected {expect_split}"
+    if expect_split:
+        assert group_size >= 2, f"{label}: a combine with GROUP_SIZE {group_size}"
+        assert group_size <= pdmod.WIDTH_SPLIT_MAX_GROUP_CORES, f"{label}: GROUP_SIZE {group_size} over the cap"
+    else:
+        assert group_size == 1, f"{label}: no combine but GROUP_SIZE={group_size}"
+
+    out = rms_norm(xd, gamma=gd, compute_kernel_config=_cfg(False))
+    _check(ttnn.to_torch(out), _ref(x, g), label=f"auto/{label}")

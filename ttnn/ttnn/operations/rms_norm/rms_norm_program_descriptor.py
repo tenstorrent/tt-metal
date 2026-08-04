@@ -15,7 +15,11 @@ Knob map (all tunable parameters, none inlined):
     CB_RM_STAGE_DEPTH       depth of the ROW_MAJOR stick staging CBs
     CB_DEPTH_CANDIDATES     ordered depths the regime search may give the two
                             cross-processor CBs (see D4)
-    GRID_W                  cores along `width` (Lamp L1 lives at its trivial 1)
+    GRID_W                  cores along `width` (Lamp L1).  0 = AUTO (the
+                            policy below); >= 1 forces the group size (1 = off)
+    WIDTH_SPLIT_MIN_WT_PER_CORE
+    WIDTH_SPLIT_MAX_GROUP_CORES
+    WIDTH_SPLIT_MIN_GAIN    the three AUTO-policy knobs (see D11)
     (no new knob in Refinement 2b -- the BAND scheme's extents are all read off
      the shard spec; see D10)
     REDUCE_BULK             reduce input policy (BulkWaitBulkPop vs per-tile)
@@ -287,6 +291,94 @@ the scheme, topology, work split and helper mapping are unchanged):
       into 16, so the same tensor gets a 4x larger combine GROUP -- a placement
       cost the caller chose, and the same cost the TILE path pays at the same group
       size (see the WIDTH row, where both are 96 cores and the two agree to 3 %).
+  D11 Refinement 3 (perf) turns GRID_W -- Lamp L1, the cross-core width split on
+      an INTERLEAVED input -- from its parked 1 to an AUTO policy
+      (_auto_width_split).  No new dataflow: the combine, both kernels and every
+      other knob are Refinement 2's, unchanged; what is new is (a) the policy that
+      decides (gw, gh) from the shape and the live grid, and (b) a PACKED
+      single-group topology for a group wider than one grid row (Mcast2D over its
+      bounding box, in-box/out-of-group cores INACTIVE -- the same shape a
+      row-major-packed WIDTH shard grid already had).
+
+      WHY.  The row split can only ever use min(Rt, num_cores) cores, so a decode
+      profile (Rt = 1) runs an arbitrarily wide tensor through ONE core: measured
+      41779 ns on (1,1,32,7168), i.e. 1.34 MB at ~32 GB/s, which is one core's NoC
+      and nothing else.  Splitting `width` is the only axis left to parallelize.
+
+      MEASURED (blackhole p150b, 110-core 11x10 grid, ~1.35 GHz, bf16 / TILE /
+      HiFi2 / fp32_dest_acc_en=False -- the `_perf_case` config; one fresh-cache
+      profiled run per variant; test_rms_norm_perf.py::
+      test_rms_norm_perf_width_split, A/B by the GRID_W override):
+
+        group size (gw)        1        8       16       32       56
+        (1,1,32,7168)      41779    13926    12876    14224    19338 ns
+        (1,1,32,1024)      11207     7149*   8305                     ns
+          * gw = 4 -> 7296 ns, so the narrow control's optimum is 8.
+
+      Two opposing terms set the optimum, which is why the ceiling knob exists:
+      per-core BYTES fall as 1/gw, while the root's GATHER cost rises with gw --
+      every member ships a full fp32 TILE (4096 B) per row-block into the root's
+      cb_partials_gathered, and that CB's L1 footprint is GROUP_SIZE * BLOCK_ROWS
+      pages.  Past ~16 members the gather is the whole story (56 members is
+      1.5x SLOWER than 16).  Hence WIDTH_SPLIT_MAX_GROUP_CORES = 16 and
+      WIDTH_SPLIT_MIN_WT_PER_CORE = 4 (below 4 tiles per core the bytes saved no
+      longer pay for a member; measured on the narrow control).
+
+      Whole-op, at the shipped AUTO policy:
+
+        shape             row split   width split   speedup   cores
+        (1,1,32,7168)       41779        12876       3.24x     1 -> 16
+        (1,1,32,8192)       47216        13644       3.46x     1 -> 16
+        (1,1,32,5120)       32699        11181       2.92x     1 -> 16
+        (1,1,32,4096)       26925        10415       2.59x     1 -> 16
+        (1,1,32,2304)       20932         8620       2.43x     1 -> 12
+        (1,1,32,1024)       11207         7223       1.55x     1 ->  8
+        (1,1,128,4096)      27074        15763       1.72x     4 -> 32
+        (1,1,224,3072)      22863        17770       1.29x     7 -> 56
+        (1,1,224,1000)      12113         9427       1.29x     7 -> 56
+        (1,1,512,4096)      45793        38224       1.20x    16 -> 80
+        (1024,1024)         20960        20960       1.00x    32 (NO split)
+        (1,1,2048,256)      10944        10944       1.00x    64 (NO split)
+        (1,1,8192,1024)    105435       105435       1.00x   110 (NO split)
+
+      WIDTH_SPLIT_MIN_GAIN = 4 is what keeps the last three byte-identical, and it
+      is not cosmetic: at MIN_GAIN = 2 the (1024,1024) case DID split (32 -> 80
+      cores) and measured 21560 -> 23315 ns, a 0.92x REGRESSION -- 2.5x more cores
+      cannot pay for a combine round when the row split already has 32 cores well
+      fed.  Every shape that splits under MIN_GAIN = 4 has >= 4x more cores at
+      work and every one of them measured faster.
+
+      PRECISION IS SAFE BY CONSTRUCTION, and that is worth spelling out because
+      D8 records the trap: a smaller per-core reduce dim can switch Refinement
+      1b's AccumulateViaAdd fix OFF (a resident shard did exactly that).  Here it
+      cannot -- gw <= Wt // WIDTH_SPLIT_MIN_WT_PER_CORE means wt_per_core >= 4 ==
+      REDUCE_ACC_VIA_ADD_MIN_WT, so every split build keeps the datapath 1b
+      needed.  Measured on the shapes that split: rel RMS 0.0087 on (1,1,32,7168)
+      and 0.0102 on (1,1,32,16384) at bf16 / fp32_dest_acc_en=False (gate 0.04),
+      i.e. unchanged from 1b's single-core numbers -- and the cross-core sum is
+      itself an fp32 elementwise add, so a split row accumulates LESS DEST-resident
+      depth than an unsplit one, never more.
+
+      GRANULARITY.  gw is clamped to a DIVISOR of Wt (_width_group_cores), so a
+      prime Wt does not split at all -- the same D1 limit the STREAM chunk lives
+      under, and for the same reason on this path: an interleaved core has no pad
+      storage, so a ragged tail would make the reader read x tiles it does not own
+      (the NATIVE_IN path can zero a resident shard's pad tiles instead, which is
+      why the SHARDED width schemes DO take a ragged tail).
+
+      REMAINING HEADROOM, measured rather than guessed.  A one-core minimal
+      program is 3456 ns of fixed launch/dispatch floor, and (1,1,32,7168) at
+      gw = 16 moves only 56 kB per core (~1.8 us at the measured 32 GB/s), so the
+      ~7 us balance of its 12876 ns is the COMBINE round trip: gather (16 x 4 kB
+      into one root), the root's sum + finalize, and the stat multicast, none of
+      which overlaps anything when Rt = 1 gives a core a single row-block.  The two
+      levers that follow from that -- (a) a hierarchical/two-stage gather, which
+      examples/tensix_all_reduce measures at 1.45-1.60x over a flat root on 2-D
+      groups and which would also RAISE the useful group ceiling, and (b) a
+      compact partial handoff (a member's REDUCE_ROW partial is a column vector:
+      32 floats carried in a 4096-byte tile) -- are both changes to the combine's
+      topology / data format, not knob turns, so they are recorded here rather
+      than half-built.
   D9  Refinement 2's placement layer.  The three SCHEME_* values, the zero-copy
       (shard-backed) cb_input_tiles / cb_output_tiles, the cross-core width
       combine's four CBs and L1_CB_ARENA_BASE_RESERVE are all documented at
@@ -350,10 +442,37 @@ CB_RM_STAGE_DEPTH = 2
 # one-line change a later refinement flips once that step lands.
 CB_DEPTH_CANDIDATES = (2,)
 
-# Cores along the `width` axis.  Trivial value 1 in Phase 0 = one core owns the
-# whole width of every row it owns; Lamp L1 turns this knob up and adds the
-# cross-core partial-sum combine.
-GRID_W = 1
+# Cores along the `width` axis (Lamp L1: the cross-core width split on an
+# INTERLEAVED input).  Phase 0 pinned this at the trivial 1 (one core owns the
+# whole width of every row it owns); Refinement 2 built the combine the knob
+# needs; Refinement 3 (D11) turns it up.
+#
+#   0   AUTO -- _auto_width_split() picks (cores per width group, row groups)
+#        from the shape and the live grid, so a shape whose row split leaves the
+#        grid idle gets the width split and one that already fills it does not.
+#   >=1 OVERRIDE -- force this many cores per width group (1 == no split at all,
+#        byte-identical to Phase 0).  This is the A/B handle the perf probes use.
+GRID_W = 0
+
+# AUTO-policy knobs (all three feed _auto_width_split; none is inlined).
+#
+# Smallest number of width TILES a core may be left with.  The width split trades
+# per-core bytes (which fall as 1/gw) against the combine's cost (which RISES with
+# gw: every member ships a full fp32 tile per row-block into the root's gather CB,
+# and the gather CB's L1 footprint is GROUP_SIZE * BLOCK_ROWS pages).  Splitting
+# past a few tiles per core buys almost no bytes and pays the whole handshake.
+#
+# MEASURED on (1,1,32,7168) / bf16 / HiFi2 / fp32_dest_acc_en=False -- see D11.
+WIDTH_SPLIT_MIN_WT_PER_CORE = 4
+# Hard ceiling on cores per width group, i.e. on the gather fan-in.  See D11 for
+# the sweep: the curve is flat-to-worse past ~32 because the root's serialized
+# gather grows linearly while the per-core byte count is already small.
+WIDTH_SPLIT_MAX_GROUP_CORES = 16
+# Only take the split when it puts at least this many times as many cores to work
+# as the plain row split would.  A split that merely re-arranges the same core
+# count adds the combine for nothing, so 2 keeps grid-filling shapes (prefill:
+# Rt >= num_cores) on the untouched Phase-0 path.
+WIDTH_SPLIT_MIN_GAIN = 4
 
 # reduce() input policy knob: 1 = BulkWaitBulkPop (bulk wait/indexed/bulk pop),
 # 0 = WaitAndPopPerTile.  Bulk is the coarse default (op_design.md section 1.4).
@@ -711,46 +830,131 @@ class _Plan:
         self.out_shard_row_bytes = int(kw.get("out_shard_row_bytes") or 0)
 
 
-def _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt, W, R_rm):
-    """GRID_W > 1 on an interleaved input: Lamp L1, the cross-core width split.
+def _width_group_cores(Wt, cap):
+    """Cores per width group: the coarsest split of `Wt` tiles into `<= cap` cores
+    that leaves every core the SAME number of real width tiles.
 
-    The dependent `width` axis is cut across `GRID_W` cores of each grid row and
-    the partials are combined with the SAME topology the sharded schemes use --
-    only `native_in` differs (x still arrives through a TensorAccessor, because
-    an interleaved tensor has no resident per-core slice).  This is the knob
-    Refinement 3 turns to fill the grid on an `Rt = 1` decode profile; at the
-    shipped GRID_W == 1 it is not reached at all.
+    A DIVISOR, not `ceil`, and that is load-bearing on the interleaved path: a
+    ragged tail leaves the last core's block ending in whole PAD tiles, and unlike
+    a resident shard (whose pad tiles the reader can zero once -- see NATIVE_X)
+    an interleaved core has no pad storage at all, so the reader would have to
+    read x tiles it does not own.  A prime `Wt` therefore does not split; that is
+    the same D1 granularity limit the STREAM chunk size lives under.
+    """
+    return _largest_divisor_at_most(Wt, max(1, cap))
 
-    GRID_W is clamped to the largest DIVISOR of Wt that fits the grid width, so
-    every core owns the same number of width tiles (the same uniformity the
-    sharded path gets from a non-ragged shard).
+
+def _auto_width_split(device, Rt, Wt):
+    """(cores per width group, row groups) for GRID_W == 0 -- the AUTO policy (D11).
+
+    The row split can only ever use `min(Rt, num_cores)` cores, so a decode
+    profile (`Rt = 1`) runs the whole tensor through ONE core no matter how wide
+    it is.  This picks the (gw, gh) rectangle-or-line that puts the most cores to
+    work, subject to the three policy knobs, and returns the trivial (1, 1) when
+    the row split already fills the grid.
+
+    `gh` is the number of ROW groups (each owns a row range and combines within
+    itself); `gw` is the group size.  Two topologies are expressible with the
+    combine Refinement 2 built, and the loop only ever proposes those:
+      * gh == 1  -> ONE group of up to num_cores cores, packed row-major over the
+                    grid (its bounding box may be ragged; the few in-box cores
+                    outside the group join INACTIVE).  This is the decode case.
+      * gh >  1  -> a gw x gh RECTANGLE, one group per grid row, so no group's
+                    multicast rectangle can overlap another group's cores.
     """
     grid = device.compute_with_storage_grid_size()
-    gw = _largest_divisor_at_most(Wt, min(GRID_W, grid.x))
-    gh = max(1, min(Rt, grid.y))
+    num_cores = grid.x * grid.y
+    row_cores = max(1, min(Rt, num_cores))
+    best = (1, 1, row_cores)  # (gw, gh, total cores at work)
+    for gh in range(1, min(Rt, grid.y) + 1):
+        cap = min(
+            num_cores // gh,  # the grid
+            Wt // WIDTH_SPLIT_MIN_WT_PER_CORE,  # leave every core real work
+            WIDTH_SPLIT_MAX_GROUP_CORES,  # bound the gather fan-in
+        )
+        if gh > 1:
+            cap = min(cap, grid.x)  # a multi-group split must be a rectangle
+        gw = _width_group_cores(Wt, cap)
+        total = gw * gh
+        # Prefer more cores at work; on a tie prefer the SMALLER group (a cheaper
+        # gather), which the strict `>` gives us since gh ascends.
+        if gw >= 2 and total > best[2]:
+            best = (gw, gh, total)
+    gw, gh, total = best
+    if total < WIDTH_SPLIT_MIN_GAIN * row_cores:
+        return 1, 1
+    return gw, gh
+
+
+def _resolve_width_split(device, Rt, Wt):
+    """(gw, gh) for the interleaved width split -- the GRID_W knob, resolved.
+
+    GRID_W == 0 is the AUTO policy; >= 1 forces the group size (1 => no split).
+    """
+    if GRID_W == 0:
+        return _auto_width_split(device, Rt, Wt)
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    cap = min(GRID_W, num_cores)
+    gh = 1 if cap > grid.x else max(1, min(Rt, grid.y))
+    gw = _width_group_cores(Wt, min(cap, num_cores // gh))
+    return gw, gh
+
+
+def _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt, W, R_rm, gw, gh):
+    """The cross-core width split on an interleaved input: Lamp L1.
+
+    The dependent `width` axis is cut across `gw` cores per row group and the
+    partials are combined with the SAME topology the sharded schemes use -- only
+    `native_in` differs (x still arrives through a TensorAccessor, because an
+    interleaved tensor has no resident per-core slice).  Refinement 3 turns this
+    on by default through _resolve_width_split; at GRID_W == 1 it is not reached.
+
+    `gw` divides `Wt` (see _width_group_cores), so every core owns the same
+    number of real width tiles -- the uniformity the sharded path gets from a
+    non-ragged shard.  Two topologies, chosen by whether the group fits one
+    physical grid row:
+
+      gw <= grid.x   a gw x gh RECTANGLE, one group per grid row (Mcast1D PerRow).
+      gw >  grid.x   ONE group (gh == 1) PACKED row-major across the grid, with
+                     the stat multicast over its bounding box and the few in-box
+                     cores outside the group joining INACTIVE -- exactly what a
+                     row-major-packed WIDTH shard grid already does.
+    """
+    grid = device.compute_with_storage_grid_size()
     wt_per_core = Wt // gw
-    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gw - 1, gh - 1))])
-    base, extra = divmod(Rt, gh)
+    mc_cfg = ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0)
     assignment = []
-    for core in _cores_in(crs):
-        y = core.y
-        rows = base + (1 if y < extra else 0)
-        row_start = y * base + min(y, extra)
-        w_start = core.x * wt_per_core
-        assignment.append(
-            _work_tile_axis(core, row_start, rows, w_start, wt_per_core, core.x == 0, core.x, W=W, R_rm=R_rm)
-        )
-    mcast = (
-        ttnn.Mcast1D(
-            device,
-            crs,
-            ttnn.Mcast1DShape.PerRow,
-            0,
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0),
-        )
-        if gw > 1
-        else None
-    )
+    if gw <= grid.x:
+        gh = max(1, min(gh, grid.y))
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gw - 1, gh - 1))])
+        base, extra = divmod(Rt, gh)
+        for core in _cores_in(crs):
+            y = core.y
+            rows = base + (1 if y < extra else 0)
+            row_start = y * base + min(y, extra)
+            w_start = core.x * wt_per_core
+            assignment.append(
+                _work_tile_axis(core, row_start, rows, w_start, wt_per_core, core.x == 0, core.x, W=W, R_rm=R_rm)
+            )
+        mcast = ttnn.Mcast1D(device, crs, ttnn.Mcast1DShape.PerRow, 0, mc_cfg) if gw > 1 else None
+    else:
+        # PACKED single group.  Its bounding box is the first ceil(gw / grid.x)
+        # whole grid rows; the (gw % grid.x) trailing cores of the last row are in
+        # the box but not in the group, so they join INACTIVE (row_count == 0) --
+        # they exist only so the stat multicast lands in a cb_row_final this
+        # program owns.  _cores_in is row-major (row_wise=True), which is the same
+        # order the packed slice is taken in.
+        assert gh == 1, "rms_norm: a width group wider than the grid must be the only group"
+        rows_used = _div_up(gw, grid.x)
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, rows_used - 1))])
+        for i, core in enumerate(_cores_in(crs)):
+            if i >= gw:
+                assignment.append(_work_inactive(core))
+                continue
+            assignment.append(_work_tile_axis(core, 0, Rt, i * wt_per_core, wt_per_core, i == 0, i, W=W, R_rm=R_rm))
+        root = assignment[0].core
+        mcast = ttnn.Mcast2D(device, crs, ttnn.CoreCoord(root.x, root.y), mc_cfg, gw - 1)
     return _Plan(
         scheme=SCHEME_SHARD_W,
         assignment=assignment,
@@ -766,7 +970,7 @@ def _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt, W
     )
 
 
-def _plan_rows(device, input_tensor, output_tensor, Rt, Wt, W, R_rm):
+def _plan_rows(device, input_tensor, output_tensor, Rt, Wt, W, R_rm, *, allow_width_split=True):
     """SCHEME_ROWS: split the independent `row` axis over the FULL grid.
 
     Phase 0's scheme, and the universal fallback: every tensor is reached through
@@ -774,9 +978,18 @@ def _plan_rows(device, input_tensor, output_tensor, Rt, Wt, W, R_rm):
     is correct for any placement.  Used for INTERLEAVED, for every ROW_MAJOR
     sharded build (see _plan_placement's note on the RM shard granule) and as the
     L1 bail-out for a tiled shard whose per-core block does not fit.
+
+    `allow_width_split=False` is that L1 bail-out: the caller has already tried a
+    width-split plan and its per-core block did not fit, so re-proposing one would
+    loop.  It is also what keeps the width split off the ROW_MAJOR interleaved
+    path (an RM row is addressed by STICK, and the accessor reads a whole page, so
+    a width slice of an interleaved RM row is not a page -- the BAND scheme
+    reaches those only because a shard makes the segment a page of its own).
     """
-    if GRID_W > 1 and Wt > 1 and input_tensor.layout == ttnn.TILE_LAYOUT:
-        return _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt, W, R_rm)
+    if allow_width_split and Wt > 1 and input_tensor.layout == ttnn.TILE_LAYOUT:
+        gw, gh = _resolve_width_split(device, Rt, Wt)
+        if gw > 1:
+            return _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt, W, R_rm, gw, gh)
     num_cores, all_cores, g1, g2, rpc1, rpc2 = ttnn.split_work_to_cores(_core_range_set_full_grid(device), Rt, True)
     assignment = []
     row_cursor = 0
@@ -972,7 +1185,9 @@ def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, W, 
     if not force_rows and not is_tile and in_ml in (_WIDTH_SHARDED, _BLOCK_SHARDED):
         return _plan_band(device, input_tensor, output_tensor, Rt=Rt, Wt=Wt, W=W, R_rm=R_rm)
     if force_rows or not is_tile or in_ml == _INTERLEAVED:
-        return _plan_rows(device, input_tensor, output_tensor, Rt, Wt, W, R_rm)
+        # force_rows is the L1 bail-out from a width-split plan, so it must not
+        # propose one again (see _plan_rows).
+        return _plan_rows(device, input_tensor, output_tensor, Rt, Wt, W, R_rm, allow_width_split=not force_rows)
 
     shard_h_t, shard_w_t = _shard_tile_extent(input_tensor)
     shard_grid = input_tensor.memory_config().shard_spec.grid
@@ -988,7 +1203,9 @@ def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, W, 
         # block and the reduce stays local.  A legal HEIGHT shard spans the full
         # padded width by construction; refuse to guess if it somehow does not.
         if shard_w_t != Wt:
-            return _plan_rows(device, input_tensor, output_tensor, Rt, Wt, W, R_rm)
+            # The input's own placement already picked the cores; don't overlay a
+            # second width split on top of it (byte-identical to Refinement 2).
+            return _plan_rows(device, input_tensor, output_tensor, Rt, Wt, W, R_rm, allow_width_split=False)
         assignment = []
         for i, core in enumerate(shard_cores):
             row_start = i * shard_h_t
@@ -1021,7 +1238,9 @@ def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, W, 
     # combination takes SCHEME_ROWS (correct, just not width-split).
     ragged_w = (Wt % shard_w_t) != 0
     if ragged_w and partial_w:
-        return _plan_rows(device, input_tensor, output_tensor, Rt, Wt, W, R_rm)
+        # As above: the shard's own geometry chose the cores, so this fallback stays
+        # the plain row split it was in Refinement 2.
+        return _plan_rows(device, input_tensor, output_tensor, Rt, Wt, W, R_rm, allow_width_split=False)
 
     bbox = shard_grid.bounding_box()
     nx = bbox.end.x - bbox.start.x + 1

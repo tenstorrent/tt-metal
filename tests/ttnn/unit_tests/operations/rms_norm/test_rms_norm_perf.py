@@ -130,6 +130,65 @@ def test_rms_norm_perf_reduce_datapath(device, shape):
 
 
 # ---------------------------------------------------------------------------
+# The interleaved cross-core WIDTH SPLIT (Lamp L1, descriptor D11, Refinement 3).
+#
+# `Rt = 1` decode profiles: the Phase-0 row split fills exactly ONE core no matter
+# how wide W is, so the whole tensor moves through one core's NoC.  GRID_W turns
+# the width split on; this A/B sweeps the group size so the crossover (per-core
+# bytes fall as 1/gw, the root's gather cost rises with gw) is re-measurable.
+#
+# GRID_W is the OVERRIDE handle: 1 = no split (the Phase-0 baseline), >= 2 = force
+# that many cores per width group, 0 = the shipped AUTO policy.  Identify the
+# variants in the profiler CSV by CORE COUNT.
+# ---------------------------------------------------------------------------
+
+WIDTH_SPLIT_CASES = [
+    # The group-size crossover on the >=7x goal shape (Wt = 224, so every gw here
+    # is an exact divisor).  MEASURED 2026-08-04, see descriptor D11:
+    #   gw   1 -> 41779 ns    8 -> 13926    16 -> 12876    32 -> 14224    56 -> 19338
+    *[pytest.param((1, 1, 32, 7168), gw, id=f"w7168_gw{gw}") for gw in (1, 8, 16, 32, 56)],
+    # ... and on the narrow-W control (Wt = 32), where the knob that binds is
+    # WIDTH_SPLIT_MIN_WT_PER_CORE rather than the group ceiling:
+    #   gw   1 -> 11207 ns    4 ->  7296     8 ->  7149    16 ->  8305
+    *[pytest.param((1, 1, 32, 1024), gw, id=f"w1024_gw{gw}") for gw in (1, 4, 8, 16)],
+    # The shipped AUTO policy on both targets (must land on the sweep's optimum),
+    # and on the two regimes that must NOT split: a mid-Rt shape whose row split
+    # already engages 32 cores (WIDTH_SPLIT_MIN_GAIN) and a grid-filling prefill.
+    *[
+        pytest.param(shape, 0, id=f"auto_{shape[-2]}x{shape[-1]}")
+        for shape in ((1, 1, 32, 7168), (1, 1, 32, 1024), (1024, 1024), (1, 1, 8192, 1024))
+    ],
+    # A one-core minimal program: the ~3.5 us fixed floor every number above sits
+    # on top of (kernel launch + dispatch), so the sweep is read against it.
+    pytest.param((1, 1, 32, 32), 1, id="floor_1core"),
+]
+
+
+@pytest.mark.parametrize("shape, grid_w", WIDTH_SPLIT_CASES)
+def test_rms_norm_perf_width_split(device, shape, grid_w):
+    import ttnn.operations.rms_norm.rms_norm_program_descriptor as pdmod
+
+    saved = pdmod.GRID_W
+    try:
+        pdmod.GRID_W = grid_w
+        torch.manual_seed(42)
+        W = shape[-1]
+        x = ttnn.from_torch(
+            torch.randn(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        g = ttnn.from_torch(
+            torch.randn(W, dtype=torch.bfloat16).reshape(1, 1, 1, W),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        out = rms_norm(x, gamma=g, compute_kernel_config=_perf_case_config())
+        assert tuple(out.shape) == tuple(shape)
+    finally:
+        pdmod.GRID_W = saved
+
+
+# ---------------------------------------------------------------------------
 # The ROW_MAJOR BAND scheme (Refinement 2b).
 #
 # A distinct dataflow from every probe above: x and the output never leave L1

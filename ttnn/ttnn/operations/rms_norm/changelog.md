@@ -378,3 +378,87 @@
   gained `test_rms_norm_perf_row_major_band` (both band granularities plus their interleaved
   controls) so the trailing perf rounds can re-measure this dataflow. The refusal test
   `test_row_major_width_shard_refused` is gone — its subject is now supported.
+
+## Refinement 3 — Speed up the wide/decode profiles (post-combine)
+- Date: 2026-08-04
+- What was done (`[x]` full, perf — no SUPPORTED change): turned **GRID_W**, the interleaved
+  cross-core width split (Lamp L1) that Refinement 2 built and parked at its byte-identical
+  1, into an **AUTO policy** (descriptor deviation **D11**). The row split can only ever use
+  `min(Rt, num_cores)` cores, so an `Rt = 1` decode profile ran an arbitrarily wide tensor
+  through ONE core (measured 41803 ns on `(1,1,32,7168)` = 1.34 MB at ~32 GB/s, which is one
+  core's NoC and nothing else). Small, shared-path diff — no new kernel, no kernel edit at
+  all, no second program-descriptor branch.
+  - **Reused**: the whole §3.4 combine (`cb_sum_handoff` → per-sender slot of the root's
+    `cb_partials_gathered` + `noc_semaphore_inc` → root sums elementwise + runs the *same*
+    `transform_in_place` finalize → `mcast_pipe` stat broadcast), both `mcast_host.hpp`
+    emitters, the ragged-free uniform-width contract, every block/depth/datapath knob, and
+    all three kernels **unchanged** (`git diff` touches no `kernels/*.cpp`).
+  - **Added**: `_auto_width_split()` (the policy), `_resolve_width_split()` (knob → decision),
+    `_width_group_cores()` (the divisor clamp), a **PACKED single-group topology** for a group
+    wider than one grid row (`Mcast2D` over its bounding box with in-box/out-of-group cores
+    joining INACTIVE — the same shape a row-major-packed WIDTH shard grid already had), and
+    three policy knobs, each measured: `WIDTH_SPLIT_MIN_WT_PER_CORE = 4`,
+    `WIDTH_SPLIT_MAX_GROUP_CORES = 16`, `WIDTH_SPLIT_MIN_GAIN = 4`. `GRID_W` keeps its
+    override meaning (0 = AUTO, 1 = off, ≥2 = forced) and is the A/B handle the perf sweep
+    measures with. `_plan_rows` gained `allow_width_split` so the L1 bail-out
+    (`force_rows=True`) and the two shard-geometry fallbacks stay byte-identical.
+- Perf achieved (blackhole p150b, 110-core 11×10 grid, CHIP_FREQ 1350 MHz == the reference
+  clock, bf16 / TILE / INTERLEAVED / `fp32_dest_acc_en=False` / HiFi2 — the `_perf_case`
+  config; one fresh-cache profiled run per variant, whole sweep reproduced twice within 2 %):
+  **`(1,1,32,7168)` 41803 → 12756 ns (3.28×)** = **8.17× the 104259 ns reference**, above the
+  required **7.0×** and inside the **≤ 14894 ns** goal; **`(1,1,32,1024)` 11196 → 7199 ns
+  (1.56×)**, 1.27× under its 9149 ns reference. Also `(1,1,32,8192)` 3.46×,
+  `(1,1,32,5120)` 2.92×, `(1,1,32,4096)` 2.59×, `(1,1,32,2304)` 2.43×,
+  `(1,1,128,4096)` 1.72×, `(1,1,224,3072)` 1.29×, `(1,1,224,1000)` 1.29×,
+  `(1,1,512,4096)` 1.20×. Byte-identical (no split, 1.00×): `(1024,1024)`,
+  `(1,1,2048,256)`, `(1,1,8192,1024)` and every other grid-filling prefill.
+- Accuracy achieved: soft `pcc_threshold = 0.9995` holds on both targets —
+  `(1,1,32,7168)` PCC 0.999980 / rel RMS 0.0087, `(1,1,32,1024)` PCC 0.999984 / rel RMS
+  0.0069 (gate `rms ≤ 0.04`). Precision is safe **by construction** and that is deliberate:
+  `gw ≤ Wt // WIDTH_SPLIT_MIN_WT_PER_CORE` ⇒ `wt_per_core ≥ 4 ==
+  REDUCE_ACC_VIA_ADD_MIN_WT`, so a split build can never switch Refinement 1b's precision
+  fix off the way a resident shard did in Refinement 2 (**D8**'s trap) — and the cross-core
+  sum is itself an fp32 elementwise add, so a split row accumulates LESS DEST-resident depth
+  than an unsplit one.
+- Golden test progress: **5421 pass / 1365 xfail / 33921 invalid-skipped / 0 fail** —
+  numerically identical to Refinement 2b (5037 cartesian + 384 loose), as a perf refinement
+  should be. `test_regression.py` 15/15. `test_translated.py` 105/106, the one failure
+  bit-identical at frobenius **0.112240** to the pre-existing `{bfloat8_b, w_non_aligned}`
+  pad-poison cell `feature_spec.INVALID` declares out of scope (recorded as a known
+  non-issue in Refinements 2 and 2b). Zero hangs. No regression: unit dir **434 passed /
+  30 skipped** (was 406 / 30 before this refinement's 28 new params).
+- Issues encountered:
+  1. **A gain threshold was REQUIRED, not cosmetic.** At the first `WIDTH_SPLIT_MIN_GAIN = 2`,
+     `(1024,1024)` (Rt = 32) split 32 → 80 cores and got **slower**: 21560 → 23315 ns
+     (0.92×). 2.5× more cores cannot pay for one combine round when the row split already
+     feeds 32 cores. Raised to 4; that shape now stays on the untouched Phase-0 path and
+     every shape that does split measured ≥ 1.20×.
+  2. **The group size has a measured optimum**, because two terms oppose: per-core bytes fall
+     as `1/gw` while the root's gather rises with `gw` (each member ships a full fp32 TILE per
+     row-block into ONE root). `(1,1,32,7168)`: gw = 1 → 41803, 8 → 13876, **16 → 12978**,
+     32 → 14487, 56 → 19428 ns. Hence the ceiling knob at 16 rather than "fill the grid".
+  3. **A ragged width tail is NOT available on the interleaved path**, unlike the sharded
+     ones: a resident shard has pad-tile storage the reader zeroes once (NATIVE_X), an
+     interleaved core has none, so a ragged core would have to read x tiles it does not own.
+     `gw` is therefore clamped to a DIVISOR of `Wt` — the same D1 granularity limit — which
+     means a prime `Wt` (e.g. `(1,1,32,4064)`, Wt = 127) does not split. Recorded, not
+     worked around.
+- Remaining headroom (a FINDING, not a queued task — see D11): a one-core minimal program is
+  **3348 ns** of fixed launch/dispatch floor, and at gw = 16 the 7168 case moves only 56 kB
+  per core (≈1.8 µs at the measured 32 GB/s single-core NoC), so ~7 µs of its 12756 ns is the
+  gather → root sum → stat-multicast round trip, which overlaps nothing because `Rt = 1`
+  gives a core a single row-block. The two levers that follow are (a) a hierarchical
+  two-stage gather (`examples/tensix_all_reduce` measures 1.45–1.60× over a flat root on 2-D
+  groups, and it would raise the useful group ceiling so more cores share the payload) and
+  (b) a compact partial handoff — a `REDUCE_ROW` partial is a 32-float column vector shipped
+  inside a 4096-byte tile, so the gather moves 128× the bytes it needs. Both change the
+  combine's topology / data format rather than turning a knob, so neither was half-built here.
+- Tests added: `test_rms_norm_perf.py::test_rms_norm_perf_width_split` (14 params — the
+  group-size crossover on both target shapes, the AUTO policy on both plus the two regimes
+  that must NOT split, and a one-core minimal program that pins the fixed floor every number
+  is read against). `test_rms_norm_sharded.py::test_interleaved_width_split_auto_policy`
+  (8 cases — asserts on the DESCRIPTOR that the split engages exactly where the policy says
+  it should, since the golden suite cannot see occupancy: a decode shape computes the same
+  numbers on 1 core as on 16, just 3× slower) and `test_interleaved_width_split_knob` widened
+  to `GRID_W ∈ {0, 1, 2, 8, 16, 56}` so both topologies stay covered (`gw56` is wider than the
+  11-core grid row, hence the PACKED `Mcast2D` single group).

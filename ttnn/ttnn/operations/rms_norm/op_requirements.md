@@ -414,7 +414,7 @@ round would attack is the sub-tile band's one-local-read-per-stick staging
 
 ---
 
-### [ ] Refinement 3 — Speed up the wide/decode profiles (post-combine)
+### [x] Refinement 3 — Speed up the wide/decode profiles (post-combine)
 
 **Type**: perf
 
@@ -445,6 +445,47 @@ lever that fills the grid on `Rt = 1`, and the ≥7× requirement on the 7168 ca
 reachable by knob-tuning a single-core kernel. Use `/perf-ceiling-dm` first on the narrow
 control shape: `(1,1,32,1024)` may already be near its single-shot DRAM roofline, in which
 case only the wide case should move and that is the honest result to record.
+
+**Outcome** (`[x]` full): the named lever — `GRID_W`, Refinement 2's interleaved
+cross-core width combine, parked at its byte-identical 1 — is now an AUTO policy
+(descriptor **D11**, `_auto_width_split`), and **both goals are met**. Measured on device
+at the declared `_perf_case` config (bf16 / TILE / INTERLEAVED / `fp32_dest_acc_en=False` /
+HiFi2, blackhole p150b, 110-core 11×10 grid, CHIP_FREQ 1350 MHz == the reference clock so
+no scaling is needed; one fresh-cache profiled run per variant, reproduced twice within
+2 %): **`(1,1,32,7168)` 41803 → 12756 ns (3.28×)**, which is **8.17× the 104259 ns
+reference — above the required 7.0× and inside the ≤ 14894 ns goal** — and
+**`(1,1,32,1024)` 11196 → 7199 ns (1.56×)**, beating its 9149 ns reference by 1.27×.
+`pcc_threshold = 0.9995` holds (0.99998 / rel RMS 0.0087 and 0.99998 / 0.0069). The whole
+decode family moved with it: `(1,1,32,8192)` 3.46×, `(1,1,32,5120)` 2.92×,
+`(1,1,32,4096)` 2.59×, `(1,1,32,2304)` 2.43×, plus the few-row shapes
+`(1,1,128,4096)` 1.72×, `(1,1,224,3072)` 1.29×, `(1,1,224,1000)` 1.29×,
+`(1,1,512,4096)` 1.20×. Golden: **5421 pass / 1365 xfail / 0 fail** (identical to
+Refinement 2b's counts — no SUPPORTED change), `test_regression.py` 15/15,
+`test_translated.py` 105/106 with the one failure bit-identical at frobenius **0.112240**
+to the pre-existing bf8b pad-poison non-issue. Unit dir 434 passed / 30 skipped, zero
+hangs. Three findings:
+* **The group size has a measured optimum, so the ceiling is a knob, not a guess.** Per-core
+  bytes fall as `1/gw` but the root's gather RISES with `gw` (every member ships a full
+  fp32 tile per row-block into one root): on `(1,1,32,7168)` gw = 1 → 41803, 8 → 13876,
+  **16 → 12978**, 32 → 14487, 56 → 19428 ns. `WIDTH_SPLIT_MAX_GROUP_CORES = 16` and
+  `WIDTH_SPLIT_MIN_WT_PER_CORE = 4` (the narrow control's own optimum: gw = 8 at 4 tiles
+  per core) are both measured, not assumed.
+* **A gain threshold was REQUIRED to avoid a regression.** At `WIDTH_SPLIT_MIN_GAIN = 2`,
+  `(1024,1024)` (Rt = 32) split 32 → 80 cores and got **slower**: 21560 → 23315 ns (0.92×).
+  2.5× more cores cannot pay for a combine round when the row split already feeds 32 cores.
+  At the shipped `MIN_GAIN = 4` that shape, `(1,1,2048,256)` and every prefill stay
+  byte-identical on the Phase-0 row split, and every shape that does split measured ≥ 1.20×.
+* **What is left is the COMBINE, quantified.** A one-core minimal program is 3348 ns of
+  fixed launch/dispatch floor, and at gw = 16 the 7168 case moves only 56 kB per core
+  (≈1.8 µs at the measured 32 GB/s single-core NoC), so ~7 µs of its 12756 ns is the gather
+  → root sum → stat-multicast round trip, which cannot overlap anything because `Rt = 1`
+  gives each core a single row-block. The next levers are therefore (a) a hierarchical
+  two-stage gather (`examples/tensix_all_reduce`: 1.45–1.60× over a flat root on 2-D groups,
+  and it would raise the useful group ceiling, letting more cores share the payload) and
+  (b) a compact partial handoff — a `REDUCE_ROW` partial is a 32-float column vector shipped
+  inside a 4096-byte tile, so the gather moves 128× the bytes it needs. Both are changes to
+  the combine's topology / data format rather than knob turns, so they are recorded in D11
+  and left un-built here.
 
 ---
 
