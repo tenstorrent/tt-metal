@@ -416,12 +416,13 @@ execute_step_hide_existing_kernel() {
 # ===========================================================================
 # Step 1c — remove the op's existing tests so the tester authors them fresh. When
 # REMOVE_TESTS=true, git-remove AND commit the op's arch-specific dedicated test
-# files (Python test + C++ source) on the worktree branch. Ops that register into a
-# shared unified SFPU test own no dedicated file: remove nothing (deleting the shared
-# file would destroy every other op's test), set REMOVE_TESTS_SHARED=true, and let the
-# tester surgically excise and re-author only this op's slice of the shared .py/.cpp.
-# No-op unless the flag is set. base_commit (GIT_COMMIT, captured at setup BEFORE this)
-# is unchanged, so the final generated.patch still diffs against origin/main.
+# files (Python test + C++ source) on the worktree branch. An op with no dedicated
+# file lives in a shared unified SFPU test: a whole-file rm would destroy every
+# other op's cases, so instead locate the shared files that register the op, record
+# them in SHARED_TEST_FILES, and print them — the orchestrator excises only this op's
+# slice (Step 2c) and commits it via execute_step_commit_test_excision. No-op unless
+# the flag is set. base_commit (GIT_COMMIT, captured at setup BEFORE this) is
+# unchanged, so the final generated.patch still diffs against origin/main.
 # Run AFTER execute_step_set_kernel_identity and BEFORE the analyzer.
 # ===========================================================================
 execute_step_remove_existing_tests() {
@@ -429,6 +430,7 @@ execute_step_remove_existing_tests() {
     local remove; remove="$(sg REMOVE_TESTS 2>/dev/null || echo false)"
     if [ "$remove" != "true" ]; then echo "remove_existing_tests: not requested — skipping"; return 0; fi
     local wt kn arch; wt="$(_wt)"; kn="$(sg KERNEL_NAME)"; arch="$(sg TARGET_ARCH)"
+    ss SHARED_TEST_FILES ""
     # Dedicated files are arch-specific and op-anchored; patterns tolerate a prefix
     # (e.g. test_sfpu_where_quasar.py) but never match a shared unified test. Keep the
     # wildcards quoted so git expands them as repo-root-relative pathspecs — the shell's
@@ -446,14 +448,49 @@ execute_step_remove_existing_tests() {
         done < <(git -C "$wt" ls-files -- "$pat")
     done
     if [ "$removed" -gt 0 ]; then
-        ss REMOVE_TESTS_SHARED false --json
         git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
             commit -q -m "codegen: remove existing ${kn} tests for regeneration" || true
-        echo "remove_existing_tests: removed ${removed} file(s), committed on worktree branch"
-    else
-        ss REMOVE_TESTS_SHARED true --json
-        echo "remove_existing_tests: no dedicated ${kn} test files — set REMOVE_TESTS_SHARED=true; tester excises and re-authors only the op's slice of the shared test"
+        echo "remove_existing_tests: removed ${removed} dedicated file(s), committed on worktree branch"
+        return 0
     fi
+    # No dedicated file — the op registers into a shared unified test. Locate the shared
+    # .py / dispatcher header / .cpp that carry the op (a registration token next to the
+    # op name, case-insensitive) so the orchestrator excises only this op's slice.
+    local -a shared=()
+    while IFS= read -r f; do [ -n "$f" ] && shared+=("$f"); done < <(
+        git -C "$wt" grep -il -E "(MathOperation|OpConfig|SfpuType|BinaryOp|prepare_|ckernel_sfpu_)[A-Za-z0-9_.:]*${kn}" \
+            -- "tt_metal/tt-llk/tests/python_tests/${arch}" \
+               "tt_metal/tt-llk/tests/sources/${arch}" \
+               "tt_metal/tt-llk/tests/helpers/include/sfpu_operations_${arch}.h" 2>/dev/null
+    )
+    ss SHARED_TEST_FILES "${shared[*]}"
+    if [ "${#shared[@]}" -gt 0 ]; then
+        echo "remove_existing_tests: no dedicated ${kn} test files — op lives in a shared test."
+        echo "  SHARED_TEST_FILES — orchestrator excises only the ${kn} slice, then runs execute_step_commit_test_excision:"
+        printf '    %s\n' "${shared[@]}"
+    else
+        echo "remove_existing_tests: no dedicated ${kn} test files and no shared registration located — orchestrator must find and excise the op's slice"
+    fi
+}
+
+# ===========================================================================
+# Step 1c (shared path) — commit the orchestrator's excision of the op's slice
+# from the shared unified test. Stage the files recorded in SHARED_TEST_FILES and
+# commit them on the worktree branch. No-op when nothing was recorded or staged.
+# Run AFTER the orchestrator edits the shared files and BEFORE the analyzer.
+# ===========================================================================
+execute_step_commit_test_excision() {
+    local _L; _L="$(_LOG)"
+    local wt kn files; wt="$(_wt)"; kn="$(sg KERNEL_NAME)"; files="$(sg SHARED_TEST_FILES)"
+    [ -n "$files" ] || { echo "commit_test_excision: no shared files recorded — nothing to commit"; return 0; }
+    git -C "$wt" add -- $files
+    if git -C "$wt" diff --cached --quiet; then
+        echo "commit_test_excision: no staged changes — nothing to commit"
+        return 0
+    fi
+    git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
+        commit -q -m "codegen: remove existing ${kn} cases from shared test for regeneration" || true
+    echo "commit_test_excision: committed ${kn} excision on worktree branch"
 }
 
 # ===========================================================================

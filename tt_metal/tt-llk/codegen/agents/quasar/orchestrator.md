@@ -189,10 +189,16 @@ If it prints a `WARNING:` block, quote it verbatim in your final report and via 
 
 ## Step 2c: Remove Existing Tests (test regeneration)
 
-EXECUTE the following. When `REMOVE_TESTS=true` it git-removes and commits the op's dedicated arch-specific test files (Python test + C++ source) on the worktree branch, so the tester authors them fresh; ops that register into a shared unified SFPU test have no dedicated file to remove and are re-authored in place. No-op when the flag is unset:
+EXECUTE the following — it acts only when `REMOVE_TESTS=true`, and is a no-op otherwise:
 
 ```bash
 execute_step_remove_existing_tests
+```
+
+If it removed a dedicated file, continue to Step 3. If it instead printed `SHARED_TEST_FILES` (the op has no dedicated file and lives in a shared unified test), open each listed file and delete **only** this op's slice — its `OpConfig(MathOperation.{op}, …)` / op-list entry and its `prepare_{KERNEL_NAME}_inputs` (or family) branch in the `.py`; its `#include "llk_sfpu/ckernel_sfpu_{KERNEL_NAME}.h"` and its `SfpuType::{op}` / `BinaryOp::{OP}` dispatcher branch in the `.cpp`/header — leaving every other op untouched (`{op}`/`{OP}` are this op's registered enum names). If the list is empty, locate the shared test yourself by grepping the op's registration. Then commit the excision:
+
+```bash
+execute_step_commit_test_excision
 ```
 
 ---
