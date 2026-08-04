@@ -67,7 +67,7 @@ jobs:
             const runs = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'grouping-ci-failures-validation.yaml',
+              workflow_id: 'grouping-ci-failures.yaml',
               branch,
               status: 'success',
               exclude_pull_requests: true,
