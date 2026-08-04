@@ -42,34 +42,36 @@ constexpr auto beta_input_dfb = normed_output_dfb;
 ALWI void normalize_chunk(const uint32_t num_tiles) {
     const auto shape = ckl::EltwiseShape::tiles(num_tiles, ckl::DEST_AUTO_LIMIT);
     constexpr auto gamma_beta_wait =
-        Wt_file_scope == dfb_length_file_scope ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::PerChunk;
+        Wt_file_scope == dfb_length_file_scope ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::PerBlockSize;
     constexpr auto gamma_beta_pop =
-        Wt_file_scope == dfb_length_file_scope ? ckl::PopPolicy::None : ckl::PopPolicy::PerChunk;
+        Wt_file_scope == dfb_length_file_scope ? ckl::PopPolicy::None : ckl::PopPolicy::PerBlockSize;
 
     ckl::sub<
-        ckl::input(dfb::inp, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+        ckl::input(dfb::inp, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
         ckl::input(dfb::stats_reduced, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
-        ckl::output(dfb::x_minus_mean, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+        ckl::output(dfb::x_minus_mean, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
         ckl::BroadcastDim::Col>(shape);
 
     ckl::mul<
-        ckl::input(dfb::x_minus_mean, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+        ckl::input(
+            dfb::x_minus_mean, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
         ckl::input(dfb::recip_sqrt_var, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
-        ckl::output(normed_output_dfb, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+        ckl::output(normed_output_dfb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
         ckl::BroadcastDim::Col>(shape);
 
 #ifdef FUSE_GAMMA
     ckl::mul<
-        ckl::input(dfb::x_normed, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+        ckl::input(dfb::x_normed, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
         ckl::input(dfb::gamma, gamma_beta_wait, gamma_beta_pop, ckl::OperandKind::Block),
-        ckl::output(times_gamma_output_dfb, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+        ckl::output(times_gamma_output_dfb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
         ckl::BroadcastDim::Row>(shape);
 #endif
 #ifdef FUSE_BETA
     ckl::add<
-        ckl::input(beta_input_dfb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+        ckl::input(
+            beta_input_dfb, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
         ckl::input(dfb::beta, gamma_beta_wait, gamma_beta_pop, ckl::OperandKind::Block),
-        ckl::output(dfb::out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+        ckl::output(dfb::out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
         ckl::BroadcastDim::Row>(shape);
 #endif
 }

@@ -22,7 +22,7 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::grid(num_output_tiles, num_input_tiles),
         ckl::BinaryFpu<
-            ckl::input(cb_in0, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(cb_in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::input(cb_in1, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Scalar),
             ckl::BinaryFpuOp::Add,
             ckl::BroadcastDim::None,

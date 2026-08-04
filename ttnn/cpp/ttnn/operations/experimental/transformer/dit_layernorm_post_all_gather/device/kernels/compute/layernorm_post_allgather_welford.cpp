@@ -103,9 +103,12 @@ void kernel_main() {
             DataflowBuffer(cb_recip_sqrt_var).wait_front(1);
             ckl::mul<
                 ckl::input(
-                    cb_intermediate, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    cb_intermediate,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
+                    ckl::OperandKind::Block),
                 ckl::input(cb_recip_sqrt_var, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                ckl::output(norm_target_cb, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+                ckl::output(norm_target_cb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
                 ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size));
 
             if constexpr (do_gamma) {
@@ -116,8 +119,8 @@ void kernel_main() {
                     ckl::BinaryFpu<
                         ckl::input(
                             norm_target_cb,
-                            ckl::WaitPolicy::PerChunk,
-                            ckl::PopPolicy::PerChunk,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
                         ckl::input(
                             cb_gamma,
@@ -129,7 +132,7 @@ void kernel_main() {
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{0u, col_tile},
                     ckl::PackTile<ckl::output(
-                        gamma_out_cb, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                        gamma_out_cb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
 
             // 4) optional beta (only if gamma was provided)

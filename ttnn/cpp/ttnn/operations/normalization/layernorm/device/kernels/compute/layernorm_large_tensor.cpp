@@ -183,12 +183,20 @@ void kernel_main() {
                 ckl::OptionalChainElement<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
                     ckl::CopyTile<
-                        ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_in,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::Dst::D0>>{},
                 ckl::OptionalChainElement<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads cb_ex; stripped under RMSNORM)
                     ckl::BinaryFpu<
-                        ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_in,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col>>{},
@@ -196,11 +204,14 @@ void kernel_main() {
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
                         ckl::input(
-                            cb_inb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                            cb_inb,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
                 ckl::Square<ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_xmm2, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                ckl::PackTile<ckl::output(cb_xmm2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
             tile_regs_acquire();
             if (!block.is_first()) {
@@ -295,12 +306,20 @@ void kernel_main() {
                 ckl::OptionalChainElement<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
                     ckl::CopyTile<
-                        ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_in,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::Dst::D0>>{},
                 ckl::OptionalChainElement<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads cb_ex; stripped under RMSNORM)
                     ckl::BinaryFpu<
-                        ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_in,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col>>{},
@@ -308,20 +327,25 @@ void kernel_main() {
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
                         ckl::input(
-                            cb_inb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                            cb_inb,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
-                ckl::PackTile<ckl::output(cb_xmm, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                ckl::PackTile<ckl::output(cb_xmm, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
             ckl::eltwise_chain(
                 block_shape,
                 ckl::BinaryFpu<
-                    ckl::input(cb_xmm, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::input(
+                        cb_xmm, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
                     ckl::input(cb_ex2pe, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::None>{},
                 ckl::OptionalChainElement<activate_after_normalize, FusedActivation>{},
-                ckl::PackTile<ckl::output(cb_im_or_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                ckl::PackTile<ckl::output(
+                    cb_im_or_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
             if constexpr (do_gamma == 1) {
                 constexpr auto cb_gamma_out = do_beta ? cb_fusion : cb_out;
@@ -329,27 +353,40 @@ void kernel_main() {
                     block_shape,
                     ckl::BinaryFpu<
                         ckl::input(
-                            cb_fusion, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                            cb_fusion,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::input(
-                            cb_gamma, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                            cb_gamma,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{},
                     ckl::OptionalChainElement<activate_after_gamma, FusedActivation>{},
                     ckl::PackTile<ckl::output(
-                        cb_gamma_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                        cb_gamma_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
             if constexpr (do_beta == 1) {
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
                         ckl::input(
-                            cb_fusion, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                            cb_fusion,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::input(
-                            cb_beta, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                            cb_beta,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
+                            ckl::OperandKind::Block),
                         ckl::BinaryFpuOp::Add,
                         ckl::BroadcastDim::Row>{},
                     ckl::OptionalChainElement<fused_activation_enabled, FusedActivation>{},
-                    ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                    ckl::PackTile<ckl::output(
+                        cb_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
 
 #ifdef UNTILIZE_OUT

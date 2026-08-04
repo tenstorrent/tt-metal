@@ -350,8 +350,8 @@ void kernel_main() {
             ckl::sub<
                 ckl::input(
                     cb_x_id,
-                    ckl::WaitPolicy::PerChunk,
-                    ckl::PopPolicy::PerChunk,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
                     ckl::OperandKind::Block,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
@@ -361,8 +361,8 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_x_id,
-                    ckl::ReservePolicy::PerChunk,
-                    ckl::PushPolicy::PerChunk,
+                    ckl::ReservePolicy::PerBlockSize,
+                    ckl::PushPolicy::PerBlockSize,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::BroadcastDim::Scalar>(valid_group_shape);
 
@@ -370,8 +370,8 @@ void kernel_main() {
             ckl::mul<
                 ckl::input(
                     cb_x_id,
-                    ckl::WaitPolicy::PerChunk,
-                    ckl::PopPolicy::PerChunk,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
                     ckl::OperandKind::Block,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
@@ -382,8 +382,8 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_x_id,
-                    ckl::ReservePolicy::PerChunk,
-                    ckl::PushPolicy::PerChunk,
+                    ckl::ReservePolicy::PerBlockSize,
+                    ckl::PushPolicy::PerBlockSize,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::BroadcastDim::None>(valid_group_shape);
             cb_input_mask.pop_front(block_w);
@@ -454,16 +454,16 @@ void kernel_main() {
             ckl::mul<
                 ckl::input(
                     cb_x_id,
-                    ckl::WaitPolicy::PerChunk,
-                    ckl::PopPolicy::PerChunk,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
                     ckl::OperandKind::Block,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
                     cb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_x_id,
-                    ckl::ReservePolicy::PerChunk,
-                    ckl::PushPolicy::PerChunk,
+                    ckl::ReservePolicy::PerBlockSize,
+                    ckl::PushPolicy::PerBlockSize,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::BroadcastDim::Scalar>(valid_group_shape);
             cb_x.wait_front(block_hw);

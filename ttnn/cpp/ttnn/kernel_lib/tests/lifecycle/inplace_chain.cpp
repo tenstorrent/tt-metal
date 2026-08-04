@@ -10,7 +10,7 @@
 // when the output reserves incrementally (per-tile/chunk) AND the input pops incrementally. The
 // `life` cases are exactly the safe pairs; each must pass (no-hang + correct values):
 //   0  BulkDrain + Streaming (Scalar)   wait all n upfront, then pop1/reserve1/push1 per tile
-//   1  Chunked   + Chunked   (Block)    wait/pop K, then reserve/push K, per chunk
+//   1  PerBlockSize + PerBlockSize (Block) wait/pop K, then reserve/push K, per block-size group
 //   2  Streaming + Streaming (Scalar)   wait1/pop1, then reserve1/push1, per tile
 // Any upfront-reserve output (Bulk / ReserveAllPush*) would deadlock and is deliberately not built.
 // In-place safety is a pure function of the input wait/pop and output reserve/push pairing; the compute
@@ -31,7 +31,7 @@ void kernel_main() {
 
     constexpr uint32_t n = get_compile_time_arg_val(0);
     constexpr uint32_t life = get_compile_time_arg_val(1);
-    constexpr uint32_t blk = get_compile_time_arg_val(2);  // block_size for the Chunked case
+    constexpr uint32_t blk = get_compile_time_arg_val(2);  // block_size for the PerBlockSize case
 
     compute_kernel_hw_startup(cb_src, cb_out);
 
@@ -55,9 +55,9 @@ void kernel_main() {
         // Chunk lockstep: pop/reserve K per chunk. Block index walks the K-tile front window.
         eltwise_chain(
             EltwiseShape::tiles(n, blk),
-            CopyTile<input(cb_x, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block), Dst::D0>{},
+            CopyTile<input(cb_x, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block), Dst::D0>{},
             Exp<>{},
-            PackTile<output(cb_x, ReservePolicy::PerChunk, PushPolicy::PerChunk)>{});
+            PackTile<output(cb_x, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     } else {  // life == 2
         // Per-tile rotation: like life 0 but the wait is per-tile too.
         eltwise_chain(EltwiseShape::tiles(n), CopyTile<input(cb_x)>{}, Exp<>{}, PackTile<output(cb_x)>{});

@@ -102,7 +102,7 @@ def test_output_lifecycle(device, life, name):
 INPLACE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/lifecycle/inplace_chain.cpp"
 INPLACE_LIFECYCLES = {
     0: "BulkDrain+Streaming",
-    1: "Chunked+Chunked",
+    1: "PerBlockSize+PerBlockSize",
     2: "Streaming+Streaming",
 }
 

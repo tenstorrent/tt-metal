@@ -49,7 +49,10 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
             ckl::BroadcastDim::Col>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>{});
+            cb_out,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Disabled)>{});
     cb_out_obj.wait_front(Wt);
 }
 
@@ -137,13 +140,20 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(Wt, ndst),
             ckl::BinaryFpu<
-                ckl::input(cb_scale_mask, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                ckl::input(
+                    cb_scale_mask,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
+                    ckl::OperandKind::Block),
                 ckl::input(cb_fused_attn, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
                 ckl::BinaryFpuOp::Add,
                 mask_bcast>{},
             ckl::OptionalChainElement<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
             ckl::PackTile<ckl::output(
-                cb_x, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>{});
+                cb_x,
+                ckl::ReservePolicy::PerBlockSize,
+                ckl::PushPolicy::PerBlockSize,
+                ckl::DataFormatReconfig::Disabled)>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -241,7 +251,7 @@ void kernel_main() {
         ckl::mul<
             ckl::input(cb_exps, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
             ckl::input(cb_recipsumexps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::output(cb_out0, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+            ckl::output(cb_out0, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt, ndst));
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at

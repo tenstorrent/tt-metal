@@ -29,7 +29,8 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::grid(num_rows_per_core, padded_Wt, block_size),
         ckl::CopyTile<
-            ckl::input(cb_input_idx, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(
+                cb_input_idx, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::Dst::D0>{},
         ckl::CopyDest<ckl::Dst::D0, ckl::Dst::D1>{},
         ckl::Sigmoid<ckl::Dst::D1>{},
@@ -39,12 +40,13 @@ void kernel_main() {
         ckl::AddUnary<ckl::Dst::D2>{one},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
         ckl::CopyTile<
-            ckl::input(cb_dL_out_idx, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(
+                cb_dL_out_idx, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::Dst::D2>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
             cb_dL_da_idx,
-            ckl::ReservePolicy::PerChunk,
-            ckl::PushPolicy::PerChunk,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Disabled)>{});
 }

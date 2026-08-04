@@ -157,9 +157,9 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         // The reader streams block-sized chunks, so waiting for the whole row would deadlock.
         ckl::add<
-            ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-            ckl::input(cb_inb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-            ckl::output(cb_x, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+            ckl::input(cb_in, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(cb_inb, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::output(cb_x, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
             ckl::BroadcastDim::None>(row_shape);
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
@@ -182,10 +182,13 @@ void kernel_main() {
 
         // x - E[x]; the mean stays resident for the whole row.
         ckl::sub<
-            ckl::input(cb_x, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(cb_x, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(
-                cb_xmm, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled),
+                cb_xmm,
+                ckl::ReservePolicy::PerBlockSize,
+                ckl::PushPolicy::PerBlockSize,
+                ckl::DataFormatReconfig::Disabled),
             ckl::BroadcastDim::Col>(row_shape);
         cb_ex_obj.pop_front(1);
 
@@ -203,8 +206,10 @@ void kernel_main() {
                 ckl::OperandKind::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::output(
-                cb_xmm2, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>(
-            row_shape);
+                cb_xmm2,
+                ckl::ReservePolicy::PerBlockSize,
+                ckl::PushPolicy::PerBlockSize,
+                ckl::DataFormatReconfig::Disabled)>(row_shape);
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
@@ -244,7 +249,8 @@ void kernel_main() {
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::Col>{block.start(), 0u},
                 ckl::OptionalChainElement<activate_after_normalize, FusedActivation>{},
-                ckl::PackTile<ckl::output(cb_im_or_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                ckl::PackTile<ckl::output(
+                    cb_im_or_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
             if constexpr (do_gamma) {
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
@@ -260,8 +266,8 @@ void kernel_main() {
                     ckl::BinaryFpu<
                         ckl::input(
                             cb_fusion,
-                            ckl::WaitPolicy::PerChunk,
-                            ckl::PopPolicy::PerChunk,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Disabled),
                         ckl::input(
@@ -276,8 +282,8 @@ void kernel_main() {
                     ckl::OptionalChainElement<activate_after_gamma, FusedActivation>{},
                     ckl::PackTile<ckl::output(
                         cb_outg,
-                        ckl::ReservePolicy::PerChunk,
-                        ckl::PushPolicy::PerChunk,
+                        ckl::ReservePolicy::PerBlockSize,
+                        ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>{});
             }
             if constexpr (do_beta) {
@@ -292,8 +298,8 @@ void kernel_main() {
                     ckl::BinaryFpu<
                         ckl::input(
                             cb_fusion,
-                            ckl::WaitPolicy::PerChunk,
-                            ckl::PopPolicy::PerChunk,
+                            ckl::WaitPolicy::PerBlockSize,
+                            ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Disabled),
                         ckl::input(
@@ -308,8 +314,8 @@ void kernel_main() {
                     ckl::OptionalChainElement<fused_activation_enabled, FusedActivation>{},
                     ckl::PackTile<ckl::output(
                         cb_out,
-                        ckl::ReservePolicy::PerChunk,
-                        ckl::PushPolicy::PerChunk,
+                        ckl::ReservePolicy::PerBlockSize,
+                        ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>{});
             }
         }

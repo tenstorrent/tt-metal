@@ -41,7 +41,7 @@ constexpr uint32_t block_size = get_compile_time_arg_val(1);
 template <uint32_t Cb, bool Consume, ckl::OperandKind Kind = ckl::OperandKind::Block>
 constexpr ckl::InputSpec block_input() {
     if constexpr (Consume) {
-        return ckl::input(Cb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, Kind);
+        return ckl::input(Cb, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, Kind);
     } else {
         return ckl::input(Cb, ckl::WaitPolicy::None, ckl::PopPolicy::None, Kind);
     }
@@ -61,7 +61,10 @@ ALWI void binary_block() {
         ckl::EltwiseShape::tiles(block_size, block_size),
         ckl::BinaryFpu<block_input<CbA, ConsumeA>(), block_input<CbB, ConsumeB, BKind>(), Op, Bcast>{},
         ckl::PackTile<ckl::output(
-            CbOut, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Enabled)>{});
+            CbOut,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Enabled)>{});
 }
 
 template <uint32_t GradCb>
@@ -75,13 +78,13 @@ ALWI void finish_momentum() {
             ckl::BinaryFpuOp::Add>{},
         ckl::PackTile<ckl::output(
             cb_momentum_out_idx,
-            ckl::ReservePolicy::PerChunk,
-            ckl::PushPolicy::PerChunk,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Enabled)>{},
         ckl::PackTile<ckl::output(
             cb_momentum_dram_idx,
-            ckl::ReservePolicy::PerChunk,
-            ckl::PushPolicy::PerChunk,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Enabled)>{});
 
 #if USE_NESTEROV

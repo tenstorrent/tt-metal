@@ -98,9 +98,9 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
         // Keep pre-add in a separate CB to avoid the transpose_dest aliasing issue.
         ckl::add<
-            ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-            ckl::input(cb_inb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-            ckl::output(cb_interm_pre_add, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+            ckl::input(cb_in, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(cb_inb, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::output(cb_interm_pre_add, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
             ckl::BroadcastDim::None>(block_shape);
 
         // Now run Welfords in these blk number of tiles
@@ -548,9 +548,14 @@ void kernel_main() {
             if constexpr (do_gamma == 1) {
                 constexpr auto cb_gamma_out = do_beta ? cb_fusion : cb_out;
                 ckl::mul<
-                    ckl::input(cb_xmm_id, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-                    ckl::input(cb_gamma, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-                    ckl::output(cb_gamma_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+                    ckl::input(
+                        cb_xmm_id,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::OperandKind::Block),
+                    ckl::input(
+                        cb_gamma, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                    ckl::output(cb_gamma_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
                     ckl::BroadcastDim::Row>(block_shape);
             }
 
@@ -558,9 +563,13 @@ void kernel_main() {
                 constexpr auto cb_beta_input = do_gamma ? cb_fusion : cb_xmm_id;
                 ckl::add<
                     ckl::input(
-                        cb_beta_input, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-                    ckl::input(cb_beta, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-                    ckl::output(cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+                        cb_beta_input,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::OperandKind::Block),
+                    ckl::input(
+                        cb_beta, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                    ckl::output(cb_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
                     ckl::BroadcastDim::Row>(block_shape);
             }
         }
