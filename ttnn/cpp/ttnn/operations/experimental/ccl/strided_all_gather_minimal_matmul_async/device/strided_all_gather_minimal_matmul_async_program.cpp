@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include <algorithm>
+#include <cstdlib>
 
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -18,7 +19,7 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_factory.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_fabric_bound_program_factory.hpp"
 
 using namespace tt::constants;
 
@@ -54,15 +55,21 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
             StridedAllGatherAsyncInputs(tensor_args.input_tensor),
             output_tensor.at(0));
 
-        auto cached_program_proxy = ttnn::experimental::prim::MinimalMatmulProgramFactory::cached_program_t::proxy(
-            program, shared_variables.mm_shared_variables);
+        auto cached_program_proxy =
+            ttnn::experimental::prim::MinimalMatmulFabricBoundProgramFactory::cached_program_t::proxy(
+                program, shared_variables.mm_shared_variables);
 
-        // Create a vector for the single output tensor
-        std::vector<Tensor> matmul_output_vec = {output_tensor.at(1)};
-        ttnn::experimental::prim::MinimalMatmulProgramFactory::override_runtime_arguments(
+        // Matmul outputs are all tensors after the all-gather output (one per chunk).
+        std::vector<Tensor> matmul_output_vec(output_tensor.begin() + 1, output_tensor.end());
+        ttnn::experimental::prim::MinimalMatmulFabricBoundProgramFactory::override_runtime_arguments(
             cached_program_proxy,
             attributes.matmul_struct,
-            {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
+            {output_tensor.at(0),
+             tensor_args.weight_tensor,
+             tensor_args.bias,
+             tensor_args.input_tensor,
+             tensor_args.fused_ternary_input_a,
+             tensor_args.fused_ternary_input_b},
             matmul_output_vec);
     }
 }
@@ -72,7 +79,7 @@ strided_all_gather_minimal_matmul_async_program(
     const Tensor& input_tensor,
     Tensor& all_gather_output_tensor,
     const Tensor& weight_tensor,
-    Tensor& matmul_output_tensor,
+    std::vector<Tensor> matmul_output_tensors,
     bool read_local_slice_from_input,
 
     /* All Gather Params */
@@ -94,7 +101,10 @@ strided_all_gather_minimal_matmul_async_program(
     const std::optional<const Tensor>& bias,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     ttnn::experimental::prim::MinimalMatmulConfig config,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<float> fused_ternary_scalar,
+    const std::optional<const Tensor>& fused_ternary_input_a,
+    const std::optional<const Tensor>& fused_ternary_input_b) {
     tt::tt_metal::Program program{};
 
     // Create a matmul signal info object that gets populated by the matmul kernel
@@ -109,10 +119,14 @@ strided_all_gather_minimal_matmul_async_program(
         read_local_slice_from_input,
         read_local_slice_from_input ? std::optional<const Tensor>(input_tensor) : std::nullopt);
 
-    // Matmul - wrap single output tensor in vector for unified interface
+    // Option W (writer-signals-matmul): the matmul cores keep the legacy 3 semaphores (backward,
+    // forward, self) and wait +1 per k-block. When the flag is on, a dedicated per-direction
+    // aggregation core (see the AG program factory) collects the N per-worker landing signals and
+    // provides that single +1 - so the matmul semaphore count is unchanged here (num_ag_workers = 1).
+
+    // Matmul outputs: one tensor per chunk (chunks == 1 -> single output).
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
-    std::vector<Tensor> matmul_output_tensors = {matmul_output_tensor};
-    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper_common(
+    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_fabric_bound_factory_helper_common(
         program,
         all_gather_output_tensor,
         weight_tensor,
@@ -122,10 +136,10 @@ strided_all_gather_minimal_matmul_async_program(
         matmul_output_tensors,
         compute_kernel_config,
         matmul_fused_op_signaler,
-        1,  // N_chunks = 1 for single output
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
+        static_cast<uint32_t>(matmul_output_tensors.size()),  // N_chunks
+        fused_ternary_scalar,
+        fused_ternary_input_a,
+        fused_ternary_input_b,
         empty_srs_fused_op_signaler);
 
     // Create the all gather fused op signaler
@@ -189,12 +203,15 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.strided_all_gather_async_struct.topology,
         attributes.strided_all_gather_async_struct.cluster_axis);
 
+    // Matmul outputs are all tensors after the all-gather output (one per chunk).
+    std::vector<Tensor> matmul_output_tensors(output_tensor.begin() + 1, output_tensor.end());
+
     // Return the StridedAllGatherMinimalMatmulAsync program with callbacks
     return strided_all_gather_minimal_matmul_async_program(
         tensor_args.input_tensor,   // input_tensor
         output_tensor[0],           // all_gather_output_tensor
         tensor_args.weight_tensor,  // weight_tensor
-        output_tensor[1],           // matmul_output_tensor
+        matmul_output_tensors,      // matmul_output_tensors (one per chunk)
         attributes.read_local_slice_from_input,
 
         /* All Gather Params */
@@ -216,7 +233,10 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         tensor_args.bias,  // Bias
         attributes.matmul_struct.fused_activation,
         attributes.matmul_struct.config.value(),
-        attributes.matmul_struct.compute_kernel_config);
+        attributes.matmul_struct.compute_kernel_config,
+        attributes.matmul_struct.fused_ternary_scalar,
+        tensor_args.fused_ternary_input_a,
+        tensor_args.fused_ternary_input_b);
 }
 
 }  // namespace ttnn::experimental::prim
