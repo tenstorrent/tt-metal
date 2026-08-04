@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace tt::tt_metal::host_buffer {
 
