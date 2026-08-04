@@ -1,0 +1,165 @@
+# EXECUTED ttnn CALL SEQUENCE - one phi-3.5-mini decode layer, batch 32
+# CHALLENGER_ADVISOR_ROPE_L1='query_key'   CHALLENGER_ADVISOR_NORM_CORES=0
+# 43 traced ttnn calls
+
+[  1] ttnn.rms_norm()
+        in   (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        args {'epsilon': '1e-05'}
+[  2] ttnn.linear()
+        in   (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        in   (3072, 9216) BFLOAT4_B TILE dram/interleaved
+        out  (1, 1, 32, 9216) BFLOAT16 TILE dram/interleaved
+        args {'dtype': 'BFLOAT16'}
+[  3] experimental.nlp_create_qkv_heads_decode()
+        in   (1, 1, 32, 9216) BFLOAT16 TILE dram/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+        args {'num_heads': '32', 'num_kv_heads': '32', 'memory_config': '<memcfg>'}
+[  4] ttnn.typecast()
+        in   (32,) INT32 ROW_MAJOR dram/interleaved
+        out  (32,) UINT32 ROW_MAJOR dram/interleaved
+[  5] ttnn.embedding()
+        in   (32,) UINT32 ROW_MAJOR dram/interleaved
+        in   (128, 96) BFLOAT16 ROW_MAJOR dram/interleaved
+        out  (32, 96) BFLOAT16 TILE dram/interleaved
+        args {'layout': 'TILE'}
+[  6] ttnn.reshape()
+        in   (32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 96) BFLOAT16 TILE dram/interleaved
+[  7] ttnn.embedding()
+        in   (32,) UINT32 ROW_MAJOR dram/interleaved
+        in   (128, 96) BFLOAT16 ROW_MAJOR dram/interleaved
+        out  (32, 96) BFLOAT16 TILE dram/interleaved
+        args {'layout': 'TILE'}
+[  8] ttnn.reshape()
+        in   (32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 96) BFLOAT16 TILE dram/interleaved
+[  9] ttnn.to_memory_config()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+[ 10] ttnn.slice()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        out  (1, 32, 32, 48) BFLOAT16 TILE l1/interleaved
+[ 11] ttnn.slice()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        out  (1, 32, 32, 48) BFLOAT16 TILE l1/interleaved
+[ 12] ttnn.neg()
+        in   (1, 32, 32, 48) BFLOAT16 TILE l1/interleaved
+        out  (1, 32, 32, 48) BFLOAT16 TILE l1/interleaved
+[ 13] ttnn.concat()
+        out  (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        args {'dim': '-1'}
+[ 14] ttnn.multiply()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        in   (1, 1, 32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+[ 15] ttnn.multiply()
+        in   (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        in   (1, 1, 32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+[ 16] ttnn.add()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        in   (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+[ 17] ttnn.to_memory_config()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+[ 18] ttnn.to_memory_config()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+[ 19] ttnn.slice()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        out  (1, 32, 32, 48) BFLOAT16 TILE l1/interleaved
+[ 20] ttnn.slice()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        out  (1, 32, 32, 48) BFLOAT16 TILE l1/interleaved
+[ 21] ttnn.neg()
+        in   (1, 32, 32, 48) BFLOAT16 TILE l1/interleaved
+        out  (1, 32, 32, 48) BFLOAT16 TILE l1/interleaved
+[ 22] ttnn.concat()
+        out  (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        args {'dim': '-1'}
+[ 23] ttnn.multiply()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        in   (1, 1, 32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+[ 24] ttnn.multiply()
+        in   (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        in   (1, 1, 32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+[ 25] ttnn.add()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        in   (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+[ 26] ttnn.to_memory_config()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+[ 27] experimental.paged_update_cache()
+        in   (128, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+        out  (128, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+[ 28] experimental.paged_update_cache()
+        in   (128, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+        out  (128, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+[ 29] transformer.paged_scaled_dot_product_attention_decode()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+        in   (128, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        in   (128, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        args {'memory_config': '<memcfg>'}
+[ 30] ttnn.to_memory_config()
+        in   (1, 32, 32, 96) BFLOAT16 TILE dram/interleaved
+        out  (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+[ 31] experimental.nlp_concat_heads_decode()
+        in   (1, 32, 32, 96) BFLOAT16 TILE l1/height_sharded, shard=(32, 96), cores=32
+        out  (1, 1, 32, 3072) BFLOAT16 TILE l1/width_sharded, shard=(32, 96), cores=32
+        args {'num_heads': '32'}
+[ 32] ttnn.linear()
+        in   (1, 1, 32, 3072) BFLOAT16 TILE l1/width_sharded, shard=(32, 96), cores=32
+        in   (3072, 3072) BFLOAT4_B TILE dram/interleaved
+        out  (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        args {'dtype': 'BFLOAT16'}
+[ 33] ttnn.reshape()
+        in   (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+[ 34] ttnn.add()
+        in   (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        in   (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+[ 35] ttnn.rms_norm()
+        in   (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        args {'epsilon': '1e-05'}
+[ 36] ttnn.linear()
+        in   (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        in   (3072, 16384) BFLOAT4_B TILE dram/interleaved
+        out  (1, 1, 32, 16384) BFLOAT16 TILE dram/interleaved
+        args {'dtype': 'BFLOAT16'}
+[ 37] ttnn.slice()
+        in   (1, 1, 32, 16384) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 8192) BFLOAT16 TILE dram/interleaved
+[ 38] ttnn.slice()
+        in   (1, 1, 32, 16384) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 8192) BFLOAT16 TILE dram/interleaved
+[ 39] ttnn.multiply()
+        in   (1, 1, 32, 8192) BFLOAT16 TILE dram/interleaved
+        in   (1, 1, 32, 8192) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 8192) BFLOAT16 TILE dram/interleaved
+[ 40] ttnn.to_memory_config()
+        in   (1, 1, 32, 8192) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 8192) BFLOAT16 TILE l1/width_sharded, shard=(32, 512), cores=16
+[ 41] ttnn.linear()
+        in   (1, 1, 32, 8192) BFLOAT16 TILE l1/width_sharded, shard=(32, 512), cores=16
+        in   (8192, 3072) BFLOAT4_B TILE dram/width_sharded, shard=(8192, 384), cores=8
+        out  (1, 1, 32, 3072) BFLOAT16 TILE l1/width_sharded, shard=(32, 192), cores=16
+        args {'dtype': 'BFLOAT16', 'memory_config': '<memcfg>'}
+[ 42] ttnn.sharded_to_interleaved()
+        in   (1, 1, 32, 3072) BFLOAT16 TILE l1/width_sharded, shard=(32, 192), cores=16
+        out  (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+[ 43] ttnn.add()
+        in   (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        in   (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
+        out  (1, 1, 32, 3072) BFLOAT16 TILE dram/interleaved
