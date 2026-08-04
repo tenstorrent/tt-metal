@@ -913,6 +913,31 @@ void PerfDebugProfiler::stop() {
             log_warning(
                 tt::LogMetal, "[perf-debug profiler] Device {}: DRISC drainer did not acknowledge stop", ctx.chip_id);
         }
+        // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
+        // bandwidth wall from a latency one; sweeps/frames/cycles can.
+        std::vector<uint32_t> res(9, 0);
+        cluster.read_core(
+            res.data(),
+            res.size() * sizeof(uint32_t),
+            drisc,
+            ctx.drisc_l1_noc + (ctx.results_addr - ctx.drisc_l1_base));
+        const uint64_t cyc = (static_cast<uint64_t>(res[1]) << 32) | res[0];
+        const uint64_t dw = (static_cast<uint64_t>(res[3]) << 32) | res[2];
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] DRISC: {} sweeps, {} frames, {} words, {} pages, max run {}/{}, "
+            "overflows {}, {} Mcyc ({:.2f} us/frame, {:.1f} cores/sweep)",
+            res[4],
+            res[6],
+            dw,
+            res[5],
+            res[7],
+            kernel_profiler::PROFILER_L1_VECTOR_SIZE,
+            res[8],
+            cyc / 1000000,
+            res[6] ? (cyc / 1.35e3) / res[6] : 0.0,
+            res[4] ? static_cast<double>(res[6]) / res[4] : 0.0);
+
         // Release it to restore the NIU. It cannot do that until we say so: NOC2AXI forwards inbound
         // DRAM-range addresses to GDDR, so the flip takes this L1 out of the host's view.
         uint32_t two = 2;
