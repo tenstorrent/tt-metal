@@ -140,6 +140,24 @@ SUPPORTED = {
 
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # Refinement 2: a ROW_MAJOR shard that cuts the WIDTH axis.
+    #
+    # eval.sharding rounds an RM shard edge to (1 stick x L1_align/elem_size
+    # elements) -- 8 elements for bfloat16 -- and a shard may not hold a partial
+    # page, so the tensor's PAGE becomes the shard's row SEGMENT rather than the
+    # row.  Two consequences, both structural for this op's blocking model:
+    #   * no core holds a whole width TILE (a segment is 8 or 32 elements), so the
+    #     tile-granular cross-core width combine cannot be built on the placement;
+    #   * the row-split fallback cannot reach a row either -- a stick read keyed on
+    #     the page index lands inside one segment and would run off the end of the
+    #     shard (measured: PCC 0.005, plus out-of-bounds L1 traffic).
+    # Reading a row back segment-by-segment IS expressible, but at
+    # ceil(W/shard_w) NoC transactions per stick (96 for (1,1,224,3072), 8 for
+    # (99991,64) x 100k sticks) it is not a viable dataflow.  See Refinement 2b.
+    # HEIGHT_SHARDED is unaffected: its shard spans the full row, so the page IS
+    # the stick and the accessor addresses rows exactly (measured PCC 1.000000).
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED},
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED},
 ]
 
 # Refinement 1 added NO exclusions.  Two corners were expected to need one and

@@ -164,10 +164,12 @@ void kernel_main() {
             if constexpr (G_RM) {
                 // gamma is a single stick; row 0 of the staged tile-row is the
                 // only row BroadcastDim::Row reads.
-                const uint32_t off = first_wt * TILE_DIM * GAMMA_ELEM_BYTES;
+                constexpr uint32_t G_TILE_COL_BYTES = TILE_DIM * GAMMA_ELEM_BYTES;
+                const uint32_t off = first_wt * G_TILE_COL_BYTES;
                 const uint32_t total = W_ELEMS * GAMMA_ELEM_BYTES;
                 const uint32_t remaining = (off < total) ? (total - off) : 0;
                 const uint32_t row_bytes = (remaining < G_CHUNK_ROW_BYTES) ? remaining : G_CHUNK_ROW_BYTES;
+                uint32_t pushed = 0;
                 if (row_bytes != 0) {
                     dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_sticks>(
                         g_acc,
@@ -175,9 +177,18 @@ void kernel_main() {
                         row_bytes,
                         /*start_page=*/0,
                         /*byte_offset_within_page=*/off);
-                } else {  // pad-only slice: keep the CB balanced with an empty push
-                    cb_reserve_back(cb_gamma_sticks, WT_CHUNK);
-                    cb_push_back(cb_gamma_sticks, WT_CHUNK);
+                    // The helper pushes ceil(row_bytes / tile-column) pages, NOT
+                    // WT_CHUNK (tilize_helpers_dataflow.inl width_in_tiles).
+                    pushed = (row_bytes + G_TILE_COL_BYTES - 1) / G_TILE_COL_BYTES;
+                }
+                if (pushed < WT_CHUNK) {
+                    // A RAGGED width shard's last core owns fewer real tile columns
+                    // than WT_CHUNK.  tilize<WT_CHUNK> waits for the full block, so
+                    // top the push up: those pages tilize into the PAD tile columns,
+                    // whose product lands in the output shard's pad region and is
+                    // never written back (the writer skips wt >= WT).
+                    cb_reserve_back(cb_gamma_sticks, WT_CHUNK - pushed);
+                    cb_push_back(cb_gamma_sticks, WT_CHUNK - pushed);
                 }
             } else {
                 const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);

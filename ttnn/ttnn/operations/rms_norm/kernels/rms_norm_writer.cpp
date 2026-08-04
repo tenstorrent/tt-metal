@@ -140,11 +140,17 @@ void kernel_main() {
                     get_noc_addr(get_write_ptr(cb_partials_gathered) + my_slot * rows * stat_bytes),
                     rows * stat_bytes);
                 noc_async_write_barrier();
-                gather_sem.up(1);
+                // NO self-signal here.  Semaphore::up(value) is a NON-ATOMIC local
+                // read-modify-write (noc_semaphore.h: "multiple cores incrementing
+                // simultaneously may lead to lost updates"), so a local bump on the
+                // root would race the members' remote atomic incs and silently drop
+                // one -- a hang in whichever group lost the race.  The root's own
+                // slot is written synchronously above, so it only ever waits for the
+                // OTHER GROUP_SIZE - 1 members.
                 cb_pop_front(cb_sum_handoff, rows);
 
                 // 2. publish the gathered block once every member has landed.
-                arrivals += GROUP_SIZE;
+                arrivals += GROUP_SIZE - 1;
                 gather_sem.wait_min(arrivals);
                 cb_push_back(cb_partials_gathered, GROUP_SIZE * rows);
 

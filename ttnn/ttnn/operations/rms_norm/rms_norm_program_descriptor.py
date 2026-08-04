@@ -229,6 +229,25 @@ TILE_DIM = 32
 # up.  Everything about block size derives from the resulting byte budget.
 L1_SAFETY_FRACTION = 0.85
 
+# Bytes between the worker-L1 UNRESERVED base and the first circular-buffer
+# address (kernel binaries / launch messages / semaphores live in between).
+# get_max_worker_l1_unreserved_size() does NOT subtract it, and metal's own check
+# is absolute: `static circular buffer region ends` must stay below the LOWEST L1
+# buffer address.  Without an L1-resident tensor there is no such buffer and the
+# term is irrelevant (the CB arena may run to the top of L1) -- which is why the
+# solve only subtracts it when a shard is resident, keeping every interleaved
+# build BYTE-IDENTICAL to Phase 0.  With one, L1_SAFETY_FRACTION alone is a
+# PROPORTIONAL margin and cannot cover a fixed offset: a shard pair holding
+# ~1.38 MB of the 1.53 MB leaves 52 kB of real headroom while 0.85 of the
+# nominal remainder claims 105 kB, and the program then fails to launch.
+#
+# MEASURED on blackhole p150b (from the clash message's own numbers: buffer at
+# 163840 with the CB region ending at 179072 for a 67584-byte CB set, so the
+# arena base is 111488 while the unreserved base is 40832).  Over-reserving here
+# only costs a little block size; under-reserving is a hard launch failure, so
+# round up rather than down on a new part.
+L1_CB_ARENA_BASE_RESERVE = 70656
+
 # Depth of the ROW_MAJOR stick staging CBs (reader <-> tilize overlap).
 CB_RM_STAGE_DEPTH = 2
 
@@ -785,8 +804,13 @@ def create_program_descriptor(
         """
         wt_core = plan.wt_per_core
         # The resident shards share L1 with the CB arena, so they are budget the
-        # CBs may not spend (_shard_l1_bytes).
-        budget = int((ttnn.get_max_worker_l1_unreserved_size() - plan.l1_reserved) * L1_SAFETY_FRACTION)
+        # CBs may not spend (_shard_l1_bytes) -- and once ANY L1 buffer exists the
+        # CB region's absolute ceiling is that buffer's address, so the arena's
+        # fixed base offset has to come off too (L1_CB_ARENA_BASE_RESERVE).
+        avail = ttnn.get_max_worker_l1_unreserved_size()
+        if plan.l1_reserved:
+            avail -= plan.l1_reserved + L1_CB_ARENA_BASE_RESERVE
+        budget = int(max(0, avail) * L1_SAFETY_FRACTION)
         max_rows = max((a[2] for a in plan.assignment), default=1) or 1
         # A CB backed on the shard costs ZERO arena bytes (it aliases the tensor's
         # own L1), so its depth term drops out of the block multiplier -- and with
@@ -860,12 +884,15 @@ def create_program_descriptor(
     # kernels from the NUM_W_CHUNKS CT arg -- one source of truth, so it is
     # deliberately NOT passed as a second flag.
 
-    # ---- reduce datapath (D7) ---------------------------------------------
-    # WT_CHUNK is the reduce-dim tile count of ONE reduce() call, so it -- not Wt
-    # -- is what the crossover is measured against.  AccumulateViaAdd's cross-chunk
-    # Accumulate indexes a resident block, hence BulkWaitBulkPop only: the two
-    # knobs are coupled here (one place), and the compute kernel static_asserts it.
-    reduce_acc_via_add = REDUCE_BULK == 1 and wt_chunk >= REDUCE_ACC_VIA_ADD_MIN_WT
+    # ---- reduce datapath (D7, refined by D8) ------------------------------
+    # The crossover is measured against THIS CORE'S WHOLE reduce dim
+    # (`wt_per_core`), not against WT_CHUNK.  In the RESIDENT regime the two are
+    # equal, so this is byte-identical to Refinement 1b; they differ only when L1
+    # forces a chunked width, and there it is the total that decides -- see D8.
+    # AccumulateViaAdd's cross-chunk Accumulate indexes a resident block, hence
+    # BulkWaitBulkPop only: the two knobs are coupled here (one place), and the
+    # compute kernel static_asserts it.
+    reduce_acc_via_add = REDUCE_BULK == 1 and wt_per_core >= REDUCE_ACC_VIA_ADD_MIN_WT
     # Tiles the reader actually pushes into cb_scaler, and the compute pops.
     # AccumulateViaAdd takes ONE: the 0/1 mask (partial W) or an unused 1.0 scaler.
     # ReduceTile takes the [full, partial] pair when W is not tile-aligned.
