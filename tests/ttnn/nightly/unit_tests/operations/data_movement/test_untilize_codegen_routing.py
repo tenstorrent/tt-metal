@@ -11,7 +11,6 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_equal
 
 _NATIVE = "native"  # forced-native golden leg
@@ -348,16 +347,20 @@ _EXECUTION_CONTROLS = [
 ]
 
 # The native-golden leg needs native to actually run the control. `ttnn.untilize` with
-# `sub_core_grids` hangs on blackhole for any grid or shape tried, including the range
+# `sub_core_grids` hangs on **both** archs for any grid or shape tried, including the range
 # test_to_layout.py::test_to_layout_subcore uses -- the native sub-core-grids factory has no direct
 # test coverage anywhere and its only model caller is wormhole galaxy. Unrelated to routing: it
 # reproduces under implementation="native", which never reaches the codegen gate.
+#
+# The hang is below the pytest-timeout signal boundary, so an arch-conditional skip does not fail
+# fast on the arch it does not cover -- it burns the whole job timeout in `ttnn.to_torch` waiting on
+# a program that never completes. Hence unconditional: there is no arch where this passes.
 _NATIVE_GOLDEN_CONTROLS = [
     pytest.param({"use_multicore": False}, "use_multicore_false"),
     pytest.param(
         {"sub_core_grids": _SUB_CORE_GRIDS},
         "sub_core_grids",
-        marks=skip_for_blackhole("native ttnn.untilize(sub_core_grids=...) hangs on blackhole"),
+        marks=pytest.mark.skip(reason="native ttnn.untilize(sub_core_grids=...) hangs on wormhole_b0 and blackhole"),
     ),
 ]
 
