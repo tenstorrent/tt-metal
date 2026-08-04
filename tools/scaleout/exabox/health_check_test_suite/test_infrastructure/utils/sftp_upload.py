@@ -4,11 +4,16 @@
 
 """Upload the health-check CSV results to the Data-team SFTP endpoint.
 
-The private key is resolved from (in order): the ``SFTP_PRIVATE_KEY_B64`` env var
-(base64-encoded PEM/OpenSSH key), the ``SFTP_PRIVATE_KEY`` env var (raw key text),
-then ``{log_dir}/.sftp_upload_key`` / ``~/.ssh/sftp_upload_key`` on disk. The env
-paths let the containerized flow inject the key via ``docker --env-file`` without
-writing it to a bind-mounted (world-readable) directory.
+Private-key resolution is the SFTP half of the launch-mode divergence:
+
+    orchestration (k8s)  the ``SFTP_KEY_PATH`` env var points at a mounted Secret
+                         file, falling back to ``~/.ssh/sftp_upload_key``.
+    slurm (default)      ``SFTP_PRIVATE_KEY_B64`` (base64 PEM/OpenSSH) or
+                         ``SFTP_PRIVATE_KEY`` (raw text) env vars, then
+                         ``{log_dir}/.sftp_upload_key`` / ``~/.ssh/sftp_upload_key``.
+                         The env paths let the Slurm flow inject the key via
+                         ``docker --env-file`` without writing it to a
+                         bind-mounted (world-readable) directory.
 """
 
 from __future__ import annotations
@@ -57,9 +62,25 @@ def _pkey_from_file(path: Path):
     return None
 
 
-def _load_sftp_pkey(log_dir: str):
-    """Resolve the SFTP private key from env (b64/raw) or disk. Returns a paramiko
-    PKey or None if no key could be loaded."""
+def _sftp_pkey_orchestration(log_dir: str):
+    """k8s: key comes from the SFTP_KEY_PATH mounted Secret file."""
+    key_env = os.environ.get("SFTP_KEY_PATH")
+    if key_env:
+        path = Path(key_env)
+        if path.is_file():
+            pkey = _pkey_from_file(path)
+            if pkey is None:
+                log.warning("SFTP key %s could not be parsed as RSA/Ed25519", path)
+            return pkey
+        log.warning("SFTP_KEY_PATH %s does not exist", key_env)
+    fallback = Path.home() / ".ssh" / "sftp_upload_key"
+    if fallback.is_file():
+        return _pkey_from_file(fallback)
+    return None
+
+
+def _sftp_pkey_slurm(log_dir: str):
+    """slurm: env (b64/raw) then a key file in log_dir / ~/.ssh."""
     b64 = os.environ.get("SFTP_PRIVATE_KEY_B64")
     raw = os.environ.get("SFTP_PRIVATE_KEY")
     key_text = None
@@ -86,16 +107,27 @@ def _load_sftp_pkey(log_dir: str):
     return pkey
 
 
+def _load_sftp_pkey(log_dir: str, launch_mode: str = "slurm"):
+    """Resolve the SFTP private key for the launch mode. Returns a paramiko PKey
+    or None if no key could be loaded."""
+    if launch_mode == "orchestration":
+        return _sftp_pkey_orchestration(log_dir)
+    return _sftp_pkey_slurm(log_dir)
+
+
 def upload_csv_sftp(
-    csv_dir: str, sftp_user: str, sftp_host: str, log_dir: str = ""
+    csv_dir: str,
+    sftp_user: str,
+    sftp_host: str,
+    log_dir: str = "",
+    launch_mode: str = "slurm",
 ) -> None:
     """Upload all CSV files in csv_dir to the SFTP server."""
-    pkey = _load_sftp_pkey(log_dir)
+    pkey = _load_sftp_pkey(log_dir, launch_mode)
     if pkey is None:
         log.warning(
-            "No SFTP private key found (env SFTP_PRIVATE_KEY_B64/SFTP_PRIVATE_KEY "
-            "or %s/.sftp_upload_key or ~/.ssh/sftp_upload_key); skipping CSV upload",
-            log_dir or "<log_dir>",
+            "No SFTP private key found (launch_mode=%s); skipping CSV upload",
+            launch_mode,
         )
         return
 

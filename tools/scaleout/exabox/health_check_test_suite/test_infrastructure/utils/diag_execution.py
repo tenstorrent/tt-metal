@@ -2,16 +2,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Execute the diag suite (``diag_runner.py``) as a subprocess.
+"""Execute the diag suite as a subprocess.
 
 This replaces the previous docker-in-docker model: when the whole health check
 runs inside the tt-metal image, the diag suite is a sibling script we invoke
 directly rather than a nested container.
 
-Subprocess (rather than importing ``diag_runner.run_diag`` in-process) is used so
-we retain a hard wall-clock budget: the diag suite drives destructive resets and
-long gtests that can hang, and a subprocess lets us kill the whole process group
-(gtest / tt-smi children included) when the timeout fires.
+The command differs by launch mode (this is one of the two spots that diverge
+between the bare-Slurm and the Kubernetes/orchestration deployments):
+
+    slurm          -> ``python3 diag_runner.py --tier <tier> --output <report>``
+    orchestration  -> ``bash run_diag.sh <tier> --output <report>``
+
+Both share the same subprocess core: we keep a hard wall-clock budget and kill
+the whole process group (gtest / tt-smi children included) when the timeout
+fires, since the diag suite drives destructive resets and long gtests that can
+hang.
 """
 
 from __future__ import annotations
@@ -36,6 +42,11 @@ def default_diag_runner() -> Path:
     return Path(__file__).resolve().parents[2] / "diag_runner.py"
 
 
+def default_run_diag_script() -> Path:
+    """Locate run_diag.sh (the bash wrapper used in orchestration mode)."""
+    return Path(__file__).resolve().parents[2] / "run_diag.sh"
+
+
 def _kill_process_group(proc: subprocess.Popen) -> None:
     """SIGTERM then SIGKILL the child's process group (gtest / tt-smi children)."""
     try:
@@ -54,40 +65,8 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
             continue
 
 
-def run_diag_subprocess(
-    tier: str,
-    timeout_seconds: int,
-    results_dir: Path,
-    *,
-    diag_runner: Path | None = None,
-    tt_metal_path: Path | None = None,
-    extra_args: list[str] | None = None,
-) -> tuple[int, str, Path | None]:
-    """Run the diag suite, writing its JSON report + per-test logs into results_dir.
-
-    Invokes ``diag_runner.py --tier <tier> --output <results_dir>/diag_report.json``,
-    which also drops per-test gtest logs under ``<results_dir>/logs/``. The report
-    and logs land straight on the host filesystem (no copy-out step), so partial
-    results survive a timeout/kill.
-
-    Returns ``(exit_code, combined_console_output, results_dir | None)``. The diag
-    tool exits 1 on FAIL and 0 on PASS/WARN; that status is propagated unchanged.
-    A timeout is reported as exit code 137 (matching the previous SIGKILL model).
-    """
-    runner = Path(diag_runner) if diag_runner else default_diag_runner()
-    if not runner.is_file():
-        log.error("diag runner not found: %s", runner)
-        return 1, f"diag runner not found: {runner}", None
-
-    results_dir.mkdir(parents=True, exist_ok=True)
-    report_path = results_dir / "diag_report.json"
-
-    cmd = [sys.executable, str(runner), "--tier", tier, "--output", str(report_path)]
-    if tt_metal_path is not None:
-        cmd += ["--tt-metal-path", str(tt_metal_path)]
-    if extra_args:
-        cmd += list(extra_args)
-
+def _diag_env(tt_metal_path: Path | None) -> dict:
+    """Environment shared by both launch modes."""
     env = os.environ.copy()
     if tt_metal_path is not None:
         env["TT_METAL_HOME"] = str(tt_metal_path)
@@ -98,7 +77,61 @@ def run_diag_subprocess(
     env["PATH"] = os.pathsep.join(
         [env.get("PATH", ""), str(Path.home() / ".local" / "bin"), "/usr/local/bin"]
     )
+    return env
 
+
+def _build_slurm_command(
+    tier: str,
+    report_path: Path,
+    tt_metal_path: Path | None,
+    diag_runner: Path | None,
+    extra_args: list[str] | None,
+) -> tuple[list[str] | None, str]:
+    """Bare-Slurm: invoke diag_runner.py directly with the current interpreter."""
+    runner = Path(diag_runner) if diag_runner else default_diag_runner()
+    if not runner.is_file():
+        return None, f"diag runner not found: {runner}"
+    cmd = [sys.executable, str(runner), "--tier", tier, "--output", str(report_path)]
+    if tt_metal_path is not None:
+        cmd += ["--tt-metal-path", str(tt_metal_path)]
+    if extra_args:
+        cmd += list(extra_args)
+    return cmd, ""
+
+
+def _build_orchestration_command(
+    tier: str,
+    report_path: Path,
+    tt_metal_path: Path | None,
+    extra_args: list[str] | None,
+) -> tuple[list[str] | None, str]:
+    """Orchestration (k8s): invoke the sibling run_diag.sh bash wrapper.
+
+    run_diag.sh takes the tier positionally and forwards the rest to
+    diag_runner.py, so ``bash run_diag.sh <tier> --output <report>`` is
+    equivalent to the Slurm command but goes through the shell wrapper the k8s
+    worker has always used.
+    """
+    script = default_run_diag_script()
+    if not script.is_file():
+        return None, f"diag test script not found: {script}"
+    cmd = ["bash", str(script), tier, "--output", str(report_path)]
+    if tt_metal_path is not None:
+        cmd += ["--tt-metal-path", str(tt_metal_path)]
+    if extra_args:
+        cmd += list(extra_args)
+    return cmd, ""
+
+
+def _execute(
+    cmd: list[str], env: dict, timeout_seconds: int, results_dir: Path
+) -> tuple[int, str, Path | None]:
+    """Run cmd with a hard timeout, killing the whole process group on expiry.
+
+    Returns ``(exit_code, combined_console_output, results_dir | None)``. The
+    diag tool exits 1 on FAIL and 0 on PASS/WARN; that status is propagated
+    unchanged. A timeout is reported as exit code 137 (SIGKILL).
+    """
     log.info("Running diag suite: %s", " ".join(cmd))
     log.info("Results dir: %s", results_dir)
     log.info("Timeout: %d seconds", timeout_seconds)
@@ -111,8 +144,8 @@ def run_diag_subprocess(
             stderr=subprocess.STDOUT,
             text=True,
             env=env,
-            # New session so the diag suite's gtest/tt-smi children share a process
-            # group we can signal as a unit on timeout.
+            # New session so the diag suite's gtest/tt-smi children share a
+            # process group we can signal as a unit on timeout.
             start_new_session=True,
         )
     except OSError as exc:
@@ -138,3 +171,40 @@ def run_diag_subprocess(
         exit_code = 137
 
     return exit_code, output or "", results_dir
+
+
+def run_diag_subprocess(
+    tier: str,
+    timeout_seconds: int,
+    results_dir: Path,
+    *,
+    launch_mode: str = "slurm",
+    diag_runner: Path | None = None,
+    tt_metal_path: Path | None = None,
+    extra_args: list[str] | None = None,
+) -> tuple[int, str, Path | None]:
+    """Run the diag suite, writing its JSON report + per-test logs into results_dir.
+
+    ``launch_mode`` selects how the diag suite is invoked (``slurm`` runs
+    ``diag_runner.py`` directly; ``orchestration`` runs the sibling ``run_diag.sh``
+    bash wrapper). Both write the report to ``<results_dir>/diag_report.json`` and
+    drop per-test gtest logs under ``<results_dir>/logs/`` straight on the host
+    filesystem, so partial results survive a timeout/kill.
+    """
+    results_dir.mkdir(parents=True, exist_ok=True)
+    report_path = results_dir / "diag_report.json"
+
+    if launch_mode == "orchestration":
+        cmd, err = _build_orchestration_command(
+            tier, report_path, tt_metal_path, extra_args
+        )
+    else:
+        cmd, err = _build_slurm_command(
+            tier, report_path, tt_metal_path, diag_runner, extra_args
+        )
+
+    if cmd is None:
+        log.error("%s", err)
+        return 1, err, None
+
+    return _execute(cmd, _diag_env(tt_metal_path), timeout_seconds, results_dir)

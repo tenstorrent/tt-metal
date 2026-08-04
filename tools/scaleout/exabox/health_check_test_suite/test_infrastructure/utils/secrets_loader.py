@@ -4,12 +4,17 @@
 
 """Load JIRA/SFTP credentials.
 
-Environment variables take precedence (the containerized flow injects them via
-``docker --env-file``), falling back to KEY=VALUE files in the log directory for
-bare-metal / local invocations:
+Credential loading is one of the two spots that diverge between deployments, so
+it dispatches on ``launch_mode``:
 
-    JIRA_BEARER_TOKEN      <- .jira-creds
-    SFTP_USER / SFTP_HOST  <- .sftp-creds
+    orchestration (k8s)  environment variables only (injected from K8s Secrets)
+    slurm (default)      environment variables, falling back to KEY=VALUE files
+                         in the log directory (.jira-creds / .sftp-creds)
+
+Environment variables read in both modes:
+
+    JIRA_BEARER_TOKEN      (slurm fallback: .jira-creds)
+    SFTP_USER / SFTP_HOST  (slurm fallback: .sftp-creds)
 """
 
 from __future__ import annotations
@@ -32,8 +37,14 @@ def _source_env_file(path: Path) -> dict[str, str]:
     return env
 
 
-def load_jira_secrets(log_dir: str) -> str:
-    """Load JIRA bearer token: env JIRA_BEARER_TOKEN, else .jira-creds file."""
+# --- JIRA -----------------------------------------------------------------
+
+
+def _load_jira_orchestration() -> str:
+    return os.environ.get("JIRA_BEARER_TOKEN", "")
+
+
+def _load_jira_slurm(log_dir: str) -> str:
     token = os.environ.get("JIRA_BEARER_TOKEN")
     if token:
         return token
@@ -43,8 +54,21 @@ def load_jira_secrets(log_dir: str) -> str:
     return _source_env_file(creds_file).get("JIRA_BEARER_TOKEN", "")
 
 
-def load_sftp_secrets(log_dir: str) -> tuple[str, str]:
-    """Load SFTP user/host: env SFTP_USER/SFTP_HOST, else .sftp-creds file."""
+def load_jira_secrets(log_dir: str, launch_mode: str = "slurm") -> str:
+    """Load the JIRA bearer token for the given launch mode."""
+    if launch_mode == "orchestration":
+        return _load_jira_orchestration()
+    return _load_jira_slurm(log_dir)
+
+
+# --- SFTP user/host -------------------------------------------------------
+
+
+def _load_sftp_orchestration() -> tuple[str, str]:
+    return os.environ.get("SFTP_USER", ""), os.environ.get("SFTP_HOST", "")
+
+
+def _load_sftp_slurm(log_dir: str) -> tuple[str, str]:
     user = os.environ.get("SFTP_USER")
     host = os.environ.get("SFTP_HOST")
     if user and host:
@@ -55,3 +79,10 @@ def load_sftp_secrets(log_dir: str) -> tuple[str, str]:
         user = user or env.get("SFTP_USER", "")
         host = host or env.get("SFTP_HOST", "")
     return user or "", host or ""
+
+
+def load_sftp_secrets(log_dir: str, launch_mode: str = "slurm") -> tuple[str, str]:
+    """Load the SFTP user/host for the given launch mode."""
+    if launch_mode == "orchestration":
+        return _load_sftp_orchestration()
+    return _load_sftp_slurm(log_dir)

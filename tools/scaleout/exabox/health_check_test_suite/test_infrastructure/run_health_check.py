@@ -61,6 +61,12 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+# Deployment this runner is executing under. The runner is shared across the
+# bare-Slurm (exabox) and Kubernetes (tt-orchestration) health checks; the two
+# spots that genuinely differ — how the diag suite is launched and how the SFTP
+# key is loaded — dispatch on this. Default preserves the Slurm behavior.
+LAUNCH_MODES = ("slurm", "orchestration")
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -71,6 +77,16 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run fabric system health check on a node.")
 
     p.add_argument("node", help="Target node hostname")
+    p.add_argument(
+        "--launch-mode",
+        choices=LAUNCH_MODES,
+        default="slurm",
+        help=(
+            "Deployment mode. 'slurm' (default) runs diag_runner.py directly and "
+            "loads creds from env + files; 'orchestration' (k8s) runs run_diag.sh "
+            "and loads the SFTP key from SFTP_KEY_PATH."
+        ),
+    )
     p.add_argument(
         "--log-dir", required=True, help="Directory for logs and credentials"
     )
@@ -91,7 +107,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--diag-runner",
         default="",
-        help="Path to diag_runner.py (defaults to the sibling health-check suite script).",
+        help="Path to diag_runner.py (slurm mode; defaults to the sibling health-check suite script).",
     )
     p.add_argument(
         "--tt-metal-path",
@@ -232,8 +248,9 @@ def main() -> int:
     log_file = Path(log_dir) / f"{node}-{slurm_job_id}.log"
     timeout_seconds = args.timeout_minutes * 60
 
-    jira_bearer_token = load_jira_secrets(log_dir)
-    sftp_user, sftp_host = load_sftp_secrets(log_dir)
+    launch_mode = args.launch_mode
+    jira_bearer_token = load_jira_secrets(log_dir, launch_mode)
+    sftp_user, sftp_host = load_sftp_secrets(log_dir, launch_mode)
 
     # Collect version info
     versions = collect_version_info()
@@ -264,6 +281,7 @@ def main() -> int:
         tier=args.tier,
         timeout_seconds=timeout_seconds,
         results_dir=results_dir,
+        launch_mode=launch_mode,
         diag_runner=Path(args.diag_runner) if args.diag_runner else None,
         tt_metal_path=Path(args.tt_metal_path) if args.tt_metal_path else None,
     )
@@ -463,7 +481,9 @@ def main() -> int:
     # SFTP upload
     if csv_dir and args.upload_sftp:
         if sftp_user and sftp_host:
-            upload_csv_sftp(csv_dir, sftp_user, sftp_host, log_dir=log_dir)
+            upload_csv_sftp(
+                csv_dir, sftp_user, sftp_host, log_dir=log_dir, launch_mode=launch_mode
+            )
         else:
             log.warning("SFTP credentials not configured, skipping CSV upload")
     elif csv_dir:
