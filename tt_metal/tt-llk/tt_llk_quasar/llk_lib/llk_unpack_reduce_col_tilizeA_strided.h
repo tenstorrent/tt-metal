@@ -95,11 +95,11 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_tiny_tiles_mop_config_(const 
         {
             // Face 0; Src_Reg_Y_Cntr_Incr = 0 resets the counter, so each face starts at row 0 of its own SrcA bank
             TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);
-            TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0 /*Row_Mask_Reg_Sel*/, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
+            TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 1 /*Row_Mask_Reg_Sel*/, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
 
             // Face 1
             TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);
-            TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 1, 0 /*Row_Mask_Reg_Sel*/, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
+            TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 1 /*Row_Mask_Reg_Sel*/, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
         });
 
     std::uint32_t unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
@@ -140,23 +140,24 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_init_(
     if (tensor_shape.total_num_faces() == NUM_FACES)
     {
         LLK_ASSERT(
-            tensor_shape.total_row_dim() == 32 && tensor_shape.total_col_dim() == 32, "Four face unpack reduce col tilizeA strided only supports 32x32 tiles");
+            tensor_shape.total_row_dim() == TILE_R_DIM && tensor_shape.total_col_dim() == TILE_C_DIM,
+            "Four face unpack reduce col tilizeA strided only supports 32x32 tiles");
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_NO_WRITE_RMW, 0);
-        cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_ROW_MASK0_RMW, 0);
         _llk_unpack_reduce_col_tilizeA_strided_mop_config_(buf_desc_id_0, buf_desc_id_1, full_ct_dim, tensor_shape);
     }
     else
     {
         // One strided unpack has to cover a whole face, and both faces of the tile must sit side by side in L1.
         LLK_ASSERT(
-            tensor_shape.face_r_dim <= ckernel::unpack::UNPACR_STRIDE_MAX_ROWS && tensor_shape.num_faces_c_dim == 2,
+            tensor_shape.face_r_dim <= ckernel::unpack::UNPACR_STRIDE_MAX_ROWS && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
+                tensor_shape.total_num_faces() == tensor_shape.num_faces_c_dim,
             "Tiny tile unpack reduce col tilizeA strided only supports Nx32 tiles with N <= 8");
 
         // A strided unpack writes UNPACR_STRIDE_MAX_ROWS rows; leave the rows past the end of the face untouched so
         // that they keep the pool identity the MOP cleared SrcA to instead of data of the next tile row.
-        const std::uint32_t row_mask = (0xFFu << tensor_shape.face_r_dim) & 0xFFu;
+        const std::uint32_t row_mask = (0xFF << tensor_shape.face_r_dim) & 0xFF;
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_NO_WRITE_RMW, 1);
-        cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_ROW_MASK0_RMW, row_mask);
+        cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_ROW_MASK1_RMW, row_mask);
         _llk_unpack_reduce_col_tilizeA_strided_tiny_tiles_mop_config_<POOL_TYPE>(buf_desc_id_0, buf_desc_id_1);
     }
 }
