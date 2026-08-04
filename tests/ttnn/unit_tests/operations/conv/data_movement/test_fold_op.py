@@ -390,7 +390,6 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch_input = torch.randn(act_shape, dtype=torch.bfloat16)
 
     expected = fold_torch(torch_input, stride_h, stride_w)
-    expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
     tt_input = torch2tt_tensor(
         torch_input,
@@ -414,7 +413,6 @@ def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_g
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
         expected = fold_torch(torch_input, stride_h, stride_w, padding=padding)
-        expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
         if core_grid is None:
             # Fit to max cores that divides total elements without padding. In case of padding cases,
