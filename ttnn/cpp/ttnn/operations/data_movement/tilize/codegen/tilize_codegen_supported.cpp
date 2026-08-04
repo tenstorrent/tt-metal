@@ -30,6 +30,16 @@ bool is_supported_dtype(DataType dtype) {
 
 }  // namespace
 
+const char* unsupported_execution_control(const Tile& tile, const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (sub_core_grids.has_value()) {
+        return "sub_core_grids";
+    }
+    if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        return "tile";
+    }
+    return nullptr;
+}
+
 bool supported_by_codegen(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
@@ -88,56 +98,123 @@ bool supported_by_codegen(const TilizeCodegenParams& operation_attributes, const
     return true;
 }
 
-bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    // The dispatch query needs the device's grid and per-core L1. A host tensor has no answer and
-    // no perf question: leave it to the prim's structural TT_FATALs.
-    if (!is_device_tensor(input_tensor)) {
-        return false;
-    }
-    // The arms below are conditions on WHICH builder create_descriptor selects and on the work that
-    // builder hands each core, so they key on the shared dispatch query rather than on shapes.
-    const uint32_t total_ht = operation_attributes.NC * operation_attributes.Ht;
-    // Same grid query the factory's path dispatch uses (64 cores on wormhole_b0).
-    const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
-    const uint32_t grid_cores = grid.x * grid.y;
-    const auto dispatch = tilize_codegen_dispatch(input_tensor.device(), operation_attributes, input_tensor);
+namespace {
 
-    // The column split as a class. Every measured configuration of this path is below parity —
-    // one-tile-per-core splits (max column-block width 1) and the ragged wider ones alike, across
-    // bfloat16/float32/uint32/int32/uint16 and both output placements — so no sub-region of it is
-    // carved out. It buys grid utilization the row split cannot reach, but reader_tilize_block and
-    // compute_tilize take the block width and the sub-block chunking as RUNTIME args so one binary
-    // covers a ragged split: the inner stick loop's transfer size and trip count are not constants,
-    // which is the specialization the path's per-core narrowness relies on to pay for its extra
-    // per-core setup. Forced implementation=codegen still runs the path.
-    if (dispatch.path == TilizeCodegenPath::Column) {
+// One measured-slow configuration, keyed on the normalized cache-key attributes. NC/Ht/Wt rather
+// than the logical shape because that is what every builder's split and CB plan reads: shapes with
+// the same tile geometry ([1, 4, 96, 32] and [4, 96, 32]) produce the same program.
+struct DemotedCase {
+    uint32_t nc;
+    uint32_t ht;
+    uint32_t wt;
+    DataType dtype;
+    BufferType output_buffer_type;
+};
+
+// Ungeneralized: no mechanism explains these, so each row is an exact match rather than a
+// condition. A predicate is not offered because the measurements separate identical tile
+// geometries by output placement alone — (NC=40, Ht=2, Wt=2) and (NC=24, Ht=3, Wt=2) are slow in
+// L1 and above parity in DRAM, (NC=6, Ht=7, Wt=5) the other way round — and both the row and the
+// column split carry rows here as well as above-parity geometries, so any condition over geometry
+// or over the dispatched path would have to contradict a measured case. Comments name the ledger
+// shape each row came from.
+//
+// The Wt >= 2 rows are the class the upstream `uses_2d_column_path` change moved onto the 2D
+// column split by dropping its `Wt <= 2` bail. Being on that split is not on its own a demotion:
+// the geometries whose column blocks stay wide enough to overlap measure at or above parity and
+// are deliberately absent — (NC=10, Ht=2, Wt=2) [1, 10, 64, 64], (NC=28, Ht=1, Wt=2)
+// [4, 7, 32, 64], (NC=40, Ht=2, Wt=2) in DRAM [5, 8, 64, 64], (NC=24, Ht=3, Wt=2) in DRAM
+// [6, 4, 96, 64] and (NC=6, Ht=7, Wt=5) in L1 [6, 224, 160] all cleared the gate on the ported
+// kernel. That is why this stays an enumeration rather than a `Wt == 2 && max_tpc == 1`
+// predicate: such a predicate would demote every one of them too.
+constexpr DemotedCase kDemotedCases[] = {
+    {1, 1, 2, DataType::UINT16, BufferType::DRAM},     // [1, 32, 64] / [32, 64]
+    {4, 3, 1, DataType::BFLOAT16, BufferType::DRAM},   // [1, 4, 96, 32]
+    {4, 3, 1, DataType::BFLOAT16, BufferType::L1},     // [1, 4, 96, 32]
+    {2, 3, 1, DataType::INT32, BufferType::DRAM},      // [2, 1, 96, 32]
+    {2, 3, 1, DataType::UINT16, BufferType::DRAM},     // [2, 1, 96, 32]
+    {2, 3, 1, DataType::UINT32, BufferType::DRAM},     // [2, 1, 96, 32]
+    {2, 3, 1, DataType::INT32, BufferType::L1},        // [2, 1, 96, 32]
+    {2, 3, 1, DataType::UINT16, BufferType::L1},       // [2, 1, 96, 32]
+    {2, 3, 1, DataType::UINT32, BufferType::L1},       // [2, 1, 96, 32]
+    {24, 2, 3, DataType::BFLOAT16, BufferType::DRAM},  // [2, 12, 64, 96]
+    {24, 2, 3, DataType::BFLOAT16, BufferType::L1},    // [2, 12, 64, 96]
+    {2, 1, 1, DataType::INT32, BufferType::DRAM},      // [2, 32, 32]
+    {2, 1, 1, DataType::UINT16, BufferType::DRAM},     // [2, 32, 32]
+    {2, 1, 1, DataType::UINT32, BufferType::DRAM},     // [2, 32, 32]
+    {2, 1, 1, DataType::INT32, BufferType::L1},        // [2, 32, 32]
+    {2, 1, 1, DataType::UINT16, BufferType::L1},       // [2, 32, 32]
+    {2, 1, 1, DataType::UINT32, BufferType::L1},       // [2, 32, 32]
+    {2, 3, 1, DataType::FLOAT32, BufferType::DRAM},    // [2, 96, 32]
+    {2, 3, 1, DataType::FLOAT32, BufferType::L1},      // [2, 96, 32]
+    {1, 7, 1, DataType::BFLOAT16, BufferType::DRAM},   // [224, 32]
+    {1, 7, 1, DataType::BFLOAT16, BufferType::L1},     // [224, 32]
+    {6, 4, 1, DataType::FLOAT32, BufferType::DRAM},    // [3, 2, 128, 32]
+    {6, 4, 1, DataType::FLOAT32, BufferType::L1},      // [3, 2, 128, 32]
+    {6, 2, 1, DataType::FLOAT32, BufferType::DRAM},    // [3, 2, 64, 32]
+    {6, 2, 1, DataType::FLOAT32, BufferType::L1},      // [3, 2, 64, 32]
+    {6, 3, 1, DataType::FLOAT32, BufferType::DRAM},    // [3, 2, 96, 32]
+    {6, 3, 1, DataType::FLOAT32, BufferType::L1},      // [3, 2, 96, 32]
+    {21, 2, 3, DataType::BFLOAT16, BufferType::DRAM},  // [3, 7, 64, 96]
+    {21, 2, 3, DataType::BFLOAT16, BufferType::L1},    // [3, 7, 64, 96]
+    {24, 3, 1, DataType::BFLOAT16, BufferType::DRAM},  // [3, 8, 96, 32] / [4, 6, 96, 32]
+    {24, 3, 1, DataType::BFLOAT16, BufferType::L1},    // [3, 8, 96, 32] / [4, 6, 96, 32]
+    {3, 3, 1, DataType::FLOAT32, BufferType::DRAM},    // [3, 96, 32]
+    {3, 3, 1, DataType::FLOAT32, BufferType::L1},      // [3, 96, 32]
+    {1, 1, 1, DataType::INT32, BufferType::DRAM},      // [32, 32]
+    {1, 1, 1, DataType::UINT16, BufferType::DRAM},     // [32, 32]
+    {1, 1, 1, DataType::UINT32, BufferType::DRAM},     // [32, 32]
+    {1, 1, 1, DataType::INT32, BufferType::L1},        // [32, 32]
+    {1, 1, 1, DataType::UINT16, BufferType::L1},       // [32, 32]
+    {1, 1, 1, DataType::UINT32, BufferType::L1},       // [32, 32]
+    {48, 3, 3, DataType::BFLOAT16, BufferType::DRAM},  // [4, 12, 96, 96]
+    {48, 3, 3, DataType::BFLOAT16, BufferType::L1},    // [4, 12, 96, 96]
+    {36, 2, 1, DataType::BFLOAT16, BufferType::DRAM},  // [4, 9, 64, 32]
+    {36, 2, 1, DataType::BFLOAT16, BufferType::L1},    // [4, 9, 64, 32]
+    {5, 4, 1, DataType::BFLOAT16, BufferType::DRAM},   // [5, 128, 32]
+    {5, 4, 1, DataType::BFLOAT16, BufferType::L1},     // [5, 128, 32]
+    {15, 2, 1, DataType::BFLOAT16, BufferType::DRAM},  // [5, 3, 64, 32]
+    {15, 2, 1, DataType::BFLOAT16, BufferType::L1},    // [5, 3, 64, 32]
+    {40, 2, 2, DataType::BFLOAT16, BufferType::L1},    // [5, 8, 64, 64] (DRAM twin is above parity)
+    {60, 1, 2, DataType::BFLOAT16, BufferType::DRAM},  // [6, 10, 32, 64]
+    {60, 1, 2, DataType::BFLOAT16, BufferType::L1},    // [6, 10, 32, 64]
+    {6, 7, 5, DataType::BFLOAT16, BufferType::DRAM},   // [6, 224, 160] (L1 twin is above parity)
+    {24, 3, 2, DataType::BFLOAT16, BufferType::L1},    // [6, 4, 96, 64] (DRAM twin is above parity)
+    {1, 2, 1, DataType::BFLOAT16, BufferType::DRAM},   // [64, 32]
+    {1, 2, 1, DataType::INT32, BufferType::DRAM},      // [64, 32]
+    {1, 2, 1, DataType::UINT16, BufferType::DRAM},     // [64, 32]
+    {1, 2, 1, DataType::UINT32, BufferType::DRAM},     // [64, 32]
+    {1, 2, 1, DataType::BFLOAT16, BufferType::L1},     // [64, 32]
+    {1, 2, 1, DataType::INT32, BufferType::L1},        // [64, 32]
+    {1, 2, 1, DataType::UINT16, BufferType::L1},       // [64, 32]
+    {1, 2, 1, DataType::UINT32, BufferType::L1},       // [64, 32]
+    {9, 4, 1, DataType::BFLOAT16, BufferType::DRAM},   // [9, 128, 32]
+    {9, 4, 1, DataType::BFLOAT16, BufferType::L1},     // [9, 128, 32]
+    {9, 5, 3, DataType::BFLOAT16, BufferType::DRAM},   // [9, 160, 96]
+    {9, 5, 3, DataType::BFLOAT16, BufferType::L1},     // [9, 160, 96]
+};
+
+}  // namespace
+
+bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs&) {
+    // A caller-forced single-core route. tilize_codegen_dispatch's RowSingleCore condition, asked
+    // directly so this needs no device: use_multicore=false / use_low_perf leave one worker, where
+    // codegen's pipelining has nothing to overlap, and native has a route built for that request.
+    // Outside the swept space (no sweep vector varies either flag), so no ledger entry arbitrates
+    // it — the demotion rests on the absence of parallelism, not on a measurement.
+    if (!operation_attributes.use_multicore || operation_attributes.use_low_perf) {
         return true;
     }
 
-    // A caller-forced single-core route (use_multicore=false / use_low_perf) has no parallelism for
-    // codegen's pipeline to exploit, and native has a factory built for exactly that request.
-    if (dispatch.path == TilizeCodegenPath::RowSingleCore) {
-        return true;
+    // supported_by_codegen has already rejected a dtype-cast call, so input_dtype is the case's
+    // dtype; output placement is the axis the ledger varies (vector_map's memory_config kwarg).
+    for (const auto& c : kDemotedCases) {
+        if (c.nc == operation_attributes.NC && c.ht == operation_attributes.Ht && c.wt == operation_attributes.Wt &&
+            c.dtype == operation_attributes.input_dtype &&
+            c.output_buffer_type == operation_attributes.output_mem_config.buffer_type()) {
+            return true;
+        }
     }
-
-    // The row path unless it fills the grid with exactly one tile-row per core. build_row is a
-    // transliteration of native's TilizeMultiCoreDefaultProgramFactory — the same 1-D split over
-    // NC*Ht tile-rows, the same TILE_H-stick reader loop, the same per-tile compute — so it has no
-    // structural advantage to trade against its heavier per-core setup. Its two edges over native
-    // are a double-buffered input CB and the batched writer, and both need one full tile-row per
-    // core on every core to pay off: with total_Ht > grid_cores a core owns several tile-rows,
-    // which forces write_batch back to 1 (writer_tilize_interleaved's batched branch mis-orders
-    // rows), and with total_Ht < grid_cores the split leaves cores idle that the column split was
-    // unable to recruit (grid_cores / total_Ht < 2, or Wt == 1).
-    //
-    // This arm carries the bulk of the demoted ledger. Its boundary position rests on a single
-    // measured row-path configuration above parity (total_Ht == grid_cores) rather than on a swept
-    // range.
-    if (dispatch.path == TilizeCodegenPath::Row && total_ht != grid_cores) {
-        return true;
-    }
-
     return false;
 }
 

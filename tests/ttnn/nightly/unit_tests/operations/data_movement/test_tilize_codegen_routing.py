@@ -28,99 +28,9 @@ def _make_input(shape, dtype):
 
 _DEMOTED = [
     (
-        [1, 1, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 1, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 1, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 1, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 1, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 1, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 10, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 10, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 3, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 3, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 32, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
         [1, 32, 64],
         {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
         ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 32, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 32, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 32, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 32, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint32,
         ttnn.ROW_MAJOR_LAYOUT,
     ),
     (
@@ -133,18 +43,6 @@ _DEMOTED = [
         [1, 4, 96, 32],
         {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
         ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 96, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 96, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.float32,
         ttnn.ROW_MAJOR_LAYOUT,
     ),
     (
@@ -173,26 +71,9 @@ _DEMOTED = [
     ),
 ]
 _DEMOTED_IDS = [
-    "[1, 1, 64, 64]|memory_config=dram|int32|row_major",
-    "[1, 1, 64, 64]|memory_config=dram|uint16|row_major",
-    "[1, 1, 64, 64]|memory_config=dram|uint32|row_major",
-    "[1, 1, 64, 64]|memory_config=l1|int32|row_major",
-    "[1, 1, 64, 64]|memory_config=l1|uint16|row_major",
-    "[1, 1, 64, 64]|memory_config=l1|uint32|row_major",
-    "[1, 10, 64, 64]|memory_config=dram|bfloat16|row_major",
-    "[1, 10, 64, 64]|memory_config=l1|bfloat16|row_major",
-    "[1, 3, 64, 64]|memory_config=dram|float32|row_major",
-    "[1, 3, 64, 64]|memory_config=l1|float32|row_major",
-    "[1, 32, 64]|memory_config=dram|int32|row_major",
     "[1, 32, 64]|memory_config=dram|uint16|row_major",
-    "[1, 32, 64]|memory_config=dram|uint32|row_major",
-    "[1, 32, 64]|memory_config=l1|int32|row_major",
-    "[1, 32, 64]|memory_config=l1|uint16|row_major",
-    "[1, 32, 64]|memory_config=l1|uint32|row_major",
     "[1, 4, 96, 32]|memory_config=dram|bfloat16|row_major",
     "[1, 4, 96, 32]|memory_config=l1|bfloat16|row_major",
-    "[1, 96, 64]|memory_config=dram|float32|row_major",
-    "[1, 96, 64]|memory_config=l1|float32|row_major",
     "[2, 1, 96, 32]|memory_config=dram|int32|row_major",
     "[2, 1, 96, 32]|memory_config=dram|uint16|row_major",
     "[2, 1, 96, 32]|memory_config=dram|uint32|row_major",
@@ -319,3 +200,30 @@ def test_tilize_codegen_rejects_sub_core_grids(device, expect_error):
     # Forced codegen must name the control rather than silently widening the placement.
     with expect_error(RuntimeError, "sub_core_grids"):
         ttnn.tilize(xt, **_EXEC_CONTROL_KWARGS, sub_core_grids=sub_core_grids, implementation=_CODEGEN)
+
+
+# A non-default tile is the second control unsupported_execution_control() refuses, and unlike
+# sub_core_grids it changes the RESULT rather than the placement: the codegen prim carries no tile
+# in TilizeCodegenParams and its compute_output_specs hardcodes PageConfig(Layout::TILE) with the
+# default 32x32 tile, so a leg lost here silently returns 32x32-tiled output for a tiny-tile request.
+_TINY_TILE = [16, 32]
+
+
+def test_tilize_codegen_auto_falls_back_on_a_non_default_tile(device):
+    xt = _exec_control_input(device)
+    tile = ttnn.Tile(_TINY_TILE)
+    golden = ttnn.tilize(xt, **_EXEC_CONTROL_KWARGS, tile=tile, implementation=_NATIVE)
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **_EXEC_CONTROL_KWARGS, tile=tile, implementation=_ROUTED)
+    assert_equal(ttnn.to_torch(golden), ttnn.to_torch(out))
+    assert (
+        device.num_program_cache_entries() == entries_before
+    ), "auto routed a non-default-tile call to codegen, which cannot honour it"
+    msg = f"auto returned {list(out.tile.tile_shape)} for a {_TINY_TILE} tile request"
+    assert list(out.tile.tile_shape) == _TINY_TILE, msg
+
+
+def test_tilize_codegen_rejects_a_non_default_tile(device, expect_error):
+    xt = _exec_control_input(device)
+    with expect_error(RuntimeError, "tile"):
+        ttnn.tilize(xt, **_EXEC_CONTROL_KWARGS, tile=ttnn.Tile(_TINY_TILE), implementation=_CODEGEN)

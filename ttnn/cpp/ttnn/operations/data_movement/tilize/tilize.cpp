@@ -125,6 +125,8 @@ ttnn::Tensor tilize(
         fixed_staging_bytes);
 
     const auto selector = ttnn::prim::parse_implementation(implementation);
+    // One answer for both the `auto` gate and the forced-codegen TT_FATAL below.
+    const char* const unsupported_control = ttnn::prim::unsupported_execution_control(tile, sub_core_grids);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         // Workaround for https://github.com/tenstorrent/tt-metal/issues/45331:
@@ -175,13 +177,6 @@ ttnn::Tensor tilize(
             return call_native();
         }
 
-        // The codegen prim assumes the standard 32x32 tile and has no sub_core_grids parameter
-        // (TilizeCodegenParams carries neither); either makes this call outside its scope
-        // regardless of what supported_by_codegen() says about the tensor itself.
-        const bool codegen_eligible_context = !sub_core_grids.has_value() &&
-                                              tile.get_height() == tt::constants::TILE_HEIGHT &&
-                                              tile.get_width() == tt::constants::TILE_WIDTH;
-
         const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
         const auto resolved_output_dtype = output_dtype.value_or(input_tensor.dtype());
         const auto codegen_params =
@@ -189,17 +184,20 @@ ttnn::Tensor tilize(
         const ttnn::prim::TilizeCodegenInputs codegen_inputs{input_tensor};
 
         if (selector == ttnn::prim::ImplementationSelector::Codegen) {
+            // Naming the control, rather than accepting the call and ignoring it: the codegen
+            // builders place work over the full compute grid with the standard 32x32 tile.
             TT_FATAL(
-                codegen_eligible_context,
-                "tilize: implementation=codegen does not support a custom tile shape or sub_core_grids");
+                unsupported_control == nullptr,
+                "tilize: implementation=codegen cannot honour '{}'",
+                unsupported_control != nullptr ? unsupported_control : "");
             TT_FATAL(
                 ttnn::prim::supported_by_codegen(codegen_params, codegen_inputs),
                 "tilize: inputs not supported by the codegen implementation");
             return ttnn::prim::tilize_codegen(input_tensor, codegen_params);
         }
 
-        // Auto: correctness gate && perf gate.
-        if (codegen_eligible_context && ttnn::prim::supported_by_codegen(codegen_params, codegen_inputs) &&
+        // Auto: honourable execution controls, then the correctness gate && the perf gate.
+        if (unsupported_control == nullptr && ttnn::prim::supported_by_codegen(codegen_params, codegen_inputs) &&
             !ttnn::prim::is_demoted(codegen_params, codegen_inputs)) {
             return ttnn::prim::tilize_codegen(input_tensor, codegen_params);
         }
