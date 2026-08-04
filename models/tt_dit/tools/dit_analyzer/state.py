@@ -23,6 +23,10 @@ class SymbolState:
     value_id: str
     producer: Optional[str] = None  # node id, or None for graph inputs
     tainted: bool = False  # produced (transitively) by an op with unknown semantics
+    #: ttnn calls with no shim/analyzer semantics that this value flowed through.
+    #: Non-empty means the metadata here is *assumed*, not derived, so findings
+    #: that depend on it are withheld rather than reported (see :mod:`.rules`).
+    unregistered: Tuple[str, ...] = ()
 
     def region(self, device: int) -> RegionSet:
         return self.regions[device]
@@ -35,6 +39,7 @@ class SymbolState:
             value_id=self.value_id,
             producer=self.producer,
             tainted=self.tainted,
+            unregistered=self.unregistered,
         )
 
 

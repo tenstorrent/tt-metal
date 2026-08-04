@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .ir import ACT, PARAM, Dist, Graph, Mesh, Node, Placement, TensorSymbol
+from .ir import ACT, PARAM, UNREGISTERED_OP, Dist, Graph, Mesh, Node, Placement, TensorSymbol
 
 
 @dataclass
@@ -351,6 +351,32 @@ class GraphBuilder:
         return y
 
     # -- escape hatch ---------------------------------------------------------
+    def unregistered(
+        self,
+        call: str,
+        ins: Sequence[Value],
+        out_shape: Optional[Sequence[int]] = None,
+        label: Optional[str] = None,
+        loc: Optional[str] = None,
+    ) -> Value:
+        """A ttnn call with no semantics, as the dry run records it.
+
+        Its output metadata is *assumed* equal to input 0's, so the analyzer
+        withholds any finding whose proof passes through it rather than reporting
+        a claim built on a guess.
+        """
+        shape = out_shape if out_shape is not None else (ins[0].shape if ins else [1])
+        y = self._symbol(label or "unreg", shape, ins[0].symbol.dtype if ins else "bf16")
+        self._node(
+            UNREGISTERED_OP,
+            ins,
+            [y],
+            {"call": call, "arity": len(ins), "output_metadata": "assumed equal to input 0"},
+            label=label,
+            loc=loc,
+        )
+        return y
+
     def unknown(self, op: str, ins: Sequence[Value], out_shape: Sequence[int], label: Optional[str] = None) -> Value:
         y = self._symbol(label or "opaque", out_shape, ins[0].symbol.dtype if ins else "bf16")
         self._node(op, ins, [y], {}, label=label)

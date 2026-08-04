@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .ir import COMM, COMPUTE, META, Dist, Graph, Mesh, Node, TensorSymbol, derive_value_id
+from .ir import COMM, COMPUTE, META, UNREGISTERED_OP, Dist, Graph, Mesh, Node, TensorSymbol, derive_value_id
 from .region import Box, RegionSet
 from .state import Diagnostic, SymbolState
 
@@ -83,7 +83,25 @@ class ApplyCtx:
             value_id=value_id,
             producer=self.node.id,
             tainted=tainted,
+            unregistered=self.unregistered_inputs(),
         )
+
+    def unregistered_inputs(self) -> Tuple[str, ...]:
+        """Unregistered calls this node's inputs flowed through.
+
+        Propagated for every op automatically, so a spec author cannot forget it:
+        a value derived from assumed metadata carries that fact for as long as it
+        is live, and the rules refuse to build a proof on it.
+        """
+        seen: List[str] = []
+        if self.node.op == UNREGISTERED_OP:
+            seen.append(str(self.node.attrs.get("call", self.node.op)))
+        for sid in self.node.inputs:
+            st = self.state.get(sid)
+            for call in st.unregistered if st else ():
+                if call not in seen:
+                    seen.append(call)
+        return tuple(seen)
 
     def warn(self, code: str, message: str) -> None:
         self.diagnostics.append(Diagnostic(node=self.node.id, code=code, message=message))
@@ -1112,6 +1130,11 @@ register(
 # -----------------------------------------------------------------------------
 def _unknown_apply(c: ApplyCtx) -> None:
     c.warn("UNKNOWN_OP", "no semantics registered for '%s'; assuming it needs and produces everything" % c.node.op)
+    _define_everything(c)
+
+
+def _define_everything(c: ApplyCtx) -> None:
+    """Pessimistic definition: full regions everywhere, fresh value, tainted."""
     for i, sid in enumerate(c.node.outputs):
         ys = c.sym(sid)
         c.define(
@@ -1130,6 +1153,33 @@ def _unknown_demand(c: DemandCtx) -> None:
 
 UNKNOWN = OpSpec("unknown", COMPUTE, _unknown_apply, _unknown_demand, doc="Unregistered op: pessimistic.")
 REGISTRY["unknown"] = UNKNOWN
+
+
+def _unregistered_apply(c: ApplyCtx) -> None:
+    """A call the dry run recorded but nobody wrote semantics for.
+
+    Distinct from ``unknown``: the shim assumed this op's output metadata equals
+    its first input's, so the *shape* here is a guess, not just the dataflow. Both
+    are pessimistic; only this one makes downstream findings unreportable.
+    """
+    call = c.node.attrs.get("call", "?")
+    c.warn(
+        "UNREGISTERED_OP",
+        "'%s' has no op spec; its output metadata is assumed equal to input 0, so findings "
+        "downstream of it are withheld. Register it (see `ditcheck ops --missing`)." % call,
+    )
+    _define_everything(c)
+
+
+register(
+    OpSpec(
+        UNREGISTERED_OP,
+        COMPUTE,
+        _unregistered_apply,
+        _unknown_demand,
+        doc="A ttnn call the dry run saw with no semantics: recorded in full, never reasoned through.",
+    )
+)
 
 
 def describe_registry() -> str:

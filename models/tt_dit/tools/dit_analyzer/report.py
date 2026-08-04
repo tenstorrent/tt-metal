@@ -68,6 +68,11 @@ def render_summary(report: Report, link_bw_gbs: Optional[float] = None) -> str:
         % (", ".join("%s=%d" % (r, per_rule[r]) for r in RULE_ORDER if r in per_rule) or "none"),
         "recoverable traffic:  %s per forward pass, aggregated over participants" % human_bytes(per_forward),
     ]
+    if report.withheld:
+        lines.append(
+            "withheld:             %d finding(s) need op coverage first: %s"
+            % (len(report.withheld), ", ".join(report.missing_ops[:4]))
+        )
     if per_gen:
         lines.append(
             "                      + %s once per generation (step-invariant collectives)" % human_bytes(per_gen)
@@ -93,6 +98,17 @@ def _is_collective(graph: Graph, node_id: str) -> bool:
         return False
 
 
+def _render_source(f: Finding, indent: str = "    ") -> List[str]:
+    """The model call site, with the library frames it went through underneath."""
+    chain = f.source_chain
+    if not chain:
+        return []
+    lines = ["%ssource: %s" % (indent, chain[0])]
+    for frame in chain[1:]:
+        lines.append("%s        via %s" % (indent, frame))
+    return lines
+
+
 def render_finding(
     index: int, f: Finding, graph: Graph, link_bw_gbs: Optional[float] = None, proof: bool = True
 ) -> str:
@@ -100,8 +116,7 @@ def render_finding(
     lines.append("-" * 100)
     lines.append("#%d  [%s/%s]  %s" % (index, f.severity.upper(), f.confidence, f.rule))
     lines.append("    %s" % f.title)
-    if f.loc:
-        lines.append("    source: %s" % f.loc)
+    lines += _render_source(f)
     lines.append("    nodes:  %s" % ", ".join(f.nodes))
     for r in f.reason:
         lines.append("    why:    %s" % r)
@@ -220,12 +235,34 @@ def render_hints(report: Report, top: int = 5) -> str:
     out = ["hints (%d) -- opportunities, not redundancy; no bytes are provably wasted" % len(report.hints)]
     for i, f in enumerate(report.hints[:top], start=1):
         out.append("  h%d [%s/%s] %s" % (i, f.severity, f.confidence, f.title))
-        if f.loc:
-            out.append("      source: %s" % f.loc)
+        out += _render_source(f, indent="      ")
         out.append("      %s" % f.suggestion)
         out.append("      applies %d times per forward" % f.calls)
     if len(report.hints) > top:
         out.append("  ... %d more" % (len(report.hints) - top))
+    return "\n".join(out)
+
+
+def render_withheld(report: Report, top: int = 10) -> str:
+    """What the analysis refused to claim, and what would unlock it.
+
+    A finding here is not a weaker finding: the shim invented the output metadata
+    of some op along its proof, so the claim is unsupported rather than uncertain.
+    Reporting the *registration* instead of the guess is the point.
+    """
+    if not report.withheld:
+        return ""
+    out = [
+        "withheld (%d) -- findings blocked on op coverage, not reported and not downgraded" % len(report.withheld),
+        "  register these ops to unlock them: %s" % ", ".join(report.missing_ops),
+    ]
+    for i, w in enumerate(report.withheld[:top], start=1):
+        f = w.finding
+        out.append("  w%d [%s] %s" % (i, f.rule, f.title))
+        out += _render_source(f, indent="      ")
+        out.append("      blocked by: %s" % ", ".join(w.ops))
+    if len(report.withheld) > top:
+        out.append("  ... %d more" % (len(report.withheld) - top))
     return "\n".join(out)
 
 
@@ -255,5 +292,8 @@ def render_report(
     hints = render_hints(report)
     if hints:
         parts += [hints, ""]
+    withheld = render_withheld(report)
+    if withheld:
+        parts += [withheld, ""]
     parts.append(render_diagnostics(report))
     return "\n".join(parts)

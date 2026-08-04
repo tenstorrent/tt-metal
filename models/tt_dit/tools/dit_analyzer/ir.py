@@ -38,6 +38,16 @@ COMPUTE = "compute"
 COMM = "comm"
 META = "meta"
 
+#: Op name used for a call the dry run saw but has no semantics for. Its node is
+#: complete (inputs, outputs, shapes, source) but its metadata is *assumed*, so
+#: any finding whose proof passes through one is withheld rather than downgraded.
+UNREGISTERED_OP = "unregistered"
+
+#: Frames under this prefix are model code; the rest of ``models/tt_dit`` is
+#: shared library code. A finding is actionable at the model call site, not at the
+#: ``layers/linear.py`` line underneath it (roadmap blocker 44).
+MODEL_CODE_PREFIX = "models/tt_dit/models/"
+
 
 @dataclass(frozen=True)
 class Mesh:
@@ -79,6 +89,21 @@ class Mesh:
 
     def index_in_group(self, device: int, mesh_axis: int) -> int:
         return self.coord(device)[mesh_axis]
+
+
+def source_chain(stack: Sequence[str], loc: Optional[str] = None) -> List[str]:
+    """Source lines to show for a node, outermost model frame first.
+
+    The innermost frame is usually shared library code: a duplicate gather
+    reported at ``layers/linear.py:250`` is true but not actionable, while the
+    ``to_qkv`` call above it is. Return the model frame and everything under it,
+    so a report can lead with the former and still name the latter (blocker 44).
+    """
+    if not stack:
+        return [loc] if loc else []
+    model = [i for i, frame in enumerate(stack) if MODEL_CODE_PREFIX in frame]
+    cut = model[0] if model else len(stack) - 1
+    return list(reversed(list(stack)[: cut + 1]))
 
 
 @dataclass(frozen=True)
@@ -164,7 +189,8 @@ class Node:
     outputs: List[str] = field(default_factory=list)
     attrs: Dict[str, Any] = field(default_factory=dict)
     mesh_axis: Optional[int] = None
-    loc: Optional[str] = None  # "file.py:123" from the model source
+    loc: Optional[str] = None  # "file.py:123" -- the ttnn call site itself
+    stack: List[str] = field(default_factory=list)  # a few tt_dit frames, innermost first
     label: Optional[str] = None  # human name, e.g. "attn.to_qkv"
     calls: int = 1  # how many times this node runs per forward (e.g. 38 blocks)
     fused_in: Optional[str] = None  # set when this node models one stage of a fused ttnn op
@@ -172,6 +198,16 @@ class Node:
     @property
     def display(self) -> str:
         return self.label or self.id
+
+    @property
+    def attribution(self) -> List[str]:
+        return source_chain(self.stack, self.loc)
+
+    @property
+    def call_site(self) -> Optional[str]:
+        """The one line to name this node by (the model frame if there is one)."""
+        chain = self.attribution
+        return chain[0] if chain else None
 
     def group(self, mesh: Mesh) -> Optional[Tuple[int, ...]]:
         if self.mesh_axis is None:
@@ -258,6 +294,7 @@ class Graph:
                     "attrs": n.attrs,
                     "mesh_axis": n.mesh_axis,
                     "loc": n.loc,
+                    "stack": n.stack,
                     "label": n.label,
                     "calls": n.calls,
                     "fused_in": n.fused_in,
@@ -305,6 +342,7 @@ class Graph:
                     attrs=dict(n.get("attrs", {})),
                     mesh_axis=n.get("mesh_axis"),
                     loc=n.get("loc"),
+                    stack=list(n.get("stack", [])),
                     label=n.get("label"),
                     calls=int(n.get("calls", 1)),
                     fused_in=n.get("fused_in"),

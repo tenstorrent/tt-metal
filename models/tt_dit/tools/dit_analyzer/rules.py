@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .ir import COMM, PARAM, Graph, Node
+from .ir import COMM, PARAM, Graph, Node, source_chain
 from .region import RegionSet
 from .semantics import lookup
 from .state import DemandResult, ForwardResult, SymbolState
@@ -58,8 +58,14 @@ class Finding:
     calls: int = 1
     steps: int = 1
     loc: Optional[str] = None
+    stack: List[str] = field(default_factory=list)  # tt_dit frames, innermost first
     scope: str = "forward"  # what `calls` counts: one forward pass, or a whole generation
     groups_total: int = 0  # participant groups this collective runs on, mesh-wide
+
+    @property
+    def source_chain(self) -> List[str]:
+        """Where to point the reader: model call site first, library frame under it."""
+        return source_chain(self.stack, self.loc)
 
     @property
     def bytes_per_forward(self) -> int:
@@ -91,6 +97,7 @@ class Finding:
             "confidence": self.confidence,
             "nodes": self.nodes,
             "loc": self.loc,
+            "source_chain": self.source_chain,
             "reason": self.reason,
             "suggestion": self.suggestion,
             "bytes_per_call": self.bytes_per_call,
@@ -183,6 +190,14 @@ class CollectiveView:
     def tainted(self) -> bool:
         return self.in_state.tainted or self.out_state.tainted
 
+    def unregistered(self) -> Tuple[str, ...]:
+        """Unregistered calls this collective's operand or result flowed through."""
+        out = list(self.in_state.unregistered)
+        for call in self.out_state.unregistered:
+            if call not in out:
+                out.append(call)
+        return tuple(out)
+
 
 def collect_views(graph: Graph, fwd: ForwardResult, bwd: DemandResult) -> List[CollectiveView]:
     views: List[CollectiveView] = []
@@ -248,6 +263,7 @@ def _base_proof(v: CollectiveView) -> Dict[str, Any]:
         "needed_downstream": {str(d): v.needed[d].describe(v.out_sym.shape) for d in v.group},
         "bytes_moved_per_call": v.moved_bytes(),
         "semantics_complete": not v.tainted(),
+        "unregistered_dependencies": list(v.unregistered()),
     }
 
 
@@ -607,6 +623,23 @@ def _name(v: CollectiveView) -> str:
 # driver
 # -----------------------------------------------------------------------------
 @dataclass
+class Withheld:
+    """A finding that was not emitted because its proof rests on assumed metadata.
+
+    "Analysis withholds, never guesses": a redundancy claim downstream of an op
+    with no semantics is not reported and not downgraded, because the shim made
+    up that op's output metadata. What it *is* good for is saying which
+    registrations would unlock it.
+    """
+
+    finding: Finding
+    ops: List[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"would_report": self.finding.to_dict(), "register_first": list(self.ops)}
+
+
+@dataclass
 class Report:
     graph: Graph
     forward: ForwardResult
@@ -615,10 +648,20 @@ class Report:
     findings: List[Finding]  # redundancy claims
     necessary: List[CollectiveView]
     hints: List[Finding] = field(default_factory=list)  # opportunities, not redundancy
+    withheld: List[Withheld] = field(default_factory=list)  # blocked on op coverage
 
     @property
     def diagnostics(self):
         return self.forward.diagnostics + self.backward.diagnostics
+
+    @property
+    def missing_ops(self) -> List[str]:
+        """Ops to register, most findings unlocked first."""
+        counts: Dict[str, int] = {}
+        for w in self.withheld:
+            for op in w.ops:
+                counts[op] = counts.get(op, 0) + 1
+        return [op for op, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
 def run_rules(graph: Graph, fwd: ForwardResult, bwd: DemandResult) -> Report:
@@ -628,18 +671,28 @@ def run_rules(graph: Graph, fwd: ForwardResult, bwd: DemandResult) -> Report:
         groups_per_node[v.node.id] = groups_per_node.get(v.node.id, 0) + 1
 
     raw: List[Tuple[Finding, CollectiveView]] = []
+    blocked: List[Tuple[Finding, CollectiveView]] = []
     necessary: List[CollectiveView] = []
     for v in views:
         f = check_collective(graph, fwd, bwd, v)
         if f is None:
             necessary.append(v)
+        elif v.unregistered():
+            blocked.append((f, v))
         else:
             raw.append((f, v))
-    raw.extend(check_invariant_collectives(graph, fwd, views))
+    for f, v in check_invariant_collectives(graph, fwd, views):
+        (blocked if v.unregistered() else raw).append((f, v))
 
     findings = _merge_across_groups(raw, groups_per_node)
     findings.sort(key=lambda f: f.rank_key)
-    hints = _merge_across_groups(check_mergeable_collectives(graph, fwd, views), groups_per_node)
+    hints = _merge_across_groups(
+        [(f, v) for f, v in check_mergeable_collectives(graph, fwd, views) if not v.unregistered()], groups_per_node
+    )
+    withheld = [
+        Withheld(finding=f, ops=list(f.proof.get("unregistered_dependencies", [])))
+        for f in _merge_across_groups(blocked, groups_per_node)
+    ]
     return Report(
         graph=graph,
         forward=fwd,
@@ -648,6 +701,7 @@ def run_rules(graph: Graph, fwd: ForwardResult, bwd: DemandResult) -> Report:
         findings=findings,
         necessary=necessary,
         hints=hints,
+        withheld=withheld,
     )
 
 
@@ -665,6 +719,8 @@ def _merge_across_groups(
     for f, v in raw:
         key = (f.rule, tuple(f.nodes))
         if key not in merged:
+            if not f.stack:
+                f.stack = list(v.node.stack)
             f.proof["participant_groups"] = [list(v.group)]
             f.groups_total = groups_per_node.get(v.node.id, 1)
             merged[key] = f
