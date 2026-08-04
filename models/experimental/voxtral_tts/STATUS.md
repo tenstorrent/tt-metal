@@ -961,6 +961,40 @@ would not have transferred either.
 If anything in Block 3 ever deserves attention it is the COMPILE cost, not the compute — and
 `BUCKET = 128` already exists to cap it.
 
+
+### 6.11 — the norm's second reshard cannot be dodged, both ways measured
+
+`_norm_dec` width-shards, norms, then converts back to DRAM. That second `to_memory_config` is 0.33
+ms/frame and looks removable. It is not, and the two candidates fail for different reasons.
+
+**Default matmul, sharded activation: 8.94 vs 5.32 ms per 26 norm+linear pairs.** The cause is the
+AXIS, not L1 vs DRAM. Width-sharding splits the matmul's CONTRACTION dimension, so each core forms
+only a partial sum and the cross-core reduce is full-output-sized ([32,6144] x 8 cores). Interleaved,
+ttnn splits by OUTPUT COLUMNS: each core owns its columns, reads the whole 6 KB activation, nothing to
+reduce. **The same axis that makes the norm fast makes the matmul slow** — the norm REDUCES over
+width (cross-core step is 8 scalars), the matmul CONTRACTS over it.
+
+**The matmul that wants a sharded activation: builds, still loses.**
+`MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig` requires exactly this layout. The DRAM-sharded-weights note above recorded
+it overflowing L1 at Block 2's shape (N=9216, per_core_N=36 tiles, CBs 1,678,528 B against
+1,499,136). Block 1's wqkv is N=6144, per_core_N=**24** tiles, and it does build — the capacity
+projection was right. It is still slower:
+
+| | us | vs shipped |
+|---|---|---|
+| shipped: unshard + default matmul | **100.9** | 1.000x |
+| DRAM-sharded, sharded activation in | 125.4 | 0.805x |
+| + unshard the output | 128.5 | 0.785x |
+
+**0.72 ms/frame worse**, and not bit-exact (4.9e-04). The reason is simply that the default path
+already runs this matmul at ~198 GB/s, i.e. at the DRAM ceiling, so there is no bandwidth for the
+DRAM-sharded machinery to win back — it only adds its own cost. That config earns its keep when the
+weight read is contended or spread across devices, not when a plain 1D config already saturates.
+
+**Generalisable:** before reaching for a fancier matmul config, check what the current one achieves.
+Every hand-tuned config tried in this port has lost, and in each case the plain one was already at
+the ceiling (see also the 169-vs-193 GB/s program-config result in ttnn_voxtral_gpt).
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
