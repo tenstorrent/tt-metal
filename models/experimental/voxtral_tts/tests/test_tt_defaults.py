@@ -23,10 +23,12 @@ from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt  # noqa: 
 
 
 def test_block1_weight_precision_is_mixed():
-    """BFP8 on FF1_FF3 ONLY. All-BFP8 is ~5 ms/frame faster and triggers a card-wedging hang in
-    multi-utterance runs; putting FF2 in BFP8 too is enough to bring it back."""
-    assert gpt.WEIGHT_DTYPE == ttnn.bfloat16
-    assert gpt.FF_WEIGHT_DTYPE == ttnn.bfloat8_b
+    """BFP8 on everything EXCEPT w2, which is the pinned trigger of a card-wedging hang in
+    multi-utterance runs (recovery needs a board reset). wqkv, wo, FF1 and FF3 are all safe and
+    were measured individually; w2 alone brings the hang back. See gpt.WEIGHT_DTYPE."""
+    assert gpt.WEIGHT_DTYPE == ttnn.bfloat16        # w2 only
+    assert gpt.FF_WEIGHT_DTYPE == ttnn.bfloat8_b    # FF1, FF3
+    assert gpt.ATTN_WEIGHT_DTYPE == ttnn.bfloat8_b  # wqkv, wo
 
 
 def test_block1_math_config_keeps_fp32_accumulation():
@@ -48,6 +50,12 @@ def test_prefill_padding_stays_on_the_tile_grid():
     """Prefill's causal mask is cut at this boundary; a ragged value would misalign it silently
     rather than raise. 128 itself is a kernel-shape-churn choice, not a hardware limit."""
     assert gpt.PREFILL_MULTIPLE % gpt.TILE == 0
+
+
+def test_block2_semantic_head_stays_fp32():
+    """It produces an INDEX, not a value. Measured over 64 hidden states, bf16 weights pick a
+    DIFFERENT index on 4 of them; fp32 matches the host answer on all 64, for 0.2 ms."""
+    assert flow.SEMANTIC_DTYPE == ttnn.float32
 
 
 def test_fused_qkv_width_matches_the_head_config():

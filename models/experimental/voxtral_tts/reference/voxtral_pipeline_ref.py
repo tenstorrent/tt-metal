@@ -61,10 +61,8 @@ from models.experimental.voxtral_tts.reference import voxtral_flow_ref as flow
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     CFG_ALPHA,
     DEFAULT_CKPT,
-    DIM,
     END_AUDIO_ID,
     FRAME_RATE,
-    NUM_CODEBOOKS,
     N_DECODING_STEPS,
     SAMPLING_RATE,
     WEIGHTS_DIR,

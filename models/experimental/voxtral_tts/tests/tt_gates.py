@@ -91,7 +91,7 @@ def gate_prefill26(dev, ref, cases, n_layers=N_LAYERS):
     """
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc
 
-    print(f"  loading fp32 reference weights (~13 GB) -- shared with the device upload")
+    print("  loading fp32 reference weights (~13 GB) -- shared with the device upload")
     w = ref.load_backbone_state()
     gen = TtVoxtralGPT(dev, n_layers=n_layers, state=w)
     print(f"  {n_layers} layers on device\n")
@@ -152,8 +152,10 @@ def gate_decode(dev, ref, cases, n_steps=8, n_layers=N_LAYERS):
             dt = (time.perf_counter() - t0) * 1e3
             worst = (h_dev - h_ref).abs().max().item() / h_ref.abs().max().item() * 100
             print(f"  {t:>6} {gen.pos - 1:>5} {pcc(h_dev, h_ref):>11.6f} {worst:>7.2f}% {dt:>7.1f}")
-    print("\n  reference for comparison (STATUS.md, Block 1): tt_transformers decode PCC 0.981,")
-    print("  48 ms/step. The 0.981 is unexplained there; this path should not reproduce it.")
+    print("\n  reference points (STATUS.md 6.8): shipped mean worst-sample is 0.86% over 44 frames")
+    print("  on two prompts, and ~31.4 ms/step. JUDGE A CHANGE ON MEAN AND P90, NOT ON MAX --")
+    print("  max is an order statistic and moved 1.28-4.28% non-monotonically across configs.")
+    print("  tt_transformers, for comparison: decode PCC 0.981 at 48 ms/step.")
 
 
 def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):

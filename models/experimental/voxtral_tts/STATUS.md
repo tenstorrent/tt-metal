@@ -33,7 +33,7 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → ~59-62 ms/frame, steady-state RTF 0.74–0.81 on long-form.** Per frame:
+**Performance: 83.7 → 58.3-62.5 ms/frame (mean 59.9), RTF 0.74-0.82 on 14 of 15 cases.** Per frame:
 Block 1 ~31.4 ms, Block 2 ~28 ms. Block 1 is the larger half. Both modules carry a "where the time
 goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
 width-sharded RMSNorm in Block 2, qkv fusion) and §6.8 (BFP8 on wqkv/wo, semantic head on device) —
@@ -627,20 +627,15 @@ and per-op PCC hid it both times. Block 2 keeps the sharded norm because 3 layer
 amplify. (This entry originally also cited WER 0.88% → 2.06%; see below for why that half of the
 evidence was worthless.)
 
-**Measured, not applied, in rough value order:**
-1. **wqkv + wo → BFP8** (Block 1, ~3.3 ms/frame): wqkv 4.82→2.64 ms per 26, wo 3.36→2.20. Only
-   three precision points were ever tested and "adding FF2 brings the hang back" pins FF2 alone —
-   these two have never been tried individually. Needs the hang repro, not just a PCC check.
-2. **sdpa for Block 2's attention** (~4 ms): 1.65x against the row fold's 1.40x. §7 measured 3.7x
-   more differing codes, but that predates BFP8 and one seed here gave 2/74 against the row fold's
-   3/74 — so the penalty may have moved. Needs multi-seed + a WER run, per §7's own condition.
-3. **semantic argmax on device** (~3.0 ms): it is a real `[1,3072]@[3072,8320]` CPU matmul today.
-   `ign/voxtral_opt` does it on device, so the approach is validated. Verify the INDEX matches
-   exactly — it is an argmax, and bf16 could tip a near-tie.
-4. ~~Re-measure the device trace.~~ **DONE, and the answer is still no** — see below.
-5. **Fewer Euler steps** (7→5 removes 28% of the solve). This is a MODEL change, not an
-   implementation one — it needs a listening pass, not just WER.
-6. **Concurrent requests** — the 3-token sequence wastes 26 of 32 tile rows. Throughput, not latency.
+**This list has since been worked through — see §6.8 for the results.** Kept only as the record of
+what was outstanding at the end of the first sweep:
+1. ~~wqkv + wo → BFP8~~ **DONE**, 3.32 ms, no hang (§6.8).
+2. ~~sdpa for Block 2's attention~~ **REJECTED** on a deterministic gate, 7/288 → 21/288 (§6.8).
+3. ~~semantic argmax on device~~ **DONE**, 1.49 ms, fp32 (§6.8).
+4. ~~Re-measure the device trace~~ **DONE**, still no (below).
+5. **Fewer Euler steps** (7→5 removes 28% of the solve) — STILL OPEN. A MODEL change, needs a
+   listening pass, not a metric.
+6. **Concurrent requests** — STILL OPEN. Throughput, not latency.
 
 **Device tracing, re-measured after the op-count wins — still not worth it, but the reason
 changed.** The old verdict was that tracing COST time (Block 1 -0.7 ms, Block 2 -6 ms/frame). That
@@ -827,20 +822,21 @@ each line item; read those before optimizing anything.
 
 1. Re-read this file. Recreate the venvs (§2). Run the tests, then
    `generate_quality_set.py --cases 0,1` to confirm the device path still speaks.
-2. **Block 2 is the larger half and the right target.** 35 of its 42.5 ms is 7 SEQUENTIAL Euler
-   steps, each a 3-layer transformer over 3 tokens — every matmul does 32 tile rows of work for 6
-   useful ones. Already tried and rejected: lower math fidelity (~4 ms for 10–20x the integer-code
-   errors) and a device trace (bit-identical, ~6 ms/frame slower). BFP8 weights ARE on and were
-   worth 1.23x. The untried idea is CONCURRENT REQUESTS filling the wasted 26 tile rows —
-   throughput, not latency.
-3. **Block 1 is close to its floor.** Only fewer weight bytes help, and BFP8 beyond FF1_FF3 hits
-   the hang. Small change left: `paged_fused_update_cache` and `rotary_embedding_llama_fused_qk`
-   are worth ~0.7 ms combined.
-4. **Gate every change on WER, not PCC.** Two lessons from this port, both expensive: a cheap
-   RMSNorm looked fine at per-op PCC 0.999993 and took model decode PCC to 0.992; and case 4
-   cannot measure an implementation at all (see §1). Per-case WER on a short clip is trajectory
-   noise — the same case swings 0%–28.6% on the SEED alone at fixed precision. Only the aggregate
-   over 340+ words means anything.
+2. **BLOCK 3 IS THE LEAST EXPLORED THING LEFT — ~9% of wall time and never swept.** Both hot
+   blocks have had two optimization passes; the codec has had none since its own bring-up.
+   `ign/voxtral_opt` has a `keep_sharded_splits` commit claiming ~18 ms → ~6 ms on their conv
+   stack by removing ~104 layout conversions, which is exactly the class of thing that pays here.
+3. **Both hot blocks are near their floors, for different reasons.** Block 1 (~31.4 ms): every
+   weight matmul is at the 194 GB/s ceiling and the only bf16 weight left is w2, the pinned hang
+   trigger — worth ~3.6 ms if it can ever be moved. Block 2 (~28 ms): sits ~2x above its 13.4 ms
+   weight-read floor on device-side per-kernel cost, and everything op-level has been tried. The
+   two ideas left there are structural — fewer Euler steps, or concurrent requests.
+4. **Gate on the DETERMINISTIC metrics, not on WER.** This is the most expensive lesson in the
+   file and it was learned twice. End-to-end WER cannot resolve a numerical change: the same code
+   at seeds 0/1/2 spans 0.88–2.06% (§6.7). Worst-sample read as a MAX is also unreliable — it
+   moved 1.28–4.28% non-monotonically across configs (§6.8). What works: teacher-forced MEAN and
+   P90 worst-sample against the fp32 reference (`tests/tt_gates.py`), long-form WER for gross
+   breakage, and integer-code counts over several draws for Block 2.
 5. `tests/test_tt_defaults.py` pins the shipped configuration with the reason for each choice. If
    you change a default, change that test in the same commit.
 

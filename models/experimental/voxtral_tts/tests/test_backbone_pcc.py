@@ -25,8 +25,6 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     HEAD_DIM,
     HIDDEN_DIM,
     KV_DIM,
-    N_HEADS,
-    N_KV_HEADS,
     N_LAYERS,
     ROPE_THETA,
     apply_rope,

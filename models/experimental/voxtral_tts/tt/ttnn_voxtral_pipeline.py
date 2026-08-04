@@ -19,43 +19,56 @@ WHAT RUNS WHERE. Blocks 1-3 all run on device. Three host steps remain, each del
   * the tekken tokenizer and prompt assembly (upstream of everything; see voxtral_tokenizer_ref)
   * `embed_frame` -- a 37-way embedding gather + sum, per frame. ttnn.embedding needs a bf16 table
     and these tables are large-valued, the same reasoning as the codec's semantic gather.
-  * Block 2's semantic argmax and FSQ quantise (see ttnn_voxtral_flow's docstring)
+  * Block 2's FSQ quantise -- clamp/scale/round on [B,36]; 36 values is not worth a dispatch.
+    (Block 2's semantic argmax USED to be here too. It is on device now, in fp32 -- worth 1.49
+    ms/frame; see ttnn_voxtral_flow.semantic_dev for why fp32 and not bf16.)
 
 FIDELITY, measured per block against the fp32 CPU reference, on real prompts -- never random ones,
 which are a pessimistic proxy and cost a lot of time once (STATUS.md trap #12):
-    Block 1 prefill  PCC 0.999881  (last position -- the only one Block 2 consumes)
-    Block 1 decode   PCC 0.99991
-    Block 2 velocity PCC 0.9999989, semantic codes EXACT, 73/74 frame codes exact on synthetic h
+    Block 1 prefill  PCC 0.999924 / 0.999883  (last position -- all Block 2 consumes)
+    Block 1 decode   PCC 0.99985+, mean worst-sample 0.86% over 44 teacher-forced frames
+    Block 2 velocity PCC 0.99998522, semantic codes EXACT, 71/74 frame codes exact on synthetic h
     Block 3          real speech PCC 0.999984, worst sample 1.16% of peak
-The end-to-end question is not any of those PCCs -- it is the WER of the decoded audio, because
-that is what a listener gets. Full 15-case fixture, free-running: natural-text WER 0.88% over 341
-words, 15/15 natural [END_AUDIO]. `compare_codes()` below is the finer-grained probe.
 
-PERFORMANCE, steady state on one N150, case 2 (448 frames, first 30 discarded):
+END TO END, the number to quote is **long-form WER 0.00% over 298 words**, plus 15/15 natural
+[END_AUDIO] and the voice-identity check. NOT the 340-word natural-text headline: that bucket
+includes 42 words of 3-to-6-word clips where one Whisper disagreement is worth 17-50%, and the
+SAME CODE at seeds 0/1/2 spans 0.88-2.06% on it. See STATUS.md 6.7 before quoting any WER, and use
+the teacher-forced gates in tests/tt_gates.py to judge a numerical change.
 
-    Block 1 decode      34.9 ms/frame   45.0%
-    Block 2 flow        42.5 ms/frame   54.8%
-    host embed_frame     0.2 ms/frame    0.2%
-    TOTAL               77.6 ms/frame   = 0.0776 s/frame
-    prefill ~1.1 s once; Block 3 codec ~2.5 s once (~7% of the audio duration)
-    RTF 0.969 steady state, 1.115 end to end   (RTF = generation / audio, lower is better)
+PERFORMANCE, steady state on one N150, long-form cases:
+
+    Block 1 decode      ~31.4 ms/frame   ~52%
+    Block 2 flow        ~28   ms/frame   ~47%
+    host embed_frame      0.2 ms/frame    0.3%
+    TOTAL               58.3-62.5 ms/frame, mean 59.9 over the 15-case fixture
+    prefill 0.1-1.5 s once; Block 3 codec ~9% of wall time
+    RTF 0.74-0.82 on 14 of 15 cases   (RTF = generation / audio, lower is better)
+
+The 15th is case 0 at RTF 1.89, and that is COLD-START, not a slow case: it pays the first codec
+bucket's kernel compiles and the first prefill shape. Every later case with the same shapes runs
+at 0.74-0.80. Quote the steady-state number, and re-run a case twice if it looks anomalous.
 
 A frame is 80 ms of audio at 12.5 Hz, so RTF = ms_per_frame / 80.
 
-BLOCK 2 IS THE LARGER HALF and is where the next work belongs: 35 of its 42.5 ms is 7 SEQUENTIAL
-Euler steps, each a 3-layer transformer over 3 tokens, so every matmul does 32 tile rows of work
-for 6 useful ones. Block 1 has had its structural wins (the GQA row fold, mixed-precision weights,
-the decode-native head layout) and its linears run at 194 GB/s -- the measured ceiling for a plain
-interleaved matmul on this part, confirmed by hand-tuned program configs coming out SLOWER.
+WHERE THE REMAINING TIME IS. Both blocks now stream every weight matmul at the 194 GB/s DRAM
+ceiling, so neither has a byte or a layout trick left; each module's docstring carries the per-line
+map. What is left is different in each:
+  * Block 1 is at its floor except for w2, the last bf16 weight and the pinned trigger of the hang
+    documented below. ~20 of its 31 ms is pure weight streaming at the ceiling.
+  * Block 2 still sits ~2x above its 13.4 ms weight-read floor, and that gap is DEVICE-side
+    per-kernel cost -- proven by tracing, which removes host dispatch and changes nothing (6.6).
+    Fewer ops does not help; only fewer, BIGGER kernels do.
+  * Block 3 is ~9% of wall and is the least explored part of the pipeline.
 
 The one structural idea left is throughput, not latency: a 3-token sequence wastes 26 of 32 tile
 rows and nothing in ONE utterance can fill them (Euler steps are sequential, frames are
 autoregressive), but CONCURRENT REQUESTS fit exactly.
 
-No comparison against ign/voxtral_p150_qb2 is available: their published figures are Blackhole
-P150 on a larger 4B/32-layer variant, their 0.10 s/frame is a test threshold rather than an
-achievement, and their RTF 0.7 is a four-card mesh. Running their code here was tried and their
-tt-metal is ~1100 commits behind ours, so it does not load.
+Against ign/voxtral_p150_qb2: their code cannot run on our tree, so their tt-metal was built
+separately and measured here at 598 ms/frame. That is their Blackhole-targeted code on our
+Wormhole card, which answers "can we adopt theirs" (no) and NOT "is their P150 slow" (unmeasured).
+STATUS.md 6.5 has the setup and the two findings it did corroborate.
 """
 
 import time

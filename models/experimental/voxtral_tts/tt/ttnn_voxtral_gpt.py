@@ -10,21 +10,20 @@ for owning this is in STATUS.md's Block 1 section.
 Measured against the fp32 CPU reference on REAL prompts (never random ones -- STATUS.md trap #12),
 with `tt_transformers` on the same metric for comparison:
 
-                             ours (mixed W)   ours BFP8 W   tt_transformers
-    prefill, last position     0.999881        0.999881       0.999564
-    decode step                0.99991         0.99986        0.981
-    decode ms/frame            34.9            33.6           48
-    end-to-end natural WER     0.88%           87.39%         1.17%
+                             ours            ours all-BFP8   tt_transformers
+    prefill, last position     0.999883        0.999881        0.999564
+    decode step                0.99985+        0.99986         0.981
+    decode ms/step             31.4            33.6            48
 
-ALL-BFP8 IS THE FAST ONE AND WE DO NOT SHIP IT. It triggers a card-wedging hang in multi-utterance
-runs; the mixed default avoids it. See WEIGHT_DTYPE here, and the full diagnosis in
-ttnn_voxtral_pipeline.
+There is deliberately no end-to-end WER row: the same code at three seeds spans 0.88-2.06% on that
+metric, so it cannot separate two builds. The gate is long-form WER (0.00% over 298 words) plus the
+teacher-forced numbers above. STATUS.md 6.7 has the seed table; read it before quoting any WER.
 
-(An earlier version of this note also blamed all-BFP8 for fixture case 4's repetition loop. That
-was wrong: case 4 is chaotic in EVERY implementation including the fp32 CPU reference, so it
-cannot attribute anything -- see score_quality_set.py's model-unstable bucket.)
+W2 IS THE ONE WEIGHT STILL IN bf16, and w2 is the hang -- not BFP8 in general. wqkv, wo, FF1 and
+FF3 are all BFP8 and were each measured on their own; only w2 brings back the card-wedging hang in
+multi-utterance runs. Diagnosis in ttnn_voxtral_pipeline, repro at WEIGHT_DTYPE below.
 
-The decode gap against tt_transformers (0.99991 vs 0.981) is real and reproduces at every weight
+The decode gap against tt_transformers (0.99985+ vs 0.981) is real and reproduces at every weight
 dtype we tried, so it is not ours to explain -- but note it is NOT caused by sdpa_decode, which is
 nearly free at these shapes.
 
@@ -34,11 +33,11 @@ carries over unchanged: the row fold, q/k/v fused into one weight, HiFi4 with fp
 bf16 activations. And so does its central lesson, which decode needed twice: a
 BATCHED matmul costs per batch element, so fold whatever you can into ROWS (see `_layer_step`).
 
-DECODE IS BOUND BY WEIGHT BYTES, so the weight dtype is the speed. At the shipped mixed precision
-the six linears stream 4.58 GB per step and measure ~23.6 ms, i.e. 194 GB/s -- the same ceiling a
-plain interleaved matmul reaches after the Block 2 work, and hand-tuned matmul program configs
-measured SLOWER (169 vs 193 GB/s on wq). There is no layout trick left in them: only fewer BYTES
-help, and how far that can go is capped by the hang described at WEIGHT_DTYPE.
+DECODE IS BOUND BY WEIGHT BYTES, so the weight dtype is the speed. At the shipped precision the
+six linears stream ~3.9 GB per step and measure ~20.3 ms, i.e. 194 GB/s -- the ceiling a plain
+interleaved matmul reaches, and hand-tuned matmul program configs measured SLOWER (169 vs 193 GB/s
+on wq). There is no layout trick left in them: only fewer BYTES help, and the only weight still in
+bf16 is w2, which is the pinned hang trigger (see WEIGHT_DTYPE). So this line is finished.
 
 WHERE THE TIME GOES, per decode frame, steady state on one N150 (measure with
 the scratch probe_perf.py harness; the numbers below are case 2, 448 frames):
@@ -157,26 +156,28 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
 
 # WEIGHT PRECISION -- load-bearing for CORRECTNESS, not just speed.
 #
-# BFP8 on FF1_FF3 only, bf16 everywhere else: exactly tt_transformers' precision_override.
-# ALL-BFP8 is ~5 ms/frame faster and TRIGGERS A CARD-WEDGING HANG in multi-utterance runs, and
-# adding FF2 alone is enough to bring it back (see ttnn_voxtral_pipeline for the full diagnosis).
+# BFP8 EVERYWHERE EXCEPT w2. Decode is bandwidth-limited on weight bytes and the six linears run at
+# the 194 GB/s DRAM ceiling, so the weight dtype IS the speed; every matrix that can be halved has
+# been. Each was measured on its own:
 #
 #     weights                       decode PCC   ms/step   mean worst-sample   hang?
 #     bf16 (all)                      0.99991     45.8            -             no
-#     bf16 + BFP8 on FF1_FF3          0.999884    34.7          0.86%           no
-#     ... + BFP8 on wqkv, wo (this)   0.999852    31.4          0.86%           no
-#     BFP8 (all, i.e. + w2)           0.99986     33.6            -             HANGS
+#     + BFP8 on FF1, FF3              0.999884    34.7          0.86%           no
+#     + BFP8 on wqkv, wo   <- this    0.999852    31.4          0.86%           no
+#     + BFP8 on w2 (i.e. all)         0.99986     33.6            -             HANGS
 #
-# Decode is bandwidth-limited on weight bytes -- the six linears alone reach 194 GB/s, the same
-# ceiling a plain interleaved matmul hits -- so the weight dtype IS the speed. FF1_FF3 is where
-# BFP8 buys most: those two 3072x9216 matrices are about half the layer's bytes.
+# W2 IS THE HANG, not BFP8 in general -- a distinction that cost a long investigation and is worth
+# keeping straight, because "all-BFP8 hangs" was true but over-attributed and it froze this line of
+# work for a while. wqkv and wo were simply never tried alone; when they were, they cost 3.32
+# ms/frame with mean and p90 worst-sample unchanged, and no hang.
 #
-# W2 IS THE ONE THAT HANGS, not BFP8 in general. That distinction cost a long investigation to
-# establish and is worth keeping straight: "all-BFP8 hangs" was true but over-attributed. wqkv and
-# wo were never tried alone until later, and they are FINE -- 3.32 ms/frame, mean and p90
-# worst-sample unchanged, and the documented minimal repro (short gen + 128-bucket decode, then
-# two long gens both landing in the 512 bucket, the second a pure cache hit) runs clean, as does
-# the full 15-case set. w2 has NOT been retried and should not be without the repro to hand.
+# BEFORE TOUCHING w2, have the repro ready: short gen + 128-bucket codec decode, then two long gens
+# that both land in the 512 bucket, the second being a pure cache HIT. That is ~90 s and it wedges
+# the card when it fires (recovery needs `tt-smi -r`). The current config clears it, and clears the
+# full 15-case set. Full diagnosis in ttnn_voxtral_pipeline.
+#
+# Judge any change here on MEAN and P90 worst-sample, never on max: max is an order statistic and
+# moved 1.28-4.28% across configs non-monotonically (STATUS.md 6.8).
 WEIGHT_DTYPE = ttnn.bfloat16          # w2 only
 FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
 ATTN_WEIGHT_DTYPE = ttnn.bfloat8_b    # wqkv and wo
