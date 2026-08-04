@@ -1,0 +1,242 @@
+<title>Laguna-XS-2.1 — Served Latency Sweep to 128k (C1 · C8)</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --surface:#ffffff; --surface-2:#f1f3f7; --line:#e2e6ee;
+    --ink:#1a2233; --ink-2:#54607a; --muted:#8a94aa;
+    --c1:#2563eb; --c1-soft:#dbe6ff; --c8:#d97706; --c8-soft:#fdecd2;
+    --good:#0f9d6b; --warn:#c2410c;
+    --accent:#2563eb;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0e1117; --surface:#161b24; --surface-2:#1c222d; --line:#28303d;
+      --ink:#e8ecf3; --ink-2:#a7b1c4; --muted:#6c778e;
+      --c1:#60a5fa; --c1-soft:#1e3155; --c8:#f59e0b; --c8-soft:#4a340f;
+      --good:#34d399; --warn:#fb923c; --accent:#60a5fa;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f7f8fa; --surface:#ffffff; --surface-2:#f1f3f7; --line:#e2e6ee;
+    --ink:#1a2233; --ink-2:#54607a; --muted:#8a94aa;
+    --c1:#2563eb; --c1-soft:#dbe6ff; --c8:#d97706; --c8-soft:#fdecd2;
+    --good:#0f9d6b; --warn:#c2410c; --accent:#2563eb;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0e1117; --surface:#161b24; --surface-2:#1c222d; --line:#28303d;
+    --ink:#e8ecf3; --ink-2:#a7b1c4; --muted:#6c778e;
+    --c1:#60a5fa; --c1-soft:#1e3155; --c8:#f59e0b; --c8-soft:#4a340f;
+    --good:#34d399; --warn:#fb923c; --accent:#60a5fa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:960px;margin:0 auto;padding:48px 24px 80px}
+  header{border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:32px}
+  .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  h1{font-size:30px;line-height:1.18;margin:8px 0 6px;letter-spacing:-.02em;text-wrap:balance}
+  .sub{color:var(--ink-2);font-size:15px;margin:0}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .chip{font:500 12px/1 var(--mono);background:var(--surface-2);color:var(--ink-2);
+    border:1px solid var(--line);border-radius:999px;padding:7px 11px;white-space:nowrap}
+  h2{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+    margin:44px 0 16px;font-weight:600}
+  .hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:4px}
+  .tile{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 18px 16px}
+  .tile .k{font-size:12px;color:var(--ink-2);font-weight:600;margin-bottom:10px}
+  .tile .v{font:650 28px/1 var(--sans);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .tile .v small{font-size:14px;color:var(--muted);font-weight:600;letter-spacing:0}
+  .tile .d{font-size:12.5px;margin-top:8px;font-variant-numeric:tabular-nums}
+  .up{color:var(--good);font-weight:600}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px 22px 10px}
+  .chartwrap{overflow-x:auto}
+  .chart-title{font-weight:600;font-size:15px;margin:0 0 2px}
+  .chart-note{color:var(--ink-2);font-size:13px;margin:0 0 14px}
+  svg{display:block;width:100%;height:auto;max-width:100%}
+  .legend{display:flex;gap:18px;margin:6px 0 16px;flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--ink-2);font-weight:500}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:14px}
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+  th,td{padding:11px 14px;text-align:right;white-space:nowrap}
+  th{font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);
+    font-weight:600;border-bottom:1px solid var(--line);background:var(--surface-2)}
+  td{border-bottom:1px solid var(--line);font-family:var(--mono);font-size:13px}
+  tr:last-child td{border-bottom:none}
+  th:first-child,td:first-child{text-align:left}
+  .cc1{color:var(--c1);font-weight:600}.cc8{color:var(--c8);font-weight:600}
+  .badge{font:600 11px/1 var(--sans);padding:3px 7px;border-radius:6px;letter-spacing:.02em}
+  .badge.c1{background:var(--c1-soft);color:var(--c1)}
+  .badge.c8{background:var(--c8-soft);color:var(--c8)}
+  .notes{display:grid;gap:12px}
+  .note{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:10px;padding:14px 16px;font-size:14px;color:var(--ink-2)}
+  .note b{color:var(--ink);font-weight:600}
+  .note.warn{border-left-color:var(--warn)}
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--muted);font-size:12.5px;font-family:var(--mono)}
+  code{font-family:var(--mono);font-size:.92em;background:var(--surface-2);padding:1px 5px;border-radius:5px}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">poolside / Laguna-XS-2.1 · P150×4 (1×4 Blackhole)</div>
+    <h1>Served Latency Sweep to 128k</h1>
+    <p class="sub">Cold single-user latency (concurrency 1) to 128k context, plus concurrency-8 throughput to 32k. Warmed before measurement, as tt-inference-server does.</p>
+    <div class="chips">
+      <span class="chip">k64 decode</span>
+      <span class="chip">PREFILL_FAST=1</span>
+      <span class="chip">warmup pass (all shapes)</span>
+      <span class="chip">APC off · cold</span>
+      <span class="chip">max-model-len 131072</span>
+      <span class="chip">max-num-seqs 8</span>
+      <span class="chip">FABRIC_1D_RING</span>
+    </div>
+  </header>
+
+  <h2>Headline — 128k single-user, vs the prior (unwarmed) sweep</h2>
+  <div class="hero">
+    <div class="tile">
+      <div class="k">Decode @128k (C=1)</div>
+      <div class="v">21.7 <small>t/s/u</small></div>
+      <div class="d"><span class="up">▲ 1.6×</span> vs prior 13.5</div>
+    </div>
+    <div class="tile">
+      <div class="k">TTFT @128k (cold)</div>
+      <div class="v">208 <small>s</small></div>
+      <div class="d"><span class="up">▲ 1.43×</span> vs prior 299 s</div>
+    </div>
+    <div class="tile">
+      <div class="k">Decode @1k (C=1)</div>
+      <div class="v">28.4 <small>t/s/u</small></div>
+      <div class="d" style="color:var(--muted)">flat to 32k (28→26)</div>
+    </div>
+    <div class="tile">
+      <div class="k">Aggregate @1k (C=8)</div>
+      <div class="v">99 <small>tok/s</small></div>
+      <div class="d" style="color:var(--muted)">≈3.5× the C=1 aggregate</div>
+    </div>
+  </div>
+
+  <h2>Decode throughput vs context</h2>
+  <div class="card">
+    <p class="chart-title">Per-user decode speed (t/s/u)</p>
+    <p class="chart-note">Higher is better. Holds ~26–28 t/s/u to 32k; ~21.7 at 128k. C=8 per-user falls under all-at-once prefill contention at 16k+.</p>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--c1)"></i>Concurrency 1 · OSL 1024</span>
+      <span><i class="dot" style="background:var(--c8)"></i>Concurrency 8 · OSL 128</span>
+    </div>
+    <div class="chartwrap"><svg id="c_tsu" viewBox="0 0 900 320" role="img" aria-label="Decode t/s/u vs context"></svg></div>
+  </div>
+
+  <h2>Time to first token &amp; end-to-end</h2>
+  <div class="card">
+    <p class="chart-title">TTFT — cold prefill cost (C=1, log scale)</p>
+    <p class="chart-note">Prefill-dominated at long context. PREFILL_FAST recovers 128k TTFT from 299 s → 208 s.</p>
+    <div class="chartwrap"><svg id="c_ttft" viewBox="0 0 900 300" role="img" aria-label="TTFT vs context"></svg></div>
+  </div>
+
+  <h2>Aggregate throughput — concurrency scaling</h2>
+  <div class="card">
+    <p class="chart-title">Aggregate output (tok/s): C=1 vs C=8</p>
+    <p class="chart-note">C=8 scales ≈3.5× at 1k, but collapses at 16k as 8 simultaneous prefills saturate the pipeline (all-at-once arrival). 128k @ C=8 is omitted — the ~164k-token KV pool can't hold 8 long contexts.</p>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--c1)"></i>C=1</span>
+      <span><i class="dot" style="background:var(--c8)"></i>C=8</span>
+    </div>
+    <div class="chartwrap"><svg id="c_agg" viewBox="0 0 900 300" role="img" aria-label="Aggregate tok/s by concurrency"></svg></div>
+  </div>
+
+  <h2>Full results</h2>
+  <div class="tablewrap"><table>
+    <thead><tr>
+      <th>Concurrency</th><th>ISL</th><th>OSL</th><th>t/s/u</th><th>Agg tok/s</th><th>E2EL (s)</th><th>TTFT (s)</th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table></div>
+
+  <h2>Method &amp; caveats</h2>
+  <div class="notes">
+    <div class="note"><b>Warmup pass.</b> Before measuring, every ISL×concurrency shape is exercised once (results discarded) — matching tt-inference-server. This inoculates against the first-call program-recompile-under-resident-trace stall; it is why 128k decode reads 21.7 t/s/u here vs 13.5 in the prior unwarmed sweep.</div>
+    <div class="note"><b>Cold, APC off.</b> Prefix caching disabled so identical random prompts don't cache-hit. Warm/agentic per-turn TTFT is far lower. Metrics: t/s/u = 1000/mean_TPOT; aggregate = output throughput; E2EL measured. Decode SDPA = accurate k64; PREFILL_FAST=1.</div>
+    <div class="note warn"><b>C=8 all-at-once collapse.</b> At 16k+, launching 8 requests simultaneously saturates prefill, inflating TTFT (85 s) and starving decode (5.6 t/s/u/user). This is a benchmark-arrival artifact, not a steady-state limit — ramped arrival avoids it. 128k @ C=8 is infeasible on the current KV pool.</div>
+  </div>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+const C1=[  // ISL, t/s/u, agg, e2el_s, ttft_s
+  [1024,28.44,27.9,36.7,0.71],
+  [16384,27.40,20.4,50.1,12.8],
+  [32768,26.38,15.0,68.1,29.3],
+  [130048,21.71,4.0,255.0,207.8],
+];
+const C8=[
+  [1024,24.02,99.1,10.3,5.0],
+  [16384,5.64,9.5,107.7,85.2],
+];
+const cs=getComputedStyle(document.documentElement);
+const col=n=>cs.getPropertyValue(n).trim();
+const fmtISL=v=>v>=1000?(v/1024>=1000?Math.round(v/1024)+'k':(v>=130000?'128k':(v/1024>=1?Math.round(v/1024)+'k':v))):v;
+const lab=v=>({1024:'1k',16384:'16k',32768:'32k',130048:'128k'})[v]||v;
+const NS='http://www.w3.org/2000/svg';
+function el(t,a){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+function line(svg,d,c,w){svg.appendChild(el('path',{d:d,fill:'none',stroke:c,'stroke-width':w,'stroke-linecap':'round','stroke-linejoin':'round'}));}
+function txt(svg,x,y,s,o){const t=el('text',{x:x,y:y,fill:o.fill||col('--ink-2'),'font-size':o.fs||12,'font-family':'ui-sans-serif,system-ui,sans-serif','text-anchor':o.an||'middle','font-weight':o.fw||400});t.textContent=s;svg.appendChild(t);}
+const LX=[1024,16384,32768,130048], lo=Math.log2(1024), hi=Math.log2(130048);
+const xlog=v=>(Math.log2(v)-lo)/(hi-lo);
+
+function lineChart(id,series,ymax,yfmt,yticks){
+  const svg=document.getElementById(id);const W=900,H=+svg.getAttribute('viewBox').split(' ')[3];
+  const pl=52,pr=18,pt=14,pb=34,pw=W-pl-pr,ph=H-pt-pb;
+  const X=v=>pl+xlog(v)*pw, Y=v=>pt+ph-(v/ymax)*ph;
+  yticks.forEach(v=>{const y=Y(v);line(svg,`M${pl} ${y} H${W-pr}`,col('--line'),1);txt(svg,pl-8,y+4,yfmt(v),{an:'end',fs:11,fill:col('--muted')});});
+  LX.forEach(v=>txt(svg,X(v),H-12,lab(v),{fs:11,fill:col('--muted')}));
+  series.forEach(s=>{
+    let d='';s.pts.forEach((p,i)=>{d+=(i?'L':'M')+X(p[0])+' '+Y(p[1])+' ';});
+    line(svg,d,s.c,2.5);
+    s.pts.forEach(p=>{svg.appendChild(el('circle',{cx:X(p[0]),cy:Y(p[1]),r:4.5,fill:col('--surface'),stroke:s.c,'stroke-width':2.5}));
+      txt(svg,X(p[0]),Y(p[1])-11,s.f(p[1]),{fs:11,fw:600,fill:s.c});});
+  });
+}
+lineChart('c_tsu',[
+  {c:col('--c1'),f:v=>v.toFixed(1),pts:C1.map(r=>[r[0],r[1]])},
+  {c:col('--c8'),f:v=>v.toFixed(1),pts:C8.map(r=>[r[0],r[1]])},
+],30,v=>v,[0,10,20,30]);
+lineChart('c_ttft',[
+  {c:col('--c1'),f:v=>v<10?v.toFixed(1)+'s':Math.round(v)+'s',pts:C1.map(r=>[r[0],r[4]])},
+],210,v=>v+'s',[0,50,100,150,200]);
+
+// grouped bars: aggregate tok/s C1 vs C8 at shared ISLs (1k,16k,32k)
+(function(){
+  const svg=document.getElementById('c_agg');const W=900,H=300;
+  const pl=52,pr=18,pt=14,pb=34,pw=W-pl-pr,ph=H-pt-pb;const ymax=110;
+  const Y=v=>pt+ph-(v/ymax)*ph;
+  [0,25,50,75,100].forEach(v=>{const y=Y(v);line(svg,`M${pl} ${y} H${W-pr}`,col('--line'),1);txt(svg,pl-8,y+4,v,{an:'end',fs:11,fill:col('--muted')});});
+  const groups=[[1024,27.9,99.1],[16384,20.4,9.5],[32768,15.0,null]];
+  const gw=pw/groups.length, bw=42;
+  groups.forEach((g,i)=>{
+    const cx=pl+gw*i+gw/2;
+    const vals=[['--c1',g[1]],['--c8',g[2]]];
+    vals.forEach((v,j)=>{
+      const bx=cx-bw-4+j*(bw+8);
+      if(v[1]==null){txt(svg,bx+bw/2,Y(0)-6,'n/a',{fs:10,fill:col('--muted')});return;}
+      const h=(v[1]/ymax)*ph;
+      svg.appendChild(el('rect',{x:bx,y:Y(v[1]),width:bw,height:h,rx:4,fill:col(v[0])}));
+      txt(svg,bx+bw/2,Y(v[1])-6,v[1].toFixed(0),{fs:11,fw:600,fill:col(v[0])});
+    });
+    txt(svg,cx,H-12,lab(g[0]),{fs:11,fill:col('--muted')});
+  });
+})();
+
+// table
+const tb=document.getElementById('tbody');
+function row(conc,r,osl){const tr=document.createElement('tr');
+  tr.innerHTML=`<td><span class="badge c${conc}">C=${conc}</span></td><td>${lab(r[0])}</td><td>${osl}</td>`+
+    `<td class="cc${conc}">${r[1].toFixed(2)}</td><td>${r[2].toFixed(1)}</td><td>${r[3].toFixed(1)}</td><td>${r[4]<10?r[4].toFixed(2):r[4].toFixed(0)}</td>`;
+  tb.appendChild(tr);}
+C1.forEach(r=>row(1,r,1024));C8.forEach(r=>row(8,r,128));
+document.getElementById('foot').textContent='Laguna-XS-2.1 · vllm bench serve · k64 + PREFILL_FAST · warmup pass · APC off (cold) · P150×4 · results: doc/vllm_integration/stage_d_c1c8/';
+</script>
