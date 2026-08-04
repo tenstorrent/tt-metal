@@ -927,7 +927,6 @@ def _load_token_pool(trace_dir, num_tokens: int) -> list:
     return pool[:num_tokens]
 
 
-
 def _resolve_slot_prompts(cfg: ProducerConfig):
     """Resolve each slot's prompt (tokens + golden trace) and load the token pool(s).
 
