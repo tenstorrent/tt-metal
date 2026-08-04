@@ -925,7 +925,7 @@
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 50  # ~38 min measured + ~12 min headroom
+      timeout: 50
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -966,7 +966,7 @@
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 55  # ~44 min measured + ~11 min headroom
+      timeout: 55
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
