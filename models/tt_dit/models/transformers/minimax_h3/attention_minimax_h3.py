@@ -30,6 +30,15 @@ class MiniMaxH3Attention(Module):
       a plain local `RMSNorm` and needs no CCL -- unlike Wan's `DistributedRMSNorm`.
     """
 
+    # Per-device sequence length -> measured-best ring SDPA (q_chunk_size, k_chunk_size).
+    # See `_sdpa_program_config` for how these were obtained and why the optimum moves with length.
+    # 4768 / 9216 / 13632 are 768P at 5s / 10s / 15s, packed and padded, divided by SP=8.
+    measured_sdpa_chunk_sizes = {
+        4768: (320, 384),
+        9216: (256, 512),
+        13632: (256, 512),
+    }
+
     def __init__(
         self,
         *,
@@ -159,12 +168,40 @@ class MiniMaxH3Attention(Module):
     # ------------------------------------------------------------------ helpers
 
     def _sdpa_program_config(self, seq_local: int, *, ring: bool) -> ttnn.SDPAProgramConfig:
-        """Chunk sizes capped to the local sequence length, so short sequences stay legal."""
+        """Ring SDPA chunk sizes for a given per-device sequence length.
+
+        Measured points come from the sweep in
+        `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_create_perf_table`
+        (model configs `minimax_h3_{5s,10s,15s}_768p`) on 4x8 Blackhole Galaxy, TP=4 / SP=8. Anything
+        else falls back to the generic rule below.
+
+        The optimum depends on the *local* sequence length, which is why this is keyed on it rather
+        than on the mesh shape the way `WanAttention.sdpa_chunk_size_map` is. At long sequences there
+        is enough work that (256, 512) wins -- a larger k halves the ring's K-loop iterations. At 5s
+        there is too little work to fill 110 cores that way: 14 heads x ceil(4768/256) = 266 work items
+        over 110 cores rounds up to 3 per core and wastes ~19% of the slots, whereas q=320 gives 210
+        items, 2 per core and ~4.5% waste. That is worth more than the larger k.
+
+        L1 (1.57 MB) bounds the (q, k) product, and the bound is what makes k=384 interesting: k=1024
+        never fits, (320, 512) reaches 1.65 MB and does not either, but (320, 384) does -- combining
+        the good q with a k larger than 256. Neither chunk size has to be a power of two, only a
+        multiple of TILE, and restricting the search to {256, 512} misses this point entirely.
+
+        Padding is not the thing to tune. 4768 is 32 x 149 with 149 prime, so no sensible chunk size
+        divides it, yet at q=320 the Q padding is only 0.67%. Core slot efficiency dominates, and the
+        optimum in it is sharp rather than a plateau: at 5s q=288 measured 10.43 ms against q=320's
+        7.81 ms. Slot efficiency is a good candidate generator but not a predictor -- q=416 at 10s has
+        the best slot efficiency of any k=256 point there (97.6%) and measured the worst (28.39 ms).
+        """
         key = (seq_local, ring)
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
-            q_chunk = max(tile, min(256, (seq_local // tile) * tile))
-            k_chunk = max(tile, min(512, (seq_local // tile) * tile))
+            measured = self.measured_sdpa_chunk_sizes.get(seq_local)
+            if measured is not None:
+                q_chunk, k_chunk = measured
+            else:
+                q_chunk = max(tile, min(256, (seq_local // tile) * tile))
+                k_chunk = max(tile, min(512, (seq_local // tile) * tile))
             grid = (
                 ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else ttnn.CoreCoord(self.full_grid.x, self.full_grid.y)
             )
