@@ -95,7 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    std::uint32_t const buf_desc_id = 8;
+    const std::uint32_t buf_desc_id = 8;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -110,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_ROW>(tensor_shape_A);
 
     // Block reduce produces a single result tile.
-    _llk_pack_(0, 0, tensor_shape_A);
+    _llk_pack_(0 /* start_math_dest_tile_idx */, 0 /* start_l1_tile_idx */, tensor_shape_A);
 
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     _llk_pack_reduce_mask_clear_();

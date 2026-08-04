@@ -33,6 +33,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
+# Keep 3 as an example of an odd block_ct_dim.
 BLOCK_CT_DIMS = [1, 2, 3, 4, 8, 16]
 
 TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
@@ -53,16 +54,12 @@ def test_reduce_block_max_row_quasar(
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    # `block_ct_dim` operand tiles laid out along the width dimension.
-    input_dimensions = [tile_dimensions[0], tile_dimensions[1] * block_ct_dim]
-
     # DIAGNOSTIC stimulus: each of the block_ct_dim tiles is a distinct ASCENDING constant
     # (tile k = 0.1*(k+1)). Constant tiles are layout-invariant, so no tilize is needed.
     tile_size = tile_shape.total_tile_size()
     src_A = torch.cat(
         [torch.full((tile_size,), 0.1 * (k + 1)) for k in range(block_ct_dim)]
     )
-    tile_cnt = block_ct_dim
 
     # Scaler tile: 1.0 (identity for MAX pool), resident in F0.
     src_B = torch.full((tile_shape.total_tile_size(),), 1)
