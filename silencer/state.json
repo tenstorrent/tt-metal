@@ -80,6 +80,12 @@
       "pattern": "-Wunused-but-set-variable: out_block_hw_actual dead-computed in groupnorm dataflow kernels (198x across 3 files in job sample)",
       "status": "pr-just-opened-dispatch-requested",
       "note": "Removed unused out_block_hw_actual (only out_block_h_actual/out_block_hw_normal are read) from reader_mcast_receiver_unary_gn.cpp, reader_mcast_sender_unary_gn.cpp, writer_unary_gn_rm_gb.cpp. Dispatched t3000-demo-tests safe-output tool in same turn for compile validation. Next run: resolve PR number via search_pull_requests and check CI status."
+    },
+    {
+      "branch": "silencer/groupnorm-unused-vars-clean",
+      "pattern": "-Wunused-but-set-variable: reset_index / output_tile_index in groupnorm compute kernels (72x across 2 files in job sample)",
+      "status": "pr-just-opened-dispatch-requested",
+      "note": "Removed dead reset_index and output_tile_index vars from groupnorm.cpp and groupnorm_sharded_v2.cpp. Dispatched t3000-demo-tests safe-output tool in same turn for compile validation. Next run: resolve PR number via search_pull_requests and check CI status."
     }
   ],
   "backlog_cursor": {
