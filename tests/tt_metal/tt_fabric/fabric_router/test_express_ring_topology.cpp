@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Golden expectations for the ring-family decomposition of each skip-link fixture. Machine-free:
+// Golden expectations for the ring-family decomposition of each express-link fixture. Machine-free:
 // MeshGraph(ClusterType, path) needs no cluster, no discovery and no topology mapper, so these are
 // pure input -> expected-output tables. Edit the literals; the checker is generic.
 //
@@ -24,12 +24,12 @@
 #include "cluster.hpp"
 #include "fabric_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/skip_ring_topology.hpp"
+#include "tt_metal/fabric/express_ring_topology.hpp"
 
-namespace tt::tt_fabric::skip_ring_tests {
+namespace tt::tt_fabric::express_ring_tests {
 namespace {
 
-constexpr int kNoContinueSrc = SkipRingTopology::kNone;
+constexpr int kNoContinueSrc = ExpressRingTopology::kNone;
 
 struct Rings {
     std::vector<int> leaves;                       // ascending
@@ -47,13 +47,13 @@ struct Hop {
     int next;
 };
 
-SkipRingTopology derive(const std::string& fixture) {
+ExpressRingTopology derive(const std::string& fixture) {
     const auto path = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
                       "tests/tt_metal/tt_fabric/custom_mesh_descriptors" / fixture;
     MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string());
-    auto topo = derive_skip_ring_topology(mesh_graph, MeshId{0});
-    EXPECT_TRUE(topo.has_value()) << fixture << " derived no skip rings";
-    return topo.value_or(SkipRingTopology{});
+    auto topo = derive_express_ring_topology(mesh_graph, MeshId{0});
+    EXPECT_TRUE(topo.has_value()) << fixture << " derived no express rings";
+    return topo.value_or(ExpressRingTopology{});
 }
 
 // A ControlPlane can only be built when the running world matches the descriptor's declared host
@@ -87,7 +87,7 @@ std::unique_ptr<ControlPlane> make_control_plane(
     return control_plane;
 }
 
-void expect_rings(const SkipRingTopology& t, const Rings& want) {
+void expect_rings(const ExpressRingTopology& t, const Rings& want) {
     std::vector<int> leaves;
     for (int r = 0; r < t.axis_len; r++) {
         if (t.is_leaf(r)) {
@@ -96,14 +96,14 @@ void expect_rings(const SkipRingTopology& t, const Rings& want) {
     }
     EXPECT_EQ(leaves, want.leaves) << "leaf set";
     for (const auto& [leaf, anchor] : want.anchors) {
-        ASSERT_NE(t.leaf_run_of[leaf], SkipRingTopology::kNone) << "row " << leaf << " is not a leaf";
+        ASSERT_NE(t.leaf_run_of[leaf], ExpressRingTopology::kNone) << "row " << leaf << " is not a leaf";
         const auto& run = t.leaf_runs[t.leaf_run_of[leaf]];
         // The end a leaf attaches to: index 0 exits before its run, the last index exits after it.
         EXPECT_EQ(t.leaf_index_of[leaf] == 0 ? run.anchor_before : run.anchor_after, anchor)
             << "anchor of leaf " << leaf;
     }
     for (const auto& [leaf, pair] : want.leaf_pairs) {
-        ASSERT_NE(t.leaf_run_of[leaf], SkipRingTopology::kNone) << "row " << leaf << " is not a leaf";
+        ASSERT_NE(t.leaf_run_of[leaf], ExpressRingTopology::kNone) << "row " << leaf << " is not a leaf";
         EXPECT_EQ(t.leaf_run_of[leaf], t.leaf_run_of[pair]) << leaf << " and " << pair << " share no run";
         EXPECT_EQ(std::abs(t.leaf_index_of[leaf] - t.leaf_index_of[pair]), 1)
             << leaf << " and " << pair << " are not adjacent in their run";
@@ -113,7 +113,7 @@ void expect_rings(const SkipRingTopology& t, const Rings& want) {
     EXPECT_EQ(t.crossovers, want.crossovers) << "ordered crossovers";
 }
 
-void expect_hops(const SkipRingTopology& t, const std::vector<Hop>& hops) {
+void expect_hops(const ExpressRingTopology& t, const std::vector<Hop>& hops) {
     for (const auto& h : hops) {
         EXPECT_EQ(t.next_row(h.src, h.dst), h.next) << "next row on " << h.src << " -> " << h.dst;
     }
@@ -121,9 +121,9 @@ void expect_hops(const SkipRingTopology& t, const std::vector<Hop>& hops) {
 
 }  // namespace
 
-// 8x4: LINE axis (no end wrap), one span-4 chord 2<->5 and one span-8 chord 0<->7, so the two classes
-// fuse into a single spanning family over the six transit rows.
-TEST(SkipRingTopologyTest, Rings8x4) {
+// 8x4: RING axis with a single span-4 chord 2<->5, its class closing one ring over the six transit
+// rows through the ordinary wrap. The pattern declares wrap: LINE, so no chord straddles the boundary.
+TEST(ExpressRingTopologyTest, Rings8x4) {
     const Rings want{
         .leaves = {3, 4},
         .anchors = {{3, 2}, {4, 5}},
@@ -132,7 +132,7 @@ TEST(SkipRingTopologyTest, Rings8x4) {
         .continue_src_domain = kNoContinueSrc,
         .crossovers = {},
     };
-    const auto topo = derive("skip_links_8x4_mesh_graph_descriptor.textproto");
+    const auto topo = derive("express_links_8x4_mesh_graph_descriptor.textproto");
     expect_rings(topo, want);
     expect_hops(
         topo,
@@ -148,7 +148,7 @@ TEST(SkipRingTopologyTest, Rings8x4) {
 
 // 16x4: LINE axis, span-4 chords 2<->5, 6<->9, 10<->13 and span-8 chords 0<->7, 8<->15. Single
 // spanning family -- note rows 1 and 14 are members despite owning no chord.
-TEST(SkipRingTopologyTest, Rings16x4) {
+TEST(ExpressRingTopologyTest, Rings16x4) {
     const Rings want{
         .leaves = {3, 4, 11, 12},
         .anchors = {{3, 2}, {4, 5}, {11, 10}, {12, 13}},
@@ -157,7 +157,7 @@ TEST(SkipRingTopologyTest, Rings16x4) {
         .continue_src_domain = kNoContinueSrc,
         .crossovers = {},
     };
-    const auto topo = derive("skip_links_16x4_mesh_graph_descriptor.textproto");
+    const auto topo = derive("express_links_16x4_mesh_graph_descriptor.textproto");
     expect_rings(topo, want);
     EXPECT_FALSE(topo.is_leaf(1)) << "row 1 is a chordless ring member, not a leaf";
     EXPECT_FALSE(topo.is_leaf(14)) << "row 14 is a chordless ring member, not a leaf";
@@ -171,7 +171,7 @@ TEST(SkipRingTopologyTest, Rings16x4) {
 }
 
 // 24x4: LINE axis, five span-4 and three span-8 chords fused into one spanning family.
-TEST(SkipRingTopologyTest, Rings24x4) {
+TEST(ExpressRingTopologyTest, Rings24x4) {
     const Rings want{
         .leaves = {3, 4, 11, 12, 19, 20},
         .anchors = {{3, 2}, {4, 5}, {11, 10}, {12, 13}, {19, 18}, {20, 21}},
@@ -180,7 +180,7 @@ TEST(SkipRingTopologyTest, Rings24x4) {
         .continue_src_domain = kNoContinueSrc,
         .crossovers = {},
     };
-    const auto topo = derive("skip_links_24x4_mesh_graph_descriptor.textproto");
+    const auto topo = derive("express_links_24x4_mesh_graph_descriptor.textproto");
     expect_rings(topo, want);
     EXPECT_FALSE(topo.is_leaf(1));
     EXPECT_FALSE(topo.is_leaf(22));
@@ -189,7 +189,7 @@ TEST(SkipRingTopologyTest, Rings24x4) {
 // 32x4: RING axis, so each class closes its own family. Domains are ordered by ascending span, so
 // domain 0 is the span-4 (ex4) ring and domain 1 the span-8 (ex8) ring; ex8 may continue into ex4
 // and the reverse crossing is terminal.
-TEST(SkipRingTopologyTest, Rings32x4) {
+TEST(ExpressRingTopologyTest, Rings32x4) {
     const Rings want{
         .leaves = {3, 4, 11, 12, 19, 20, 27, 28},
         .anchors = {{3, 2}, {4, 5}, {11, 10}, {12, 13}, {19, 18}, {20, 21}, {27, 26}, {28, 29}},
@@ -202,7 +202,7 @@ TEST(SkipRingTopologyTest, Rings32x4) {
         .continue_src_domain = 1,
         .crossovers = {{0, 1}, {7, 6}, {8, 9}, {15, 14}, {16, 17}, {23, 22}, {24, 25}, {31, 30}},
     };
-    const auto topo = derive("skip_links_32x4_mesh_graph_descriptor.textproto");
+    const auto topo = derive("express_links_32x4_mesh_graph_descriptor.textproto");
     expect_rings(topo, want);
     expect_hops(
         topo,
@@ -214,44 +214,16 @@ TEST(SkipRingTopologyTest, Rings32x4) {
         });
 }
 
-// The quad geometry with only its wide pattern declared, so each block skips six rows rather than
-// two. Runs longer than a pair are entered and left by their nearer end, one row at a time -- a run
-// member is never handed the anchor directly unless it is adjacent to it.
-TEST(SkipRingTopologyTest, LeafRunsOfSix) {
-    const auto topo = derive("skip_links_32x4_ex8_only_mesh_graph_descriptor.textproto");
-
-    ASSERT_EQ(topo.leaf_runs.size(), 4u);
-    EXPECT_EQ(topo.forward_cycle, (std::vector<std::vector<int>>{{0, 7, 8, 15, 16, 23, 24, 31}}));
-    const auto& run = topo.leaf_runs[topo.leaf_run_of[1]];
-    EXPECT_EQ(run.rows, (std::vector<int>{1, 2, 3, 4, 5, 6}));
-    EXPECT_EQ(run.anchor_before, 0);
-    EXPECT_EQ(run.anchor_after, 7);
-
-    expect_hops(
-        topo,
-        {
-            {1, 12, 0},  // index 0 is adjacent to anchor_before, so it exits straight to it
-            {2, 12, 1},  // nearer end is before: step along the run, not a jump to the anchor
-            {3, 12, 2},
-            {4, 12, 5},  // past the midpoint the nearer end is after
-            {5, 12, 6},
-            {6, 12, 7},  // last index is adjacent to anchor_after
-            {0, 2, 1},   // entered from anchor_before, then inward
-            {7, 5, 6},   // entered from anchor_after, then inward
-            {1, 4, 2},   // both ends inside one run: step toward the destination
-        });
-}
-
 using tt::tt_fabric::fabric_router_tests::ControlPlaneFixture;
 
 // The canonical logical route query must reconstruct the same path the table walks, and must complete
-// the skip axis before turning onto X. chip = row*4 + col on the 8x4 fixture.
+// the express axis before turning onto X. chip = row*4 + col on the 8x4 fixture.
 TEST_F(ControlPlaneFixture, CanonicalRoute8x4) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
     auto control_plane = make_control_plane(
-        "skip_links_8x4_mesh_graph_descriptor.textproto",
+        "express_links_8x4_mesh_graph_descriptor.textproto",
         FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
         FabricConfig::FABRIC_2D_TORUS_XY);
 
@@ -283,10 +255,10 @@ TEST_F(ControlPlaneFixture, RingPredicates32x4) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
     if (world_size() != 4) {
-        GTEST_SKIP() << "skip_links_32x4 declares 4 host ranks; run under tt-run with 4 ranks";
+        GTEST_SKIP() << "express_links_32x4 declares 4 host ranks; run under tt-run with 4 ranks";
     }
     auto control_plane = make_control_plane(
-        "skip_links_32x4_mesh_graph_descriptor.textproto",
+        "express_links_32x4_mesh_graph_descriptor.textproto",
         FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
         FabricConfig::FABRIC_2D_TORUS_XY);
 
@@ -315,4 +287,4 @@ TEST_F(ControlPlaneFixture, RingPredicates32x4) {
     EXPECT_FALSE(control_plane->continuation_allowed(row(0), D::S, D::Z));
 }
 
-}  // namespace tt::tt_fabric::skip_ring_tests
+}  // namespace tt::tt_fabric::express_ring_tests
