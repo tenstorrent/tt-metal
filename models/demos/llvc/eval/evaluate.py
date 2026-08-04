@@ -7,30 +7,45 @@
 Produces the evidence a voice-conversion bring-up is expected to report:
 
 1. Decoder throughput (latent frames per second) vs the real-time frame rate.
-2. Token-level accuracy vs the PyTorch reference (per-frame correlation, not just
-   a single global PCC).
+2. Token-level accuracy vs the PyTorch reference (per-frame correlation + SI-SDR,
+   not just a single global PCC).
 3. WER / content preservation (source vs converted, via Whisper) -- optional.
-4. Speaker similarity to the target speaker (via a speaker encoder) -- optional.
+4. Speaker similarity (to a target speaker if given, else target-consistency of
+   the converted set + contrast vs the source) -- optional.
 5. Objective audio quality of the converted speech (DNSMOS) -- optional.
 
-Metrics 1 and 2 are pure-torch and always run. Metrics 3-5 need extra models
-(``openai-whisper`` + ``jiwer``, ``resemblyzer``, ``torchmetrics[audio]`` with
-``onnxruntime``); each is imported lazily and skipped with a clear message if the
-dependency is absent, so the harness stays turnkey without them.
+Two stages
+----------
+The device work and the file-based quality metrics are decoupled so the heavy
+eval models (Whisper / resemblyzer / DNSMOS, which pull their own torch) never
+share a process with ``ttnn``:
+
+* ``--stage convert`` (needs ttnn + the checkpoint): converts the wavs, times the
+  stream, computes throughput + token-level accuracy, and writes the converted
+  wavs plus ``eval_report.json`` (with a manifest) into ``--out-dir``.
+* ``--stage metrics`` (offline, no ttnn): reads that manifest and adds WER,
+  speaker similarity, and DNSMOS on the saved wavs.
+* ``--stage all`` (default): both in one process.
+
+Metrics 3-5 are imported lazily; if a dependency is missing the harness logs a
+skip line and still reports the rest.
 
 Example
 -------
-python models/demos/llvc/eval/evaluate.py \
-    --config /path/experiments/llvc/config.json \
-    --checkpoint /path/G_500000.pth \
-    --input /path/test_wavs \
-    --target-ref /path/target_speaker_samples \
-    --out-dir llvc_eval_out --chunk-factor 2
+# on the device box (clean tt-metal env):
+python models/demos/llvc/eval/evaluate.py --stage convert \
+    --config .../config.json --checkpoint .../G_500000.pth \
+    --input .../test_wavs --out-dir llvc_eval_out --chunk-factor 2
+
+# anywhere (after `pip install openai-whisper jiwer resemblyzer librosa onnxruntime requests`):
+python models/demos/llvc/eval/evaluate.py --stage metrics \
+    --input .../test_wavs --out-dir llvc_eval_out --target-ref .../target_speaker
 """
 
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
 from pathlib import Path
@@ -38,10 +53,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 
-import ttnn
 from models.demos.llvc.demo.demo import _glob_audio, _load_audio, _safe_output_path, _save_audio
-from models.demos.llvc.tt.model import create_llvc
-from models.demos.llvc.tt.state_io import load_llvc_config_and_model
 
 
 # --------------------------------------------------------------------- metrics
@@ -128,7 +140,7 @@ def try_wer(source_paths: list[str], converted_paths: list[str]) -> dict | None:
     try:
         import jiwer
         import whisper
-    except ImportError:
+    except (ImportError, ModuleNotFoundError):
         logger.warning("WER skipped: install `openai-whisper` and `jiwer` to enable content-preservation eval.")
         return None
 
@@ -141,32 +153,57 @@ def try_wer(source_paths: list[str], converted_paths: list[str]) -> dict | None:
     for src, conv in zip(source_paths, converted_paths):
         refs.append(transcribe(src))
         hyps.append(transcribe(conv))
-    wer = jiwer.wer(refs, hyps)
-    return {"wer": wer, "num_files": len(refs)}
+    return {"wer": float(jiwer.wer(refs, hyps)), "num_files": len(refs)}
 
 
-def try_speaker_similarity(converted_paths: list[str], target_ref_paths: list[str]) -> dict | None:
-    """Cosine similarity of converted-speech speaker embeddings to the target speaker."""
-    if not target_ref_paths:
-        logger.warning("Speaker similarity skipped: pass --target-ref with target-speaker wavs to enable.")
-        return None
+def try_speaker_similarity(
+    converted_paths: list[str],
+    target_ref_paths: list[str],
+    source_paths: list[str],
+) -> dict | None:
+    """Speaker-identity evidence via a speaker encoder.
+
+    With ``--target-ref`` (target-speaker audio): cosine similarity of each
+    converted clip to the mean target embedding. Without it (LLVC ships no target
+    ground truth): report target-*consistency* — the mean pairwise similarity of
+    the converted set, which should be high because every clip must map to the
+    same target voice — and the converted-vs-source similarity, which should be
+    lower, showing the identity actually changed.
+    """
     try:
         import numpy as np
         from resemblyzer import VoiceEncoder, preprocess_wav
-    except ImportError:
+    except (ImportError, ModuleNotFoundError):
         logger.warning("Speaker similarity skipped: install `resemblyzer` to enable.")
         return None
 
     encoder = VoiceEncoder()
-    target_embed = np.mean([encoder.embed_utterance(preprocess_wav(Path(p))) for p in target_ref_paths], axis=0)
-    target_embed /= np.linalg.norm(target_embed) + 1e-8
 
-    sims = []
-    for conv in converted_paths:
-        emb = encoder.embed_utterance(preprocess_wav(Path(conv)))
-        emb /= np.linalg.norm(emb) + 1e-8
-        sims.append(float(np.dot(emb, target_embed)))
-    return {"speaker_similarity_mean": float(np.mean(sims)), "speaker_similarity_min": float(np.min(sims))}
+    def embed(path: str):
+        e = encoder.embed_utterance(preprocess_wav(Path(path)))
+        return e / (np.linalg.norm(e) + 1e-8)
+
+    conv = [embed(p) for p in converted_paths]
+    result: dict = {}
+
+    if target_ref_paths:
+        target = np.mean([embed(p) for p in target_ref_paths], axis=0)
+        target /= np.linalg.norm(target) + 1e-8
+        sims = [float(np.dot(e, target)) for e in conv]
+        result["to_target_mean"] = float(np.mean(sims))
+        result["to_target_min"] = float(np.min(sims))
+    else:
+        logger.warning(
+            "No --target-ref: reporting target-consistency (pairwise similarity of converted clips) "
+            "instead of similarity to a ground-truth target speaker."
+        )
+        pairs = [float(np.dot(a, b)) for a, b in itertools.combinations(conv, 2)]
+        result["target_consistency_mean"] = float(np.mean(pairs)) if pairs else 1.0
+
+    src = [embed(p) for p in source_paths]
+    cross = [float(np.dot(c, s)) for c, s in zip(conv, src)]
+    result["converted_vs_source_mean"] = float(np.mean(cross))
+    return result
 
 
 def try_dnsmos(converted_paths: list[str], sample_rate: int) -> dict | None:
@@ -192,62 +229,70 @@ def try_dnsmos(converted_paths: list[str], sample_rate: int) -> dict | None:
     return {"dnsmos_ovrl_mean": sum(ovrl) / len(ovrl), "num_files": len(ovrl)}
 
 
-# ------------------------------------------------------------------------ main
-def run_eval(args: argparse.Namespace, *, device: ttnn.Device) -> dict:
-    config, reference = load_llvc_config_and_model(args.config, args.checkpoint)
-    model = create_llvc(config, device=device, reference=reference)
-    sr = config.sample_rate
-    hop = config.L
+# ------------------------------------------------------------------- stages
+def convert_stage(args: argparse.Namespace) -> dict:
+    """Device stage: convert wavs, time streaming, score token-level accuracy."""
+    import ttnn
+    from models.demos.llvc.tt.model import create_llvc
+    from models.demos.llvc.tt.state_io import load_llvc_config_and_model
 
-    files = _glob_audio(args.input)
-    if not files:
-        raise FileNotFoundError(f"No audio files found under {args.input}")
-    if args.limit:
-        files = files[: args.limit]
+    if not (args.config and args.checkpoint):
+        raise ValueError("--stage convert needs --config and --checkpoint")
 
-    os.makedirs(args.out_dir, exist_ok=True)
-    source_paths, converted_paths = [], []
-    rtfs, latencies = [], []
-    frame_corrs = []
-    global_pccs = []
-    si_sdrs = []
-    voiced_total, frame_total = 0, 0
+    device = ttnn.open_device(device_id=args.device_id, l1_small_size=32768, trace_region_size=23887872)
+    device.enable_program_cache()
+    try:
+        config, reference = load_llvc_config_and_model(args.config, args.checkpoint)
+        model = create_llvc(config, device=device, reference=reference)
+        sr = config.sample_rate
+        hop = config.L
 
-    for fname in files:
-        audio = _load_audio(fname, sr)
-        wav = audio.reshape(1, 1, -1)
+        files = _glob_audio(args.input)
+        if not files:
+            raise FileNotFoundError(f"No audio files found under {args.input}")
+        if args.limit:
+            files = files[: args.limit]
 
-        # token-level accuracy: non-streaming TTNN vs the PyTorch reference
-        with torch.no_grad():
-            ref_out = reference(wav)
-        tt_ns = model(wav)
-        corr, n_voiced, n_frames = per_frame_pcc(tt_ns, ref_out, hop)
-        frame_corrs.append(corr)
-        voiced_total += n_voiced
-        frame_total += n_frames
-        global_pccs.append(global_pcc(tt_ns, ref_out))
-        si_sdrs.append(si_sdr_db(tt_ns, ref_out))
+        os.makedirs(args.out_dir, exist_ok=True)
+        source_paths, converted_paths = [], []
+        rtfs, latencies, si_sdrs, global_pccs, frame_corrs = [], [], [], [], []
+        voiced_total, frame_total = 0, 0
 
-        # streaming conversion: RTF/latency + saved audio for the quality evals
-        stream_out, rtf, latency = model.stream(audio, chunk_factor=args.chunk_factor)
-        rtfs.append(rtf)
-        latencies.append(latency)
-        out_path = _safe_output_path(args.out_dir, os.path.basename(fname))
-        _save_audio(stream_out.squeeze(0), out_path, sr)
-        source_paths.append(fname)
-        converted_paths.append(out_path)
-        logger.info(
-            "[{}] RTF={:.3f} latency={:.2f}ms voiced_frame_pcc={:.4f} si_sdr={:.1f}dB",
-            os.path.basename(fname),
-            rtf,
-            latency,
-            corr.mean().item(),
-            si_sdrs[-1],
-        )
+        for fname in files:
+            audio = _load_audio(fname, sr)
+            wav = audio.reshape(1, 1, -1)
+
+            with torch.no_grad():
+                ref_out = reference(wav)
+            tt_ns = model(wav)
+            corr, n_voiced, n_frames = per_frame_pcc(tt_ns, ref_out, hop)
+            frame_corrs.append(corr)
+            voiced_total += n_voiced
+            frame_total += n_frames
+            global_pccs.append(global_pcc(tt_ns, ref_out))
+            si_sdrs.append(si_sdr_db(tt_ns, ref_out))
+
+            stream_out, rtf, latency = model.stream(audio, chunk_factor=args.chunk_factor)
+            rtfs.append(rtf)
+            latencies.append(latency)
+            out_path = _safe_output_path(args.out_dir, os.path.basename(fname))
+            _save_audio(stream_out.squeeze(0), out_path, sr)
+            source_paths.append(os.path.abspath(fname))
+            converted_paths.append(os.path.abspath(out_path))
+            logger.info(
+                "[{}] RTF={:.3f} latency={:.2f}ms voiced_frame_pcc={:.4f} si_sdr={:.1f}dB",
+                os.path.basename(fname),
+                rtf,
+                latency,
+                corr.mean().item(),
+                si_sdrs[-1],
+            )
+    finally:
+        ttnn.close_device(device)
 
     mean_rtf = sum(rtfs) / len(rtfs)
     all_corr = torch.cat(frame_corrs)
-    report = {
+    return {
         "num_files": len(files),
         "chunk_factor": args.chunk_factor,
         "streaming": {
@@ -264,21 +309,38 @@ def run_eval(args: argparse.Namespace, *, device: ttnn.Device) -> dict:
             "voiced_frames": voiced_total,
             "total_frames": frame_total,
         },
+        "_manifest": {"sample_rate": sr, "sources": source_paths, "converted": converted_paths},
     }
 
-    wer = try_wer(source_paths, converted_paths)
+
+def metrics_stage(args: argparse.Namespace, report: dict | None) -> dict:
+    """Offline stage: WER / speaker similarity / DNSMOS on the saved wavs (no ttnn)."""
+    if report is None:
+        json_path = os.path.join(args.out_dir, "eval_report.json")
+        if not os.path.exists(json_path):
+            raise FileNotFoundError(f"{json_path} not found — run `--stage convert` first.")
+        report = json.loads(Path(json_path).read_text())
+
+    manifest = report.get("_manifest")
+    if not manifest:
+        raise RuntimeError("eval_report.json has no manifest; re-run `--stage convert`.")
+    sr = manifest["sample_rate"]
+    sources = manifest["sources"]
+    converted = manifest["converted"]
+
+    wer = try_wer(sources, converted)
     if wer is not None:
         report["content_preservation_wer"] = wer
-    spk = try_speaker_similarity(converted_paths, args.target_ref or [])
+    spk = try_speaker_similarity(converted, args.target_ref or [], sources)
     if spk is not None:
         report["speaker_similarity"] = spk
-    quality = try_dnsmos(converted_paths, sr)
+    quality = try_dnsmos(converted, sr)
     if quality is not None:
         report["audio_quality_dnsmos"] = quality
-
     return report
 
 
+# ------------------------------------------------------------------- report io
 def _write_markdown(report: dict, path: str) -> None:
     thr = report["decoder_throughput"]
     tok = report["token_level_accuracy_vs_reference"]
@@ -302,27 +364,36 @@ def _write_markdown(report: dict, path: str) -> None:
         f"| Voiced / total frames | {tok['voiced_frames']} / {tok['total_frames']} |",
     ]
     if "content_preservation_wer" in report:
-        lines.append(
-            f"| Content preservation (WER, source vs converted) | {report['content_preservation_wer']['wer'] * 100:.1f}% |"
-        )
+        lines.append(f"| Content preservation (WER, source vs converted) | {report['content_preservation_wer']['wer'] * 100:.1f}% |")
     if "speaker_similarity" in report:
-        lines.append(
-            f"| Speaker similarity to target (cosine) | {report['speaker_similarity']['speaker_similarity_mean']:.3f} |"
-        )
+        spk = report["speaker_similarity"]
+        if "to_target_mean" in spk:
+            lines.append(f"| Speaker similarity to target (cosine) | {spk['to_target_mean']:.3f} |")
+        if "target_consistency_mean" in spk:
+            lines.append(f"| Target consistency (converted↔converted) | {spk['target_consistency_mean']:.3f} |")
+        lines.append(f"| Converted↔source similarity (lower = identity changed) | {spk['converted_vs_source_mean']:.3f} |")
     if "audio_quality_dnsmos" in report:
         lines.append(f"| Audio quality (DNSMOS OVRL) | {report['audio_quality_dnsmos']['dnsmos_ovrl_mean']:.2f} / 5 |")
     Path(path).write_text("\n".join(lines) + "\n")
 
 
+def _write_report(report: dict, out_dir: str) -> tuple[str, str]:
+    os.makedirs(out_dir, exist_ok=True)
+    json_path = os.path.join(out_dir, "eval_report.json")
+    md_path = os.path.join(out_dir, "eval_report.md")
+    Path(json_path).write_text(json.dumps(report, indent=2))
+    _write_markdown(report, md_path)
+    return json_path, md_path
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="LLVC evaluation harness")
-    p.add_argument("--config", type=str, required=True, help="KoeAI config.json path")
-    p.add_argument("--checkpoint", type=str, required=True, help="KoeAI generator checkpoint (.pth)")
-    p.add_argument("--input", type=str, required=True, help="Source audio file or directory")
-    p.add_argument("--out-dir", type=str, default="llvc_eval_out", help="Where converted wavs + report are written")
-    p.add_argument(
-        "--target-ref", type=str, nargs="*", help="Target-speaker reference wav(s)/dir for speaker similarity"
-    )
+    p.add_argument("--stage", choices=["all", "convert", "metrics"], default="all")
+    p.add_argument("--config", type=str, default=None, help="KoeAI config.json path (convert stage)")
+    p.add_argument("--checkpoint", type=str, default=None, help="KoeAI checkpoint .pth (convert stage)")
+    p.add_argument("--input", type=str, default="test_wavs", help="Source audio file or directory")
+    p.add_argument("--out-dir", type=str, default="llvc_eval_out", help="Converted wavs + report location")
+    p.add_argument("--target-ref", type=str, nargs="*", help="Target-speaker wav(s)/dir for speaker similarity")
     p.add_argument("--chunk-factor", type=int, default=2, help="Streaming chunk multiplier (2 meets RTF<0.3)")
     p.add_argument("--limit", type=int, default=0, help="Only evaluate the first N files (0 = all)")
     p.add_argument("--device-id", type=int, default=0)
@@ -337,20 +408,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    device = ttnn.open_device(device_id=args.device_id, l1_small_size=32768, trace_region_size=23887872)
-    device.enable_program_cache()
-    try:
-        report = run_eval(args, device=device)
-    finally:
-        ttnn.close_device(device)
+    report: dict | None = None
+    if args.stage in ("all", "convert"):
+        report = convert_stage(args)
+        _write_report(report, args.out_dir)
+    if args.stage in ("all", "metrics"):
+        report = metrics_stage(args, report)
+        _write_report(report, args.out_dir)
 
-    os.makedirs(args.out_dir, exist_ok=True)
-    json_path = os.path.join(args.out_dir, "eval_report.json")
-    md_path = os.path.join(args.out_dir, "eval_report.md")
-    Path(json_path).write_text(json.dumps(report, indent=2))
-    _write_markdown(report, md_path)
+    json_path, md_path = os.path.join(args.out_dir, "eval_report.json"), os.path.join(args.out_dir, "eval_report.md")
     logger.info("Wrote {} and {}", json_path, md_path)
-    print(json.dumps(report, indent=2))
+    print(json.dumps({k: v for k, v in report.items() if k != "_manifest"}, indent=2))
 
 
 if __name__ == "__main__":
