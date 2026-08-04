@@ -84,6 +84,12 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     WAYPOINT("URBD");
 }
 
+/**
+ * @brief Uninit for the block reduce_max_row unpacker (runtime): clears the UNPACKER0 transpose bit.
+ *
+ * @param respect_trigger     Unsupported on Quasar; must stay false.
+ * @param overlap_first_half  Unsupported on Quasar; must stay false.
+ */
 inline void llk_unpack_AB_reduce_block_max_row_uninit_runtime(
     const bool respect_trigger = false, const bool overlap_first_half = false) {
     _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(respect_trigger, overlap_first_half);

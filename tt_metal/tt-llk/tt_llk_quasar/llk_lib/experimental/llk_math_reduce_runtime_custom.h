@@ -35,7 +35,7 @@ inline void reduce_block_max_row_configure_addrmod()
 /**
  * @brief Transpose one pooled 1xN row partial (at the current DEST counter) into an Nx1 column.
  *
- * @param face_r_dim Number of rows in the face = height of the transposed output column. The column is
+ * @param face_r_dim: Number of rows in the face = height of the transposed output column. The column is
  *                   written back to DEST with MOVB2D moves of ELTWISE_MATH_ROWS rows each,
  *                   so ceil(face_r_dim / ELTWISE_MATH_ROWS) moves are emitted -- one per
  *                   ELTWISE_MATH_ROWS-row band the face actually spans.
@@ -81,7 +81,13 @@ inline void reduce_block_max_row_transpose_face_row(const std::uint32_t face_r_d
 }
 
 /**
- * @brief Runtime-block_ct_dim MOP config for block reduce_max_row.
+ * @brief Program the pool MOP for block reduce_max_row: pool F0,F1 -> DEST slot0 and F2,F3 -> slot1,
+ *        accumulating the row-max across all block_ct_dim tiles.
+ *
+ * @tparam is_fp32_dest_acc_en: 32-bit DEST accumulation, values = <false> (true unsupported on Quasar).
+ * @param block_ct_dim: Number of tiles in the block; becomes the MOP inner-loop count.
+ * @param tensor_shape: Operand tile shape; drives the face count and the single- vs two-face-row pool.
+ * @note Called by @ref _llk_math_reduce_block_max_row_init_runtime_; not a standalone entry point.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32_t block_ct_dim, const TensorShape& tensor_shape)
@@ -126,7 +132,16 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
 }
 
 /**
- * @brief Runtime-block_ct_dim init for block reduce_max_row.
+ * @brief Configure the math (FPU) thread for block reduce_max_row: address modifier, tile-shape GPR,
+ *        counter reset, and the pool MOP.
+ *
+ * @tparam is_fp32_dest_acc_en: 32-bit DEST accumulation, values = <false> (true unsupported on Quasar).
+ * @param block_ct_dim: Number of tiles in the block, baked into the pool MOP.
+ * @param tensor_shape: Operand tile shape (face count / dims).
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_reduce_block_max_row_init_runtime_ (T0);
+ *       on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
+ * @note @ref _llk_math_reduce_block_max_row_runtime_ runs the reduction; call
+ *       @ref _llk_math_reduce_block_max_row_uninit_runtime_ after to restore state.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_init_runtime_(const std::uint32_t block_ct_dim, const TensorShape& tensor_shape)
@@ -137,14 +152,31 @@ inline void _llk_math_reduce_block_max_row_init_runtime_(const std::uint32_t blo
     _llk_math_reduce_block_max_row_mop_config_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
 }
 
+/**
+ * @brief Uninit the math thread after block reduce_max_row. No-op: the op leaves no math CFG state a
+ *        later op depends on being restored (ADDR_MOD_0, tile-shape GPR, and counters are reprogrammed
+ *        by the next init). Kept for init/execute/uninit symmetry.
+ *
+ * @tparam is_fp32_dest_acc_en: 32-bit DEST accumulation, values = <false> (true unsupported on Quasar).
+ * @note Pairs with @ref _llk_math_reduce_block_max_row_init_runtime_.
+ */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_uninit_runtime_()
 {
 }
 
 /**
- * @brief Runtime-block_ct_dim execute for block reduce_max_row. The block tile count is baked into
- *        the MOP by init, so only dst_index / tensor_shape are needed here.
+ * @brief Execute block reduce_max_row: run the pool MOP (row-max accumulate across the block into two
+ *        DEST slots), then transpose each pooled row partial into a reduced column at DEST[dst_index].
+ *
+ * The block tile count is baked into the MOP by init, so only dst_index / tensor_shape are needed here.
+ *
+ * @tparam is_fp32_dest_acc_en: 32-bit DEST accumulation, values = <false> (true unsupported on Quasar).
+ * @param dst_index: DEST tile index that receives the reduced column.
+ * @param tensor_shape: Operand tile shape; drives the transpose row count and single- vs two-face-row path.
+ * @note Call @ref _llk_math_reduce_block_max_row_init_runtime_ first (programs the MOP + addrmod) and
+ *       @ref _llk_math_reduce_block_max_row_uninit_runtime_ after. On T0, pair with
+ *       @ref _llk_unpack_AB_reduce_block_max_row_runtime_ which delivers the block's SrcA tiles + scaler.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index, const TensorShape& tensor_shape)
