@@ -28,6 +28,16 @@
 
 namespace ttml::ttnn_fixed {
 
+namespace {
+
+// The inverse Gumbel CDF, -log(-log(u)), is finite only for u in (0, 1).
+// Half of the 31-bit RNG step is a natural strictly-positive lower endpoint;
+// ttnn::rand's half-open contract keeps the upper endpoint strictly below 1.
+constexpr float gumbel_uniform_lower_bound = 0x1p-32F;
+constexpr float gumbel_uniform_upper_bound = 1.0F;
+
+}  // namespace
+
 ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim) {
     return sum_moreh(t, dim, /* keepdim */ true);
 }
@@ -199,8 +209,8 @@ ttnn::Tensor sample(
                 /* dtype */ ttnn::DataType::FLOAT32,
                 /* layout */ ttnn::Layout::TILE,
                 /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
-                /* from */ 0.00001F,
-                /* to */ 0.99F,
+                /* from */ gumbel_uniform_lower_bound,
+                /* to */ gumbel_uniform_upper_bound,
                 /* seed */ seed,
                 /* mesh_mapper */ mapper);
         } else {
@@ -212,8 +222,8 @@ ttnn::Tensor sample(
                 /* dtype */ ttnn::DataType::FLOAT32,
                 /* layout */ ttnn::Layout::TILE,
                 /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
-                /* from */ 0.00001F,
-                /* to */ 0.99F,
+                /* from */ gumbel_uniform_lower_bound,
+                /* to */ gumbel_uniform_upper_bound,
                 /* seed */ seed);
         }
 
