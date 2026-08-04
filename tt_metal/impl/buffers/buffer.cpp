@@ -27,6 +27,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator.hpp"
+#include "impl/memory_tracking/shm_tracking_processor.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
@@ -500,6 +501,11 @@ void Buffer::allocate_impl() {
     allocation_status_ = AllocationStatus::ALLOCATED;
 
     GraphTracker::instance().track_allocate(this);
+
+    // Record to the per-device SHM stats region directly (not via GraphTracker, whose
+    // processor stack is thread_local and therefore misses allocations on non-init
+    // threads). Runs on the allocating thread, so it is always in the right scope.
+    shm_record_buffer_allocation(this);
 }
 
 void Buffer::deallocate() {
@@ -529,6 +535,9 @@ void Buffer::deallocate_impl() {
     if (device_->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(this);
+        // Mirror allocate: record the deallocation directly to the SHM region so it is
+        // captured regardless of the dispatching thread (see shm_record_buffer_allocation).
+        shm_record_buffer_deallocation(this);
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
 #if defined(TRACY_ENABLE)
             if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))

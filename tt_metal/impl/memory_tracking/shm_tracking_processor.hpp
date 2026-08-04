@@ -5,12 +5,25 @@
 #pragma once
 
 #include <tt-metalium/graph_tracking.hpp>
-#include <mutex>
 
 namespace tt::tt_metal {
 
 // Forward declarations
 class Device;
+class Buffer;
+
+// Direct, thread-agnostic SHM recording entry points, invoked from
+// Buffer::allocate_impl() / Buffer::deallocate_impl().
+//
+// These deliberately do NOT route through GraphTracker. Since #44668 made
+// GraphTracker::processors thread_local, a processor pushed once on the
+// device-init thread is invisible to allocations dispatched on any other
+// thread, which silently disabled SHM DRAM/L1/trace tracking. Calling the
+// SHM provider directly here records allocations regardless of which thread
+// performs them, while leaving the thread_local capture semantics (used by
+// transient graph-capture processors) untouched.
+void shm_record_buffer_allocation(const Buffer* buffer);
+void shm_record_buffer_deallocation(Buffer* buffer);
 
 // Processor that tracks buffer allocations/deallocations to shared memory (SHM)
 // for real-time monitoring by external tools (e.g. tt-smi-ui)
@@ -39,15 +52,6 @@ public:
         const IDevice* /*device*/) override {}
 
     void track_deallocate_cb(const IDevice* /*device*/) override {}
-
-private:
-    // Global mutex to serialize all buffer tracking calls
-    // Prevents race conditions where concurrent allocations/deallocations
-    // at the same address send out-of-order updates to the SHM tracking
-    std::mutex tracking_mutex_;
-
-    // Verbose logging flag (set from TT_METAL_SHM_VERBOSE env var)
-    bool verbose_enabled_;
 };
 
 }  // namespace tt::tt_metal

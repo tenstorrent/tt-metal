@@ -13,6 +13,8 @@
 #include <host_api.hpp>
 #include <initializer_list>
 #include <sub_device.hpp>
+#include <unistd.h>       // DIAGNOSTIC (temporary): syscall/gettid for SHM thread logging
+#include <sys/syscall.h>  // DIAGNOSTIC (temporary)
 #include <sub_device_types.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "impl/device/mock_allocator.hpp"
@@ -651,16 +653,27 @@ bool Device::initialize(
             std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_, shm_tracking_disabled, shm_verbose);
         log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
 
-        // Register ShmTrackingProcessor globally once (when first device with SHM is created).
-        // Verbose flag is captured here from this device's MetalContext for the same reason as
-        // SharedMemoryStatsProvider above.
-        static bool shm_processor_registered = false;
-        if (!shm_processor_registered) {
-            tt::tt_metal::GraphTracker::instance().push_processor(
-                std::make_shared<tt::tt_metal::ShmTrackingProcessor>(shm_verbose));
-            log_debug(tt::LogMetal, "ShmTrackingProcessor registered with GraphTracker");
-            shm_processor_registered = true;
+        // DIAGNOSTIC (temporary): log the OS thread that initialized SHM for the FIRST device.
+        // Pre-fix, the ShmTrackingProcessor was push_processor'd on exactly this thread, and
+        // GraphTracker::processors is thread_local -- so only allocations on this tid were ever
+        // recorded. Compare against the "[SHM-DIAG] first buffer allocation on tid=..." lines.
+        static bool shm_diag_logged_init_tid = false;
+        if (!shm_diag_logged_init_tid) {
+            shm_diag_logged_init_tid = true;
+            log_info(
+                tt::LogMetal,
+                "[SHM-DIAG] init/registration thread tid={} (device {})",
+                static_cast<long>(::syscall(SYS_gettid)),
+                this->id_);
         }
+
+        // NOTE: Buffer allocation/deallocation recording is driven directly from
+        // Buffer::allocate_impl()/deallocate_impl() via shm_record_buffer_*(), NOT through a
+        // GraphTracker processor. GraphTracker::processors is thread_local (since #44668), so a
+        // once-registered processor only observes allocations on the registering thread and
+        // silently drops everything dispatched on other threads. The direct path records on the
+        // allocating thread and is thread-agnostic. Per-op verbose logging (TT_METAL_SHM_VERBOSE)
+        // is emitted by SharedMemoryStatsProvider itself.
     }
 
     this->initialized_ = true;
