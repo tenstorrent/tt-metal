@@ -199,6 +199,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // laid out [sender, u1, ..., uN] consecutively along x per sender group.
     uint32_t sender_row_y = subdevice_cores.at(0).y;
     std::vector<CoreCoord> all_row_cores;
+    all_row_cores.reserve(subdevice_cores.size());
     for (const auto& core : subdevice_cores) {
         if (core.y == sender_row_y) {
             all_row_cores.push_back(core);
@@ -881,6 +882,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
 
     // ==================== Pre-compute NOC coordinates ====================
     std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;
+    sender_noc_coords.reserve(sender_cores.size());
     for (const auto& sc : sender_cores) {
         auto noc_coord = mesh_device->virtual_core_from_logical_core(sc, tt::CoreType::WORKER);
         sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
@@ -961,6 +963,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         if (operation_attributes.num_links > 0) {
             // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+            dst_nodes.reserve(neighbors.size());
             for (const auto& neighbor_coordinate : neighbors) {
                 if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
                     continue;
