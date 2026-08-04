@@ -3773,7 +3773,6 @@ def _fullpipe_ms_now():
         return None
 
 
-@mcp.tool()
 def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tuple[int, int]:
     """(attempts already made, how many are permitted) for this (op, rung).
 
@@ -3784,7 +3783,13 @@ def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tupl
     """
     rung = _normalise_rung(kernel_kind)
     matches = [a for a in attempts if _op_match(op_signature, a)]
-    tries = sum(1 for a in matches if _normalise_rung(a.get("kernel_kind")) == rung and not a.get("measurement_failed"))
+    tries = sum(
+        1
+        for a in matches
+        if _normalise_rung(a.get("kernel_kind")) == rung
+        and not a.get("measurement_failed")
+        and a.get("measured_ms") is not None
+    )
     kinds = {(a.get("kernel_kind") or "").lower() for a in matches}
     went_deeper = bool(kinds & (_STRUCTURAL_RUNGS | {"tt-lang", "cpp", "tp-fracture"}))
     if rung in _KNOB_RUNG_NAMES:
@@ -3797,6 +3802,7 @@ def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tupl
 _KNOB_RUNG_NAMES = {"grid", "dtype", "fidelity", "shard"}
 
 
+@mcp.tool()
 def record_kernel_attempt(
     op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = "", stages_json: str = ""
 ) -> dict:
@@ -3849,6 +3855,38 @@ def record_kernel_attempt(
     except Exception:  # noqa: BLE001
         stages = []
     _ms = round(float(measured_ms), 4)
+    # CLOSED-RUNG CHECK RUNS FIRST, BEFORE the verdict is claimed. `_attempt_fullpipe_verdict()`
+    # CONSUMES the measurement id (one replay, one attempt), so when it ran ahead of this check a
+    # refusal still burned the measurement: the agent recorded a closed rung by mistake, got refused,
+    # and the trace replay it had already paid minutes for was gone -- the next, legitimate kind on
+    # the same op then refused too, for "owns no end-to-end measurement". Order matters because one
+    # of these two refusals is free to retry and the other is not.
+    if os.environ.get("PERF_MCP_ALLOW_RETRIED_RUNG") != "1":
+        _all = [a for a in _load_attempts_all() if not a.get("measurement_failed")]
+        _tries, _allowed = _rung_allowance(op_signature, kernel_kind, _all)
+        if _tries >= _allowed:
+            _done_kinds = sorted(
+                {
+                    _normalise_rung(a.get("kernel_kind"))
+                    for a in _all
+                    if _op_match(op_signature, a) and a.get("kernel_kind")
+                }
+            )
+            _left = [r for r in _LADDER_ORDER if r not in _done_kinds]
+            return {
+                "recorded": False,
+                "refused": (
+                    "rung %r on %r is CLOSED: %d of %d permitted attempt(s) already recorded"
+                    % (_normalise_rung(kernel_kind), op_signature, _tries, _allowed)
+                ),
+                "already_tried": _done_kinds,
+                "rungs_still_open": _left,
+                "next": (
+                    "work a rung in rungs_still_open, or a different op from termination_check's "
+                    "blocking list. Re-measuring a closed rung cannot be recorded, so it cannot "
+                    "clear the op or bank a win."
+                ),
+            }
     _fpv = _attempt_fullpipe_verdict()
     # AN ATTEMPT NEEDS ITS OWN MEASUREMENT. gates_allow_banking already enforces this at COMMIT time
     # -- "absent verdicts are refused, not assumed: an unrun gate is not a passed gate" -- but nothing
@@ -3891,32 +3929,6 @@ def record_kernel_attempt(
     #
     # Permanence across runs comes free: _load_attempts_all reads archive UNION live, so a rung tried
     # in a previous optimize of this model is still closed in the next one.
-    if os.environ.get("PERF_MCP_ALLOW_RETRIED_RUNG") != "1":
-        _all = [a for a in _load_attempts_all() if not a.get("measurement_failed")]
-        _tries, _allowed = _rung_allowance(op_signature, kernel_kind, _all)
-        if _tries >= _allowed:
-            _done_kinds = sorted(
-                {
-                    _normalise_rung(a.get("kernel_kind"))
-                    for a in _all
-                    if _op_match(op_signature, a) and a.get("kernel_kind")
-                }
-            )
-            _left = [r for r in _LADDER_ORDER if r not in _done_kinds]
-            return {
-                "recorded": False,
-                "refused": (
-                    "rung %r on %r is CLOSED: %d of %d permitted attempt(s) already recorded"
-                    % (_normalise_rung(kernel_kind), op_signature, _tries, _allowed)
-                ),
-                "already_tried": _done_kinds,
-                "rungs_still_open": _left,
-                "next": (
-                    "work a rung in rungs_still_open, or a different op from termination_check's "
-                    "blocking list. Re-measuring a closed rung cannot be recorded, so it cannot "
-                    "clear the op or bank a win."
-                ),
-            }
     rec = {
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,
