@@ -46,12 +46,14 @@ export TT_METAL_HOME PYTHONPATH="$TT_METAL_HOME"
 export TT_METAL_CACHE="${PP_TT_METAL_CACHE:-/tmp/tt-metal-cache-pp}"
 cd "$TT_METAL_HOME"
 
-# Optional shell-selected model: forward PREFILL_MANIFEST / PREFILL_MODEL to every rank when set, so a
-# GENERIC binding (one that does not set the model in its global_env) can run any model without a
+# Optional shell-selected model, SINGLE-HOST ONLY: forward PREFILL_MANIFEST / PREFILL_MODEL when set, so
+# a GENERIC binding (one that does not set the model in its global_env) can run any model without a
 # per-model binding, e.g.
 #   PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
 #     ./run_pipeline_prefill.sh <generic_binding.yaml> <host_list>
 # Use this with a binding that leaves the model unset; don't also set it in that binding's global_env.
+# Multi-host: -x reaches only the launch-host rank, so remote ranks silently take the default model and
+# disagree on the chunk plan — put PREFILL_MANIFEST (ABSOLUTE path) in the binding's global_env instead.
 FWD_ENV=""
 [ -n "${PREFILL_MANIFEST:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MANIFEST"
 [ -n "${PREFILL_MODEL:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MODEL"

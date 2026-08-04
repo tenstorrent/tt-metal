@@ -227,7 +227,7 @@ anything. The runner serialises the KV-chunk table and device map and nothing el
 each chunk device-lessly via `read_dram_umd` — the same UMD path the migration worker uses — and PCCs
 against golden. This isolates one question: is `build_kv_chunk_table` correct? No endpoint, no worker and
 no MPI are involved. Requires the producer to implement a read-back for this model's cache layout (see
-`prefill_producer.py`). `PREFILL_MAX_SEQ_LEN` must be at least `NCHUNKS * CHUNK_SIZE` or the runner
+`prefill_producer.py`). `PREFILL_MAX_SEQ_LEN` must be at least `chunks * CHUNK_SIZE` or the runner
 asserts when a chunk overruns the cache — it no longer derives from a chunk count.
 
 In the binding, replace the migration block with:

@@ -196,8 +196,7 @@ shell-exported `PREFILL_*` is NOT an override here — `tt-run` only passes thro
 
 This keeps the rank-binding + mesh-graph descriptors model-agnostic shared topology config (under
 `models/demos/common/prefill/runners/topology_configuration/`) — the same binding runs any model by
-swapping the manifest. (A manifest may also carry a migration `users[]` block for pairwise
-KV-migration validation; see `_apply_manifest_env`.)
+swapping the manifest. (The runner reads only the manifest's `env` block; see `_apply_manifest_env`.)
 
 ## 4. Validate
 
@@ -205,12 +204,12 @@ KV-migration validation; see `_apply_manifest_env`.)
 and exports its descriptor; the producer (prefill_producer.py / the scheduler) connects by
 `PREFILL_H2D_SERVICE_ID` and pushes token chunks. The shared env (`PREFILL_MODEL`, `PREFILL_SP/TP`,
 `PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
-both so the byte layout agrees, and `PREFILL_MAX_SEQ_LEN` must be ≥ `chunks * PREFILL_CHUNK_SIZE` or the
-runner asserts when a chunk overruns the per-user cache.
+both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 11 chunks) and
+must be ≥ `chunks * PREFILL_CHUNK_SIZE`, else the runner asserts when a chunk overruns a slot.
 
 ```bash
 # terminal A — runner (creates the H2D service, exports the descriptor, serves):
-PREFILL_MODEL=my_model PREFILL_SP=8 PREFILL_TP=4 PREFILL_MAX_SEQ_LEN=56320 PREFILL_H2D_SERVICE_ID=my_prefill \
+PREFILL_MODEL=my_model PREFILL_SP=8 PREFILL_TP=4 PREFILL_H2D_SERVICE_ID=my_prefill \
   python -m models.demos.common.prefill.runners.prefill_runner
 
 # terminal B — producer (pushes 11 chunks from the golden trace):
@@ -222,7 +221,9 @@ PREFILL_PRODUCER_CHUNKS=11 \
 **KV PCC** — validate prefill writes correct KV. The producer reads the KV back device-lessly and PCCs
 vs the golden trace, which requires the runner to publish its KV chunk table + device map: run the runner
 with `PREFILL_MOCK_MIGRATION=1` and the producer with `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
-recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner itself PCCs nothing.
+recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner itself PCCs nothing. The producer's
+reader knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
+layout needs a branch in `_read_slot_kv_and_check_pcc`, since that read-back is not adapter-dispatched.
 
 **Single-rank migration** — `PREFILL_ENABLE_MIGRATION=1` on the runner (requires the
 migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).

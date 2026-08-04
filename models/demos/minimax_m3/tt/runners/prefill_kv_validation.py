@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-M3 KV-cache golden PCC validation (bring-up / standalone only — never used in serving).
+"""MiniMax-M3 KV-cache golden PCC validation (bring-up only — never used in serving).
 
 Per-layer K / V / index_k PCC: the device cache (``runtime.gather_layer``) vs the golden trace written
 by ``scripts/generate_golden_kv_cache.py`` (keys ``key/value/index_k_cache_layer_N``, HF layout). The

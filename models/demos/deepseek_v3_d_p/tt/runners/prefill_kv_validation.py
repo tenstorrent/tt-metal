@@ -44,8 +44,8 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     here. `mmap=True` keeps it lazy on first touch; subsequent layers are zero-copy
     slices into the same backing storage.
 
-    Both `validate_migration_kv` PCC calls (BEFORE/AFTER) reuse one load via the
-    module-level cache; the cache lives for the runner's lifetime.
+    Repeated PCC calls against the same `.pt` reuse one load via the module-level
+    cache; the cache lives for the process's lifetime.
     """
     import torch
 
@@ -139,14 +139,13 @@ def kv_cache_pcc_check(
     Returns the min per-layer PCC and asserts (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when
     any layer is below threshold.
 
-    The single PCC entrypoint, driven by the migration validators and the producer's device-less
-    read-back. Golden source, in priority order:
+    The single PCC entrypoint; its callers are out-of-tree (tt-llm-engine) or bring-up scripts.
+    Golden source, in priority order:
       1. `pt_path_override` / DEEPSEEK_PREFILL_TRACE_PT — a save_reference_cache .pt carrying
          ref_kvpe_list[layer] ([1, 1, seq, kv_lora + qk_rope_head_dim], already Meta-interleaved).
-         Used by the migration validators.
       2. `trace_dir` (caller-resolved) — the resolved PREFILL_TRACE_DIR golden, descended via
          resolve_trace_dir.
-      3. DEEPSEEK_PREFILL_TRACE_DIR env (default: the longbook_qa 56320 trace) — migration fallback.
+      3. DEEPSEEK_PREFILL_TRACE_DIR env (default: the longbook_qa 56320 trace) — last-resort fallback.
     A trace dir holds kv_cache/layer_*.safetensors (or a Kimi row-sharded dir) keyed by
     kv_post_transform_layer_<global_layer>.
 
@@ -191,7 +190,7 @@ def kv_cache_pcc_check(
             )
         resolved_dir = None
     elif trace_dir is not None:
-        # Standalone path: caller passes the PREFILL_TRACE_DIR golden; descend to the dir holding it.
+        # Caller passes the PREFILL_TRACE_DIR golden; descend to the dir holding it.
         resolved_dir = resolve_trace_dir(trace_dir)
         kv_pt = None
     else:

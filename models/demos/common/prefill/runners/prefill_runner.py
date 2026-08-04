@@ -17,11 +17,13 @@ after compile).
 
 Serving is request-driven: rank 0's tokens + per-iter PrefillMetadata arrive over the H2D socket from
 an external producer (prefill_producer.py / the scheduler); the loop is UNBOUNDED. KV-chunk-table
-migration + per-layer LayerAck are wired for the single-rank case only (disabled for the pipeline for
-now). Shutdown is graceful: the producer/scheduler closes the stream with an all -1 PrefillMetadata
-sentinel that each rank forwards downstream and then exits on; a rank blocked in the recv can only be
-released by a transfer (the recv device op has no timeout), so SIGTERM/SIGKILL remains the hard
-fallback if no sentinel arrives.
+migration and per-layer LayerAck run at any rank count: every rank joins the all-gather that merges
+the chunk table and rank 0 publishes it, and pipeline layer completions are routed to the master
+rank, which re-emits them into the same ack channel the scheduler connects to in the single-rank case
+(only PREFILL_MOCK_MIGRATION stays single-rank). Shutdown is graceful: the producer/scheduler closes
+the stream with an all -1 PrefillMetadata sentinel that each rank forwards downstream and then exits
+on; a rank blocked in the recv can only be released by a transfer (the recv device op has no timeout),
+so SIGTERM/SIGKILL remains the hard fallback if no sentinel arrives.
 
 The model class is the single source of truth — this driver wires rank topology, input, transport,
 and the per-chunk schedule; it does not reimplement embed / layers / forward.
@@ -117,8 +119,8 @@ GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 # Per-user KV cache length. In request mode the external producer decides the chunk count, so this is
-# the one cache-sizing knob; a chunk must not push a slot past it. Default holds 4 chunks.
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 4))
+# the one cache-sizing knob; a chunk must not push a slot past it. Default holds 11 chunks.
+MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
 # Chunks one slot's cache holds. Only the migration self-test needs a chunk count (it bounds the
 # otherwise-unbounded loop so the post-loop verify can run); the producer fills a slot to its cache
 # depth there, so the two agree by construction.
