@@ -12,8 +12,13 @@ the work to close it.
 > fighting tensor identity under buffer reuse, trace replay and `deallocate`.
 > This version makes a **metadata-only `ttnn` shim** the primary front end and
 > demotes the device to a *validator*. Seven of the original 35 blockers dissolve
-> outright; eight new shim-specific ones replace them. The critical path gets
+> outright; nine new shim-specific ones replace them. The critical path gets
 > shorter and, more importantly, the everyday analysis stops needing hardware.
+>
+> **The design has been spiked** — see [`spike/FINDINGS.md`](spike/FINDINGS.md).
+> The real LTX block runs under a metadata-only ttnn on a laptop and reproduces
+> the phase-5 findings byte for byte, so what follows is calibrated against a
+> working prototype rather than an estimate.
 
 ## Where we are
 
@@ -22,8 +27,9 @@ the work to close it.
 | Analysis | works offline, pure Python: forward availability + backward demand + 6 redundancy rules + proofs |
 | Op semantics | 18 specs, 80 call-name aliases |
 | Capture | 30 monkeypatch hooks written, **never run on hardware** |
-| Graph source | hand-written via `builder.py`, or a trace + hand-declared entry placements |
-| Validated on | SD3.5-large block (0 findings), LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear) |
+| Dry run | spike proven: real `LTXTransformerBlock.forward` under a fake ttnn, 18 ttnn ops, 212 nodes, findings byte-identical to the oracle on both BH configs |
+| Graph source | hand-written via `builder.py`, or the spike's dry run; a trace still needs hand-declared placements |
+| Validated on | SD3.5-large block (0 findings), LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), both reproduced from source by the dry run |
 
 ## The design: dry run first, device as validator
 
@@ -109,7 +115,7 @@ Target: a pointwise / view-like / axis-mapping op is a ≤10-line entry. Only ne
 ## Blocker inventory
 
 The 35 items from the original audit of `models/tt_dit` (169 distinct `ttnn.*`
-call sites), plus 8 introduced by the shim. `P` = phase that closes it;
+call sites), plus 9 introduced by the shim (44 was found by the spike). `P` = phase that closes it;
 **dissolved** = the dry-run design removes it.
 
 ### A. Capture mechanics
@@ -188,13 +194,14 @@ call sites), plus 8 introduced by the shim. `P` = phase that closes it;
 | 40 | **Device and config object stubs.** `MeshDevice.shape/arch/compute_with_storage_grid_size/create_submeshes`, `CoreGrid`/`CoreCoord`/`CoreRangeSet`, `SDPAProgramConfig`, `MemoryConfig`, compute-kernel configs, `SubDevice`, `create_global_semaphore` — and `get_matmul_config`'s assertions must be satisfiable from fake shapes | 6 |
 | 41 | **Pipeline construction touches the device before any forward.** `CCLManager.__init__` calls `_init_subdevice()` and `_init_semaphores()` (many `create_global_semaphore`) and `synchronize_device`; pipelines also build persistent buffers and prepare weights at init | 6 |
 | 42 | **Shim/ttnn divergence over time.** The shim is a second implementation of ttnn's shape/layout semantics and will rot | 11 |
+| 44 | **Source attribution points at shared library code.** Spike findings landed on `layers/linear.py:250` (the AGMM call site inside `ColParallelLinear`) rather than `attention_ltx.py:428` (`to_qkv`). Both are true; only the second is actionable. Record a short caller stack (2-3 tt_dit frames), not one line | 6 |
 | 43 | **Readback boundaries end the graph.** Everything after `to_torch(get_device_tensors(...))` (`transformer_ltx.py:1068`, `bwe_ltx.py:85`, `mel_decoder_ltx.py:483`) is host code on fake data; and no kernel-level constraint (program-config asserts, L1 fit, hangs) is visible in a dry run | 10 |
 
 ## Phases
 
 Estimates are for one engineer. Only phase 11 needs device access.
 
-### Phase 6 — Dry-run shim core (3–4 weeks) · closes 37, 40, 41; dissolves 3–9
+### Phase 6 — Dry-run shim core (2–3 weeks) · closes 37, 40, 41, 44; dissolves 3–9
 
 - A `ttnn` stand-in (installed by import shadowing, not by editing model code): metadata
   `Tensor`, `MeshDevice`, mesh mappers/composers, config objects, semaphores,
@@ -205,14 +212,27 @@ Estimates are for one engineer. Only phase 11 needs device access.
   recorded at creation, so entry placements are known rather than declared.
 - A no-device pipeline construction path (or shim coverage of `CCLManager.__init__`
   and persistent-buffer allocation) so a pipeline object can exist on a laptop.
-- **Acceptance:** run the real `LTXTransformerBlock.forward` under the shim and
-  reproduce the same 6 `duplicate_gather` findings with the same source lines.
-  `examples/ltx.py` stays: it is the oracle the dry run is diffed against, and
-  the regression test that catches shim drift later.
+- Record a short caller stack per node, not a single innermost frame (44), so a
+  finding names the model call site and the library line under it.
+- **Acceptance — met by the spike** for one block: the real forward runs, the
+  collectives match `examples/ltx.py` as an identical multiset (31 vs 31 on Ring,
+  25 vs 25 on Linear), and the findings are byte-identical (6 provable
+  `duplicate_gather`, 128.7 GiB/forward; 0 on Linear). `examples/ltx.py` stays as
+  the oracle and the drift regression test (`spike/test_dryrun_matches_oracle.py`).
+  What remains for the production version: real torch-meta weights instead of
+  `fake_torch`, the `unregistered` node kind, pipeline-level construction, and the
+  caller stack.
+- **Prerequisites the spike surfaced:** the repo needs Python ≥ 3.10 (PEP 604
+  unions in evaluated annotations, `types.NoneType`), and
+  `models.common.utility_functions` pulls in numpy *and pytest* for the sake of
+  `is_blackhole` — worth splitting upstream.
 
 ### Phase 7 — Shape and layout fidelity (2–3 weeks) · closes 10, 11, 12, 13, 36, 38
 
-The load-bearing wall: shapes decide branches (36).
+The load-bearing wall: shapes decide branches (36). The spike's two bugs are
+exactly this phase's content — treating `num_heads_per_device=1` (the no-split
+default) as a head split, and reusing a fused weight's symbol for a chunked AGMM.
+Between them they produced 15 spurious findings next to the 6 real ones.
 
 - Implement tile padding and expose both `shape` and `padded_shape`; regions and
   demand on logical extents, byte/cost math on padded.
@@ -223,6 +243,8 @@ The load-bearing wall: shapes decide branches (36).
   `_prepare_torch_state` on meta tensors so preprocessing shapes come for free.
 - Checkpoint key lists from a safetensors index for `has_gate`-style flags.
 - Block-float byte table.
+- A real `chunked_weight` spec: `to_qkv(chunks=3)` consumes a column block of a
+  per-device-interleaved weight, which the spike models as separate weights.
 - **Acceptance:** for one block, every per-device shape the shim computes matches
   a recorded real run (the phase 11 collective log), and no branch differs.
 
@@ -244,6 +266,10 @@ The load-bearing wall: shapes decide branches (36).
   stops tainting.
 - **Acceptance:** LTX and VAE dry runs complete with zero `unregistered` nodes and
   zero `UNKNOWN_OP` diagnostics.
+- **Calibration:** one transformer block touches **18 distinct ttnn ops**, and the
+  spike's 53 implemented names covered it with room to spare. The ~100-op estimate
+  for the whole surface stands, but the tail is VAE/encoder, not the DiT — so this
+  phase can ship DiT-complete early and grow into the VAE.
 
 ### Phase 9 — Scale (1–2 weeks) · closes 20, 21, 26, 27
 
@@ -254,7 +280,8 @@ so block boundaries and `calls` come from the run instead of being inferred.
 - Roll repeated blocks up to one instance + `calls`, keeping the first and last
   instances intact so boundary effects aren't hidden.
 - Liveness-pruned, copy-on-write state; snapshot only at collectives.
-- Roll findings up by `(rule, source location)`.
+- Roll findings up by `(rule, source location)`, leading with the outermost model
+  frame from the caller stack recorded in phase 6 (44).
 - **Acceptance:** a full 48-layer dry run analyzes in <60 s and <2 GB, with
   findings matching the rolled-up single-block result.
 
@@ -273,6 +300,8 @@ so block boundaries and `calls` come from the run instead of being inferred.
 ### Phase 11 — Conformance and soundness gates (2–3 weeks, needs a device) · closes 1, 28, 29, 30, 42
 
 The device's whole remaining job, plus the gates between "look here" and "do this".
+The spike is the argument for the conformance half: two shape bugs invented 15
+findings that read exactly as convincingly as the 6 real ones.
 
 - Per-op conformance harness: for each registered op, build inputs on a real
   mesh, run real ttnn, and assert the shim's shape/layout/dist match. Runs in
@@ -334,8 +363,8 @@ recorded collective log, so a small amount of device time is needed early.
 
 | Risk | Mitigation |
 |---|---|
-| Shim shape math diverges from ttnn and flips a branch (36) — the worst failure mode, because it produces confident wrong findings | Per-op conformance in device CI (11); phase 7 acceptance is a per-device-shape diff against a real run; keep the hand-written `examples/` graphs as regression oracles rather than deleting them |
-| The shim rots as ttnn adds or changes ops | `ops --check` makes coverage debt visible; conformance failures name the op; fused-kernel behaviour lives in a data table |
+| Shim shape math diverges from ttnn and flips a branch (36) — the worst failure mode, because it produces confident wrong findings, **observed in the spike: 2 bugs, 15 spurious findings** | Per-op conformance in device CI (11); phase 7 acceptance is a per-device-shape diff against a real run; keep the hand-written `examples/` graphs as regression oracles rather than deleting them |
+| The shim rots as ttnn adds or changes ops (42) | `ops --check` makes coverage debt visible; conformance failures name the op; fused-kernel behaviour lives in a data table |
 | A weightless or input-free dry run silently changes the graph (37, 38, 39) | Meta-tensor weights so `_data` is non-None; checkpoint key lists; the coverage matrix reports which branches were never exercised |
 | Import shadowing `ttnn` is fragile or leaks into real runs | Install the shim only under an explicit entry point, and assert `ttnn.__file__` is the shim at graph-emit time |
 | Findings scale faster than anyone reads them | Rollup by source location plus top-N ranking; the report is a queue, not a dump |

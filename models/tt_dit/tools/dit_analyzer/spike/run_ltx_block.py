@@ -264,12 +264,14 @@ def compare_with_oracle(graph, ring: bool):
         return out
 
     dry, ref = collectives(graph), collectives(oracle)
+    only_dry: list = []
+    only_ref: list = []
     print("\ncollectives: dry run %d, oracle %d" % (len(dry), len(ref)))
     from collections import Counter
 
     cd, cr = Counter(dry), Counter(ref)
-    only_dry = sorted((cd - cr).elements())
-    only_ref = sorted((cr - cd).elements())
+    only_dry[:] = sorted((cd - cr).elements())
+    only_ref[:] = sorted((cr - cd).elements())
     if only_dry or only_ref:
         print("  only in dry run:", len(only_dry))
         for x in only_dry[:12]:
@@ -290,7 +292,33 @@ def compare_with_oracle(graph, ring: bool):
     if report.diagnostics:
         codes = Counter(d.code for d in report.diagnostics)
         print("diagnostics:", dict(codes))
-    return report
+
+    oracle_report = analyze_graph(oracle)
+    failures = check_criteria(graph, report, oracle_report, only_dry, only_ref)
+    return report, failures
+
+
+def check_criteria(graph, report, oracle_report, only_dry, only_ref):
+    """The four acceptance criteria, as assertions. Empty list == pass."""
+    fail = []
+    if not graph.nodes:
+        fail.append("1: dry run produced no nodes")
+    if fake_ttnn.UNREGISTERED:
+        fail.append("1: unregistered ops: %s" % sorted(fake_ttnn.UNREGISTERED))
+    if report.diagnostics:
+        fail.append("2: analyzer diagnostics: %s" % sorted({d.code for d in report.diagnostics}))
+    if only_dry or only_ref:
+        fail.append("3: collectives differ from the oracle (+%d / -%d)" % (len(only_dry), len(only_ref)))
+
+    def signature(r):
+        return sorted((f.rule, f.confidence, f.bytes_per_call, f.calls) for f in r.findings)
+
+    if signature(report) != signature(oracle_report):
+        fail.append(
+            "4: findings differ from the oracle\n     dry run: %s\n     oracle:  %s"
+            % (signature(report), signature(oracle_report))
+        )
+    return fail
 
 
 def main() -> int:
@@ -304,11 +332,17 @@ def main() -> int:
             print("  %-60s x%d" % (name, count))
     else:
         print("unregistered ops: none")
-    compare_with_oracle(graph, ring)
+    _, failures = compare_with_oracle(graph, ring)
     out = os.path.join(HERE, "ltx_dryrun.graph.json")
     with open(out, "w") as fh:
         fh.write(graph.to_json())
     print("\nwrote %s" % out)
+    if failures:
+        print("\nFAIL (%d criteria):" % len(failures))
+        for f in failures:
+            print("  - %s" % f)
+        return 1
+    print("\nPASS: dry run matches the hand-written oracle on all four criteria")
     return 0
 
 

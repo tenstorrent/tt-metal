@@ -37,8 +37,18 @@ models/tt_dit/tools/ditcheck analyze g.json --json findings.json --fail-on prova
 Tests (no device, no pytest needed):
 
 ```bash
-python3 models/tt_dit/tools/dit_analyzer/tests/test_dit_analyzer.py
-# or: pytest models/tt_dit/tools/dit_analyzer/tests/
+python3 models/tt_dit/tools/dit_analyzer/tests/test_dit_analyzer.py          # analyzer, 20 tests
+python3 models/tt_dit/tools/dit_analyzer/spike/test_dryrun_matches_oracle.py # dry run vs oracle
+# or: pytest models/tt_dit/tools/dit_analyzer/
+```
+
+The dry-run spike derives the LTX graph from the model source instead of
+restating it by hand, and reproduces the findings below byte for byte on both
+Blackhole configs — see [`spike/FINDINGS.md`](spike/FINDINGS.md):
+
+```bash
+python3 models/tt_dit/tools/dit_analyzer/spike/run_ltx_block.py            # BH 4x8, Ring
+python3 models/tt_dit/tools/dit_analyzer/spike/run_ltx_block.py --linear   # BH 2x4, Linear
 ```
 
 ## Phase 5: what it found in LTX-2.3
@@ -146,6 +156,7 @@ report.py     text rendering: state tables, ranked findings, proofs, diagnostics
 builder.py    DSL for writing/lifting graphs; expands fused ttnn ops into stages
 capture.py    record a real ttnn forward pass -> trace -> graph
 examples/     gold graphs (LTX-2.3 block x2 topologies, SD3.5 block, synthetic patterns)
+spike/        dry-run prototype: real model code under a metadata-only ttnn + FINDINGS.md
 ```
 
 Three ideas carry most of the weight:
@@ -262,12 +273,12 @@ Not built (and where it would go):
   `semantics.py`; nothing else changes.
 * **Automated rewrites.** Diagnostics only, per the plan's "proofs before
   auto-fixes".
-* **A graph derived from the model code.** The LTX-2.3 result above comes from a
-  graph hand-modelled off the source, so it validates the analysis, not the
-  front end. The roadmap's phases 6-8 replace `examples/` with a dry run of the
-  real forward under a metadata-only `ttnn` shim; that also covers the branches
-  this hand model fixes by construction (image conditioning, `skip_qk`, LoRA, the
-  non-audio config).
+* **A production dry-run front end.** `spike/` proves the approach for one block
+  (the real forward under a metadata-only `ttnn`, matching the oracle byte for
+  byte), but it is throwaway: it fakes torch, ignores tiling, covers one block and
+  no pipeline entry point. Roadmap phases 6-8 turn it into the real front end,
+  which also covers the branches the hand model fixes by construction (image
+  conditioning, `skip_qk`, LoRA, the non-audio config).
 * **On-device conformance.** `capture.py` remains for the device's two jobs in
   the new design -- per-op shape/layout conformance and one flat collective log to
   diff the dry run against -- and has not been run on hardware yet.

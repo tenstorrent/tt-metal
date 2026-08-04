@@ -10,7 +10,13 @@ Run it:
 ```bash
 python3 models/tt_dit/tools/dit_analyzer/spike/run_ltx_block.py            # BH 4x8, Ring
 python3 models/tt_dit/tools/dit_analyzer/spike/run_ltx_block.py --linear   # BH 2x4, Linear
+python3 models/tt_dit/tools/dit_analyzer/spike/test_dryrun_matches_oracle.py  # drift test
 ```
+
+Each driver run enforces the four criteria below and exits non-zero on any
+mismatch, so the drift test is just the two runs in subprocesses (the fakes must
+not leak into other tests). Negative control: reintroducing the
+`num_heads_per_device` bug below makes it fail and prints the collective diff.
 
 ## Results against the acceptance criteria
 
@@ -100,9 +106,10 @@ library frame underneath. Cheap, and it materially changes how a finding reads.
 
 ## Calibration for the roadmap
 
-* Phase 6 (shim core, 3–4 weeks): plausible. This spike is ~1,000 throwaway lines
-  covering one block; the production version needs real torch-meta support, the
-  `unregistered` node kind, and pipeline-level construction.
+* Phase 6 (shim core): dropped from 3–4 weeks to **2–3** in the roadmap on the
+  strength of this run. The spike is ~1,000 throwaway lines covering one block; the
+  production version still needs real torch-meta weights, the `unregistered` node
+  kind, pipeline-level construction and the caller stack (44).
 * Phase 7 (shape fidelity): the two bugs above are exactly its content. Tiling is
   *not* modelled here (`padded_shape` just rounds the last two axes to 32) and
   uneven shards assert rather than divide — both real work.
