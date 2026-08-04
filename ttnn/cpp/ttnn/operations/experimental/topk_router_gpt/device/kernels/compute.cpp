@@ -86,7 +86,21 @@ void kernel_main() {
         /*rt_dim=*/1,
         /*kt_dim=*/1);
     tile_regs_acquire();
+    // ZEROACC's operand list is arch-specific, so this cannot be one call. Wormhole takes
+    // (clear_mode, AddrMode, dst); Blackhole inserts two fields and takes
+    // (clear_mode, use_32_bit_mode, clear_zero_flags, addr_mode, where) -- see
+    // TT_OP_ZEROACC in each arch's ckernel_ops.h. Without the guard this kernel fails to
+    // JIT-compile on Blackhole ("macro 'TTI_ZEROACC' requires 5 arguments, but only 3
+    // given"), which made the whole op WH-only.
+    //
+    // use_32_bit_mode must track the dest accumulator width, exactly as Blackhole's own
+    // llk_pack_common.h passes is_fp32_dest_acc_en here. The program factory sets
+    // fp32_dest_acc_en = !glm_mode, so that is the value to mirror.
+#ifdef ARCH_BLACKHOLE
+    MATH(TTI_ZEROACC(p_zeroacc::CLR_ALL, !glm_mode, /*clear_zero_flags=*/0, ADDR_MOD_1, /*where=*/0));
+#else
     MATH(TTI_ZEROACC(p_zeroacc::CLR_ALL, ADDR_MOD_1, 0));
+#endif
 
     uint32_t tiles_done = 0;
     while (tiles_done < num_k_tiles) {
