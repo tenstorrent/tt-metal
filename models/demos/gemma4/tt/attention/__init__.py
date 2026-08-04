@@ -121,9 +121,9 @@ class Gemma4Attention:
         else:
             self.kv_cache = None
 
-        # CP prefill masks, keyed by local sequence length. Built lazily on first
-        # prefill so the host-side construction lands in warmup, not trace capture.
-        self._cp_mask_cache = {}
+        # Fallback CP mask cache for callers that pass no ccl_manager; the shared
+        # one on CCLManager is preferred so a 60-layer stack holds two masks, not 60.
+        self._cp_mask_cache_local = {}
 
         # Persistent hot-block staging for the packed-verify loop-free KV write.
         # Allocated lazily by the spec-decode driver (see tt/spec_decode.py);
@@ -273,15 +273,17 @@ class Gemma4Attention:
         """
         if cp_degree(self.mesh_config) <= 1:
             return None
-        mask = self._cp_mask_cache.get(local_seq_len)
+        window = self.config.sliding_window if self.config.is_sliding else None
+        # Shared across layers when a ccl_manager is available: the mask depends
+        # only on (local_seq_len, window), so a 60-layer stack needs two entries.
+        cache = getattr(self.ccl_manager, "_cp_mask_cache", None)
+        if cache is None:
+            cache = self._cp_mask_cache_local
+        key = (local_seq_len, window)
+        mask = cache.get(key)
         if mask is None:
-            mask = build_cp_prefill_mask(
-                self.mesh_device,
-                self.mesh_config,
-                local_seq_len,
-                self.config.sliding_window if self.config.is_sliding else None,
-            )
-            self._cp_mask_cache[local_seq_len] = mask
+            mask = build_cp_prefill_mask(self.mesh_device, self.mesh_config, local_seq_len, window)
+            cache[key] = mask
         return mask
 
     def _release_sliding_prefill_tail(self, *, clear_persistent: bool = False):
