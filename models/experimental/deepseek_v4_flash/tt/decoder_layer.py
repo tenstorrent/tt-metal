@@ -56,6 +56,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         gate=None,
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        use_prefetcher: bool = False,
+        prefetch_buffers: Optional[dict] = None,
     ):
         self.config = config
         self.layer_idx = layer_idx
@@ -70,6 +72,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             device,
             cache=cache.sub("self_attn"),
             weight_dtype=weight_dtype,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
         )
         self.mlp = DeepSeekV4SparseMoeBlock(
             config,
@@ -97,6 +101,16 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             config, _strip_prefix(weights, "ffn_hc"), device, cache=cache.sub("ffn_hc")
         )
         _profile(self.device)
+
+    def prefetch_weights(self):
+        """Stage this layer's attention weights ahead of the :meth:`decode` that uses them.
+
+        Delegates to the attention block, which covers its compressor too; neither the MoE path
+        nor the hyper-connections have prefetcher weights. Under the prefetcher the layers on a
+        device share GCBs, so the requests queued here must be consumed by this layer's own
+        decode before any later layer queues its own.
+        """
+        self.self_attn.prefetch_weights()
 
     def _mix(
         self, post: ttnn.Tensor, comb: ttnn.Tensor, sublayer_out: ttnn.Tensor, streams: ttnn.Tensor
