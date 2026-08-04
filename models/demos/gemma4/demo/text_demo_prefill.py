@@ -136,25 +136,54 @@ def _guard_chunk(request, chunk):
         pytest.skip(f"chunk={chunk} > --max-prefill={max_prefill}")
 
 
-def _guard_no_context_parallel(mesh_device, test_name):
-    """Skip whole-model tests on a context-parallel mesh.
+def _guard_cp_rope_alignment(mesh_device, chunk):
+    """Skip when CP is on but the model's RoPE cache would not line up.
 
-    Context parallelism is currently wired for ``test_prefill_layer`` only, which
-    stages its hidden states already sharded along the CP axis. The whole-model
-    entry points stage a *replicated* sequence and embed on device, so each rank
-    would hold all ``chunk`` tokens; the attention CP path would then build a mask
-    and gather K/V spanning ``cp * chunk`` positions and silently compute nonsense.
-    Skip loudly instead of reporting a wrong number.
+    Under CP the 4D prefill RoPE cache is sharded along positions, so rank ``r``
+    holds ``[r*max_seq_len/cp, (r+1)*max_seq_len/cp)`` while the model slices
+    ``[0:chunk/cp]`` of that local shard. Those agree only when ``max_seq_len ==
+    chunk``, which is the default. A larger GEMMA4_MAX_SEQ_LEN would silently give
+    every rank the wrong positions, so refuse instead.
+    """
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    cp = cp_degree(_mesh_config(mesh_device))
+    if cp <= 1:
+        return
+    max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", chunk))
+    if max_seq_len != chunk:
+        pytest.skip(
+            f"CP={cp} needs GEMMA4_MAX_SEQ_LEN == chunk so the sharded RoPE cache lines up with the "
+            f"positions each rank owns, but max_seq_len={max_seq_len} and chunk={chunk}. Unset "
+            f"GEMMA4_MAX_SEQ_LEN, or run with GEMMA4_PREFILL_MESH=1x32 (CP=1)."
+        )
+    if chunk % cp != 0:
+        pytest.skip(f"chunk={chunk} is not divisible by CP={cp}")
+
+
+def _guard_cp_last_token_slice(mesh_device):
+    """Skip the lm_head test under CP: the last-token slice is not CP-aware.
+
+    This test takes the logits for one absolute position, and both paths select it
+    with a mesh-wide scalar index — ``get_last_token=tile_start`` eagerly, or
+    ``process_logits_after_prefill_trace(..., last_token_idx)`` after a trace. Under
+    CP the sequence is sharded, so that scalar indexes into each rank's *local*
+    shard and picks the wrong tokens; the position actually lives on exactly one rank.
+
+    Gathering the logits instead is not viable — 4096 x 262144 is ~4.3 GB, which is
+    why the head is fed a 32-row slice in the first place. The fix is to CP-gather
+    the hidden states before lm_head (~44 MB) so the existing slice stays valid;
+    that is a model-path change and is not done yet.
     """
     from models.demos.gemma4.tt.ccl import cp_degree
 
     cp = cp_degree(_mesh_config(mesh_device))
     if cp > 1:
         pytest.skip(
-            f"{test_name} is not context-parallel yet (mesh {tuple(mesh_device.shape)} gives CP={cp}). "
-            f"CP is wired for test_prefill_layer only. Re-run with GEMMA4_PREFILL_MESH=1x32 for the "
-            f"whole-model graph, or extend CP to the model path (sharded token staging, CP-aware "
-            f"embed/lm_head, and a CP gather for the readback)."
+            f"test_prefill_full's last-token slice is not CP-aware (CP={cp}): the slice index is a "
+            f"mesh-wide scalar into a sequence-sharded tensor. Needs a CP gather of the hidden states "
+            f"before lm_head. Run with GEMMA4_PREFILL_MESH=1x32 (CP=1), or use test_prefill_layers for "
+            f"the 60-layer body under CP."
         )
 
 
@@ -252,7 +281,7 @@ def _prompt_tokens(model_path, chunk):
     return tokens.reshape(1, chunk), tokenizer, prompt_len
 
 
-def _host_tensor(mesh_device, torch_tensor, dtype, layout, mesh_config=None):
+def _host_tensor(mesh_device, torch_tensor, dtype, layout, mesh_config=None, seq_dim=-2):
     """Host-resident ttnn tensor, replicated across the mesh.
 
     Kept on host (``device=None``) so it can be pushed into the same device buffer
@@ -262,22 +291,26 @@ def _host_tensor(mesh_device, torch_tensor, dtype, layout, mesh_config=None):
     across the CP axis instead of replicated, so each rank receives only the tokens
     it owns. The scatter is free here — it is just a different mesh mapper at
     staging time, with no collective involved.
+
+    ``seq_dim`` is which axis of ``torch_tensor`` holds the sequence: -2 for 4D
+    hidden states ``[1, 1, S, H]``, but **-1** for a 2D token-id tensor ``[1, S]``,
+    where -2 is the size-1 batch dim and sharding it would be wrong.
     """
     return ttnn.from_torch(
         torch_tensor,
         device=None,
         dtype=dtype,
         layout=layout,
-        mesh_mapper=_cp_or_replicate_mapper(mesh_device, mesh_config),
+        mesh_mapper=_cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=seq_dim),
     )
 
 
-def _cp_or_replicate_mapper(mesh_device, mesh_config):
-    """Shard the sequence dim across the CP axis, or replicate when CP is off."""
+def _cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=-2):
+    """Shard ``seq_dim`` across the CP axis, or replicate when CP is off."""
     from models.demos.gemma4.tt.ccl import cp_degree
 
     if mesh_config is not None and cp_degree(mesh_config) > 1:
-        shard_dims = (-2, None) if mesh_config.sp_axis == 0 else (None, -2)
+        shard_dims = (seq_dim, None) if mesh_config.sp_axis == 0 else (None, seq_dim)
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
     return ttnn.ReplicateTensorToMesh(mesh_device)
 
@@ -674,13 +707,17 @@ def test_prefill_layers(mesh_device, chunk, traced, reset_seeds, request):
     timings so eager and traced are directly comparable at the same chunk size.
     """
     _guard_chunk(request, chunk)
-    _guard_no_context_parallel(mesh_device, "test_prefill_layers")
+    _guard_cp_rope_alignment(mesh_device, chunk)
 
     model_path = _model_path()
+    mesh_config = _mesh_config(mesh_device)
     model_args, model, kv_cache, page_table_tt = _build_prefill_model(mesh_device, model_path, chunk)
 
     tokens, _tokenizer, prompt_len = _prompt_tokens(model_path, chunk)
-    host_input = _host_tensor(mesh_device, tokens, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    # Token ids are [1, chunk], so the sequence axis is -1, not -2.
+    host_input = _host_tensor(
+        mesh_device, tokens, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_config=mesh_config, seq_dim=-1
+    )
 
     # get_last_token=-1: no host-side last-token slice, which is required inside a
     # trace and keeps eager identical to the captured graph.
@@ -690,7 +727,7 @@ def test_prefill_layers(mesh_device, chunk, traced, reset_seeds, request):
         result = _run_graph(mesh_device, forward, traced=traced, host_input=host_input)
     _log_run("prefill_layers", chunk, traced, result, extra=f" layers={len(model.layers)}")
 
-    hidden = _first_device_torch(result.output)
+    hidden = _cp_gather_torch(result.output, mesh_device, mesh_config)
 
     assert len(model.layers) == model_args.num_hidden_layers, (
         f"built {len(model.layers)} decoder layers but the config declares "
@@ -732,7 +769,7 @@ def test_prefill_full(mesh_device, chunk, traced, reset_seeds, request):
     the reported numbers stay comparable.
     """
     _guard_chunk(request, chunk)
-    _guard_no_context_parallel(mesh_device, "test_prefill_full")
+    _guard_cp_last_token_slice(mesh_device)
 
     model_path = _model_path()
     model_args, model, kv_cache, page_table_tt = _build_prefill_model(mesh_device, model_path, chunk)
