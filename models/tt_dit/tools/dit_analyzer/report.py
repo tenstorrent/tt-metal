@@ -36,6 +36,31 @@ def _us(bytes_moved: float, link_bw_gbs: float) -> str:
     return "%.1f us" % (bytes_moved / (link_bw_gbs * 1e9) * 1e6)
 
 
+def render_trust(graph: Graph) -> str:
+    """One line stating how far the graph's shapes can be trusted.
+
+    A standing requirement (``DitStaticAnalyzerPlan.md`` §"Honesty rules"): the
+    report must say, every time, when a finding rests on shapes the metadata-only
+    ttnn shim *computed* rather than on real ttnn -- "the shim believes" -- so a
+    shim-derived finding is never mistaken for a device-verified one.
+    """
+    prov = getattr(graph, "provenance", "unknown")
+    if prov == "dry-run":
+        return (
+            "trust: THE SHIM BELIEVES -- shapes were computed by the metadata-only ttnn shim, not "
+            "verified against real ttnn. Corroborate with `--check-oracle` and with per-op "
+            "conformance on a device (conform.py / phase 11) before acting on a finding."
+        )
+    if prov == "hand-written":
+        return (
+            "trust: hand-transcribed graph -- findings rest on this transcription's fidelity to the "
+            "model source, not on a device."
+        )
+    if prov == "captured":
+        return "trust: captured from a device trace -- shapes are ground truth (entry placements may be declared)."
+    return "trust: provenance unrecorded -- treat every finding as unverified."
+
+
 def render_header(graph: Graph) -> str:
     mesh = graph.mesh
     lines = [
@@ -47,6 +72,7 @@ def render_header(graph: Graph) -> str:
     ]
     for k, v in sorted(graph.meta.items()):
         lines.append("%-6s %s" % (k + ":", v))
+    lines.append(render_trust(graph))
     lines.append("=" * 100)
     return "\n".join(lines)
 

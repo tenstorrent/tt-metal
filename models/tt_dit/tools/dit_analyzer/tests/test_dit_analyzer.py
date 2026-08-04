@@ -312,6 +312,29 @@ def test_trace_to_graph_lifts_local_shapes_and_flags_assumptions():
     assert graph2.meta["assumptions"]
 
 
+def test_report_declares_trust_and_flags_shim_belief():
+    # Requirement: every report must state its provenance, and say "the shim
+    # believes" whenever a finding rests on shim-computed (not device-verified)
+    # shapes -- and that must survive a JSON round trip (dump then analyze).
+    from dit_analyzer.ir import Graph
+    from dit_analyzer.report import render_report, render_trust
+
+    b = GraphBuilder(name="hw", mesh=MESH)
+    x = b.input("x", [1, 512, 1024], shard={TP: 2})
+    g = b.finish([b.all_gather(x, dim=2, mesh_axis=TP, label="ag")])
+    assert g.provenance == "hand-written"  # builder default
+    assert "hand-transcribed" in render_trust(g)
+    assert "SHIM BELIEVES" not in render_report(analyze_graph(g))
+
+    g.provenance = "dry-run"
+    assert "SHIM BELIEVES" in render_trust(g)
+    assert "SHIM BELIEVES" in render_report(analyze_graph(g))  # in the report body
+    assert Graph.from_json(g.to_json()).provenance == "dry-run"  # survives serialization
+
+    unknown = Graph(name="u", mesh=MESH)
+    assert "unverified" in render_trust(unknown)
+
+
 def test_reshape_preserves_a_shard_on_a_kept_trailing_axis():
     # the VAE's [B,H,W,C] <-> [B,1,H*W,C] merges leading axes but keeps the
     # channel axis; a shard on it must survive, not degrade to replicated+taint.

@@ -398,7 +398,9 @@ def trace_to_graph(
     """
     mesh = Mesh(shape=trace.mesh_shape, axis_names=trace.axis_names)
     placements = dict(placements or {})
-    graph = Graph(name=trace.name, mesh=mesh, steps=steps if steps is not None else trace.steps)
+    # Lifted from a real device trace: ground-truth shapes (entry placements may
+    # still be declared -- those are recorded as assumptions below).
+    graph = Graph(name=trace.name, mesh=mesh, steps=steps if steps is not None else trace.steps, provenance="captured")
     assumptions: List[str] = []
 
     sym_of: Dict[int, str] = {}  # trace tensor id -> symbol id

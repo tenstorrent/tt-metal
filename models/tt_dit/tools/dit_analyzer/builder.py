@@ -40,8 +40,10 @@ class Value:
 
 
 class GraphBuilder:
-    def __init__(self, name: str, mesh: Mesh, steps: int = 1, **meta):
-        self.graph = Graph(name=name, mesh=mesh, steps=steps, meta=dict(meta))
+    def __init__(self, name: str, mesh: Mesh, steps: int = 1, provenance: str = "hand-written", **meta):
+        # Transcribed from the model source by a human (examples/, tests) unless the
+        # caller says otherwise; findings rest on the transcription, not a device.
+        self.graph = Graph(name=name, mesh=mesh, steps=steps, meta=dict(meta), provenance=provenance)
         self._counter = 0
         self._calls = 1
         self._loc: Optional[str] = None

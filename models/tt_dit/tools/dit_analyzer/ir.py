@@ -263,6 +263,14 @@ class Graph:
     # (denoise steps). Used only to scale param-gather savings.
     steps: int = 1
     meta: Dict[str, Any] = field(default_factory=dict)
+    # How the graph's shapes were produced, which decides how far a finding can be
+    # trusted (see report.render_trust). One of:
+    #   "dry-run"      -- computed by the metadata-only ttnn shim; "the shim believes",
+    #                     not verified against real ttnn until on-device conformance.
+    #   "hand-written" -- transcribed from the model source by a human (examples/, builder).
+    #   "captured"     -- lifted from a real device trace (ground-truth shapes).
+    #   "unknown"      -- provenance not recorded; treat as unverified.
+    provenance: str = "unknown"
 
     def symbol(self, sid: str) -> TensorSymbol:
         return self.symbols[sid]
@@ -289,6 +297,7 @@ class Graph:
             "name": self.name,
             "steps": self.steps,
             "meta": self.meta,
+            "provenance": self.provenance,
             "mesh": {
                 "shape": list(self.mesh.shape),
                 "axis_names": list(self.mesh.axis_names),
@@ -341,7 +350,13 @@ class Graph:
             arch=m.get("arch", "wormhole_b0"),
             topology=m.get("topology", "Linear"),
         )
-        g = Graph(name=d.get("name", "graph"), mesh=mesh, steps=d.get("steps", 1), meta=d.get("meta", {}))
+        g = Graph(
+            name=d.get("name", "graph"),
+            mesh=mesh,
+            steps=d.get("steps", 1),
+            meta=d.get("meta", {}),
+            provenance=d.get("provenance", "unknown"),
+        )
         for s in d["symbols"]:
             g.symbols[s["id"]] = TensorSymbol(
                 id=s["id"],

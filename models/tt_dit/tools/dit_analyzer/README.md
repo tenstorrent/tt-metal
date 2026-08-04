@@ -295,6 +295,14 @@ source: models/tt_dit/models/transformers/ltx/attention_ltx.py:428
 
 ### Honesty rules the analyzer follows
 
+* **Every report declares its trust.** The header carries a `trust:` line stating
+  how the graph's shapes were produced, and it says **"THE SHIM BELIEVES"** in as
+  many words whenever a finding rests on shapes the metadata-only ttnn shim
+  *computed* rather than on real ttnn (any `provenance: dry-run` graph). This is a
+  requirement, not a nicety: a shim-derived finding must never be mistaken for a
+  device-verified one. Hand-transcribed (`examples/`) graphs say so; a captured
+  device trace says its shapes are ground truth. The tag rides in the graph JSON,
+  so it survives `dump` → `analyze`.
 * An op with unknown semantics gets pessimistic semantics **and** taints
   everything downstream; findings touching tainted values are demoted to
   `suspicious`.

@@ -109,10 +109,13 @@ def _dryrun(args) -> int:
 
     graph, preset = build(args.target, args.preset)
     info = provenance()
+    from .report import render_trust
+
     print(
         "dry run %s/%s: %d nodes, %d symbols, mesh %s %s"
         % (args.target, preset.name, len(graph.nodes), len(graph.symbols), tuple(graph.mesh.shape), graph.mesh.topology)
     )
+    print(render_trust(graph))
     print("torch: %s" % info["torch"])
     for note in info["substitutions"]:
         print("  substituted %s" % note)

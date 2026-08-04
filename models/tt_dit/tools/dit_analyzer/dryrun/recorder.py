@@ -30,7 +30,8 @@ def start(mesh_device, axis_names=("axis0", "axis1"), name="dryrun", steps=1, ca
         arch=mesh_device.arch().name.lower(),
         topology=str(meta.pop("topology", "Linear")),
     )
-    CTX.graph = Graph(name=name, mesh=CTX.mesh, steps=steps, meta=dict(meta))
+    # Shim-derived shapes -> "the shim believes" until on-device conformance.
+    CTX.graph = Graph(name=name, mesh=CTX.mesh, steps=steps, meta=dict(meta), provenance="dry-run")
     CTX.calls = calls
     return CTX.graph
 
