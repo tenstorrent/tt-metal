@@ -54,7 +54,7 @@ tt::tt_metal::TensorSpec PrefixScanDeviceOperation::compute_output_specs(
     const auto& a = tensor_args.a;
     return tt::tt_metal::TensorSpec(
         a.logical_shape(),
-        tensor_layout_from_padded_shape(
+        experimental::tensor_layout_from_padded_shape(
             args.dtype, PageConfig(Layout::TILE), args.memory_config, a.logical_shape(), a.padded_shape()));
 }
 

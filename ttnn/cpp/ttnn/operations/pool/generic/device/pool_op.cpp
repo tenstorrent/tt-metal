@@ -141,7 +141,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::tensor_layout_from_padded_shape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype, op_attr.output_layout_, mem_config, output_shape, padded_output_shape));
 }
 
@@ -153,7 +153,7 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
             op_attr.sliding_window_config_.input_hw.first, op_attr.sliding_window_config_.input_hw.second);
 
         // the index output spec is the same as the input spec just with a different data type
-        auto output_layout_ind = tt::tt_metal::tensor_layout_with_custom_alignment(
+        auto output_layout_ind = tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             index_dtype,
             output_spec_data.page_config(),
             output_spec_data.memory_config(),

@@ -425,7 +425,7 @@ tt::tt_metal::HostTensor view(
 
     auto new_spec = tt::tt_metal::TensorSpec(
         new_logical_shape,
-        tt::tt_metal::tensor_layout_from_padded_shape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             tensor.dtype(),
             tensor.tensor_spec().page_config(),
             output_memory_config,

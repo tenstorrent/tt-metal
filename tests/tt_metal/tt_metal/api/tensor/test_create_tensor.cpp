@@ -100,7 +100,7 @@ TEST_P(EmptyTensorTest, Combinations) {
         GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
     }
 
-    auto tensor_layout = tensor_layout_from_padded_shape(
+    auto tensor_layout = experimental::tensor_layout_from_padded_shape(
         dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
     auto tensor = MeshTensor::allocate_on_device(

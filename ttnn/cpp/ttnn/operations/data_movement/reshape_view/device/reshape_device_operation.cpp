@@ -33,7 +33,7 @@ ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::comp
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return tt::tt_metal::TensorSpec(
         operation_attributes.logical_output_shape,
-        tt::tt_metal::tensor_layout_from_padded_shape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             tensor_args.input.dtype(),
             tt::tt_metal::PageConfig(tensor_args.input.layout()),
             operation_attributes.output_mem_config,

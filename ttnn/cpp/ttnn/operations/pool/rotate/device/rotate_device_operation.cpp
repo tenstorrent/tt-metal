@@ -114,7 +114,7 @@ RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::tensor_layout_from_padded_shape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input.dtype(),
             tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
             operation_attributes.memory_config,

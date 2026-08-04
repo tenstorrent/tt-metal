@@ -384,7 +384,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
     auto new_spec = TensorSpec(
         new_logical_shape,
-        tensor_layout_from_padded_shape(
+        experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             input_tensor.tensor_spec().page_config(),
             output_memory_config,

@@ -81,7 +81,7 @@ Tensor::Tensor(
         std::move(buffer),
         TensorSpec(
             logical_shape,
-            tt::tt_metal::tensor_layout_from_padded_shape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 dtype,
                 tt::tt_metal::PageConfig(layout, tile),
                 tt::tt_metal::MemoryConfig{},

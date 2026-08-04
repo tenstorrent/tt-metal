@@ -12,7 +12,7 @@
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental {
 
 // ======================================================================================
 //                    TensorLayout APIs with a caller-supplied Alignment
@@ -59,4 +59,4 @@ TensorLayout tensor_layout_with_custom_alignment(
     const tt::tt_metal::Shape& logical_shape,
     const tt::tt_metal::Shape& padded_shape);
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental

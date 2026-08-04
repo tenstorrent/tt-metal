@@ -54,7 +54,7 @@ CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
     const auto& input = tensor_args.input;
     return tt::tt_metal::TensorSpec(
         input.logical_shape(),
-        tt::tt_metal::tensor_layout_from_padded_shape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             operation_attributes.dtype,
             tt::tt_metal::PageConfig(input.layout()),
             operation_attributes.memory_config,

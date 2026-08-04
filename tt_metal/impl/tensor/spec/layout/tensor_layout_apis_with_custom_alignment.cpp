@@ -10,7 +10,7 @@
 #include "page_config_impl.hpp"
 #include "tensor_layout_impl.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -132,4 +132,4 @@ TensorLayout tensor_layout_from_padded_shape(
         CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental

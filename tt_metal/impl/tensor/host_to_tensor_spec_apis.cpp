@@ -130,7 +130,7 @@ HostTensor host_tensor_to_tensor_spec_with_pad_value(
     const TensorSpec& decode_spec = source_for_decode.tensor_spec();
     const TensorSpec working_spec(
         dest_spec.logical_shape(),
-        tensor_layout_with_custom_alignment(
+        experimental::tensor_layout_with_custom_alignment(
             working_encode_dtype,
             dest_spec.page_config(),
             dest_spec.memory_config(),

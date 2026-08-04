@@ -109,7 +109,7 @@ tt::tt_metal::TensorSpec ShardedToInterleavedDeviceOperation::compute_output_spe
     // inter-stick byte overlap and data corruption.
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::tensor_layout_from_padded_shape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             args.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
             args.output_mem_config,

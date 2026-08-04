@@ -76,7 +76,7 @@ MoeRoutingRemapDeviceOperation::spec_return_value_t MoeRoutingRemapDeviceOperati
     const auto& old_spec = routing_weights.tensor_spec();
     return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
-        tensor_layout_with_custom_alignment(
+        experimental::tensor_layout_with_custom_alignment(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
             mem_config,

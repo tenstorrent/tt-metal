@@ -438,7 +438,7 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
 
                 return tt::tt_metal::TensorSpec(
                     output_shape,
-                    tensor_layout_from_padded_shape(
+                    experimental::tensor_layout_from_padded_shape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),
                         PageConfig(Layout::TILE),
                         mem_config,
