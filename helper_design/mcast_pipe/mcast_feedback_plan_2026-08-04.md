@@ -185,7 +185,7 @@ This section is the durable record of the automated execution of this plan. Comm
   performance-verified and committed as `a0fad936c89` (`Restore mcast source lifetime optimizations`). The recovery
   stash remains present as an additional safety copy.
 
-### 2026-08-04 — Gate 2 (in progress)
+### 2026-08-04 — Gate 2
 
 - Audited all 13 migrated kernel rows and all 12 migrated host-binding rows from
   `helper_design/mcast_pipe/migration/ledger.json`.
@@ -225,3 +225,39 @@ This section is the durable record of the automated execution of this plan. Comm
   - `SORT-SINGLE-ROW-CONTROL`: all seven long-tensor cases and both `Ht=2` deadlock regressions passed.
 - Re-ran the durable opaque-ABI audit after the full inventory: 8/8 passed. `git diff --check` is clean.
 - Gate 2 is green. No helper wire-size change was started before this gate completed.
+- Committed the Gate 2 implementation as `adf71f3dcde` (`Make mcast helper ABI boundaries opaque`).
+
+### 2026-08-04 — Gate 3
+
+- Extended `Mcast1D` to accept any dense rectangular `CoreRangeSet`, retain its logical origin, and perform sender
+  placement, line indexing, sender-coordinate lookup, multicast bounding-box construction, and semaphore coverage
+  relative to that origin. Sparse/non-rectangular sets are rejected by comparing the set size to its bounding box.
+- Added a legacy-`Program` bridge for helper-owned semaphores. It sorts declarations by ID, supports worker
+  semaphores, creates each declaration through `CreateSemaphore`, and fails immediately if the allocated ID differs
+  from the helper-declared ID. Descriptor factories continue to append the complete `owned_semaphores()` range.
+- Replaced Matmul-2D's vector of per-line `Mcast2D` objects with one offset-aware `Mcast1D` over
+  `all_cores_with_work`: `transpose_mcast=true` uses `PerRow`, while `false` uses `PerColumn`. The helper owns the in1
+  semaphore pair in both legacy and descriptor paths. Matmul-1D retains its whole-grid `Mcast2D` geometry but also
+  delegates ownership of its in1 semaphore pair to the helper.
+- Added host gtests for offset `PerRow` and `PerColumn` layouts on NoC 0/1, uniform and diagonal sender placement,
+  sender/receiver coordinates, line-relative selection, NoC-ordered bounding boxes, helper semaphore ranges,
+  degenerate one-core lines, and the legacy semaphore bridge's declared-ID ordering.
+- The first rebuild exposed only a namespace typo in the new bridge (`tt::tt_metal::CoreType`); correcting it to
+  `tt::CoreType` resolved the compile error. The subsequent `./build_metal.sh` completed successfully.
+- `McastHostFixture.*` passed 25/25, including all six new offset/bridge cases. The Gate 2 opaque-ABI source audit
+  remained green at 8/8 and `git diff --check` remained clean.
+- Focused device validation used one initially empty isolated JIT cache and `--dev --no-precompile`. One Matmul-1D
+  in1-multicast case and both Matmul-2D `transpose_mcast=true/false` orientations passed sequentially without watcher,
+  assertion, or timeout failures.
+- The complete `MM-IN1-ALL` inventory passed from a separate initially empty cache: 302 passed / 188 expected skips /
+  490 selected, exactly matching the recorded baseline. The four chunks were 56/72, 46/50, 46/50, and 154/16.
+- Confirmed the required device remained a single-chip Blackhole p100a at AICLK 800. The checked-in real-time-profiler
+  harness collected three warmups and 20 measured records for every Matmul case:
+  - `matmul_2d_sdxl_ff_gelu`: `164,173.30109646538 ns`, +0.0286% versus `164,126.2962962963 ns` baseline — **PASS**;
+  - `matmul_1d_sdxl_resnet_960_320`: `77,412.96296296295 ns`, +0.6133% versus `76,941.11111111111 ns` baseline —
+    **PASS**;
+  - `matmul_2d_transpose_mcast`: `12,308.518518518518 ns`, -1.1658% versus `12,453.703703703703 ns` baseline —
+    **PASS**.
+- None of the Matmul results was borderline against the 1.5% limit, so no additional performance runs were required.
+  Raw results are `generated/mcast_migration_rt/gate3_20260804_matmul_*.json`.
+- Gate 3 is green.

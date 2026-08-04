@@ -1369,16 +1369,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
 
     // Mcast args
-    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const ttnn::kernel_lib::host::Mcast2D in1_mcast(
         device,
         CoreRangeSet(in1_mcast_receiver_cores_bounding_box),
         start_core,
         ttnn::kernel_lib::host::McastConfig{
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()),
-            .sem_ids = std::vector<uint32_t>{in1_mcast_receiver_semaphore_id, in1_mcast_sender_semaphore_id}},
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()), .base_sem_id = 0},
         num_cores - 1);
+    ttnn::kernel_lib::host::create_owned_semaphores(program, in1_mcast.owned_semaphores());
     const uint32_t in1_mcast_runtime_arg_count = in1_mcast.runtime_args(start_core).size();
     const uint32_t in1_sender_operation_args_offset = 2 + in1_mcast_runtime_arg_count;
     const uint32_t in1_receiver_operation_args_offset = in1_mcast_runtime_arg_count;
@@ -4350,16 +4348,13 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1)
-    uint32_t in1_mcast_sender_semaphore_id = 0;
-    uint32_t in1_mcast_receiver_semaphore_id = 1;
+    // Mcast args — the helper owns semaphore IDs starting at 0.
     const ttnn::kernel_lib::host::Mcast2D in1_mcast(
         device,
         CoreRangeSet(in1_mcast_receiver_cores_bounding_box),
         start_core,
         ttnn::kernel_lib::host::McastConfig{
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()),
-            .sem_ids = std::vector<uint32_t>{in1_mcast_receiver_semaphore_id, in1_mcast_sender_semaphore_id}},
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()), .base_sem_id = 0},
         num_cores - 1);
 
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
@@ -4893,10 +4888,8 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      Semaphore Descriptors
     ////////////////////////////////////////////////////////////////////////////
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in1_mcast_sender_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in1_mcast_receiver_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
+    const auto in1_mcast_semaphores = in1_mcast.owned_semaphores();
+    desc.semaphores.insert(desc.semaphores.end(), in1_mcast_semaphores.begin(), in1_mcast_semaphores.end());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)

@@ -341,28 +341,17 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1, 2, 3)
+    // Mcast args — in0 retains ids 0/1; the helper owns in1 ids starting at 2.
     uint32_t in0_mcast_sender_semaphore_id = 0;
     uint32_t in0_mcast_receiver_semaphore_id = 1;
-    uint32_t in1_mcast_sender_semaphore_id = 2;
-    uint32_t in1_mcast_receiver_semaphore_id = 3;
-    std::vector<ttnn::kernel_lib::host::Mcast2D> in1_mcasts;
-    in1_mcasts.reserve(num_blocks_x);
-    for (uint32_t line = 0; line < num_blocks_x; ++line) {
-        const CoreCoord sender = transpose_mcast ? CoreCoord{start_core_x, start_core_y + line}
-                                                 : CoreCoord{start_core_x + line, start_core_y};
-        const CoreCoord line_end = transpose_mcast
-                                       ? CoreCoord{start_core_x + num_cores_with_work_c - 1, start_core_y + line}
-                                       : CoreCoord{start_core_x + line, start_core_y + num_cores_with_work_r - 1};
-        in1_mcasts.emplace_back(
-            device,
-            CoreRangeSet(CoreRange(sender, line_end)),
-            sender,
-            ttnn::kernel_lib::host::McastConfig{
-                .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()),
-                .sem_ids = std::vector<uint32_t>{in1_mcast_receiver_semaphore_id, in1_mcast_sender_semaphore_id}},
-            num_blocks_y - 1);
-    }
+    const ttnn::kernel_lib::host::Mcast1D in1_mcast(
+        device,
+        CoreRangeSet(all_cores_with_work),
+        transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
+                        : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+        /*starting_sender_index=*/0,
+        ttnn::kernel_lib::host::McastConfig{
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()), .base_sem_id = 2});
     bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
@@ -482,7 +471,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
     in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
-    const auto in1_mcast_compile_time_args = in1_mcasts.front().compile_time_args();
+    const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
         // in1 tensor args
@@ -1149,10 +1138,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         .id = in0_mcast_sender_semaphore_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = INVALID});
     desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = in0_mcast_receiver_semaphore_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = INVALID});
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in1_mcast_sender_semaphore_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = INVALID});
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in1_mcast_receiver_semaphore_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = INVALID});
+    const auto in1_mcast_semaphores = in1_mcast.owned_semaphores();
+    desc.semaphores.insert(desc.semaphores.end(), in1_mcast_semaphores.begin(), in1_mcast_semaphores.end());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)
@@ -1296,7 +1283,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender
             if (in0_idx == 0) {
-                const auto in1_mcast_runtime_args = in1_mcasts.at(in1_idx).runtime_args(core);
+                const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
                 std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>>
                     mm_in1_sender_writer_args = {
                         // READER
@@ -1445,7 +1432,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
                 // in1 receiver
             } else {
-                const auto in1_mcast_runtime_args = in1_mcasts.at(in1_idx).runtime_args(core);
+                const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
                 std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>>
                     mm_in1_receiver_writer_args;
                 mm_in1_receiver_writer_args.insert(
@@ -1881,28 +1868,18 @@ create_program_mcast_in0_in1(
     // Mcast args
     auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    std::vector<ttnn::kernel_lib::host::Mcast2D> in1_mcasts;
-    in1_mcasts.reserve(num_blocks_x);
-    for (uint32_t line = 0; line < num_blocks_x; ++line) {
-        const CoreCoord sender = transpose_mcast ? CoreCoord{start_core_x, start_core_y + line}
-                                                 : CoreCoord{start_core_x + line, start_core_y};
-        const CoreCoord line_end = transpose_mcast
-                                       ? CoreCoord{start_core_x + num_cores_with_work_c - 1, start_core_y + line}
-                                       : CoreCoord{start_core_x + line, start_core_y + num_cores_with_work_r - 1};
-        in1_mcasts.emplace_back(
-            device,
-            CoreRangeSet(CoreRange(sender, line_end)),
-            sender,
-            ttnn::kernel_lib::host::McastConfig{
-                .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()),
-                .sem_ids = std::vector<uint32_t>{in1_mcast_receiver_semaphore_id, in1_mcast_sender_semaphore_id}},
-            num_blocks_y - 1);
-    }
+    const ttnn::kernel_lib::host::Mcast1D in1_mcast(
+        device,
+        CoreRangeSet(all_cores_with_work),
+        transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
+                        : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+        /*starting_sender_index=*/0,
+        ttnn::kernel_lib::host::McastConfig{
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()),
+            .base_sem_id = in0_mcast_receiver_semaphore_id + 1});
+    ttnn::kernel_lib::host::create_owned_semaphores(program, in1_mcast.owned_semaphores());
 
-    const uint32_t in1_mcast_runtime_arg_count =
-        in1_mcasts.front().runtime_args(CoreCoord{start_core_x, start_core_y}).size();
+    const uint32_t in1_mcast_runtime_arg_count = in1_mcast.runtime_args(CoreCoord{start_core_x, start_core_y}).size();
     const uint32_t in1_sender_operation_args_offset = 2 + in1_mcast_runtime_arg_count;
     const uint32_t in1_receiver_operation_args_offset = in1_mcast_runtime_arg_count;
     const MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t::McastIn1RuntimeArgIndices
@@ -2030,7 +2007,7 @@ create_program_mcast_in0_in1(
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
     in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
-    const auto in1_mcast_compile_time_args = in1_mcasts.front().compile_time_args();
+    const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
         // in1 tensor args
@@ -2814,7 +2791,7 @@ create_program_mcast_in0_in1(
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender
             if (in0_idx == 0) {
-                const auto in1_mcast_runtime_args = in1_mcasts.at(in1_idx).runtime_args(core);
+                const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
                 std::vector<uint32_t> mm_in1_sender_writer_args = {
                     // READER
                     // in1 tensor args
@@ -2959,7 +2936,7 @@ create_program_mcast_in0_in1(
 
                 // in1 receiver
             } else {
-                const auto in1_mcast_runtime_args = in1_mcasts.at(in1_idx).runtime_args(core);
+                const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
                 std::vector<uint32_t> mm_in1_receiver_writer_args;
                 mm_in1_receiver_writer_args.insert(
                     mm_in1_receiver_writer_args.end(), in1_mcast_runtime_args.begin(), in1_mcast_runtime_args.end());
