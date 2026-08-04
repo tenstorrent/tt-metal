@@ -175,6 +175,16 @@ _L1 = ttnn.L1_MEMORY_CONFIG
 # outright, reads the whole 6 KB activation, and there is nothing to reduce. The same axis that makes
 # the NORM fast (it reduces over width, so the cross-core step is 8 scalars) makes the matmul slow.
 #
+# AND YOU CANNOT SHARD ONLY THE WEIGHT INSTEAD. Width-sharding the WEIGHT splits the OUTPUT columns,
+# which is the axis that needs no reduction, so it ought to be the free version -- but ttnn couples
+# the two. A width-sharded in1 is accepted by ONLY the DRAM-sharded config, which also requires a
+# width-sharded in0; every other config asserts `in1.memory_config().memory_layout() == INTERLEAVED`
+# (matmul_device_operation.cpp:1188ff, and the comment at :1199 states the pairing outright). So
+# "sharded weight, interleaved activation" is not an expressible combination, and the paired form is
+# the one measured below. An L1-RESIDENT weight fails the same assertion, and would be capped anyway:
+# Block 1 streams ~3.9 GB/frame against 96 MB of total L1, i.e. 2.4% of the model. The model not
+# fitting in L1 is exactly WHY 194 GB/s is the wall.
+#
 # `MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig` REQUIRES a width-sharded activation, so it
 # is the one config that wants what the norm already produces. It BUILDS here -- Block 1's wqkv is
 # per_core_N=24 tiles where Block 2's N=9216 overflowed L1 at 36 (STATUS.md) -- and it is still
