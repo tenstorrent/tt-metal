@@ -145,6 +145,7 @@ class Gemma4Attention:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        sliding_tail_end_row=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -247,6 +248,7 @@ class Gemma4Attention:
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
                 sliding_tail_in=getattr(self, "_sliding_prefill_tail", None),
+                sliding_tail_end_row=sliding_tail_end_row,
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk.

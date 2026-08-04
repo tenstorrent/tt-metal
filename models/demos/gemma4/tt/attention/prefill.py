@@ -163,7 +163,9 @@ def _left_pad_kv_to_hist(tt_k, tt_v, hist, head_dim, *, deallocate_inputs=False)
     return k_out, v_out
 
 
-def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, *, allow_short_pad=True):
+def _clone_sliding_prefill_tail(
+    tt_k, tt_v, hist, head_dim, valid_seq_len=None, *, allow_short_pad=True, tail_end_row=None
+):
     """Clone the last up-to-``hist`` K/V rows for the next sliding prefill chunk.
 
     vLLM APC / token-chunked prefill often delivers a first scheduler grant
@@ -174,12 +176,25 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
     Always clone at least the available rows (safe mid-trace-capture). Eager
     paths may left-pad to ``hist`` here; traced short buckets keep a short
     clone and the consumer pads via ``_left_pad_kv_to_hist``.
+
+    ``tail_end_row`` ends the tail at a row *before* the chunk end. The consumer
+    prepends this tail to the next chunk and runs an index-based causal +
+    sliding-window SDPA, so the tail must be exactly the ``hist`` tokens
+    immediately preceding the next chunk's start. That is the chunk end only
+    while chunks are contiguous; when the generator pulls the last chunk's start
+    back to ring-align a short remnant (``_adjust_last_prefill_chunk``) the next
+    chunk *overlaps* this one, and a chunk-end tail would feed it its own future
+    rows — the first ``hist`` queries would then attend forward in time (#51186
+    128k bounded-sliding corruption). Callers pass the next chunk's start,
+    relative to this chunk, so the slice lands on the right absolute tokens.
     """
     if tt_k is None or tt_v is None or hist is None or hist <= 0:
         return None
     kseq = int(tt_k.shape[-2])
     if valid_seq_len is not None:
         kseq = min(kseq, max(0, int(valid_seq_len)))
+    if tail_end_row is not None:
+        kseq = min(kseq, max(0, int(tail_end_row)))
     if kseq <= 0:
         return None
     nkv = int(tt_k.shape[1])
@@ -263,6 +278,7 @@ def _prefill_forward_single(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    sliding_tail_end_row=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
 
@@ -616,6 +632,7 @@ def _prefill_forward_single(
             valid_seq_len=valid_seq_len,
             # Tensor chunk_start_idx ⇒ traced multi-chunk; skip short-pad alloc.
             allow_short_pad=not use_persistent_tail,
+            tail_end_row=sliding_tail_end_row,
         )
         if sliding_tail_stash is None:
             k_tail_out = v_tail_out = None
@@ -775,6 +792,7 @@ def prefill_forward(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    sliding_tail_end_row=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -813,6 +831,7 @@ def prefill_forward(
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
             sliding_tail_in=sliding_tail_in,
+            sliding_tail_end_row=sliding_tail_end_row,
         )
 
     tp = mesh_config.tp if mesh_config else 1

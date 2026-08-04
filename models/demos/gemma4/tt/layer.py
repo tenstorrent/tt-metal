@@ -216,6 +216,7 @@ class Gemma4DecoderLayer:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        sliding_tail_end_row=None,
     ):
         """
         Decoder layer forward pass.
@@ -261,6 +262,7 @@ class Gemma4DecoderLayer:
             packed=packed,
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
+            sliding_tail_end_row=sliding_tail_end_row,
         )
 
         if isinstance(attn_output, torch.Tensor):

@@ -815,11 +815,36 @@ class ChunkedPrefillPageTableGuardMixin:
             chunk_starts = [s for s in chunk_starts if s < last_abs]
             chunk_starts.append(last_abs)
 
-            for chunk_start in chunk_starts:
+            for chunk_idx, chunk_start in enumerate(chunk_starts):
                 chunk_end = chunk_start + chunk_size
                 chunk_start_relative = chunk_start - num_cached_tokens
                 chunk_end_relative = min(chunk_end - num_cached_tokens, seq_len)
                 is_last_chunk = chunk_start == last_abs
+                # Sliding layers stash this chunk's tail as the *next* chunk's
+                # prepended history, and the consumer's causal + window SDPA is
+                # index-based — so the tail must end exactly where the next chunk
+                # begins. That is the chunk end while chunks are contiguous, but
+                # _adjust_last_prefill_chunk pulls the last start back to
+                # ring-align a short remnant, making the next chunk overlap this
+                # one. Without this the overlapped chunk receives its own future
+                # rows as "history" and its first `sliding_window` queries attend
+                # forward in time, corrupting the KV they write back (#51186 128k).
+                next_chunk_start = chunk_starts[chunk_idx + 1] if chunk_idx + 1 < len(chunk_starts) else None
+                sliding_tail_end_row = (
+                    max(0, next_chunk_start - chunk_start)
+                    if next_chunk_start is not None and next_chunk_start < chunk_end
+                    else None
+                )
+                if sliding_tail_end_row is not None:
+                    logger.info(
+                        "Gemma4 multi-chunk: next chunk {} overlaps chunk [{}, {}); "
+                        "clipping sliding tail to first {} rows so it ends at the "
+                        "next chunk's start",
+                        next_chunk_start,
+                        chunk_start,
+                        chunk_end,
+                        sliding_tail_end_row,
+                    )
 
                 chunk_tokens = tokens[:, chunk_start_relative:chunk_end_relative]
                 if chunk_tokens.shape[-1] < chunk_size:
@@ -875,6 +900,7 @@ class ChunkedPrefillPageTableGuardMixin:
                     ),
                     kv_cache=kv_cache,
                     batch_size=batch_size,
+                    sliding_tail_end_row=sliding_tail_end_row,
                     **kwargs,
                 )
                 if is_last_chunk:

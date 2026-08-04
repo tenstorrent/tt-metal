@@ -767,6 +767,7 @@ class Gemma4Model:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        sliding_tail_end_row=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -970,6 +971,7 @@ class Gemma4Model:
                 packed=layer_packed,
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
+                sliding_tail_end_row=sliding_tail_end_row,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -1685,6 +1687,7 @@ class Gemma4Model:
         embeds_torch=None,
         pli_device_tensors=None,
         page_tables_per_layer=None,
+        sliding_tail_end_row=None,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -1732,6 +1735,7 @@ class Gemma4Model:
             user_id=user_id,
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
+            sliding_tail_end_row=sliding_tail_end_row,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
