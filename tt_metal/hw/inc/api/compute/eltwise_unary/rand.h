@@ -18,14 +18,16 @@ namespace ckernel {
  * That is each element is overwritten with a randomly generated float.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
+ * This operation records replay slots 0-17 on Blackhole and Wormhole. Callers
+ * sharing the replay buffer with other SFPU operations must reinitialize it as needed.
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required  |
- * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|-----------|
- * | tile_index     | The index of the tile in DST register buffer to perform typecast operation | uint32_t | Must be less than the size of the DST register buffer | True      |
- * | from           | Random range lowerbound(inclusive)                                         | uint     | Any number                                            | True      |
- * | scale          | Random scale rand float in range [from, from + scale]                      | uint     | Must be greater than 0                                | True      |
+ * | Argument       | Description                                                   | Type     | Valid Range                                           | Required  |
+ * |----------------|---------------------------------------------------------------|----------|-------------------------------------------------------|-----------|
+ * | tile_index     | The index of the tile in the DST register buffer              | uint32_t | Must be less than the size of the DST register buffer | True      |
+ * | from           | FP32 bit pattern for the inclusive lower bound                | uint32_t | Any supported FP32 value                              | True      |
+ * | scale          | FP32 bit pattern producing [from, from + scale], inclusively  | uint32_t | Must be non-negative; zero produces a constant tile   | True      |
  */
 // clang-format on
 ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
@@ -33,7 +35,9 @@ ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
 }
 
 /**
- * Please refer to documentation for any_init.
+ * Please refer to documentation for any_init. On Wormhole, this operation
+ * programs LREG12-LREG14; callers must restore those constants before another
+ * SFPU operation that relies on them.
  */
 ALWI void rand_tile_init(uint32_t seed = 0) { MATH(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed)); }
 
