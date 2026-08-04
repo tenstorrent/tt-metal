@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..ir import PARAM, Dist
+from ..region import shard_chunk_size
 from . import recorder
 from .context import CTX
 from .stubs import Enum, MeshMapper
@@ -346,19 +347,28 @@ _CHUNK_CACHE: Dict[Tuple[str, int, int], Tensor] = {}
 def _weight_chunk(w: Tensor, index: int, count: int) -> Tensor:
     """One column block of a chunked (fused) weight, as its own symbol.
 
-    ``to_qkv(chunks=3)`` / ``to_kv(chunks=2)`` slice the weight by output columns,
-    but a fused weight is stored per-device interleaved (``_interleave_heads``), so
-    the block is not a contiguous logical column range. Modelling each block as its
-    own ``[K, N/count]`` weight matches the maths and keeps the region algebra
-    exact; a real ``chunked_weight`` spec that makes the interleave explicit is
-    phase 7. Reusing the fused symbol instead was the spike's second shim bug.
+    ``to_qkv(chunks=3)`` / ``to_kv(chunks=2)`` slice the weight by output columns
+    with ``torch.chunk``, so the block width follows the chunk rule
+    (``shard_chunk_size``): ``ceil(N/count)`` for the leading chunks and the
+    remainder for the last, *not* a floor split -- an uneven fused weight would
+    otherwise lose columns. Each block is its own ``[K, block]`` PARAM symbol,
+    which keeps the region algebra exact and gives the chunk a distinct value
+    (reusing the fused symbol was the spike's second shim bug).
+
+    Not modelled: the block is stored per-device interleaved
+    (``_interleave_heads``), so its *columns* are strided rather than a
+    contiguous logical range. The analyzer reasons about a weight's shape and
+    value identity, not its column ordering, so this does not affect findings;
+    pinning the interleave down is the on-device conformance job (blocker 12).
     """
     if count == 1:
         return w
     key = (w.sym or "", index, count)
     if key not in _CHUNK_CACHE:
+        chunk = shard_chunk_size(w.logical[1], count)
+        width = min(chunk, max(0, w.logical[1] - index * chunk))  # last block is short
         _CHUNK_CACHE[key] = recorder.entry(
-            [w.logical[0], w.logical[1] // count],
+            [w.logical[0], width],
             w.dist,
             w.dtype,
             kind=PARAM,

@@ -19,6 +19,41 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence, Tuple
 
+#: ttnn stores tensors in 32x32 tiles, so the last two axes of an on-device
+#: tensor are rounded up to a multiple of this. Region coverage stays on logical
+#: extents; only the byte/cost estimate reads the padded extent, because that is
+#: what a collective actually pushes across a link (roadmap blocker 10).
+TILE = 32
+
+
+def pad_extent(extent: int, tile: int = TILE) -> int:
+    return -(-extent // tile) * tile
+
+
+def shard_chunk_size(extent: int, count: int) -> int:
+    """The chunk size ttnn splits ``extent`` into over ``count`` devices.
+
+    Exactly ttnn's rule (``xtensor/partition.cpp::chunk_ndim``): each shard is
+    ``ceil(extent / count)`` and device ``i`` takes
+    ``[i*chunk, min((i+1)*chunk, extent))``, so the leading devices get a full
+    chunk and at most one trailing device gets a short remainder. This is
+    torch.chunk semantics, *not* an even split -- it is what the region shard
+    and the dry-run per-device shape both have to reproduce (blocker 11).
+    """
+    if count <= 1:
+        return extent
+    return -(-extent // count)
+
+
+def shard_chunk_count(extent: int, count: int) -> int:
+    """How many *non-empty* shards ttnn actually produces for ``count`` devices.
+
+    ``< count`` means some device would get nothing; ttnn's
+    ``distributed_tensor.cpp`` TT_FATALs on that for a 2D mesh.
+    """
+    chunk = shard_chunk_size(extent, count)
+    return -(-extent // chunk) if chunk else 0
+
 
 @dataclass(frozen=True)
 class Box:
@@ -45,6 +80,25 @@ class Box:
         v = 1
         for lo, hi in self.ranges:
             v *= hi - lo
+        return v
+
+    def padded_volume(self, tile: int = TILE) -> int:
+        """Volume with the last two axes rounded up to a tile.
+
+        On device the innermost two axes live in ``tile x tile`` tiles, so a
+        collective moves the padded extent, not the logical one -- a gather of a
+        ``num_heads``-column tensor still ships a full 32-wide tile. Cost math
+        reads this; coverage/demand stay on :attr:`volume`.
+        """
+        if self.is_empty:
+            return 0
+        v = 1
+        n = self.ndim
+        for i, (lo, hi) in enumerate(self.ranges):
+            extent = hi - lo
+            if i >= n - 2:  # innermost two axes are tiled
+                extent = pad_extent(extent, tile)
+            v *= extent
         return v
 
     def intersect(self, other: "Box") -> "Box":
@@ -117,10 +171,16 @@ class RegionSet:
 
     @staticmethod
     def shard(shape: Sequence[int], axis: int, index: int, count: int) -> "RegionSet":
-        """Even 1-D shard ``index`` of ``count`` along ``axis``."""
+        """1-D shard ``index`` of ``count`` along ``axis``, per ttnn's chunk rule.
+
+        Reproduces ``xtensor/partition.cpp``: leading devices get a full
+        ``ceil(extent/count)`` chunk and one trailing device may get a short
+        remainder, so this handles the uneven case correctly, not just the even
+        one (blocker 11).
+        """
         axis = axis % len(shape)
         extent = int(shape[axis])
-        step = -(-extent // count)  # ceil, mirrors ttnn's shard padding behaviour
+        step = shard_chunk_size(extent, count)
         lo = min(index * step, extent)
         hi = min(lo + step, extent)
         return RegionSet.of(Box.full(shape).replace_axis(axis, lo, hi))
@@ -133,6 +193,15 @@ class RegionSet:
     @property
     def volume(self) -> int:
         return sum(b.volume for b in self.boxes)
+
+    def padded_volume(self, tile: int = TILE) -> int:
+        """Sum of per-box tile-padded volumes; see :meth:`Box.padded_volume`.
+
+        Boxes are padded independently, so a region split across the innermost
+        axes can double-count fractional tiles -- acceptable for a first-order
+        fabric-cost estimate, and it never *under*-counts.
+        """
+        return sum(b.padded_volume(tile) for b in self.boxes)
 
     def union(self, other: "RegionSet") -> "RegionSet":
         return RegionSet(self.ndim, list(self.boxes) + list(other.boxes))

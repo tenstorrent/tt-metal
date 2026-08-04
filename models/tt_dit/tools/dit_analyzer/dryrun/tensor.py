@@ -18,10 +18,11 @@ from __future__ import annotations
 from typing import Optional, Sequence, Tuple
 
 from ..ir import Dist
+from ..region import shard_chunk_count, shard_chunk_size
 from .context import CTX, TILE
 
-#: ttnn dtype name -> analyzer dtype tag. Block-float exponent overhead is
-#: phase 7 (blocker 13); the tags themselves already distinguish the formats.
+#: ttnn dtype name -> analyzer dtype tag. Block-float exponent overhead lives in
+#: ``ir.elem_bytes_for`` (blocker 13, closed); the tags distinguish the formats.
 DTYPES = {
     "bfloat16": "bf16",
     "float32": "fp32",
@@ -62,10 +63,12 @@ class Shape(tuple):
 
 
 def pad_to_tile(shape: Sequence[int]) -> Tuple[int, ...]:
-    """Round the last two axes up to a tile.
+    """Round the last two (tiled) axes up to a tile.
 
-    A placeholder for real tiling (phase 7): enough for `get_matmul_config`'s
-    arithmetic, not enough for byte accounting.
+    This is the per-device on-device shape the model code branches on and feeds
+    to ``get_matmul_config``. Byte/cost accounting no longer relies on it: the
+    analyzer pads independently in ``region.padded_volume`` so the fabric cost
+    reflects whole tiles while region coverage stays logical (roadmap blocker 10).
     """
     s = list(shape)
     for a in (-2, -1):
@@ -75,21 +78,33 @@ def pad_to_tile(shape: Sequence[int]) -> Tuple[int, ...]:
 
 
 def local_shape(logical: Sequence[int], dist: Dist) -> Tuple[int, ...]:
-    """Per-device shape: logical divided by the mesh factor on each sharded axis."""
+    """Per-device shape: logical split by the mesh factor on each sharded axis.
+
+    Uses ttnn's real chunk rule (``region.shard_chunk_size``), so an uneven
+    axis gives device 0 a full ``ceil(extent/n)`` chunk -- the representative
+    shard model code branches on -- rather than crashing. The single trailing
+    device that ttnn gives a short remainder is not modelled here (one Tensor
+    carries one shape); the region algebra tracks that per-device difference,
+    and the phase-11 collective log is what pins it down on real silicon.
+    tt_dit itself keeps sharded axes even for weights (``Parameter`` rejects an
+    uneven split) and pads activation axes (e.g. 38->40 heads), so the uneven
+    branch is a guard, held to ttnn's exact rule (blocker 11).
+    """
     s = list(logical)
     for mesh_axis, tensor_axis in enumerate(dist.shard):
         if tensor_axis is None:
             continue
         a = tensor_axis % len(s)
         n = CTX.mesh.shape[mesh_axis]
-        if s[a] % n:
-            # Uneven shards are real (38 -> 40 heads at tp=4) and land in phase 7;
-            # until the division rules match ttnn's exactly, refuse to guess.
+        if s[a] % n and shard_chunk_count(s[a], n) < n:
+            # ttnn's chunk_ndim would leave some device empty, which
+            # distributed_tensor.cpp TT_FATALs for a 2D mesh -- refuse it too.
             raise NotImplementedError(
-                "uneven shard: logical %s dim %d = %d over %d devices on mesh axis %d "
-                "(uneven shard division is roadmap blocker 11, phase 7)" % (list(logical), a, s[a], n, mesh_axis)
+                "shard of logical %s dim %d = %d over %d devices (mesh axis %d) leaves "
+                "%d device(s) empty; ttnn rejects this for a 2D mesh (roadmap blocker 11)"
+                % (list(logical), a, s[a], n, mesh_axis, n - shard_chunk_count(s[a], n))
             )
-        s[a] //= n
+        s[a] = shard_chunk_size(s[a], n)
     return tuple(s)
 
 

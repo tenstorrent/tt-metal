@@ -261,6 +261,86 @@ def test_stack_survives_a_json_round_trip():
     assert Graph.from_json(graph.to_json()).nodes[0].stack == ["models/tt_dit/layers/linear.py:250"]
 
 
+def test_weight_chunk_width_matches_torch_chunk():
+    # to_qkv(chunks=n) splits weight columns with torch.chunk; the shim's block
+    # width must be exactly torch's, ceil-to-leading not floor (blocker 12).
+    from dit_analyzer.region import shard_chunk_size
+
+    try:
+        import torch
+    except ImportError:
+        return  # torch-less CI: shard_chunk_size is covered in test_dit_analyzer
+    for n_cols, count in [(3072, 3), (1024, 2), (30, 4), (38, 4)]:
+        widths = [t.shape[-1] for t in torch.empty(8, n_cols).chunk(count, dim=-1)]
+        chunk = shard_chunk_size(n_cols, count)
+        expected = [min(chunk, max(0, n_cols - i * chunk)) for i in range(count)]
+        assert widths == [w for w in expected if w > 0], (n_cols, count, widths, expected)
+
+
+def test_fused_swiglu_preprocessing_runs_on_meta_and_preserves_shape():
+    # the roadmap's "run the real _prepare_torch_state on meta tensors": the
+    # swiglu reorder is a pure reshape/permute, so it runs with no bytes and is
+    # shape-preserving -- which is why total_shape already captures it and the
+    # residual (blocker 12) is column identity, not shape.
+    try:
+        import torch
+
+        from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
+    except ImportError:
+        return
+    w = torch.empty(4096, 2 * 4096, device="meta")  # packed [.., 2N] swiglu weight
+    out = prepare_for_fused_swiglu(w, ndev=4)
+    assert tuple(out.shape) == (4096, 2 * 4096)  # reordered, not reshaped
+    assert out.is_meta  # no bytes were ever materialised
+
+
+def test_checkpoint_flags_match_tt_dit_detection():
+    from dit_analyzer.dryrun.checkpoint import LTX_ADALN_KEY, declared, ltx_flags
+
+    inner = 4096
+    # audio+video: to_gate_logits present -> has_gate; adaln rows 9*inner > 6*inner
+    av = declared(
+        keys=[LTX_ADALN_KEY, "model.diffusion_model.transformer_blocks.0.attn1.to_gate_logits.weight"],
+        shapes={LTX_ADALN_KEY: (9 * inner, inner)},
+    )
+    assert ltx_flags(av, inner) == {"has_gate": True, "cross_attention_adaln": True}
+    # a video-only checkpoint: no gate key, small adaln (6*inner, not > 6*inner)
+    vo = declared(keys=[LTX_ADALN_KEY], shapes={LTX_ADALN_KEY: (6 * inner, inner)})
+    assert ltx_flags(vo, inner) == {"has_gate": False, "cross_attention_adaln": False}
+    # adaln weight absent -> tt_dit's fallback is True
+    none = declared(keys=["model.diffusion_model.transformer_blocks.0.attn1.to_gate_logits.weight"])
+    assert ltx_flags(none, inner) == {"has_gate": True, "cross_attention_adaln": True}
+    # key present but shape unknown (index.json source) -> adaln reported unknown
+    keys_only = declared(keys=[LTX_ADALN_KEY])
+    assert ltx_flags(keys_only, inner)["cross_attention_adaln"] is None
+
+
+def test_safetensors_header_reads_shapes_without_weight_bytes():
+    import json
+    import struct
+    import tempfile
+
+    from dit_analyzer.dryrun.checkpoint import from_safetensors_header
+
+    # a minimal, valid safetensors file: <u64 header_len><json header><data>
+    header = {
+        "w.gate": {"dtype": "F32", "shape": [16, 4], "data_offsets": [0, 256]},
+        "__metadata__": {"format": "pt"},
+    }
+    blob = json.dumps(header).encode()
+    with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
+        f.write(struct.pack("<Q", len(blob)))
+        f.write(blob)
+        f.write(b"\x00" * 256)  # tensor data we must never read
+        path = f.name
+    index = from_safetensors_header(path)
+    os.unlink(path)
+    assert index.keys == ["w.gate"]  # __metadata__ excluded
+    assert index.shape_of("w.gate") == (16, 4)
+    assert index.any_key_contains("gate")
+    assert "safetensors header" in index.source
+
+
 def _tests():
     return [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
 

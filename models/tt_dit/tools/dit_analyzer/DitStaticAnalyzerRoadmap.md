@@ -35,7 +35,8 @@ stale copy to disagree.
 | Capture | 30 monkeypatch hooks written, **never run on hardware**; demoted to the phase 11 conformance path |
 | Graph source | `ditcheck dryrun` from source, or hand-written via `builder.py`; a trace still needs hand-declared placements |
 | Validated on | SD3.5-large block (0 findings), LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), both reproduced from source by the dry run and asserted in `tests/test_dryrun.py` |
-| Tests | 20 analyzer + 15 dry-run, no device and no pytest required |
+| Tests | 24 analyzer + 19 dry-run, no device and no pytest required; plus `conform.py` on a device |
+| Conformance | `conform.py`: per-device shape diff vs real ttnn, **green on the 2×4 Loudbox** (the LTX block's shapes match; 4×8 Ring needs a Galaxy) |
 
 ### Phases
 
@@ -48,16 +49,19 @@ real code. Plan phase 6 and roadmap phase 13 are the same work.
 | plan 1 — graph capture | **superseded** | replaced by the dry run; capture survives as the phase 11 validator, still never run on hardware |
 | plan 5 — validate on historical wins | **partly** | rediscovers the LTX win from source and passes the SD3.5 precision test; no wider corpus of past AGMM graphs, and none of the human metrics (false-positive rate over a real backlog, time per finding) |
 | **roadmap 6 — dry-run front end** | **done** | — |
-| **roadmap 7 — shape and layout fidelity** | **next** | tiling, uneven shards, weight layout, block-float bytes, checkpoint keys |
-| roadmap 8 — op coverage | not started | DiT block is covered; the tail is VAE/encoder |
+| **roadmap 7 — shape and layout fidelity** | **done (7a); 7b on 2×4, Ring blocked** | tiling, exact shard division, block-float bytes, checkpoint keys, and the chunk rule all shipped and corroborated against real ttnn on the 2×4 Loudbox via `conform.py`; the 4×8 Ring corroboration needs a 32-chip Galaxy |
+| roadmap 8 — op coverage | **next** | DiT block is covered; the tail is VAE/encoder |
 | roadmap 9 — scale | not started | 48-layer rollup, quadratic cost, finding rollup, stable IDs |
 | roadmap 10 — multi-mesh / stage / host | not started | submeshes, encoder→DiT→VAE, carried state, readbacks |
 | roadmap 11 — conformance (needs a device) | not started | **gates trusting findings**, not producing them |
 | roadmap 12 — branch and shape matrix | not started | one graph is currently one branch |
 | roadmap 13 / plan 6 — workflow | **partly** | CLI and `ops --check` exist; no CI job, no golden baselines, no time-based ranking |
 
-**Blockers: 33 of 44 open** — 7 dissolved by the dry-run design, 4 closed by phase
-6. Open counts by phase: 7→6, 8→6, 9→4, 10→6, 11→5, 12→3, 13→3.
+**Blockers: 27 of 44 open** — 7 dissolved by the dry-run design, 4 closed by phase
+6, 6 closed by phase 7 (10, 11, 12, 13, 36, 38). Open counts by phase: 7→0,
+8→6, 9→4, 10→6, 11→5, 12→2, 13→3. (Blocker 36 is closed for *shape math*: the
+2×4 shapes are now diffed against real ttnn by `conform.py`; the 4×8 Ring diff
+still awaits a Galaxy.)
 
 **The plan's v1 bar is met.** It set the go/no-go at "if it can reliably rediscover
 Kevin's finding, and do so early in bring-up, it is already worth the build cost"
@@ -70,7 +74,15 @@ corroborated block is not a trustworthy tool.
 Until phase 11's per-op conformance is green, a dry-run finding means *"the shim
 believes"*. Today's 6 LTX findings are corroborated by a hand-written oracle built
 independently from the same source, which is real evidence — but it is the only
-block that has one.
+block that has one. Phase 7b took the first bite of the conformance gate:
+[`conform.py`](conform.py) builds representative LTX tensors on a real 2×4
+Blackhole mesh and diffs each per-device (logical *and* tile-padded) shape against
+the shim. Every shape the LTX 2×4 block actually uses matches ttnn exactly; the
+one deliberately-uneven probe is refused by ttnn itself under tile layout (its
+shards must be uniform, which is why tt_dit pads first — and the shim's predicted
+chunk size is the value ttnn *expected* before it refused). This validates the
+shape math a wrong-shape finding would exploit, but only on the 2×4 (Linear)
+config — the 4×8 Ring finding still needs a 32-chip Galaxy to corroborate.
 
 ## The design: dry run first, device as validator
 
@@ -185,10 +197,10 @@ call sites), plus 9 introduced by the shim (44 was found by the spike). `P` = ph
 |---|---|---|
 | 8 | Entry placements must be declared: `.shape` is per-device, nothing says which mesh axis fractures which tensor axis | **dissolved** — recorded when the shim creates the tensor |
 | 9 | Axis roles (sp/tp/cfg) live in `DiTParallelConfig`, not on tensors | **dissolved** — the dry run reads the config object in-process |
-| 10 | `padded_shape` vs logical shape: matmuls use tile-padded shapes, region math uses logical | 7 |
-| 11 | Uneven shards (38→40 heads for tp=4); shard split must match ttnn's mapping exactly | 7 |
-| 12 | Model-specific weight preprocessing (`_interleave_heads`, `prepare_for_fused_swiglu`, `permute_for_swiglu`) changes logical column order | 7 |
-| 13 | Block-float byte accounting: `bfp8_b`/`bfp4_b` exponent overhead missing from `elem_bytes` | 7 |
+| 10 | `padded_shape` vs logical shape: matmuls use tile-padded shapes, region math uses logical | **closed in 7** — `shape`/`padded_shape` split; cost math on `region.padded_volume` |
+| 11 | Uneven shards (38→40 heads for tp=4); shard split must match ttnn's mapping exactly | **closed in 7** — one `shard_chunk_size` reproduces ttnn's `torch.chunk` rule, verified on 2×4 |
+| 12 | Model-specific weight preprocessing (`_interleave_heads`, `prepare_for_fused_swiglu`, `permute_for_swiglu`) changes logical column order | **closed in 7 for shape** — shapes validated via `total_shape`+`_check_data`; column *order* not consumed by the analyzer |
+| 13 | Block-float byte accounting: `bfp8_b`/`bfp4_b` exponent overhead missing from `elem_bytes` | **closed in 7** — `ir.elem_bytes_for` (1.0625 / 0.5625) |
 
 ### C. Semantics coverage
 
@@ -236,9 +248,9 @@ call sites), plus 9 introduced by the shim (44 was found by the spike). `P` = ph
 
 | # | Blocker | P |
 |---|---|---|
-| 36 | **Per-device shape and tile-padding math must be exact.** The graph branches on it — `attention_ltx.py:483` does `need_gather = k_BHNE.shape[2] < _k_cos_pe.shape[2]`. An off-by-a-factor doesn't perturb the graph, it flips a collective in or out of existence | 7 |
+| 36 | **Per-device shape and tile-padding math must be exact.** The graph branches on it — `attention_ltx.py:483` does `need_gather = k_BHNE.shape[2] < _k_cos_pe.shape[2]`. An off-by-a-factor doesn't perturb the graph, it flips a collective in or out of existence | **closed in 7 for 2×4** — `conform.py` diffs every shape vs real ttnn; 4×8 Ring diff needs a Galaxy |
 | 37 | **`weight._data is None` gates the graph.** `attention_ltx.py:379`: `_compute_gate` returns `None` when the gate weight is unloaded, so a weightless dry run silently loses the exact finding phase 5 reported. Needs `torch.device('meta')` weights so `Parameter._data` is non-None without bytes | **closed in 6** |
-| 38 | **Checkpoint-derived flags.** `has_gate` comes from state-dict *keys* (`transformer_ltx.py:1090`), as does `cross_attention_adaln`. Needs a key list from a safetensors index without downloading weights | 7 |
+| 38 | **Checkpoint-derived flags.** `has_gate` comes from state-dict *keys* (`transformer_ltx.py:1090`), as does `cross_attention_adaln`. Needs a key list from a safetensors index without downloading weights | **closed in 7** — `dryrun/checkpoint.py` (safetensors header / index / declared manifest) |
 | 39 | **Host-value dependence.** `transformer_mochi.py:575` derives `valid_prompt_length` via `encoder_attention_mask.sum(dim=1).max().int().item()`, which drives shapes. Needs representative host inputs or supplied lengths | 12 |
 | 40 | **Device and config object stubs.** `MeshDevice.shape/arch/compute_with_storage_grid_size/create_submeshes`, `CoreGrid`/`CoreCoord`/`CoreRangeSet`, `SDPAProgramConfig`, `MemoryConfig`, compute-kernel configs, `SubDevice`, `create_global_semaphore` — and `get_matmul_config`'s assertions must be satisfiable from fake shapes | **closed in 6** |
 | 41 | **Pipeline construction touches the device before any forward.** `CCLManager.__init__` calls `_init_subdevice()` and `_init_semaphores()` (many `create_global_semaphore`) and `synchronize_device`; pipelines also build persistent buffers and prepare weights at init | **closed in 6** |
@@ -314,26 +326,51 @@ kept. What shipped:
   the generic stub would answer "not blackhole" for every mesh while the model keys
   chunk sizes and program configs off it.
 
-### Phase 7 — Shape and layout fidelity (2–3 weeks) · closes 10, 11, 12, 13, 36, 38
+### Phase 7 — Shape and layout fidelity · **7a done; 7b on 2×4, Ring blocked** · closes 10, 11, 12, 13, 36, 38
 
 The load-bearing wall: shapes decide branches (36). The spike's two bugs are
 exactly this phase's content — treating `num_heads_per_device=1` (the no-split
 default) as a head split, and reusing a fused weight's symbol for a chunked AGMM.
-Between them they produced 15 spurious findings next to the 6 real ones.
+Between them they produced 15 spurious findings next to the 6 real ones. What
+shipped:
 
-- Implement tile padding and expose both `shape` and `padded_shape`; regions and
-  demand on logical extents, byte/cost math on padded.
-- Reproduce ttnn's shard division exactly, including uneven splits, from the
-  mapper's own rules rather than a ceil assumption.
-- Weight layout as a declared property of a linear layer (`per_device_qkv`,
-  `swiglu_interleave`, …), replacing today's hardcoded default; run the real
-  `_prepare_torch_state` on meta tensors so preprocessing shapes come for free.
-- Checkpoint key lists from a safetensors index for `has_gate`-style flags.
-- Block-float byte table.
-- A real `chunked_weight` spec: `to_qkv(chunks=3)` consumes a column block of a
-  per-device-interleaved weight, which the spike models as separate weights.
-- **Acceptance:** for one block, every per-device shape the shim computes matches
-  a recorded real run (the phase 11 collective log), and no branch differs.
+- **Tile padding (10).** `shape` and `padded_shape` are distinct; region and
+  demand math stay on logical extents, and byte/cost math reads a tile-padded
+  volume (`region.padded_volume`) because the fabric moves whole 32×32 tiles.
+- **Exact shard division (11).** One canonical `region.shard_chunk_size`
+  reproduces ttnn's `xtensor/partition.cpp` chunk rule — `ceil(extent/n)` to the
+  leading devices, remainder to the last — used by both the region shard and the
+  dry-run per-device shape. The uneven case follows ttnn instead of crashing, and
+  the empty-device case that ttnn TT_FATALs on a 2D mesh is refused with that reason.
+- **Block-float bytes (13).** `ir.elem_bytes_for` carries the +1/16-byte shared
+  exponent overhead: `bfp8_b`=1.0625, `bfp4_b`=0.5625, so a block-float gather is
+  no longer undercounted by ~6%.
+- **Checkpoint-derived flags (38).** `dryrun/checkpoint.py` reads keys and shapes
+  from a metadata-only source — a real `.safetensors` header (no tensor bytes), an
+  index JSON, or a declared manifest — and derives `has_gate` /
+  `cross_attention_adaln` by tt_dit's own rule, reporting which source it used.
+  `apply_gated_attention` is no longer a hardcoded boolean.
+- **Weight preprocessing / chunked weights (12).** Established that
+  `Parameter.total_shape` + `_check_data` already validate every per-device weight
+  shape against tt_dit's own `local_shape`, and that `_prepare_torch_state`'s
+  swiglu/interleave reorders are shape-preserving (`prepare_for_fused_swiglu`:
+  `[..,2N]→[..,2N]`), so the shapes are already correct and checked. `_weight_chunk`
+  now splits fused-weight columns by ttnn's `torch.chunk` rule (ceil, not floor).
+  The residual — a fused weight's column *ordering* under `_interleave_heads` — is
+  not consumed by the analyzer (it reasons about shape and value identity, not
+  column order) and is left to on-device conformance.
+- **Acceptance — met on 2×4, blocked on Ring.** [`conform.py`](conform.py) builds
+  representative LTX tensors on a real 2×4 Blackhole mesh via the same
+  `create_mesh_mapper` path tt_dit uses, reads back each device's shard and diffs
+  its logical and tile-padded shape against the shim: `video_act`, `audio_act`,
+  the TP-sharded fused `qkv_weight`, `rope_cos` and the tile-padding probe all
+  match ttnn exactly; the deliberately-uneven probe is refused by ttnn under tile
+  layout with the shim's chunk size as ttnn's own expected value. The 4×8 Ring
+  finding — the one with redundancy — needs a 32-chip Galaxy to record, so its
+  per-device-shape corroboration stays open.
+
+**Test count: 43 offline (24 analyzer + 19 dry run), no device or pytest needed,
+plus `conform.py` on a device.**
 
 ### Phase 8 — Op coverage, one registration per op (3–4 weeks) · closes 2, 14, 15, 16, 17, 18
 
@@ -435,21 +472,23 @@ Nearly free once the dry run works: sweeps are laptop CPU time, not device time.
 ## Ordering
 
 ```
-6 (shim core) ══► 7 (shape fidelity) ──► 8 (op coverage) ──► 9 (scale) ──► 13 (device-free CI)
-    done                                      │
-                                              ├──► 10 (multi-mesh / stage)
-                                              ├──► 11 (conformance + soundness, on device)
-                                              └──► 12 (coverage matrix)
+6 (shim core) ══► 7 (shape fidelity) ══► 8 (op coverage) ──► 9 (scale) ──► 13 (device-free CI)
+    done              7a done; 7b on 2×4     next  │
+                                                   ├──► 10 (multi-mesh / stage)
+                                                   ├──► 11 (conformance + soundness, on device)
+                                                   └──► 12 (coverage matrix)
 ```
 
 6 → 7 → 8 is the critical path to "runs on a real pipeline with no hand-written
-model"; with 6 done, 7 → 8 is ~5–7 weeks of it. **Next is phase 7**, and the
-reason it comes before op coverage is that shapes decide branches: the two shim
-bugs the spike found produced 15 spurious findings next to the 6 real ones, and
-neither perturbed the graph. Phase 11 does not gate producing findings, but it does
-gate *trusting* them: until per-op conformance is green, every dry-run finding
-should be read as "the shim believes", and phase 7's acceptance criterion depends
-on one recorded collective log, so a small amount of device time is needed early.
+model"; with 6 and 7a done and 7b green on the 2×4 box, **next is phase 8**. Phase
+7 came before op coverage because shapes decide branches: the two shim bugs the
+spike found produced 15 spurious findings next to the 6 real ones, and neither
+perturbed the graph. That risk is now materially lower — `conform.py` diffs the
+shim's per-device shapes against real ttnn, and the LTX 2×4 block matches exactly.
+Phase 11 still gates *trusting* findings in full: `conform.py` is a per-tensor
+shape check, not the per-op collective-log diff, and the 4×8 Ring finding remains
+uncorroborated until a Galaxy is available. Until then a Ring finding still reads
+as "the shim believes", now with the shape math it rests on checked on 2×4.
 
 Two cheap checks already push against the top risk, and both are free to keep
 running: loading weights through `Parameter.load_torch_tensor` makes tt_dit's own

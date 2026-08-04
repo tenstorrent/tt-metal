@@ -70,22 +70,63 @@ class Target:
 VIDEO_DIM, VIDEO_HEADS, VIDEO_HEAD_DIM, VIDEO_N = 4096, 32, 128, 38912
 AUDIO_DIM, AUDIO_HEADS, AUDIO_HEAD_DIM, AUDIO_N = 2048, 32, 64, 256
 TEXT_L, LAYERS, STEPS = 32, 48, 8
+LTX_ADALN_MODULATIONS = 9  # adaln_single.linear.weight rows = 9 * inner_dim for A+V
+
+
+def _ltx_checkpoint():
+    """The A+V checkpoint as a metadata-only index (blocker 38).
+
+    Points at a real ``.safetensors`` header/index if ``DITCHECK_LTX_CHECKPOINT``
+    names one -- reading shapes, never weights -- and otherwise falls back to a
+    declared manifest that reproduces the audio+video checkpoint's detectable
+    flags: a ``to_gate_logits`` key (``has_gate``) and an ``adaln_single`` weight
+    whose first dim (``9 * inner_dim``) exceeds ``6 * inner_dim``
+    (``cross_attention_adaln``). Either way the flags are *derived*, not asserted.
+    """
+    import os
+
+    from . import checkpoint as ckpt
+
+    path = os.environ.get("DITCHECK_LTX_CHECKPOINT")
+    if path:
+        if path.endswith(".index.json"):
+            return ckpt.from_index_json(path)
+        return ckpt.from_safetensors_header(path)
+    return ckpt.declared(
+        keys=[
+            ckpt.LTX_ADALN_KEY,
+            "model.diffusion_model.transformer_blocks.0.attn1.to_gate_logits.weight",
+        ],
+        shapes={ckpt.LTX_ADALN_KEY: (LTX_ADALN_MODULATIONS * VIDEO_DIM, VIDEO_DIM)},
+    )
 
 
 def _ltx_block(preset: Preset) -> Graph:
     """One `LTXTransformerBlock`, built and called for real.
 
-    ``has_audio`` / ``apply_gated_attention`` / ``cross_attention_adaln`` are
-    checkpoint-derived in the pipeline (blocker 38) and stated here.
+    ``apply_gated_attention`` (``has_gate``) and ``cross_attention_adaln`` are
+    checkpoint-derived (blocker 38): they come from a metadata-only index via
+    the same rule tt_dit uses, not a hardcoded boolean. ``has_audio`` is a
+    per-instance flag the checkpoint never encodes, so it stays declared.
     """
+    from .checkpoint import ltx_flags
+
     mesh_device = install(preset.mesh_shape, preset.arch)
     import ttnn  # the shim
+
+    index = _ltx_checkpoint()
+    flags = ltx_flags(index, inner_dim=VIDEO_DIM)
+    has_gate = bool(flags["has_gate"])
+    # a shape-less index can't evaluate the adaln size test; keep the A+V default
+    cross_attention_adaln = True if flags["cross_attention_adaln"] is None else flags["cross_attention_adaln"]
 
     graph = _start(mesh_device, preset, name="ltx_block_dryrun_%s" % preset.name, calls=LAYERS, steps=STEPS)
     graph.meta.update(
         {
             "model": "LTX-2.3 (audio + video), dry run from source",
             "note": "one LTXTransformerBlock x%d layers; %s topology" % (LAYERS, preset.topology),
+            "checkpoint": index.source,
+            "checkpoint_flags": {"has_gate": has_gate, "cross_attention_adaln": cross_attention_adaln},
         }
     )
 
@@ -116,9 +157,9 @@ def _ltx_block(preset: Preset) -> Graph:
         mesh_device=mesh_device,
         ccl_manager=ccl,
         parallel_config=parallel_config,
-        has_audio=True,
-        apply_gated_attention=True,
-        cross_attention_adaln=True,
+        has_audio=True,  # per-instance, not checkpoint-encoded
+        apply_gated_attention=has_gate,  # checkpoint-derived (blocker 38)
+        cross_attention_adaln=cross_attention_adaln,  # checkpoint-derived
     )
     graph.meta["parameters"] = load_meta_weights(block)
 

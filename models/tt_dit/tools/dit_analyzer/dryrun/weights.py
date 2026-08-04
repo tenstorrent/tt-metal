@@ -19,9 +19,17 @@ Loading goes through the real ``Parameter.load_torch_tensor``, not by assigning
   the shard math that blocker 36 says is load-bearing;
 * dtype and layout mismatches surface here instead of as a wrong byte count.
 
-Not covered: ``_prepare_torch_state`` (``_interleave_heads``, swiglu permutation)
-never runs, because a state dict needs checkpoint keys. Weight *layout* is
-therefore still a declaration, which is phase 7 (blockers 12, 38).
+On ``_prepare_torch_state`` (``_interleave_heads``, swiglu permutation): it does
+not run here, because a state dict needs checkpoint keys -- but its *shape* is
+already captured. The transpose it applies is baked into ``Parameter.total_shape``,
+and the swiglu/interleave reorders are shape-preserving (``prepare_for_fused_swiglu``
+maps ``[.., 2N] -> [.., 2N]``), so ``_check_data`` above validates the final
+per-device shape on every parameter regardless. What preprocessing changes that
+the load path does *not* reconstruct is a fused weight's column *ordering*; the
+analyzer reasons about weight shape and value identity, not column order, so this
+does not affect findings. Pinning the interleave down belongs to on-device
+conformance (blockers 12, phase 11). Checkpoint-derived branch *flags* (blocker 38)
+are handled in :mod:`.checkpoint`.
 """
 
 from __future__ import annotations

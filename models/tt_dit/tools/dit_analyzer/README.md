@@ -50,9 +50,11 @@ models/tt_dit/tools/ditcheck analyze g.json --json findings.json --fail-on prova
 Tests (no device, no pytest needed):
 
 ```bash
-python3 models/tt_dit/tools/dit_analyzer/tests/test_dit_analyzer.py   # analyzer, 20 tests
-python3 models/tt_dit/tools/dit_analyzer/tests/test_dryrun.py         # dry run, 11 tests
+python3 models/tt_dit/tools/dit_analyzer/tests/test_dit_analyzer.py   # analyzer, 24 tests
+python3 models/tt_dit/tools/dit_analyzer/tests/test_dryrun.py         # dry run, 19 tests
 # or: pytest models/tt_dit/tools/dit_analyzer/
+# on a device: shape conformance vs real ttnn (phase 7b / 11)
+python3 models/tt_dit/tools/dit_analyzer/conform.py --mesh 2 4
 ```
 
 ## The dry run
@@ -231,7 +233,9 @@ rules.py      redundancy rules -> Finding + machine-readable proof
 report.py     text rendering: state tables, ranked findings, proofs, diagnostics
 builder.py    DSL for writing/lifting graphs; expands fused ttnn ops into stages
 capture.py    record a real ttnn forward pass -> trace -> graph
+conform.py    on-device: diff the shim's per-device shapes against real ttnn (phase 7b/11)
 dryrun/       real model code under a metadata-only ttnn -> graph, no device
+dryrun/checkpoint.py  checkpoint-derived branch flags from a metadata-only index
 examples/     gold graphs (LTX-2.3 block x2 topologies, SD3.5 block, synthetic patterns)
 spike/        FINDINGS.md: what the dry-run prototype answered, and what it cost
 ```
@@ -369,12 +373,15 @@ Not built (and where it would go):
   else changes. Roadmap phase 8 merges the two into one registration.
 * **Automated rewrites.** Diagnostics only, per the plan's "proofs before
   auto-fixes".
-* **Shape fidelity.** Tiling is a placeholder (`padded_shape` rounds the last two
-  axes to 32), uneven shards raise rather than divide, and weight preprocessing
-  (`_interleave_heads`, swiglu permutation) is not run — so a chunked fused weight
-  is modelled as separate per-chunk weights. This is roadmap phase 7, and it is the
-  load-bearing one: shapes decide branches, and a wrong shape invents redundancy
-  rather than perturbing the graph.
+* **Shape fidelity — phase 7a, shipped and corroborated on 2×4.** Tile padding is
+  real (`shape` vs `padded_shape` are distinct; byte/cost math uses a tile-padded
+  volume), shard division reproduces ttnn's `torch.chunk` rule including uneven
+  splits, block-float bytes carry their exponent overhead, and checkpoint flags
+  (`has_gate`, `cross_attention_adaln`) are derived from a metadata-only index.
+  [`conform.py`](conform.py) diffs the shim's per-device shapes against real ttnn
+  on a 2×4 Blackhole mesh and they match. Remaining: a fused weight's column
+  *interleave* is not modelled (the analyzer doesn't consume column order), and the
+  4×8 Ring finding needs a 32-chip Galaxy to corroborate.
 * **Whole pipelines.** One block on one mesh, not encoder → DiT → VAE across
   submeshes with carried latents (phase 10), and no branch/shape sweep (phase 12).
 * **Trusting the shim.** Until per-op conformance runs on a device (phase 11),

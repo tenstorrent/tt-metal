@@ -111,6 +111,11 @@ def _dryrun(args) -> int:
     print("torch: %s" % info["torch"])
     for note in info["substitutions"]:
         print("  substituted %s" % note)
+    if graph.meta.get("checkpoint"):
+        flags = graph.meta.get("checkpoint_flags", {})
+        print(
+            "checkpoint: %s -> %s" % (graph.meta["checkpoint"], ", ".join("%s=%s" % (k, v) for k, v in flags.items()))
+        )
     if info["unregistered_ops"]:
         print(
             "\nunregistered ops (%d distinct) -- `ditcheck ops --missing` on the graph for detail:"

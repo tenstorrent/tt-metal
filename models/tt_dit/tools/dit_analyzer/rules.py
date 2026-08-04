@@ -156,6 +156,10 @@ class CollectiveView:
         Deliberately independent of the available/needed region delta -- a
         collective whose data is already replicated still pays full fabric cost
         on hardware, and that cost is exactly what removing it recovers.
+
+        Volumes are tile-padded (``padded_volume``): the fabric moves whole
+        32x32 tiles, so a gather of a ``num_heads``-column tensor costs a full
+        tile row, not its logical width. The region *algebra* stays logical.
         """
         g = len(self.group)
         if g <= 1:
@@ -163,10 +167,10 @@ class CollectiveView:
         esize = self.out_sym.elem_bytes
         share = float(g - 1) / g
         if self.node.op == "all_reduce":
-            return int(sum(self.out_state.regions[d].volume for d in self.group) * share * 2 * esize)
+            return int(sum(self.out_state.regions[d].padded_volume() for d in self.group) * share * 2 * esize)
         if self.node.op == "reduce_scatter":
-            return int(sum(self.in_state.regions[d].volume for d in self.group) * share * esize)
-        return int(sum(self.out_state.regions[d].volume for d in self.group) * share * esize)
+            return int(sum(self.in_state.regions[d].padded_volume() for d in self.group) * share * esize)
+        return int(sum(self.out_state.regions[d].padded_volume() for d in self.group) * share * esize)
 
     def wasted(self) -> Dict[int, RegionSet]:
         """Regions this collective materialised that nothing downstream reads."""

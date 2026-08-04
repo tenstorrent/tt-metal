@@ -312,6 +312,85 @@ def test_trace_to_graph_lifts_local_shapes_and_flags_assumptions():
     assert graph2.meta["assumptions"]
 
 
+def test_shard_chunk_matches_ttnn_torch_chunk_semantics():
+    from dit_analyzer.region import RegionSet, shard_chunk_count, shard_chunk_size
+
+    # even split: the common tt_dit case
+    assert shard_chunk_size(40, 4) == 10
+    assert shard_chunk_count(40, 4) == 4
+    # uneven: ttnn's chunk_ndim gives ceil(E/n) to leading devices and the
+    # remainder to one trailing device (torch.chunk), NOT an even ceil to all
+    assert shard_chunk_size(38, 4) == 10  # ceil(38/4)
+    assert shard_chunk_count(38, 4) == 4  # 10,10,10,8 -> 4 non-empty shards
+    # the region shards tile the axis exactly, disjoint and complete
+    shards = [RegionSet.shard((1, 38), 1, i, 4) for i in range(4)]
+    assert [s.bounds(1) for s in shards] == [(0, 10), (10, 20), (20, 30), (30, 38)]
+    assert sum(s.volume for s in shards) == 38  # last shard is short, not padded
+    # the empty-device case ttnn TT_FATALs on a 2D mesh
+    assert shard_chunk_size(5, 4) == 2  # ceil(5/4)
+    assert shard_chunk_count(5, 4) == 3  # 2,2,1 -> device 3 gets nothing
+
+
+def test_uneven_shard_local_shape_follows_ttnn_or_refuses(monkeypatch=None):
+    import dit_analyzer.dryrun.context as context_mod
+    from dit_analyzer.dryrun.tensor import local_shape
+    from dit_analyzer.ir import Dist, Mesh
+
+    mesh = Mesh(shape=(1, 4), axis_names=("sp", "tp"))
+    saved = context_mod.CTX.mesh
+    context_mod.CTX.mesh = mesh
+    try:
+        # tp-sharded on axis 1: even -> exact, uneven -> ttnn chunk size (ceil)
+        dist = Dist.make(mesh, {1: 1})
+        assert local_shape((1, 40), dist) == (1, 10)
+        assert local_shape((1, 38), dist) == (1, 10)  # device-0 chunk, ceil(38/4)
+        # the empty-device case is refused, matching ttnn's TT_FATAL
+        try:
+            local_shape((1, 5), dist)
+            raise AssertionError("expected NotImplementedError for the empty-device shard")
+        except NotImplementedError as exc:
+            assert "empty" in str(exc)
+    finally:
+        context_mod.CTX.mesh = saved
+
+
+def test_padded_volume_rounds_the_innermost_two_axes_to_a_tile():
+    from dit_analyzer.region import TILE, Box, RegionSet
+
+    assert TILE == 32
+    # a num_heads-column gather ships a full tile row, not 8 logical columns
+    b = Box.full((1, 40, 8))
+    assert b.volume == 1 * 40 * 8
+    assert b.padded_volume() == 1 * 64 * 32  # 40->64, 8->32
+    # only the last two axes are tiled; the leading axis is untouched
+    assert Box.full((5, 32, 32)).padded_volume() == 5 * 32 * 32
+    # tile-aligned extents (the LTX video activation) are unchanged, so the
+    # oracle findings keep their byte counts
+    assert Box.full((1, 38912, 4096)).padded_volume() == 1 * 38912 * 4096
+    # region padding sums per box
+    rs = RegionSet(3, [Box.full((1, 40, 8))])
+    assert rs.padded_volume() == 1 * 64 * 32
+
+
+def test_block_float_bytes_carry_exponent_overhead():
+    from dit_analyzer.ir import TensorSymbol, elem_bytes_for
+
+    # whole-byte formats are exact
+    assert elem_bytes_for("bf16") == 2.0
+    assert elem_bytes_for("fp32") == 4.0
+    # block-float carries +1/16 byte of shared exponent per element, which
+    # whole-byte accounting (the old int table) dropped -- so a bfp8_b gather
+    # was undercounted by ~6%.
+    assert elem_bytes_for("bfp8_b") == 1.0 + 1.0 / 16
+    assert elem_bytes_for("bfp4_b") == 0.5 + 1.0 / 16
+    assert elem_bytes_for("bf8_b") == elem_bytes_for("bfp8_b")  # legacy alias
+    assert elem_bytes_for("unknown-tag") == 2.0  # conservative default
+    # and it reaches the symbol's byte estimate
+    sym = TensorSymbol(id="w", shape=(32, 32), dtype="bfp8_b")
+    assert sym.elem_bytes == 1.0 + 1.0 / 16
+    assert sym.bytes_of(sym.full_region()) == 32 * 32 * (1.0 + 1.0 / 16)
+
+
 def _tests():
     return [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
 

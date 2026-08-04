@@ -33,6 +33,31 @@ from .region import RegionSet
 ACT = "activation"
 PARAM = "param"  # weights / biases: constant across denoise steps
 
+# Bytes per logical element, by analyzer dtype tag (roadmap blocker 13).
+#
+# Block-float formats are not whole-byte: tt-metal stores an n-bit mantissa per
+# element plus one shared 8-bit exponent per 16-element block, so the amortised
+# cost carries a +1/16 byte of exponent overhead per element that whole-byte
+# accounting drops. bfp8_b = 1 + 1/16 = 1.0625, bfp4_b = 0.5 + 1/16 = 0.5625.
+# This is what a collective actually pushes across a link, so it belongs in the
+# fabric-cost estimate rather than the logical-region math.
+_BFP_EXPONENT_OVERHEAD = 1.0 / 16  # one 8-bit exponent shared per 16 elements
+_ELEM_BYTES = {
+    "bf16": 2.0,
+    "fp16": 2.0,
+    "fp32": 4.0,
+    "bfp8_b": 1.0 + _BFP_EXPONENT_OVERHEAD,
+    "bfp4_b": 0.5 + _BFP_EXPONENT_OVERHEAD,
+    # legacy tags kept as aliases so an older graph JSON still costs correctly
+    "bf8_b": 1.0 + _BFP_EXPONENT_OVERHEAD,
+    "bf4_b": 0.5 + _BFP_EXPONENT_OVERHEAD,
+}
+
+
+def elem_bytes_for(dtype: str) -> float:
+    return _ELEM_BYTES.get(dtype, 2.0)
+
+
 # Node kinds -------------------------------------------------------------------
 COMPUTE = "compute"
 COMM = "comm"
@@ -171,8 +196,8 @@ class TensorSymbol:
         return len(self.shape)
 
     @property
-    def elem_bytes(self) -> int:
-        return {"bf16": 2, "fp16": 2, "bf8_b": 1, "bfp8_b": 1, "fp32": 4, "bf4_b": 1}.get(self.dtype, 2)
+    def elem_bytes(self) -> float:
+        return elem_bytes_for(self.dtype)
 
     def full_region(self) -> RegionSet:
         return RegionSet.full(self.shape)
