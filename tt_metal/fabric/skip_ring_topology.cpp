@@ -28,12 +28,15 @@ constexpr int kNone = SkipRingTopology::kNone;
 struct Pattern {
     int step = 0;
     int start = 0;
+    // Declared tiling wrap, unset when the descriptor leaves it to the dimension.
+    std::optional<bool> declared_wrap;
+    bool wraps = false;
     std::vector<std::pair<int, int>> blocks;  // {first, last} row of each block, in block order
 };
 
 // Block tiling for one declared pattern. Mirrors expand_skip_link_edges in mesh_graph.cpp: a block
-// straddling the boundary wraps on a RING axis and is dropped on a LINE axis.
-void fill_blocks(Pattern& pattern, MeshId mesh_id, int len, bool wraps) {
+// straddling the boundary wraps when the pattern wraps and is dropped otherwise.
+void fill_blocks(Pattern& pattern, MeshId mesh_id, int len) {
     TT_FATAL(
         pattern.step >= 2 && len % pattern.step == 0,
         "SkipRingTopology: mesh M{} skip step {} does not tile axis length {}",
@@ -43,7 +46,7 @@ void fill_blocks(Pattern& pattern, MeshId mesh_id, int len, bool wraps) {
     for (int k = 0; k < len / pattern.step; k++) {
         const int first = pattern.start + k * pattern.step;
         const int last = first + pattern.step - 1;
-        if (!wraps && last >= len) {
+        if (!pattern.wraps && last >= len) {
             continue;
         }
         pattern.blocks.emplace_back(first % len, last % len);
@@ -81,8 +84,13 @@ std::vector<Pattern> read_patterns(const MeshGraph& mesh_graph, MeshId mesh_id, 
             "SkipRingTopology: mesh M{} declares skip links on more than one dimension",
             *mesh_id);
         axis = declared_axis;
-        patterns.push_back(
-            Pattern{static_cast<int>(skip.pattern().step()), static_cast<int>(skip.pattern().start()), {}});
+        Pattern pattern;
+        pattern.step = static_cast<int>(skip.pattern().step());
+        pattern.start = static_cast<int>(skip.pattern().start());
+        if (skip.wrap() != proto::TorusTopology::INVALID_TYPE) {
+            pattern.declared_wrap = skip.wrap() == proto::TorusTopology::RING;
+        }
+        patterns.push_back(std::move(pattern));
     }
     std::sort(patterns.begin(), patterns.end(), [](const Pattern& a, const Pattern& b) { return a.step < b.step; });
     return patterns;
@@ -117,13 +125,21 @@ std::vector<int> canonicalize(std::vector<int> cycle) {
     return std::min(cycle, reflected);
 }
 
-// RING axis: a pattern closes its own ring straight through its block endpoints -- chord across each
-// block, ordinary connector to the next block, mesh wrap to close.
-std::vector<int> pattern_cycle(const Pattern& pattern) {
-    std::vector<int> cycle;
+// RING axis: the ring is the rows this pattern does not skip, in coordinate order. Consecutive members
+// are joined either by an ordinary edge or by the chord across the block between them, and the axis
+// wrap closes it. Block endpoints alone would only work where the blocks tile the whole axis.
+std::vector<int> pattern_cycle(const Pattern& pattern, int len) {
+    std::vector<bool> interior(len, false);
     for (const auto& [first, last] : pattern.blocks) {
-        cycle.push_back(first);
-        cycle.push_back(last);
+        for (int row = (first + 1) % len; row != last; row = (row + 1) % len) {
+            interior[row] = true;
+        }
+    }
+    std::vector<int> cycle;
+    for (int row = 0; row < len; row++) {
+        if (!interior[row]) {
+            cycle.push_back(row);
+        }
     }
     return cycle;
 }
@@ -243,9 +259,12 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
     const auto shape = mesh_graph.get_mesh_shape(mesh_id);
     const int len = static_cast<int>(shape[axis]);
     const int ortho_len = static_cast<int>(shape[1 - axis]);
+    // Baseline fact: whether the ordinary grid closes the axis. Distinct from a pattern's tiling
+    // wrap, which the overlay declares and which only decides which blocks exist.
     const bool wraps = axis_wraps(mesh_graph, mesh_id, axis, len);
     for (auto& pattern : patterns) {
-        fill_blocks(pattern, mesh_id, len, wraps);
+        pattern.wraps = pattern.declared_wrap.value_or(wraps);
+        fill_blocks(pattern, mesh_id, len);
     }
 
     SkipRingTopology topo;
@@ -276,8 +295,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
             }
         }
     }
-    // Group the skipped rows into maximal runs. A run needs a transit row either side to attach to,
-    // which is what a run of any length has as long as the whole axis is not skipped.
+    // Group the skipped rows into maximal runs. A run needs a transit row either side to attach to.
     const auto neighbour = [&](int row, int delta) {
         const int peer = row + delta;
         return (peer < 0 || peer >= len) ? (wraps ? ((peer % len) + len) % len : kNone) : peer;
@@ -307,7 +325,7 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
     std::vector<std::vector<int>> cycles;
     if (wraps) {
         for (const auto& pattern : patterns) {
-            cycles.push_back(canonicalize(pattern_cycle(pattern)));
+            cycles.push_back(canonicalize(pattern_cycle(pattern, len)));
         }
     } else {
         TT_FATAL(
@@ -420,6 +438,42 @@ std::optional<SkipRingTopology> derive_skip_ring_topology(const MeshGraph& mesh_
     return topo;
 }
 
+std::optional<SkipRingTopology> derive_ordinary_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
+    const auto shape = mesh_graph.get_mesh_shape(mesh_id);
+    const int len = static_cast<int>(shape[axis]);
+    if (!axis_wraps(mesh_graph, mesh_id, axis, len)) {
+        return std::nullopt;
+    }
+
+    SkipRingTopology topo;
+    topo.axis_dim = axis;
+    topo.axis_len = len;
+    topo.domain_of.assign(len, 0);
+    topo.leaf_run_of.assign(len, kNone);
+    topo.leaf_index_of.assign(len, kNone);
+    topo.pos_in_domain.resize(len);
+    topo.forward_cycle.emplace_back();
+    for (int coord = 0; coord < len; coord++) {
+        topo.pos_in_domain[coord] = coord;
+        topo.forward_cycle.front().push_back(coord);
+    }
+
+    for (int ortho = 0; ortho < static_cast<int>(shape[1 - axis]); ortho++) {
+        for (int coord = 0; coord < len; coord++) {
+            const int next = (coord + 1) % len;
+            TT_FATAL(
+                edge_dir(mesh_graph, mesh_id, axis, ortho, coord, next).has_value(),
+                "Mesh M{} dim {} line {} is missing the ordinary edge {}-{}",
+                *mesh_id,
+                axis,
+                ortho,
+                coord,
+                next);
+        }
+    }
+    return topo;
+}
+
 std::string describe_skip_rings(const MeshGraph& mesh_graph, MeshId mesh_id, const SkipRingTopology& topo) {
     const int axis = topo.axis_dim;
     const int len = topo.axis_len;
@@ -439,10 +493,11 @@ std::string describe_skip_rings(const MeshGraph& mesh_graph, MeshId mesh_id, con
     auto patterns = read_patterns(mesh_graph, mesh_id, probe_axis);
     out << "declared patterns:";
     for (auto& pattern : patterns) {
-        fill_blocks(pattern, mesh_id, len, wraps);
+        pattern.wraps = pattern.declared_wrap.value_or(wraps);
+        fill_blocks(pattern, mesh_id, len);
         declared_chords += static_cast<int>(pattern.blocks.size());
-        out << " (start " << pattern.start << " step " << pattern.step << " -> " << pattern.blocks.size()
-            << " blocks:";
+        out << " (start " << pattern.start << " step " << pattern.step << (pattern.wraps ? " wrap" : " no-wrap")
+            << " -> " << pattern.blocks.size() << " blocks:";
         for (const auto& [first, last] : pattern.blocks) {
             out << " [" << first << "," << last << "]";
         }
