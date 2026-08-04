@@ -122,23 +122,12 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
         if (operation_attributes.input_dtype == DataType::UINT16 && out_is_dram && nc == 1 && ht == 1 && wt == 2) {
             return true;
         }
-        // [12, 32, 160], bfloat16 — twelve tile-rows split five ways. Both output placements measured
-        // below parity (L1 out, and DRAM out at wall 0.93 with generic parity on device), so unlike
-        // the uint16 arm above this one carries no placement term.
-        if (operation_attributes.input_dtype == DataType::BFLOAT16 && nc == 12 && ht == 1 && wt == 5) {
+        // [12, 32, 160], bfloat16 — twelve tile-rows split five ways. Only the L1-output twin
+        // measured below parity; the DRAM-output twin sits at wall 0.94 with the port ahead on
+        // device, so like the uint16 arm above this one keys on the OUTPUT placement.
+        if (operation_attributes.input_dtype == DataType::BFLOAT16 && !out_is_dram && nc == 12 && ht == 1 && wt == 5) {
             return true;
         }
-    }
-
-    // A column split whose blocks are not all the same width needs a second reader/compute kernel
-    // instance for the one-tile-wider cliff group, doubling the program's kernel count over the
-    // same core set. The two non-divisor configurations measured on wormhole_b0 (Wt=7 split five
-    // ways, Wt=5 split three ways) beat native on device (~2.1x / ~1.5x, generic parity) but lost
-    // wall-clock (0.68 / 0.64 of native): the extra group's host-side program cost outweighs the
-    // device saving at these sizes. Every column configuration at or above wall-clock parity has a
-    // uniform width, so `auto` keeps the cliff on native while forced codegen still exercises it.
-    if (dispatch.path == TilizeCodegenPath::Column && (operation_attributes.Wt % dispatch.ncol) != 0) {
-        return true;
     }
 
     // A caller-forced single-core route (use_multicore=false / use_low_perf) has no parallelism for

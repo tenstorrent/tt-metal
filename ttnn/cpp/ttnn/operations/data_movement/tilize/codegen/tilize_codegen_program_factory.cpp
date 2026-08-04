@@ -199,6 +199,20 @@ CbDepths select_cb_depths(
     return *depths;
 }
 
+// One CoreRange per core, folded into as few rectangles as cover the same cores. Every CoreRange in
+// a kernel's or CB's set is its own dispatch subcommand for the kernel binary, CB config and
+// runtime-arg writes, so a set of single-core ranges makes enqueue cost scale with the core count
+// instead of with the shape of the region — the cost CoreRangeSet::merge_ranges() exists to remove.
+// The core SET is unchanged, so which core owns which work is unaffected.
+CoreRangeSet merged_core_range_set(const std::vector<CoreCoord>& cores) {
+    std::vector<CoreRange> ranges;
+    ranges.reserve(cores.size());
+    for (const auto& c : cores) {
+        ranges.emplace_back(c, c);
+    }
+    return CoreRangeSet(std::move(ranges)).merge_ranges();
+}
+
 // UnpackToDestMode vector forcing a FLOAT32 input CB to unpack straight into DEST (avoids the
 // SRCA Float16_b truncation for RM fp32 tilize input) — mirrors builder_utils.unpack_to_dest_fp32_modes.
 // Length is the host-side CB-count constant the native tilize factory uses for the same vector.
@@ -311,9 +325,7 @@ bool uses_block_path(
 //
 // ncol need not divide Wt: a non-divisor split makes the first Wt % ncol blocks one tile wider,
 // which build_2d_column serves with one extra reader/compute kernel variant (the width is a
-// compile-time arg) and which buys the column split for prime and awkward Wt. The extra kernel
-// group's host cost is a wall-clock loss at these sizes, so `auto` keeps non-uniform splits on
-// native via is_demoted() rather than narrowing the builder away from the reference.
+// compile-time arg) and which buys the column split for prime and awkward Wt.
 uint32_t choose_tilize_2d_ncol(uint32_t total_ht, uint32_t wt, uint32_t valid_cores) {
     if (total_ht >= valid_cores || wt < 2) {
         return 1;
@@ -657,12 +669,7 @@ ProgramDescriptor build_2d_column(
     const uint32_t elem_w_bytes = constants::TILE_WIDTH * g.elem_size;
 
     const std::vector<CoreCoord> cores = grid_to_cores(num_cores, grid.x, grid.y, /*row_wise=*/true);
-    std::vector<CoreRange> ranges;
-    ranges.reserve(cores.size());
-    for (const auto& c : cores) {
-        ranges.emplace_back(c, c);
-    }
-    const CoreRangeSet core_grid(ranges);
+    const CoreRangeSet core_grid = merged_core_range_set(cores);
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
@@ -688,18 +695,34 @@ ProgramDescriptor build_2d_column(
 
     // The block width is a compile-time arg to the reader and the compute kernel, so each distinct
     // width (at most two: base and base+1 when ncol does not divide Wt) needs its own instance.
-    std::map<uint32_t, std::vector<uint32_t>> groups;  // block width -> core indices
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        groups[shape.block_wts[i % ncol]].push_back(i);
+    //
+    // Cores are handed out column-block-major — every tile-row of one column block before the next
+    // block starts. Since the wider blocks are exactly the first Wt % ncol column blocks, each width
+    // group then owns a CONTIGUOUS run of the row-wise core list and merges into a few rectangles.
+    // Walking (tile_row, col_block) instead interleaves the two groups core by core, leaving each a
+    // strided scatter that merges into nothing. Which core owns which (tile_row, col_block) is free:
+    // every pair is still assigned exactly once, at the same absolute output tile ids.
+    struct ColumnAssignment {
+        CoreCoord core;
+        uint32_t tile_row;
+        uint32_t col_block;
+    };
+    std::map<uint32_t, std::vector<ColumnAssignment>> groups;  // block width -> assignments
+    uint32_t core_idx = 0;
+    for (uint32_t col_block = 0; col_block < ncol; ++col_block) {
+        for (uint32_t tile_row = 0; tile_row < g.total_ht; ++tile_row) {
+            groups[shape.block_wts[col_block]].push_back({cores[core_idx], tile_row, col_block});
+            ++core_idx;
+        }
     }
 
-    for (const auto& [grp_wt, indices] : groups) {
-        std::vector<CoreRange> grp_ranges;
-        grp_ranges.reserve(indices.size());
-        for (const uint32_t i : indices) {
-            grp_ranges.emplace_back(cores[i], cores[i]);
+    for (const auto& [grp_wt, assignments] : groups) {
+        std::vector<CoreCoord> grp_cores;
+        grp_cores.reserve(assignments.size());
+        for (const auto& a : assignments) {
+            grp_cores.push_back(a.core);
         }
-        const CoreRangeSet grp_grid(grp_ranges);
+        const CoreRangeSet grp_grid = merged_core_range_set(grp_cores);
 
         const uint32_t sub_wt = tilize_compute_chunk(grp_wt, cb_block_limit);
         const uint32_t n_sub = grp_wt / sub_wt;
@@ -734,18 +757,15 @@ ProgramDescriptor build_2d_column(
         }
         compute_desc.config = compute_cfg;
 
-        for (const uint32_t i : indices) {
-            const auto& core = cores[i];
-            const uint32_t tile_row = i / ncol;
-            const uint32_t col_block = i % ncol;
-            const uint32_t start_stick = tile_row * constants::TILE_HEIGHT;
-            const uint32_t start_tc = shape.block_starts[col_block];
+        for (const auto& a : assignments) {
+            const uint32_t start_stick = a.tile_row * constants::TILE_HEIGHT;
+            const uint32_t start_tc = shape.block_starts[a.col_block];
             const uint32_t col_byte_offset = start_tc * constants::TILE_WIDTH * g.elem_size;
 
-            reader_desc.emplace_runtime_args(core, {input_tensor.buffer(), 1u, start_stick, col_byte_offset});
-            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{1});
-            const uint32_t start_tile = tile_row * g.wt + start_tc;
-            writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), grp_wt, start_tile, grp_wt, g.wt});
+            reader_desc.emplace_runtime_args(a.core, {input_tensor.buffer(), 1u, start_stick, col_byte_offset});
+            compute_desc.runtime_args.emplace_back(a.core, KernelDescriptor::CoreRuntimeArgs{1});
+            const uint32_t start_tile = a.tile_row * g.wt + start_tc;
+            writer_desc.emplace_runtime_args(a.core, {output_tensor.buffer(), grp_wt, start_tile, grp_wt, g.wt});
         }
 
         desc.kernels.push_back(std::move(reader_desc));
@@ -873,12 +893,7 @@ ProgramDescriptor build_block(
     const uint32_t out_page = align_up(g.ts_out, dram_alignment);
     const uint32_t elem_w_bytes = constants::TILE_WIDTH * g.elem_size;
 
-    std::vector<CoreRange> all_ranges;
-    all_ranges.reserve(valid_cores.size());
-    for (const auto& c : valid_cores) {
-        all_ranges.emplace_back(c, c);
-    }
-    const CoreRangeSet all_core_grid(all_ranges);
+    const CoreRangeSet all_core_grid = merged_core_range_set(valid_cores);
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
@@ -903,12 +918,12 @@ ProgramDescriptor build_block(
     const bool fp32 = (attrs.input_dtype == DataType::FLOAT32 || attrs.output_dtype == DataType::FLOAT32);
 
     for (const auto& [grp_wt, assignments] : groups) {
-        std::vector<CoreRange> grp_ranges;
-        grp_ranges.reserve(assignments.size());
+        std::vector<CoreCoord> grp_cores;
+        grp_cores.reserve(assignments.size());
         for (const auto& a : assignments) {
-            grp_ranges.emplace_back(a.core, a.core);
+            grp_cores.push_back(a.core);
         }
-        const CoreRangeSet grp_grid(grp_ranges);
+        const CoreRangeSet grp_grid = merged_core_range_set(grp_cores);
 
         const uint32_t sub_wt = tilize_compute_chunk(grp_wt, cb_block_limit);
         const uint32_t n_sub = grp_wt / sub_wt;
