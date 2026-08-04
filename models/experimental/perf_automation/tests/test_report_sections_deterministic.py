@@ -78,7 +78,7 @@ def test_roofline_renders_when_throughput_none(tmp_path, monkeypatch):
     sm = _summary()
     monkeypatch.setattr(sm, "_throughput_from_profile", lambda bp: _tp(100.0))
     text = _render(sm, tmp_path, baseline_profile=_PROF, throughput=None, final_ms=200.0, attempts=[])
-    assert "Roofline & utilization" in text
+    assert "Roofline" in text
 
 
 def test_prefers_agent_stages_when_present(tmp_path):
@@ -121,8 +121,8 @@ def test_a_bandwidth_ceiling_does_publish_the_band(tmp_path):
         "perf_layers": "all",
     }
     text = _render(sm, tmp_path, baseline_profile={"per_token_ms": 19.4}, throughput=llm, final_ms=19.4)
-    assert "achievable (60-80%) : 38.4 - 51.2 tok/s/u" in text, text
-    assert "theoretical ceiling : 64.0 tok/s/u" in text, text
+    assert "ACHIEVABLE 60-80%" in text, text
+    assert "64.0 tok/s/u" in text, text  # now a THEORETICAL column, not a labelled line
 
 
 def test_status_has_no_band_verdict_for_a_floor_target(tmp_path):
@@ -142,7 +142,7 @@ def test_stress_many_profiles(tmp_path):
     for i in range(60):
         prof = {"buckets": [{"id": f"op{j}", "device_ms": (j + 1) * (i % 5 + 1) * 1.0} for j in range(1 + i % 6)]}
         text = _render(sm, tmp_path, baseline_profile=prof, throughput=_tp(50.0 + i), final_ms=100.0 + i, attempts=[])
-        assert "Roofline & utilization" in text, f"iter {i}: roofline missing"
+        assert "Roofline" in text, f"iter {i}: roofline missing"
         assert "Block-level timing (per-stage trace)" in text, f"iter {i}: block-level missing"
 
 

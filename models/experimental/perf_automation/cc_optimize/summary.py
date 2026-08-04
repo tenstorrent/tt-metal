@@ -539,6 +539,177 @@ def _floor_anchor(current_ms, depth, model: str = "", task: str = ""):
         return None
 
 
+_BAR_W = 20
+
+
+def _split(width):
+    """Divider aligned to the column format: first break at 46, second at 69."""
+    return "\u2500" * 46 + "\u253c" + "\u2500" * 23 + "\u253c" + "\u2500" * max(0, width - 70)
+
+
+def _bar(frac):
+    """Proportional fill. `frac` is 0..1, or None for "no data" (an all-empty bar)."""
+    if frac is None:
+        return "\u2591" * _BAR_W
+    n = max(0, min(_BAR_W, int(round(float(frac) * _BAR_W))))
+    return "\u2588" * n + "\u2591" * (_BAR_W - n)
+
+
+def _dispatch_ms_per_unit(profile, per_unit_ms):
+    """Launch overhead in the same unit as the headline, or None.
+
+    host_overhead is the profiler's op_gap bucket -- time the device spent waiting between kernels.
+    Scaled into the headline unit by its share of total device_ms, because the two are measured over
+    different windows (a profiling capture vs one traced token).
+    """
+    try:
+        buckets = [b for b in (profile or {}).get("buckets") or [] if isinstance(b, dict)]
+        host = next((b for b in buckets if b.get("id") == "host_overhead"), None)
+        total = float((profile or {}).get("device_ms") or 0.0)
+        if not host or total <= 0 or not per_unit_ms:
+            return None
+        share = float(host.get("device_ms") or 0.0) / total
+        return float(per_unit_ms) * share if 0 < share < 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ops_per_unit(profile):
+    try:
+        return (
+            sum(int(b.get("count") or 0) for b in (profile or {}).get("buckets") or [] if isinstance(b, dict)) or None
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _capacity_bytes():
+    """Per-chip DRAM from the detected arch, or None. Never a hardcoded number."""
+    try:
+        from agent.environment import ARCH_FACTS
+
+        import os as _os
+
+        arch = (_os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()
+        return int((ARCH_FACTS.get(arch) or {}).get("dram_capacity_bytes") or 0) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, active_bytes, per_unit_ms, profile, tag=""):
+    """The Roofline / Overheads / Utilization blocks.
+
+    Three blocks rather than one, because the middle column means different things. A roofline row
+    has a spec ceiling and a sustained band (60-80% dense, 37.5-50% MoE -- what silicon actually
+    delivers). Dispatch and capacity have neither: dispatch is overhead whose target is zero, and
+    capacity is a hard wall with a safety margin. Printing "achievable" over all four invited reading
+    26% dispatch as a grade rather than as a quarter of every token being wasted.
+
+    Every row renders only from inputs that exist; a missing one prints `not measured` instead of
+    being dropped, so the report states what it does not know.
+    """
+    W = 93
+    rule = "\u2500" * W
+    out = []
+
+    out.append("Roofline")
+    out.append(rule)
+    _pct = ""
+    if band and band[0] and theo:
+        _pct = " %.0f-%.0f%%" % (100.0 * band[0] / theo, 100.0 * band[1] / theo)
+    out.append("%-26s %-18s \u2502 %-21s \u2502 %s" % ("", "THEORETICAL", "ACHIEVABLE" + _pct, "MEASURED"))
+    out.append(_split(W))
+
+    _ach = "%.1f \u2013 %.1f" % (band[0], band[1]) if (band and band[0]) else "n/a"
+    _meas = ("%.1f %s" % (measured, unit)) if measured else "not measured"
+    _ok = "\u2714" if (measured and band and band[0] and measured >= band[0]) else "\u2717"
+    out.append(
+        " %-25s %-18s \u2502 %-21s \u2502 %s   %s" % ("DRAM bandwidth", "%.1f %s" % (theo, unit), _ach, _meas, _ok)
+    )
+    if peak_bw_gbps:
+        _bwb = ("%.0f \u2013 %.0f GB/s" % (peak_bw_gbps * 0.60, peak_bw_gbps * 0.80)) if band and band[0] else ""
+        _bwm = ("%.0f GB/s" % bw_gbps) if bw_gbps else "\u2014"
+        out.append(" %-25s %-18s \u2502 %-21s \u2502 %s" % ("", "%.0f GB/s" % peak_bw_gbps, _bwb, _bwm))
+    out.append(_split(W))
+    out.append(
+        " %-25s %-18s \u2502 %-21s \u2502 %s   %s"
+        % ("Compute FLOPs", "not modelled", "\u2014", "not measured", "\u2717")
+    )
+    out.append(rule)
+    out.append("")
+
+    disp = _dispatch_ms_per_unit(profile, per_unit_ms)
+    cap = _capacity_bytes()
+    if disp is not None or cap:
+        out.append("Overheads & limits")
+        out.append(rule)
+        out.append("%-26s %-18s \u2502 %-21s \u2502" % ("", "TARGET", "MEASURED"))
+        out.append(_split(W))
+        if disp is not None and per_unit_ms:
+            _share = 100.0 * disp / float(per_unit_ms)
+            _ops = _ops_per_unit(profile)
+            out.append(
+                " %-25s %-18s \u2502 %-21s \u2502 %.0f%% of step   %s"
+                % (
+                    "Dispatch",
+                    "~0 ms (traced)",
+                    "%.2f ms/%s" % (disp, unit.split("/")[0].replace("tok", "token")),
+                    _share,
+                    "\u2193 OVER" if _share > 10 else "\u2193 ok",
+                )
+            )
+            if _ops:
+                out.append(" %-25s %-18s \u2502 %-21s \u2502" % ("", "%d ops in profile" % _ops, ""))
+        if cap and active_bytes:
+            _used = 100.0 * active_bytes / cap
+            out.append(
+                " %-25s %-18s \u2502 %-21s \u2502 %.0f%% used      %s"
+                % (
+                    "DRAM capacity",
+                    "< %.1f GiB (90%%)" % (cap * 0.9 / 1024**3),
+                    "%.2f GiB" % (active_bytes / 1024**3),
+                    _used,
+                    "\u2193 ok" if _used < 90 else "\u2193 OVER",
+                )
+            )
+            out.append(rule)
+            out.append("  %.1f GiB unused \u2014 headroom for a larger batch" % ((cap - active_bytes) / 1024**3))
+        else:
+            out.append(rule)
+        out.append("")
+
+    out.append("Utilization")
+    out.append(rule)
+    out.append("  higher is better")
+    _u1 = (measured / theo) if (measured and theo) else None
+    out.append(
+        "  %-19s %s  %4s   %s"
+        % (
+            "DRAM bandwidth",
+            _bar(_u1),
+            ("%.0f%%" % (_u1 * 100)) if _u1 else "\u2014",
+            ("%.0f / %.0f GB/s" % (bw_gbps, peak_bw_gbps)) if (bw_gbps and peak_bw_gbps) else "no data",
+        )
+    )
+    out.append("  %-19s %s  %4s   %s" % ("Compute (prefill)", _bar(None), "\u2014", "TTFT never measured"))
+    out.append("")
+    out.append("  lower is better")
+    if disp is not None and per_unit_ms:
+        _d = disp / float(per_unit_ms)
+        out.append(
+            "  %-19s %s  %4s   %.2f / %.2f ms"
+            % ("Dispatch overhead", _bar(_d), "%.0f%%" % (_d * 100), disp, per_unit_ms)
+        )
+    if cap and active_bytes:
+        _c = active_bytes / cap
+        out.append(
+            "  %-19s %s  %4s   %.2f / %.0f GiB"
+            % ("DRAM capacity", _bar(_c), "%.0f%%" % (_c * 100), active_bytes / 1024**3, cap / 1024**3)
+        )
+    out.append(rule)
+    return out
+
+
 def _roofline_lines(
     throughput: dict | None,
     forward_ms: float | None,
@@ -646,6 +817,25 @@ def _roofline_lines(
         _depth = str((throughput or {}).get("perf_layers") or "").strip()
         _partial = _depth and _depth.lower() not in ("all", "0", "none")
         _tag = "   [%s-layer window, NOT the full model]" % _depth if _partial else ""
+        if str(os.environ.get("PERF_MCP_ROOFLINE_TABLE", "1")).lower() not in ("0", "false", "no"):
+            # NEW LAYOUT: three blocks. The old five lines conflated a roofline (spec ceiling +
+            # sustained band) with overheads that have neither, so "achievable" spanned rows where it
+            # is meaningless. See _roofline_tables.
+            try:
+                return _roofline_tables(
+                    unit=_u,
+                    theo=theo,
+                    band=band,
+                    measured=measured,
+                    bw_gbps=bw_gbps,
+                    peak_bw_gbps=float((throughput or {}).get("peak_bw_gbps") or 0.0) or None,
+                    active_bytes=active_bytes,
+                    per_unit_ms=fm,
+                    profile=profile,
+                    tag=_tag,
+                )
+            except Exception:  # noqa: BLE001
+                pass  # fall through to the legacy lines rather than losing the section entirely
         out.append(f"  theoretical ceiling : {theo:.1f} {_u}{_tag}")
         if band[0] is not None:
             # The percentages are DERIVED from the band, not hardcoded: dense sustains 60-80% of peak
