@@ -12,6 +12,10 @@
 using std::uint32_t;
 
 // C = A @ B per core. full_in0 is sender-major. matmul_block does not reduce over kt_dim; K is accumulated in the loop.
+//
+// With ENABLE_GLOBAL_CB the in1 tiles arrive through a GCB-backed circular buffer instead of a
+// globally-allocated one, so this kernel must actually wait on them and, when done, tell the
+// reader (via the sync CB) that the GCB page can be released.
 using namespace ckernel;
 void kernel_main() {
     constexpr uint32_t out_block_w = 1;
@@ -20,6 +24,7 @@ void kernel_main() {
     constexpr uint32_t K_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t N_tiles_per_core = get_compile_time_arg_val(2);
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(3);
+    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(4);
 
     constexpr uint32_t out_block_h = M_tiles;
     constexpr uint32_t in0_block_w = inA_K_tiles_per_core;
@@ -29,15 +34,23 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = tt::CBIndex::c_2;
 
     constexpr uint32_t in0_num_tiles = M_tiles * K_tiles;
+    constexpr uint32_t in1_num_tiles = K_tiles * N_tiles_per_core;
     constexpr uint32_t num_senders = K_tiles / inA_K_tiles_per_core;
     constexpr uint32_t sender_slice_tiles = M_tiles * inA_K_tiles_per_core;
 
     CircularBuffer in0_cb(in0_cb_id);
     CircularBuffer out_cb(out_cb_id);
+#ifdef ENABLE_GLOBAL_CB
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer sync_cb(sync_cb_id);
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
 
     in0_cb.wait_front(in0_num_tiles);
+#ifdef ENABLE_GLOBAL_CB
+    in1_cb.wait_front(in1_num_tiles);
+#endif
 
     matmul_block_init(in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
@@ -63,4 +76,10 @@ void kernel_main() {
     out_cb.push_back(M_tiles * N_tiles_per_core);
 
     in0_cb.pop_front(in0_num_tiles);
+#ifdef ENABLE_GLOBAL_CB
+    // Every in1 tile has been read; release the local alias and let the reader ack the GCB page.
+    in1_cb.pop_front(in1_num_tiles);
+    sync_cb.reserve_back(1);
+    sync_cb.push_back(1);
+#endif
 }

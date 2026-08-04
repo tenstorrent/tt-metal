@@ -7,8 +7,22 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#ifdef ENABLE_GLOBAL_CB
+#include "api/remote_circular_buffer.h"
+#endif
 
 // Gathers width(K)-sharded A onto every core via two-hub gather/broadcast.
+//
+// in1 (weights) arrive one of two ways:
+//   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
+//     reader only has to declare its tiles available.
+//   - ENABLE_GLOBAL_CB: the weights are pushed into a DRAM-sender GlobalCircularBuffer by the
+//     tensor prefetcher. Exactly one remote page per invocation carries this receiver's whole
+//     [Kc, Nc] slab. The reader waits for that page, hands the tiles to compute through the
+//     local alias CB, and releases the page only after compute signals (via the sync CB) that
+//     it has finished reading -- releasing earlier would let the prefetcher overwrite weights
+//     still in use. This kernel runs on the merged A/B/output bounding box, so cores outside
+//     the B grid have no in1 or sync CB and must skip the handshake entirely.
 void kernel_main() {
     constexpr uint32_t in0_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t full_in0_cb_index = get_compile_time_arg_val(1);
@@ -29,10 +43,13 @@ void kernel_main() {
     constexpr uint32_t split_H = get_compile_time_arg_val(16);
     constexpr uint32_t in1_cb_index = get_compile_time_arg_val(17);
     constexpr uint32_t in1_num_tiles = get_compile_time_arg_val(18);
+    constexpr uint32_t remote_cb_index = get_compile_time_arg_val(19);
+    constexpr uint32_t sync_cb_index = get_compile_time_arg_val(20);
 
     const uint32_t is_sender = get_arg_val<uint32_t>(0);
     const uint32_t sender_id = get_arg_val<uint32_t>(1);
     const uint32_t role = get_arg_val<uint32_t>(2);
+    const uint32_t is_in1_receiver = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t full_num_tiles = num_senders * shard_num_tiles;
     const uint32_t shard_size_bytes = shard_num_tiles * tile_size_bytes;
@@ -51,8 +68,16 @@ void kernel_main() {
     Semaphore<> done_sem(done_sem_id);
     UnicastEndpoint hub;
 
+#ifdef ENABLE_GLOBAL_CB
+    if (is_in1_receiver) {
+        in1_cb.reserve_back(in1_num_tiles);
+        experimental::remote_cb_wait_front(remote_cb_index, 1);
+        in1_cb.push_back(in1_num_tiles);
+    }
+#else
     in1_cb.reserve_back(in1_num_tiles);
     in1_cb.push_back(in1_num_tiles);
+#endif
     full_in0_cb.reserve_back(full_num_tiles);
 
     const bool is_hub0 = (role == 1);
@@ -106,6 +131,19 @@ void kernel_main() {
 
     done_sem.wait(2);
     full_in0_cb.push_back(full_num_tiles);
+
+#ifdef ENABLE_GLOBAL_CB
+    if (is_in1_receiver) {
+        // Compute signals here once it has finished reading every in1 tile of this slab.
+        CircularBuffer sync_cb(sync_cb_index);
+        sync_cb.wait_front(1);
+        sync_cb.pop_front(1);
+        experimental::remote_cb_pop_front(remote_cb_index, 1);
+        // Persist the remote read pointer so the next invocation resumes at the right ring offset.
+        experimental::update_remote_cb_config_in_l1(remote_cb_index);
+        noc.async_atomic_barrier();
+    }
+#endif
 
     noc.async_write_barrier();
     noc.async_read_barrier();

@@ -131,6 +131,7 @@ void signal_tensor_prefetcher(
     uint32_t signal_id,
     const tt::tt_metal::CoreCoord& core = tt::tt_metal::CoreCoord{0, 0});
 
-void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
+// `force` abandons the kernels instead of waiting for them; see the metal-level StopTensorPrefetcher.
+void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool force = false);
 
 }  // namespace ttnn::operations::experimental
