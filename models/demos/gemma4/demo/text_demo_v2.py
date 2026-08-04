@@ -14,11 +14,9 @@ mirroring how Gemma3 / tt_transformers models are run:
 Differences from the Gemma3 demo (Gemma4-specific):
   * Single model instance, no data-parallel submeshes (Gemma4 runs batch=1 per
     submesh today, so the demo focuses on the latency / long-context configs).
-  * Host sampling by default (``GEMMA4_HOST_SAMPLE=1``) so decode Metal Trace
-    stays coherent — on-device sample can allocate after an active decode
-    trace and corrupt generation. Opt into device sampling with
-    ``GEMMA4_HOST_SAMPLE=0`` once sampling buffers are captured before
-    decode-trace (TP>1, vocab shard ≤64K).
+  * Device sampling by default when supported (TP>1, vocab shard ≤64K). Force
+    host with ``GEMMA4_HOST_SAMPLE=1`` if device sample + decode Metal Trace
+    misbehaves.
   * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
     first decode iteration serves as the compile step and is excluded from the
     reported steady-state perf (matching the benchmark warmup convention).
@@ -581,9 +579,9 @@ def test_demo_text(
             f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
-    # Default host sample: device sample + decode Metal Trace can allocate
-    # mid-trace and corrupt tokens. Opt in with GEMMA4_HOST_SAMPLE=0.
-    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "1").lower() in ("1", "true", "yes")
+    # Default device sample when the model supports it. Force host with
+    # GEMMA4_HOST_SAMPLE=1 (useful if device sample + decode Metal Trace misbehaves).
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
     can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
     device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
     greedy_only = temperature <= 0
