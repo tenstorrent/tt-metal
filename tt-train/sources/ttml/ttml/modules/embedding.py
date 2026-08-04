@@ -178,8 +178,12 @@ class VocabParallelEmbedding(AbstractModuleBase):
         # Each token is nonzero on exactly one device, so summing across TP reconstructs it.
         if self.sequence_parallel:
             # Same sum, but leaves the result sequence-sharded for the first block.
-            return ttml.ops.distributed.reduce_scatter(emb, 2, self.cluster_axis)
-        return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
+            out = ttml.ops.distributed.reduce_scatter(emb, 2, self.cluster_axis)
+        else:
+            out = ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
+        # The collective differentiates w.r.t. the output grad alone.
+        ttnn.deallocate(emb.get_value(ttml.autograd.PreferredPrecision.NATIVE), force=True)
+        return out
 
 
 class FeatureParallelEmbedding(AbstractModuleBase):

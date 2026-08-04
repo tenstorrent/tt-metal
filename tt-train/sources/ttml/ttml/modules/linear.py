@@ -229,13 +229,15 @@ class RowParallelLinear(AbstractModuleBase):
         if not self.input_is_parallel:
             # Split the input along the feature dimension across TP devices.
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
-        x = ttml.ops.linear.linear(x, self.weight.tensor, None)
+        partial = ttml.ops.linear.linear(x, self.weight.tensor, None)
         if self.sequence_parallel:
             # SP: sum partial products across TP and re-shard along the sequence in one step.
-            x = ttml.ops.distributed.reduce_scatter(x, _SEQUENCE_DIM, self.cluster_axis)
+            x = ttml.ops.distributed.reduce_scatter(partial, _SEQUENCE_DIM, self.cluster_axis)
         else:
             # Sum partial products across TP devices to obtain the full result.
-            x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
+            x = ttml.ops.distributed.all_reduce(partial, self.input_is_parallel, self.cluster_axis)
+        # Both collectives differentiate w.r.t. the output grad alone.
+        ttnn.deallocate(partial.get_value(ttml.autograd.PreferredPrecision.NATIVE), force=True)
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)
         return x
