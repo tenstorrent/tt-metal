@@ -103,6 +103,11 @@ def return_first_string_starts_with(starting_string, strings):
 
 def get_job_failure_signature_(github_job, failure_description, workflow_outputs_dir) -> Optional[Union[InfraErrorV1]]:
     error_snippet_to_signature_mapping = {
+        # Actions runner timing out downloading a custom action/repo tarball from codeload.github.com
+        # (same root cause as the ACTION_DOWNLOAD_FAILURE cases below, just the timeout variant instead
+        # of an explicit error) — must be checked before the generic "has timed out" job-timeout snippet,
+        # which would otherwise swallow this and misroute it through hang detection
+        "download has timed out": str(InfraErrorV1.ACTION_DOWNLOAD_FAILURE),
         "has timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
         "exceeded the maximum execution time": str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
         "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
