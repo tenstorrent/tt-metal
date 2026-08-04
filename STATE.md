@@ -1688,3 +1688,80 @@ model-structure one. If that traffic ran near DRAM peak the encoder would be ~24
 `output_layout` and accepting TILE input**, which would delete the tilize/untilize round
 trip at all thirteen norm sites and let every residual add be tiled -- not the GroupNorm
 change, which measurement rules out.
+
+## Amendment 57 (2026-08-04) — the causal zero pad was a host write: encoder 1.70x
+
+`causal_pad_t` built its zero block with `ttnn.zeros(..., device=mesh_device)` **on every
+call**. That is a host-to-device *write*, not a device fill: 34 MB at block 0, thirteen
+times per unit, on the critical path. The block is constant per (shape, dtype), so it is now
+allocated once per conv and reused.
+
+**Encoder wave 0.715 -> 0.443 s (1.70x). 768P/5s encode 5.0 -> 3.1 s.** PCC 99.9264 %,
+unchanged. Decode is unaffected at 1.0 s. **Total 4.2 s.**
+
+It was found by trying to capture the encoder into a trace, which died on
+
+    TT_FATAL: Writes are not supported during trace capture
+
+-- so the trace attempt paid for itself even though **trace itself measures 1.00x** on both
+halves once the write is gone (encoder 0.4403 untraced / 0.4411 traced; decoder 0.1498 /
+0.1496). The encoder is **device-bound, not dispatch-bound**; amendment 49's withdrawn
+op-to-op-gap reading is doubly dead, and there is no reason to ship a trace.
+
+This also explains the gap amendment 56 could not account for: level 0 measures 346 ms
+against ~244 ms of summed standalone components, and the missing ~100 ms was these writes.
+
+Note `test_vae_conv_minimax_h3.py::test_resnet_block` fails 8/8 — verified **pre-existing**
+by running it at `HEAD~1` (before any of this session's work), where it fails identically.
+Not a regression from the norm rewrite or the zero-pad cache. Unrelated, still open.
+
+## Amendment 58 (2026-08-04) — the one kernel change worth making is in conv3d's pad, not GroupNorm
+
+Amendment 56 ruled out the fused GroupNorm on measurement. The change that *would* pay is in
+`ttnn.experimental.conv3d`, and it is smaller than it looks, because **the vol2col reader
+already implements padding natively**. `reader_vol2col.cpp:371-400` computes signed
+`t_in/h_in/w_in` against the padded window, detects out-of-bounds, and either zero-fills
+(`is_padding_zeros`) or clamps via `clampIndex` (replicate) — all inside the gather it was
+already doing, with `check_padding` a compile-time template arg.
+
+H3 cannot use it for two reasons, both narrow:
+
+* **No reflect mode.** H3's spatial pad is reflect; the op accepts only `zeros` and
+  `replicate` (`conv3d_device_operation.cpp:110`). Reflect is a sibling of `clampIndex`:
+  `idx < 0 -> -idx`, `idx > N-1 -> 2*(N-1) - idx`.
+* **Padding is symmetric.** `padding` is `array<uint32_t,3>` applied both sides, and H3's
+  temporal pad is causal — `kernel_t - 1` frames prepended, none appended. Needs
+  before/after per axis in `compute_output_dims` and the window origin.
+
+The payoff is the whole padding chain: every conv currently does **three full copies** of its
+activation (reflect W, reflect H, causal T) plus edge slices. That is Concat 88 ms + Slice
+7 ms of level 0's profile and 24 + 4 of level 1's — roughly **100 ms of the 609 ms encoder,
+~17 %**, which would take encode from 3.1 s to about **2.6 s**. It would also drop three
+full-size temporaries per conv.
+
+Checked and **not** an option: there is no "tpad fuse" in the WAN VAE to borrow —
+`vae_wan2_1.py` pads with `ttnn.pad`/concat like everything else, and no `tpad` symbol
+exists anywhere in the tree.
+
+## Amendment 59 (2026-08-04) — audio decode measured: 1.273 s against a 0.05 s target
+
+First measurement against the new audio goal. Single device, 5 s clip:
+
+| | measured | target |
+|---|---|---|
+| audio encode | 0.347 s | (last) |
+| **audio decode** | **1.273 s** | **~0.05 s** |
+
+Round-trip PSNR 29.89 dB, test passes. **25x off**, and untouched by any performance work so
+far — the visual path's 32x came from data-parallelism over `(clip, tile)` work units, and a
+single 5 s audio stream is one unit, so none of that applies.
+
+One lead already visible in the log, though probably not the main cost:
+
+    depthwise conv1d unavailable at T_pad=1041, C=512, K=7, stride=1; MAC fallback
+
+`audio_ops.py:232` falls back to `_depthwise_tap_mac` (7 strided slices + 7 multiplies +
+6 adds) when `ttnn.conv1d`'s HEIGHT_SHARDED slicer finds no valid configuration at the latent
+rate. It fires twice and the tensors there are ~1 MB, so it is likely single-digit ms of the
+1.273 s. **The BigVGAN upsampling stack has not been profiled at all** — that is where to
+start, with `profile_downblock`-style per-stage device timing rather than wall clock.
