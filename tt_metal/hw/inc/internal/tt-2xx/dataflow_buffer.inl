@@ -25,10 +25,14 @@
 #endif
 
 #if DFB_IS_COMPUTE_MATH
-inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
+inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {
+    dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
+}
 #else
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {}
+    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {
+    dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
+}
 #endif
 
 inline uint32_t DataflowBuffer::get_entry_size() const {
@@ -257,21 +261,29 @@ inline void DataflowBuffer::finish_impl() {
             dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
             uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
-            // TRISC drain: finish() must not return until this TC is empty (posted == 0) -
-            // covers the consumer (UNPACK), the Tensix->DM producer (PACK), and both sides of
-            // an INTRA self-loop. The consumer also skips TCs this TRISC doesn't own via
-            // tensix_trisc_mask, which exists only in the UNPACK-side LocalDFBInterface, so the
-            // gate sits under an inner UNPACK guard (the PACK struct has no such member).
+            // TRISC drain: finish() must not return until this TC is empty (posted == 0).
+            // On TRISC, tile_counters[].f.posted/.acked are live occupancy / free-space
+            // (tiles-available / space-available), NOT the cumulative read_posted/read_acked
+            // totals used by the DM overlay path below. The consumer also skips TCs this TRISC
+            // doesn't own via tensix_trisc_mask, which exists only in the UNPACK-side
+            // LocalDFBInterface, so the gate sits under an inner UNPACK guard (the PACK struct
+            // has no such member).
 #ifdef UCK_CHLKC_UNPACK
             if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
                 continue;
             }
 #endif
-            all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
+            const uint32_t tiles_avail = ckernel::trisc::tile_counters[tc_id].f.posted & 0xFFFFu;
+            if (tiles_avail != 0) {
+                all_acked = false;
+            }
 #elif !defined(COMPILE_FOR_TRISC)
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-            all_acked &=
-                (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) == overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
+            const uint32_t read_posted = overlay::fast_llk_intf_read_posted(tensix_id, tc_id);
+            const uint32_t read_acked = overlay::fast_llk_intf_read_acked(tensix_id, tc_id);
+            if (read_acked != read_posted) {
+                all_acked = false;
+            }
 #endif
         }
     }
