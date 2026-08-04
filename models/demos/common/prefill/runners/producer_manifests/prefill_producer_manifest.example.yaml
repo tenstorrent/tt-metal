@@ -46,7 +46,7 @@ workload:
 
 # ---------------------------------------------------------------------------
 # Real KV migration issued BY the producer (opt-in). Needs a live migration_endpoint the runner already
-# drove to WORKER_READY. The producer migrates + writes the DONE sentinel; the RUNNER validates KV.
+# drove to WORKER_READY. The producer migrates + writes the DONE sentinel; nothing reads the dst slots.
 migration:
   issue: false              # PREFILL_PRODUCER_ISSUE_MIGRATION (default: false) attach client + migrate
   dest_endpoint_id: 1       # PREFILL_MIGRATION_DEST_ENDPOINT_ID (default: 1) own id => loopback; other => x-ep

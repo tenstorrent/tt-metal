@@ -7,7 +7,7 @@
 Model-agnostic: the model is selected by PREFILL_MODEL and driven through a PrefillModelAdapter
 (see ../adapter.py and ADDING_A_PREFILL_MODEL.md). This driver wires rank topology, input,
 transport, and the per-chunk schedule; the adapter supplies how to build the model, allocate the KV
-cache, run a chunk, and validate/migrate it.
+cache, run a chunk, and migrate it.
 
 The model is split across N ranks under tt-run: each rank owns a contiguous layer slice and builds
 the same TtPrefillRuntime (first_layer_idx / is_first_rank / is_last_rank). With >1 rank the cross-rank
@@ -53,9 +53,9 @@ from models.demos.common.prefill.runners.runner_utils import (
 
 def _apply_manifest_env():
     """If PREFILL_MANIFEST is set, load the shared run.json and populate the env vars
-    the runner (and migration/validation helpers) read. setdefault => an explicitly
-    exported env var still wins over the manifest. Must be invoked before the
-    module-level env reads below (e.g. PREFILL_MAX_SEQ_LEN) so the values take effect."""
+    the runner reads. setdefault => an explicitly exported env var still wins over the
+    manifest. Must be invoked before the module-level env reads below (e.g.
+    PREFILL_MAX_SEQ_LEN) so the values take effect."""
     manifest_path = os.environ.get("PREFILL_MANIFEST")
     if not manifest_path:
         return
@@ -72,49 +72,6 @@ def _apply_manifest_env():
     # manifest for all model config — PREFILL_MODEL, fabric mode, chunk count, etc.
     for key, val in manifest.get("env", {}).items():
         sd(key, val)
-
-    # The migration/pairwise-validation runs additionally carry a users[] + migration{} block. A
-    # plain model-config manifest omits it (env-only), so it's optional.
-    users = manifest.get("users")
-    if not users:
-        return
-    N = len(users)
-
-    model = manifest.get("model", {})
-    mig = manifest.get("migration", {})
-    paths = manifest.get("paths", {})
-
-    sd("PREFILL_MODEL", model.get("variant"))
-    sd("DEEPSEEK_PREFILL_TRACE_DIR", paths.get("trace_dir"))
-    sd("PREFILL_MIGRATION_CLIENT_DIR", paths.get("migration_client_dir"))
-    sd("PREFILL_NUM_USERS", 2 * N)
-    sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
-    sd("PREFILL_STANDALONE_CHUNKED_NCHUNKS", sum(u["n_chunks"] for u in users))
-    sd("PREFILL_MIGRATE_WAIT_S", mig.get("wait_s"))
-    sd("PREFILL_MIGRATE_GOLDEN_PTS", ",".join(u.get("kv_cache", "") for u in users))
-
-    # Mode: default to pairwise
-    mode = mig.get("mode") or "pairwise"
-    # Loud failure for incorrect mode
-    if mode != "pairwise":
-        raise ValueError(f"manifest migration.mode must be 'pairwise', got: {mode}")
-    # Loud failure for empty users
-    if N < 1:
-        raise ValueError(f"manifest migration.mode 'pairwise' requires at least 1 user, got {N}")
-    sd("PREFILL_MIGRATE", mode)
-
-    # Each non-empty kv_cache must exist on disk.
-    for i, u in enumerate(users):
-        kv = u.get("kv_cache", "")
-        if kv and not os.path.exists(kv):
-            raise FileNotFoundError(f"PREFILL_MANIFEST user {i} kv_cache not found: {kv}")
-
-    # PREFILL_NUM_USERS (derived or explicitly exported) must equal 2*N.
-    num_users = int(os.environ["PREFILL_NUM_USERS"])
-    if num_users != 2 * N:
-        raise ValueError(
-            f"PREFILL_NUM_USERS ({num_users}) inconsistent with manifest " f"({N} users => expected {2 * N})"
-        )
 
 
 # Populate env from the manifest BEFORE the module-level env reads below.
@@ -499,10 +456,7 @@ def run_request_loop(
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
     as a hard fallback, until SIGTERM/SIGKILL. No fixed chunk bound, no trace input, no PCC.
 
-    Exception: in migration-validation mode (PREFILL_VALIDATE_MIGRATION=1) the scheduler driver never
-    pushes the shutdown sentinel — it pushes PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks, migrates, then
-    writes the DONE sentinel for the runner to poll. So the loop exits after that many chunks and returns
-    to validate_after_prefill. Returns (chunks_per_slot, real_end_per_slot, total_chunks)."""
+    Returns (real_end_per_slot, total_chunks)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -511,23 +465,13 @@ def run_request_loop(
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
     # Self-test bound: PREFILL_MIGRATION_SELFTEST=1 makes the loop run exactly CHUNKS_PER_SLOT chunks
-    # then exit CLEANLY so the post-loop migrate + verify can run — without it the unbounded loop blocks
-    # in recv and only SIGKILL exits, which kills before the verify. 0 == unbounded serving.
+    # then exit CLEANLY so the post-loop migrate can run — without it the unbounded loop blocks in recv
+    # and only SIGKILL exits, which kills before the migrate. 0 == unbounded serving.
     n_selftest = CHUNKS_PER_SLOT if os.environ.get("PREFILL_MIGRATION_SELFTEST", "0") == "1" else 0
     t0 = time.perf_counter()
     c = 0
     first = None
-    # Per-slot bookkeeping for the optional post-loop migration validation (validate_after_prefill):
-    # how many chunks each slot received and its highest real (non-pad) end position.
-    chunks_per_slot: dict = {}
     real_end_per_slot: dict = {}
-    # If we run prefill validation, we need to know the expected number of chunks to exit the loop.
-    # PREFILL_STANDALONE_CHUNKED_* is migration-validation config, not a serving-mode knob.
-    _expected_chunks = (
-        int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "0"))
-        if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1"
-        else 0
-    )
     while not _shutdown:
         if n_selftest and c >= n_selftest:
             break
@@ -544,9 +488,6 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
-        slot = meta["slot_id"]
-        chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
-        real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
         t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         # Interleaved migration: register this chunk's correlation, then migrate any chunk whose layers
         # have all acked (single-rank: chunk c's acks are visible the moment _compute_and_send returns).
@@ -564,18 +505,10 @@ def run_request_loop(
         if first is None:
             first = t
         c += 1
-        if _expected_chunks and c >= _expected_chunks:
-            logger.info(
-                f"[pp rank {rank}] processed {c}/{_expected_chunks} chunks "
-                "(PREFILL_STANDALONE_CHUNKED_NCHUNKS reached); exiting request loop for migration validation"
-            )
-            if d2d_out is not None:
-                _forward_shutdown(d2d_out, rank, hidden_size)
-            break
     if num_ranks > 1 and n_selftest:
         ttnn.distributed_context_barrier()
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
-    return chunks_per_slot, real_end_per_slot, c
+    return real_end_per_slot, c
 
 
 # ---------------------------------------------------------------------------
@@ -607,11 +540,6 @@ def _print_config() -> None:
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
-        ("PREFILL_STANDALONE_CHUNKED_PCC", os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88")),
-        (
-            "PREFILL_STANDALONE_CHUNKED_RECORD_ONLY",
-            os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0"),
-        ),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         ("PREFILL_MOCK_MIGRATION", os.environ.get("PREFILL_MOCK_MIGRATION", "0")),
         (
@@ -619,7 +547,6 @@ def _print_config() -> None:
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
         ),
         ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
-        ("MIGRATION_DONE_FILE", os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")),
     ]
     sep = "=" * 70
     lines = [sep, "prefill_runner configuration", sep]
@@ -830,14 +757,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         )
 
     if _migration_enabled:
-        if is_first_rank:
-            # Clear a stale DONE sentinel from a prior run so the validator can't read its pairs.
-            # First rank only -- it owns the publish + validation handshake.
-            _done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
-            if os.path.exists(_done_file):
-                logger.warning(f"[migration] removing stale DONE sentinel {_done_file} from a prior run")
-                os.remove(_done_file)
-
         # Migration bring-up, split by ownership before the request loop opens (the worker gates on
         # SetTable + AssignDevMap, so this must finish first):
         #   * ALL RANKS deliver their local device map + join the all-gather barrier (COLLECTIVE —
@@ -1023,7 +942,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:
-        chunks_per_slot, real_end_per_slot, total_chunks = run_request_loop(
+        real_end_per_slot, _ = run_request_loop(
             runtime,
             kv_caches,
             rank,
@@ -1034,21 +953,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_out=d2d_out,
             migration_driver=mig_driver,
         )
-
-        # Post-loop KV validation (bring-up / migration accuracy; never in production serving). Single-rank
-        # only: only the last/single rank owns the whole cache. By now the scheduler has migrated the slots
-        # out-of-band and written the DONE sentinel; the validator waits for it and PCCs the migrated pairs.
-        if single_rank and os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1":
-            from models.demos.common.prefill.runners.validation import validate_after_prefill
-
-            validate_after_prefill(
-                runtime,
-                kv_caches,
-                chunks_per_slot=chunks_per_slot,
-                real_end_per_slot=real_end_per_slot,
-                num_users=NUM_USERS,
-                total_chunks=total_chunks,
-            )
 
         # Release services while the mesh + command queues are still alive (their dtors free a command
         # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
@@ -1097,15 +1001,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 migration_endpoint.wait_complete(tok, wait_complete_ms)
                 logger.success(f"[migration-selftest] migrate slot{src_slot}->slot{dst_slot} complete")
 
-            # Barrier: every rank must wait for rank 0's migrate to finish before reading its local
-            # dst slot (the migrate covers all stages; each rank then verifies its own layers).
+            # Barrier: rank 0's migrate copies EVERY stage's layers, so no rank may fall through to
+            # teardown (and free its mesh) until that migrate has completed.
             if num_ranks > 1:
                 ttnn.distributed_context_barrier()
             ttnn.synchronize_device(runtime.mesh_device)
-
-            from models.demos.common.prefill.runners.validation import validate_migrations_pairwise
-
-            validate_migrations_pairwise(runtime, kv_caches, [(src_slot, dst_slot)])
     finally:
         # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
         # spin timing out on a stalled router); without this, producer/router/ack segments + the
