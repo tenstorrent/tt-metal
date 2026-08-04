@@ -33,9 +33,9 @@ def collect_version_info() -> dict[str, str]:
         pass
 
     kmod_path = Path("/sys/module/tenstorrent/version")
-    if kmod_path.exists():
+    try:
         versions["tt_kmd"] = kmod_path.read_text().strip()
-    else:
+    except OSError:
         try:
             result = subprocess.run(
                 ["modinfo", "-F", "version", "tenstorrent"],
@@ -54,7 +54,10 @@ def collect_version_info() -> dict[str, str]:
         for dev_path in sorted(tt_class_dir.glob("tenstorrent!*")):
             fw_file = dev_path / "tt_fw_bundle_ver"
             if fw_file.is_file():
-                versions["fw_bundle"] = fw_file.read_text().strip()
-                break
+                try:
+                    versions["fw_bundle"] = fw_file.read_text().strip()
+                    break
+                except OSError:
+                    continue
 
     return versions

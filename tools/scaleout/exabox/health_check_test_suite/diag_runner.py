@@ -1447,9 +1447,13 @@ def run_diag(
     report["phases"]["reset_loop"] = asdict(reset_phase)
     # reset_loop prints its own per-reset lines as they run; rollup line only.
     print(f"  {'reset_loop':14} {reset_phase.status:5} ({reset_phase.duration_s:.1f}s)", flush=True)
-    # Dedupe per-reset snapshots: if all match initial, keep only initial and
-    # record a single summary check. If any differ, splice only the differing
-    # phases into the report (the matching ones are noise).
+    # Dedupe per-reset snapshots: splice the differing phases into the report
+    # (matching intermediates are noise) but ALWAYS keep the final post-reset
+    # snapshot, even when it matches initial. normalize_health_report judges the
+    # fleet on the last snapshot_after_* phase (post[-1]); if the unit regressed
+    # on an early reset but recovered by the final one, dropping the (matching)
+    # final snapshot would strand the stale regression as post[-1] and falsely
+    # fail a node that actually came back healthy.
     if post_reset_phases:
 
         def _check_sig(checks: list) -> tuple:
@@ -1466,6 +1470,12 @@ def run_diag(
             (matched if _check_sig([asdict(c) for c in p.checks]) == initial_sig else differed).append((name, p))
         for name, p in differed:
             report["phases"][name] = asdict(p)
+        # Preserve the actual final snapshot so the verdict reflects the true end
+        # state. If it differed it is already spliced above (in chronological
+        # order, so it stays post[-1]); if it matched initial, add it back here.
+        final_name, final_phase = post_reset_phases[-1]
+        if final_name not in report["phases"]:
+            report["phases"][final_name] = asdict(final_phase)
         summary_status = PASS if not differed else WARN
         summary_details = f"{len(matched)}/{len(post_reset_phases)} post-reset snapshots matched initial" + (
             f"; {len(differed)} differed (see {', '.join(n for n,_ in differed)})" if differed else ""

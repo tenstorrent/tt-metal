@@ -69,9 +69,11 @@ def _diag_env(tt_metal_path: Path | None) -> dict:
     """Environment shared by both launch modes."""
     env = os.environ.copy()
     if tt_metal_path is not None:
-        env["TT_METAL_HOME"] = str(tt_metal_path)
-        env.setdefault("PYTHONPATH", str(tt_metal_path))
-        env.setdefault("LD_LIBRARY_PATH", str(Path(tt_metal_path) / "build" / "lib"))
+        root = str(tt_metal_path)
+        lib_dir = str(tt_metal_path / "build" / "lib")
+        env["TT_METAL_HOME"] = root
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, (root, env.get("PYTHONPATH"))))
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, (lib_dir, env.get("LD_LIBRARY_PATH"))))
     # tt-smi often lives at ~/.local/bin or /usr/local/bin but isn't on PATH in
     # non-login SSH sessions.
     env["PATH"] = os.pathsep.join([env.get("PATH", ""), str(Path.home() / ".local" / "bin"), "/usr/local/bin"])
@@ -189,6 +191,7 @@ def run_diag_subprocess(
     """
     results_dir.mkdir(parents=True, exist_ok=True)
     report_path = results_dir / "diag_report.json"
+    report_path.unlink(missing_ok=True)
 
     if launch_mode == "orchestration":
         cmd, err = _build_orchestration_command(tier, report_path, tt_metal_path, extra_args)

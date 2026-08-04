@@ -266,7 +266,10 @@ def machine_meta(report, hostname, job_id, jira_ticket, ts, versions=None):
     log_fw = versions.get("fw_bundle_version", "")
     if log_fw in FW_SENTINELS:
         log_fw = ""
-    fw_bundle = str(fw.get("data", {}).get("value", "") or log_fw)
+    report_fw = fw.get("data", {}).get("value", "")
+    if report_fw in FW_SENTINELS:
+        report_fw = ""
+    fw_bundle = str(report_fw or log_fw)
     enum = _find_check(report, "pcie_enum_count") or {}
     num_chips = enum.get("data", {}).get("actual", "")
     overall = report.get("overall_status", "") or "UNKNOWN"

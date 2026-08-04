@@ -283,7 +283,11 @@ def transition_jira_ticket(
         log.warning("Could not fetch transitions for %s: %s", ticket_key, exc)
         return
 
-    transitions = resp.json().get("transitions", [])
+    try:
+        transitions = resp.json().get("transitions", [])
+    except ValueError as exc:
+        log.warning("Could not parse transitions for %s: %s", ticket_key, exc)
+        return
     transition_id = next((t["id"] for t in transitions if t["name"] == target_transition), None)
     if not transition_id and fallback_to_done:
         transition_id = next(

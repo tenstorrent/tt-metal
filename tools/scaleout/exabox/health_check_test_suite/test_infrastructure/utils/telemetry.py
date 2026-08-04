@@ -149,3 +149,26 @@ def format_prometheus_metrics(metrics: dict[str, list[dict]]) -> str:
 
     lines.append("\n--- end prometheus metrics ---")
     return "\n".join(lines)
+
+
+def aggregate_telemetry_for_csv(metrics: dict[str, list[dict]] | None) -> dict:
+    """Reduce raw metric families into the flat summary runs.csv expects.
+
+    ``format_prometheus_metrics`` only builds the human-readable log block; the
+    CSV verdict needs a separate flat dict whose keys mirror the ones consumed by
+    ``analyze_health_check_results.runs_row`` (``available`` + per-metric totals).
+    Returns ``{"available": False}`` when nothing was collected so the run row
+    records ``telemetry_available=0`` rather than silently claiming a value.
+    """
+    if not metrics:
+        return {"available": False}
+
+    def _total(name: str) -> int:
+        return int(sum(s["value"] for s in metrics.get(name, [])))
+
+    return {
+        "available": True,
+        "eth_retrain_total": _total("tt_ethernet_retrain_count"),
+        "eth_crc_total": _total("tt_ethernet_crc_error_count"),
+        "eth_uncorr_cw_total": _total("tt_ethernet_uncorrected_codeword_count"),
+    }

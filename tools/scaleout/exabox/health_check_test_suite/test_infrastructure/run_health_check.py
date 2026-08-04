@@ -52,7 +52,7 @@ from utils.report import has_actionable_failure, normalize_health_report
 from utils.secrets_loader import load_jira_secrets, load_sftp_secrets
 from utils.sftp_upload import upload_csv_sftp
 from utils.system_info import collect_version_info
-from utils.telemetry import collect_prometheus_metrics, format_prometheus_metrics
+from utils.telemetry import aggregate_telemetry_for_csv, collect_prometheus_metrics, format_prometheus_metrics
 
 logging.basicConfig(
     level=logging.INFO,
@@ -166,6 +166,7 @@ def run_csv_analysis(
     slurm_job_id: str,
     ticket_key: str | None,
     versions: dict[str, str],
+    telemetry: dict | None = None,
 ) -> str | None:
     """Translate the diag_report.json into the runs/checks CSVs for Superset.
 
@@ -199,6 +200,7 @@ def run_csv_analysis(
                 "tt_kmd_version": _clean_version(versions.get("tt_kmd")),
                 "fw_bundle_version": _clean_version(versions.get("fw_bundle")),
             },
+            telemetry=telemetry,
         )
     except Exception as exc:
         log.warning("CSV analysis failed: %s", exc)
@@ -218,11 +220,17 @@ def _clean_version(value: str | None) -> str:
 
 
 def remove_path(base: str, target: str) -> None:
-    """Delete target only if it canonicalizes to a location inside base."""
+    """Delete target only if it canonicalizes to a strict child of base.
+
+    Rejecting ``target_real == base_real`` is deliberate: commonpath() of two
+    identical paths is that path, so without the equality guard a caller passing
+    target == base (e.g. --results-dir equal to --log-dir) would recursively
+    delete the entire base directory, including credentials and unrelated runs.
+    """
     base_real = os.path.realpath(base)
     target_real = os.path.realpath(target)
-    if os.path.commonpath([base_real, target_real]) != base_real:
-        log.warning("Refusing to delete %s: outside %s", target_real, base_real)
+    if target_real == base_real or os.path.commonpath([base_real, target_real]) != base_real:
+        log.warning("Refusing to delete %s: not a child of %s", target_real, base_real)
         return
     if os.path.isdir(target_real):
         shutil.rmtree(target_real, ignore_errors=True)
@@ -262,6 +270,10 @@ def main() -> int:
         print(prom_output, flush=True)
     else:
         log.info("No Prometheus metrics collected")
+    # Flatten the collected families for the CSV verdict. Without this the
+    # analyzer only gets the log-formatted string and every run reports
+    # telemetry_available=0 to Superset despite a successful collection.
+    telemetry_summary = aggregate_telemetry_for_csv(prom_metrics)
 
     # Run the diag suite as a subprocess. It writes its JSON report + per-test
     # logs straight into results_dir on the host filesystem.
@@ -461,6 +473,7 @@ def main() -> int:
         slurm_job_id=slurm_job_id,
         ticket_key=ticket_key,
         versions=versions,
+        telemetry=telemetry_summary,
     )
 
     # SFTP upload
