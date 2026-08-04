@@ -2930,3 +2930,44 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor)
 
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
+
+
+def height_sharded_l1(shard_shape):
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
+# An interleaved row-major page is one logical row, so an interleaved output cannot carry the input's
+# tile padding: consumers size their per-page copy from buffer()->page_size() and would move that
+# padding as data. These are the two input configs that used to skip the untilize_with_unpadding
+# reroute (it only fired for non-sharded DRAM inputs) and so leaked padding downstream.
+@pytest.mark.parametrize(
+    "input_memory_config",
+    [ttnn.L1_MEMORY_CONFIG, height_sharded_l1((32, 64))],
+    ids=["l1_interleaved", "height_sharded"],
+)
+def test_untilize_interleaved_output_drops_tile_padding(device, input_memory_config):
+    torch.manual_seed(0)
+    tensor_shape = [1, 1, 32, 40]  # a width of 40 is tile-padded to 64
+
+    input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+    assert input_ttnn_tensor.padded_shape[-1] == 64, "test needs a tile-padded input width"
+
+    ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert ttnn_output_tensor.padded_shape[-1] == ttnn_output_tensor.shape[-1]
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))

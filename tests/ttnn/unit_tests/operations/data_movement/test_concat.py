@@ -532,3 +532,22 @@ def test_concat_int32_2d_dim1_regression(device):
 
     tt_output_torch = ttnn.to_torch(tt_output)
     assert torch.equal(torch_output, tt_output_torch)
+
+
+def test_concat_untilized_padded_width(device):
+    """A row-major input whose page used to be wider than its logical row (tile padding kept by
+    untilize): concat copied buffer()->page_size() per row, so the padding landed in the output as
+    data and pushed the rest of the row along."""
+    torch_input = torch.rand([1, 1, 32, 40], dtype=torch.bfloat16)
+    tiled = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    row_major = ttnn.untilize(tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    output = ttnn.concat([row_major, row_major], dim=-1)
+
+    assert_equal(torch.concat([torch_input, torch_input], dim=-1), ttnn.to_torch(output))

@@ -44,10 +44,12 @@ ttnn::Tensor untilize(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // If the input tensor is not sharded, on DRAM and logical shape != padded shape, then unpad the input tensor.
-    // conv op_slicing logic requires the padding information to be present in the input tensor.
-    if (!input_tensor.is_sharded() && input_tensor.memory_config().is_dram() &&
-        input_tensor.logical_shape() != input_tensor.padded_shape()) {
+    // Consumers read an interleaved row-major page as one logical row, so handing back the input's
+    // tile padding corrupts them - it broke concat, pad and reshape. Unpad while de-tiling instead.
+    // A sharded output keeps the padding: there the padded width is the shard width, which conv's
+    // op_slicing logic relies on.
+    const auto& output_memory_config = memory_config.value_or(input_tensor.memory_config());
+    if (!output_memory_config.is_sharded() && input_tensor.logical_shape() != input_tensor.padded_shape()) {
         ttnn::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(input_tensor.logical_shape().rank(), 0));
         int logical_rank = input_tensor.logical_shape().rank();
         for (int index = -1; index >= -logical_rank; --index) {

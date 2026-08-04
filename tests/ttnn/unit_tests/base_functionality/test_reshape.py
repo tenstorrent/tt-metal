@@ -934,3 +934,22 @@ def test_reshape_rm_interleaved_wide_multi_page(device, input_shape, output_shap
     )
     y = ttnn.reshape(x, output_shape)
     assert_equal(t.reshape(*output_shape), ttnn.to_torch(y))
+
+
+def test_reshape_untilized_padded_width(device):
+    """A row-major input whose page used to be wider than its logical row (tile padding kept by
+    untilize): reshape took the zero-cost view path because only the logical last dims matched, then
+    built an unpadded spec over the padded buffer and tripped "size % page_size == 0" in Buffer."""
+    torch_input = torch.rand([1, 1, 32, 40], dtype=torch.bfloat16)
+    tiled = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    row_major = ttnn.untilize(tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    output = ttnn.reshape(row_major, [1, 32, 40])
+
+    assert_equal(torch_input.reshape([1, 32, 40]), ttnn.to_torch(output))

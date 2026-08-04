@@ -1281,3 +1281,23 @@ def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, expect_e
             use_multicore=True,
             memory_config=output_memory_config,
         )
+
+
+def test_pad_untilized_padded_width(device):
+    """A row-major input whose page used to be wider than its logical row (tile padding kept by
+    untilize): pad built its input accessor from the logical row instead of the buffer's page size,
+    so page addresses drifted after the first round of DRAM banks and only the first 12 of 32 rows
+    were written."""
+    torch_input = torch.rand([1, 1, 32, 40], dtype=torch.bfloat16)
+    tiled = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    row_major = ttnn.untilize(tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    output = ttnn.pad(row_major, [(0, 0), (0, 0), (0, 0), (0, 8)], 0.0)
+
+    assert_allclose(torch.nn.functional.pad(torch_input, (0, 8)), ttnn.to_torch(output))
