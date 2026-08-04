@@ -13,8 +13,6 @@
 #include <host_api.hpp>
 #include <initializer_list>
 #include <sub_device.hpp>
-#include <unistd.h>       // DIAGNOSTIC (temporary): syscall/gettid for SHM thread logging
-#include <sys/syscall.h>  // DIAGNOSTIC (temporary)
 #include <sub_device_types.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "impl/device/mock_allocator.hpp"
@@ -652,20 +650,6 @@ bool Device::initialize(
         shm_stats_provider_ =
             std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_, shm_tracking_disabled, shm_verbose);
         log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
-
-        // DIAGNOSTIC (temporary): log the OS thread that initialized SHM for the FIRST device.
-        // Pre-fix, the ShmTrackingProcessor was push_processor'd on exactly this thread, and
-        // GraphTracker::processors is thread_local -- so only allocations on this tid were ever
-        // recorded. Compare against the "[SHM-DIAG] first buffer allocation on tid=..." lines.
-        static bool shm_diag_logged_init_tid = false;
-        if (!shm_diag_logged_init_tid) {
-            shm_diag_logged_init_tid = true;
-            log_info(
-                tt::LogMetal,
-                "[SHM-DIAG] init/registration thread tid={} (device {})",
-                static_cast<long>(::syscall(SYS_gettid)),
-                this->id_);
-        }
 
         // NOTE: Buffer allocation/deallocation recording is driven directly from
         // Buffer::allocate_impl()/deallocate_impl() via shm_record_buffer_*(), NOT through a

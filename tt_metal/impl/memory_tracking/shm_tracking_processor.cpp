@@ -9,15 +9,9 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
-#include <sys/syscall.h>
 #include <mutex>
 
 namespace tt::tt_metal {
-
-// DIAGNOSTIC (temporary): OS thread id of the caller. Used to compare the thread that
-// performs buffer allocations against the thread that initialized SHM / would have
-// registered the (thread_local) GraphTracker processor. Remove once confirmed.
-static long shm_diag_gettid() { return static_cast<long>(::syscall(SYS_gettid)); }
 
 // Convert BufferType to ShmBufferType for shared memory tracking
 static ShmBufferType to_shm_buffer_type(BufferType type) {
@@ -43,20 +37,6 @@ static std::mutex& shm_tracking_mutex() {
 void shm_record_buffer_allocation(const Buffer* buffer) {
     if (!buffer || !buffer->device()) {
         return;
-    }
-
-    // DIAGNOSTIC (temporary): log the first allocation seen on each OS thread. Compare
-    // these tids to the "[SHM-DIAG] init/registration thread" line from Device::initialize.
-    // If they differ, the pre-fix thread_local GraphTracker processor (pushed only on the
-    // init thread) never observed these allocations -- which is why the direct call fixes it.
-    thread_local bool shm_diag_logged_alloc_tid = false;
-    if (!shm_diag_logged_alloc_tid) {
-        shm_diag_logged_alloc_tid = true;
-        log_info(
-            tt::LogMetal,
-            "[SHM-DIAG] first buffer allocation on tid={} (buffer_type={})",
-            shm_diag_gettid(),
-            static_cast<unsigned>(buffer->buffer_type()));
     }
 
     // Check if this is a MeshDevice (backing buffer)
