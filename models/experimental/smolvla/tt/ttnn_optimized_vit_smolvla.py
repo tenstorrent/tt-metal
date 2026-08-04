@@ -86,7 +86,7 @@ def smolvla_patch_embeddings(
 
     # Fold patches: each patch becomes a row
     # stride_h = patch_size folds vertically, stride_w = 1 keeps horizontal
-    pixel_values = ttnn.fold(pixel_values, patch_size, 1)
+    pixel_values = ttnn.fold(pixel_values, patch_size, 1, collapse_output=True)
 
     # Convert to tile layout for efficient matmul
     pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT)
