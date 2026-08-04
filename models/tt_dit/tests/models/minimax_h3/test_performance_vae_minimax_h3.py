@@ -459,3 +459,115 @@ def test_visual_data_parallel_throughput(mesh_device):
             f"decode {decode_units} units / {decode_waves} waves = {decode_total:.1f} s, "
             f"total {encode_total + decode_total:.1f} s"
         )
+
+
+_HW_FACTORS = [
+    pytest.param(1, 1, id="dp_only"),
+    pytest.param(4, 1, id="h4"),
+    pytest.param(1, 8, id="w8"),
+    pytest.param(4, 8, id="h4w8"),
+]
+
+_HW_FABRIC = [
+    pytest.param(
+        (4, 8),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "require_exact_physical_num_devices": True,
+            "l1_small_size": 65536,
+        },
+        id="mesh4x8",
+    )
+]
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _HW_FABRIC, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("h_factor", "w_factor"), _HW_FACTORS)
+def test_visual_encoder_hw_vs_dp(mesh_device, h_factor, w_factor):
+    """Latency of one encoder unit under H/W sharding, against the data-parallel per-unit cost.
+
+    Two different quantities, deliberately reported side by side:
+
+    * ``dp_only`` times a **whole 32-unit wave**, so its per-unit figure is throughput.
+    * the sharded cases time **one unit** spread over ``h_factor * w_factor`` devices, so
+      their figure is latency.
+
+    H/W cannot win on throughput -- data-parallelism already runs at 95-97 % scaling
+    efficiency with no communication, while sharding adds a full-activation all-gather and
+    re-partition at every GroupNorm site plus a halo per conv, and its tiles shrink to 2 rows
+    at the deepest, widest-channel blocks. It is measured here for the case where a single
+    clip's latency matters more than aggregate throughput.
+    """
+    from loguru import logger
+
+    from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3Encoder3d
+    from ....parallel.config import ParallelFactor, VaeHWParallelConfig
+    from ....parallel.manager import CCLManager
+
+    weights_dir = _weights_dir("vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+    config = _config(weights_dir)
+    devices = mesh_device.get_num_devices()
+    torch.manual_seed(0)
+
+    sharded = h_factor > 1 or w_factor > 1
+    ccl = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear) if sharded else None
+    parallel_config = (
+        VaeHWParallelConfig(
+            height_parallel=ParallelFactor(factor=h_factor, mesh_axis=0),
+            width_parallel=ParallelFactor(factor=w_factor, mesh_axis=1),
+        )
+        if sharded
+        else None
+    )
+
+    encoder = MiniMaxH3Encoder3d(
+        num_frames=CLIP_FRAMES,
+        height=TILE,
+        width=TILE,
+        in_channels=3,
+        out_channels=2 * config["latent_channels"],
+        block_out_channels=tuple(config["block_out_channels"]),
+        layers_per_block=config["layers_per_block"],
+        spatial_downsample_factors=tuple(config["spatial_downsample_factors"]),
+        temporal_downsample_factors=tuple(config["temporal_downsample_factors"]),
+        temporal_taps=3,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl,
+    )
+    encoder.load_torch_state_dict(_random_encoder_state(config))
+    in_channels = encoder.conv_in.in_channels
+
+    if sharded:
+        x = torch.randn(1, CLIP_FRAMES, TILE, TILE, in_channels)
+        dims = [None, None]
+        if h_factor > 1:
+            dims[0] = 2
+        if w_factor > 1:
+            dims[1] = 3
+        x_device = ttnn.from_torch(
+            x,
+            dtype=ttnn.float32,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(dims), mesh_shape=tuple(mesh_device.shape)),
+        )
+        units_in_flight = devices // (h_factor * w_factor)
+    else:
+        x = torch.randn(devices, CLIP_FRAMES, TILE, TILE, in_channels)
+        x_device = ttnn.from_torch(
+            x,
+            dtype=ttnn.float32,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        units_in_flight = devices
+
+    seconds = _time_it(lambda: encoder(x_device), mesh_device=mesh_device)
+    logger.info(
+        f"PERF h{h_factor}w{w_factor}: {seconds:.3f} s per launch, {units_in_flight} unit(s) in flight, "
+        f"{seconds / units_in_flight:.4f} s/unit throughput, {seconds:.3f} s/unit latency"
+    )

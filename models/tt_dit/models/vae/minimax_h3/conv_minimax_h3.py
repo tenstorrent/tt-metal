@@ -43,29 +43,33 @@ from ....utils.conv3d import _FP32_BLOCKINGS, _ntuple, aligned_channels, get_con
 # fallback is slow but not fatal -- conv_in is 9 ms at (1,256,256) and 305 ms at
 # (17,256,256) -- so it is a performance problem, not a correctness blocker.
 #
-# These are **stubs**, not swept values, shaped after the WAN 720p *encoder* entries in
-# conv3d.py: keep ``H_out_block * W_out_block`` near 32 (they use 2x16, 16x2, 8x4) and let
-# ``C_in_block`` follow the input width. `bruteforce_conv3d_sweep.py` is the tool for real
-# tuning and that belongs in the performance pass, after all four VAE halves are correct.
+# **Swept**, not stubs: measured per shape with `sweep_conv3d_minimax_h3.py`, which
+# brute-forces every legal blocking and times it on hardware under a trace. Against the
+# conv3d.py table baseline the winners are 2.5x-25.6x per layer and 9.5x summed, which is
+# what the encoder needed -- it was running at ~2.3 TFLOP/s against the ViT decoder's 14.0
+# purely because every one of its shapes missed the table.
 #
-# The ViT decoder needs no entry here: it is a pure transformer, so its only conv --
-# ``post_quant_conv`` (24->24, 1x1x1) -- is folded into ``proj_in`` and everything else
-# goes through ``Linear``'s matmul config.
+# Keyed by (C_in, C_out), which a level's res and downsample convs share. Where they share a
+# key the blocking must be legal for **both**: a strided downsample has a different input
+# footprint than the res conv at the same channel pair, so one swept on the res conv alone
+# can overflow L1 on the downsample (measured 1753984 B against a 1572864 B L1). Each entry
+# is therefore the blocking minimising *total* time over every layer that shares the key,
+# restricted to those every one of them measured OK.
+#
 # Constraint the kernel enforces: C_out_block must be a multiple of 32 *and* divide the
-# padded output channel count evenly -- so 96 is legal against 384 output channels (as in
-# the WAN entries these are shaped after) but not against 128.
+# **tile-aligned** output channel count -- so conv_out's 48 out-channels align to 64, which
+# is why a C_out_block of 64 is legal there and 32 would not divide 48.
+
 _H3_ENCODER_BLOCKINGS = {
-    (32, 128): (32, 32, 1, 2, 16),  # conv_in, C_in padded 3 -> 32
-    (128, 128): (128, 32, 1, 2, 16),
-    (128, 256): (128, 32, 1, 2, 16),
-    (256, 256): (128, 32, 1, 4, 8),
-    # C_in_block=256 with a 32-pixel H/W block overflows L1 in fp32: measured 2786176 B
-    # against 1572864 B, i.e. 1.77x over, so these stay at 128.
-    (256, 512): (128, 32, 1, 4, 8),
-    (512, 512): (128, 32, 1, 4, 8),
-    (512, 1024): (128, 32, 1, 4, 8),
-    (1024, 1024): (128, 32, 1, 4, 8),
-    (1024, 48): (128, 32, 1, 8, 4),  # conv_out, with quant_conv folded in
+    (32, 128): (32, 128, 3, 2, 16),  # conv_in: 5358 us
+    (128, 128): (64, 128, 1, 16, 2),  # b0_res+b0_down: 32731 us
+    (128, 256): (32, 256, 3, 16, 2),  # b1_res0: 5533 us
+    (256, 256): (64, 128, 1, 16, 2),  # b1_res1+b1_down+b2_res+b2_down: 29478 us
+    (256, 512): (64, 128, 1, 16, 2),  # b3_res0: 710 us
+    (512, 512): (64, 128, 1, 16, 2),  # b3_res1+b3_down+b4_res: 2983 us
+    (512, 1024): (64, 128, 1, 8, 4),  # b5_res0: 851 us
+    (1024, 1024): (64, 64, 5, 16, 2),  # b5_res1: 2025 us
+    (1024, 48): (128, 32, 1, 16, 2),  # conv_out: 197 us
 }
 _H3_BLOCKING_ENTRIES = {
     (in_c, out_c, kernel): blocking
