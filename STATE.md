@@ -1317,3 +1317,50 @@ K/V, a profiler-driven chunk sweep, or a different attention decomposition -- ch
 decoder materially. The two anomalies worth pairing with it: NLPConcatHeads measured 42.6 us
 and 580.5 us for identical work in the same trace, and both head ops run on **57 cores** while
 every other op gets 120.
+
+## Amendment 49 (2026-08-04) — tt-perf-report: 97.1 % of wall time is op-to-op gap
+
+`tt-perf-report` on the bf16 encoder profile states it outright:
+
+```
+These ops have a >6 us gap since the previous operation. Running with tracing could save
+47463439 us (97.1% of overall time)
+```
+
+Its stacked report, over the whole run (weight-load ops included, so percentages differ from
+the second-iteration-only cut in amendment 45):
+
+| % | op | device time | count | category |
+|---|---|---|---|---|
+| 32.24 % | Conv3dDeviceOperation | 450,439 us | 66 | Other |
+| **32.09 %** | **GroupNormDeviceOperation** | 448,402 us | 50 | Compute |
+| 13.72 % | ConcatDeviceOperation | 191,654 us | 180 | TM |
+| 12.76 % | PermuteDeviceOperation | 178,236 us | 63 | TM |
+| 2.37 % | UnaryDeviceOperation | 33,090 us | 50 | Compute |
+| 2.30 % | TilizeWithValPadding | 32,183 us | 126 | TM |
+| 2.02 % | BinaryNgDeviceOperation | 28,233 us | 24 | Compute |
+| 1.53 % | UntilizeDeviceOperation | 21,408 us | 58 | TM |
+
+**This reframes the whole optimisation order.** Amendment 41 inferred host-dispatch binding
+from timing variance; `tt-perf-report` quantifies it, and at **97.1 %** it dwarfs every op-level
+change made in this session put together. The measured wins so far -- head fusion 1.45x, bf16
+2.84x, blockings 1.70x -- were all reductions in *device* time, which is ~3 % of wall clock.
+Trace is not a follow-up item; it is the item.
+
+Second finding: **GroupNorm is 32.09 %, co-equal with Conv3d at 32.24 %.** That corroborates
+amendment 45's target from an independent tool, and makes
+`MINIMAX_H3_USE_STATS_GROUPNORM` the right second move after trace.
+
+**Blocked, and how to unblock it:** profiling the encoder with the stats norm enabled fails
+report generation --
+`AssertionError: Device data missing: Op 1034240 not present in cpp_device_perf_report.csv`.
+That is Tracy's 1000-op-per-device buffer (tt-buddy's `profiler/tracy.md` warns about it): the
+encoder is already ~550 ops per iteration x 2 iterations, and the stats norm adds more. Fix
+by calling `ReadDeviceProfilerResults(device)` between iterations, or by profiling a single
+down_block instead of the whole encoder. The flag stays `False` until that profile runs.
+
+Also worth noting from the per-op listing: the op-to-op gaps are enormous and irregular
+(492,684 us, 486,788 us, 535,331 us between early ops), which is weight upload during
+construction rather than steady-state inference -- so the 97.1 % figure is an upper bound on
+what trace recovers for a warmed pipeline. The right next measurement is a traced run, which
+gives the real number directly rather than another estimate.
