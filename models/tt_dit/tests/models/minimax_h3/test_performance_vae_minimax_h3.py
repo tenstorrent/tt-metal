@@ -423,7 +423,7 @@ def test_visual_data_parallel_throughput(mesh_device):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
-    encoder_wave = _time_it(lambda: encoder(x_device), mesh_device=mesh_device)
+    encoder_wave = _time_it(lambda: encoder(x_device), iterations=8, mesh_device=mesh_device)
     logger.info(f"PERF encoder wave of {devices} units: {encoder_wave:.3f} s ({encoder_wave / devices:.4f} s/unit)")
 
     decoder = MiniMaxH3ViTDecoder3d(
@@ -444,7 +444,7 @@ def test_visual_data_parallel_throughput(mesh_device):
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
-    decoder_wave = _time_it(lambda: decoder(tokens_device), mesh_device=mesh_device)
+    decoder_wave = _time_it(lambda: decoder(tokens_device), iterations=8, mesh_device=mesh_device)
     logger.info(f"PERF decoder wave of {devices} units: {decoder_wave:.3f} s ({decoder_wave / devices:.4f} s/unit)")
 
     for name, units in WORK_UNITS.items():

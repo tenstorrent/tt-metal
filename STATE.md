@@ -1577,3 +1577,114 @@ sweeping several in sequence. Anyone continuing should treat 256+ as suspect and
 which must be killed by PID before the device will initialise again.
 
 Gates unchanged: 5 passed, PCC 99.9997 % / 99.9877 %.
+
+## Amendment 56 (2026-08-04) — encoder norm rewritten; four measured negatives
+
+Session goal moved to **encode < 3 s and decode < 3 s** at 768P/5s (from "3 s e2e").
+
+### The decoder was already there — the old number was under-sampled
+
+`_time_it` ran `iterations=2`. Raised to 8 for the throughput test. The decoder wave went
+**0.652 s -> 0.150 s** with no code change: min-of-2 was simply never catching the warm
+time. Amendment 41's "0.34-0.99 s/wave" drift was that.
+
+**768P/5s: encode 5.0 s, decode 1.0 s.** Decode is done; encode is the whole problem.
+
+### Per-level budget (this is what was missing)
+
+Generalised `profile_downblock_minimax_h3.py` over all six levels. Per unit:
+
+| level | shape | profiled | **wall clock, no profiler** |
+|---|---|---|---|
+| 0 | 128->128 T17 256x256 | 477 ms | **346 ms** |
+| 1 | 128->256 T17 128x128 | 332 ms | **195 ms** |
+| 2 | 256->256 T9 64x64 | 40 ms | 30 ms |
+| 3 | 256->512 T5 32x32 | 21 ms | 17 ms |
+| 4 | 512->512 T5 16x16 | 5 ms | 6 ms |
+| 5 | 512->1024 T5 16x16 | 26 ms | 14 ms |
+| | | | **609 ms** |
+
+**Levels 0+1 are 89 % of the encoder.** Everything below is about them.
+
+**Tracy inflates data-movement ops and must not be read as absolute.** Profiled Conv3d
+(18.5 ms for b0_res) matches the blocking sweep's independent trace timer (18.25 ms) to
+1.4 %, but profiled Tilize is 21.3 ms where the identical tilize -- same shape, dtype,
+memory config, same conv3d producer -- measures **3.0 ms** standalone. Block totals confirm
+it: 432 profiled vs 346 actual at level 0, 322 vs 195 at level 1. Use the profiler for
+*ranking*, wall clock for magnitude.
+
+### What shipped: the stats norm is 2 passes shorter and absorbs the SiLU
+
+`normed * weight + bias` was three full passes over the activation. Folding
+`gamma = rsqrt(var + eps) * weight` on the (T,1,1,C) stats tensor makes it two, and the
+SiLU folds into that add via `activations=[UnaryWithParam(SILU)]` instead of running as a
+separate ROW_MAJOR unary.
+
+Level 0 **477 -> 432 ms** profiled, level 1 **332 -> 322 ms**; BinaryNg 147 -> 68 ms at
+level 0 and 106 -> 28 ms at level 1, UnaryDeviceOperation 18.5 -> 0.02 ms. Gates: 7 passed,
+encoder PCC **99.9264 %** -- identical to before, so this is free.
+
+### Four negatives, each measured
+
+**1. conv3d compute-kernel config is irrelevant.** `MiniMaxH3CausalConv3d` has always used
+HiFi2 + `fp32_dest_acc_en=True`, chosen when the encoder was fp32; both are worth up to 2x
+on the FPU. Swept six configurations over seven real shapes
+(`sweep_conv3d_fidelity_minimax_h3.py`, trace-timed per op):
+
+| config | sum us | vs shipping | worst pcc |
+|---|---|---|---|
+| HiFi2/fp32acc (shipping) | 71729 | 1.00x | 0.999990 |
+| HiFi2/bf16acc | 71402 | 1.00x | 0.999683 |
+| LoFi/bf16acc | 72256 | 0.99x | 0.999758 |
+| LoFi/fp32acc | 71611 | 1.00x | 0.999896 |
+
+Nothing moves. **conv3d here is data-movement bound, not FPU bound** -- which is also why
+the blocking sweep (which controls the vol2col working set) got 1.70x while fidelity gets
+nothing. The shipping config also has the best PCC, so it stays.
+
+**2. `Conv3dConfig.output_layout` is dead.** Setting it to TILE changes nothing:
+`Conv3dDeviceOperation::compute_output_specs` hardcodes `PageConfig(Layout::ROW_MAJOR)` and
+never reads `args.output_layout`. The knob exists on the config and in the nanobind
+bindings but the device op ignores it. Plumbing it through the model was written and backed
+out. **This is the one kernel change that would pay** -- see below.
+
+**3. The flat-tile residual is a wash.** A ROW_MAJOR add of two 285 MB tensors profiles at
+23.5 ms against ~2.2 ms tiled, so carrying the resnet chain in TILE looks free. It is not:
+it moves the cost into Tilize (level 0 Tilize 50 -> 114 ms) rather than removing it.
+A/B at both levels: flat-tile on 439/327 ms, off **432/322 ms**. Kept as
+`MINIMAX_H3_FLAT_TILE_RESIDUAL`, defaulted **False**.
+
+**4. The fused distributed GroupNorm would not help, so lifting its `N == 1` restriction is
+not worth doing.** Timed all three candidates ROW_MAJOR-in/ROW_MAJOR-out (the honest
+comparison -- conv3d is on both sides of every norm), with the fused op given the same
+pinned `determine_expected_group_norm_dram_grid_size` grid as the group_norm path:
+
+| candidate | L0 (285 MB) | L1 (143 MB) |
+|---|---|---|
+| `ttnn.group_norm`, T as batch | 46.8 ms | 14.6 ms |
+| **stats norm (shipping)** | **17.3 ms** | **7.9 ms** |
+| fused GN, per frame x T | 27.1 ms | 11.6 ms |
+| (tilize + untilize floor) | 4.6 ms | 2.0 ms |
+
+The fused op's per-frame call moves 50 MB in 1.59 ms — **~30 GB/s**, against the stats
+norm's ~112 GB/s. `N > 1` would batch *the same kernel*, so it inherits that bandwidth;
+the restriction is not what is holding it back. The stats norm is the fastest of the three
+and `ttnn.group_norm` is 2.7x worse, which independently re-confirms amendment 52.
+
+Also ruled out: **DRAM pressure is not why in-model ops are slow** -- the standalone tilize
+holds 3.0 ms with 570/855/1140/1425 MB of ballast live. And **`ttnn.experimental.slice_write`
+is not a faster pad than concat**: 379 ms against 42 ms for the three-concat chain.
+
+### Where the encoder time actually is, and the ceiling
+
+Conv3d is ~182 ms of the 609 ms (30 %), and the blocking sweep plus the fidelity sweep both
+say it is at its floor. The other **~427 ms is data movement**: ~13 norm sites, ~13 pad
+chains (three full copies each -- reflect H, reflect W, causal T), and ~6 residual adds,
+moving roughly 22 GB per unit at an effective **~45-110 GB/s**.
+
+That is the whole remaining opportunity, and it is an op-efficiency problem rather than a
+model-structure one. If that traffic ran near DRAM peak the encoder would be ~240 ms/unit
+(**1.7 s at 768P/5s**). The single highest-value kernel change is **conv3d honouring
+`output_layout` and accepting TILE input**, which would delete the tilize/untilize round
+trip at all thirteen norm sites and let every residual add be tiled -- not the GroupNorm
+change, which measurement rules out.
