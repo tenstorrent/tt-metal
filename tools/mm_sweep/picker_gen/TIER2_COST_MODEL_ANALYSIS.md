@@ -153,3 +153,60 @@ and Sm), it seemed likely that adding the known-under-ranked siblings would let 
 a top-8. It does not: the corrected set collapses to ~2 configs (the max-nsb sibling is usually already the
 top pick) and it loses to plain top-4 at half the budget. **Use a plain top-N.** top-8 for ~0 regret, top-4
 if the autotune budget must be halved.
+
+---
+
+# DECISION (2026-08-04): stop tuning the cost formula; autotune instead
+
+## Five measured attempts, five failures to generalise
+
+| attempt | in-study | reality |
+|---|---|---|
+| refit the 9 constants | LOOCV +10.6% mean | no better than deployed |
+| add a core-contention term | rejected by the fit (kCon=0 in 22/24 folds) | hypothesis refuted |
+| strategy-split reduction term (extended form) | LOOCV +7.2% mean | **+15.9%** on 16 truly fresh shapes |
+| component-wise physical model | "5.9x better than baseline" | **4-34% WORSE on hardware** |
+| same model, refitted over the full domain | -- | +19.9% mean, worse than the original fit |
+
+Also tried and rejected on held-out data: a 24-case nearest-neighbour table (+13.6% mean), an 8-predicate
+induced rule set (+45.6% mean, +433% worst -- it required waste-free K splits, which no TRAIN shape lacked
+and two TEST shapes did), and a 48-feature / 2006-node gradient-boosted ranker (+7.0% mean).
+
+## The corrected baseline
+
+The shipped picker -- kTable, then a guarded fallback (Sm=1 anchor + narrow-N hysteresis) -- scores
+**+4.67% median / +7.81% mean** regret against the true optimum over its own full search space. Earlier
+numbers in this document compared against that cost function's PLAIN ARGMIN (+5.52% / +27.94%), which is not
+what ships and made every candidate look far better than it was. The anchor/hysteresis scaffolding is doing
+real work, not covering for a broken formula.
+
+## Two methodology errors that produced a false positive, both mine
+
+1. **Wrong candidate space.** The study's candidate lists came from a sweep generator capping
+   nsb in {1,2,3,4,6,8}, Ns<=4, kb<=4. The picker enumerates Ns<=6, kb<=8, nsb<=Nown -- 1.4-2.4x wider, and
+   the c_2 L1 fix widened it further. The winning model then chose nsb=19, an extreme no measurement covered,
+   because its fitted `1 + kBlkOvh/(area*kb)` term decreases without bound in area. Ground truth over the
+   full space later showed the nsb>=8 region has a MEDIAN regret of +109% to +395%.
+2. **Wrong baseline.** See above.
+
+Rule for next time: define the evaluation domain and the baseline as EXACTLY what production does, before
+fitting anything. A model may only be trusted over the domain it was scored on.
+
+## What to do instead: autotune (picker_gen/autotune.py)
+
+The analytic model is a good RANKER and a poor CHOOSER, so measure a shortlist rather than trusting a pick.
+Held out over the full domain, best-of-top-N regret: N=1 9.2%, N=4 3.1%, N=8 1.6%, N=16 0.6%.
+
+`autotune.py` therefore ranks a UNION shortlist (physical top-k, shipped-cost top-k, and the Sm=1 anchor
+top-k -- neither ranker dominates, and on three Kt=192 shapes the physical top-8 did not contain the shipped
+pick, which was 4-6% faster than anything it shortlisted), measures every candidate PLUS the shipped pick,
+and proposes a change only when it is confirmed over fresh relaunches. It is therefore MONOTONE: it can
+improve a shape or leave it alone, never regress it. The cache is kTable itself, so the runtime picker is
+untouched -- no file I/O, no global state, no measurement inside an op.
+
+This also makes table staleness self-correcting: 14 of the original 44 rows had gone stale under later kernel
+work, and re-running the tool re-measures instead of letting rows rot.
+
+Validated end-to-end: correctly declined 3 shapes where the shipped pick was already best or the gain was
+sub-threshold, and found + confirmed the one remaining >1.5% gap that ground truth predicted
+(128x6144x768 -> 6,1,2,4,3, -2.1%).
