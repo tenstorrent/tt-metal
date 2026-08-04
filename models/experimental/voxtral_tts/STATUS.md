@@ -1103,6 +1103,91 @@ abort with the kernel named) and then one observation — that the faulting op w
 we could simply stop calling it. Before writing something off as someone else's bug, check whether
 you are the one invoking it.
 
+### 6.14 — the codec projection: the question was "fuse the matmuls", the answer was the pad
+
+The replacement projection from §6.13 cost 6.26 ms against `ttnn.conv1d`'s 4.29 — a regression we
+accepted because it runs once per utterance and unlocks 2.5 ms *per frame*. The obvious next move is
+to fuse its seven tap matmuls, since each one re-reads the same 16 MiB `xp` from DRAM: 118 MiB of
+traffic to produce 3.9 MiB of output. **Fusing works and is nearly worthless. The padding was the
+expense.** Six rounds of probes (`probe_fuse_taps*.py`), and the first three rounds each refuted the
+previous round's premise.
+
+**Round 1, the fusion itself.** Concat g taps side by side into one `[1024, g*pitch]` weight, one
+matmul, then g column-block slices. DRAM traffic is *not* monotone in g, because the wider output
+stops fitting L1 and starts paying a write plus a read-back:
+
+| g | out | xp reads | best |
+|---|---|---|---|
+| 1 | 3.9 MiB → L1 | 7 | 6.25 ms |
+| 2 | 8.0 MiB | 4 | 6.04 ms |
+| 3 | 12.0 MiB → DRAM | 3 | 5.89 ms |
+| 7 | 29.4 MiB → DRAM | 1 | worse |
+
+1.06×. But the same run reported `_pad_causal` alone at **3.06 of the 6.26 ms**, which reframed
+everything.
+
+**Round 2 killed its own hypothesis.** The pad builds a 16 MiB tensor with a 7-input concat, so the
+concat looked like the cost. Measuring four padding strategies showed otherwise — the variant that
+builds *no* 16 MiB tensor at all, only a 12-row one, still cost 2.554 ms against the current 3.062.
+A 48 KiB tensor cannot cost 2.5 ms. The concat was worth ~0.4 ms. What all four shared was **six
+single-row `ttnn.slice` calls**.
+
+**Round 3 found the actual currency: ops, not bytes.**
+
+```
+one single-row slice of the 16 MiB x     0.381 ms      six of them            2.282 ms
+one SIX-row slice of x, rows 1:7         0.358 ms      ragged 7-way concat    1.815 ms
+six single-row slices of a 24 KiB tensor 1.022 ms      aligned 2-way concat   0.281 ms
+```
+
+Six rows cost the same as one. A 4 KiB slice costs 170 µs. Cost is per *op*, and against a
+TILE_LAYOUT tensor an unaligned single-row slice appears to pay something proportional to the whole
+tensor.
+
+**Rounds 4–6, the fix.** The prefix is rows x6,x5,x4,x3,x2,x1 — contiguous but **reversed**, and
+there is no `ttnn.flip`. Five ways to reverse six rows:
+
+| method | ops | ms | exact? |
+|---|---|---|---|
+| six 1-row slices + concat (what shipped) | 8 | 1.665 | yes |
+| permutation matmul, HiFi3 | 3 | 0.195 | **no**, 2.4e-04 |
+| permutation matmul, HiFi4 + fp32_dest_acc | 3 | 0.194 | **no**, 2.4e-04 |
+| `ttnn.slice` with step −1 | 1 | 0.202 | **returned 0 rows, no error** |
+| `ttnn.gather` into a 32-row prefix | 2 | **0.071** | **yes** |
+
+`ttnn.gather` wins outright, and folding it straight into a tile-aligned 32-row prefix makes the
+reversal, the alignment and the prefix cost 3 ops together. Output slices then start at 26 instead
+of 0; prefix rows 0..25 are deliberate copies of `x[0]`, finite, and sliced away.
+
+**Shipped: 6.26 → 3.45 ms, bit-identical, and finally below `ttnn.conv1d`'s 4.29.** Verified three
+ways: probe max-abs-diff exactly 0.0 at L=4096; the codec gate's PCC lines diff *identically* against
+the pre-change build; 26/26 tests, full real-prompt set clean under `TT_METAL_WATCHER=10`, RTF
+0.60–0.65.
+
+**Fusion was measured and NOT taken.** On top of the gather pad, g=3 gives 2.94 ms — 0.51 ms more —
+but costs bit-exactness (1.1e-04: a `[1024,768]` matmul decomposes differently from three
+`[1024,240]` ones, same phenomenon as Block 2's qkv fusion). Not worth trading exactness for 0.51 ms
+on an op that is 0.015% of wall.
+
+**Three ttnn behaviours worth knowing, all found by checking numerics that "obviously" could not be
+wrong:**
+- A 240-wide (half-tile) column block sliced out of an **L1** tensor comes back **silently wrong** —
+  rel err 5e-01, no exception. 256-aligned blocks are fine.
+- `ttnn.slice` with a negative step returns an **empty tensor**, no error.
+- An **fp32 matmul multiplies at bf16 precision** here: a 0/1 permutation matrix loses 2.4e-04, and
+  HiFi4 with `fp32_dest_acc_en` changes nothing. Worth remembering before trusting fp32 anywhere in
+  this port for precision rather than range.
+
+**Also fixed:** `test_prepared_weights_are_deduplicated` asserted 20 prepared `(conv, length)` pairs
+and had been failing at 16 since §6.13 — `out` left `ttnn.conv1d`, so 5 convs × 4 buckets became 4 × 4.
+Verified stale *before* this change, not caused by it.
+
+**The generalisable lesson, and it is the same shape as §6.13's:** I set out to optimise the thing
+the arithmetic said was expensive (118 MiB of redundant reads) and it was worth 6%. The thing
+actually costing 49% was six lines of index bookkeeping nobody had timed. Decompose before
+optimising — and when a decomposition contains an item that *cannot* cost what it measures, that
+item is the finding.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
