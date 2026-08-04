@@ -122,19 +122,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
 
-    // Runs calculate_where over the faces selected by VECTOR_MODE: cond=tile 0,
-    // true_val=tile 1, false_val=tile 2, result written to tile 0. Faces outside
-    // the selected set keep whatever the producer wrote into Dest before SFPU ran
-    // (the cond tile, here), so the Python test asserts only on the processed faces.
+    // Runs calculate_where over the faces selected by VECTOR_MODE: cond=base+0,
+    // true_val=base+1, false_val=base+2, result written to base+0. Faces
+    // outside the selected set keep whatever the producer wrote into Dest before
+    // SFPU ran (the cond tile, here), so Python asserts only processed faces.
     SFPU_TERNARY_CALL(
         dest_sync,
         is_fp32_dest_acc_en,
         calculate_where,
         (false /*APPROXIMATION_MODE*/),
-        0u /*DST_IN0*/,
-        1u /*DST_IN1*/,
-        2u /*DST_IN2*/,
-        0u /*DST_OUT*/,
+        params.DST_INDEX + 0u /*DST_IN0*/,
+        params.DST_INDEX + 1u /*DST_IN1*/,
+        params.DST_INDEX + 2u /*DST_IN2*/,
+        params.DST_INDEX + 0u /*DST_OUT*/,
         VECTOR_MODE);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
@@ -173,7 +173,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
 
     // Packs only the result tile (DEST[DST_INDEX]); where produces one output tile

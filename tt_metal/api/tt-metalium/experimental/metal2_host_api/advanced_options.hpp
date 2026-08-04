@@ -19,7 +19,7 @@ namespace tt::tt_metal::experimental {
 // Advanced options for Metal 2.0 specs
 // ============================================================================
 //
-// Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, TensorParameter, ...) may
+// Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, ...) may
 // carry a *AdvancedOptions field at the end of its struct.
 // Features in "advanced options" are one (or more) of:
 //
@@ -43,21 +43,6 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 //       This is legal so long as the declarations are identical, which is compiler-enforced.
 
 struct KernelAdvancedOptions {
-    ////////////////////////////////////////////////////////////////////////////////
-    // Enqueue-loop invariant kernel arguments
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Designate certain runtime arguments and common runtime arguments as enqueue-loop
-    // invariant. This permits the same argument value to be reused across multiple Program
-    // enqueues via UpdateProgramRunArgs, which can improve performance in enqueue loops.
-    // By default, every runtime argument and common runtime argument is expected to be
-    // re-specified (via SetProgramRunArgs) on every enqueue.
-    //
-    // CAUTION: This feature is unsafe if used incorrectly! The onus is on the programmer
-    // to ensure that the designated arguments remain valid across enqueues.
-    Group<std::string> enqueue_invariant_runtime_args;
-    Group<std::string> enqueue_invariant_common_runtime_args;
-
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
@@ -184,64 +169,6 @@ struct SemaphoreAdvancedOptions {
     //       When cross-node DFB becomes available, non-zero initial values will be removed.
     [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
     uint32_t initial_value = 0;
-};
-
-struct TensorParameterAdvancedOptions {
-    ////////////////////////////////////////////////////////////////////////////////
-    // Enqueue-loop invariance
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Designate this TensorParameter as enqueue-loop invariant.
-    // Permits the same MeshTensor argument to be reused across multiple Program
-    // enqueues via UpdateProgramRunArgs. By default, a TensorParameter is expected to
-    // be re-specified on every enqueue.
-    //
-    // CAUTION:
-    // The user is responsible for managing the MeshTensor argument's lifetime and
-    // ensuring that it remains valid across enqueues. Undefined behavior will result
-    // if the MeshTensor goes out of scope (and its device memory is deallocated),
-    // and you try to re-enqueue the Program with the now-stale MeshTensor argument.
-    bool enqueue_invariant = false;
-
-    ////////////////////////////////////////////////////////////////////////////////
-    // TensorSpec match relaxation options
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // By default, the MeshTensor argument provided at execution time must
-    // EXACTLY match the TensorParameter's declared TensorSpec.
-    // The options here relax this match requirement in particular ways.
-    //
-    // CAUTION:
-    // These options are UNSAFE if set to true; most kernels will not function
-    // correctly if the tensor argument's spec deviates from the declared spec.
-    // Use with caution. You must ensure that your kernel logic outside of the
-    // TensorAccessor itself is compatible with the chosen relaxation option(s)!
-
-    // Permit tensor arguments whose logical_shape differs from the declared shape.
-    // The argument's padded_shape must still match exactly.
-    //
-    // Effects:
-    //  - Validation checks are relaxed
-    //  - TensorAccessor configuration is completely unchanged
-    bool match_padded_shape_only = false;
-
-    // Permit tensor arguments with dynamic logical shape.
-    // The argument's logical_shape AND padded_shape may differ from the declared shape.
-    //
-    // Effects:
-    //  - Validation checks are relaxed.
-    //  - For a sharded tensor:
-    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's actual shape.
-    //    Shape, expressed in pages-per-dim, becomes implicit common runtime arguments.
-    //  - For an interleaved TILED tensor:
-    //    TensorAccessor configuration is unchanged
-    //    (The page size is fixed by dtype/tile dims, so it cannot vary with shape).
-    //  - For an interleaved ROW-MAJOR tensor:
-    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's page size.
-    //    NOTE: page_size = last_dim_width * element_size is part of the varying shape!
-    //    The aligned_page_size becomes an implicit common runtime argument.
-    //    (Your kernel can access this value via TensorAccessor::get_aligned_page_size().)
-    bool dynamic_tensor_shape = false;
 };
 
 }  // namespace tt::tt_metal::experimental

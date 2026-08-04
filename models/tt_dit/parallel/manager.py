@@ -143,8 +143,13 @@ class CCLManager:
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
 
+            # The op's tiled intermediate is input-shaped, except on Linear topology where it holds
+            # two slices stacked on dim 0. Matching this exactly is required: reduce_scatter rejects
+            # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
+            # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            intermediate_buffer_shape = [2] + intermediate_buffer_shape
+            if self.topology == ttnn.Topology.Linear:
+                intermediate_buffer_shape[0] *= 2
             for _ in range(2):
                 # Device-native, uninitialized allocation: these scratch ping-pong
                 # buffers are fully overwritten by the reduce-scatter op, so no

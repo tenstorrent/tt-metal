@@ -70,7 +70,7 @@ struct ChunkGdnPrepProgramFactory {
 struct ChunkGdnPrepOperation {
     using operation_attributes_t = ChunkGdnPrepParams;
     using tensor_args_t = ChunkGdnPrepInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<ChunkGdnPrepProgramFactory>;
 
@@ -137,7 +137,7 @@ struct ChunkGdnScanProgramFactory {
 struct ChunkGdnScanOperation {
     using operation_attributes_t = ChunkGdnScanParams;
     using tensor_args_t = ChunkGdnScanInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<ChunkGdnScanProgramFactory>;
 

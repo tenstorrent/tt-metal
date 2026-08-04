@@ -202,7 +202,17 @@ class DistributedRMSNorm(Module):
         rope_sin=None,
         trans_mat=None,
         dtype=None,
+        dynamic_weight=None,
+        per_head_norm=False,
     ) -> ttnn.Tensor:
+        # per_head_norm selects the normalization semantics when the activation is
+        # head-split (num_heads_per_device > 1):
+        #   True  -> RMSNorm INDEPENDENTLY over each head's head_dim (per-head QK-norm, e.g.
+        #            Ideogram4). No cross-device all-gather (each head is device-local).
+        #   False -> one RMSNorm over the FULL per-device row, then reshape to heads
+        #            (WAN2.2 / LTX "norm before splitting heads").
+        # The two are NOT equivalent. Default is whole-row (False); per-head models must opt
+        # in with per_head_norm=True at the call site (e.g. the Ideogram4 QK-norm).
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
             msg = (
@@ -210,6 +220,15 @@ class DistributedRMSNorm(Module):
                 f"embedding_dim / mesh_width = {expected_dim}"
             )
             raise ValueError(msg)
+
+        # Effective affine weight: the static per-channel weight, optionally modulated by a
+        # per-sample dynamic weight (e.g. an adaLN (1 + scale) factor). Folding it in here
+        # applies the modulation inside the fused op (fp32 internals) and removes the separate
+        # elementwise scale op the caller would otherwise need. RMSNorm has no bias term.
+        weight = self.weight.data if self.weight is not None else None
+        if dynamic_weight is not None:
+            weight = dynamic_weight if weight is None else ttnn.multiply(weight, dynamic_weight)
+        weight_key = tuple(weight.shape) if weight is not None else None
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).
@@ -225,14 +244,18 @@ class DistributedRMSNorm(Module):
                 # forwarded to create_stats_buffer and affects its sizing). Guards against
                 # a shared-cache collision between two same-shape modules differing only
                 # in affine geometry.
-                ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None, self.weight is not None),
+                # per_head_norm changes the stats geometry (per-head reduces locally -> no
+                # all-gather scratch), so it MUST be part of the key and forwarded to
+                # create_stats_buffer (which returns None for the per-head/local path).
+                ("rms", tuple(x.shape), num_heads_per_device, per_head_norm, rope_cos is not None, weight_key),
                 lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,
                     num_heads_per_device=num_heads_per_device,
+                    per_head_norm=per_head_norm,
                     num_links=self.ccl_manager.num_links,
-                    weight=self.weight.data if self.weight is not None else None,
+                    weight=weight,
                     transformation_mat=trans_mat,
                     rope_cos=rope_cos,
                     rope_sin=rope_sin,
@@ -240,7 +263,8 @@ class DistributedRMSNorm(Module):
             ),
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
-            weight=self.weight.data if self.weight is not None else None,
+            per_head_norm=per_head_norm,
+            weight=weight,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             transformation_mat=trans_mat,

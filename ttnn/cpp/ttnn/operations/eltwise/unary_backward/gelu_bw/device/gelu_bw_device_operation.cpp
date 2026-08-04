@@ -137,7 +137,7 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec GeluBwDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec GeluBwDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_input_grad.has_value()) {
         return tensor_args.preallocated_input_grad->tensor_spec();
@@ -154,7 +154,7 @@ TensorSpec GeluBwDeviceOperation::compute_output_specs(
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(output_dtype, output_layout, args.output_memory_config));
+    return tt::tt_metal::TensorSpec(output_shape, TensorLayout(output_dtype, output_layout, args.output_memory_config));
 }
 
 Tensor GeluBwDeviceOperation::create_output_tensors(

@@ -19,6 +19,9 @@ ttnn::Tensor fold(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding =
         std::array<uint32_t, 2>{0, 0},
     const std::optional<CoreRangeSet>& core_grid = std::nullopt,
-    const std::optional<MemoryConfig>& override_memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& override_memory_config = std::nullopt,
+    // Quasar: input is already channels-last [N,H,W,C], so skip the on-device NCHW->NHWC transpose
+    // (which has no Quasar kernel and FATALs). When interleaved, pass core_grid for the fold shard grid.
+    bool input_is_nhwc = false);
 
 }  // namespace ttnn::operations::experimental::quasar

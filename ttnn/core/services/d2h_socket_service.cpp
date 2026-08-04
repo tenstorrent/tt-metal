@@ -358,7 +358,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         const auto& per_shard_spec = distributed_dummy.tensor_spec();
         const auto& topology = distributed_dummy.tensor_topology();
 
-        device_tensor_ = create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
+        device_tensor_ = ttnn::create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
         per_shard_spec_ = device_tensor_.tensor_spec();
 
         if (cfg_.composer_config.has_value()) {
@@ -958,7 +958,7 @@ const TensorSpec& D2HStreamService::get_per_shard_spec() const {
     return *per_shard_spec_;
 }
 
-const Tensor& D2HStreamService::get_backing_tensor() const {
+const ttnn::Tensor& D2HStreamService::get_backing_tensor() const {
     require_d2h_owner(is_owner_, "D2HStreamService::get_backing_tensor");
     return device_tensor_;
 }
@@ -1079,7 +1079,7 @@ void D2HStreamService::read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<
         cfg_.global_spec->layout() == Layout::ROW_MAJOR,
         "D2HStreamService::read_from_tensor(span): global_spec must be ROW_MAJOR");
 
-    Tensor host_tensor = (*mapper_)(make_zero_host_tensor(*cfg_.global_spec));
+    ttnn::Tensor host_tensor = (*mapper_)(make_zero_host_tensor(*cfg_.global_spec));
     read_from_tensor(host_tensor, metadata);
 
     const size_t per_shard_bytes = per_shard_spec_->compute_packed_buffer_size_bytes();
@@ -1092,7 +1092,7 @@ void D2HStreamService::read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<
     }
 
     TT_FATAL(composer_ != nullptr, "D2HStreamService::read_from_tensor: composer unavailable");
-    Tensor composed = composer_->compose(host_tensor);
+    ttnn::Tensor composed = composer_->compose(host_tensor);
 
     // View composed bytes directly; to_vector<uint8_t>() rejects non-UINT8 dtypes.
     const auto& composed_host = composed.host_storage().host_tensor();
@@ -1113,7 +1113,7 @@ void D2HStreamService::read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<
     std::memcpy(bytes.data(), composed_bytes.data(), bytes.size());
 }
 
-void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byte> metadata) {
+void D2HStreamService::read_from_tensor(ttnn::Tensor& host_tensor, ttsl::Span<std::byte> metadata) {
     TT_FATAL(
         tensor_enabled(),
         "D2HStreamService::read_from_tensor: no tensor configured; use read_metadata() in metadata-only mode");
@@ -1129,7 +1129,7 @@ void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byt
     }
 
     TT_FATAL(
-        host_tensor.storage_type() == StorageType::HOST,
+        host_tensor.storage_type() == ttnn::StorageType::HOST,
         "D2HStreamService::read_from_tensor: expected a preallocated host tensor");
 
     const auto& host_mesh_tensor = host_tensor.host_storage().host_tensor();

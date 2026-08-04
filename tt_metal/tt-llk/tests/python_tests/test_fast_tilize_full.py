@@ -302,7 +302,7 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
     #   word[0] = 0x4680 (marker), word[1..4] = corrupted count per guard tile.
     import struct
 
-    from ttexalens.tt_exalens_lib import read_from_device
+    from helpers.device_io import read_from_device
 
     stim = configuration.variant_stimuli
     last_g_addr = (

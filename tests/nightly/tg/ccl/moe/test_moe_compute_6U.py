@@ -197,8 +197,8 @@ def _expand_model_configs(
                     for act in cfg.activation_types:
                         # enable_trace innermost so a shape's trace variants run back-to-back and the
                         # second hits the _build_moe_host_data lru_cache (maxsize=1, evicted on every
-                        # new shape). The matmul ring size is auto-detected from the arch by the op
-                        # (8 on BH, 12 on WH) and is no longer a sweep dimension.
+                        # new shape). The matmul ring size is auto-detected from the live DRAM-bank count
+                        # by the op (12 on WH, 7/8 on BH) and is no longer a sweep dimension.
                         for enable_trace in trace_values_fn(cfg, test_mode):
                             bias_tag = "bias" if has_bias else "no_bias"
                             act_tag = act.name.lower()
@@ -364,8 +364,8 @@ def _run_model_test(
         num_layers = model_cfg.num_layers
         num_iterations = model_cfg.num_iterations
 
-    # Matmul ring size the op (and the weight-prep helpers) auto-detect from the arch
-    # (8 on BH, 12 on WH); used here for the ring-aware width-parallel derivation.
+    # Matmul ring size the op (and the weight-prep helpers) auto-detect from the live
+    # DRAM-bank count (12 on WH, 7/8 on BH); used here for the ring-aware width-parallel derivation.
     ring_n = effective_matmul_ring_size(mesh_device)
 
     _run_moe_compute_impl(
@@ -1596,8 +1596,8 @@ def _build_moe_host_data(
     same shape share an entry. ``maxsize=1`` keeps at most one (large) shape's artifacts
     alive: a new shape evicts the previous one.
 
-    The matmul ring size is auto-detected from the arch (8 on BH, 12 on WH) by the
-    weight-prep helpers, so it is fixed per device and not part of the cache key.
+    The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH,
+    7/8 on BH) by the weight-prep helpers, so it is fixed per device and not part of the cache key.
     """
     torch.manual_seed(2003)
     random.seed(2003)
@@ -2520,9 +2520,10 @@ def test_auto_output_width_shard_dim():
     assert auto_output_width_shard_dim(5120) == 4  # GLM-4.7: Ht=160
     assert auto_output_width_shard_dim(4096) == 4  # DS V4 Flash: Ht=128
     assert auto_output_width_shard_dim(7168) == 4  # Kimi K2.5: same as DS
-    # Ring-aware: GPT-OSS width=3 at N=12, falls back to 2 at N=8/16
+    # Ring-aware: GPT-OSS width=3 at N=12, falls back to 2 at N=8, and to 1 at N=7 (harvested BH).
     assert auto_output_width_shard_dim(2880, matmul_ring_size=12) == 3
     assert auto_output_width_shard_dim(2880, matmul_ring_size=8) == 2
+    assert auto_output_width_shard_dim(2880, matmul_ring_size=7) == 1
     assert auto_output_width_shard_dim(2880, matmul_ring_size=16) == 2
 
 

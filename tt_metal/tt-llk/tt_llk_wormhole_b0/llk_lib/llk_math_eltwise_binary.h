@@ -285,8 +285,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
                     {
                         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
                         {
-                            // HiFi: only advance dest register, src was cleared by ADDR_MOD_3
-                            TTI_INCRWC(0, MAX_FPU_ROWS, 0, 0);
+                            TTI_INCRWC(p_setrwc::CR_D, MAX_FPU_ROWS, 0, 0);
                         }
                     }
                     // LoFi: MOP handles face spacing internally via loop_op1, no runtime INCRWC needed
@@ -307,8 +306,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
                 {
                     if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
                     {
-                        // HiFi: only advance dest register, src was cleared by ADDR_MOD_3
-                        TTI_INCRWC(0, MAX_FPU_ROWS, 0, 0);
+                        TTI_INCRWC(p_setrwc::CR_D, MAX_FPU_ROWS, 0, 0);
                     }
                 }
                 // LoFi: MOP handles face spacing internally via loop_op1, no runtime INCRWC needed
@@ -404,11 +402,6 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
             tmp.set_last_inner_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_2));
             tmp.set_last_outer_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(CLR_SRC, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_3));
 
-            if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
-            {
-                // HiFi: only advance dest and carry register, src was cleared by ADDR_MOD_3
-                tmp.set_end_op(TT_OP_INCRWC(MAX_FPU_ROWS, MAX_FPU_ROWS, 0, 0));
-            }
             tmp.program();
         }
         else if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
@@ -467,14 +460,20 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::Tensor
  *
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register (halves tiles per bank and gates the zero-flag clear).
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param loop_count: Number of faces to process.
  * @param face_offset: Index of the first face within the tile.
  * @param clear_fp32_dst_acc: Clear the FP32 dest accumulator face when FP32 mode is enabled.
  * @param dst_index: Tile index into the destination register.
+ * @param face_r_dim: Face row dimension; used for HiFi partial-face dest spacing.
  */
-template <bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest>
+template <bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void eltwise_binary_run_with_dest_reuse(
-    const std::uint32_t loop_count, const std::uint32_t face_offset, const bool clear_fp32_dst_acc, const std::uint32_t dst_index)
+    const std::uint32_t loop_count,
+    const std::uint32_t face_offset,
+    const bool clear_fp32_dst_acc,
+    const std::uint32_t dst_index,
+    const std::uint32_t face_r_dim)
 {
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
 
@@ -497,6 +496,14 @@ inline void eltwise_binary_run_with_dest_reuse(
         }
 
         ckernel_template::run();
+
+        if constexpr (is_high_fidelity(math_fidelity))
+        {
+            if (face_r_dim <= MAX_FPU_ROWS)
+            {
+                TTI_INCRWC(p_setrwc::CR_D, MAX_FPU_ROWS, 0, 0);
+            }
+        }
     }
 }
 
@@ -583,14 +590,16 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
             {
                 // face_offset = face_row * num_faces_c_dim (position in face array)
                 const std::uint32_t face_offset = face_row * num_faces_c_dim;
-                eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest>(num_faces_c_dim, face_offset, clear_fp32_dst_acc, dst_index);
+                eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest, math_fidelity>(
+                    num_faces_c_dim, face_offset, clear_fp32_dst_acc, dst_index, tensor_shape.face_r_dim);
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             }
         }
         else
         {
             // NONE/ROW/SCALAR: process all faces with ZEROACC
-            eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest>(num_faces, 0 /*face_offset*/, clear_fp32_dst_acc, dst_index);
+            eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest, math_fidelity>(
+                num_faces, 0 /*face_offset*/, clear_fp32_dst_acc, dst_index, tensor_shape.face_r_dim);
 
             if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
             {

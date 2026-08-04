@@ -48,7 +48,7 @@ void ApplyDeviceDelayDeviceOperation::validate_on_program_cache_hit(
 
 ApplyDeviceDelayDeviceOperation::spec_return_value_t ApplyDeviceDelayDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return std::vector<ttnn::TensorSpec>{};
+    return std::vector<tt::tt_metal::TensorSpec>{};
 }
 
 ApplyDeviceDelayDeviceOperation::tensor_return_value_t ApplyDeviceDelayDeviceOperation::create_output_tensors(

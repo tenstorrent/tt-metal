@@ -62,8 +62,17 @@ class EagerQwenExecutor:
 class TracedQwenExecutor:
     """Traced path; same surface as ``EagerQwenExecutor``."""
 
-    def __init__(self, model: Qwen2_7B, mesh_device: ttnn.MeshDevice):
-        self._engine = TracedLLMExecutor(model, mesh_device, iter_named_modules=_iter_qwen_executor_named_modules)
+    def __init__(self, model: Qwen2_7B, mesh_device: ttnn.MeshDevice, ondevice_decode_loop: bool = False):
+        # ``ondevice_decode_loop`` (opt-in, default OFF) forwards to the shared engine's in-trace
+        # decode loop (#49284): position/rope advance + sampled-token feedback stay on device and the
+        # per-step host round-trip is pipelined. Inert unless on-device top-k sampling is active
+        # (``_decode_loop_active``); the perf path enables it, host/teacher-forcing/DP leave it OFF.
+        self._engine = TracedLLMExecutor(
+            model,
+            mesh_device,
+            iter_named_modules=_iter_qwen_executor_named_modules,
+            ondevice_decode_loop=ondevice_decode_loop,
+        )
 
     @property
     def model(self) -> Qwen2_7B:
