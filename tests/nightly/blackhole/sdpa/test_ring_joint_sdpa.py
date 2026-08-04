@@ -546,7 +546,12 @@ class RingJointSDPARuntime:
 
 
 def open_ring_joint_sdpa_runtime(
-    mesh_config, *, fp32_dest_acc_en: bool = False, trace_region_size: int = 0, topology: Topology = None
+    mesh_config,
+    *,
+    fp32_dest_acc_en: bool = False,
+    trace_region_size: int = 0,
+    topology: Topology = None,
+    reserve_llk_kernel_config: bool = True,
 ):
     use_ring = mesh_config.sp_size > 2 if topology is None else topology == Topology.Ring
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
@@ -574,7 +579,7 @@ def open_ring_joint_sdpa_runtime(
         # trace_region_size defaults to 0 (no trace region), leaving every existing caller unchanged; only
         # the trace-replay test asks for one.
         mesh_device_kwargs = {"mesh_shape": mesh_shape, "trace_region_size": trace_region_size}
-        if os.getenv("TT_METAL_LLK_ASSERTS"):
+        if reserve_llk_kernel_config and os.getenv("TT_METAL_LLK_ASSERTS"):
             mesh_device_kwargs["worker_l1_size"] = LLK_ASSERT_WORKER_L1_SIZE
         mesh_device = ttnn.open_mesh_device(**mesh_device_kwargs)
 
@@ -1621,6 +1626,7 @@ def run_ring_joint_sdpa_chunked(
     sliding_window_size: int = None,
     use_attention_sink: bool = False,
     runtime: RingJointSDPARuntime = None,
+    reserve_llk_kernel_config: bool = True,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1705,7 +1711,11 @@ def run_ring_joint_sdpa_chunked(
 
     owns_runtime = runtime is None
     if runtime is None:
-        runtime = open_ring_joint_sdpa_runtime(mesh_config, fp32_dest_acc_en=fp32_dest_acc_en)
+        runtime = open_ring_joint_sdpa_runtime(
+            mesh_config,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            reserve_llk_kernel_config=reserve_llk_kernel_config,
+        )
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -5324,6 +5334,7 @@ def test_ring_mla_chunked_accuracy(model_name, qk_configs, chunk_size):
         qk_configs=qk_configs,
         persistent_buffer_mode="reuse_max",
         use_ring_mla=True,
+        reserve_llk_kernel_config=False,
     )
 
 
@@ -5416,6 +5427,7 @@ def test_ring_mla_chunked_determinism(model_name, qk_configs, chunk_size):
         qk_configs=qk_configs,
         num_iterations=3,
         use_ring_mla=True,
+        reserve_llk_kernel_config=False,
     )
 
 
