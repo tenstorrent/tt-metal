@@ -33,9 +33,19 @@ using Strides = std::vector<size_t>;
 // shape) And provides information required to physically lay out the tensor in memory
 class TensorLayout {
 public:
-    // The Alignment is derived from page_config, dtype and memory_config; it is not a parameter.
-    // Overriding it is outside this API, see experimental/tensor_layout_apis_with_custom_alignment.hpp.
+    // Constructs a layout with alignment derived from the page config, data type, and memory config.
     TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
+
+    // Constructs a layout with caller-supplied alignment.
+    [[deprecated(
+        "Use experimental::tensor_layout_with_custom_alignment instead. "
+        "This API will be removed after 2026-12-01.")]]
+    TensorLayout(
+        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
+
+    // Wraps an already-built TensorLayoutImpl. Used by experimental custom-alignment factories
+    // that construct TensorLayoutImpl with a caller-supplied Alignment.
+    explicit TensorLayout(std::unique_ptr<TensorLayoutImpl> impl);
 
     ~TensorLayout();
     TensorLayout(const TensorLayout& other);

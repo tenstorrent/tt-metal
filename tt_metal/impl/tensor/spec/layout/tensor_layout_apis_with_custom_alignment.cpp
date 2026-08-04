@@ -114,9 +114,7 @@ Alignment legacyShapeToAlignment(
 
 TensorLayout tensor_layout_with_custom_alignment(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) {
-    TensorLayout result(dtype, page_config, memory_config);
-    result.impl().set_custom_alignment(alignment);
-    return result;
+    return TensorLayout(std::make_unique<TensorLayoutImpl>(dtype, page_config, memory_config, alignment));
 }
 
 TensorLayout tensor_layout_from_padded_shape(

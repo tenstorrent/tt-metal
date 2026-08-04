@@ -131,7 +131,7 @@ TEST(HostTensorToDtype, NonBfpPreservesMetadata) {
 
     auto source_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
@@ -139,7 +139,7 @@ TEST(HostTensorToDtype, NonBfpPreservesMetadata) {
 
     auto expected_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT16, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
@@ -157,7 +157,7 @@ TEST(HostTensorToDtype, TileBfp8ToFloat32ValueCheck) {
 
     auto source_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(packed, source_spec);
 
@@ -165,7 +165,7 @@ TEST(HostTensorToDtype, TileBfp8ToFloat32ValueCheck) {
 
     auto expected_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::FLOAT32);
@@ -184,7 +184,7 @@ TEST(HostTensorToDtype, Float32ToTileBfp8ValueCheck) {
 
     auto source_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, source_spec);
 
@@ -192,7 +192,7 @@ TEST(HostTensorToDtype, Float32ToTileBfp8ValueCheck) {
 
     auto expected_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT8_B);
@@ -211,7 +211,7 @@ TEST(HostTensorToDtype, TileBfp4ToFloat32ValueCheck) {
 
     auto source_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(packed, source_spec);
 
@@ -219,7 +219,7 @@ TEST(HostTensorToDtype, TileBfp4ToFloat32ValueCheck) {
 
     auto expected_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::FLOAT32);
@@ -238,7 +238,7 @@ TEST(HostTensorToDtype, Float32ToTileBfp4ValueCheck) {
 
     auto source_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, source_spec);
 
@@ -246,7 +246,7 @@ TEST(HostTensorToDtype, Float32ToTileBfp4ValueCheck) {
 
     auto expected_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT4_B);
@@ -327,7 +327,7 @@ TEST(HostTensorToDtype, PerCoreAllocationPreserved) {
 
     auto source_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
@@ -335,7 +335,7 @@ TEST(HostTensorToDtype, PerCoreAllocationPreserved) {
 
     auto expected_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT16, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
@@ -396,7 +396,7 @@ TEST(HostTensorToDtype, RowMajorToBfpPhysicalMismatchThrows) {
 
     auto source_spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
