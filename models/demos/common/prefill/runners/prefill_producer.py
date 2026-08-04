@@ -998,6 +998,7 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
 # runner's shutdown sentinel until the mesh/DRAM is safe to tear down.
 # ---------------------------------------------------------------------------
 
+
 def _mr_config():
     """(rank, world_size). Under an MPI launcher (OMPI_COMM_WORLD_SIZE > 1) initialize the distributed
     context and take rank/size from it. Standalone (the single-rank de-risk, no mpirun) skips MPI
