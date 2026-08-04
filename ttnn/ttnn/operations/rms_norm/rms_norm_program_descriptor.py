@@ -17,6 +17,9 @@ Knob map (all tunable parameters, none inlined):
                             cross-processor CBs (see D4)
     GRID_W                  cores along `width` (Lamp L1 lives at its trivial 1)
     REDUCE_BULK             reduce input policy (BulkWaitBulkPop vs per-tile)
+    CB_ROW_STAT_DEPTH       ring depth of cb_row_stat, in units of BLOCK_ROWS.
+                            NOT a perf knob -- >= 2 is a CORRECTNESS floor for
+                            the partial final row-block (see D6)
 
   derived buffer depths
     CB_X_DEPTH / CB_OUT_DEPTH   the depth the regime search settled on; forced
@@ -87,6 +90,60 @@ the scheme, topology, work split and helper mapping are unchanged):
       depth 2 -- strictly better than this trade -- and Lamp L1 (cross-core
       width split) gives the core many blocks again so depth 1 would no longer
       serialize.  Recorded as a follow-up, not a finished win.
+  D5  Refinement 1 (precision surface) needed NO new format machinery: every CB
+      already declares `data_format` = the dtype of the tensor it carries and
+      `page_size` = ttnn.tile_size() of that same dtype, so bfloat8_b rides the
+      existing path.  Per-CB roles, unchanged:
+        cb_input_{sticks,tiles} / cb_x_squared / cb_normalized   input dtype
+        cb_output_{tiles,sticks}                                 output dtype
+        cb_gamma_{sticks,tiles}                                  GAMMA dtype
+        cb_scaler                                                bfloat16 (1.0)
+        cb_row_stat                                              float32, ALWAYS
+      cb_row_stat stays fp32 in BOTH fp32_dest_acc_en modes: it is the
+      cross-chunk accumulator that reduce()'s Accumulate::at reloads, so an
+      fp32 CB keeps the STREAM reload lossless even when DEST itself is bf16.
+      Demoting it to the input dtype would erase exactly the precision this op
+      cares about (op_requirements.md Refinement 1, lever 1).
+
+      Two consequences worth spelling out, both DELIBERATE non-changes:
+        * `unpack_to_dest_mode` is left entirely at Default -- NO CB qualifies
+          for UnpackToDestMode::UnpackToDestFp32.  The only fp32 CB is
+          cb_row_stat, and while its reduce reload (AccumulateReloadMode::
+          CopySeedPairs, the default) and the transform_in_place finalize are
+          both copy_tile-into-DEST and would be compatible, pass B consumes it
+          as operand B of an FPU broadcast multiply (mul<BroadcastDim::Col>).
+          An UnpackToDestFp32 CB may never be an FPU operand
+          (reduce_helpers_compute.inl:127-137) -- tagging it would corrupt
+          silently.  Tagging cb_input_sticks is separately forbidden by
+          tilize's Fp32Mode::Fast static_assert (op_design.md R16).
+        * `Tensor.element_size()` is NOT defined for a block-float dtype, so the
+          ROW_MAJOR stick byte math goes through _stick_elem_bytes(); see its
+          docstring for why 0 is correct there rather than a fudge.
+  D6  cb_row_stat is CB_ROW_STAT_DEPTH (= 2) * BLOCK_ROWS pages, not BLOCK_ROWS.
+      This is a CORRECTNESS requirement, found by the resilience loose cases that
+      Refinement 1 made reachable -- it is NOT a perf/overlap depth.
+
+      transform_in_place ROTATES its CB: it pops one page then reserves one page
+      (streaming_reduce_helpers.inl:88-95), so running it `rows` times advances
+      cb_row_stat's front by `rows`.  With a ring of exactly BLOCK_ROWS that is
+      harmless while rows == BLOCK_ROWS (the advance is a whole revolution, so
+      the finalized block lands back on pages 0..BLOCK_ROWS-1, contiguous), but
+      the LAST row-block of a core is PARTIAL whenever BLOCK_ROWS does not
+      divide its assignment.  Then the advance is `rows mod BLOCK_ROWS != 0`, the
+      finalized tiles STRADDLE the ring wrap, and pass B's
+      `mul<..., OperandKind::Col>` -- a bulk cb_wait_front(rows) plus LINEAR tile
+      indexing off the read pointer -- reads past the end of the ring for every
+      index after the wrap.  Symptom: the 2nd..last row of each partial block is
+      garbage while every full block is correct; catastrophic (PCC 0.55-0.93),
+      not a precision drift, and invisible to Phase 0 because every Phase-0
+      golden cell had Rt <= 64 < the 110-core grid, hence BLOCK_ROWS == 1.
+
+      Doubling the ring restores contiguity for ANY rows <= BLOCK_ROWS: a block
+      starts with front == 0 (a full block pushes B, rotates B, pops B == 2B == 0
+      mod 2B), the rotation leaves the finalized tiles on pages
+      [rows, 2*rows) which is within the ring since 2*rows <= 2*BLOCK_ROWS.
+      Both L1 solves count this depth through CB_ROW_STAT_DEPTH -- one source of
+      truth, so raising it cannot drift from the budget.
 """
 
 from __future__ import annotations
@@ -130,6 +187,10 @@ GRID_W = 1
 # reduce() input policy knob: 1 = BulkWaitBulkPop (bulk wait/indexed/bulk pop),
 # 0 = WaitAndPopPerTile.  Bulk is the coarse default (op_design.md section 1.4).
 REDUCE_BULK = 1
+
+# Ring depth of cb_row_stat, in units of BLOCK_ROWS.  MUST be >= 2 -- this is a
+# correctness constant, not a perf knob.  See D6.
+CB_ROW_STAT_DEPTH = 2
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +236,31 @@ def _cb_block_mult(depth_x: int, depth_out: int, has_gamma: bool) -> int:
 
 def _f32_bits(v: float) -> int:
     return struct.unpack("I", struct.pack("f", float(v)))[0]
+
+
+# Block-float dtypes: 16 data values share one 8-bit exponent, so there is no
+# such thing as "bytes per element" for them.
+BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def _stick_elem_bytes(tensor) -> int:
+    """Bytes per element, for the ROW_MAJOR stick byte math ONLY (D5).
+
+    `Tensor.element_size()` raises "datum for bfp2, bfp4, bfp8 is invalid" on a
+    block-float dtype, and rightly so.  The number is only ever consumed by the
+    ROW_MAJOR stick path (CHUNK_ROW_BYTES in the reader / writer), and a
+    block-float tensor cannot be ROW_MAJOR -- it has no sticks, only exponent
+    blocks -- so the CT arg is dead on exactly the dtypes that cannot answer.
+    Report 0 there rather than teaching every caller the special case.
+    """
+    if tensor is None:
+        return 0
+    if tensor.dtype in BLOCK_FLOAT_DTYPES:
+        assert tensor.layout == ttnn.TILE_LAYOUT, (
+            f"rms_norm: {tensor.dtype} is a block-float format and cannot be ROW_MAJOR " f"(got layout {tensor.layout})"
+        )
+        return 0
+    return tensor.element_size()
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +339,8 @@ def create_program_descriptor(
         R_rm = _prod(shape[:-1])
         Rt = _div_up(R_rm, TILE_DIM)
 
-    elem_bytes = input_tensor.element_size()
-    gamma_elem_bytes = gamma.element_size() if has_gamma else 0
+    elem_bytes = _stick_elem_bytes(input_tensor)
+    gamma_elem_bytes = _stick_elem_bytes(gamma) if has_gamma else 0
 
     # ---- L1 byte budget (derived from the device, never a literal) --------
     l1_budget = int(ttnn.get_max_worker_l1_unreserved_size() * L1_SAFETY_FRACTION)
@@ -286,7 +372,8 @@ def create_program_descriptor(
             + (2 * CB_RM_STAGE_DEPTH * Wt * bt if not is_tile else 0)  # stick staging
             + scaler_bytes
         )
-        per_tilerow = Wt * bt * mult + ft  # + one cb_row_stat page
+        # + cb_row_stat's pages per tile-row (CB_ROW_STAT_DEPTH of them -- D6)
+        per_tilerow = Wt * bt * mult + CB_ROW_STAT_DEPTH * ft
         return max(0, (l1_budget - fixed) // per_tilerow), mult
 
     # ---- cross-core split of the independent `row` axis: SIZE and COUNT ----
@@ -336,7 +423,7 @@ def create_program_descriptor(
             + (gt * (2 if gamma_is_rm else 1) if has_gamma else 0)
             + (2 * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)  # D2
         )
-        fixed_stream = scaler_bytes + ft
+        fixed_stream = scaler_bytes + CB_ROW_STAT_DEPTH * ft  # block_rows == 1 here
         wt_chunk_l1_max = max(1, (l1_budget - fixed_stream) // per_chunk_tile_bytes)
         wt_chunk = _largest_divisor_at_most(Wt, wt_chunk_l1_max)  # D1
         num_w_chunks = Wt // wt_chunk
@@ -371,7 +458,9 @@ def create_program_descriptor(
     cbs.append(_cb(CB_INPUT_TILES, bt, cb_x_depth * block_rows * wt_chunk, input_tensor.dtype, all_cores))
     cbs.append(_cb(CB_X_SQUARED, bt, block_rows * wt_chunk, input_tensor.dtype, all_cores))
     cbs.append(_cb(CB_SCALER, st, scaler_pages, ttnn.bfloat16, all_cores))
-    cbs.append(_cb(CB_ROW_STAT, ft, block_rows, ttnn.float32, all_cores))
+    # D6: CB_ROW_STAT_DEPTH * block_rows, so transform_in_place's rotation leaves
+    # a PARTIAL final block's stat tiles contiguous for pass B's indexed read.
+    cbs.append(_cb(CB_ROW_STAT, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
     if has_gamma:
         if gamma_is_rm:
             cbs.append(_cb(CB_GAMMA_STICKS, gt, wt_chunk, gamma.dtype, all_cores))

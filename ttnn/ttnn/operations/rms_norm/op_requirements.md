@@ -60,7 +60,7 @@
 
 ---
 
-### [ ] Refinement 1 — Numerical configurability expansion (dtype + DEST/fidelity surface)
+### [~] Refinement 1 — Numerical configurability expansion (dtype + DEST/fidelity surface)
 
 **Goal**: complete the precision surface in one pass.
 1. add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and to `SUPPORTED["gamma_dtype"]`
@@ -105,6 +105,76 @@
   alignment: *_non_aligned}` to fail (a bf8b gamma shares one exponent per block, so pad
   lanes perturb real weights) and park it in `EXCLUSIONS` with a pointer to
   `op_design.md` §9.2, which proposes the matching INVALID entries.
+
+**Outcome** (`[~]` partial): both named axis values LANDED and are confirmed live —
+`SUPPORTED["dtype"]` and `SUPPORTED["gamma_dtype"]` gained `bfloat8_b`,
+`SUPPORTED["fp32_dest_acc_en"]` gained `False`, `{float32, False}` stays the sole
+EXCLUSION. Golden **1660 / 1670** (Phase 0: 737 / 737), `xpass_drift = 0`, no regression.
+Zero new EXCLUSIONS: the `{gamma_dtype: bfloat8_b, alignment: *_non_aligned}` corner
+§9.2 predicted would fail is **clean** (PCC 0.99997) — gamma's tile padding is zero, and a
+zero never raises a block-float block's shared exponent, so the straddling block's real
+weights are untouched. Two findings:
+* **A latent pre-existing bug, now fixed (descriptor D6).** 11 cells failed
+  *catastrophically* (PCC 0.55–0.99), identically at `fp32_dest_acc_en=True` — so not this
+  axis. `transform_in_place` *rotates* its CB (pop 1 / push 1), so with `cb_row_stat` sized
+  exactly `BLOCK_ROWS` a **partial** final row-block leaves the finalized stats straddling
+  the ring wrap, and pass B's `OperandKind::Col` bulk-indexed read runs off the end. Every
+  Phase-0 golden cell had `Rt ≤ 64 <` the 110-core grid ⇒ `BLOCK_ROWS == 1` ⇒ no partial
+  block ever existed, which is why Phase 0 could not see it; the resilience loose cases
+  this refinement unlocked reach it. Fixed by `CB_ROW_STAT_DEPTH = 2`, counted through both
+  L1 solves.
+* **The remaining 10 failures are the wide-`W` bf16-DEST reduce**, and they are
+  Refinement 1b's target (below), NOT excluded. All are `severity=precision`,
+  `W ≥ 5120`, `fp32_dest_acc_en=False`: PCC 0.99993–0.99996 (so the perf cases' soft
+  `pcc_threshold = 0.9995` **holds** — it is the `rms ≤ 0.04` component of
+  `TOLERANCES[bfloat16]` that misses, at 0.041–0.127). Diagnosed to the exact datapath, not
+  guessed: DEVICE_PRINT on `cb_row_stat` shows the *reduce output* wrong (`7904` vs a true
+  `7033`, +12.4 %) while the finalize is exact, and the error is **bit-invariant** across
+  `NUM_W_CHUNKS` 4 → 112, across `REDUCE_BULK` ∈ {1,0} and across all four
+  `math_fidelity` values. So it is not the cross-chunk `Accumulate::at` reload (verifier
+  lever 2 — **measured null**) but the FPU matmul reduce's *within-tile* 32-column sum
+  accumulating all-positive addends into a 16-bit DEST, which chunking cannot reach.
+
+---
+
+### [ ] Refinement 1b — wide-`W` reduce precision under `fp32_dest_acc_en=False`
+
+**Goal**: close the 10 `severity=precision` cells Refinement 1 left failing — every
+`fp32_dest_acc_en=False` loose case with `W ≥ 5120`
+(`(1,1,32,{5120,7168})`, `(1,1,8192,{5120,7168})`, `(1,1,96,6144)`,
+`(1,1,160,11008)`, `(1,224,11008)`, both gamma layouts). They must reach
+`rms ≤ 0.04` at `TOLERANCES[bfloat16]` without regressing the 1660 cells that pass now.
+No SUPPORTED change — the axis value is already in; this closes its wide-`W` corner.
+
+**The exact next lever** (do not re-litigate the three already measured null — chunk count,
+`REDUCE_BULK`, `math_fidelity`): **`ReduceAlgorithm::AccumulateViaAdd`**. It replaces the
+FPU matmul-vs-scaler reduce with pairwise `add_tiles` plus an **SFPU** within-tile finalize
+(`sfpu_reduce` SUM), which is precisely the step that currently accumulates 32 all-positive
+addends into a 16-bit DEST. `reduce<>` exposes it as the `algorithm` template parameter,
+but **`accumulate_reduce_block<>` does not forward that slot** (its template list is
+pool / rdim / cb_in / cb_scaler / cb_acc / in_policy / reconfig_mode / PostOp) — the same
+class of gap as deviation **D3**, so step one is widening the wrapper in
+`streaming_reduce_helpers.hpp`, not rewriting the kernel.
+
+**Verifier notes**:
+* This is the *same* lever as Refinement 4's item (a), which independently measures
+  **2.87–2.94×** on `REDUCE_ROW` at `Wt ≥ 4` — so it is a precision fix and a perf win in
+  one change. Whichever refinement runs first should land it; the other then only verifies.
+* It is a **coupled** change, not a one-word swap: `AccumulateViaAdd` restricts
+  `Accumulate` to SUM + `BulkWaitBulkPop` and swaps the partial-`W` mechanism from a scaler
+  tile to a 0/1 **mask** tile (`prepare_reduce_mask` in place of
+  `prepare_partial_reduce_scalers`). Re-run the poisoned-padding cells specifically — the
+  acceptance set plus the 24 pad-poison loose cells are the only tests that can catch a
+  masked-reduce regression, and a padding leak on a wide row is a near-uniform scale error
+  PCC is largely blind to (`test_rms_norm_precision_baseline.py`'s ratio-spread assertion is
+  the second net).
+* Do **not** reach for `ReduceFp32Mode::Accurate` first: it routes **Float32** SUM through
+  the SFPU, and these cells are `bfloat16` activations, so it does not apply.
+* Confirmation harness already in the tree: `test_rms_norm_precision_baseline.py` carries
+  the `dtype × fp32_dest_acc_en` matrix, and
+  `tests/ttnn/unit_tests/operations/rms_norm/probes/` holds the chunk-count / `REDUCE_BULK` /
+  fidelity sweeps that established the nulls — re-run them to prove the lever moves what
+  those could not.
 
 ---
 

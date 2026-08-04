@@ -96,14 +96,18 @@ INPUT_TAGGERS = {
 # is ALWAYS legal (see eval/prompts/rms_norm.txt).
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    # Phase 0 is the maxed-out precision corner only.
-    "fp32_dest_acc_en": [True],
+    # Refinement 1: the full float precision surface.  Every CB's data_format is
+    # derived from the dtype of the tensor it carries (activation / gamma /
+    # output) in rms_norm_program_descriptor.py, so block-float rides the same
+    # path as bf16 -- see that file's D5 note.
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    # Both DEST accumulation modes.  {float32, False} stays an EXCLUSION below.
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     # Sharded placements are Lamps L3/L4 (op_design.md section 5.3).
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
@@ -123,6 +127,19 @@ SUPPORTED = {
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
 ]
+
+# Refinement 1 added NO exclusions.  Two corners were expected to need one and
+# both were measured clean, so claiming them would have under-reported support:
+#
+#  * {gamma_dtype: bfloat8_b, alignment: *_non_aligned} -- op_design.md 9.2
+#    predicted a bf8b gamma would be perturbed on a non-tile-aligned W, since 16
+#    weights share one exponent and the straddling block mixes pad lanes with
+#    real weights.  It does not: gamma's tile padding is ZERO, and a zero never
+#    raises a block's shared exponent, so the real weights in that block are
+#    untouched.  Measured PCC 0.99997 / rel RMS 0.008 on (1,1,32,72) and
+#    (1,1,50,128); pinned by test_rms_norm_precision_mixed_gamma_dtype.
+#  * {dtype: bfloat8_b, ...} generally -- every CB already derives its format
+#    from the dtype of the tensor it carries, so block-float needed no new path.
 
 
 # ---------------------------------------------------------------------------
