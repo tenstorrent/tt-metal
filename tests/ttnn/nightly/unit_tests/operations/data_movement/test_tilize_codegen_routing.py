@@ -28,12 +28,6 @@ def _make_input(shape, dtype):
 
 _DEMOTED = [
     (
-        [1, 32, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
         [1, 4, 96, 32],
         {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
         ttnn.bfloat16,
@@ -71,7 +65,6 @@ _DEMOTED = [
     ),
 ]
 _DEMOTED_IDS = [
-    "[1, 32, 64]|memory_config=dram|uint16|row_major",
     "[1, 4, 96, 32]|memory_config=dram|bfloat16|row_major",
     "[1, 4, 96, 32]|memory_config=l1|bfloat16|row_major",
     "[2, 1, 96, 32]|memory_config=dram|int32|row_major",
