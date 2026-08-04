@@ -28,6 +28,7 @@ using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;
+using tt::tt_metal::Program;
 
 class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixture> {};
 
@@ -35,6 +36,20 @@ namespace {
 
 CoreRangeSet make_grid(uint32_t gc, uint32_t gr) {
     return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(gc - 1, gr - 1)));
+}
+
+CoreRangeSet make_grid(CoreCoord origin, uint32_t gc, uint32_t gr) {
+    return CoreRangeSet(CoreRange(origin, CoreCoord(origin.x + gc - 1, origin.y + gr - 1)));
+}
+
+std::vector<uint32_t> expected_bbox(tt::tt_metal::IDevice* dev, const std::vector<CoreCoord>& logical_cores, NOC noc) {
+    std::vector<std::pair<uint32_t, uint32_t>> virtual_cores;
+    virtual_cores.reserve(logical_cores.size());
+    for (const auto& core : logical_cores) {
+        const auto worker = dev->worker_core_from_logical_core(core);
+        virtual_cores.emplace_back(static_cast<uint32_t>(worker.x), static_cast<uint32_t>(worker.y));
+    }
+    return detail::noc_ordered_bbox(noc, virtual_cores);
 }
 
 }  // namespace
@@ -164,6 +179,136 @@ TEST_F(McastHostFixture, PerColumnDegenerateSingleRow) {
         EXPECT_TRUE(mc.is_sender(CoreCoord(X, 0)));
         EXPECT_EQ(mc.runtime_args(CoreCoord(X, 0)), (std::vector<uint32_t>{0, 0, 0, 0})) << "col " << X;
     }
+}
+
+TEST_F(McastHostFixture, OffsetPerRowUniformNoc0) {
+    auto* dev = device_;
+    const CoreCoord origin(2, 3);
+    const auto grid = make_grid(origin, /*gc=*/4, /*gr=*/3);
+    McastConfig cfg;
+    cfg.base_sem_id = 5;
+    Mcast1D mc(dev, grid, Mcast1DShape::PerRow, /*starting_sender_index=*/1, cfg);
+
+    const auto semaphores = mc.owned_semaphores();
+    ASSERT_EQ(semaphores.size(), 2u);
+    EXPECT_EQ(semaphores[0].id, 5u);
+    EXPECT_EQ(semaphores[1].id, 6u);
+    EXPECT_EQ(semaphores[0].core_ranges, grid);
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 5, 6, 3, 1}));
+
+    EXPECT_TRUE(mc.is_sender(CoreCoord(3, 4)));
+    EXPECT_FALSE(mc.is_sender(CoreCoord(2, 4)));
+    EXPECT_EQ(mc.num_receivers(CoreCoord(3, 4)), 3u);
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(3, 4)),
+        expected_bbox(dev, {CoreCoord(2, 4), CoreCoord(3, 4), CoreCoord(4, 4), CoreCoord(5, 4)}, NOC::NOC_0));
+    const auto sender = dev->worker_core_from_logical_core(CoreCoord(3, 4));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(5, 4)),
+        (std::vector<uint32_t>{static_cast<uint32_t>(sender.x), static_cast<uint32_t>(sender.y), 0, 0}));
+}
+
+TEST_F(McastHostFixture, OffsetPerRowDiagonalNoc1) {
+    auto* dev = device_;
+    const auto grid = make_grid(CoreCoord(2, 3), /*gc=*/4, /*gr=*/3);
+    McastConfig cfg;
+    cfg.noc = NOC::NOC_1;
+    Mcast1D mc(
+        dev,
+        grid,
+        Mcast1DShape::PerRow,
+        /*starting_sender_index=*/1,
+        cfg,
+        Mcast1DSenderPlacement::Diagonal);
+
+    EXPECT_TRUE(mc.is_sender(CoreCoord(3, 3)));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(4, 4)));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(5, 5)));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(5, 5)),
+        expected_bbox(dev, {CoreCoord(2, 5), CoreCoord(3, 5), CoreCoord(4, 5)}, NOC::NOC_1));
+    const auto sender = dev->worker_core_from_logical_core(CoreCoord(4, 4));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(2, 4)),
+        (std::vector<uint32_t>{static_cast<uint32_t>(sender.x), static_cast<uint32_t>(sender.y), 0, 0}));
+}
+
+TEST_F(McastHostFixture, OffsetPerColumnUniformNoc0) {
+    auto* dev = device_;
+    const CoreCoord origin(3, 2);
+    const auto grid = make_grid(origin, /*gc=*/3, /*gr=*/4);
+    McastConfig cfg;
+    cfg.base_sem_id = 7;
+    Mcast1D mc(dev, grid, Mcast1DShape::PerColumn, /*starting_sender_index=*/1, cfg);
+
+    const auto semaphores = mc.owned_semaphores();
+    ASSERT_EQ(semaphores.size(), 2u);
+    EXPECT_EQ(semaphores[0].id, 7u);
+    EXPECT_EQ(semaphores[1].id, 8u);
+    EXPECT_EQ(semaphores[1].core_ranges, grid);
+    EXPECT_TRUE(mc.is_sender(CoreCoord(4, 3)));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(4, 3)),
+        expected_bbox(dev, {CoreCoord(4, 2), CoreCoord(4, 3), CoreCoord(4, 4), CoreCoord(4, 5)}, NOC::NOC_0));
+    const auto sender = dev->worker_core_from_logical_core(CoreCoord(4, 3));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(4, 5)),
+        (std::vector<uint32_t>{static_cast<uint32_t>(sender.x), static_cast<uint32_t>(sender.y), 0, 0}));
+}
+
+TEST_F(McastHostFixture, OffsetPerColumnDiagonalNoc1) {
+    auto* dev = device_;
+    const auto grid = make_grid(CoreCoord(3, 2), /*gc=*/3, /*gr=*/4);
+    McastConfig cfg;
+    cfg.noc = NOC::NOC_1;
+    Mcast1D mc(
+        dev,
+        grid,
+        Mcast1DShape::PerColumn,
+        /*starting_sender_index=*/1,
+        cfg,
+        Mcast1DSenderPlacement::Diagonal);
+
+    EXPECT_TRUE(mc.is_sender(CoreCoord(3, 3)));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(4, 4)));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(5, 5)));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(5, 5)),
+        expected_bbox(dev, {CoreCoord(5, 2), CoreCoord(5, 3), CoreCoord(5, 4)}, NOC::NOC_1));
+    const auto sender = dev->worker_core_from_logical_core(CoreCoord(4, 4));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(4, 2)),
+        (std::vector<uint32_t>{static_cast<uint32_t>(sender.x), static_cast<uint32_t>(sender.y), 0, 0}));
+}
+
+TEST_F(McastHostFixture, OffsetDegenerateLines) {
+    auto* dev = device_;
+    const auto row_grid = make_grid(CoreCoord(5, 4), /*gc=*/1, /*gr=*/3);
+    const auto column_grid = make_grid(CoreCoord(4, 5), /*gc=*/3, /*gr=*/1);
+    McastConfig cfg;
+    cfg.noc = NOC::NOC_1;
+    Mcast1D per_row(dev, row_grid, Mcast1DShape::PerRow, 0, cfg);
+    Mcast1D per_column(dev, column_grid, Mcast1DShape::PerColumn, 0, cfg);
+
+    EXPECT_FALSE(per_row.active());
+    EXPECT_TRUE(per_row.is_sender(CoreCoord(5, 6)));
+    EXPECT_EQ(per_row.runtime_args(CoreCoord(5, 6)), (std::vector<uint32_t>{0, 0, 0, 0}));
+    EXPECT_EQ(per_row.owned_semaphores()[0].core_ranges, row_grid);
+    EXPECT_FALSE(per_column.active());
+    EXPECT_TRUE(per_column.is_sender(CoreCoord(6, 5)));
+    EXPECT_EQ(per_column.runtime_args(CoreCoord(6, 5)), (std::vector<uint32_t>{0, 0, 0, 0}));
+    EXPECT_EQ(per_column.owned_semaphores()[0].core_ranges, column_grid);
+}
+
+TEST_F(McastHostFixture, LegacyProgramSemaphoreBridgeUsesDeclaredOrder) {
+    auto* dev = device_;
+    McastConfig cfg;
+    Mcast1D mc(dev, make_grid(/*gc=*/2, /*gr=*/2), Mcast1DShape::PerRow, 0, cfg);
+    auto descriptors = mc.owned_semaphores();
+    std::reverse(descriptors.begin(), descriptors.end());
+
+    Program program;
+    EXPECT_NO_THROW(create_owned_semaphores(program, descriptors));
 }
 
 // =============================================================================

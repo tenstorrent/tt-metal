@@ -53,6 +53,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>         // tt::tt_metal::NOC
 #include <tt-metalium/program_descriptors.hpp>  // tt::tt_metal::SemaphoreDescriptor
 #include <tt_stl/assert.hpp>
@@ -101,6 +102,27 @@ struct McastConfig {
     // When set, semaphores() returns {} (the factory owns creation).
     std::optional<std::vector<uint32_t>> sem_ids = std::nullopt;
 };
+
+// Materialize helper-owned descriptors in a legacy Program. Program semaphore IDs are allocated
+// sequentially, so sort by the declared ID and fail immediately if surrounding factory allocations
+// do not line up with the helper's base_sem_id. Descriptor factories can append the same vector
+// directly to ProgramDescriptor::semaphores.
+inline void create_owned_semaphores(
+    tt::tt_metal::Program& program, std::vector<tt::tt_metal::SemaphoreDescriptor> descriptors) {
+    std::sort(descriptors.begin(), descriptors.end(), [](const auto& lhs, const auto& rhs) { return lhs.id < rhs.id; });
+    for (const auto& descriptor : descriptors) {
+        TT_FATAL(
+            descriptor.core_type == tt::CoreType::WORKER,
+            "mcast helper legacy Program bridge only supports WORKER semaphores");
+        const uint32_t created_id =
+            tt::tt_metal::CreateSemaphore(program, descriptor.core_ranges, descriptor.initial_value);
+        TT_FATAL(
+            created_id == descriptor.id,
+            "mcast helper declared semaphore id {} but legacy Program allocated id {}",
+            descriptor.id,
+            created_id);
+    }
+}
 
 // Shared coord math, used by both Mcast1D and Mcast2D.
 namespace detail {
@@ -169,15 +191,18 @@ public:
         cfg_(cfg) {
         TT_FATAL(device_ != nullptr, "Mcast1D: device must not be null");
 
-        // Grid extent. The grid must be a single 0-anchored rectangle.
+        // Grid extent. Preserve the logical origin so every line calculation remains relative to
+        // the supplied rectangle rather than assuming the device's (0,0).
         const auto bb = grid.bounding_box();
         TT_FATAL(
-            bb.start_coord.x == 0 && bb.start_coord.y == 0,
-            "Mcast1D: grid must be anchored at (0,0) (got start ({},{}))",
-            bb.start_coord.x,
-            bb.start_coord.y);
-        GC_ = static_cast<uint32_t>(bb.end_coord.x) + 1;  // columns
-        GR_ = static_cast<uint32_t>(bb.end_coord.y) + 1;  // rows
+            grid.num_cores() == bb.size(),
+            "Mcast1D: grid must be one dense rectangle (bounding box has {} cores, set has {})",
+            bb.size(),
+            grid.num_cores());
+        origin_x_ = static_cast<uint32_t>(bb.start_coord.x);
+        origin_y_ = static_cast<uint32_t>(bb.start_coord.y);
+        GC_ = static_cast<uint32_t>(bb.end_coord.x - bb.start_coord.x) + 1;  // columns
+        GR_ = static_cast<uint32_t>(bb.end_coord.y - bb.start_coord.y) + 1;  // rows
 
         // The broadcast extent along the mcast axis; >1 => the family actually multicasts.
         span_ = (shape_ == Mcast1DShape::PerRow) ? GC_ : GR_;
@@ -287,8 +312,8 @@ public:
             return active_;
         }
         const uint32_t sender_index = sender_index_for_(core);
-        return (shape_ == Mcast1DShape::PerRow) ? (static_cast<uint32_t>(core.x) == sender_index)
-                                                : (static_cast<uint32_t>(core.y) == sender_index);
+        return (shape_ == Mcast1DShape::PerRow) ? (static_cast<uint32_t>(core.x) == origin_x_ + sender_index)
+                                                : (static_cast<uint32_t>(core.y) == origin_y_ + sender_index);
     }
 
     // Number of receiver cores a broadcast lands on (0 for a non-sender or a degenerate sender).
@@ -333,13 +358,14 @@ private:
     // The sender core a given receiver listens to (FIXED mode).
     tt::tt_metal::CoreCoord sender_of_(const tt::tt_metal::CoreCoord& core) const {
         const uint32_t sender_index = sender_index_for_(core);
-        return (shape_ == Mcast1DShape::PerRow) ? tt::tt_metal::CoreCoord{sender_index, core.y}
-                                                : tt::tt_metal::CoreCoord{core.x, sender_index};
+        return (shape_ == Mcast1DShape::PerRow) ? tt::tt_metal::CoreCoord{origin_x_ + sender_index, core.y}
+                                                : tt::tt_metal::CoreCoord{core.x, origin_y_ + sender_index};
     }
 
     // The independent line index: row for PerRow, column for PerColumn.
     uint32_t line_index_(const tt::tt_metal::CoreCoord& core) const {
-        return (shape_ == Mcast1DShape::PerRow) ? static_cast<uint32_t>(core.y) : static_cast<uint32_t>(core.x);
+        return (shape_ == Mcast1DShape::PerRow) ? static_cast<uint32_t>(core.y) - origin_y_
+                                                : static_cast<uint32_t>(core.x) - origin_x_;
     }
 
     // The fixed sender's broadcast-axis index on the line containing `core`.
@@ -352,8 +378,8 @@ private:
 
     // The logical core at axis position `i` on the line `core` belongs to.
     tt::tt_metal::CoreCoord line_coord_(const tt::tt_metal::CoreCoord& core, uint32_t i) const {
-        return (shape_ == Mcast1DShape::PerRow) ? tt::tt_metal::CoreCoord{i, core.y}
-                                                : tt::tt_metal::CoreCoord{core.x, i};
+        return (shape_ == Mcast1DShape::PerRow) ? tt::tt_metal::CoreCoord{origin_x_ + i, core.y}
+                                                : tt::tt_metal::CoreCoord{core.x, origin_y_ + i};
     }
 
     // Bounding box over a set of virtual coords, NOC-ordered (see detail::noc_ordered_bbox).
@@ -405,6 +431,8 @@ private:
     uint32_t starting_sender_index_;
     Mcast1DSenderPlacement sender_placement_;
     McastConfig cfg_;
+    uint32_t origin_x_ = 0;
+    uint32_t origin_y_ = 0;
     uint32_t GR_ = 1;
     uint32_t GC_ = 1;
     uint32_t span_ = 1;  // cores on the broadcast axis
