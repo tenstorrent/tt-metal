@@ -22,12 +22,17 @@ WHAT MAKES THIS BLOCK UNUSUAL:
     device trace; it was correct and bit-identical but ~6 ms/frame SLOWER on this N150, so the
     capture machinery was removed rather than left as a dormant second path.
 
-IT IS NOT WEIGHT-READ BOUND. It WAS, which is why the CFG batch fold in `_trunk` was worth 2.23x
-(a batched matmul re-reads the whole weight per batch element, so batch-2 doubled every read; 6
-rows still fit one 32-row tile, so folding is free). But do the arithmetic on where it stands now:
-the velocity net is 349M params (3 layers x 116.4M) at BFP8, so 7 steps stream ~2.6 GB, and at the
-194 GB/s Block 1 demonstrably reaches that is a 13.4 ms floor. The solve measured 35 ms -- 74 GB/s,
-38% of the ceiling.
+IT IS NOT WEIGHT-READ BOUND, AND BYTES ARE NOT THE LEVER -- both halves measured. It WAS
+weight-bound once, which is why the CFG batch fold in `_trunk` was worth 2.23x (a batched matmul
+re-reads the whole weight per batch element, so batch-2 doubled every read; 6 rows still fit one
+32-row tile, so folding is free). Where it stands now: the velocity net is 349M params (3 layers x
+116.4M) at BFP8, so 7 steps stream ~2.6 GB, a 13.4 ms floor at 194 GB/s.
+
+Two measurements say do NOT plan around that floor. First, the five weight matmuls already sum to
+13.28 ms of `_block`'s 19.24 -- they ARE at the floor, 168-205 GB/s each, so no op work touches them.
+Second, BFP4 weights cut the bytes 47% (2.60 -> 1.37 GB) and returned only 12% of the time (25.70 ->
+22.56 ms) where the model predicts ~6.3 ms. Halving bytes here buys about a quarter of what the
+arithmetic promises, unlike Block 1 where dtype really is the speed. STATUS.md 6.17.
 
 THE GAP IS PER-KERNEL COST -- and note the precise wording, because the obvious reading of it is
 wrong and was tested. A step is ~88 ops and only 18 carry weights; the rest are reshapes,
@@ -42,13 +47,14 @@ rows, and the qkv fusion (0.96 ms) merged a 2048-wide matmul that was costing th
 4096-wide one into a single larger call. Judge a proposal on whether it makes kernels BIGGER, not
 on how many ops it deletes.
 
-WHERE THE TIME GOES, per frame, steady state on one N150 (~23 ms of a ~51 ms frame; Block 1's
-26.6 ms is the larger half):
+WHERE THE TIME GOES, per frame, steady state on one N150 (~22 ms of a ~51 ms frame; Block 1's
+is the larger half):
 
-    _solve -- 7 Euler steps          ~21 ms    7 SEQUENTIAL velocity evaluations, each a 3-layer
+    _solve -- 7 Euler steps          ~20 ms    7 SEQUENTIAL velocity evaluations, each a 3-layer
                                                transformer over 3 tokens, CFG batch-2 folded to 6
-                                               rows. Floor is 13.4 ms (2.6 GB at 194 GB/s), so
-                                               there is still ~1.6x of per-kernel cost in here.
+                                               rows. Nominally 1.6x a 13.4 ms weight-read floor,
+                                               but BFP4 showed that floor governs less of this than
+                                               it looks -- see above.
                                                The biggest single non-matmul line is
                                                nlp_create_qkv_heads at ~97 us x21 -- see _block,
                                                where its floor is measured and shown to be fixed.
@@ -57,18 +63,28 @@ WHERE THE TIME GOES, per frame, steady state on one N150 (~23 ms of a ~51 ms fra
                                                it produces an INDEX; see semantic_dev.
     host tail (FSQ quantise etc)       0.7 ms
     ------------------------------------------
-    Block 2 total                     ~23 ms   (42.5 before the row fold, sharded norm, qkv
-                                               fusion, device semantic head and L1 interior)
+    Block 2 total                     ~22 ms   (42.5 before the row fold, sharded norm, qkv
+                                               fusion, device semantic head, L1 interior and the
+                                               three op-level wins in STATUS.md 6.17)
 
 The structural problem is the SEQUENCE: 7 steps that each depend on the previous, so none of the
 usual batching tricks apply within a frame.
 
-TRIED AND REJECTED, so they do not get retried: lower math fidelity (HiFi2/LoFi save ~4 ms for
-10-20x the integer-code errors -- see COMPUTE_CONFIG); sdpa for the attention interior (1.147x, but
-codes differing from the fp32 reference go 7/288 -> 21/288 over 8 draws -- rejected once before
-BFP8 and again after, same answer); the CFG-combine and inplace-norm micro-fusions above; and a
-device trace, re-measured after all of the above at +0.16 ms (1.006x) with bit-identical codes.
+TRIED AND REJECTED, so they do not get retried: BFP4 weights (1.139x for 8.4x the differing
+codes, 19/576 -> 159/576 over 8 draws -- and only 12% of the time for 47% fewer bytes, see above;
+per-weight numbers in STATUS.md 6.17, and w2 alone is 0.016 ms for 2.6x the errors); lower math
+fidelity (HiFi2/LoFi save ~4 ms for 10-20x the integer-code errors -- see COMPUTE_CONFIG); sdpa for
+the attention interior (1.147x, but codes go 7/288 -> 21/288 over 8 draws -- rejected once before
+BFP8 and again after, same answer); the CFG-combine and inplace-norm micro-fusions above; w1+w3
+merged into one 18432-wide matmul (0.998x, 0.951x once the output split is charged); and a device
+trace, re-measured after all of the above at +0.16 ms (1.006x) with bit-identical codes.
 BFP8 weights ARE on and were worth 1.23x.
+
+WHAT LANDED INSTEAD, once the matmuls turned out to be at their floor, was op count: silu fused into
+the w1 matmul, SCALE folded into wqkv's q rows, and `_trunk` projecting BEFORE it narrows. Together
++1.19 ms/frame in isolation with accuracy slightly BETTER (velocity PCC 0.9999816 -> 0.9999851,
+differing codes 19/576 -> 16/576). End to end the pipeline shows only ~-0.4 ms/frame of that and the
+factor of ~3 is unexplained -- quote the pipeline number, see STATUS.md 6.17.
 
 STILL OPEN, and both are structural rather than op-level:
   * FEWER EULER STEPS. 7 -> 5 removes 28% of the solve outright. This changes what the model
@@ -254,7 +270,15 @@ class TtVoxtralFlow:
                 # nearly free. Fusing pays exactly when one of the pair is too narrow to earn its
                 # launch. It does NOT pay otherwise: w1+w3 are 9216 each, and merging them into
                 # 18432 measured 0.998x -- no gain -- and 0.951x once the output split is charged.
-                "wqkv": lin(torch.cat([w[p + "attention.wq.weight"],
+                #
+                # THE 1/sqrt(head_dim) SCALE IS FOLDED IN HERE, into the q rows only. It used to be
+                # a `multiply(s, SCALE)` on the scores, once per block call -- 21 op launches a
+                # frame for one constant. Folding it is worth 0.28 ms/frame AND slightly more
+                # accurate: the scores are rounded once instead of twice, and it took differing
+                # acoustic codes from 19/576 to 16/576 with velocity PCC 0.9999816 -> 0.9999851.
+                # Not bit-identical (SCALE is not a power of two, so the BFP8 mantissas in those
+                # columns change), which is exactly why the code counts were measured.
+                "wqkv": lin(torch.cat([w[p + "attention.wq.weight"] * SCALE,
                                        w[p + "attention.wk.weight"],
                                        w[p + "attention.wv.weight"]], dim=0)),
                 "wo": lin(w[p + "attention.wo.weight"]),
@@ -329,10 +353,10 @@ class TtVoxtralFlow:
         # NO mask and NO RoPE here -- bidirectional by design. sdpa would fuse the interior into
         # ONE op and measures faster still (1.147x), but it triples the differing codes (7/288 ->
         # 21/288 over 8 draws); see STATUS.md 6.8.
+        # No `multiply(s, SCALE)` here: 1/sqrt(head_dim) is folded into wqkv's q rows at load time.
         s = ttnn.matmul(ttnn.reshape(qh, [B, FM_N_KV_HEADS, REP * 3, FM_HEAD_DIM]),
                         kh, compute_kernel_config=COMPUTE_CONFIG,   # kh already transposed
                         memory_config=_L1)
-        s = ttnn.multiply(s, SCALE, memory_config=_L1)
         a = ttnn.softmax(s, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
         a = ttnn.matmul(a, vh, compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
         # back to folded rows so wo and the MLP get the single-weight-read layout too
@@ -341,8 +365,12 @@ class TtVoxtralFlow:
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
                                     memory_config=_L1), memory_config=_L1)
         h = self._norm(x, w["fn"])
-        g = ttnn.silu(ttnn.linear(h, w["w1"], compute_kernel_config=COMPUTE_CONFIG,
-                                  memory_config=_L1), memory_config=_L1)
+        # SiLU rides along on the w1 matmul instead of being its own op -- bit-identical (verified
+        # here at 19/576 acoustic codes and velocity PCC unchanged), 0.16 ms/frame, and the same
+        # thing Block 1 has always done. NOT the idea rejected in STATUS.md 6.8, which was fusing
+        # silu into the MULTIPLY below via input_tensor_a_activations; that one really is worthless.
+        g = ttnn.linear(h, w["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1,
+                        activation="silu")
         u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
                                          memory_config=_L1), memory_config=_L1)
         return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
@@ -365,10 +393,19 @@ class TtVoxtralFlow:
         for w in self.layers:
             seq = self._block(seq, w, B)
         seq = self._norm(seq, self.norm)
-        seq = ttnn.reshape(seq, [B, 3, FM_INPUT_DIM])
-        pos0 = ttnn.slice(seq, [0, 0, 0], [B, 1, FM_INPUT_DIM])
-        return ttnn.linear(pos0, self.proj["acoustic_codebook_output"],
-                           compute_kernel_config=COMPUTE_CONFIG)
+        # PROJECT FIRST, THEN NARROW -- worth 1.09 ms/frame, bit-identical, the single biggest
+        # op-level win left in this block. It used to reshape to [B,3,3072], slice position 0 out at
+        # 3072 wide, and project that. Both of those moves are now 36 wide instead: 85x less data,
+        # and the linear runs batch-1 over 6 rows rather than batch-2 over 3, so it reads the weight
+        # once instead of twice (a batched matmul re-reads the whole weight per batch element).
+        # Computing all 6 rows costs nothing -- 3 and 6 are both one 32-row tile.
+        # Same lesson as the codec's output projection, STATUS.md 6.13/6.14: shift the NARROW side.
+        # Row r of seq is (batch r//3, token r%3) and a linear is per-row, so rows 0 and 3 are the
+        # two position-0 vectors -- which is exactly what the reshape and slice then pick out.
+        out = ttnn.linear(seq, self.proj["acoustic_codebook_output"],
+                          compute_kernel_config=COMPUTE_CONFIG)
+        out = ttnn.reshape(out, [B, 3, N_ACOUSTIC_CODEBOOK])
+        return ttnn.slice(out, [0, 0, 0], [B, 1, N_ACOUSTIC_CODEBOOK])
 
     def _cfg_input(self, B, llm_hidden):
         """-> [2B, 3072] = llm_hidden (cond) over zeros (uncond), in a buffer reused per batch.
