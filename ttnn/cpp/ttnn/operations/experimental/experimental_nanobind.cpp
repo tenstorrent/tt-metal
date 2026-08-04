@@ -8,8 +8,10 @@
 
 #include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
+#include "ttnn/operations/experimental/yuv_conversion/yuv_conversion_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/neighbor_pad_conv3d/neighbor_pad_conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.hpp"
@@ -100,6 +102,7 @@ namespace ttnn::operations::experimental {
 void py_module(nb::module_& mod) {
     slice_write::bind_slice_write(mod);
     padded_slice::bind_padded_slice(mod);
+    ttnn::experimental::detail::bind_yuv_conversion(mod);
 
     transformer::detail::bind_concatenate_heads(mod);
     transformer::detail::bind_split_qkv(mod);
@@ -143,6 +146,11 @@ void py_module(nb::module_& mod) {
     cnn::detail::bind_convert_to_hwc(mod);
 
     ttnn::operations::experimental::conv3d::detail::bind_conv3d(mod);
+    // Fused neighbor_pad_conv3d op + NpConv3dConfig (a Conv3dConfig subclass). bind_np_conv3d_config
+    // must run after bind_conv3d so the Conv3dConfig base type is already registered. NpConv3dConfig
+    // is imported unconditionally in ttnn/ttnn/__init__.py, so it must always be bound.
+    ttnn::operations::experimental::ccl::bind_neighbor_pad_conv3d(mod);
+    ttnn::operations::experimental::ccl::bind_np_conv3d_config(mod);
     adaptive_pool::bind_adaptive_avg_pool2d_operation(mod);
     adaptive_pool::bind_adaptive_max_pool2d_operation(mod);
 
