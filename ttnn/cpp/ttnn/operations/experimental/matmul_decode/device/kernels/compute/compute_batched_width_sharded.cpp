@@ -12,6 +12,10 @@
 using std::uint32_t;
 
 // Block-diagonal batched matmul per core. full_in0 is sender-major; matmul_block does not reduce over kt_dim.
+//
+// With ENABLE_GLOBAL_CB the in1 tiles arrive through a GCB-backed circular buffer instead of a
+// globally-allocated one, so this kernel must tell the reader (via the sync CB) that the GCB
+// page can be released once every in1 tile has been read.
 using namespace ckernel;
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -19,6 +23,7 @@ void kernel_main() {
     constexpr uint32_t Nc_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t Bc = get_compile_time_arg_val(3);
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(4);
+    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(5);
 
     constexpr uint32_t full_in0_cb_id = tt::CBIndex::c_3;
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
@@ -36,6 +41,9 @@ void kernel_main() {
     CircularBuffer full_in0_cb(full_in0_cb_id);
     CircularBuffer in1_cb(in1_cb_id);
     CircularBuffer out_cb(out_cb_id);
+#ifdef ENABLE_GLOBAL_CB
+    CircularBuffer sync_cb(sync_cb_id);
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(full_in0_cb_id, in1_cb_id, out_cb_id);
 
@@ -68,4 +76,10 @@ void kernel_main() {
     }
     out_cb.push_back(out_num_tiles);
     full_in0_cb.pop_front(full_in0_num_tiles);
+#ifdef ENABLE_GLOBAL_CB
+    // Every in1 tile has been read; release the local alias and let the reader ack the GCB page.
+    in1_cb.pop_front(in1_num_tiles);
+    sync_cb.reserve_back(1);
+    sync_cb.push_back(1);
+#endif
 }

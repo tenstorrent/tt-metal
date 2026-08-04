@@ -1,3 +1,4 @@
+import contextlib
 import math
 import os
 from typing import Optional
@@ -11,6 +12,7 @@ from .attention import (
     build_static_layer_cache,
     host_decode_mask,
     int32_pos_tensor,
+    make_attention_prefetch_buffers,
     make_rope_table,
     sdpa_causal_cur_pos,
     sdpa_causal_ok,
@@ -216,6 +218,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         use_submeshes: bool = False,
         require_cache: bool = False,
         pipeline_group_size: Optional[int] = None,
+        use_prefetcher: Optional[bool] = None,
+        num_prefetch_slabs: int = 1,
     ):
         """Build the V4-Flash model off the checkpoint.
 
@@ -231,10 +235,21 @@ class DeepSeekV4Model(DeepSeekV4Module):
         the HC ``scale`` triplets, the hash router's ``tid2eid`` table) and the
         locally-computed RoPE rotate matrix have no tile cache by design and are
         always materialised, so they are exempt.
+
+        ``use_prefetcher`` puts the attention projections (and their compressor) on
+        DRISC-prefetched weights instead of a DRAM->L1 copy per call; it defaults to whether the
+        device supports it. Decode must then run inside :meth:`prefetcher_session`. The GCBs are
+        built once per device and shared by every layer on it (see
+        :func:`make_attention_prefetch_buffers`), so the cost is ~342 KB of L1 per receiver core
+        for the whole model rather than per layer.
         """
         self.config = config
         self.loader = loader
         self.weight_dtype = weight_dtype
+        if use_prefetcher is None:
+            use_prefetcher = ttnn.experimental.is_tensor_prefetcher_supported(full_device)
+        self.use_prefetcher = use_prefetcher
+        self._prefetch_buffers_by_device: dict[int, dict] = {}
         if cache is None and cache_dir is not None:
             cache = WeightCache(cache_dir)
         cache = _as_cache(cache)
@@ -360,6 +375,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     gate=gate,
                     cache=layer_cache,
                     weight_dtype=weight_dtype,
+                    use_prefetcher=self.use_prefetcher,
+                    prefetch_buffers=self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_slabs),
                 )
             )
             _profile(current_device)
@@ -462,6 +479,70 @@ class DeepSeekV4Model(DeepSeekV4Module):
             if self.layer_submesh_ids[li] == k:
                 return li
         return None
+
+    def _prefetch_buffers_for(self, device, weight_dtype, num_prefetch_slabs) -> Optional[dict]:
+        """The GCBs for ``device``, built on first use and reused after.
+
+        One set per device rather than per layer: a GCB is a permanent L1 allocation, and
+        every layer's weights have the same shapes, so they can all prefetch through the
+        same buffers. Building them per layer would multiply ~342 KB per receiver core by the
+        layer count and exhaust L1 -- and long before that, the DRISC senders' state zone, which
+        holds only about six GCBs per device however small they are.
+        """
+        if not self.use_prefetcher:
+            return None
+        key = id(device)
+        if key not in self._prefetch_buffers_by_device:
+            self._prefetch_buffers_by_device[key] = (
+                device,
+                make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_slabs),
+            )
+        return self._prefetch_buffers_by_device[key][1]
+
+    @contextlib.contextmanager
+    def prefetcher_session(self):
+        """Run the DRISC senders for the duration of a decode run.
+
+        Required around every :meth:`decode` when the model was built with
+        ``use_prefetcher``; a no-op otherwise, so callers can wrap unconditionally. One
+        session should span a whole generation rather than a single step, because starting
+        and stopping the senders is not free and the GCB ring state carries across steps.
+
+        Opened on every device holding prefetch buffers, which under ``use_submeshes`` is one
+        per submesh. Entry fences against the weight uploads already on the command queue
+        with ``wait_for_cq_on_tensor_prefetcher``, so a sender cannot read a weight buffer
+        before its write has landed.
+
+        A failure anywhere inside the session -- not just a rejected ``matmul_decode``, but any
+        op that throws while building or launching its program -- leaves the requests that
+        ``prefetch_weights`` hoisted for the next layer sitting with the DRISC senders, with no
+        matmul left to drain them. A clean stop cannot retire that: its sentinel queues behind
+        the orphaned requests, so the kernel blocks on a full GCB and never reaches it. The
+        exception path therefore force-stops (abandoning the kernels) and skips the device sync,
+        both of which would otherwise hang and bury the error. Forcing leaves DRISC kernels
+        running, so the device must be closed or reset before another session is opened -- which
+        is fine, because this path only runs when the caller is already unwinding.
+        """
+        if not self.use_prefetcher:
+            yield
+            return
+        devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
+        for device in devices:
+            ttnn.experimental.start_tensor_prefetcher(device)
+        for device in devices:
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        try:
+            yield
+        except BaseException:
+            for device in devices:
+                # Already stopped if the failure came out of LinearDecode.forward, which
+                # retires the senders itself; stopping twice is a no-op.
+                with contextlib.suppress(Exception):
+                    ttnn.experimental.stop_tensor_prefetcher(device, force=True)
+            raise
+        for device in devices:
+            ttnn.experimental.stop_tensor_prefetcher(device)
+            ttnn.synchronize_device(device)
 
     def _expert_provider(self, layer_idx: int):
         def provider(e: int):
@@ -914,9 +995,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
             )
             last_submesh_id = current_submesh_id
             _profile(this_device)
+            # Stage the next layer on this device while it is otherwise idle. Under the
+            # prefetcher the layers on a device share GCBs, so this must stay in layer
+            # order: each buffer is a FIFO and the matmuls pop it in the order queued.
             next_on_device = self._next_layer_on_submesh(li)
             if next_on_device is not None:
-                self.layers[next_on_device].self_attn.prefetch_weights()
+                self.layers[next_on_device].prefetch_weights()
         with _region("HC_HEAD"):
             hidden = self.hc_head(streams)
         with _region("FINAL_NORM"):
@@ -1523,7 +1607,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 streams.deallocate()
                 next_on_device = self._next_layer_on_submesh(li)
                 if next_on_device is not None:
-                    self.layers[next_on_device].self_attn.prefetch_weights()
+                    self.layers[next_on_device].prefetch_weights()
         return out if out is not None else streams
 
     def _build_packet(self, token_id: int, pos: int) -> torch.Tensor:

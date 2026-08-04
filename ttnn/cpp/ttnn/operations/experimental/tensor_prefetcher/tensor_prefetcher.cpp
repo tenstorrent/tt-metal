@@ -133,8 +133,8 @@ void signal_tensor_prefetcher(
         mesh_device, tt::tt_metal::experimental::GetTensorPrefetcherSignalAddress(*mesh_device, signal_id), core);
 }
 
-void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    tt::tt_metal::experimental::StopTensorPrefetcher(*mesh_device);
+void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool force) {
+    tt::tt_metal::experimental::StopTensorPrefetcher(*mesh_device, force);
 }
 
 }  // namespace ttnn::operations::experimental

@@ -23,6 +23,7 @@ Run it (ttnn venv)::
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 from pathlib import Path
@@ -95,7 +96,7 @@ def _build_rope(config, max_seq: int) -> dict:
     return rope
 
 
-def _build_and_prefill(mesh_device, text: str):
+def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack):
     """Build the full ttnn model, prepare the static traced-decode buffers, and
     prefill ``text`` one token at a time. Returns the populated state shared by
     the decode demo and the max-perf measurement tests."""
@@ -154,6 +155,13 @@ def _build_and_prefill(mesh_device, text: str):
     )
     logger.info(f"built DeepSeekV4Model with {model.num_layers}/{config.num_hidden_layers} layers")
 
+    # One prefetcher session for the whole run rather than one per step: starting the DRISC
+    # senders is not free, and each GCB's ring state carries from one step to the next. The
+    # caller owns the stack so the session also covers the generation loop. A no-op when the
+    # model was built without the prefetcher.
+    prefetcher.enter_context(model.prefetcher_session())
+    logger.info(f"tensor prefetcher: {'on' if model.use_prefetcher else 'off'}")
+
     # --- prefill the prompt by replaying decode one token at a time --------- #
     # There is no dedicated prefill: each prompt token is fed at its absolute
     # position through the (eager or traced) decode path, filling the in-place
@@ -199,7 +207,7 @@ def _build_and_prefill(mesh_device, text: str):
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2}],
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
@@ -207,47 +215,50 @@ def _build_and_prefill(mesh_device, text: str):
 def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
     import time
 
-    state = _build_and_prefill(mesh_device, text)
-    model, lm_head, tokenizer = state["model"], state["lm_head"], state["tokenizer"]
-    rope, prompt_ids, real_len = state["rope"], state["prompt_ids"], state["real_len"]
-    max_seq, max_new_tokens, eos_id = state["max_seq"], state["max_new_tokens"], state["eos_id"]
-    traced, next_id = state["traced"], state["next_id"]
-    generated: list[int] = [next_id]
+    # The prefetcher session spans prefill and generation both, so it is opened inside
+    # ``_build_and_prefill`` (once the model exists) against this stack.
+    with contextlib.ExitStack() as prefetcher:
+        state = _build_and_prefill(mesh_device, text, prefetcher)
+        model, lm_head, tokenizer = state["model"], state["lm_head"], state["tokenizer"]
+        rope, prompt_ids, real_len = state["rope"], state["prompt_ids"], state["real_len"]
+        max_seq, max_new_tokens, eos_id = state["max_seq"], state["max_new_tokens"], state["eos_id"]
+        traced, next_id = state["traced"], state["next_id"]
+        generated: list[int] = [next_id]
 
-    # Each step feeds the previously generated token at its absolute position and
-    # reads back the single-token logits (no recompute over the prior context).
-    decode_tokens = 0
-    decode_time = 0.0
-    for step in range(1, max_new_tokens):
-        if next_id == eos_id:
-            logger.info("hit EOS; stopping")
-            break
-        pos = real_len + step - 1  # absolute position of the token being fed back
-        if pos >= max_seq:  # ran past the precomputed RoPE span
-            logger.warning(f"hit max RoPE length {max_seq}; stopping at {len(generated)} tokens")
-            break
-        t0 = time.perf_counter()
-        if traced:
-            # [1, 1, vocab], lm_head in-trace; the socket read is the device sync
-            logits = model.decode_traced(next_id, pos).reshape(1, -1).float()
-        else:
-            hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
-            with _region("LM_HEAD"):
-                logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()  # forces device sync
-        next_id = int(logits[0].argmax().item())
-        decode_time += time.perf_counter() - t0
-        decode_tokens += 1
-        generated.append(next_id)
-        logger.info(f"step {step:3d} (pos {pos:4d}): token id {next_id} {tokenizer.decode([next_id])!r}")
+        # Each step feeds the previously generated token at its absolute position and
+        # reads back the single-token logits (no recompute over the prior context).
+        decode_tokens = 0
+        decode_time = 0.0
+        for step in range(1, max_new_tokens):
+            if next_id == eos_id:
+                logger.info("hit EOS; stopping")
+                break
+            pos = real_len + step - 1  # absolute position of the token being fed back
+            if pos >= max_seq:  # ran past the precomputed RoPE span
+                logger.warning(f"hit max RoPE length {max_seq}; stopping at {len(generated)} tokens")
+                break
+            t0 = time.perf_counter()
+            if traced:
+                # [1, 1, vocab], lm_head in-trace; the socket read is the device sync
+                logits = model.decode_traced(next_id, pos).reshape(1, -1).float()
+            else:
+                hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
+                with _region("LM_HEAD"):
+                    logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()  # forces device sync
+            next_id = int(logits[0].argmax().item())
+            decode_time += time.perf_counter() - t0
+            decode_tokens += 1
+            generated.append(next_id)
+            logger.info(f"step {step:3d} (pos {pos:4d}): token id {next_id} {tokenizer.decode([next_id])!r}")
 
-        # Running decode throughput, reported every 10 generated tokens.
-        if decode_tokens % 10 == 0:
-            logger.info(
-                f"decode throughput: {decode_tokens / decode_time:.2f} tok/s "
-                f"({decode_tokens} tokens in {decode_time:.2f}s)"
-            )
-            decode_tokens = 0
-            decode_time = 0.0
+            # Running decode throughput, reported every 10 generated tokens.
+            if decode_tokens % 10 == 0:
+                logger.info(
+                    f"decode throughput: {decode_tokens / decode_time:.2f} tok/s "
+                    f"({decode_tokens} tokens in {decode_time:.2f}s)"
+                )
+                decode_tokens = 0
+                decode_time = 0.0
 
     if decode_tokens:
         logger.info(
