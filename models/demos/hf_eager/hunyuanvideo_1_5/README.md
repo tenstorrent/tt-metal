@@ -100,20 +100,24 @@ the tuned `ttnn` matmul. C++ Metalium `generic_op` matmul: same result. Both rev
 
 Real weights, 24-chip sp=3, 480×848, 121 frames, 50 steps, tiled VAE (128px).
 
-Trace+2CQ numbers are **steady-state** (the ~52 s one-time trace capture is excluded —
-it's paid once and amortized across all subsequent generations).
+Steady-state (the ~52 s one-time trace capture is excluded — paid once, amortized across
+all subsequent generations):
 
-| mode | steady-state s/it | denoise (50 steps) | **e2e total** | frames |
-|---|---|---|---|---|
-| **Eager** (`HY_TRACE=0`) | 4.18 | 3:50 | **8:18** | 121 ✓ |
-| **Trace+2CQ** (`HY_TRACE=1`) | 4.15 | ~3:28 | **~8:44** | 121 ✓ |
+| mode | steady-state s/it | denoise (50 steps, steady) |
+|---|---|---|
+| **Eager** (`HY_TRACE=0`) | 4.18 | ~3:29 |
+| **Trace+2CQ** (`HY_TRACE=1`) | 4.15 | ~3:27 |
 
-Steady-state per-step is **essentially identical** (4.15 vs 4.18 s/it) — the DiT is
-compute-bound, so 2CQ input-overlap buys almost nothing; trace's slightly lower s/it is
-offset by other e2e overhead. The `device_ms` wins above are at the tiny dispatch-bound
-profiling scale and **do not materially speed up the compute-bound 121f e2e** (which is
-also ~half model-load + VAE). For a single one-shot generation, eager avoids the ~52 s
-capture; trace wins only once that capture is amortized across many generations.
+Steady-state per-step is **essentially identical** (4.15 vs 4.18 s/it, trace marginally
+faster) — the DiT is compute-bound, so 2CQ input-overlap buys almost nothing.
+
+**e2e wall-clock ≈ 8:00–8:20**, but it is **not a clean trace-vs-eager discriminator**:
+~half of it is model-load + tiled-VAE decode — identical work in both modes — which
+varies 40–50 s run-to-run from kernel-cache warmth. The mode-attributable part is the
+denoise above (trace ≈ eager, ± a couple seconds). The `device_ms` wins are at the tiny
+dispatch-bound profiling scale and **do not materially speed up the compute-bound 121f
+denoise**. For a one-shot generation, eager avoids the ~52 s capture; trace pulls ahead
+only once that capture is amortized across many generations.
 
 ## PCC validation
 
