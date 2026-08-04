@@ -23,6 +23,7 @@ using namespace ckernel;
  */
 inline void _llk_unpack_AB_reduce_block_max_row_cfg_(const bool enable = true)
 {
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::UNPACK0);
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, enable ? 1 : 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
 }
