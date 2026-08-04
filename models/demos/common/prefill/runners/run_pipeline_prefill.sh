@@ -38,6 +38,9 @@ TCP_IFACE="${3:-ens5f0np0}"
 # (models/demos/common/prefill/runners -> 5 levels up).
 TT_METAL_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 export TT_METAL_HOME PYTHONPATH="$TT_METAL_HOME"
+# ttrun.py runs on THIS (launch) host and must use the venv interpreter (loguru etc.); peer ranks get
+# it via -x PATH below. Activate here so callers don't have to remember to source the venv first.
+[ -z "${VIRTUAL_ENV:-}" ] && [ -f "$TT_METAL_HOME/python_env/bin/activate" ] && source "$TT_METAL_HOME/python_env/bin/activate"
 # Per-host LOCAL JIT cache. A shared (NFS) TT_METAL_CACHE makes both hosts write the same generated
 # kernel files (defines_generated.h, ...) concurrently on a cold cache -> "Stale file handle" compile
 # failures. /tmp is per-host, so each rank compiles into its own dir. ttrun auto-propagates TT_* vars.
