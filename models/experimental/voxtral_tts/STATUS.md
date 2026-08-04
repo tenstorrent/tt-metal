@@ -33,8 +33,8 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → 58.3-62.5 ms/frame (mean 59.9), RTF 0.74-0.82 on 14 of 15 cases.** Per frame:
-Block 1 ~31.4 ms, Block 2 ~28 ms. Block 1 is the larger half. Both modules carry a "where the time
+**Performance: 83.7 → 53.4-58.8 ms/frame (mean 55.5), RTF 0.68-0.78 on 14 of 15 cases.** Per frame:
+Block 1 ~26.6 ms, Block 2 ~28 ms, host 0.2 ms. The two are now about even.
 goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
 width-sharded RMSNorm in Block 2, qkv fusion) and §6.8 (BFP8 on wqkv/wo, semantic head on device) —
 and §6.7 is the one to read first: it explains why the WER headline cannot gate any of this.
@@ -813,6 +813,44 @@ honest reason is "slightly worse on a stable metric for 5 ms", not the dramatic 
 - Norm grids 8x2 / 8x4 / 8x8: all slower than 8x1 at our shapes. 8x8 will not even build.
 - Row fold in Block 1 prefill (needs a 4x-tall mask, and prefill is ~1.3% of wall) and in the codec
   (it is MHA 8/8, no grouping to fold).
+
+
+### 6.9 — the sharded norm, shipped on the second look
+
+**Block 1's two RMSNorms are now width-sharded over 8 cores: 6.1 ms → 1.1 ms, worth 4.4 ms/frame
+(31.4 → 26.6 ms/step, mean frame 59.9 → 55.5, RTF 0.74-0.82 → 0.68-0.78).**
+
+THIS REVERSES §6.6, and the reason it was wrong is the useful part. That revert measured the
+sharded norm while `wqkv` and `wo` were still bf16, where it read mean worst-sample 0.86% → 0.92%.
+On the CURRENT weights it reads 0.86% → 0.84% mean and 1.10% → 1.06% p90 — no cost, reproduced in
+two independent runs. **A precision change here is not separable from the others; re-measure against
+the config you actually ship, never against a recorded number.**
+
+Core count barely matters, and it is worth knowing why:
+
+| norm | us/call | ms/step | mean ws | p90 ws |
+|---|---|---|---|---|
+| interleaved | 115.5 | 31.42 | 0.86% | 1.10% |
+| 2-core | 42.4 | 27.50 | 0.83% | 1.08% |
+| 4-core | 40.5 | 26.81 | 0.81% | 1.10% |
+| 8-core ← shipped | 44.1 | 26.54 | 0.84% | 1.06% |
+
+Flat, because the norm COMPUTE is ~16 us at any count and the two `to_memory_config` calls are the
+other ~28. The reshard is the tax, not the reduction. (Feeding the sharded result straight to the
+next matmul to dodge the second reshard is SLOWER — 8.94 vs 5.32 ms per 26 norm+linear pairs.)
+
+**THE COST, stated exactly, because it is not zero.** Long-form errors over three seeds:
+
+| config | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| interleaved | 0 wrong | 0 wrong | 0 wrong |
+| 8-core sharded | 1 wrong | 1 wrong | 0 wrong |
+
+Both errors are the SAME word in the SAME sentence: the model contracts "I am" to "I'm" in "…now
+that I have it, I am not going to be silent." That is the only difference across 894 long-form words
+(298 × 3 seeds); termination is 15/15 and voice identity passes everywhere. Shipped on the judgement
+that a contraction is what a human reader does, not a defect — an explicit call, so if a future
+regression traces here, this is the trade to question first.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
