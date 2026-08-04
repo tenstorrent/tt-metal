@@ -112,6 +112,15 @@ get_padded_slice_runtime_args_rm_sharded_output(
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
     const uint32_t num_sticks_per_core = output_shard_spec.shape[0];
+    // [#48552] Real (unpadded) output stick count = product of the actual output dims except channels. The
+    // shard height (num_sticks_per_core) is tile-rounded and can exceed this, so without clamping the last
+    // core reads past the real output and its src_stick_id walks beyond the source buffer. WH/BH's async_read
+    // tolerates the OOB page-id (reads garbage into the padded tail); Quasar range-checks it and asserts.
+    // Clamp per-core below so the reader only touches real sticks (the TILE factory clamps the same way).
+    uint32_t total_output_sticks = 1;
+    for (uint32_t d = 0; d + 1 < actual_output_shape.rank(); ++d) {
+        total_output_sticks *= actual_output_shape[d];
+    }
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
 
     uint32_t core_index = 0;
@@ -141,6 +150,13 @@ get_padded_slice_runtime_args_rm_sharded_output(
         int this_input_row_size_bytes =
             std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
         uint32_t this_core_num_sticks = num_sticks_per_core;
+        // [#48552] Clamp to the real output sticks so the reader doesn't over-read past the source on the
+        // tile-rounded padded shard tail (see total_output_sticks note above).
+        if (num_sticks_written >= total_output_sticks) {
+            this_core_num_sticks = 0;
+        } else if (num_sticks_written + this_core_num_sticks > total_output_sticks) {
+            this_core_num_sticks = total_output_sticks - num_sticks_written;
+        }
         if (this_input_row_size_bytes == 0) {
             this_core_num_sticks = 0;
         }
@@ -254,28 +270,6 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         const uint32_t scratch_page =
             tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment);
         spec.scratchpads.push_back(ScratchpadSpec{.unique_id = PS_SCRATCH, .size_per_node = scratch_page * kNumTrids});
-    }
-
-    // [#48552 DIAG - remove after] The DRAM-slice input gather. Watcher misattributes this to the s2i
-    // reader (stale kernel name), but this is the op that actually asserts. is_non_aligned selects the
-    // TRID scratch-loopback path (reader fills scratch via NoC self-read then loops back to the OUT DFB);
-    // log the path + sizing so the assert (capacity vs scratch vs NoC self-read) can be pinned.
-    {
-        const uint32_t _diag_scratch_page =
-            tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment);
-        log_warning(
-            tt::LogOp,
-            "[PS-DIAG] is_non_aligned={} out_row_bytes={} out_cb_page_sz={} out_dfb_cap(sticks)={} "
-            "src_align={} dst_align={} num_dims={} num_trids={} scratch_page={}",
-            is_non_aligned ? 1u : 0u,
-            output_row_size_bytes,
-            output_cb_page_size,
-            num_output_sticks_per_core,
-            static_cast<uint32_t>(src_buffer_alignment),
-            static_cast<uint32_t>(dst_buffer_alignment),
-            num_dims,
-            kNumTrids,
-            _diag_scratch_page);
     }
 
     // Reader: interleaved src -> OUTPUT DFB.
