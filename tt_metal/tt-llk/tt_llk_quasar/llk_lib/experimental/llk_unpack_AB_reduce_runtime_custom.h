@@ -73,7 +73,6 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
     }
     else
     {
-        // Tiny path (not exercised here): TILE_INC already advances the source tile per op.
         unpack_srcA_face      = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
         unpack_srcA_face_last = unpack_srcA_face;
     }
