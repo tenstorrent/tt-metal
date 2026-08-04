@@ -22,9 +22,9 @@
 namespace tt::tt_metal::distributed {
 
 struct D2HStreamServiceDescriptor {
-    // v3: DataType ordinals were renumbered (INT8 inserted at 8, shifting FP8_E4M3 8->9 and INVALID 9->10).
+    // v3: INT8 was appended to DataType at ordinal 9, moving INVALID 9->10.
     // global_dtype is serialized as a raw DataType ordinal, so the bump forces a version mismatch (hard error)
-    // between old/new processes instead of silently decoding ordinal 8/9 as the wrong dtype.
+    // between old/new processes instead of an old peer decoding ordinal 9 as INVALID rather than INT8.
     static constexpr uint32_t kVersion = 3;
 
     tt::tt_metal::Shape global_shape;

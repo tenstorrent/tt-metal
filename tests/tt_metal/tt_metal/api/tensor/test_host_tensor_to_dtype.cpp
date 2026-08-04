@@ -361,11 +361,7 @@ TEST(HostTensorToDtype, Float32ToInt8RowMajorValueCheck) {
     for (float& i : data) {
         i = static_cast<float>(static_cast<int8_t>(static_cast<int>(i)));
     }
-    auto memory_config = MemoryConfig{
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        BufferType::L1,
-        ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {16, 64}, ShardOrientation::ROW_MAJOR}};
-    experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
     auto source_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
     auto source = HostTensor::from_vector<float>(data, source_spec);
@@ -389,11 +385,7 @@ TEST(HostTensorToDtype, Int8ToInt32RowMajorValueCheck) {
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<int8_t>(shape.volume());
     data[0] = -128;
     data[1] = 127;
-    auto memory_config = MemoryConfig{
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        BufferType::L1,
-        ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {16, 64}, ShardOrientation::ROW_MAJOR}};
-    experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
     auto source_spec = TensorSpec(shape, TensorLayout(DataType::INT8, PageConfig(Layout::ROW_MAJOR), memory_config));
     auto source = HostTensor::from_vector<int8_t>(data, source_spec);
@@ -422,11 +414,7 @@ TEST(HostTensorToDtype, Int32ToInt8RowMajorValueCheck) {
         // NOLINTNEXTLINE(bugprone-signed-char-misuse,cert-str34-c)
         i = static_cast<int32_t>(static_cast<int8_t>(i));
     }
-    auto memory_config = MemoryConfig{
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        BufferType::L1,
-        ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {16, 64}, ShardOrientation::ROW_MAJOR}};
-    experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
     auto source_spec = TensorSpec(shape, TensorLayout(DataType::INT32, PageConfig(Layout::ROW_MAJOR), memory_config));
     auto source = HostTensor::from_vector<int32_t>(data, source_spec);
