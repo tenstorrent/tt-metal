@@ -597,3 +597,177 @@ up to 11% (w_interleaved glm isl-256 measured 156.9 and 175.4 us), because those
 dominated by fixed per-K-block sync latency rather than streaming work. Cases with more
 than one observation are centred on their min/max midpoint. Proper fix is multi-iteration
 averaging in the harness, not a narrower band.
+
+## 12. Full measurement matrix (2026-08-04, P150 card 0)
+
+The perf test now sweeps **x layout x weight layout x model x ISL = 72 cases**, and the ISL
+sweep gained a **64-token** point — 2 tile-rows, so only 2 of the 8 M-rows carry real
+tokens and the op is almost entirely the fixed weight read. Device kernel time in us:
+
+| model | ISL | x_rm + IL | x_rm + ND | x_tile + IL | x_tile + ND | best GB/s |
+|---|---|---|---|---|---|---|
+| kimi | 64 | 162.2 | 132.6 | 143.0 | **120.8** | 213 |
+| kimi | 128 | 172.8 | 140.7 | 145.2 | **133.7** | 200 |
+| kimi | 256 | 183.1 | 162.6 | 150.0 | **135.6** | 211 |
+| kimi | 512 | 251.1 | 179.7 | 178.5 | **167.3** | 195 |
+| kimi | 1024 | 308.2 | 307.9 | **279.0** | 280.5 | 145 |
+| kimi | 2048 | 591.8 | 590.8 | 534.1 | **533.4** | 105 |
+| kimi | 4096 | 1167.8 | 1174.0 | 1044.6 | **1043.4** | 107 |
+| kimi | 5120 | 1479.7 | 1488.1 | 1313.2 | **1311.6** | 116 |
+| glm | 64 | 142.3 | 118.5 | 127.9 | **113.1** | 195 |
+| glm | 128 | 146.8 | 123.1 | 132.4 | **117.6** | 195 |
+| glm | 256 | 158.4 | 138.0 | 130.6 | **117.4** | 209 |
+| glm | 512 | 218.5 | 157.6 | 150.4 | **147.9** | 189 |
+| glm | 1024 | 270.3 | 269.9 | 262.5 | **242.9** | 142 |
+| glm | 2048 | 518.1 | 517.8 | 469.2 | **467.1** | 103 |
+| glm | 4096 | 1026.8 | 1052.3 | 918.0 | **913.0** | 105 |
+| glm | 5120 | 1283.7 | 1291.8 | 1158.2 | **1141.3** | 114 |
+
+(IL = DRAM-interleaved weights, ND = DRAM ND-sharded. GB/s counts x read + weights x chunks
++ output write for the best cell of that row; the x_tile rows read x as bfp8, so their byte
+count is lower and the rate is not directly comparable with an x_rm row.)
+
+### 12a. What the two axes are each worth
+
+**ND-sharded weights**, holding x layout fixed:
+
+| | isl 64 | 128 | 256 | 512 | 1024+ |
+|---|---|---|---|---|---|
+| on x_rm | 1.20-1.22x | 1.19-1.23x | 1.13-1.15x | **1.39-1.40x** | 0.98-1.00x |
+| on x_tile | 1.13-1.18x | 1.09-1.13x | 1.11x | 1.02-1.07x | 0.99-1.08x |
+
+**x_tile vs x_rm** (i.e. what the in-op row-major tilize costs), holding weights fixed:
+
+| | isl 64 | 128 | 256 | 512 | 1024 | 2048 | 4096 | 5120 |
+|---|---|---|---|---|---|---|---|---|
+| on interleaved | 1.11-1.13x | 1.11-1.19x | 1.21-1.22x | **1.41-1.45x** | 1.03-1.10x | 1.10-1.11x | 1.12x | 1.11-1.13x |
+| on ND-sharded | 1.05-1.10x | 1.05x | 1.18-1.20x | 1.07x | 1.10-1.11x | 1.11x | 1.13-1.15x | 1.13x |
+
+Three things fall out of this:
+
+1. **The two optimisations partly overlap.** Each is worth ~1.1-1.4x alone, but stacking
+   them gives less than the product — at kimi isl-512, ND alone is 1.40x and x_tile alone
+   1.41x, yet both together are only 1.50x (251.1 -> 167.3). They are competing for the same
+   critical path: whichever one is removed first exposes the other.
+2. **x_tile is worth 1.10-1.13x even at long ISL**, where ND-sharding is worth nothing. That
+   is the tilize cost (section 6) showing up directly, and it is the only lever measured so
+   far that scales with ISL. Note this is the OP's time only — it excludes whatever the
+   caller must pay to produce bfp8 TILE x, which section 6 measured as far more than the
+   in-op tilize when done as standalone Tilize + Typecast ops. So x_tile is only a real win
+   if the producer emits that layout natively.
+3. **Best achieved rate is ~195-213 GB/s at isl <= 512**, against the ~310 GB/s ceiling for
+   576 B reads and ~379 GB/s for bank-rotating ones (section 7). Still short, and section 10b
+   explains why: the multicast is irreducible and additive with the read on the same RISC.
+
+### 12b. Baseline stability, and a self-inflicted trap
+
+Verification of all 72 cases: **71 pass, 1 residual jitter case**, zero infra errors. Five
+short-ISL cases needed re-centring on their min/max midpoint after a second observation
+(kimi x_rm+IL isl-256 measured 183.1 and 197.8 us; glm x_tile+ND isl-256 117.4 and 129.6).
+`_MARGIN` = 8% covers the observed spread; long-ISL cases sit inside 1%.
+
+Trap worth recording: an earlier verification showed **7** failures, of which only ONE was a
+perf miss. The other six were Tracy infrastructure errors
+(`profile_log_device.csv is also missing`, `CalledProcessError`) caused by running TWO
+device-perf pytest sessions concurrently — `run_model_device_perf_test_per_op` writes to a
+fixed `generated/profiler/<subdir>`, so concurrent runs clobber each other's artifacts. The
+failure looks exactly like a perf regression. Never overlap perf runs.
+
+### 12c. Perf-test structure
+
+`_EXPECTED_NS` is keyed `(x_layout, weights_layout, model, active)`; `_LAYOUT_IDS` and
+`_WEIGHTS_IDS` are both swept. The `-k` filter pins all four id components, so each of the
+72 invocations profiles exactly one worker case — without that the ops CSV would hold
+several FFN rows and the harness would sum them. Runtime is ~15 min for the full sweep.
+
+## 13. NEXT: in0_block_w and where the K-blocking overhead actually goes
+
+### 13a. The proposal, and what is right about it
+
+The mechanism description is exactly right: the K dimension is broken into blocks of
+`[per_core_M, in0_block_w] @ [in0_block_w, per_core_N]`, each accumulated into a separate
+partials CB (PACKER_L1_ACC), so per K-block there is a fetch whose latency has to be
+covered by something. And the parameters ARE maxed for L1: the guard picks the largest
+`per_core_M` that fits (8), then the widest `in0_block_w` that still fits — which for kimi
+snaps 16 down to **8**. Measured L1 use is ~1.31 MB of a ~1.49 MB budget. So at small ISL,
+where there is very little compute per block to hide anything behind, that per-block fetch
+latency is exposed. All of that matches what section 3 and section 7c measured.
+
+### 13b. But the proposed direction looks inverted
+
+Decomposing the measured per-K-block cost on the weight-sender core at isl-128 (kimi,
+x_rm, interleaved) into a part that is FIXED per block and a part that SCALES with
+`in0_block_w`:
+
+| component | cy/block at w=8 | scales with w? |
+|---|---|---|
+| ready-barrier + peer-valid wait | 2503 | no — one round per block |
+| read completion tail (`async_read_barrier`) | 429 | mostly no |
+| read issue | 2070 | yes (w x per_core_N requests) |
+| multicast | 1099 | yes (w x per_core_N tiles) |
+
+⇒ fixed ≈ **2932 cy/block**, scaling ≈ **66 cy per weight tile**.
+
+Total gate/up overhead is then `(K/w) * 2932 + K * per_core_N * 66`. The second term does
+not depend on w at all — the same `K * per_core_N` tiles are moved either way — so only the
+first term moves, and it goes as **K/w**:
+
+| in0_block_w | K-blocks | fixed total | scaling total | overhead |
+|---|---|---|---|---|
+| 2 | 112 | 328 K cy | 89 K cy | **309 us** |
+| 4 | 56 | 164 K | 89 K | **187 us** |
+| **8 (today)** | 28 | 82 K | 89 K | **127 us** |
+| 14 | 16 | 47 K | 89 K | **101 us** |
+| 16 | 14 | 41 K | 89 K | **96 us** |
+| 28 | 8 | 23 K | 89 K | **83 us** |
+
+So **shrinking `in0_block_w` should make short ISL worse, not better** — it multiplies the
+number of times the per-block barrier round is paid. The lever with the predicted sign is
+the opposite one: make `in0_block_w` BIGGER. It is currently clamped to 8 only because L1
+is full.
+
+Caveat on this model: it is extrapolated from a single measured point (w=8), and it assumes
+the barrier cost really is w-invariant. If part of what is booked as "fixed" actually
+scales, the curve flattens. That is precisely why the next step is a sweep, not an argument.
+
+### 13c. The L1 that a short sequence is wasting
+
+The thing that makes a bigger `in0_block_w` affordable: **CB sizing is compile-time
+(`per_core_M_max = chunk_M_tiles / GRID_Y = 8`) while the RUNTIME `per_core_M` at short ISL
+is 1.** At isl <= 256 the op reserves eight times the M-dimension CB space it actually uses
+— `cb_x_rm`, `cb_in0_x`, both gate/up partials, `cb_activated`, `cb_gate_intermed`,
+`partials_d` and `cb_in0_down_full` all scale with `per_core_M`. That is the L1 that could
+be paying for a wider K-block or a deeper weight pipeline instead.
+
+And it needs no new plumbing: **`chunk_M_tiles` is already an op attribute** (default 64,
+in the program-cache key). A caller that knows the token count is small can pass a smaller
+one; the guard then has room to keep `in0_block_w` at 16, and at short ISL the smaller chunk
+costs nothing because there is only one chunk either way. The runtime picker already adapts
+`per_core_M` downward — what it cannot adapt is the CB sizing, so the caller has to choose it.
+
+### 13d. Experiment matrix
+
+Sweep at fixed shape, isl in {64, 128, 256, 512} plus 2048/5120 as the regression guard:
+
+| chunk_M_tiles | per_core_M_max | in0_block_w the guard should allow | note |
+|---|---|---|---|
+| 64 (today) | 8 | 8 | baseline |
+| 32 | 4 | 16 | half the K-blocks |
+| 16 | 2 | 16-28 | |
+| 8 | 1 | 28+ | exactly matches runtime per_core_M at isl <= 256 |
+
+Two knobs to separate, because they are confounded today:
+
+1. **`in0_block_w` alone** — force w while holding `chunk_M_tiles` at 64, accepting the L1
+   overflow by dropping something else, to get the clean w-curve and test 13b's sign.
+2. **weight CB depth** — at fixed w, go from 2 slots to 3-4. This is the part of the
+   colleague's latency argument that survives: with only double buffering the reader can run
+   just ONE block ahead, so the fetch latency is exposed rather than hidden. Deeper CBs at the
+   same w hide it without multiplying the barrier count. Pairs with per-subset
+   (transaction-ID) barriers so the multicast of K-row n can start while n+1 is still in
+   flight (section 8 item 4, still unimplemented).
+
+Falsifiable predictions to check the model against: w 8 -> 16 should save ~30 us of gate/up
+overhead at short ISL and be neutral at isl >= 2048; w 8 -> 4 should COST ~60 us. If instead
+w 8 -> 4 helps, the fixed/scaling split above is wrong and the barrier cost is not
+per-block — which would itself be the useful finding.

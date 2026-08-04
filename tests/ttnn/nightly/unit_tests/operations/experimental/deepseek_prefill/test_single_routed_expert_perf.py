@@ -45,7 +45,11 @@ _WORKER = (
     "tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/"
     "test_single_routed_expert.py::test_single_routed_expert_isl_sweep"
 )
-_LAYOUT_ID = "x_rm"  # Blackhole fused-tilize production fast path (ROW_MAJOR bf16 input)
+# x input layouts, both measured.
+#   x_rm   — ROW_MAJOR bf16 x, tilized and bf8-packed inside the op. The Blackhole
+#            fused-tilize production fast path, and what the dispatch actually produces.
+#   x_tile — x already TILE bfp8, consumed directly (no in-op tilize).
+_LAYOUT_IDS = ("x_rm", "x_tile")
 
 # Weight memory layouts the worker sweeps, both measured here. The ``-k`` filter MUST pin
 # one of them: without it a single perf invocation runs both cases, the ops CSV holds two
@@ -62,41 +66,87 @@ _WEIGHTS_IDS = ("w_interleaved", "w_ndshard")
 # Per-(weights layout, model, active) UnifiedRoutedExpertFfnDeviceOperation device time in
 # ns, measured on a Blackhole P150 (2026-07-29, card 0, single sample per case).
 # Recalibrate on the perf CI runner — device times are HW/DDR-speed dependent.
-_EXPECTED_NS: dict[tuple[str, str, int], int] = {
-    # ---- DRAM-interleaved weights ----
-    ("w_interleaved", "kimi_k26", 0): 3_952,
-    ("w_interleaved", "kimi_k26", 128): 173_988,
-    ("w_interleaved", "kimi_k26", 256): 190_135,
-    ("w_interleaved", "kimi_k26", 512): 244_350,
-    ("w_interleaved", "kimi_k26", 1024): 309_656,
-    ("w_interleaved", "kimi_k26", 2048): 592_184,
-    ("w_interleaved", "kimi_k26", 4096): 1_186_882,
-    ("w_interleaved", "kimi_k26", 5120): 1_471_016,
-    ("w_interleaved", "glm_51", 0): 3_866,
-    ("w_interleaved", "glm_51", 128): 146_539,
-    ("w_interleaved", "glm_51", 256): 166_129,
-    ("w_interleaved", "glm_51", 512): 223_597,
-    ("w_interleaved", "glm_51", 1024): 269_973,
-    ("w_interleaved", "glm_51", 2048): 518_296,
-    ("w_interleaved", "glm_51", 4096): 1_026_701,
-    ("w_interleaved", "glm_51", 5120): 1_289_506,
-    # ---- DRAM ND-sharded weights ----
-    ("w_ndshard", "kimi_k26", 0): 3_978,
-    ("w_ndshard", "kimi_k26", 128): 139_511,
-    ("w_ndshard", "kimi_k26", 256): 157_155,
-    ("w_ndshard", "kimi_k26", 512): 180_430,
-    ("w_ndshard", "kimi_k26", 1024): 308_223,
-    ("w_ndshard", "kimi_k26", 2048): 590_855,
-    ("w_ndshard", "kimi_k26", 4096): 1_167_613,
-    ("w_ndshard", "kimi_k26", 5120): 1_477_976,
-    ("w_ndshard", "glm_51", 0): 3_945,
-    ("w_ndshard", "glm_51", 128): 122_241,
-    ("w_ndshard", "glm_51", 256): 136_586,
-    ("w_ndshard", "glm_51", 512): 157_119,
-    ("w_ndshard", "glm_51", 1024): 269_410,
-    ("w_ndshard", "glm_51", 2048): 517_196,
-    ("w_ndshard", "glm_51", 4096): 1_027_824,
-    ("w_ndshard", "glm_51", 5120): 1_288_875,
+_EXPECTED_NS: dict[tuple[str, str, str, int], int] = {
+    # ---- x_rm, w_interleaved, kimi_k26 ----
+    ("x_rm", "w_interleaved", "kimi_k26", 0): 4_025,
+    ("x_rm", "w_interleaved", "kimi_k26", 64): 162_241,
+    ("x_rm", "w_interleaved", "kimi_k26", 128): 172_781,
+    ("x_rm", "w_interleaved", "kimi_k26", 256): 190_462,
+    ("x_rm", "w_interleaved", "kimi_k26", 512): 251_074,
+    ("x_rm", "w_interleaved", "kimi_k26", 1024): 308_201,
+    ("x_rm", "w_interleaved", "kimi_k26", 2048): 591_755,
+    ("x_rm", "w_interleaved", "kimi_k26", 4096): 1_167_791,
+    ("x_rm", "w_interleaved", "kimi_k26", 5120): 1_479_656,
+    # ---- x_rm, w_interleaved, glm_51 ----
+    ("x_rm", "w_interleaved", "glm_51", 0): 4_093,
+    ("x_rm", "w_interleaved", "glm_51", 64): 142_306,
+    ("x_rm", "w_interleaved", "glm_51", 128): 146_794,
+    ("x_rm", "w_interleaved", "glm_51", 256): 158_376,
+    ("x_rm", "w_interleaved", "glm_51", 512): 218_491,
+    ("x_rm", "w_interleaved", "glm_51", 1024): 270_338,
+    ("x_rm", "w_interleaved", "glm_51", 2048): 518_102,
+    ("x_rm", "w_interleaved", "glm_51", 4096): 1_026_791,
+    ("x_rm", "w_interleaved", "glm_51", 5120): 1_283_715,
+    # ---- x_rm, w_ndshard, kimi_k26 ----
+    ("x_rm", "w_ndshard", "kimi_k26", 0): 4_003,
+    ("x_rm", "w_ndshard", "kimi_k26", 64): 132_572,
+    ("x_rm", "w_ndshard", "kimi_k26", 128): 140_708,
+    ("x_rm", "w_ndshard", "kimi_k26", 256): 162_613,
+    ("x_rm", "w_ndshard", "kimi_k26", 512): 179_670,
+    ("x_rm", "w_ndshard", "kimi_k26", 1024): 307_894,
+    ("x_rm", "w_ndshard", "kimi_k26", 2048): 590_800,
+    ("x_rm", "w_ndshard", "kimi_k26", 4096): 1_173_978,
+    ("x_rm", "w_ndshard", "kimi_k26", 5120): 1_488_144,
+    # ---- x_rm, w_ndshard, glm_51 ----
+    ("x_rm", "w_ndshard", "glm_51", 0): 3_881,
+    ("x_rm", "w_ndshard", "glm_51", 64): 118_454,
+    ("x_rm", "w_ndshard", "glm_51", 128): 123_122,
+    ("x_rm", "w_ndshard", "glm_51", 256): 138_035,
+    ("x_rm", "w_ndshard", "glm_51", 512): 157_604,
+    ("x_rm", "w_ndshard", "glm_51", 1024): 269_875,
+    ("x_rm", "w_ndshard", "glm_51", 2048): 517_784,
+    ("x_rm", "w_ndshard", "glm_51", 4096): 1_052_298,
+    ("x_rm", "w_ndshard", "glm_51", 5120): 1_291_798,
+    # ---- x_tile, w_interleaved, kimi_k26 ----
+    ("x_tile", "w_interleaved", "kimi_k26", 0): 4_181,
+    ("x_tile", "w_interleaved", "kimi_k26", 64): 142_984,
+    ("x_tile", "w_interleaved", "kimi_k26", 128): 145_221,
+    ("x_tile", "w_interleaved", "kimi_k26", 256): 149_980,
+    ("x_tile", "w_interleaved", "kimi_k26", 512): 178_458,
+    ("x_tile", "w_interleaved", "kimi_k26", 1024): 279_036,
+    ("x_tile", "w_interleaved", "kimi_k26", 2048): 534_085,
+    ("x_tile", "w_interleaved", "kimi_k26", 4096): 1_044_649,
+    ("x_tile", "w_interleaved", "kimi_k26", 5120): 1_313_227,
+    # ---- x_tile, w_interleaved, glm_51 ----
+    ("x_tile", "w_interleaved", "glm_51", 0): 4_048,
+    ("x_tile", "w_interleaved", "glm_51", 64): 127_861,
+    ("x_tile", "w_interleaved", "glm_51", 128): 132_430,
+    ("x_tile", "w_interleaved", "glm_51", 256): 130_553,
+    ("x_tile", "w_interleaved", "glm_51", 512): 150_356,
+    ("x_tile", "w_interleaved", "glm_51", 1024): 262_498,
+    ("x_tile", "w_interleaved", "glm_51", 2048): 469_246,
+    ("x_tile", "w_interleaved", "glm_51", 4096): 918_013,
+    ("x_tile", "w_interleaved", "glm_51", 5120): 1_158_153,
+    # ---- x_tile, w_ndshard, kimi_k26 ----
+    ("x_tile", "w_ndshard", "kimi_k26", 0): 3_953,
+    ("x_tile", "w_ndshard", "kimi_k26", 64): 120_830,
+    ("x_tile", "w_ndshard", "kimi_k26", 128): 133_710,
+    ("x_tile", "w_ndshard", "kimi_k26", 256): 135_634,
+    ("x_tile", "w_ndshard", "kimi_k26", 512): 167_287,
+    ("x_tile", "w_ndshard", "kimi_k26", 1024): 280_490,
+    ("x_tile", "w_ndshard", "kimi_k26", 2048): 533_361,
+    ("x_tile", "w_ndshard", "kimi_k26", 4096): 1_043_357,
+    ("x_tile", "w_ndshard", "kimi_k26", 5120): 1_311_580,
+    # ---- x_tile, w_ndshard, glm_51 ----
+    ("x_tile", "w_ndshard", "glm_51", 0): 3_901,
+    ("x_tile", "w_ndshard", "glm_51", 64): 113_067,
+    ("x_tile", "w_ndshard", "glm_51", 128): 117_569,
+    ("x_tile", "w_ndshard", "glm_51", 256): 123_511,
+    ("x_tile", "w_ndshard", "glm_51", 512): 147_905,
+    ("x_tile", "w_ndshard", "glm_51", 1024): 242_937,
+    ("x_tile", "w_ndshard", "glm_51", 2048): 467_063,
+    ("x_tile", "w_ndshard", "glm_51", 4096): 913_007,
+    ("x_tile", "w_ndshard", "glm_51", 5120): 1_141_312,
 }
 
 # 8% rather than the usual 3%: repeated runs of the SAME build on the same card show the
@@ -109,12 +159,12 @@ _EXPECTED_NS: dict[tuple[str, str, int], int] = {
 _MARGIN = 0.08
 
 
-def _k_filter(model: str, active: int, weights: str) -> str:
+def _k_filter(model: str, active: int, x_layout: str, weights: str) -> str:
     """Pin exactly one ``test_single_routed_expert_isl_sweep`` case: model + isl + x
     layout + weight layout. Disambiguate substring collisions in the pytest ``-k`` match
     — e.g. ``isl-512`` is a substring of ``isl-5120`` — by excluding any other sweep value
     whose id contains this one."""
-    parts = [f"{model}-isl-{active}", _LAYOUT_ID, weights]
+    parts = [f"{model}-isl-{active}", x_layout, weights]
     parts += [
         f"not isl-{other}" for other in _ISL_EXHAUSTIVE_SWEEP if other != active and f"isl-{active}" in f"isl-{other}"
     ]
@@ -123,18 +173,19 @@ def _k_filter(model: str, active: int, weights: str) -> str:
 
 def _perf_params():
     params = []
-    for weights in _WEIGHTS_IDS:
-        for model in _ISL_EXHAUSTIVE_MODELS:
-            for active in _ISL_EXHAUSTIVE_SWEEP:
-                command = f"pytest {_WORKER} -k '{_k_filter(model, active, weights)}'"
-                params.append(
-                    pytest.param(
-                        command,
-                        {_OP_CODE: _EXPECTED_NS[(weights, model, active)]},
-                        f"single_routed_expert_{model}_isl{active}_{_LAYOUT_ID}_{weights}",
-                        id=f"{weights}-{model}-isl-{active}",
+    for x_layout in _LAYOUT_IDS:
+        for weights in _WEIGHTS_IDS:
+            for model in _ISL_EXHAUSTIVE_MODELS:
+                for active in _ISL_EXHAUSTIVE_SWEEP:
+                    command = f"pytest {_WORKER} -k '{_k_filter(model, active, x_layout, weights)}'"
+                    params.append(
+                        pytest.param(
+                            command,
+                            {_OP_CODE: _EXPECTED_NS[(x_layout, weights, model, active)]},
+                            f"single_routed_expert_{model}_isl{active}_{x_layout}_{weights}",
+                            id=f"{x_layout}-{weights}-{model}-isl-{active}",
+                        )
                     )
-                )
     return params
 
 
